@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import okhttp3.Interceptor
+import okhttp3.OkHttpClient
 import org.siros.sdk.auth.WebAuthnAuthClient
 import org.siros.sdk.credentials.InMemoryCredentialStore
 import org.siros.sdk.credentials.StoredCredential
@@ -19,7 +21,10 @@ import org.siros.sdk.transport.wmp.WmpWebSocketTransport
 import timber.log.Timber
 
 sealed class WalletUiState {
-    data class NotConnected(val backendUrl: String = "https://wallet.sirosid.dev") : WalletUiState()
+    data class NotConnected(
+        val backendUrl: String = "https://wallet.sirosid.dev",
+        val tenantId: String = "",
+    ) : WalletUiState()
     data object Connecting : WalletUiState()
     data class Connected(
         val isAuthenticated: Boolean = false,
@@ -36,6 +41,7 @@ class WalletViewModel : ViewModel() {
     val uiState: StateFlow<WalletUiState> = _uiState
 
     private var backendUrl: String = "https://wallet.sirosid.dev"
+    private var tenantId: String = ""
     private var transport: WmpWebSocketTransport? = null
     private var session: WmpSession? = null
     private var flowClient: FlowClient? = null
@@ -44,16 +50,24 @@ class WalletViewModel : ViewModel() {
 
     fun updateBackendUrl(url: String) {
         backendUrl = url
-        _uiState.update { WalletUiState.NotConnected(url) }
+        _uiState.update { if (it is WalletUiState.NotConnected) it.copy(backendUrl = url) else it }
+    }
+
+    fun updateTenantId(id: String) {
+        tenantId = id
+        _uiState.update { if (it is WalletUiState.NotConnected) it.copy(tenantId = id) else it }
     }
 
     fun connect() {
         viewModelScope.launch {
             _uiState.value = WalletUiState.Connecting
             try {
+                val extraHeaders = buildMap {
+                    if (tenantId.isNotBlank()) put("X-Tenant-ID", tenantId)
+                }
                 val wsUrl = backendUrl.replace("https://", "wss://")
                     .replace("http://", "ws://") + "/wmp"
-                transport = WmpWebSocketTransport(wsUrl)
+                transport = WmpWebSocketTransport(wsUrl, extraHeaders = extraHeaders)
                 session = WmpSession(transport!!, WmpCodec())
                 _uiState.value = WalletUiState.Connected()
                 Timber.i("Transport created for $wsUrl")
@@ -160,7 +174,7 @@ class WalletViewModel : ViewModel() {
             session = null
             flowClient = null
             keystore.lock()
-            _uiState.value = WalletUiState.NotConnected(backendUrl)
+            _uiState.value = WalletUiState.NotConnected(backendUrl, tenantId)
         }
     }
 

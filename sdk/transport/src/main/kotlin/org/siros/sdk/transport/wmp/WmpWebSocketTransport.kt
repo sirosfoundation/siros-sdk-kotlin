@@ -22,6 +22,7 @@ import java.util.concurrent.TimeUnit
 class WmpWebSocketTransport(
     private val url: String,
     private val client: OkHttpClient = defaultClient(),
+    private val extraHeaders: Map<String, String> = emptyMap(),
 ) : Transport {
 
     private val _state = MutableStateFlow(TransportState.DISCONNECTED)
@@ -37,6 +38,7 @@ class WmpWebSocketTransport(
         val request = Request.Builder()
             .url(url)
             .header("Sec-WebSocket-Protocol", "wmp.v1")
+            .apply { extraHeaders.forEach { (k, v) -> header(k, v) } }
             .build()
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {

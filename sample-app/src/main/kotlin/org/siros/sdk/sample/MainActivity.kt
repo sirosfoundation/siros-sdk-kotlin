@@ -64,7 +64,9 @@ fun WalletScreen(viewModel: WalletViewModel = viewModel()) {
                 is WalletUiState.NotConnected -> {
                     NotConnectedView(
                         backendUrl = state.backendUrl,
+                        tenantId = state.tenantId,
                         onBackendUrlChange = viewModel::updateBackendUrl,
+                        onTenantIdChange = viewModel::updateTenantId,
                         onConnect = viewModel::connect,
                     )
                 }
@@ -105,13 +107,22 @@ fun WalletScreen(viewModel: WalletViewModel = viewModel()) {
 @Composable
 fun NotConnectedView(
     backendUrl: String,
+    tenantId: String,
     onBackendUrlChange: (String) -> Unit,
+    onTenantIdChange: (String) -> Unit,
     onConnect: () -> Unit,
 ) {
     OutlinedTextField(
         value = backendUrl,
         onValueChange = onBackendUrlChange,
         label = { Text("Backend URL") },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+    )
+    OutlinedTextField(
+        value = tenantId,
+        onValueChange = onTenantIdChange,
+        label = { Text("Tenant ID (optional)") },
         modifier = Modifier.fillMaxWidth(),
         singleLine = true,
     )
