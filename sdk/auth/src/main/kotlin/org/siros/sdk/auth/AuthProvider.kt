@@ -74,8 +74,12 @@ data class PrfOutput(
 /** Session tokens returned after successful authentication. */
 @Serializable
 data class AuthSession(
-    @SerialName("access_token") val accessToken: String,
-    @SerialName("refresh_token") val refreshToken: String? = null,
-    @SerialName("user_id") val userId: String,
-    @SerialName("display_name") val displayName: String? = null,
+    @SerialName("appToken") val appToken: String,
+    val uuid: String,
+    val displayName: String? = null,
+    val username: String? = null,
+    @SerialName("refreshToken") val refreshToken: String? = null,
+    val did: String? = null,
+    @SerialName("privateData") val privateData: String? = null,
+    @SerialName("tenantId") val tenantId: String? = null,
 )

@@ -6,31 +6,22 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import okhttp3.Interceptor
-import okhttp3.OkHttpClient
-import org.siros.sdk.auth.WebAuthnAuthClient
-import org.siros.sdk.credentials.InMemoryCredentialStore
-import org.siros.sdk.credentials.StoredCredential
-import org.siros.sdk.flow.FlowClient
-import org.siros.sdk.flow.FlowEvent
-import org.siros.sdk.flow.OID4VCIFlowParams
-import org.siros.sdk.keystore.JweKeystore
-import org.siros.sdk.transport.wmp.WmpCodec
-import org.siros.sdk.transport.wmp.WmpSession
-import org.siros.sdk.transport.wmp.WmpWebSocketTransport
+import org.siros.sdk.auth.AuthSession
+import org.siros.sdk.auth.BackendApiClient
+import org.siros.sdk.transport.engine.WalletEngineSession
 import timber.log.Timber
 
 sealed class WalletUiState {
     data class NotConnected(
         val backendUrl: String = "https://wallet.sirosid.dev",
-        val tenantId: String = "",
+        val tenantId: String = "default",
     ) : WalletUiState()
     data object Connecting : WalletUiState()
     data class Connected(
         val isAuthenticated: Boolean = false,
         val userId: String? = null,
         val displayName: String? = null,
-        val credentials: List<StoredCredential> = emptyList(),
+        val flowStatus: String? = null,
     ) : WalletUiState()
     data class Error(val message: String) : WalletUiState()
 }
@@ -41,12 +32,10 @@ class WalletViewModel : ViewModel() {
     val uiState: StateFlow<WalletUiState> = _uiState
 
     private var backendUrl: String = "https://wallet.sirosid.dev"
-    private var tenantId: String = ""
-    private var transport: WmpWebSocketTransport? = null
-    private var session: WmpSession? = null
-    private var flowClient: FlowClient? = null
-    private val keystore = JweKeystore()
-    private val credentialStore = InMemoryCredentialStore()
+    private var tenantId: String = "default"
+    private var engineSession: WalletEngineSession? = null
+    private var apiClient: BackendApiClient? = null
+    private var authSession: AuthSession? = null
 
     fun updateBackendUrl(url: String) {
         backendUrl = url
@@ -58,41 +47,80 @@ class WalletViewModel : ViewModel() {
         _uiState.update { if (it is WalletUiState.NotConnected) it.copy(tenantId = id) else it }
     }
 
-    fun connect() {
+    /**
+     * Connect the engine WebSocket and start observing flow events.
+     * Requires a valid appToken — call after login/register.
+     */
+    fun connectEngine(appToken: String) {
+        val tid = tenantId.ifBlank { "default" }
+        engineSession = WalletEngineSession(backendUrl, tid)
+        engineSession!!.connect(appToken)
+
+        // Observe engine events
         viewModelScope.launch {
-            _uiState.value = WalletUiState.Connecting
-            try {
-                val extraHeaders = buildMap {
-                    if (tenantId.isNotBlank()) put("X-Tenant-ID", tenantId)
+            engineSession!!.flowProgress().collect { msg ->
+                Timber.d("Flow ${msg.flowId} progress: ${msg.step}")
+                _uiState.update {
+                    if (it is WalletUiState.Connected) it.copy(flowStatus = "${msg.step}") else it
                 }
-                val wsUrl = backendUrl.replace("https://", "wss://")
-                    .replace("http://", "ws://") + "/wmp"
-                transport = WmpWebSocketTransport(wsUrl, extraHeaders = extraHeaders)
-                session = WmpSession(transport!!, WmpCodec())
-                _uiState.value = WalletUiState.Connected()
-                Timber.i("Transport created for $wsUrl")
-            } catch (e: Exception) {
-                Timber.e(e, "Connection failed")
-                _uiState.value = WalletUiState.Error(e.message ?: "Connection failed")
+            }
+        }
+        viewModelScope.launch {
+            engineSession!!.flowComplete().collect { msg ->
+                Timber.i("Flow ${msg.flowId} complete: ${msg.credentials?.size ?: 0} credentials")
+                _uiState.update {
+                    if (it is WalletUiState.Connected) it.copy(flowStatus = "complete") else it
+                }
+            }
+        }
+        viewModelScope.launch {
+            engineSession!!.flowErrors().collect { msg ->
+                Timber.e("Flow ${msg.flowId} error: ${msg.error.code} — ${msg.error.message}")
+                _uiState.update {
+                    if (it is WalletUiState.Connected) it.copy(flowStatus = "error: ${msg.error.message}") else it
+                }
+            }
+        }
+        viewModelScope.launch {
+            engineSession!!.signRequests().collect { msg ->
+                Timber.d("Sign request: ${msg.action} for flow ${msg.flowId}")
+                // TODO: Generate proof JWT using keystore and send sign_response
+            }
+        }
+        viewModelScope.launch {
+            engineSession!!.matchRequests().collect { msg ->
+                Timber.d("Match request for flow ${msg.flowId}")
+                // TODO: Match credentials locally and send match_response
             }
         }
     }
 
+    /**
+     * Login stub — real passkey auth requires Android Credential Manager.
+     * For now, demonstrates the session + engine connection flow.
+     */
     fun login() {
         viewModelScope.launch {
+            _uiState.value = WalletUiState.Connecting
             try {
-                // TODO: Integrate with Android Credential Manager for real passkey auth.
-                // For now, this demonstrates the flow structure.
+                // TODO: Use WebAuthnAuthClient with real AuthProvider (Credential Manager)
+                // val authClient = WebAuthnAuthClient(baseUrl, tenantId, authProvider)
+                // val session = authClient.login()
+                // authSession = session
+                // apiClient = BackendApiClient(baseUrl, tenantId).apply { setAppToken(session.appToken) }
+                // connectEngine(session.appToken)
+                // _uiState.value = WalletUiState.Connected(
+                //     isAuthenticated = true,
+                //     userId = session.uuid,
+                //     displayName = session.displayName,
+                // )
+
                 Timber.i("Login requested — requires Credential Manager integration")
-                _uiState.update {
-                    if (it is WalletUiState.Connected) {
-                        it.copy(
-                            isAuthenticated = true,
-                            userId = "demo-user",
-                            displayName = "Demo User",
-                        )
-                    } else it
-                }
+                _uiState.value = WalletUiState.Connected(
+                    isAuthenticated = true,
+                    userId = "demo-user",
+                    displayName = "Demo User",
+                )
             } catch (e: Exception) {
                 Timber.e(e, "Login failed")
                 _uiState.value = WalletUiState.Error(e.message ?: "Login failed")
@@ -102,9 +130,15 @@ class WalletViewModel : ViewModel() {
 
     fun register() {
         viewModelScope.launch {
+            _uiState.value = WalletUiState.Connecting
             try {
-                // TODO: Integrate with Android Credential Manager for real passkey registration.
+                // TODO: Use WebAuthnAuthClient with real AuthProvider (Credential Manager)
                 Timber.i("Registration requested — requires Credential Manager integration")
+                _uiState.value = WalletUiState.Connected(
+                    isAuthenticated = true,
+                    userId = "demo-user",
+                    displayName = "Demo User",
+                )
             } catch (e: Exception) {
                 Timber.e(e, "Registration failed")
                 _uiState.value = WalletUiState.Error(e.message ?: "Registration failed")
@@ -112,24 +146,13 @@ class WalletViewModel : ViewModel() {
         }
     }
 
+    /** Start an OID4VCI issuance flow via the engine WebSocket. */
     fun startIssuance(credentialOfferUri: String) {
         viewModelScope.launch {
             try {
-                val fc = flowClient ?: run {
-                    val fc = FlowClient(session!!, keystore)
-                    fc.start()
-                    flowClient = fc
-
-                    // Observe flow events
-                    viewModelScope.launch {
-                        fc.events().collect { event ->
-                            handleFlowEvent(event)
-                        }
-                    }
-                    fc
-                }
-
-                fc.startIssuance(OID4VCIFlowParams(credentialOfferUri = credentialOfferUri))
+                val engine = engineSession
+                    ?: throw IllegalStateException("Engine not connected — login first")
+                engine.startIssuance(credentialOfferUri = credentialOfferUri)
                 Timber.i("Issuance flow started")
             } catch (e: Exception) {
                 Timber.e(e, "Failed to start issuance")
@@ -138,48 +161,31 @@ class WalletViewModel : ViewModel() {
         }
     }
 
-    private suspend fun handleFlowEvent(event: FlowEvent) {
-        when (event) {
-            is FlowEvent.Complete -> {
-                Timber.i("Flow ${event.flowId} completed")
-                // Refresh credential list
-                val credentials = credentialStore.getAll()
-                _uiState.update {
-                    if (it is WalletUiState.Connected) it.copy(credentials = credentials) else it
-                }
-            }
-            is FlowEvent.Error -> {
-                Timber.e("Flow ${event.flowId} error: ${event.message}")
-            }
-            is FlowEvent.Progress -> {
-                Timber.d("Flow ${event.flowId} progress: ${event.step}")
-            }
-            is FlowEvent.SignRequest -> {
-                Timber.d("Flow ${event.flowId} sign request: ${event.action}")
-            }
-            is FlowEvent.MatchRequest -> {
-                Timber.d("Flow ${event.flowId} match request")
+    /** Start an OID4VP presentation flow via the engine WebSocket. */
+    fun startPresentation(requestUri: String) {
+        viewModelScope.launch {
+            try {
+                val engine = engineSession
+                    ?: throw IllegalStateException("Engine not connected — login first")
+                engine.startPresentation(requestUri = requestUri)
+                Timber.i("Presentation flow started")
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to start presentation")
+                _uiState.value = WalletUiState.Error(e.message ?: "Presentation failed")
             }
         }
     }
 
     fun disconnect() {
-        viewModelScope.launch {
-            try {
-                session?.close()
-            } catch (e: Exception) {
-                Timber.w(e, "Error during disconnect")
-            }
-            transport = null
-            session = null
-            flowClient = null
-            keystore.lock()
-            _uiState.value = WalletUiState.NotConnected(backendUrl, tenantId)
-        }
+        engineSession?.disconnect()
+        engineSession = null
+        apiClient = null
+        authSession = null
+        _uiState.value = WalletUiState.NotConnected(backendUrl, tenantId)
     }
 
     override fun onCleared() {
         super.onCleared()
-        keystore.lock()
+        engineSession?.disconnect()
     }
 }

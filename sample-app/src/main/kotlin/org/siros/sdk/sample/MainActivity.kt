@@ -10,10 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -67,7 +64,8 @@ fun WalletScreen(viewModel: WalletViewModel = viewModel()) {
                         tenantId = state.tenantId,
                         onBackendUrlChange = viewModel::updateBackendUrl,
                         onTenantIdChange = viewModel::updateTenantId,
-                        onConnect = viewModel::connect,
+                        onLogin = viewModel::login,
+                        onRegister = viewModel::register,
                     )
                 }
                 is WalletUiState.Connecting -> {
@@ -84,8 +82,6 @@ fun WalletScreen(viewModel: WalletViewModel = viewModel()) {
                 is WalletUiState.Connected -> {
                     ConnectedView(
                         state = state,
-                        onLogin = viewModel::login,
-                        onRegister = viewModel::register,
                         onStartIssuance = viewModel::startIssuance,
                         onDisconnect = viewModel::disconnect,
                     )
@@ -110,7 +106,8 @@ fun NotConnectedView(
     tenantId: String,
     onBackendUrlChange: (String) -> Unit,
     onTenantIdChange: (String) -> Unit,
-    onConnect: () -> Unit,
+    onLogin: () -> Unit,
+    onRegister: () -> Unit,
 ) {
     OutlinedTextField(
         value = backendUrl,
@@ -122,79 +119,48 @@ fun NotConnectedView(
     OutlinedTextField(
         value = tenantId,
         onValueChange = onTenantIdChange,
-        label = { Text("Tenant ID (optional)") },
+        label = { Text("Tenant ID") },
         modifier = Modifier.fillMaxWidth(),
         singleLine = true,
     )
-    Button(
-        onClick = onConnect,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Text("Connect")
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    Button(onClick = onLogin, modifier = Modifier.fillMaxWidth()) {
+        Text("Login with Passkey")
+    }
+    Button(onClick = onRegister, modifier = Modifier.fillMaxWidth()) {
+        Text("Register")
     }
 }
 
 @Composable
 fun ConnectedView(
     state: WalletUiState.Connected,
-    onLogin: () -> Unit,
-    onRegister: () -> Unit,
     onStartIssuance: (String) -> Unit,
     onDisconnect: () -> Unit,
 ) {
-    if (!state.isAuthenticated) {
-        Button(onClick = onLogin, modifier = Modifier.fillMaxWidth()) {
-            Text("Login with Passkey")
-        }
-        Button(onClick = onRegister, modifier = Modifier.fillMaxWidth()) {
-            Text("Register")
-        }
-    } else {
+    Text(
+        text = "Logged in as ${state.displayName ?: state.userId}",
+        style = MaterialTheme.typography.titleMedium,
+    )
+
+    state.flowStatus?.let { status ->
+        Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = "Logged in as ${state.displayName ?: state.userId}",
-            style = MaterialTheme.typography.titleMedium,
+            text = "Flow: $status",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
 
-        Spacer(modifier = Modifier.height(8.dp))
+    Spacer(modifier = Modifier.height(8.dp))
 
-        Text("Credentials", style = MaterialTheme.typography.titleSmall)
-
-        if (state.credentials.isEmpty()) {
-            Text(
-                text = "No credentials yet",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                items(state.credentials) { credential ->
-                    Card(modifier = Modifier.fillMaxWidth()) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Text(
-                                text = credential.metadata?.name ?: credential.id,
-                                style = MaterialTheme.typography.bodyLarge,
-                            )
-                            Text(
-                                text = credential.format,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Button(
-            onClick = { onStartIssuance("") },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text("Accept Credential Offer")
-        }
+    Button(
+        onClick = { onStartIssuance("") },
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text("Accept Credential Offer")
     }
 
     Spacer(modifier = Modifier.height(16.dp))

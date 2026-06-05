@@ -21,6 +21,7 @@ import timber.log.Timber
  */
 class WebAuthnAuthClient(
     private val baseUrl: String,
+    private val tenantId: String = "default",
     private val authProvider: AuthProvider,
     private val httpClient: OkHttpClient = OkHttpClient(),
     private val json: Json = Json { ignoreUnknownKeys = true },
@@ -34,7 +35,10 @@ class WebAuthnAuthClient(
         )
 
         val options = challengeResponse.jsonObject
-        val publicKey = options["publicKey"]?.jsonObject
+        val challengeId = options["challengeId"]?.jsonPrimitive?.content
+        val publicKey = (options["getOptions"] ?: options["createOptions"])?.jsonObject
+            ?.get("publicKey")?.jsonObject
+            ?: options["publicKey"]?.jsonObject
             ?: throw AuthException("Missing publicKey in registration challenge")
 
         val rpId = publicKey["rp"]?.jsonObject?.get("id")?.jsonPrimitive?.content
@@ -60,7 +64,7 @@ class WebAuthnAuthClient(
         )
 
         // Step 3: Complete registration with backend
-        val finishBody = buildJsonObject {
+        val credential = buildJsonObject {
             put("id", encodeBase64Url(result.credentialId))
             put("rawId", encodeBase64Url(result.credentialId))
             put("type", "public-key")
@@ -68,6 +72,10 @@ class WebAuthnAuthClient(
                 put("attestationObject", encodeBase64Url(result.attestationObject))
                 put("clientDataJSON", encodeBase64Url(result.clientDataJSON))
             })
+        }
+        val finishBody = buildJsonObject {
+            challengeId?.let { put("challengeId", it) }
+            put("credential", credential)
         }
 
         val sessionResponse = post("$baseUrl/user/register-webauthn-finish", finishBody)
@@ -79,7 +87,10 @@ class WebAuthnAuthClient(
         // Step 1: Get login challenge
         val challengeResponse = post("$baseUrl/user/login-webauthn-begin", buildJsonObject {})
         val options = challengeResponse.jsonObject
-        val publicKey = options["publicKey"]?.jsonObject
+        val challengeId = options["challengeId"]?.jsonPrimitive?.content
+        val publicKey = (options["getOptions"])?.jsonObject
+            ?.get("publicKey")?.jsonObject
+            ?: options["publicKey"]?.jsonObject
             ?: throw AuthException("Missing publicKey in login challenge")
 
         val rpId = publicKey["rpId"]?.jsonPrimitive?.content
@@ -96,7 +107,7 @@ class WebAuthnAuthClient(
         )
 
         // Step 3: Complete login with backend
-        val finishBody = buildJsonObject {
+        val credential = buildJsonObject {
             put("id", encodeBase64Url(result.credentialId))
             put("rawId", encodeBase64Url(result.credentialId))
             put("type", "public-key")
@@ -107,6 +118,10 @@ class WebAuthnAuthClient(
                 result.userHandle?.let { put("userHandle", encodeBase64Url(it)) }
             })
         }
+        val finishBody = buildJsonObject {
+            challengeId?.let { put("challengeId", it) }
+            put("credential", credential)
+        }
 
         val sessionResponse = post("$baseUrl/user/login-webauthn-finish", finishBody)
         json.decodeFromJsonElement(AuthSession.serializer(), sessionResponse)
@@ -115,6 +130,8 @@ class WebAuthnAuthClient(
     private fun post(url: String, body: JsonObject): JsonObject {
         val request = Request.Builder()
             .url(url)
+            .header("X-Tenant-ID", tenantId)
+            .header("Content-Type", "application/json")
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
