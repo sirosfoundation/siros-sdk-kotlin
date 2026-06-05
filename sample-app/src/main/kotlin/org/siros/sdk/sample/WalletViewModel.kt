@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import org.siros.sdk.credentials.CredentialOffer
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.wallet.SirosWallet
 import org.siros.sdk.wallet.WalletConfig
@@ -31,7 +32,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     // ── Configuration (editable before login) ───────────────────────
 
-    private val _backendUrl = MutableStateFlow("https://wallet.sirosid.dev")
+    private val _backendUrl = MutableStateFlow("https://backend.id.siros.org")
     val backendUrl: StateFlow<String> = _backendUrl
 
     private val _tenantId = MutableStateFlow("default")
@@ -39,6 +40,27 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     fun updateBackendUrl(url: String) { _backendUrl.value = url }
     fun updateTenantId(id: String) { _tenantId.value = id }
+
+    // ── Add-credential state ────────────────────────────────────────
+
+    private val _availableCredentials = MutableStateFlow<List<CredentialOffer>>(emptyList())
+    val availableCredentials: StateFlow<List<CredentialOffer>> = _availableCredentials
+
+    private val _isLoadingOffers = MutableStateFlow(false)
+    val isLoadingOffers: StateFlow<Boolean> = _isLoadingOffers
+
+    private val _showAddCredential = MutableStateFlow(false)
+    val showAddCredential: StateFlow<Boolean> = _showAddCredential
+
+    // ── Loading / error feedback ────────────────────────────────────
+
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading
+
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage: StateFlow<String?> = _errorMessage
+
+    fun clearError() { _errorMessage.value = null }
 
     // ── Wallet ──────────────────────────────────────────────────────
 
@@ -66,12 +88,30 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     fun login() {
         rebuildWalletIfNeeded()
-        viewModelScope.launch { wallet.login() }
+        _isLoading.value = true
+        viewModelScope.launch {
+            try {
+                wallet.login()
+            } catch (e: Exception) {
+                _errorMessage.value = e.message ?: "Login failed"
+            } finally {
+                _isLoading.value = false
+            }
+        }
     }
 
     fun register() {
         rebuildWalletIfNeeded()
-        viewModelScope.launch { wallet.register("Sample User") }
+        _isLoading.value = true
+        viewModelScope.launch {
+            try {
+                wallet.register("Sample User")
+            } catch (e: Exception) {
+                _errorMessage.value = e.message ?: "Registration failed"
+            } finally {
+                _isLoading.value = false
+            }
+        }
     }
 
     fun startIssuance(credentialOfferUri: String) {
@@ -84,6 +124,34 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     fun disconnect() {
         wallet.logout()
+        _showAddCredential.value = false
+        _availableCredentials.value = emptyList()
+    }
+
+    /** Open the add-credential screen — fetches available offers from issuers. */
+    fun openAddCredential() {
+        _showAddCredential.value = true
+        _isLoadingOffers.value = true
+        viewModelScope.launch {
+            try {
+                _availableCredentials.value = wallet.getAvailableCredentials()
+            } catch (_: Exception) {
+                _availableCredentials.value = emptyList()
+            } finally {
+                _isLoadingOffers.value = false
+            }
+        }
+    }
+
+    /** Close the add-credential screen. */
+    fun closeAddCredential() {
+        _showAddCredential.value = false
+    }
+
+    /** User picked a credential to issue. */
+    fun selectCredentialOffer(offer: CredentialOffer) {
+        _showAddCredential.value = false
+        viewModelScope.launch { wallet.startIssuanceByOffer(offer) }
     }
 
     /**

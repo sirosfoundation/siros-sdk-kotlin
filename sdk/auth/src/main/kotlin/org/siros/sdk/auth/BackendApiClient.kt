@@ -51,6 +51,9 @@ class BackendApiClient(
     /** GET /issuer/all — list registered issuers */
     suspend fun getIssuers(): JsonObject = get("/issuer/all")
 
+    /** GET /issuer/:id/metadata — get cached issuer metadata via the backend proxy */
+    suspend fun getIssuerMetadata(id: Long): JsonObject = get("/issuer/$id/metadata")
+
     /** GET /verifier/all — list registered verifiers */
     suspend fun getVerifiers(): JsonObject = get("/verifier/all")
 

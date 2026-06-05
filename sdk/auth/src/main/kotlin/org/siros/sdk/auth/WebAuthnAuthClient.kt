@@ -34,7 +34,8 @@ class WebAuthnAuthClient(
             buildJsonObject { put("displayName", displayName) },
         )
 
-        val options = challengeResponse.jsonObject
+        // Decode tagged binary objects ({"$b64u": "..."} → plain strings) in the response
+        val options = TaggedBinary.decode(challengeResponse).jsonObject
         val challengeId = options["challengeId"]?.jsonPrimitive?.content
         val publicKey = (options["getOptions"] ?: options["createOptions"])?.jsonObject
             ?.get("publicKey")?.jsonObject
@@ -87,7 +88,8 @@ class WebAuthnAuthClient(
     suspend fun login(prfSalt: ByteArray? = null): AuthSession = withContext(Dispatchers.IO) {
         // Step 1: Get login challenge
         val challengeResponse = post("$baseUrl/user/login-webauthn-begin", buildJsonObject {})
-        val options = challengeResponse.jsonObject
+        // Decode tagged binary objects
+        val options = TaggedBinary.decode(challengeResponse).jsonObject
         val challengeId = options["challengeId"]?.jsonPrimitive?.content
         val publicKey = (options["getOptions"])?.jsonObject
             ?.get("publicKey")?.jsonObject

@@ -9,7 +9,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.siros.sdk.auth.AuthSession
@@ -19,10 +21,16 @@ import org.siros.sdk.auth.WebAuthnAuthClient
 import org.siros.sdk.credentials.CredentialStore
 import org.siros.sdk.credentials.InMemoryCredentialStore
 import org.siros.sdk.credentials.StoredCredential
+import org.siros.sdk.credentials.CredentialOffer
+import org.siros.sdk.credentials.IssuerEntry
+import org.siros.sdk.credentials.IssuerMetadata
+import org.siros.sdk.credentials.CredentialConfiguration
 import org.siros.sdk.keystore.JweKeystore
 import org.siros.sdk.keystore.KeystoreManager
 import org.siros.sdk.transport.engine.CredentialMatch
 import org.siros.sdk.transport.engine.WalletEngineSession
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import timber.log.Timber
 import java.security.SecureRandom
 import java.util.Base64
@@ -207,23 +215,125 @@ class SirosWallet private constructor(
     }
 
     /**
-     * Start a credential issuance flow.
+     * Fetch the list of available credential issuers from the backend.
      *
-     * @param issuerUrl URL of the credential issuer.
+     * Requires an active session (call after [login] or [register]).
+     * Each [IssuerEntry] contains the issuer URL; call [getAvailableCredentials]
+     * to discover what credentials each issuer offers.
      */
-    suspend fun startIssuance(issuerUrl: String) {
+    suspend fun getIssuers(): List<IssuerEntry> = withContext(Dispatchers.IO) {
+        val client = apiClient ?: throw WalletException("Not connected")
+        val response = client.getIssuers()
+        // Backend returns either a JSON array or { "issuers": [...] }
+        val arr = response["issuers"]?.jsonArray
+            ?: response["data"]?.jsonArray
+            ?: throw WalletException("Unexpected issuer list format")
+        arr.map { json.decodeFromJsonElement(IssuerEntry.serializer(), it) }
+            .filter { it.visible }
+    }
+
+    /**
+     * Fetch OpenID4VCI credential issuer metadata for a given issuer URL.
+     *
+     * This calls `<issuerUrl>/.well-known/openid-credential-issuer` directly.
+     */
+    suspend fun getIssuerMetadata(issuerUrl: String): IssuerMetadata = withContext(Dispatchers.IO) {
+        val url = issuerUrl.trimEnd('/') + "/.well-known/openid-credential-issuer"
+        val request = Request.Builder().url(url).get().build()
+        val response = httpClient.newCall(request).execute()
+        val body = response.body?.string()
+            ?: throw WalletException("Empty metadata response from $issuerUrl")
+        if (!response.isSuccessful) {
+            throw WalletException("Metadata fetch failed: ${response.code}")
+        }
+        json.decodeFromString(IssuerMetadata.serializer(), body)
+    }
+
+    /**
+     * Discover all available credentials across all visible issuers.
+     *
+     * Returns a flat list of [CredentialOffer] items ready for display in a
+     * picker UI. Each item can be passed to [startIssuanceByOffer].
+     */
+    suspend fun getAvailableCredentials(): List<CredentialOffer> = withContext(Dispatchers.IO) {
+        val issuers = getIssuers()
+        val offers = mutableListOf<CredentialOffer>()
+
+        for (issuer in issuers) {
+            try {
+                val metadata = getIssuerMetadata(issuer.credentialIssuerIdentifier)
+                val issuerDisplay = metadata.display?.firstOrNull()
+                val issuerName = issuerDisplay?.name
+                    ?: java.net.URI(issuer.credentialIssuerIdentifier).host
+                    ?: issuer.credentialIssuerIdentifier
+
+                for ((configId, config) in metadata.credentialConfigurationsSupported) {
+                    val credDisplay = config.credentialMetadata?.display?.firstOrNull()
+                    val credName = credDisplay?.name ?: configId
+                    offers.add(CredentialOffer(
+                        credentialConfigurationId = configId,
+                        credentialIssuerIdentifier = issuer.credentialIssuerIdentifier,
+                        credentialName = credName,
+                        credentialDescription = credDisplay?.description,
+                        issuerName = issuerName,
+                        backgroundColor = credDisplay?.backgroundColor
+                            ?: issuerDisplay?.backgroundColor,
+                        textColor = credDisplay?.textColor
+                            ?: issuerDisplay?.textColor,
+                        logoUri = credDisplay?.logo?.uri,
+                        issuerLogoUri = issuerDisplay?.logo?.uri,
+                    ))
+                }
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to fetch metadata for ${issuer.credentialIssuerIdentifier}")
+            }
+        }
+        offers
+    }
+
+    /**
+     * Start an issuance flow for a specific credential offer.
+     *
+     * Constructs the OID4VCI credential_offer and sends it to the engine.
+     */
+    suspend fun startIssuanceByOffer(offer: CredentialOffer) {
         val engine = engineSession ?: throw WalletException("Not connected")
-        engine.startIssuance(issuerUrl)
+        val credentialOffer = kotlinx.serialization.json.buildJsonObject {
+            put("credential_issuer", kotlinx.serialization.json.JsonPrimitive(
+                offer.credentialIssuerIdentifier
+            ))
+            put("credential_configuration_ids", kotlinx.serialization.json.buildJsonArray {
+                add(kotlinx.serialization.json.JsonPrimitive(offer.credentialConfigurationId))
+            })
+            put("grants", kotlinx.serialization.json.buildJsonObject {
+                put("authorization_code", kotlinx.serialization.json.buildJsonObject {})
+            })
+        }
+        engine.startIssuance(offer = credentialOffer.toString())
+    }
+
+    /**
+     * Start a credential issuance flow with a raw offer or URI.
+     *
+     * @param offerUri a credential_offer_uri or raw JSON credential_offer string.
+     */
+    suspend fun startIssuance(offerUri: String) {
+        val engine = engineSession ?: throw WalletException("Not connected")
+        if (offerUri.startsWith("openid-credential-offer://") || offerUri.startsWith("http")) {
+            engine.startIssuance(credentialOfferUri = offerUri)
+        } else {
+            engine.startIssuance(offer = offerUri)
+        }
     }
 
     /**
      * Start a credential presentation flow.
      *
-     * @param verifierUrl URL of the relying party / verifier.
+     * @param requestUri the OID4VP request URI.
      */
-    suspend fun startPresentation(verifierUrl: String) {
+    suspend fun startPresentation(requestUri: String) {
         val engine = engineSession ?: throw WalletException("Not connected")
-        engine.startPresentation(verifierUrl)
+        engine.startPresentation(requestUri = requestUri)
     }
 
     // ── Internal wiring ─────────────────────────────────────────────
@@ -234,6 +344,7 @@ class SirosWallet private constructor(
     private val keystore: KeystoreManager = JweKeystore()
     private val credentialStore: CredentialStore = InMemoryCredentialStore()
     private val json = Json { ignoreUnknownKeys = true }
+    private val httpClient = OkHttpClient()
 
     private var apiClient: BackendApiClient? = null
     private var engineSession: WalletEngineSession? = null
