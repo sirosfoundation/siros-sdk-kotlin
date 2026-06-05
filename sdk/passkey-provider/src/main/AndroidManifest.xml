@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!--
+            SDK consumers must declare this service in their own manifest
+            with the appropriate intent-filter. This manifest entry serves
+            as documentation of the required configuration.
+
+            <service
+                android:name="org.siros.sdk.passkey.SirosCredentialProviderService"
+                android:exported="true"
+                android:permission="android.permission.BIND_CREDENTIAL_PROVIDER_SERVICE">
+                <intent-filter>
+                    <action android:name="android.service.credentials.CredentialProviderService" />
+                </intent-filter>
+                <meta-data
+                    android:name="android.credentials.provider"
+                    android:resource="@xml/provider" />
+            </service>
+        -->
+    </application>
+
+</manifest>
