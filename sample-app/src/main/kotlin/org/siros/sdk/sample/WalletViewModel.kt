@@ -6,30 +6,20 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import org.siros.sdk.auth.AuthSession
-import org.siros.sdk.auth.BackendApiClient
-import org.siros.sdk.auth.CredentialManagerAuthProvider
-import org.siros.sdk.auth.WebAuthnAuthClient
-import org.siros.sdk.transport.engine.WalletEngineSession
-import timber.log.Timber
+import org.siros.sdk.credentials.StoredCredential
+import org.siros.sdk.wallet.SirosWallet
+import org.siros.sdk.wallet.WalletConfig
+import org.siros.sdk.wallet.WalletEventListener
+import org.siros.sdk.wallet.WalletState
 
-sealed class WalletUiState {
-    data class NotConnected(
-        val backendUrl: String = "https://wallet.sirosid.dev",
-        val tenantId: String = "default",
-    ) : WalletUiState()
-    data object Connecting : WalletUiState()
-    data class Connected(
-        val isAuthenticated: Boolean = false,
-        val userId: String? = null,
-        val displayName: String? = null,
-        val flowStatus: String? = null,
-    ) : WalletUiState()
-    data class Error(val message: String) : WalletUiState()
-}
-
+/**
+ * Sample app ViewModel.
+ *
+ * The entire wallet lifecycle — auth, key management, engine protocol,
+ * credential storage — is handled by [SirosWallet]. This ViewModel only
+ * needs to expose UI-level state and forward user actions.
+ */
 class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     class Factory(private val activity: Activity) : ViewModelProvider.Factory {
@@ -39,159 +29,75 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         }
     }
 
-    private val _uiState = MutableStateFlow<WalletUiState>(WalletUiState.NotConnected())
-    val uiState: StateFlow<WalletUiState> = _uiState
+    // ── Configuration (editable before login) ───────────────────────
 
-    private var backendUrl: String = "https://wallet.sirosid.dev"
-    private var tenantId: String = "default"
-    private var engineSession: WalletEngineSession? = null
-    private var apiClient: BackendApiClient? = null
-    private var authSession: AuthSession? = null
+    private val _backendUrl = MutableStateFlow("https://wallet.sirosid.dev")
+    val backendUrl: StateFlow<String> = _backendUrl
 
-    private val authProvider = CredentialManagerAuthProvider(activity)
+    private val _tenantId = MutableStateFlow("default")
+    val tenantId: StateFlow<String> = _tenantId
 
-    fun updateBackendUrl(url: String) {
-        backendUrl = url
-        _uiState.update { if (it is WalletUiState.NotConnected) it.copy(backendUrl = url) else it }
-    }
+    fun updateBackendUrl(url: String) { _backendUrl.value = url }
+    fun updateTenantId(id: String) { _tenantId.value = id }
 
-    fun updateTenantId(id: String) {
-        tenantId = id
-        _uiState.update { if (it is WalletUiState.NotConnected) it.copy(tenantId = id) else it }
-    }
+    // ── Wallet ──────────────────────────────────────────────────────
 
-    /**
-     * Connect the engine WebSocket and start observing flow events.
-     * Called automatically after successful login/register.
-     */
-    private fun connectEngine(appToken: String) {
-        val tid = tenantId.ifBlank { "default" }
-        engineSession = WalletEngineSession(backendUrl, tid)
-        engineSession!!.connect(appToken)
+    private var wallet: SirosWallet = SirosWallet.create(
+        activity,
+        WalletConfig(_backendUrl.value, _tenantId.value),
+    )
 
-        viewModelScope.launch {
-            engineSession!!.flowProgress().collect { msg ->
-                Timber.d("Flow ${msg.flowId} progress: ${msg.step}")
-                _uiState.update {
-                    if (it is WalletUiState.Connected) it.copy(flowStatus = "${msg.step}") else it
-                }
+    /** Observable wallet state — collect this from your Composable. */
+    val state: StateFlow<WalletState> get() = wallet.state
+
+    init {
+        // Wire up the event listener for credential selection UX
+        wallet.setEventListener(object : WalletEventListener {
+            override suspend fun onCredentialSelectionRequired(
+                verifierName: String?,
+                candidates: List<StoredCredential>,
+            ): List<String> {
+                // Auto-accept all candidates in the sample app.
+                // A real app would show a picker dialog here.
+                return candidates.map { it.id }
             }
-        }
-        viewModelScope.launch {
-            engineSession!!.flowComplete().collect { msg ->
-                Timber.i("Flow ${msg.flowId} complete: ${msg.credentials?.size ?: 0} credentials")
-                _uiState.update {
-                    if (it is WalletUiState.Connected) it.copy(flowStatus = "complete") else it
-                }
-            }
-        }
-        viewModelScope.launch {
-            engineSession!!.flowErrors().collect { msg ->
-                Timber.e("Flow ${msg.flowId} error: ${msg.error.code} — ${msg.error.message}")
-                _uiState.update {
-                    if (it is WalletUiState.Connected) it.copy(flowStatus = "error: ${msg.error.message}") else it
-                }
-            }
-        }
-        viewModelScope.launch {
-            engineSession!!.signRequests().collect { msg ->
-                Timber.d("Sign request: ${msg.action} for flow ${msg.flowId}")
-                // TODO: Generate proof JWT using keystore and send sign_response
-            }
-        }
-        viewModelScope.launch {
-            engineSession!!.matchRequests().collect { msg ->
-                Timber.d("Match request for flow ${msg.flowId}")
-                // TODO: Match credentials locally and send match_response
-            }
-        }
-    }
-
-    private fun onAuthSuccess(session: AuthSession) {
-        authSession = session
-        apiClient = BackendApiClient(backendUrl, tenantId.ifBlank { "default" }).apply {
-            setAppToken(session.appToken)
-        }
-        connectEngine(session.appToken)
-        _uiState.value = WalletUiState.Connected(
-            isAuthenticated = true,
-            userId = session.uuid,
-            displayName = session.displayName,
-        )
+        })
     }
 
     fun login() {
-        viewModelScope.launch {
-            _uiState.value = WalletUiState.Connecting
-            try {
-                val tid = tenantId.ifBlank { "default" }
-                val authClient = WebAuthnAuthClient(backendUrl, tid, authProvider)
-                val session = authClient.login()
-                Timber.i("Login successful: ${session.uuid}")
-                onAuthSuccess(session)
-            } catch (e: Exception) {
-                Timber.e(e, "Login failed")
-                _uiState.value = WalletUiState.Error(e.message ?: "Login failed")
-            }
-        }
+        rebuildWalletIfNeeded()
+        viewModelScope.launch { wallet.login() }
     }
 
     fun register() {
-        viewModelScope.launch {
-            _uiState.value = WalletUiState.Connecting
-            try {
-                val tid = tenantId.ifBlank { "default" }
-                val authClient = WebAuthnAuthClient(backendUrl, tid, authProvider)
-                val session = authClient.register("Sample User")
-                Timber.i("Registration successful: ${session.uuid}")
-                onAuthSuccess(session)
-            } catch (e: Exception) {
-                Timber.e(e, "Registration failed")
-                _uiState.value = WalletUiState.Error(e.message ?: "Registration failed")
-            }
-        }
+        rebuildWalletIfNeeded()
+        viewModelScope.launch { wallet.register("Sample User") }
     }
 
-    /** Start an OID4VCI issuance flow via the engine WebSocket. */
     fun startIssuance(credentialOfferUri: String) {
-        viewModelScope.launch {
-            try {
-                val engine = engineSession
-                    ?: throw IllegalStateException("Engine not connected — login first")
-                engine.startIssuance(credentialOfferUri = credentialOfferUri)
-                Timber.i("Issuance flow started")
-            } catch (e: Exception) {
-                Timber.e(e, "Failed to start issuance")
-                _uiState.value = WalletUiState.Error(e.message ?: "Issuance failed")
-            }
-        }
+        viewModelScope.launch { wallet.startIssuance(credentialOfferUri) }
     }
 
-    /** Start an OID4VP presentation flow via the engine WebSocket. */
     fun startPresentation(requestUri: String) {
-        viewModelScope.launch {
-            try {
-                val engine = engineSession
-                    ?: throw IllegalStateException("Engine not connected — login first")
-                engine.startPresentation(requestUri = requestUri)
-                Timber.i("Presentation flow started")
-            } catch (e: Exception) {
-                Timber.e(e, "Failed to start presentation")
-                _uiState.value = WalletUiState.Error(e.message ?: "Presentation failed")
-            }
-        }
+        viewModelScope.launch { wallet.startPresentation(requestUri) }
     }
 
     fun disconnect() {
-        engineSession?.disconnect()
-        engineSession = null
-        apiClient = null
-        authSession = null
-        _uiState.value = WalletUiState.NotConnected(backendUrl, tenantId)
+        wallet.logout()
     }
 
-    override fun onCleared() {
-        super.onCleared()
-        engineSession?.disconnect()
+    /**
+     * Rebuild the SirosWallet instance if the user changed the
+     * backend URL or tenant ID since the last creation.
+     */
+    private fun rebuildWalletIfNeeded() {
+        val current = wallet
+        val currentState = current.state.value
+        if (currentState is WalletState.Disconnected || currentState is WalletState.Error) {
+            wallet = SirosWallet.create(
+                activity,
+                WalletConfig(_backendUrl.value, _tenantId.value),
+            )
+        }
     }
 }

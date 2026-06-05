@@ -18,9 +18,9 @@ import com.nimbusds.jwt.SignedJWT
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import timber.log.Timber
-import java.security.MessageDigest
 import java.util.Date
 import java.util.UUID
+import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 /**
@@ -28,7 +28,10 @@ import javax.crypto.spec.SecretKeySpec
  * encrypted container format.
  *
  * Keys are stored as JWK objects inside a JWE envelope encrypted with
- * an AES-256-GCM key derived from the WebAuthn PRF output via HKDF.
+ * an AES-256-GCM key derived from the WebAuthn PRF output via HKDF-SHA256.
+ *
+ * Key derivation matches the web frontend:
+ *   PRF output → HKDF(hash=SHA-256, salt=hkdfSalt, info=hkdfInfo) → 256-bit AES key
  */
 class JweKeystore(
     private val json: Json = Json { ignoreUnknownKeys = true },
@@ -39,8 +42,13 @@ class JweKeystore(
 
     override val isUnlocked: Boolean get() = encryptionKey != null
 
-    override suspend fun unlock(prfOutput: ByteArray, encryptedContainer: ByteArray) {
-        val derivedKey = deriveKey(prfOutput)
+    override suspend fun unlock(
+        prfOutput: ByteArray,
+        encryptedContainer: ByteArray,
+        hkdfSalt: ByteArray,
+        hkdfInfo: ByteArray,
+    ) {
+        val derivedKey = hkdfSha256(prfOutput, hkdfSalt, hkdfInfo, 32)
         encryptionKey = derivedKey
 
         if (encryptedContainer.isNotEmpty()) {
@@ -158,11 +166,35 @@ class JweKeystore(
         if (!isUnlocked) throw KeystoreException("Keystore is locked")
     }
 
-    /** Derive AES-256 key from PRF output using HKDF-SHA256. */
-    private fun deriveKey(prfOutput: ByteArray): ByteArray {
-        // Simplified HKDF extract+expand for 32-byte key
-        val digest = MessageDigest.getInstance("SHA-256")
-        return digest.digest(prfOutput)
+    /**
+     * HKDF-SHA256: extract + expand.
+     *
+     * Matches the web frontend's key derivation:
+     *   HKDF(hash=SHA-256, ikm=prfOutput, salt=hkdfSalt, info=hkdfInfo) → outputLen bytes
+     */
+    private fun hkdfSha256(
+        ikm: ByteArray,
+        salt: ByteArray,
+        info: ByteArray,
+        outputLen: Int,
+    ): ByteArray {
+        // Extract: PRK = HMAC-SHA256(salt, ikm)
+        val prk = hmacSha256(if (salt.isEmpty()) ByteArray(32) else salt, ikm)
+
+        // Expand: T(1) = HMAC-SHA256(PRK, info || 0x01)
+        // For 32-byte output, a single block is sufficient.
+        require(outputLen <= 32) { "HKDF output length must be <= 32 for single-block expand" }
+        val expandInput = ByteArray(info.size + 1)
+        System.arraycopy(info, 0, expandInput, 0, info.size)
+        expandInput[info.size] = 0x01
+        val okm = hmacSha256(prk, expandInput)
+        return okm.copyOf(outputLen)
+    }
+
+    private fun hmacSha256(key: ByteArray, data: ByteArray): ByteArray {
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(key, "HmacSHA256"))
+        return mac.doFinal(data)
     }
 
     @Serializable

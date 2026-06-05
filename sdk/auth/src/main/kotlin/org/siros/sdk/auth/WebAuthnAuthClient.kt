@@ -27,7 +27,7 @@ class WebAuthnAuthClient(
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
     /** Register a new user with WebAuthn. Returns an authenticated session. */
-    suspend fun register(displayName: String): AuthSession = withContext(Dispatchers.IO) {
+    suspend fun register(displayName: String, prfSalt: ByteArray? = null): AuthSession = withContext(Dispatchers.IO) {
         // Step 1: Get registration challenge from backend
         val challengeResponse = post(
             "$baseUrl/user/register-webauthn-begin",
@@ -60,6 +60,7 @@ class WebAuthnAuthClient(
                 userName = userName,
                 userDisplayName = displayName,
                 challenge = challenge,
+                prfSalt = prfSalt,
             )
         )
 
@@ -83,7 +84,7 @@ class WebAuthnAuthClient(
     }
 
     /** Authenticate an existing user with WebAuthn. Returns an authenticated session. */
-    suspend fun login(): AuthSession = withContext(Dispatchers.IO) {
+    suspend fun login(prfSalt: ByteArray? = null): AuthSession = withContext(Dispatchers.IO) {
         // Step 1: Get login challenge
         val challengeResponse = post("$baseUrl/user/login-webauthn-begin", buildJsonObject {})
         val options = challengeResponse.jsonObject
@@ -103,6 +104,7 @@ class WebAuthnAuthClient(
             AuthenticateOptions(
                 rpId = rpId,
                 challenge = challenge,
+                prfSalt = prfSalt,
             )
         )
 

@@ -34,8 +34,21 @@ class CredentialManagerAuthProvider(
     private val credentialManager = CredentialManager.create(context)
     private val json = Json { ignoreUnknownKeys = true }
 
+    /**
+     * The credential ID from the most recent register/authenticate call.
+     * Used by [SirosWallet] to persist the credential for future PRF evaluations.
+     */
+    var lastCredentialId: ByteArray? = null
+        private set
+
+    /**
+     * The PRF output from the most recent register/authenticate call.
+     * Null if the authenticator did not support PRF.
+     */
+    var lastPrfOutput: PrfOutput? = null
+        private set
+
     override suspend fun register(options: RegisterOptions): RegisterResult {
-        // Build the WebAuthn PublicKeyCredentialCreationOptions JSON
         val requestJson = buildCreationOptionsJson(options)
         Timber.d("CreatePublicKeyCredentialRequest JSON: $requestJson")
 
@@ -46,11 +59,13 @@ class CredentialManagerAuthProvider(
             throw AuthException("Unexpected credential response type: ${response::class.simpleName}")
         }
 
-        return parseRegistrationResponse(response.registrationResponseJson)
+        return parseRegistrationResponse(response.registrationResponseJson).also {
+            lastCredentialId = it.credentialId
+            lastPrfOutput = it.prfOutput
+        }
     }
 
     override suspend fun authenticate(options: AuthenticateOptions): AuthenticateResult {
-        // Build the WebAuthn PublicKeyCredentialRequestOptions JSON
         val requestJson = buildRequestOptionsJson(options)
         Timber.d("GetPublicKeyCredentialOption JSON: $requestJson")
 
@@ -63,14 +78,46 @@ class CredentialManagerAuthProvider(
             throw AuthException("Unexpected credential type: ${credential::class.simpleName}")
         }
 
-        return parseAuthenticationResponse(credential.authenticationResponseJson)
+        return parseAuthenticationResponse(credential.authenticationResponseJson).also {
+            lastCredentialId = it.credentialId
+            lastPrfOutput = it.prfOutput
+        }
     }
 
     override suspend fun getPrfOutput(credentialId: ByteArray, salt: ByteArray): PrfOutput {
-        // PRF extension support depends on the authenticator. Build a get request
-        // with the PRF extension and attempt to extract the output.
-        // Note: Android Credential Manager PRF support is authenticator-dependent.
-        throw AuthException("PRF not yet supported on this platform")
+        // Issue a standalone credentials.get with PRF extension for the given credential+salt.
+        // The challenge is a random throwaway — we only care about the PRF output.
+        val challenge = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+        val requestJson = buildJsonObject {
+            put("challenge", b64url(challenge))
+            put("rpId", "")  // Will be overridden by the credential's RP
+            put("timeout", 60000)
+            put("userVerification", "preferred")
+            put("allowCredentials", buildJsonArray {
+                add(buildJsonObject {
+                    put("type", "public-key")
+                    put("id", b64url(credentialId))
+                })
+            })
+            put("extensions", buildJsonObject {
+                put("prf", buildJsonObject {
+                    put("eval", buildJsonObject {
+                        put("first", b64url(salt))
+                    })
+                })
+            })
+        }.toString()
+
+        val credentialOption = GetPublicKeyCredentialOption(requestJson)
+        val request = GetCredentialRequest(listOf(credentialOption))
+        val response = credentialManager.getCredential(context, request)
+        val credential = response.credential
+        if (credential !is PublicKeyCredential) {
+            throw AuthException("Unexpected credential type: ${credential::class.simpleName}")
+        }
+
+        return extractPrfOutput(credential.authenticationResponseJson)
+            ?: throw AuthException("PRF extension not supported by this authenticator")
     }
 
     // ── JSON builders ───────────────────────────────────────────────
@@ -100,6 +147,17 @@ class CredentialManagerAuthProvider(
                 put("residentKey", sel.residentKey)
                 put("userVerification", sel.userVerification)
             })
+
+            // PRF extension — request evaluation if salt is provided
+            options.prfSalt?.let { salt ->
+                put("extensions", buildJsonObject {
+                    put("prf", buildJsonObject {
+                        put("eval", buildJsonObject {
+                            put("first", b64url(salt))
+                        })
+                    })
+                })
+            }
         }
         return obj.toString()
     }
@@ -119,6 +177,17 @@ class CredentialManagerAuthProvider(
                             put("id", b64url(cred.id))
                         })
                     }
+                })
+            }
+
+            // PRF extension for authentication
+            options.prfSalt?.let { salt ->
+                put("extensions", buildJsonObject {
+                    put("prf", buildJsonObject {
+                        put("eval", buildJsonObject {
+                            put("first", b64url(salt))
+                        })
+                    })
                 })
             }
         }
@@ -144,6 +213,7 @@ class CredentialManagerAuthProvider(
             credentialId = b64urlDecode(id),
             attestationObject = b64urlDecode(attestationObject),
             clientDataJSON = b64urlDecode(clientDataJSON),
+            prfOutput = extractPrfOutput(responseJson),
         )
     }
 
@@ -169,6 +239,24 @@ class CredentialManagerAuthProvider(
             clientDataJSON = b64urlDecode(clientDataJSON),
             signature = b64urlDecode(signature),
             userHandle = userHandle?.let { b64urlDecode(it) },
+            prfOutput = extractPrfOutput(responseJson),
+        )
+    }
+
+    /**
+     * Extract PRF output from a WebAuthn response JSON.
+     * Returns null if the PRF extension was not evaluated.
+     */
+    private fun extractPrfOutput(responseJson: String): PrfOutput? {
+        val obj = json.parseToJsonElement(responseJson).jsonObject
+        val extensions = obj["clientExtensionResults"]?.jsonObject ?: return null
+        val prf = extensions["prf"]?.jsonObject ?: return null
+        val results = prf["results"]?.jsonObject ?: return null
+        val first = results["first"]?.jsonPrimitive?.content ?: return null
+        val second = results["second"]?.jsonPrimitive?.content
+        return PrfOutput(
+            first = b64urlDecode(first),
+            second = second?.let { b64urlDecode(it) },
         )
     }
 

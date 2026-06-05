@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import org.siros.sdk.wallet.WalletState
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -44,7 +45,9 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WalletScreen(viewModel: WalletViewModel) {
-    val uiState by viewModel.uiState.collectAsState()
+    val walletState by viewModel.state.collectAsState()
+    val backendUrl by viewModel.backendUrl.collectAsState()
+    val tenantId by viewModel.tenantId.collectAsState()
 
     Scaffold(
         topBar = {
@@ -58,18 +61,18 @@ fun WalletScreen(viewModel: WalletViewModel) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            when (val state = uiState) {
-                is WalletUiState.NotConnected -> {
+            when (val state = walletState) {
+                is WalletState.Disconnected -> {
                     NotConnectedView(
-                        backendUrl = state.backendUrl,
-                        tenantId = state.tenantId,
+                        backendUrl = backendUrl,
+                        tenantId = tenantId,
                         onBackendUrlChange = viewModel::updateBackendUrl,
                         onTenantIdChange = viewModel::updateTenantId,
                         onLogin = viewModel::login,
                         onRegister = viewModel::register,
                     )
                 }
-                is WalletUiState.Connecting -> {
+                is WalletState.Connecting -> {
                     Column(
                         modifier = Modifier.fillMaxSize(),
                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -80,14 +83,26 @@ fun WalletScreen(viewModel: WalletViewModel) {
                         Text("Connecting...")
                     }
                 }
-                is WalletUiState.Connected -> {
-                    ConnectedView(
+                is WalletState.Ready -> {
+                    ReadyView(
                         state = state,
                         onStartIssuance = viewModel::startIssuance,
                         onDisconnect = viewModel::disconnect,
                     )
                 }
-                is WalletUiState.Error -> {
+                is WalletState.FlowActive -> {
+                    Column {
+                        Text(
+                            text = "Flow in progress: ${state.flowType}",
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        CircularProgressIndicator()
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Status: ${state.status}")
+                    }
+                }
+                is WalletState.Error -> {
                     Text(
                         text = "Error: ${state.message}",
                         color = MaterialTheme.colorScheme.error,
@@ -136,8 +151,8 @@ fun NotConnectedView(
 }
 
 @Composable
-fun ConnectedView(
-    state: WalletUiState.Connected,
+fun ReadyView(
+    state: WalletState.Ready,
     onStartIssuance: (String) -> Unit,
     onDisconnect: () -> Unit,
 ) {
@@ -146,10 +161,10 @@ fun ConnectedView(
         style = MaterialTheme.typography.titleMedium,
     )
 
-    state.flowStatus?.let { status ->
+    if (state.credentials.isNotEmpty()) {
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = "Flow: $status",
+            text = "${state.credentials.size} credential(s)",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

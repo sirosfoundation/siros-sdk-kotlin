@@ -49,11 +49,7 @@ android {
 }
 
 dependencies {
-    implementation(project(":sdk:transport"))
-    implementation(project(":sdk:auth"))
-    implementation(project(":sdk:keystore"))
-    implementation(project(":sdk:flow"))
-    implementation(project(":sdk:credentials"))
+    implementation(project(":sdk:wallet"))
     implementation(project(":sdk:passkey-provider"))
 
     implementation(libs.kotlinx.serialization.json)
