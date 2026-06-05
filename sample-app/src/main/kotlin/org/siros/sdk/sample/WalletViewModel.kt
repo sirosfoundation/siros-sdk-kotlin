@@ -1,6 +1,8 @@
 package org.siros.sdk.sample
 
+import android.app.Activity
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -8,6 +10,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.siros.sdk.auth.AuthSession
 import org.siros.sdk.auth.BackendApiClient
+import org.siros.sdk.auth.CredentialManagerAuthProvider
+import org.siros.sdk.auth.WebAuthnAuthClient
 import org.siros.sdk.transport.engine.WalletEngineSession
 import timber.log.Timber
 
@@ -26,7 +30,14 @@ sealed class WalletUiState {
     data class Error(val message: String) : WalletUiState()
 }
 
-class WalletViewModel : ViewModel() {
+class WalletViewModel(private val activity: Activity) : ViewModel() {
+
+    class Factory(private val activity: Activity) : ViewModelProvider.Factory {
+        @Suppress("UNCHECKED_CAST")
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            return WalletViewModel(activity) as T
+        }
+    }
 
     private val _uiState = MutableStateFlow<WalletUiState>(WalletUiState.NotConnected())
     val uiState: StateFlow<WalletUiState> = _uiState
@@ -36,6 +47,8 @@ class WalletViewModel : ViewModel() {
     private var engineSession: WalletEngineSession? = null
     private var apiClient: BackendApiClient? = null
     private var authSession: AuthSession? = null
+
+    private val authProvider = CredentialManagerAuthProvider(activity)
 
     fun updateBackendUrl(url: String) {
         backendUrl = url
@@ -49,14 +62,13 @@ class WalletViewModel : ViewModel() {
 
     /**
      * Connect the engine WebSocket and start observing flow events.
-     * Requires a valid appToken — call after login/register.
+     * Called automatically after successful login/register.
      */
-    fun connectEngine(appToken: String) {
+    private fun connectEngine(appToken: String) {
         val tid = tenantId.ifBlank { "default" }
         engineSession = WalletEngineSession(backendUrl, tid)
         engineSession!!.connect(appToken)
 
-        // Observe engine events
         viewModelScope.launch {
             engineSession!!.flowProgress().collect { msg ->
                 Timber.d("Flow ${msg.flowId} progress: ${msg.step}")
@@ -95,32 +107,28 @@ class WalletViewModel : ViewModel() {
         }
     }
 
-    /**
-     * Login stub — real passkey auth requires Android Credential Manager.
-     * For now, demonstrates the session + engine connection flow.
-     */
+    private fun onAuthSuccess(session: AuthSession) {
+        authSession = session
+        apiClient = BackendApiClient(backendUrl, tenantId.ifBlank { "default" }).apply {
+            setAppToken(session.appToken)
+        }
+        connectEngine(session.appToken)
+        _uiState.value = WalletUiState.Connected(
+            isAuthenticated = true,
+            userId = session.uuid,
+            displayName = session.displayName,
+        )
+    }
+
     fun login() {
         viewModelScope.launch {
             _uiState.value = WalletUiState.Connecting
             try {
-                // TODO: Use WebAuthnAuthClient with real AuthProvider (Credential Manager)
-                // val authClient = WebAuthnAuthClient(baseUrl, tenantId, authProvider)
-                // val session = authClient.login()
-                // authSession = session
-                // apiClient = BackendApiClient(baseUrl, tenantId).apply { setAppToken(session.appToken) }
-                // connectEngine(session.appToken)
-                // _uiState.value = WalletUiState.Connected(
-                //     isAuthenticated = true,
-                //     userId = session.uuid,
-                //     displayName = session.displayName,
-                // )
-
-                Timber.i("Login requested — requires Credential Manager integration")
-                _uiState.value = WalletUiState.Connected(
-                    isAuthenticated = true,
-                    userId = "demo-user",
-                    displayName = "Demo User",
-                )
+                val tid = tenantId.ifBlank { "default" }
+                val authClient = WebAuthnAuthClient(backendUrl, tid, authProvider)
+                val session = authClient.login()
+                Timber.i("Login successful: ${session.uuid}")
+                onAuthSuccess(session)
             } catch (e: Exception) {
                 Timber.e(e, "Login failed")
                 _uiState.value = WalletUiState.Error(e.message ?: "Login failed")
@@ -132,13 +140,11 @@ class WalletViewModel : ViewModel() {
         viewModelScope.launch {
             _uiState.value = WalletUiState.Connecting
             try {
-                // TODO: Use WebAuthnAuthClient with real AuthProvider (Credential Manager)
-                Timber.i("Registration requested — requires Credential Manager integration")
-                _uiState.value = WalletUiState.Connected(
-                    isAuthenticated = true,
-                    userId = "demo-user",
-                    displayName = "Demo User",
-                )
+                val tid = tenantId.ifBlank { "default" }
+                val authClient = WebAuthnAuthClient(backendUrl, tid, authProvider)
+                val session = authClient.register("Sample User")
+                Timber.i("Registration successful: ${session.uuid}")
+                onAuthSuccess(session)
             } catch (e: Exception) {
                 Timber.e(e, "Registration failed")
                 _uiState.value = WalletUiState.Error(e.message ?: "Registration failed")

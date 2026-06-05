@@ -30,10 +30,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val vmFactory = WalletViewModel.Factory(this)
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    WalletScreen()
+                    WalletScreen(viewModel(factory = vmFactory))
                 }
             }
         }
@@ -42,7 +43,7 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WalletScreen(viewModel: WalletViewModel = viewModel()) {
+fun WalletScreen(viewModel: WalletViewModel) {
     val uiState by viewModel.uiState.collectAsState()
 
     Scaffold(
