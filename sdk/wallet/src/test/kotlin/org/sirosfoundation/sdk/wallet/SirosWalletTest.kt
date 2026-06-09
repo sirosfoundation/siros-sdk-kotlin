@@ -29,6 +29,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -248,10 +249,11 @@ class SirosWalletTest {
         val sessionStore = mockk<SessionStore>(relaxed = true)
         val apiClient = mockk<BackendApiClient>(relaxed = true)
         var privateDataJwe: String? = null
+        val containerJson = """{"prfKeys":[],"jwe":"test-jwe"}"""
         every { keystore.isUnlocked } returns true
         every { sessionStore.privateDataJwe } answers { privateDataJwe }
         every { sessionStore.privateDataJwe = any() } answers { privateDataJwe = firstArg() }
-        coEvery { keystore.exportEncryptedContainer() } returns "encrypted-jwe".toByteArray()
+        coEvery { keystore.exportEncryptedContainer() } returns containerJson.toByteArray()
         coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(
@@ -266,9 +268,9 @@ class SirosWalletTest {
         wallet.deleteCredential("missing")
 
         coVerify(exactly = 1) { keystore.exportEncryptedContainer() }
-        verify(exactly = 1) { sessionStore.privateDataJwe = "encrypted-jwe" }
+        verify(exactly = 1) { sessionStore.privateDataJwe = containerJson }
         coVerify(exactly = 1) {
-            apiClient.updatePrivateData(match { it["\$b64u"] == JsonPrimitive("ZW5jcnlwdGVkLWp3ZQ") })
+            apiClient.updatePrivateData(match { it["jwe"]?.jsonPrimitive?.content == "test-jwe" })
         }
     }
 
@@ -487,7 +489,7 @@ class SirosWalletTest {
         every { keystore.isUnlocked } returns true
         every { sessionStore.privateDataJwe } answers { privateDataJwe }
         every { sessionStore.privateDataJwe = any() } answers { privateDataJwe = firstArg() }
-        coEvery { keystore.exportEncryptedContainer() } returns "updated-container".toByteArray()
+        coEvery { keystore.exportEncryptedContainer() } returns """{"prfKeys":[],"jwe":"updated-jwe"}""".toByteArray()
         coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
         mockEngineConstructor(flowComplete = completeFlow)
         val wallet = newWallet(

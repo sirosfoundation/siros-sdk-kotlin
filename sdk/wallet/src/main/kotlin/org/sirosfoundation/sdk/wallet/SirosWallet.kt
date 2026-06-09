@@ -127,6 +127,9 @@ class SirosWallet private constructor(
             // Derive key and initialise empty keystore
             keystore.unlock(prfOutput.first, ByteArray(0), hkdfSalt, hkdfInfo)
 
+            // Set the credential ID on the container metadata
+            (keystore as? JweKeystore)?.setCredentialId(credId)
+
             // Export the initial (empty) encrypted container
             val encryptedContainer = keystore.exportEncryptedContainer()
 
@@ -696,10 +699,29 @@ class SirosWallet private constructor(
         val client = apiClient ?: throw WalletException("Not authenticated")
         return try {
             val response = client.getPrivateData()
-            val pd = response["privateData"]?.jsonPrimitive?.content
-            if (pd != null) {
-                sessionStore.privateDataJwe = pd
-                pd.toByteArray(Charsets.UTF_8)
+            val pdElement = response["privateData"]
+            if (pdElement != null) {
+                // Backend returns {"privateData": {"$b64u": "base64url-encoded-container"}}
+                val containerBytes = when (pdElement) {
+                    is kotlinx.serialization.json.JsonObject -> {
+                        val b64u = pdElement["\$b64u"]?.jsonPrimitive?.content
+                        if (b64u != null) {
+                            b64UrlDecode(b64u)
+                        } else {
+                            // Container is inline JSON
+                            pdElement.toString().toByteArray(Charsets.UTF_8)
+                        }
+                    }
+                    is kotlinx.serialization.json.JsonPrimitive -> {
+                        // Plain string (legacy or direct JWE)
+                        pdElement.content.toByteArray(Charsets.UTF_8)
+                    }
+                    else -> ByteArray(0)
+                }
+                if (containerBytes.isNotEmpty()) {
+                    sessionStore.privateDataJwe = String(containerBytes, Charsets.UTF_8)
+                }
+                containerBytes
             } else {
                 ByteArray(0)
             }
@@ -711,13 +733,11 @@ class SirosWallet private constructor(
 
     private suspend fun syncPrivateDataToBackend() {
         val client = apiClient ?: return
-        val jwe = sessionStore.privateDataJwe ?: return
+        val containerJson = sessionStore.privateDataJwe ?: return
         try {
-            val body = kotlinx.serialization.json.buildJsonObject {
-                put("\$b64u", kotlinx.serialization.json.JsonPrimitive(
-                    b64UrlEncode(jwe.toByteArray(Charsets.UTF_8))
-                ))
-            }
+            // Send the full container JSON as the POST body,
+            // matching the wallet-frontend's format.
+            val body = Json.parseToJsonElement(containerJson).jsonObject
             client.updatePrivateData(body)
             Timber.d("Private data synced to backend")
         } catch (e: Exception) {
@@ -1078,7 +1098,7 @@ class SirosWallet private constructor(
     }
 
     companion object {
-        internal const val HKDF_INFO = "SIROS Wallet PRF"
+        internal const val HKDF_INFO = "eDiplomas PRF"
         internal var createEngineSession: (String, String) -> WalletEngineSession =
             { baseUrl, tenantId -> WalletEngineSession(baseUrl, tenantId) }
 
@@ -1089,6 +1109,7 @@ class SirosWallet private constructor(
         private fun b64Encode(data: ByteArray): String = b64.encodeToString(data)
         private fun b64Decode(data: String): ByteArray = b64Dec.decode(data)
         private fun b64UrlEncode(data: ByteArray): String = b64Url.encodeToString(data)
+        private fun b64UrlDecode(data: String): ByteArray = Base64.getUrlDecoder().decode(data)
 
         /**
          * Create the appropriate [AuthProvider] based on config.

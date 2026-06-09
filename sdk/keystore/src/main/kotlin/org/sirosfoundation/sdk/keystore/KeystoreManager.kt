@@ -21,13 +21,13 @@ interface KeystoreManager {
      * @param prfOutput   raw PRF output from the WebAuthn authenticator.
      * @param encryptedContainer the JWE container (may be empty for first-time setup).
      * @param hkdfSalt    HKDF extraction salt (32 bytes).
-     * @param hkdfInfo    HKDF expansion info (e.g. "SIROS Wallet PRF").
+     * @param hkdfInfo    HKDF expansion info (e.g. "eDiplomas PRF").
      */
     suspend fun unlock(
         prfOutput: ByteArray,
         encryptedContainer: ByteArray,
         hkdfSalt: ByteArray = ByteArray(32),
-        hkdfInfo: ByteArray = "SIROS Wallet PRF".toByteArray(Charsets.UTF_8),
+        hkdfInfo: ByteArray = "eDiplomas PRF".toByteArray(Charsets.UTF_8),
     )
 
     /** Lock the keystore, clearing key material from memory. */
