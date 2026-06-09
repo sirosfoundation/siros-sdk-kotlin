@@ -1,5 +1,7 @@
 package org.sirosfoundation.sdk.auth
 
+import org.sirosfoundation.sdk.credentials.AuthException
+import org.sirosfoundation.sdk.credentials.NetworkException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -165,5 +167,3 @@ class WebAuthnAuthClient(
         fun decodeBase64Url(data: String): ByteArray = base64UrlDecoder.decode(data)
     }
 }
-
-class AuthException(message: String, cause: Throwable? = null) : Exception(message, cause)

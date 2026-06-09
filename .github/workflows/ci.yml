@@ -55,15 +55,15 @@ jobs:
 
           total = total_missed + total_covered
           pct = (100.0 * total_covered / total) if total else 0.0
-            min_pct = float(os.environ.get('COVERAGE_MIN_PCT', '0'))
+          min_pct = float(os.environ.get('COVERAGE_MIN_PCT', '0'))
 
-            print(f'Aggregated line coverage (sdk modules + sample-app): {pct:.2f}%')
-            print(f'Required minimum coverage: {min_pct:.2f}%')
+          print(f'Aggregated line coverage (sdk modules + sample-app): {pct:.2f}%')
+          print(f'Required minimum coverage: {min_pct:.2f}%')
 
-            if pct < min_pct:
+          if pct < min_pct:
               print(
-                f'Coverage gate failed: {pct:.2f}% < {min_pct:.2f}%',
-                file=sys.stderr,
+                  f'Coverage gate failed: {pct:.2f}% < {min_pct:.2f}%',
+                  file=sys.stderr,
               )
               sys.exit(1)
           PY

@@ -72,14 +72,31 @@ data class LogoInfo(
 
 /**
  * Local credential store.
- * SDK consumers can implement custom storage backends.
+ *
+ * SDK consumers can implement custom storage backends (e.g. Room, SQLite,
+ * encrypted preferences). All methods are suspend to allow I/O-backed
+ * implementations.
+ *
+ * Thread safety: implementations must be safe for concurrent access
+ * from multiple coroutines.
  */
 interface CredentialStore {
+    /** Return all stored credentials. */
     suspend fun getAll(): List<StoredCredential>
+
+    /** Find a credential by its unique [id]. Returns null if not found. */
     suspend fun getById(id: String): StoredCredential?
+
+    /** Store a new credential. Overwrites any existing credential with the same ID. */
     suspend fun save(credential: StoredCredential)
+
+    /** Update an existing credential's metadata. Equivalent to [save]. */
     suspend fun update(credential: StoredCredential)
+
+    /** Delete a credential by [id]. No-op if not found. */
     suspend fun delete(id: String)
+
+    /** Remove all stored credentials. */
     suspend fun clear()
 }
 

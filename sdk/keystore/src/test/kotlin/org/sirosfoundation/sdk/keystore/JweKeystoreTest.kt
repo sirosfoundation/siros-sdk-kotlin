@@ -1,5 +1,6 @@
 package org.sirosfoundation.sdk.keystore
 
+import org.sirosfoundation.sdk.credentials.KeystoreException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals

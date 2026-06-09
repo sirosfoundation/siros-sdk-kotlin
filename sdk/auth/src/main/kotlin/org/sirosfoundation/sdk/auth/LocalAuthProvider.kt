@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.sirosfoundation.sdk.auth
 
+import org.sirosfoundation.sdk.credentials.AuthException
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.pm.PackageManager

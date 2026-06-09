@@ -1,5 +1,6 @@
 package org.sirosfoundation.sdk.auth
 
+import org.sirosfoundation.sdk.credentials.BackendApiException
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject

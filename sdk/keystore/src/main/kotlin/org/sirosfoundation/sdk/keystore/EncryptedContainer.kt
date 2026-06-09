@@ -1,5 +1,6 @@
 package org.sirosfoundation.sdk.keystore
 
+import org.sirosfoundation.sdk.credentials.KeystoreException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
