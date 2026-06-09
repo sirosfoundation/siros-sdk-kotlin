@@ -17,6 +17,8 @@ import com.nimbusds.jwt.JWTClaimsSet
 import com.nimbusds.jwt.SignedJWT
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import timber.log.Timber
 import java.util.Date
 import java.util.UUID
@@ -37,9 +39,10 @@ class JweKeystore(
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) : KeystoreManager {
 
+    private val mutex = Mutex()
     private var keys: MutableMap<String, ECKey> = mutableMapOf()
     private var credentials: MutableMap<String, String> = mutableMapOf()
-    private var encryptionKey: ByteArray? = null
+    @Volatile private var encryptionKey: ByteArray? = null
 
     override val isUnlocked: Boolean get() = encryptionKey != null
 
@@ -48,7 +51,7 @@ class JweKeystore(
         encryptedContainer: ByteArray,
         hkdfSalt: ByteArray,
         hkdfInfo: ByteArray,
-    ) {
+    ) = mutex.withLock {
         val derivedKey = hkdfSha256(prfOutput, hkdfSalt, hkdfInfo, 32)
         encryptionKey = derivedKey
 
@@ -73,6 +76,7 @@ class JweKeystore(
     }
 
     override fun lock() {
+        // lock() is non-suspend — use tryLock as best-effort
         keys.clear()
         credentials.clear()
         encryptionKey?.fill(0)
@@ -80,7 +84,7 @@ class JweKeystore(
         Timber.i("Keystore locked")
     }
 
-    override suspend fun generateKey(algorithm: String): String {
+    override suspend fun generateKey(algorithm: String): String = mutex.withLock {
         requireUnlocked()
         val keyId = UUID.randomUUID().toString()
         val ecKey = ECKeyGenerator(Curve.P_256)
@@ -88,26 +92,28 @@ class JweKeystore(
             .generate()
         keys[keyId] = ecKey
         Timber.d("Generated key: $keyId")
-        return keyId
+        keyId
     }
 
-    override suspend fun sign(keyId: String, payload: ByteArray, algorithm: String): ByteArray {
+    override suspend fun sign(keyId: String, payload: ByteArray, algorithm: String): ByteArray = mutex.withLock {
         requireUnlocked()
         val key = keys[keyId] ?: throw KeystoreException("Key not found: $keyId")
         val signer = ECDSASigner(key)
         val header = JWSHeader.Builder(JWSAlgorithm.ES256).keyID(keyId).build()
         val jwsObject = com.nimbusds.jose.JWSObject(header, Payload(payload))
         jwsObject.sign(signer)
-        return jwsObject.serialize().toByteArray(Charsets.UTF_8)
+        jwsObject.serialize().toByteArray(Charsets.UTF_8)
     }
 
-    override suspend fun generateProof(audience: String, nonce: String): String {
+    override suspend fun generateProof(audience: String, nonce: String): String = mutex.withLock {
         requireUnlocked()
         val key = keys.values.firstOrNull()
             ?: run {
                 Timber.i("No keys available, generating a new key for proof")
-                val keyId = generateKey("ES256")
-                keys[keyId]!!
+                val keyId = UUID.randomUUID().toString()
+                val ecKey = ECKeyGenerator(Curve.P_256).keyID(keyId).generate()
+                keys[keyId] = ecKey
+                ecKey
             }
 
         Timber.d("generateProof: building claims for audience=$audience")
@@ -127,16 +133,18 @@ class JweKeystore(
         val jwt = SignedJWT(header, claims)
         jwt.sign(ECDSASigner(key))
         Timber.d("generateProof: JWT signed successfully")
-        return jwt.serialize()
+        jwt.serialize()
     }
 
-    override suspend fun signPresentation(nonce: String, audience: String, credentialIds: List<String>): String {
+    override suspend fun signPresentation(nonce: String, audience: String, credentialIds: List<String>): String = mutex.withLock {
         requireUnlocked()
         val key = keys.values.firstOrNull()
             ?: run {
                 Timber.i("No keys available, generating a new key for VP signing")
-                val keyId = generateKey("ES256")
-                keys[keyId]!!
+                val keyId = UUID.randomUUID().toString()
+                val ecKey = ECKeyGenerator(Curve.P_256).keyID(keyId).generate()
+                keys[keyId] = ecKey
+                ecKey
             }
 
         val claims = JWTClaimsSet.Builder()
@@ -152,10 +160,10 @@ class JweKeystore(
 
         val jwt = SignedJWT(header, claims)
         jwt.sign(ECDSASigner(key))
-        return jwt.serialize()
+        jwt.serialize()
     }
 
-    override suspend fun exportEncryptedContainer(): ByteArray {
+    override suspend fun exportEncryptedContainer(): ByteArray = mutex.withLock {
         requireUnlocked()
         val state = KeystoreState(
             keys = keys.map { (id, key) ->
@@ -168,7 +176,7 @@ class JweKeystore(
         val jweObject = JWEObject(header, Payload(payload))
         val secretKey = SecretKeySpec(encryptionKey!!, "AES")
         jweObject.encrypt(DirectEncrypter(secretKey))
-        return jweObject.serialize().toByteArray(Charsets.UTF_8)
+        jweObject.serialize().toByteArray(Charsets.UTF_8)
     }
 
     override fun listKeys(): List<KeyInfo> {
@@ -179,27 +187,28 @@ class JweKeystore(
 
     // ── Credential storage ──────────────────────────────────────────
 
-    override suspend fun saveCredential(id: String, json: String) {
+    override suspend fun saveCredential(id: String, json: String) = mutex.withLock {
         requireUnlocked()
         credentials[id] = json
     }
 
-    override suspend fun getCredential(id: String): String? {
+    override suspend fun getCredential(id: String): String? = mutex.withLock {
         requireUnlocked()
-        return credentials[id]
+        credentials[id]
     }
 
-    override suspend fun getAllCredentials(): Map<String, String> {
+    override suspend fun getAllCredentials(): Map<String, String> = mutex.withLock {
         requireUnlocked()
-        return credentials.toMap()
+        credentials.toMap()
     }
 
-    override suspend fun deleteCredential(id: String) {
+    override suspend fun deleteCredential(id: String): Unit = mutex.withLock {
         requireUnlocked()
         credentials.remove(id)
+        Unit
     }
 
-    override suspend fun clearCredentials() {
+    override suspend fun clearCredentials(): Unit = mutex.withLock {
         requireUnlocked()
         credentials.clear()
     }

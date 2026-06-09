@@ -21,6 +21,18 @@ sealed class WalletState {
         val credentials: List<StoredCredential> = emptyList(),
     ) : WalletState()
 
+    /**
+     * Session resumed but the keystore is still locked (requires PRF).
+     *
+     * The engine is connected and the session token is valid, but
+     * credentials and signing are unavailable until [SirosWallet.unlockKeystore]
+     * is called (which triggers a WebAuthn assertion to obtain the PRF output).
+     */
+    data class KeystoreLocked(
+        val userId: String,
+        val displayName: String?,
+    ) : WalletState()
+
     /** An issuance or presentation flow is in progress. */
     data class FlowActive(
         val userId: String,

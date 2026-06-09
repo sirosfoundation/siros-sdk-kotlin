@@ -311,6 +311,14 @@ class WalletEngineSession(
         webSocket = null
         sessionId = null
         _state.value = State.DISCONNECTED
+        // Close all channels to release consumers
+        incomingMessages.close()
+        flowProgressChannel.close()
+        flowCompleteChannel.close()
+        flowErrorChannel.close()
+        signRequestChannel.close()
+        matchRequestChannel.close()
+        pushChannel.close()
         scope.cancel()
     }
 

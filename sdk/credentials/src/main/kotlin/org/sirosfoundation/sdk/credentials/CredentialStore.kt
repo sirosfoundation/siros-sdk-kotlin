@@ -37,24 +37,36 @@ data class CredentialMetadata(
     val claims: List<ClaimMeta>? = null,
 )
 
+/** Metadata about an individual claim within a credential. */
 @Serializable
 data class ClaimMeta(
+    /** JSON path elements selecting this claim in the credential. */
     val path: List<String>,
+    /** Human-readable label for display. */
     val label: String? = null,
+    /** Human-readable description. */
     val description: String? = null,
+    /** Selective disclosure rule: "always", "allowed", or "never". */
     val sd: String? = null,
+    /** Whether this claim must be present in a presentation. */
     val mandatory: Boolean = false,
 )
 
+/** Information about the credential issuer. */
 @Serializable
 data class IssuerInfo(
+    /** Display name of the issuer. */
     val name: String? = null,
+    /** URL of the issuer. */
     val url: String? = null,
 )
 
+/** Logo image reference for a credential or issuer. */
 @Serializable
 data class LogoInfo(
+    /** URI of the logo image. */
     val uri: String? = null,
+    /** Accessible alt-text for the logo. */
     @SerialName("alt_text") val altText: String? = null,
 )
 

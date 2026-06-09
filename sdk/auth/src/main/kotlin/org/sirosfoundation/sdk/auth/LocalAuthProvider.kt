@@ -68,7 +68,15 @@ class LocalAuthProvider(
         )
             .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
             .setDigests(KeyProperties.DIGEST_SHA256)
-            .setUserAuthenticationRequired(false) // TODO: enable biometric UV
+            .setUserAuthenticationRequired(true)
+            .apply {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    setUserAuthenticationParameters(
+                        0, // require auth every use
+                        KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL,
+                    )
+                }
+            }
             .build()
         keyPairGenerator.initialize(keySpec)
         val keyPair = keyPairGenerator.generateKeyPair()

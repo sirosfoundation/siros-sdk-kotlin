@@ -147,9 +147,13 @@ class SirosWallet private constructor(
                 displayName = session.displayName,
                 credentials = credentialStore.getAll(),
             )
+        } catch (e: WalletException) {
+            Timber.e(e, "Registration failed")
+            _state.value = WalletState.Error(e.message ?: "Registration failed")
         } catch (e: Exception) {
             Timber.e(e, "Registration failed")
             _state.value = WalletState.Error(e.message ?: "Registration failed")
+            throw WalletException("Registration failed", e)
         }
     }
 
@@ -210,9 +214,13 @@ class SirosWallet private constructor(
                 displayName = session.displayName,
                 credentials = credentialStore.getAll(),
             )
+        } catch (e: WalletException) {
+            Timber.e(e, "Login failed")
+            _state.value = WalletState.Error(e.message ?: "Login failed")
         } catch (e: Exception) {
             Timber.e(e, "Login failed")
             _state.value = WalletState.Error(e.message ?: "Login failed")
+            throw WalletException("Login failed", e)
         }
     }
 
@@ -278,25 +286,79 @@ class SirosWallet private constructor(
             val storedJwe = sessionStore.privateDataJwe
             val hkdfSalt = sessionStore.hkdfSalt?.let { b64Decode(it) }
             val hkdfInfo = sessionStore.hkdfInfo?.let { b64Decode(it) }
-            if (storedJwe != null && hkdfSalt != null && hkdfInfo != null) {
-                // We need the PRF output to derive the encryption key.
-                // On resume we don't have it, so we re-authenticate quietly.
-                // Fall through to connect engine with existing token.
-                Timber.d("Skipping keystore unlock on resume (requires PRF)")
-            }
 
-            // Connect the engine
+            // Connect the engine (works with token alone, no keystore needed)
             connectEngine(sessionStore.appToken!!)
 
-            _state.value = WalletState.Ready(
-                userId = userId,
-                displayName = displayName,
-                credentials = credentialStore.getAll(),
-            )
-            Timber.i("Session resumed for user $userId")
+            if (storedJwe != null && hkdfSalt != null && hkdfInfo != null) {
+                // Keystore cannot be unlocked without PRF output.
+                // Emit KeystoreLocked so the UI can prompt the user.
+                _state.value = WalletState.KeystoreLocked(
+                    userId = userId,
+                    displayName = displayName,
+                )
+                Timber.i("Session resumed for user $userId (keystore locked — call unlockKeystore())")
+            } else {
+                // No private data stored — fresh session, no unlock needed
+                _state.value = WalletState.Ready(
+                    userId = userId,
+                    displayName = displayName,
+                    credentials = emptyList(),
+                )
+                Timber.i("Session resumed for user $userId (no private data)")
+            }
         } catch (e: Exception) {
             Timber.e(e, "Session resume failed")
             _state.value = WalletState.Disconnected
+        }
+    }
+
+    /**
+     * Unlock the keystore after a session resume.
+     *
+     * Call this when the wallet is in [WalletState.KeystoreLocked].
+     * Triggers a WebAuthn assertion (biometric prompt) to obtain the PRF
+     * output needed to decrypt the keystore and credentials.
+     *
+     * After a successful unlock the state transitions to [WalletState.Ready].
+     */
+    suspend fun unlockKeystore() {
+        val current = _state.value
+        if (current !is WalletState.KeystoreLocked) {
+            Timber.w("unlockKeystore called but state is $current")
+            return
+        }
+        try {
+            val storedPrfSalt = sessionStore.prfSalt?.let { b64Decode(it) }
+            val authClient = WebAuthnAuthClient(
+                baseUrl = config.backendUrl,
+                tenantId = config.tenantId,
+                authProvider = authProvider,
+            )
+            // Silent assertion — triggers biometric to get PRF output
+            authClient.login(prfSalt = storedPrfSalt)
+
+            val prfOutput = extractLastPrfOutput()
+                ?: throw WalletException("PRF not available from authenticator")
+
+            val storedJwe = sessionStore.privateDataJwe
+            val hkdfSalt = sessionStore.hkdfSalt?.let { b64Decode(it) }
+                ?: throw WalletException("Missing HKDF salt")
+            val hkdfInfo = sessionStore.hkdfInfo?.let { b64Decode(it) }
+                ?: HKDF_INFO.toByteArray(Charsets.UTF_8)
+
+            val privateData = storedJwe?.toByteArray(Charsets.UTF_8) ?: ByteArray(0)
+            keystore.unlock(prfOutput.first, privateData, hkdfSalt, hkdfInfo)
+
+            _state.value = WalletState.Ready(
+                userId = current.userId,
+                displayName = current.displayName,
+                credentials = credentialStore.getAll(),
+            )
+            Timber.i("Keystore unlocked after session resume")
+        } catch (e: Exception) {
+            Timber.e(e, "Keystore unlock failed")
+            _state.value = WalletState.Error(e.message ?: "Keystore unlock failed")
         }
     }
 
@@ -574,15 +636,7 @@ class SirosWallet private constructor(
         if (current is WalletState.Ready) {
             _state.value = current.copy(credentials = credentialStore.getAll())
         }
-        if (keystore.isUnlocked) {
-            try {
-                val container = keystore.exportEncryptedContainer()
-                sessionStore.privateDataJwe = String(container, Charsets.UTF_8)
-                syncPrivateDataToBackend()
-            } catch (e: Exception) {
-                Timber.e(e, "Failed to sync keystore after credential deletion")
-            }
-        }
+        persistAndSyncKeystore()
     }
 
     // ── Internal wiring ─────────────────────────────────────────────
@@ -667,7 +721,24 @@ class SirosWallet private constructor(
             client.updatePrivateData(body)
             Timber.d("Private data synced to backend")
         } catch (e: Exception) {
-            Timber.e(e, "Failed to sync private data")
+            Timber.e(e, "Failed to sync private data to backend")
+            eventListener?.onFlowError("sync", "Private data sync failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Persist the current keystore state to local storage and sync to backend.
+     *
+     * Called after any credential mutation to minimise the data-loss window.
+     */
+    private suspend fun persistAndSyncKeystore() {
+        if (!keystore.isUnlocked) return
+        try {
+            val container = keystore.exportEncryptedContainer()
+            sessionStore.privateDataJwe = String(container, Charsets.UTF_8)
+            syncPrivateDataToBackend()
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to persist keystore")
         }
     }
 
@@ -839,6 +910,19 @@ class SirosWallet private constructor(
 
                 // Store any new credentials from the flow result
                 msg.credentials?.forEach { cred ->
+                    // Basic validation: ensure credential is parseable
+                    val payload = CredentialUtils.parseJwtPayload(cred.credential)
+                    if (payload == null) {
+                        Timber.w("Skipping unparseable credential in flow ${msg.flowId}")
+                        return@forEach
+                    }
+                    // Check expiry — don't store already-expired credentials
+                    val exp = payload["exp"]?.jsonPrimitive?.longOrNull
+                    val now = System.currentTimeMillis() / 1000
+                    if (exp != null && exp < now) {
+                        Timber.w("Skipping expired credential (exp=$exp, now=$now)")
+                        return@forEach
+                    }
                     val metadata = activeOffer?.let { offer ->
                         CredentialUtils.buildMetadata(
                             offer = offer,
@@ -846,14 +930,13 @@ class SirosWallet private constructor(
                             rawCredential = cred.credential,
                         )
                     }
-                    val payload = CredentialUtils.parseJwtPayload(cred.credential)
                     val stored = StoredCredential(
                         id = java.util.UUID.randomUUID().toString(),
                         format = cred.format,
                         raw = cred.credential,
                         metadata = metadata,
-                        issuedAt = payload?.get("iat")?.jsonPrimitive?.longOrNull,
-                        expiresAt = payload?.get("exp")?.jsonPrimitive?.longOrNull,
+                        issuedAt = payload["iat"]?.jsonPrimitive?.longOrNull,
+                        expiresAt = exp,
                     )
                     credentialStore.save(stored)
                     eventListener?.onCredentialReceived(stored)
@@ -861,16 +944,8 @@ class SirosWallet private constructor(
                 activeOffer = null
                 activeVctm = null
 
-                // Re-export and sync the updated keystore
-                if (keystore.isUnlocked) {
-                    try {
-                        val container = keystore.exportEncryptedContainer()
-                        sessionStore.privateDataJwe = String(container, Charsets.UTF_8)
-                        syncPrivateDataToBackend()
-                    } catch (e: Exception) {
-                        Timber.e(e, "Failed to sync keystore after flow")
-                    }
-                }
+                // Persist locally + sync to backend immediately
+                persistAndSyncKeystore()
 
                 eventListener?.onFlowComplete(msg.flowId)
 

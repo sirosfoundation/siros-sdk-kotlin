@@ -475,6 +475,8 @@ class SirosWalletTest {
 
     @Test
     fun connectEngine_flowComplete_stores_credentials_notifies_listener_and_returns_ready() = runTest(dispatcher) {
+        // Minimal valid JWT: {"alg":"none"}.{"sub":"test","iat":1700000000,"exp":9999999999}.
+        val testCredential = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9."
         val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
         val listener = mockk<WalletEventListener>(relaxed = true)
         val store = FakeCredentialStore(mutableListOf())
@@ -514,7 +516,7 @@ class SirosWalletTest {
             FlowCompleteMessage(
                 flowId = "flow-complete",
                 credentials = listOf(
-                    CredentialResult(format = "dc+sd-jwt", credential = "credential-payload")
+                    CredentialResult(format = "dc+sd-jwt", credential = testCredential)
                 ),
             )
         )
@@ -522,14 +524,14 @@ class SirosWalletTest {
 
         verify(exactly = 1) { listener.onFlowComplete("flow-complete") }
         verify(exactly = 1) {
-            listener.onCredentialReceived(match { it.format == "dc+sd-jwt" && it.raw == "credential-payload" })
+            listener.onCredentialReceived(match { it.format == "dc+sd-jwt" && it.raw == testCredential })
         }
         coVerify(exactly = 1) { keystore.exportEncryptedContainer() }
         coVerify(exactly = 1) { apiClient.updatePrivateData(any()) }
         val ready = wallet.state.value as WalletState.Ready
         assertEquals("user-1", ready.userId)
         assertEquals(1, ready.credentials.size)
-        assertEquals("credential-payload", ready.credentials.single().raw)
+        assertEquals(testCredential, ready.credentials.single().raw)
     }
 
     @Test
