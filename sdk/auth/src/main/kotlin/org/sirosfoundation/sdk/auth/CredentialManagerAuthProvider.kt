@@ -2,6 +2,7 @@
 package org.sirosfoundation.sdk.auth
 
 import android.content.Context
+import org.sirosfoundation.sdk.credentials.AuthException
 import androidx.credentials.CreatePublicKeyCredentialRequest
 import androidx.credentials.CreatePublicKeyCredentialResponse
 import androidx.credentials.CredentialManager
@@ -92,7 +93,7 @@ class CredentialManagerAuthProvider(
             put("challenge", b64url(challenge))
             put("rpId", "")  // Will be overridden by the credential's RP
             put("timeout", 60000)
-            put("userVerification", "preferred")
+            put("userVerification", "required")
             put("allowCredentials", buildJsonArray {
                 add(buildJsonObject {
                     put("type", "public-key")

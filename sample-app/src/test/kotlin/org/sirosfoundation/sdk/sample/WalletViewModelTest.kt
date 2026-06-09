@@ -3,6 +3,7 @@ package org.sirosfoundation.sdk.sample
 import android.app.Activity
 import android.net.Uri
 import android.util.Log
+import org.sirosfoundation.sdk.sample.BuildConfig
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -87,10 +88,10 @@ class WalletViewModelTest {
 
         val viewModel = WalletViewModel(mockk<Activity>(relaxed = true))
 
-        assertEquals("http://192.168.240.1:8090", viewModel.backendUrl.value)
+        assertEquals(BuildConfig.DEFAULT_BACKEND_URL, viewModel.backendUrl.value)
         assertEquals("default", viewModel.tenantId.value)
         assertEquals(1, configs.size)
-        assertEquals("http://192.168.240.1:8090", configs.single().backendUrl)
+        assertEquals(BuildConfig.DEFAULT_BACKEND_URL, configs.single().backendUrl)
         assertEquals("default", configs.single().tenantId)
     }
 

@@ -1,6 +1,8 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.sirosfoundation.sdk.auth
 
+import org.sirosfoundation.sdk.credentials.BackendApiException
+import org.sirosfoundation.sdk.credentials.NetworkException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -142,7 +144,11 @@ class BackendApiClient(
     }
 
     private fun executeRaw(request: Request): JsonElement {
-        val response = httpClient.newCall(request).execute()
+        val response = try {
+            httpClient.newCall(request).execute()
+        } catch (e: java.io.IOException) {
+            throw NetworkException("Network error: ${request.url}", e)
+        }
         val responseBody = response.body?.string() ?: "{}"
 
         if (!response.isSuccessful) {
@@ -161,9 +167,3 @@ class BackendApiClient(
         }
     }
 }
-
-class BackendApiException(
-    val code: Int,
-    message: String,
-    val body: String? = null,
-) : Exception(message)

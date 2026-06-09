@@ -1,5 +1,6 @@
 package org.sirosfoundation.sdk.keystore
 
+import org.sirosfoundation.sdk.credentials.KeystoreException
 import com.nimbusds.jose.EncryptionMethod
 import com.nimbusds.jose.JWEAlgorithm
 import com.nimbusds.jose.JWEHeader
@@ -392,5 +393,3 @@ class JweKeystore(
         val createdAt: Long,
     )
 }
-
-class KeystoreException(message: String, cause: Throwable? = null) : Exception(message, cause)

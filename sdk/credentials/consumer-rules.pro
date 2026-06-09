@@ -6,6 +6,11 @@
 -keep class org.sirosfoundation.sdk.credentials.CredentialMatcher { *; }
 -keep class org.sirosfoundation.sdk.credentials.PresentationRecord { *; }
 -keep class org.sirosfoundation.sdk.credentials.SirosException { *; }
+-keep class org.sirosfoundation.sdk.credentials.AuthException { *; }
+-keep class org.sirosfoundation.sdk.credentials.BackendApiException { *; }
+-keep class org.sirosfoundation.sdk.credentials.KeystoreException { *; }
+-keep class org.sirosfoundation.sdk.credentials.WalletException { *; }
+-keep class org.sirosfoundation.sdk.credentials.NetworkException { *; }
 -keep class org.sirosfoundation.sdk.credentials.IssuerEntry { *; }
 -keep class org.sirosfoundation.sdk.credentials.IssuerMetadata { *; }
 -keep class org.sirosfoundation.sdk.credentials.ClaimMeta { *; }

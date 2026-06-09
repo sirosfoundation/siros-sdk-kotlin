@@ -1,5 +1,6 @@
 package org.sirosfoundation.sdk.auth
 
+import org.sirosfoundation.sdk.credentials.AuthException
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer

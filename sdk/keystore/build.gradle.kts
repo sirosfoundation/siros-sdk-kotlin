@@ -26,6 +26,7 @@ android {
 
 dependencies {
     implementation(project(":sdk:auth"))
+    implementation(project(":sdk:credentials"))
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.nimbus.jose.jwt)

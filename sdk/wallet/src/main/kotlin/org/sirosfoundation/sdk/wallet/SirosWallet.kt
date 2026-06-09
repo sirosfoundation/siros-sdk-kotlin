@@ -27,6 +27,12 @@ import org.sirosfoundation.sdk.auth.CredentialManagerAuthProvider
 import org.sirosfoundation.sdk.auth.LocalAuthProvider
 import org.sirosfoundation.sdk.auth.PrfOutput
 import org.sirosfoundation.sdk.auth.WebAuthnAuthClient
+import org.sirosfoundation.sdk.credentials.AuthException
+import org.sirosfoundation.sdk.credentials.BackendApiException
+import org.sirosfoundation.sdk.credentials.KeystoreException
+import org.sirosfoundation.sdk.credentials.NetworkException
+import org.sirosfoundation.sdk.credentials.SirosException
+import org.sirosfoundation.sdk.credentials.WalletException
 import org.sirosfoundation.sdk.credentials.CredentialStore
 import org.sirosfoundation.sdk.credentials.InMemoryCredentialStore
 import org.sirosfoundation.sdk.credentials.StoredCredential
@@ -98,8 +104,13 @@ class SirosWallet private constructor(
      * 6. Opens the engine WebSocket.
      *
      * @param displayName the user's display name for the passkey.
+     * @throws WalletException if registration fails.
+     * @throws IllegalArgumentException if displayName is blank or too long.
      */
     suspend fun register(displayName: String) {
+        require(displayName.isNotBlank() && displayName.length <= 256) {
+            "displayName must be 1-256 characters"
+        }
         _state.value = WalletState.Connecting
         try {
             // Generate a fresh PRF salt for this registration
@@ -150,7 +161,7 @@ class SirosWallet private constructor(
                 displayName = session.displayName,
                 credentials = credentialStore.getAll(),
             )
-        } catch (e: WalletException) {
+        } catch (e: SirosException) {
             Timber.e(e, "Registration failed")
             _state.value = WalletState.Error(e.message ?: "Registration failed")
         } catch (e: Exception) {
@@ -217,7 +228,7 @@ class SirosWallet private constructor(
                 displayName = session.displayName,
                 credentials = credentialStore.getAll(),
             )
-        } catch (e: WalletException) {
+        } catch (e: SirosException) {
             Timber.e(e, "Login failed")
             _state.value = WalletState.Error(e.message ?: "Login failed")
         } catch (e: Exception) {
@@ -269,7 +280,7 @@ class SirosWallet private constructor(
             // Verify the token is still valid by calling a lightweight endpoint
             try {
                 apiClient!!.healthCheck()
-            } catch (e: org.sirosfoundation.sdk.auth.BackendApiException) {
+            } catch (e: BackendApiException) {
                 if (e.code == 401) {
                     // Token expired — try refreshing
                     val refreshed = refreshToken()
@@ -310,6 +321,9 @@ class SirosWallet private constructor(
                 )
                 Timber.i("Session resumed for user $userId (no private data)")
             }
+        } catch (e: SirosException) {
+            Timber.e(e, "Session resume failed")
+            _state.value = WalletState.Disconnected
         } catch (e: Exception) {
             Timber.e(e, "Session resume failed")
             _state.value = WalletState.Disconnected
@@ -359,6 +373,15 @@ class SirosWallet private constructor(
                 credentials = credentialStore.getAll(),
             )
             Timber.i("Keystore unlocked after session resume")
+        } catch (e: KeystoreException) {
+            Timber.e(e, "Keystore unlock failed: corrupt container")
+            _state.value = WalletState.Error(e.message ?: "Keystore unlock failed")
+        } catch (e: AuthException) {
+            Timber.e(e, "Keystore unlock failed: authentication error")
+            _state.value = WalletState.Error(e.message ?: "Authentication failed")
+        } catch (e: SirosException) {
+            Timber.e(e, "Keystore unlock failed")
+            _state.value = WalletState.Error(e.message ?: "Keystore unlock failed")
         } catch (e: Exception) {
             Timber.e(e, "Keystore unlock failed")
             _state.value = WalletState.Error(e.message ?: "Keystore unlock failed")
@@ -428,24 +451,19 @@ class SirosWallet private constructor(
      * to discover what credentials each issuer offers.
      */
     suspend fun getIssuers(): List<IssuerEntry> = withContext(Dispatchers.IO) {
-        Timber.d("getIssuers: apiClient=${apiClient != null}")
         val client = apiClient ?: throw WalletException("Not connected")
         val response = client.getIssuers()
-        Timber.d("getIssuers: response type=${response::class.simpleName}, content=${response.toString().take(200)}")
         // Backend user API returns a plain JSON array, admin API wraps in {"issuers": [...]}
         val arr = when (response) {
             is kotlinx.serialization.json.JsonArray -> response
             is kotlinx.serialization.json.JsonObject ->
                 response["issuers"]?.jsonArray
                     ?: response["data"]?.jsonArray
-                    ?: throw WalletException("Unexpected issuer list format: ${response.keys}")
+                    ?: throw WalletException("Unexpected issuer list format")
             else -> throw WalletException("Unexpected issuer response type")
         }
-        Timber.d("getIssuers: found ${arr.size} issuers")
-        val result = arr.map { json.decodeFromJsonElement(IssuerEntry.serializer(), it) }
+        arr.map { json.decodeFromJsonElement(IssuerEntry.serializer(), it) }
             .filter { it.visible }
-        Timber.d("getIssuers: ${result.size} visible issuers")
-        result
     }
 
     /**
@@ -475,17 +493,13 @@ class SirosWallet private constructor(
      */
     suspend fun getAvailableCredentials(): List<CredentialOffer> = withContext(Dispatchers.IO) {
         val issuers = getIssuers()
-        Timber.d("getAvailableCredentials: ${issuers.size} issuers found")
+        Timber.d("getAvailableCredentials: ${issuers.size} issuers")
         val client = apiClient ?: throw WalletException("Not connected")
         val offers = mutableListOf<CredentialOffer>()
 
         for (issuer in issuers) {
             try {
-                Timber.d("getAvailableCredentials: fetching metadata for issuer ${issuer.id} (${issuer.credentialIssuerIdentifier})")
-                // Fetch metadata via backend proxy (the issuer URL may be
-                // an internal Docker hostname unreachable from the device).
                 val metadataJson = client.getIssuerMetadata(issuer.id)
-                Timber.d("getAvailableCredentials: metadata response: ${metadataJson.toString().take(200)}")
                 val metadata = json.decodeFromJsonElement(IssuerMetadata.serializer(), metadataJson)
                 val issuerDisplay = metadata.display?.firstOrNull()
                 val issuerName = issuerDisplay?.name
@@ -725,6 +739,12 @@ class SirosWallet private constructor(
             } else {
                 ByteArray(0)
             }
+        } catch (e: NetworkException) {
+            Timber.w(e, "Could not fetch privateData (network), starting with empty keystore")
+            ByteArray(0)
+        } catch (e: BackendApiException) {
+            Timber.w(e, "Could not fetch privateData (HTTP ${e.code}), starting with empty keystore")
+            ByteArray(0)
         } catch (e: Exception) {
             Timber.w(e, "Could not fetch privateData, starting with empty keystore")
             ByteArray(0)
@@ -803,6 +823,8 @@ class SirosWallet private constructor(
                             Timber.w("Unknown sign action: ${msg.action}")
                         }
                     }
+                } catch (e: KeystoreException) {
+                    Timber.e(e, "Error handling sign request: keystore error")
                 } catch (e: Exception) {
                     Timber.e(e, "Error handling sign request")
                 }
@@ -865,6 +887,8 @@ class SirosWallet private constructor(
                         }
                     }
                     engine.sendMatchResponse(msg.flowId, matches)
+                } catch (e: SirosException) {
+                    Timber.e(e, "Error handling match request")
                 } catch (e: Exception) {
                     Timber.e(e, "Error handling match request")
                 }
@@ -1142,4 +1166,3 @@ class SirosWallet private constructor(
     }
 }
 
-class WalletException(message: String, cause: Throwable? = null) : org.sirosfoundation.sdk.credentials.SirosException(message, cause)
