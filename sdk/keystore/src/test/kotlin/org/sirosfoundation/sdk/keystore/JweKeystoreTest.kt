@@ -143,4 +143,121 @@ class JweKeystoreTest {
             // Expected: decryption fails with wrong key
         }
     }
+
+    // ── signVpToken tests ───────────────────────────────────────────
+
+    @Test
+    fun signVpToken_assembles_sdjwt_with_kbjwt() = runTest {
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        keystore.generateKey()
+
+        // Minimal SD-JWT: issuer JWT + 2 disclosures
+        val issuerJwt = "eyJhbGciOiJFUzI1NiJ9.eyJ0ZXN0IjoxfQ.c2ln"
+        val d1 = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("""["salt1","given_name","Alice"]""".toByteArray())
+        val d2 = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("""["salt2","family_name","Smith"]""".toByteArray())
+        val credential = "$issuerJwt~$d1~$d2~"
+
+        val vpToken = keystore.signVpToken(
+            credential = credential,
+            disclosedClaims = null,
+            nonce = "verifier-nonce",
+            audience = "https://verifier.example.com",
+        )
+
+        // VP token format: IssuerJWT~disclosure1~disclosure2~KB-JWT
+        val parts = vpToken.split("~")
+        assertEquals(issuerJwt, parts[0])
+        assertEquals(d1, parts[1])
+        assertEquals(d2, parts[2])
+
+        // Last part is KB-JWT (3-part JWT)
+        val kbJwt = parts[3]
+        assertEquals(3, kbJwt.split(".").size)
+
+        // Verify KB-JWT header contains typ and jwk
+        val headerJson = String(java.util.Base64.getUrlDecoder().decode(kbJwt.split(".")[0]))
+        assertTrue("KB-JWT header must contain typ", headerJson.contains("\"typ\":\"kb+jwt\""))
+        assertTrue("KB-JWT header must contain jwk", headerJson.contains("\"jwk\""))
+        // Must NOT contain private key
+        assertFalse("KB-JWT must not contain private key d", headerJson.contains("\"d\""))
+
+        // Verify KB-JWT payload contains sd_hash, nonce, aud
+        val payloadJson = String(java.util.Base64.getUrlDecoder().decode(kbJwt.split(".")[1]))
+        assertTrue("KB-JWT must contain sd_hash", payloadJson.contains("\"sd_hash\""))
+        assertTrue("KB-JWT must contain nonce", payloadJson.contains("\"verifier-nonce\""))
+        assertTrue("KB-JWT must contain aud", payloadJson.contains("\"https://verifier.example.com\""))
+    }
+
+    @Test
+    fun signVpToken_selective_disclosure_filters_claims() = runTest {
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        keystore.generateKey()
+
+        val issuerJwt = "eyJhbGciOiJFUzI1NiJ9.eyJ0ZXN0IjoxfQ.c2ln"
+        val d1 = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("""["salt1","given_name","Alice"]""".toByteArray())
+        val d2 = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("""["salt2","family_name","Smith"]""".toByteArray())
+        val d3 = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("""["salt3","birth_date","2000-01-01"]""".toByteArray())
+        val credential = "$issuerJwt~$d1~$d2~$d3~"
+
+        // Only disclose given_name
+        val vpToken = keystore.signVpToken(
+            credential = credential,
+            disclosedClaims = listOf("given_name"),
+            nonce = "n1",
+            audience = "aud",
+        )
+
+        val parts = vpToken.split("~")
+        // Should have: issuerJwt, disclosure for given_name, KB-JWT
+        assertEquals(3, parts.size)
+        assertEquals(issuerJwt, parts[0])
+        assertEquals(d1, parts[1])  // given_name disclosure
+        // KB-JWT
+        assertEquals(3, parts[2].split(".").size)
+    }
+
+    @Test
+    fun signVpToken_sd_hash_is_computed_correctly() = runTest {
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        keystore.generateKey()
+
+        val issuerJwt = "eyJhbGciOiJFUzI1NiJ9.eyJ0ZXN0IjoxfQ.c2ln"
+        val credential = "$issuerJwt~"
+
+        val vpToken = keystore.signVpToken(
+            credential = credential,
+            disclosedClaims = null,
+            nonce = "n",
+            audience = "a",
+        )
+
+        val kbJwt = vpToken.split("~").last()
+        val payloadJson = String(java.util.Base64.getUrlDecoder().decode(kbJwt.split(".")[1]))
+
+        // Compute expected sd_hash: SHA-256 of the SD-JWT with trailing ~
+        val sdJwtPresentation = "$issuerJwt~"
+        val expectedHash = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(
+            java.security.MessageDigest.getInstance("SHA-256")
+                .digest(sdJwtPresentation.toByteArray(Charsets.US_ASCII))
+        )
+        assertTrue("sd_hash must match", payloadJson.contains("\"$expectedHash\""))
+    }
+
+    @Test
+    fun signVpToken_locked_keystore_throws() = runTest {
+        val keystore = JweKeystore()
+        try {
+            keystore.signVpToken("cred", null, "n", "a")
+            fail("Expected KeystoreException")
+        } catch (_: KeystoreException) {
+        }
+    }
 }

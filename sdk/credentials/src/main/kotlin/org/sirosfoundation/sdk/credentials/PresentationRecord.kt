@@ -18,6 +18,8 @@ data class PresentationRecord(
     @SerialName("credential_ids") val credentialIds: List<String>,
     /** Credential names for display (resolved at presentation time). */
     @SerialName("credential_names") val credentialNames: List<String> = emptyList(),
+    /** Claim names that were requested/disclosed. */
+    @SerialName("requested_claims") val requestedClaims: List<String> = emptyList(),
     /** Unix epoch millis when the presentation occurred. */
     val timestamp: Long,
     /** Whether the presentation completed successfully. */

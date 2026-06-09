@@ -810,11 +810,37 @@ class SirosWallet private constructor(
                         }
                         "sign_presentation" -> {
                             val params = msg.params
-                            val vpToken = keystore.signPresentation(
-                                nonce = params?.nonce ?: "",
-                                audience = params?.audience ?: "",
-                                credentialIds = emptyList(),
-                            )
+                            val nonce = params?.nonce ?: ""
+                            val audience = params?.audience ?: ""
+                            val credsToInclude = params?.credentialsToInclude
+
+                            val vpToken = if (!credsToInclude.isNullOrEmpty()) {
+                                // SD-JWT VP: build proper VP token with KB-JWT for each credential
+                                val allCreds = credentialStore.getAll()
+                                val vpParts = credsToInclude.mapNotNull { ref ->
+                                    val cred = allCreds.find { it.id == ref.credentialId }
+                                    if (cred == null) {
+                                        Timber.w("Credential ${ref.credentialId} not found in store for VP signing")
+                                        return@mapNotNull null
+                                    }
+                                    keystore.signVpToken(
+                                        credential = cred.raw,
+                                        disclosedClaims = ref.disclosedClaims,
+                                        nonce = nonce,
+                                        audience = audience,
+                                    )
+                                }
+                                // For single credential presentations (most common), return the token directly
+                                // For multiple, join with a newline per OID4VP spec
+                                vpParts.joinToString("\n")
+                            } else {
+                                // Fallback: legacy plain VP JWT (no credential data)
+                                keystore.signPresentation(
+                                    nonce = nonce,
+                                    audience = audience,
+                                    credentialIds = emptyList(),
+                                )
+                            }
                             Timber.d("Sending VP sign response for flow ${msg.flowId}, messageId=${msg.messageId}")
                             engine.sendSignResponse(msg.flowId, vpToken = vpToken, messageId = msg.messageId)
                             Timber.d("VP sign response sent successfully for flow ${msg.flowId}")
@@ -857,7 +883,13 @@ class SirosWallet private constructor(
 
                     // Let the app filter further via user selection
                     val selectedIds = if (listener != null && candidates.isNotEmpty()) {
-                        listener.onCredentialSelectionRequired(null, candidates)
+                        listener.onCredentialSelectionRequired(
+                            PresentationRequest(
+                                verifierName = null,
+                                matchResults = matchResults,
+                                candidates = candidates,
+                            )
+                        )
                     } else {
                         candidates.map { it.id }
                     }
@@ -870,6 +902,7 @@ class SirosWallet private constructor(
                         credentialNames = selectedIds.mapNotNull { id ->
                             allCreds.find { it.id == id }?.metadata?.name
                         },
+                        requestedClaims = matchResults.flatMap { it.requestedClaims.flatten() }.distinct(),
                         timestamp = System.currentTimeMillis(),
                     ))
 
@@ -905,6 +938,11 @@ class SirosWallet private constructor(
                     msg.payload?.jsonObject?.get("trust_evaluation_required")?.jsonPrimitive?.boolean == true
                 ) {
                     handleTrustEvaluation(engine, msg.flowId, msg.payload!!.jsonObject)
+                }
+
+                // Handle credential selection — verifier wants credentials, user must consent
+                if (msg.step == "credential_selection") {
+                    handleCredentialSelection(engine, msg.flowId, msg.payload?.jsonObject)
                 }
 
                 // Handle authorization required — user must approve in browser
@@ -1099,6 +1137,105 @@ class SirosWallet private constructor(
             } catch (e: Exception) {
                 Timber.e(e, "Trust evaluation failed")
                 engine.sendTrustResult(flowId, false, e.message ?: "Trust evaluation failed")
+            }
+        }
+    }
+
+    /**
+     * Handle credential_selection step from the engine.
+     *
+     * The backend sends DCQL query + verifier info in a flow_progress message.
+     * We match credentials locally, show a consent UI via the event listener,
+     * and respond with a consent or decline action.
+     */
+    private fun handleCredentialSelection(
+        engine: WalletEngineSession,
+        flowId: String,
+        payload: kotlinx.serialization.json.JsonObject?,
+    ) {
+        scope.launch {
+            try {
+                val dcqlQuery = payload?.get("dcql_query")?.jsonObject
+                val verifierInfo = payload?.get("verifier")?.jsonObject
+                val verifierName = verifierInfo?.get("name")?.jsonPrimitive?.contentOrNull
+                    ?: verifierInfo?.get("client_id")?.jsonPrimitive?.contentOrNull
+
+                val allCreds = credentialStore.getAll()
+                val matchResults = if (dcqlQuery != null) {
+                    CredentialMatcher.match(dcqlQuery, allCreds)
+                } else {
+                    listOf(CredentialMatcher.MatchResult(
+                        queryId = "_default",
+                        format = null,
+                        candidates = allCreds,
+                        requestedClaims = emptyList(),
+                    ))
+                }
+                val candidates = matchResults.flatMap { it.candidates }.distinctBy { it.id }
+
+                val listener = eventListener
+                val selectedIds = if (listener != null && candidates.isNotEmpty()) {
+                    listener.onCredentialSelectionRequired(
+                        PresentationRequest(
+                            verifierName = verifierName,
+                            matchResults = matchResults,
+                            candidates = candidates,
+                        )
+                    )
+                } else {
+                    candidates.map { it.id }
+                }
+
+                if (selectedIds.isEmpty()) {
+                    // User declined
+                    val declinePayload = kotlinx.serialization.json.buildJsonObject {
+                        put("reason", kotlinx.serialization.json.JsonPrimitive("user_declined"))
+                    }
+                    engine.sendFlowAction(flowId, "decline", declinePayload)
+                    return@launch
+                }
+
+                // Record presentation history
+                _presentationHistory.add(0, PresentationRecord(
+                    id = java.util.UUID.randomUUID().toString(),
+                    flowId = flowId,
+                    verifierName = verifierName,
+                    credentialIds = selectedIds,
+                    credentialNames = selectedIds.mapNotNull { id ->
+                        allCreds.find { it.id == id }?.metadata?.name
+                    },
+                    requestedClaims = matchResults.flatMap { it.requestedClaims.flatten() }.distinct(),
+                    timestamp = System.currentTimeMillis(),
+                ))
+
+                // Build consent payload with selected credentials
+                val consentPayload = kotlinx.serialization.json.buildJsonObject {
+                    put("selected_credentials", kotlinx.serialization.json.buildJsonArray {
+                        for (id in selectedIds) {
+                            val cred = allCreds.find { it.id == id } ?: continue
+                            val queryId = matchResults.firstOrNull { r ->
+                                r.candidates.any { it.id == id }
+                            }?.queryId
+                            add(kotlinx.serialization.json.buildJsonObject {
+                                queryId?.let {
+                                    put("credential_query_id", kotlinx.serialization.json.JsonPrimitive(it))
+                                }
+                                put("credential_id", kotlinx.serialization.json.JsonPrimitive(id))
+                                put("format", kotlinx.serialization.json.JsonPrimitive(cred.format))
+                                cred.metadata?.vct?.let {
+                                    put("vct", kotlinx.serialization.json.JsonPrimitive(it))
+                                }
+                            })
+                        }
+                    })
+                }
+                engine.sendFlowAction(flowId, "consent", consentPayload)
+            } catch (e: Exception) {
+                Timber.e(e, "Error handling credential selection")
+                val declinePayload = kotlinx.serialization.json.buildJsonObject {
+                    put("reason", kotlinx.serialization.json.JsonPrimitive("error: ${e.message}"))
+                }
+                engine.sendFlowAction(flowId, "decline", declinePayload)
             }
         }
     }

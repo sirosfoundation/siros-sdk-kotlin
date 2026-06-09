@@ -89,6 +89,16 @@ Phase 6: SDK/sample-app alignment with wallet-frontend and demo-wallet target
 	- tighten deep link handling and redirect validation
 	- strengthen local auth guarantees (no false UV claims)
 
+VP / KB-JWT interoperability notes
+1. When implementing SD-JWT VP presentation signing, the Key Binding JWT (KB-JWT)
+   protected header MUST include the holder's public key (`jwk`) in addition to
+   `typ` ("kb+jwt") and `alg`.
+2. RFC 9901 §4.3 only requires `typ` and `alg`, but real-world verifiers
+   (e.g. WE BUILD ITB / UAegean) reject presentations without `jwk` in the header.
+3. The `jwk` value should come from `cnf.jwk` in the SD-JWT payload.
+4. CRITICAL: strip the private key parameter (`d`) before including in the header.
+5. Reference fix: sirosfoundation/wallet-frontend#154
+
 Immediate high-priority security fixes
 1. Remove app token logging in sdk/auth and sdk/wallet.
 2. Remove debug token file write from sdk/wallet.

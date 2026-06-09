@@ -62,6 +62,29 @@ interface KeystoreManager {
      */
     suspend fun signPresentation(nonce: String, audience: String, credentialIds: List<String>): String
 
+    /**
+     * Build a complete SD-JWT VP token with Key Binding JWT.
+     *
+     * Takes the raw SD-JWT credential, filters disclosures to only those
+     * matching [disclosedClaims], computes the `sd_hash`, and signs a
+     * KB-JWT with `typ: "kb+jwt"` and the holder's public key in `jwk`.
+     *
+     * The returned string is the full VP token:
+     * `IssuerJWT~disclosure1~...~disclosureN~KB-JWT`
+     *
+     * @param credential the raw SD-JWT credential string.
+     * @param disclosedClaims claim names to selectively disclose (null = all).
+     * @param nonce the verifier-provided nonce.
+     * @param audience the verifier's client_id.
+     * @return the assembled VP token string.
+     */
+    suspend fun signVpToken(
+        credential: String,
+        disclosedClaims: List<String>?,
+        nonce: String,
+        audience: String,
+    ): String
+
     /** Export the encrypted container for backend sync. */
     suspend fun exportEncryptedContainer(): ByteArray
 
