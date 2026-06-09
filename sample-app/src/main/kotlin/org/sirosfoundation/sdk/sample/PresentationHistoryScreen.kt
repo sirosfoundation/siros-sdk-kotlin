@@ -152,6 +152,17 @@ private fun PresentationRecordCard(record: PresentationRecord) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (record.requestedClaims.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = record.requestedClaims.joinToString(", ") { claim ->
+                            claim.split(".", "_")
+                                .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
             }
         }
     }

@@ -18,6 +18,9 @@ import com.nimbusds.jwt.JWTClaimsSet
 import com.nimbusds.jwt.SignedJWT
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import timber.log.Timber
@@ -267,6 +270,93 @@ class JweKeystore(
         val jwt = SignedJWT(header, claims)
         jwt.sign(ECDSASigner(key))
         jwt.serialize()
+    }
+
+    override suspend fun signVpToken(
+        credential: String,
+        disclosedClaims: List<String>?,
+        nonce: String,
+        audience: String,
+    ): String = mutex.withLock {
+        requireUnlocked()
+        val key = keys.values.firstOrNull()
+            ?: run {
+                Timber.i("No keys available, generating a new key for VP signing")
+                val keyId = UUID.randomUUID().toString()
+                val ecKey = ECKeyGenerator(Curve.P_256).keyID(keyId).generate()
+                keys[keyId] = ecKey
+                ecKey
+            }
+
+        // Split the SD-JWT into parts: IssuerJWT~disclosure1~disclosure2~...~
+        val parts = credential.split("~")
+        val issuerJwt = parts[0]
+        val disclosures = parts.drop(1).filter { it.isNotEmpty() }
+
+        // Filter disclosures if specific claims are requested
+        val selectedDisclosures = if (disclosedClaims.isNullOrEmpty()) {
+            disclosures
+        } else {
+            filterDisclosures(disclosures, disclosedClaims)
+        }
+
+        // Build the SD-JWT presentation string (with trailing ~)
+        val sdJwtPresentation = buildString {
+            append(issuerJwt)
+            for (d in selectedDisclosures) {
+                append("~")
+                append(d)
+            }
+            append("~")
+        }
+
+        // Compute sd_hash = base64url(SHA-256(sdJwtPresentation))
+        val sdHashBytes = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(sdJwtPresentation.toByteArray(Charsets.US_ASCII))
+        val sdHash = Base64.getUrlEncoder().withoutPadding().encodeToString(sdHashBytes)
+
+        // Build KB-JWT with typ: "kb+jwt", alg: "ES256", jwk: <public key>
+        // Per RFC 9901 + real-world interop: jwk MUST be in header, d MUST be stripped
+        val publicJwk = key.toPublicJWK()
+        val kbHeader = JWSHeader.Builder(JWSAlgorithm.ES256)
+            .type(com.nimbusds.jose.JOSEObjectType("kb+jwt"))
+            .jwk(publicJwk)
+            .build()
+
+        val kbClaims = JWTClaimsSet.Builder()
+            .audience(audience)
+            .issueTime(Date())
+            .claim("nonce", nonce)
+            .claim("sd_hash", sdHash)
+            .build()
+
+        val kbJwt = SignedJWT(kbHeader, kbClaims)
+        kbJwt.sign(ECDSASigner(key))
+
+        // Assemble: sdJwtPresentation + KB-JWT (no separator — presentation already ends with ~)
+        sdJwtPresentation + kbJwt.serialize()
+    }
+
+    /**
+     * Filter SD-JWT disclosures to only those matching the requested claim names.
+     *
+     * Each disclosure is a base64url-encoded JSON array: ["salt", "claim_name", "value"].
+     * We decode each, extract the claim name (index 1), and keep only those in [claimNames].
+     */
+    private fun filterDisclosures(disclosures: List<String>, claimNames: List<String>): List<String> {
+        val requested = claimNames.toSet()
+        return disclosures.filter { disclosure ->
+            try {
+                val decoded = Base64.getUrlDecoder().decode(disclosure)
+                val arr = json.parseToJsonElement(String(decoded, Charsets.UTF_8))
+                val claimName = arr.jsonArray.getOrNull(1)?.jsonPrimitive?.contentOrNull
+                claimName != null && claimName in requested
+            } catch (e: Exception) {
+                // If we can't parse a disclosure, include it to be safe
+                Timber.w(e, "Could not parse SD-JWT disclosure, including it")
+                true
+            }
+        }
     }
 
     override suspend fun exportEncryptedContainer(): ByteArray = mutex.withLock {

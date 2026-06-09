@@ -139,6 +139,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
     val selectedCredential by viewModel.selectedCredential.collectAsState()
     val showHistory by viewModel.showHistory.collectAsState()
     val showQrScanner by viewModel.showQrScanner.collectAsState()
+    val pendingPresentation by viewModel.pendingPresentationRequest.collectAsState()
 
     LaunchedEffect(errorMessage) {
         errorMessage?.let {
@@ -158,6 +159,16 @@ fun WalletScreen(viewModel: WalletViewModel) {
             onTenantIdChange = viewModel::updateTenantId,
             onLogin = viewModel::login,
             onRegister = viewModel::register,
+        )
+        return
+    }
+
+    // Presentation consent dialog — shown as a full-screen overlay
+    if (pendingPresentation != null) {
+        PresentationConsentScreen(
+            request = pendingPresentation!!,
+            onAccept = viewModel::acceptPresentation,
+            onDecline = viewModel::declinePresentation,
         )
         return
     }

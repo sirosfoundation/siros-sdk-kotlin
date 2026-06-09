@@ -631,7 +631,7 @@ class SirosWalletTest {
             )
         )
         val initialCredentials = store.getAll()
-        coEvery { listener.onCredentialSelectionRequired(null, any()) } returns listOf("cred-2")
+        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf("cred-2")
         val engine = mockEngineConstructor(matchRequests = matchFlow)
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(
@@ -651,9 +651,8 @@ class SirosWalletTest {
 
         coVerify(exactly = 1) {
             listener.onCredentialSelectionRequired(
-                null,
-                match<List<StoredCredential>> { candidates ->
-                    candidates.map { it.id } == listOf("cred-1", "cred-2")
+                match<PresentationRequest> { request ->
+                    request.candidates.map { it.id } == listOf("cred-1", "cred-2")
                 },
             )
         }

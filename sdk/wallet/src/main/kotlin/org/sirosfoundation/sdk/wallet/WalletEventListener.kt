@@ -1,7 +1,23 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.sirosfoundation.sdk.wallet
 
+import org.sirosfoundation.sdk.credentials.CredentialMatcher
 import org.sirosfoundation.sdk.credentials.StoredCredential
+
+/**
+ * Context provided when a verifier requests credential presentation.
+ *
+ * Contains the matched credentials, requested claims, and optional
+ * verifier identity so the app can render an informed consent screen.
+ */
+data class PresentationRequest(
+    /** Verifier display name (from trust evaluation), null if unknown. */
+    val verifierName: String?,
+    /** Matched credentials grouped by DCQL query. */
+    val matchResults: List<CredentialMatcher.MatchResult>,
+    /** Flat list of candidate credentials (convenience). */
+    val candidates: List<StoredCredential>,
+)
 
 /**
  * Callback interface for wallet events that require user interaction.
@@ -14,13 +30,16 @@ interface WalletEventListener {
 
     /**
      * A verifier has requested credentials. The app should present a
-     * picker UI and return the IDs the user has consented to share.
+     * consent UI showing the verifier name and requested claims,
+     * then return the IDs the user has consented to share.
+     *
+     * The [request] parameter provides verifier identity and the
+     * DCQL match results including which claims are requested.
      *
      * Return an empty list to cancel the presentation.
      */
     suspend fun onCredentialSelectionRequired(
-        verifierName: String?,
-        candidates: List<StoredCredential>,
+        request: PresentationRequest,
     ): List<String>
 
     /**

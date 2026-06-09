@@ -18,6 +18,7 @@ import org.sirosfoundation.sdk.wallet.SirosWallet
 import org.sirosfoundation.sdk.wallet.WalletConfig
 import org.sirosfoundation.sdk.wallet.WalletEventListener
 import org.sirosfoundation.sdk.wallet.WalletState
+import org.sirosfoundation.sdk.wallet.PresentationRequest
 
 /**
  * Sample app ViewModel.
@@ -98,6 +99,13 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     /** Pending authorization flow ID (set when browser opens, consumed on redirect). */
     private var pendingAuthFlowId: String? = null
 
+    // ── Presentation consent state ─────────────────────────────────
+
+    private val _pendingPresentationRequest = MutableStateFlow<PresentationRequest?>(null)
+    val pendingPresentationRequest: StateFlow<PresentationRequest?> = _pendingPresentationRequest
+
+    private var presentationContinuation: kotlinx.coroutines.CancellableContinuation<List<String>>? = null
+
     init {
         setupEventListener()
     }
@@ -105,12 +113,13 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private fun setupEventListener() {
         wallet.setEventListener(object : WalletEventListener {
             override suspend fun onCredentialSelectionRequired(
-                verifierName: String?,
-                candidates: List<StoredCredential>,
+                request: PresentationRequest,
             ): List<String> {
-                // Auto-accept all candidates in the sample app.
-                // A real app would show a picker dialog here.
-                return candidates.map { it.id }
+                // Show consent UI and suspend until user responds
+                return kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+                    presentationContinuation = cont
+                    _pendingPresentationRequest.value = request
+                }
             }
 
             override fun onAuthorizationRequired(
@@ -130,6 +139,20 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 activity.startActivity(intent)
             }
         })
+    }
+
+    /** User consented to share selected credentials. */
+    fun acceptPresentation(selectedIds: List<String>) {
+        _pendingPresentationRequest.value = null
+        presentationContinuation?.resume(selectedIds, null)
+        presentationContinuation = null
+    }
+
+    /** User declined the presentation request. */
+    fun declinePresentation() {
+        _pendingPresentationRequest.value = null
+        presentationContinuation?.resume(emptyList(), null)
+        presentationContinuation = null
     }
 
     /**
