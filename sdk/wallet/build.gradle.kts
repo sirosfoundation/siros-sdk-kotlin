@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "org.siros.sdk.wallet"
+    namespace = "org.sirosfoundation.sdk.wallet"
     compileSdk = 35
 
     defaultConfig {
@@ -44,4 +44,5 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.kotlin.reflect)
 }

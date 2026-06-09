@@ -1,4 +1,96 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Translatable strings for SIROS Wallet sample app.
+     Export to Transifex using Android XML format.
+     See: https://docs.transifex.com/formats/android-xml -->
 <resources>
-    <string name="app_name">SIROS SDK Sample</string>
+    <string name="app_name">SIROS Wallet</string>
+
+    <!-- Login screen -->
+    <string name="login_title">SIROS Wallet</string>
+    <string name="login_tagline">Digital Identity For Humans</string>
+    <string name="login_backend_url">Backend URL</string>
+    <string name="login_tenant_id">Tenant ID</string>
+    <string name="login_button">Log in with Passkey</string>
+    <string name="login_register_button">Create Account</string>
+
+    <!-- Navigation -->
+    <string name="nav_credentials">Credentials</string>
+    <string name="nav_add">Add</string>
+    <string name="nav_settings">Settings</string>
+
+    <!-- Top bar -->
+    <string name="topbar_title">SIROS Wallet</string>
+    <string name="topbar_logo_description">SIROS</string>
+
+    <!-- Credentials tab -->
+    <string name="credentials_welcome">Welcome, %1$s</string>
+    <string name="credentials_count_one">%1$d credential</string>
+    <string name="credentials_count_other">%1$d credentials</string>
+    <string name="credentials_empty_title">No credentials yet</string>
+    <string name="credentials_empty_subtitle">Tap the Add tab below to get started</string>
+
+    <!-- Add credential screen -->
+    <string name="add_credential_title">Add Credential</string>
+    <string name="add_credential_loading">Loading available credentials\u2026</string>
+    <string name="add_credential_empty">No credentials available</string>
+    <string name="nav_back">Back</string>
+
+    <!-- Credential detail screen -->
+    <string name="credential_detail_title">Credential Details</string>
+    <string name="credential_detail_tab_info">Info</string>
+    <string name="credential_detail_tab_claims">Claims</string>
+    <string name="credential_detail_tab_raw">Raw</string>
+    <string name="credential_detail_issuer">Issuer</string>
+    <string name="credential_detail_format">Format</string>
+    <string name="credential_detail_type">Type</string>
+    <string name="credential_detail_issued">Issued</string>
+    <string name="credential_detail_expires">Expires</string>
+    <string name="credential_detail_no_claims">No claims available</string>
+    <string name="credential_detail_delete">Delete Credential</string>
+    <string name="credential_detail_delete_confirm_title">Delete Credential</string>
+    <string name="credential_detail_delete_confirm_message">Are you sure you want to delete \"%1$s\"? This action cannot be undone.</string>
+    <string name="credential_detail_delete_confirm">Delete</string>
+
+    <!-- Settings screen -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_account_section">Account</string>
+    <string name="settings_signed_in_as">Signed in as</string>
+    <string name="settings_backend_url">Backend</string>
+    <string name="settings_tenant_id">Tenant</string>
+    <string name="settings_credentials_stored">Credentials stored</string>
+    <string name="settings_app_version">App version</string>
+    <string name="settings_presentation_history">Presentation History</string>
+    <string name="settings_logout">Log Out</string>
+
+    <!-- Presentation history -->
+    <string name="history_title">Presentation History</string>
+    <string name="history_empty">No presentations yet</string>
+    <string name="history_presented_to">Presented to %1$s</string>
+    <string name="history_credentials_shared">%1$d credential(s) shared</string>
+    <string name="history_success">Successful</string>
+    <string name="history_failed">Failed</string>
+
+    <!-- QR Scanner -->
+    <string name="qr_scanner_title">Scan QR Code</string>
+    <string name="qr_scanner_hint">Point camera at a credential or presentation QR code</string>
+    <string name="qr_scanner_permission_required">Camera permission is required to scan QR codes</string>
+    <string name="qr_scanner_grant_permission">Grant Permission</string>
+    <string name="qr_scan_button">Scan QR Code</string>
+    <string name="qr_scanner_paste_label">Or paste a credential offer URI</string>
+    <string name="qr_scanner_paste_button">Redeem Offer</string>
+
+    <!-- Flow states -->
+    <string name="flow_issuing">Issuing Credential\u2026</string>
+    <string name="flow_presenting">Presenting Credential\u2026</string>
+    <string name="flow_processing">Processing\u2026</string>
+    <string name="flow_cancel">Cancel</string>
+
+    <!-- Error view -->
+    <string name="error_title">Something went wrong</string>
+    <string name="error_retry">Try Again</string>
+
+    <!-- Common -->
+    <string name="cancel">Cancel</string>
+    <string name="ok">OK</string>
+    <string name="user_fallback_name">User</string>
 </resources>

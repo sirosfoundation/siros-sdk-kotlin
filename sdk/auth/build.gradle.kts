@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "org.siros.sdk.auth"
+    namespace = "org.sirosfoundation.sdk.auth"
     compileSdk = 35
 
     defaultConfig {
@@ -36,4 +36,5 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.okhttp.mockwebserver)
 }

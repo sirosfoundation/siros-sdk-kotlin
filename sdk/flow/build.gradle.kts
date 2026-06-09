@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "org.siros.sdk.flow"
+    namespace = "org.sirosfoundation.sdk.flow"
     compileSdk = 35
 
     defaultConfig {
