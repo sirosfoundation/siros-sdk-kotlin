@@ -916,6 +916,7 @@ class SirosWallet private constructor(
                                 credentialId = cred.id,
                                 format = cred.format,
                                 vct = cred.metadata?.vct,
+                                availableClaims = extractAvailableClaims(cred),
                             )
                         }
                     }
@@ -1209,22 +1210,30 @@ class SirosWallet private constructor(
                 ))
 
                 // Build consent payload with selected credentials
+                // Must match backend ConsentSelection: credential_query_id, credential_id, disclosed_claims
                 val consentPayload = kotlinx.serialization.json.buildJsonObject {
                     put("selected_credentials", kotlinx.serialization.json.buildJsonArray {
                         for (id in selectedIds) {
-                            val cred = allCreds.find { it.id == id } ?: continue
-                            val queryId = matchResults.firstOrNull { r ->
+                            allCreds.find { it.id == id } ?: continue
+                            val matchResult = matchResults.firstOrNull { r ->
                                 r.candidates.any { it.id == id }
-                            }?.queryId
+                            }
                             add(kotlinx.serialization.json.buildJsonObject {
-                                queryId?.let {
+                                matchResult?.queryId?.let {
                                     put("credential_query_id", kotlinx.serialization.json.JsonPrimitive(it))
                                 }
                                 put("credential_id", kotlinx.serialization.json.JsonPrimitive(id))
-                                put("format", kotlinx.serialization.json.JsonPrimitive(cred.format))
-                                cred.metadata?.vct?.let {
-                                    put("vct", kotlinx.serialization.json.JsonPrimitive(it))
-                                }
+                                // Include disclosed_claims from DCQL match so backend can
+                                // round-trip them into sign_request's credentials_to_include
+                                val requestedClaims = matchResult?.requestedClaims
+                                    ?.flatten()
+                                    ?.distinct()
+                                    ?: emptyList()
+                                put("disclosed_claims", kotlinx.serialization.json.buildJsonArray {
+                                    for (claim in requestedClaims) {
+                                        add(kotlinx.serialization.json.JsonPrimitive(claim))
+                                    }
+                                })
                             })
                         }
                     })
@@ -1256,6 +1265,43 @@ class SirosWallet private constructor(
         sessionStore.prfSalt = b64Encode(prfSalt)
         sessionStore.hkdfSalt = b64Encode(hkdfSalt)
         sessionStore.hkdfInfo = b64Encode(hkdfInfo)
+    }
+
+    /**
+     * Extract available claim names from a stored credential.
+     *
+     * For SD-JWT credentials, parses disclosures to get claim names.
+     * Falls back to credential metadata claims if available.
+     */
+    private fun extractAvailableClaims(cred: StoredCredential): List<String> {
+        val claims = mutableSetOf<String>()
+
+        // Extract from SD-JWT disclosures: each is base64url(["salt","claim_name","value"])
+        if (cred.raw.contains("~")) {
+            val parts = cred.raw.split("~")
+            for (disclosure in parts.drop(1).filter { it.isNotEmpty() }) {
+                try {
+                    val decoded = java.util.Base64.getUrlDecoder().decode(disclosure)
+                    val arr = json.parseToJsonElement(String(decoded, Charsets.UTF_8))
+                    val claimName = arr.jsonArray.getOrNull(1)?.jsonPrimitive?.contentOrNull
+                    if (claimName != null) {
+                        claims.add(claimName)
+                    }
+                } catch (_: Exception) {
+                    // Skip unparseable disclosures
+                }
+            }
+        }
+
+        // Supplement from metadata claims if available
+        cred.metadata?.claims?.forEach { claimMeta ->
+            val name = claimMeta.path.lastOrNull()
+            if (name != null) {
+                claims.add(name)
+            }
+        }
+
+        return claims.toList()
     }
 
     companion object {
