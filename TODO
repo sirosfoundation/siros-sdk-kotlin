@@ -1,0 +1,96 @@
+Post-conformance backlog (focus area while conformance suite owns the shared env)
+
+Principles
+1. No tests that depend on the shared dev environment.
+2. Prioritize internal unit/integration tests and deterministic fixtures.
+3. Raise code quality and security posture in SDK before feature expansion.
+
+Phase 1: Namespace migration (org.siros -> org.sirosfoundation)
+1. Rename package namespaces in all modules:
+	- sdk/* namespace values in Gradle
+	- sample-app applicationId + namespace
+	- Kotlin package declarations and imports
+	- AndroidManifest service/activity names
+2. Add temporary compatibility layer:
+	- typealiases/deprecated wrappers for public API package moves where possible
+3. Update docs and sample snippets to only use org.sirosfoundation.
+4. Add migration guide with before/after import mapping.
+
+Phase 2: Coverage > 70% (internal tests only)
+1. Add Kover and enforce minimum line coverage threshold at CI gate.
+2. Build module-level test matrix:
+	- sdk/auth: WebAuthn response parsing, PRF extraction, challenge flow error handling
+	- sdk/keystore: HKDF derivation, JWE decrypt/encrypt, signing/proof generation
+	- sdk/transport: websocket protocol state machine, message parsing, reconnect behavior
+	- sdk/flow: flow event translation, sign/match action handling, error paths
+	- sdk/credentials: DCQL matching logic, edge-case credential metadata handling
+	- sdk/wallet: state transitions, flow orchestration, trust result callbacks
+	- sample-app: ViewModel reducers/intents with fake wallet and fake event stream
+3. Add deterministic integration tests (no external backend):
+	- MockWebServer for REST endpoints
+	- in-process fake engine transport for websocket messages
+4. Add coverage reports to CI artifacts and fail build under threshold.
+
+Phase 3: SDK developer documentation (Kotlin best practices)
+1. Add Dokka and publish API docs from CI.
+2. Add docs set under docs/:
+	- architecture overview (modules + data flows)
+	- quickstart for host apps
+	- configuration matrix (backendUrl, tenantId, redirectUri, passkey mode)
+	- threading/coroutine model
+	- error model and recovery strategy
+	- security model (PRF, key derivation, keystore, token handling)
+3. Add cookbook examples:
+	- register/login/logout
+	- issuance and presentation flows
+	- authorization_required handling with app links/custom scheme
+	- custom credential selection UX
+
+Phase 4: Rust plugin strategy
+1. Define plugin boundary first:
+	- cryptography-intensive, deterministic logic in Rust
+	- Android UI, lifecycle, and platform integrations in Kotlin
+2. Set up Rust + Kotlin bridge baseline:
+	- uniffi or JNI layer selection doc
+	- ABI/release strategy for arm64-v8a, armeabi-v7a, x86_64
+	- contract tests for Kotlin <-> Rust boundary
+3. Candidate plugin pilots:
+	- advanced credential format parsing
+	- trust/policy evaluation helpers
+	- selective-disclosure validation helpers
+
+Phase 5: Go-inspired Kotlin-native scaffolding (SBOM, security, quality)
+1. Add Makefile targets (mirror successful Go patterns):
+	- test, test-coverage, lint, security-scan, sbom, check, ci
+2. Tooling baseline:
+	- lint: detekt + ktlint
+	- security: dependency audit + CodeQL + secrets scan
+	- sbom: CycloneDX SBOM generation for Gradle modules
+	- coverage: Kover XML/HTML + threshold checks
+3. CI policy:
+	- check = lint + unit tests + coverage gate + security checks
+	- publish artifacts: test reports, coverage, sbom
+
+Phase 6: SDK/sample-app alignment with wallet-frontend and demo-wallet target
+1. Perform explicit feature parity matrix against wallet-frontend:
+	- login and OIDC callback hardening
+	- issuance (offer URI, authorization_code, pre-authorized)
+	- presentation and DCQL selection UX
+	- trust evaluation and consent UX
+	- credential history, deletion, metadata rendering
+2. Upgrade sample-app from minimal to demo-wallet:
+	- proper navigation/state restoration
+	- settings and environment profiles
+	- richer error surfaces and retry flows
+	- accessibility and localization baseline
+3. Security hardening required before demo-wallet designation:
+	- remove token logging and any debug token file writes
+	- redact sensitive logs globally
+	- tighten deep link handling and redirect validation
+	- strengthen local auth guarantees (no false UV claims)
+
+Immediate high-priority security fixes
+1. Remove app token logging in sdk/auth and sdk/wallet.
+2. Remove debug token file write from sdk/wallet.
+3. Review LocalAuthProvider UV/PRF semantics to avoid overstating authenticator guarantees.
+4. Add security-focused unit tests for auth/session handling and log redaction.

@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "org.siros.sdk.passkey"
+    namespace = "org.sirosfoundation.sdk.passkey"
     compileSdk = 35
 
     defaultConfig {
@@ -31,6 +31,7 @@ dependencies {
     implementation(libs.androidx.credentials)
     implementation(libs.androidx.credentials.play)
     implementation(libs.androidx.biometric)
+    implementation(libs.androidx.security.crypto)
     implementation(libs.timber)
 
     testImplementation(libs.junit)

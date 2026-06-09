@@ -1,2 +1,2 @@
 # Keep public SDK API classes
--keep class org.siros.sdk.** { *; }
+-keep class org.sirosfoundation.sdk.** { *; }

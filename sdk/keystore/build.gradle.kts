@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "org.siros.sdk.keystore"
+    namespace = "org.sirosfoundation.sdk.keystore"
     compileSdk = 35
 
     defaultConfig {

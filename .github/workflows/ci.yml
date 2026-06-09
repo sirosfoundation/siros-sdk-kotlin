@@ -24,12 +24,63 @@ jobs:
       - name: Run unit tests
         run: ./gradlew test --no-daemon
 
+      - name: Generate coverage report
+        run: ./gradlew koverXmlReport --no-daemon
+
+      - name: Summarize coverage
+        env:
+          COVERAGE_MIN_PCT: "12.5"
+        run: |
+          python3 - <<'PY'
+          import glob
+          import os
+          import sys
+          import xml.etree.ElementTree as ET
+
+          reports = sorted(glob.glob('sdk/*/build/reports/kover/report.xml'))
+          reports += sorted(glob.glob('sample-app/build/reports/kover/report.xml'))
+
+          total_missed = 0
+          total_covered = 0
+
+          for path in reports:
+              root = ET.parse(path).getroot()
+              for counter in root.findall('counter'):
+                  if counter.attrib.get('type') == 'LINE':
+                      missed = int(counter.attrib.get('missed', 0))
+                      covered = int(counter.attrib.get('covered', 0))
+                      total_missed += missed
+                      total_covered += covered
+                      break
+
+          total = total_missed + total_covered
+          pct = (100.0 * total_covered / total) if total else 0.0
+            min_pct = float(os.environ.get('COVERAGE_MIN_PCT', '0'))
+
+            print(f'Aggregated line coverage (sdk modules + sample-app): {pct:.2f}%')
+            print(f'Required minimum coverage: {min_pct:.2f}%')
+
+            if pct < min_pct:
+              print(
+                f'Coverage gate failed: {pct:.2f}% < {min_pct:.2f}%',
+                file=sys.stderr,
+              )
+              sys.exit(1)
+          PY
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-results
           path: '**/build/reports/tests/'
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: '**/build/reports/kover/**'
 
   lint:
     runs-on: ubuntu-latest

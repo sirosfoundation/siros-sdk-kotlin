@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "org.siros.sdk.sample"
+    namespace = "org.sirosfoundation.sdk.sample"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "org.siros.sdk.sample"
+        applicationId = "org.sirosfoundation.sdk.sample"
         minSdk = 28
         targetSdk = 35
         versionCode = 1
@@ -27,15 +27,22 @@ android {
                 "proguard-rules.pro"
             )
             manifestPlaceholders["usesCleartextTraffic"] = "false"
+            buildConfigField("String", "DEFAULT_BACKEND_URL", "\"https://wallet.sirosid.dev\"")
+            buildConfigField("String", "ISSUER_PROXY_URL", "\"\"")
         }
         debug {
             // Allow connecting to local backend over cleartext for development
             manifestPlaceholders["usesCleartextTraffic"] = "true"
+            // Waydroid reaches host-mapped wallet backend via gateway + wallet-proxy
+            buildConfigField("String", "DEFAULT_BACKEND_URL", "\"http://192.168.240.1:8090\"")
+            // Rewrite Docker-internal issuer URLs to the host-accessible proxy
+            buildConfigField("String", "ISSUER_PROXY_URL", "\"http://192.168.240.1:8091\"")
         }
     }
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     compileOptions {
@@ -70,6 +77,16 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
 
     implementation(libs.timber)
+
+    // QR code scanning
+    implementation(libs.camerax.core)
+    implementation(libs.camerax.camera2)
+    implementation(libs.camerax.lifecycle)
+    implementation(libs.camerax.view)
+    implementation(libs.mlkit.barcode)
+
+    // Credential image loading
+    implementation(libs.coil.compose)
 
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
