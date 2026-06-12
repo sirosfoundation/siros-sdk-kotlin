@@ -830,8 +830,11 @@ class SirosWallet private constructor(
                                         audience = audience,
                                     )
                                 }
-                                // For single credential presentations (most common), return the token directly
-                                // For multiple, join with a newline per OID4VP spec
+                                // For single credential presentations (most common), return the token directly.
+                                // For multiple credentials, join with newline for WMP transport.
+                                // Note: The backend assembles the OID4VP-compliant vp_token JSON
+                                // object (keyed by credential query ID, §8.1) before submission
+                                // to the verifier.
                                 vpParts.joinToString("\n")
                             } else {
                                 // Fallback: legacy plain VP JWT (no credential data)
@@ -867,18 +870,23 @@ class SirosWallet private constructor(
 
                     // Filter credentials using DCQL query from the verifier
                     val dcqlQuery = msg.dcqlQuery?.jsonObject
-                    val matchResults = if (dcqlQuery != null) {
-                        CredentialMatcher.match(dcqlQuery, allCreds)
+                    val dcqlOutput = if (dcqlQuery != null) {
+                        CredentialMatcher.matchDcql(dcqlQuery, allCreds)
                     } else {
                         // No DCQL query — fall back to all credentials
-                        listOf(CredentialMatcher.MatchResult(
-                            queryId = "_default",
-                            format = null,
-                            candidates = allCreds,
-                            requestedClaims = emptyList(),
-                        ))
+                        CredentialMatcher.DcqlMatchOutput(
+                            queryResults = listOf(CredentialMatcher.MatchResult(
+                                queryId = "_default",
+                                format = null,
+                                candidates = allCreds,
+                                requestedClaims = emptyList(),
+                            )),
+                            credentialSets = null,
+                            satisfiableOptions = emptyList(),
+                        )
                     }
 
+                    val matchResults = dcqlOutput.queryResults
                     val candidates = matchResults.flatMap { it.candidates }.distinctBy { it.id }
 
                     // Let the app filter further via user selection
@@ -888,6 +896,8 @@ class SirosWallet private constructor(
                                 verifierName = null,
                                 matchResults = matchResults,
                                 candidates = candidates,
+                                credentialSets = dcqlOutput.credentialSets,
+                                satisfiableOptions = dcqlOutput.satisfiableOptions,
                             )
                         )
                     } else {
