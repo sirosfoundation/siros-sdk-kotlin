@@ -17,6 +17,10 @@ data class PresentationRequest(
     val matchResults: List<CredentialMatcher.MatchResult>,
     /** Flat list of candidate credentials (convenience). */
     val candidates: List<StoredCredential>,
+    /** DCQL credential set constraints, null if no `credential_sets` in query. */
+    val credentialSets: List<CredentialMatcher.CredentialSetQuery>? = null,
+    /** Which credential set options are satisfiable with available credentials. */
+    val satisfiableOptions: List<CredentialMatcher.SatisfiableOption> = emptyList(),
 )
 
 /**
