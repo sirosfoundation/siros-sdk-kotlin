@@ -103,4 +103,63 @@ Immediate high-priority security fixes
 1. Remove app token logging in sdk/auth and sdk/wallet.
 2. Remove debug token file write from sdk/wallet.
 3. Review LocalAuthProvider UV/PRF semantics to avoid overstating authenticator guarantees.
+
+SDK / sample-app boundary issues (audit 2026-06-12)
+
+CRITICAL — sensitive data logging
+  1. MainActivity.kt:87 logs full incoming URIs including credential_offer params.
+     Fix: log only scheme://host, never query params.
+  2. WalletViewModel.kt:368 logs full QR-scanned URI.
+     Fix: same — log only scheme://host.
+  3. WalletViewModel.kt:175 logs raw code/state values on the null-case error path.
+     The happy path (line 169) already truncates; the error path should redact too.
+  4. QrScannerScreen.kt:217 Timber.d logs full scanned QR value.
+     Fix: log only "QR scanned: <scheme>://<host>".
+
+CRITICAL — deep-link / URI validation belongs in SDK
+  5. URI routing logic is scattered across MainActivity (lines 82-97),
+     WalletViewModel.handleQrResult (line 370), and QrScannerScreen.isOID4URI
+     (line 265). These all use substring matching (e.g. contains("credential_offer"))
+     which is too permissive — matches attacker-controlled URLs.
+     Fix: add SirosWallet.classifyDeepLink(uri: Uri): DeepLinkType to the SDK.
+     The SDK should parse the URI properly, validate scheme/host, and return a
+     sealed class (AuthCallback | CredentialOffer | PresentationRequest | Invalid).
+     Sample app should only call this method, never do its own URI string matching.
+
+HIGH — auto-authentication on QR scan bypasses consent
+  6. WalletViewModel.ensureAuthenticatedForAutomation() (lines 240-275) auto-registers
+     a new wallet account ("Conformance User") if the user is not logged in. This is
+     triggered by scanning any QR code, meaning a malicious QR can silently create an
+     account. This is test/conformance-only behavior.
+     Fix: rename to ensureAuthenticatedForTesting(), gate behind BuildConfig.DEBUG,
+     and document that production apps must never auto-register.
+
+HIGH — raw credential display
+  7. CredentialDetailScreen.kt RawTab (line 289) displays credential.raw as plaintext
+     with no security warning. Users may screenshot or share this data.
+     Fix: add a warning banner ("This is sensitive data — do not share or screenshot")
+     and gate behind a confirmation tap.
+
+MEDIUM — redirect URI not validated on OAuth callback
+  8. WalletViewModel.handleAuthRedirect (line 162) passes code/state to
+     wallet.completeAuthorization without verifying the redirect URI matches
+     the configured one. A rogue app intercepting the custom scheme could inject
+     an arbitrary authorization code.
+     Fix: SDK's completeAuthorization should accept the full redirect URI and
+     validate it matches the configured redirectUri before processing.
+
+MEDIUM — urlRewriter not constrained
+  9. WalletConfig.urlRewriter is an arbitrary lambda that can redirect authorization
+     URLs to any domain. No validation that the rewritten URL is still on an allowed
+     host. Currently used for Docker internal→external hostname mapping.
+     Fix: if URL rewriting is needed, constrain to specific hostname replacements
+     and validate the destination domain.
+
+Boundary assessment: GOOD fundamentals, needs hardening
+  ✓ Consent UI properly separated — SDK provides PresentationRequest, app renders.
+  ✓ Credential display logic is app-side, SDK provides data models + CredentialUtils.
+  ✓ Keystore, WebAuthn, key derivation all correctly SDK-side.
+  ✓ ViewModel has no crypto or protocol logic — only UI state management.
+  ✗ URI validation/routing is the major gap — must move to SDK.
+  ✗ Logging of sensitive URIs needs immediate fixing.
 4. Add security-focused unit tests for auth/session handling and log redaction.

@@ -48,6 +48,7 @@ class WalletViewModelTest {
         mockkStatic(Log::class)
         every { Log.d(any(), any()) } returns 0
         every { Log.i(any(), any()) } returns 0
+        every { Log.w(any(), any<String>()) } returns 0
         every { Log.e(any(), any()) } returns 0
         every { Log.e(any(), any(), any()) } returns 0
     }
@@ -100,12 +101,9 @@ class WalletViewModelTest {
         val wallet = mockWallet()
         every { SirosWallet.create(any(), any()) } returns wallet
         val viewModel = WalletViewModel(mockk<Activity>(relaxed = true))
-        val uri = mockk<Uri>()
-        every { uri.getQueryParameter("code") } returns "code-123"
-        every { uri.getQueryParameter("state") } returns "state-456"
         setField(viewModel, "pendingAuthFlowId", "flow-789")
 
-        viewModel.handleAuthRedirect(uri)
+        viewModel.handleAuthRedirect("code-123", "state-456")
 
         verify(exactly = 1) { wallet.completeAuthorization("flow-789", "code-123", "state-456") }
         assertNull(getField(viewModel, "pendingAuthFlowId"))
@@ -113,19 +111,16 @@ class WalletViewModelTest {
     }
 
     @Test
-    fun handleAuthRedirect_sets_error_when_params_are_missing() {
+    fun handleAuthRedirect_sets_error_when_no_pending_flow() {
         val wallet = mockWallet()
         every { SirosWallet.create(any(), any()) } returns wallet
         val viewModel = WalletViewModel(mockk<Activity>(relaxed = true))
-        val uri = mockk<Uri>()
-        every { uri.getQueryParameter("code") } returns null
-        every { uri.getQueryParameter("state") } returns "state-456"
-        setField(viewModel, "pendingAuthFlowId", "flow-789")
+        // No pending flow ID set
 
-        viewModel.handleAuthRedirect(uri)
+        viewModel.handleAuthRedirect("code-123", "state-456")
 
         verify(exactly = 0) { wallet.completeAuthorization(any(), any(), any()) }
-        assertEquals("Authorization failed: missing code or state", viewModel.errorMessage.value)
+        assertEquals("Authorization failed: no pending flow", viewModel.errorMessage.value)
     }
 
     @Test
