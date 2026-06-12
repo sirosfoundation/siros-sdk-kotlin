@@ -74,6 +74,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import org.sirosfoundation.sdk.wallet.DeepLinkType
+import org.sirosfoundation.sdk.wallet.classifyDeepLink
 
 class MainActivity : ComponentActivity() {
     private lateinit var viewModel: WalletViewModel
@@ -82,20 +84,17 @@ class MainActivity : ComponentActivity() {
     private fun dispatchIncomingUri(uri: android.net.Uri?) {
         if (uri == null || !::viewModel.isInitialized) return
 
-        val uriString = uri.toString()
-        Log.i(tag, "Incoming URI: $uriString")
-        val isAuthCallback = uri.scheme == "siros-sample" && uri.host == "callback"
-        val isIssuanceOrPresentation =
-            uriString.contains("credential_offer", ignoreCase = true) ||
-                uriString.startsWith("openid-credential-offer://", ignoreCase = true) ||
-                uriString.startsWith("openid4vp://", ignoreCase = true) ||
-                uriString.contains("request_uri=", ignoreCase = true)
-
-        when {
-            isAuthCallback -> viewModel.handleAuthRedirect(uri)
-            isIssuanceOrPresentation -> viewModel.handleQrResult(uriString)
-            else -> Log.d(tag, "Ignoring non-wallet URI: $uriString")
+        Log.i(tag, "Incoming URI: ${uri.scheme}://${uri.host}")
+        when (val link = classifyDeepLink(uri, REDIRECT_SCHEME)) {
+            is DeepLinkType.AuthCallback -> viewModel.handleAuthRedirect(link.code, link.state)
+            is DeepLinkType.CredentialOffer -> viewModel.handleQrResult(link.uri)
+            is DeepLinkType.PresentationRequest -> viewModel.handleQrResult(link.uri)
+            is DeepLinkType.Unknown -> Log.d(tag, "Ignoring non-wallet URI: ${uri.scheme}://${uri.host}")
         }
+    }
+
+    companion object {
+        private const val REDIRECT_SCHEME = "siros-sample"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

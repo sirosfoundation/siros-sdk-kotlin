@@ -19,6 +19,8 @@ import org.sirosfoundation.sdk.wallet.WalletConfig
 import org.sirosfoundation.sdk.wallet.WalletEventListener
 import org.sirosfoundation.sdk.wallet.WalletState
 import org.sirosfoundation.sdk.wallet.PresentationRequest
+import org.sirosfoundation.sdk.wallet.DeepLinkType
+import org.sirosfoundation.sdk.wallet.classifyDeepLink
 
 /**
  * Sample app ViewModel.
@@ -157,20 +159,18 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     /**
      * Handle an OAuth redirect from the browser.
-     * Called by MainActivity.onNewIntent() when the custom scheme URI is received.
+     * Called by MainActivity when the deep-link classifier returns [DeepLinkType.AuthCallback].
      */
-    fun handleAuthRedirect(uri: Uri) {
-        val code = uri.getQueryParameter("code")
-        val state = uri.getQueryParameter("state")
+    fun handleAuthRedirect(code: String, state: String) {
         val flowId = pendingAuthFlowId
 
-        if (code != null && state != null && flowId != null) {
+        if (flowId != null) {
             Log.i(TAG, "Auth redirect: code=${code.take(8)}..., state=${state.take(8)}...")
             pendingAuthFlowId = null
             wallet.completeAuthorization(flowId, code, state)
         } else {
-            Log.e(TAG, "Auth redirect missing params: code=$code state=$state flowId=$flowId")
-            _errorMessage.value = "Authorization failed: missing code or state"
+            Log.e(TAG, "Auth redirect but no pending flow")
+            _errorMessage.value = "Authorization failed: no pending flow"
         }
     }
 
@@ -224,7 +224,12 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         }
     }
 
-    private suspend fun ensureAuthenticatedForAutomation() {
+    /**
+     * Auto-authenticate for testing/conformance only.
+     * Only active in debug builds — production apps must require explicit user login.
+     */
+    private suspend fun ensureAuthenticatedForTesting() {
+        if (!BuildConfig.DEBUG) return // No-op in release builds
         fun isConnectedState(state: WalletState): Boolean {
             return state is WalletState.Ready || state is WalletState.FlowActive
         }
@@ -363,16 +368,24 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _showQrScanner.value = false
         viewModelScope.launch {
             try {
-                Log.i(TAG, "handleQrResult: $uri")
-                ensureAuthenticatedForAutomation()
-                if (uri.contains("credential_offer", ignoreCase = true) ||
-                    uri.startsWith("openid-credential-offer://", ignoreCase = true)
-                ) {
-                    Log.i(TAG, "Routing to issuance")
-                    wallet.startIssuance(uri)
-                } else {
-                    Log.i(TAG, "Routing to presentation")
-                    wallet.startPresentation(uri)
+                val jUri = try { java.net.URI(uri) } catch (_: Exception) { null }
+                Log.i(TAG, "handleQrResult: ${jUri?.scheme}://${jUri?.host}")
+                ensureAuthenticatedForTesting()
+                when (val link = classifyDeepLink(uri, REDIRECT_SCHEME)) {
+                    is DeepLinkType.CredentialOffer -> {
+                        Log.i(TAG, "Routing to issuance")
+                        wallet.startIssuance(link.uri)
+                    }
+                    is DeepLinkType.PresentationRequest -> {
+                        Log.i(TAG, "Routing to presentation")
+                        wallet.startPresentation(link.uri)
+                    }
+                    else -> {
+                        // Fallback: treat unclassified URIs as presentation requests
+                        // (covers plain https://...?request_uri= patterns from QR codes)
+                        Log.i(TAG, "Routing to presentation (unclassified)")
+                        wallet.startPresentation(uri)
+                    }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "QR/deep-link flow failed", e)
@@ -417,5 +430,6 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         private val DEFAULT_BACKEND_URL = BuildConfig.DEFAULT_BACKEND_URL
         private const val DEFAULT_TENANT_ID = "default"
         private const val REDIRECT_URI = "siros-sample://callback"
+        private const val REDIRECT_SCHEME = "siros-sample"
     }
 }

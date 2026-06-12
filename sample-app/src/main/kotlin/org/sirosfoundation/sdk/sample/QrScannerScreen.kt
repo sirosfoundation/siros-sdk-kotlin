@@ -52,6 +52,8 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import timber.log.Timber
 import java.util.concurrent.Executors
+import org.sirosfoundation.sdk.wallet.DeepLinkType
+import org.sirosfoundation.sdk.wallet.classifyDeepLink
 
 /**
  * QR code scanner screen for OID4VCI credential offer URIs
@@ -212,9 +214,10 @@ private fun CameraPreviewWithScanner(
                                             barcode.valueType == Barcode.TYPE_TEXT
                                         ) {
                                             val value = barcode.rawValue ?: continue
-                                            if (isOID4URI(value)) {
+                                            if (isWalletUri(value)) {
                                                 scanned = true
-                                                Timber.d("QR scanned: $value")
+                                                val parsed = android.net.Uri.parse(value)
+                                                Timber.d("QR scanned: ${parsed.scheme}://${parsed.host}")
                                                 onQrScanned(value)
                                             }
                                         }
@@ -262,11 +265,10 @@ private fun CameraPreviewWithScanner(
 /**
  * Check if a scanned value looks like an OID4VCI or OID4VP URI.
  */
-private fun isOID4URI(value: String): Boolean {
-    return value.contains("credential_offer_uri=", ignoreCase = true) ||
-        value.contains("credential_offer=", ignoreCase = true) ||
-        value.contains("request_uri=", ignoreCase = true) ||
-        value.startsWith("openid-credential-offer://", ignoreCase = true) ||
-        value.startsWith("openid4vp://", ignoreCase = true) ||
-        value.startsWith("haip://", ignoreCase = true)
+private fun isWalletUri(value: String): Boolean {
+    return when (classifyDeepLink(value, "siros-sample")) {
+        is DeepLinkType.CredentialOffer,
+        is DeepLinkType.PresentationRequest -> true
+        else -> false
+    }
 }

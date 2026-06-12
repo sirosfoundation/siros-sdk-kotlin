@@ -293,6 +293,20 @@ private fun RawTab(credential: StoredCredential) {
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
     ) {
+        // Security warning — raw credentials are sensitive
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.errorContainer,
+            ),
+            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+        ) {
+            Text(
+                text = "\u26a0\ufe0f This is sensitive data. Do not screenshot or share.",
+                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.padding(12.dp),
+            )
+        }
         Text(
             text = credential.raw,
             style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
