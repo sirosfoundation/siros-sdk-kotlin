@@ -29,7 +29,7 @@ jobs:
 
       - name: Summarize coverage
         env:
-          COVERAGE_MIN_PCT: "12.5"
+          COVERAGE_MIN_PCT: "25"
         run: |
           python3 - <<'PY'
           import glob

@@ -824,7 +824,7 @@ class SirosWallet private constructor(
                                 val vpParts = credsToInclude.mapNotNull { ref ->
                                     val cred = allCreds.find { it.id == ref.credentialId }
                                     if (cred == null) {
-                                        Timber.w("Credential ${ref.credentialId} not found in store for VP signing")
+                                        Timber.w("Credential ...${ref.credentialId.takeLast(4)} not found in store for VP signing")
                                         return@mapNotNull null
                                     }
                                     keystore.signVpToken(

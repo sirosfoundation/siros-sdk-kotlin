@@ -85,7 +85,7 @@ class WebAuthnAuthClient(
         val sessionResponse = post("$baseUrl/user/register-webauthn-finish", finishBody)
         Timber.d("register finish response keys: ${sessionResponse.keys}")
         val session = json.decodeFromJsonElement(AuthSession.serializer(), sessionResponse)
-        Timber.d("register session: uuid=${session.uuid}, tenantId=${session.tenantId}")
+        Timber.d("register session: uuid=...${session.uuid.takeLast(4)}, tenantId=${session.tenantId}")
         session
     }
 
@@ -135,7 +135,7 @@ class WebAuthnAuthClient(
         val sessionResponse = post("$baseUrl/user/login-webauthn-finish", finishBody)
         Timber.d("login finish response keys: ${sessionResponse.keys}")
         val session = json.decodeFromJsonElement(AuthSession.serializer(), sessionResponse)
-        Timber.d("login session: uuid=${session.uuid}, tenantId=${session.tenantId}")
+        Timber.d("login session: uuid=...${session.uuid.takeLast(4)}, tenantId=${session.tenantId}")
         session
     }
 
