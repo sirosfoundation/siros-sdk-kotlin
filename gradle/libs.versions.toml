@@ -20,6 +20,7 @@ turbine = "1.2.0"
 timber = "5.0.1"
 detekt = "1.23.7"
 kover = "0.8.3"
+dokka = "2.0.0"
 camerax = "1.4.1"
 mlkit-barcode = "17.3.0"
 coil = "2.7.0"
@@ -68,3 +69,4 @@ kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }
+dokka = { id = "org.jetbrains.dokka", version.ref = "dokka" }
