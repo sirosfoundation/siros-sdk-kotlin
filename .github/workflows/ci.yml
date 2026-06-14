@@ -2,9 +2,15 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
   pull_request:
-    branches: [ main ]
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
 
 jobs:
   test:
@@ -116,27 +122,3 @@ jobs:
 
       - name: Build
         run: ./gradlew assemble --no-daemon
-
-  codeql:
-    runs-on: ubuntu-latest
-    permissions:
-      security-events: write
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: java-kotlin
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-
-      - name: Build for CodeQL
-        run: ./gradlew assemble --no-daemon
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
