@@ -82,4 +82,17 @@ interface WalletEventListener {
         redirectUri: String,
         state: String,
     ) {}
+
+    /**
+     * An issuer requires a transaction code (PIN) for pre-authorized issuance.
+     *
+     * Return the PIN/tx_code value, or null to cancel the flow.
+     *
+     * @param flowId The flow that requires a tx_code.
+     * @param description Human-readable description from the issuer (may contain the code for testing).
+     */
+    fun onTxCodeRequired(
+        flowId: String,
+        description: String?,
+    ): String? = null
 }

@@ -585,7 +585,11 @@ class SirosWallet private constructor(
      */
     suspend fun startIssuance(offerUri: String) {
         val engine = engineSession ?: throw WalletException("Not connected")
-        if (offerUri.startsWith("openid-credential-offer://") || offerUri.startsWith("http")) {
+        if (offerUri.startsWith("openid-credential-offer://")) {
+            // Deep-link URI with inline offer — send as "offer" so the engine
+            // extracts the credential_offer query parameter instead of HTTP-fetching.
+            engine.startIssuance(offer = offerUri)
+        } else if (offerUri.startsWith("http")) {
             engine.startIssuance(credentialOfferUri = offerUri)
         } else {
             engine.startIssuance(offer = offerUri)
@@ -960,21 +964,40 @@ class SirosWallet private constructor(
                 if (msg.step == "authorization_required") {
                     val payload = msg.payload?.jsonObject
                     Timber.d("Authorization required payload: $payload")
-                    val authUrl = payload?.get("authorization_url")?.jsonPrimitive?.contentOrNull
-                    val redirectUri = payload?.get("expected_redirect_uri")?.jsonPrimitive?.contentOrNull
-                    val state = payload?.get("state")?.jsonPrimitive?.contentOrNull
-                    if (authUrl != null) {
-                        // Apply URL rewriter if configured
-                        val rewrittenUrl = config.urlRewriter?.invoke(authUrl) ?: authUrl
-                        // Extract state from URL query params if not in payload
-                        val effectiveState = state ?: android.net.Uri.parse(rewrittenUrl).getQueryParameter("state") ?: ""
-                        Timber.d("Authorization required: url=$rewrittenUrl state=$effectiveState")
-                        eventListener?.onAuthorizationRequired(
+
+                    // Handle tx_code (PIN input) for pre-authorized code flow
+                    val payloadType = payload?.get("type")?.jsonPrimitive?.contentOrNull
+                    if (payloadType == "tx_code") {
+                        val txCode = eventListener?.onTxCodeRequired(
                             flowId = msg.flowId,
-                            authorizationUrl = rewrittenUrl,
-                            redirectUri = redirectUri ?: "",
-                            state = effectiveState,
+                            description = payload?.get("message")?.jsonPrimitive?.contentOrNull,
                         )
+                        if (txCode != null) {
+                            Timber.i("Providing tx_code for flow ${msg.flowId}")
+                            engine.sendFlowAction(msg.flowId, "provide_pin",
+                                kotlinx.serialization.json.buildJsonObject {
+                                    put("tx_code", kotlinx.serialization.json.JsonPrimitive(txCode))
+                                })
+                        } else {
+                            Timber.w("No tx_code provided for flow ${msg.flowId}")
+                        }
+                    } else {
+                        val authUrl = payload?.get("authorization_url")?.jsonPrimitive?.contentOrNull
+                        val redirectUri = payload?.get("expected_redirect_uri")?.jsonPrimitive?.contentOrNull
+                        val state = payload?.get("state")?.jsonPrimitive?.contentOrNull
+                        if (authUrl != null) {
+                            // Apply URL rewriter if configured
+                            val rewrittenUrl = config.urlRewriter?.invoke(authUrl) ?: authUrl
+                            // Extract state from URL query params if not in payload
+                            val effectiveState = state ?: android.net.Uri.parse(rewrittenUrl).getQueryParameter("state") ?: ""
+                            Timber.d("Authorization required: url=$rewrittenUrl state=$effectiveState")
+                            eventListener?.onAuthorizationRequired(
+                                flowId = msg.flowId,
+                                authorizationUrl = rewrittenUrl,
+                                redirectUri = redirectUri ?: "",
+                                state = effectiveState,
+                            )
+                        }
                     }
                 }
 
@@ -1343,7 +1366,7 @@ class SirosWallet private constructor(
                 CredentialManagerAuthProvider(activity)
             } else {
                 Timber.i("Using local KeyStore-backed passkey provider")
-                LocalAuthProvider(activity)
+                LocalAuthProvider(activity, requireUserAuth = config.requireUserAuth)
             }
         }
 
