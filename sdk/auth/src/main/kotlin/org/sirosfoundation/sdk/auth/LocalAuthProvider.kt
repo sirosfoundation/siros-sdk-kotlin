@@ -124,7 +124,7 @@ class LocalAuthProvider(
         lastCredentialId = credentialId
         lastPrfOutput = prfOutput
 
-        Timber.i("LocalAuthProvider: registered credential ${b64url(credentialId)} for RP ${options.rpId}")
+        Timber.i("LocalAuthProvider: registered credential for RP ${options.rpId}")
 
         return RegisterResult(
             credentialId = credentialId,
@@ -181,7 +181,7 @@ class LocalAuthProvider(
         lastCredentialId = credentialId
         lastPrfOutput = prfOutput
 
-        Timber.i("LocalAuthProvider: authenticated with credential ${credential.credentialId}")
+        Timber.i("LocalAuthProvider: authenticated with credential")
 
         return AuthenticateResult(
             credentialId = credentialId,

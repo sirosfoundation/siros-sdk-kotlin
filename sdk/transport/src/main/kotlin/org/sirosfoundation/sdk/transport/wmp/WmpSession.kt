@@ -249,5 +249,5 @@ data class WmpSessionConfig(
     val reconnectMaxMs: Long = 30_000,
 )
 
-class WmpSessionException(message: String, cause: Throwable? = null) : Exception(message, cause)
-class WmpTimeoutException(message: String) : Exception(message)
+class WmpSessionException(message: String, cause: Throwable? = null) : org.sirosfoundation.sdk.credentials.SirosException(message, cause)
+class WmpTimeoutException(message: String) : org.sirosfoundation.sdk.credentials.SirosException(message)
