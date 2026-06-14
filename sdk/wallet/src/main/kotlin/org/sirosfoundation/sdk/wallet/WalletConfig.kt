@@ -33,4 +33,5 @@ data class WalletConfig(
     val credentialStore: CredentialStore? = null,
     val httpClient: OkHttpClient? = null,
     val urlRewriter: ((String) -> String)? = null,
+    val requireUserAuth: Boolean = true,
 )

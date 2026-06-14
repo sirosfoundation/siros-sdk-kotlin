@@ -233,7 +233,6 @@ class JweKeystore(
             .build()
 
         val header = JWSHeader.Builder(JWSAlgorithm.ES256)
-            .keyID(key.keyID)
             .type(com.nimbusds.jose.JOSEObjectType("openid4vci-proof+jwt"))
             .jwk(key.toPublicJWK())
             .build()

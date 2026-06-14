@@ -39,6 +39,7 @@ import javax.crypto.spec.SecretKeySpec
  */
 class LocalAuthProvider(
     private val context: Context,
+    private val requireUserAuth: Boolean = true,
 ) : AuthProvider {
 
     private val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
@@ -69,9 +70,9 @@ class LocalAuthProvider(
         )
             .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
             .setDigests(KeyProperties.DIGEST_SHA256)
-            .setUserAuthenticationRequired(true)
+            .setUserAuthenticationRequired(requireUserAuth)
             .apply {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                if (requireUserAuth && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     setUserAuthenticationParameters(
                         0, // require auth every use
                         KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL,

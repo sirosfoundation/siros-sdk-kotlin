@@ -3,6 +3,7 @@ package org.sirosfoundation.sdk.sample
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -139,6 +140,22 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse(authorizationUrl))
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 activity.startActivity(intent)
+            }
+
+            override fun onTxCodeRequired(
+                flowId: String,
+                description: String?,
+            ): String? {
+                Log.i(TAG, "tx_code required for flow $flowId: $description")
+                // Extract PIN from description (e.g. "Input the one-time code: <123456> for testing purposes")
+                val match = Regex("<(\\d+)>").find(description ?: "")
+                val pin = match?.groupValues?.get(1)
+                if (pin != null) {
+                    Log.i(TAG, "Auto-providing tx_code from description: $pin")
+                    return pin
+                }
+                Log.w(TAG, "No tx_code found in description, cannot auto-respond")
+                return null
             }
         })
     }
@@ -413,10 +430,19 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     private fun buildWalletConfig(): WalletConfig {
         val proxyUrl = BuildConfig.ISSUER_PROXY_URL
+        // Disable user-auth-bound keys on emulators/Waydroid where the lock screen
+        // cannot be reliably unlocked via ADB.
+        val isEmulator = Build.FINGERPRINT.contains("generic") ||
+            Build.PRODUCT.contains("sdk") ||
+            Build.MODEL.contains("Emulator") ||
+            Build.HARDWARE == "ranchu" ||
+            Build.MANUFACTURER.equals("waydroid", ignoreCase = true) ||
+            Build.BRAND == "google" && Build.DEVICE?.startsWith("generic") == true
         return WalletConfig(
             backendUrl = _backendUrl.value,
             tenantId = _tenantId.value,
             redirectUri = REDIRECT_URI,
+            requireUserAuth = !isEmulator,
             urlRewriter = if (proxyUrl.isNotBlank()) { url ->
                 // Rewrite Docker-internal issuer URLs to the dev proxy
                 url.replace("https://vc-proxy:8443", proxyUrl)
