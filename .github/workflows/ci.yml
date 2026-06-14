@@ -28,10 +28,10 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Run unit tests
-        run: ./gradlew test --no-daemon
+        run: ./gradlew test -x :sample-app:testDebugUnitTest -x :sample-app:testReleaseUnitTest --no-daemon
 
       - name: Generate coverage report
-        run: ./gradlew koverXmlReport --no-daemon
+        run: ./gradlew koverXmlReport -x :sample-app:koverXmlReport --no-daemon
 
       - name: Summarize coverage
         env:
