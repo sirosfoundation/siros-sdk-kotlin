@@ -382,7 +382,6 @@ class WalletEngineSessionTest {
             client = client,
         )
         session.connect("app-token")
-        listener.onMessage(webSocket, """{"type":"handshake_complete","session_id":"session-123"}""")
 
         session.disconnect()
 
