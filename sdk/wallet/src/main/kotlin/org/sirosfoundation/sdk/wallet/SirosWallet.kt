@@ -607,6 +607,32 @@ class SirosWallet private constructor(
     }
 
     /**
+     * Perform identity verification via a plugin provider and automatically start
+     * credential issuance with the resulting offer.
+     *
+     * This is the primary integration point for IDV flows (FaceTec, iProov, etc.).
+     * The provider handles all capture UI and backend communication; this method
+     * bridges the IDV result into the standard OID4VCI issuance flow.
+     *
+     * @param provider An [IdentityVerificationProvider] implementation.
+     * @param activity The hosting Activity for presenting the IDV UI.
+     * @throws IDVException if verification fails.
+     * @throws WalletException if issuance fails.
+     */
+    suspend fun verifyIdentityAndIssue(
+        provider: org.sirosfoundation.sdk.idv.IdentityVerificationProvider,
+        activity: android.app.Activity,
+    ) {
+        if (!provider.isAvailable()) {
+            throw org.sirosfoundation.sdk.idv.IDVException.Unavailable(
+                "${provider.name} is not available on this device"
+            )
+        }
+        val result = provider.startVerification(activity)
+        startIssuance(result.credentialOfferURI)
+    }
+
+    /**
      * Cancel an in-progress flow and return the wallet to the Ready state.
      *
      * If there is an active flow, sends a decline message to the backend.

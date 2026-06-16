@@ -31,6 +31,7 @@ dependencies {
     api(project(":sdk:keystore"))
     api(project(":sdk:flow"))
     api(project(":sdk:credentials"))
+    api(project(":sdk:idv"))
 
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.core)
