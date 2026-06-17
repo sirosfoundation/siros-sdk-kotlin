@@ -1,0 +1,315 @@
+package org.sirosfoundation.sdk.keystore
+
+import com.nimbusds.jose.JWSAlgorithm
+import com.nimbusds.jose.JWSHeader
+import com.nimbusds.jose.Payload
+import com.nimbusds.jwt.JWTClaimsSet
+import com.nimbusds.jwt.SignedJWT
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import java.security.MessageDigest
+import java.util.Base64
+import java.util.Date
+import java.util.UUID
+
+/**
+ * Transaction data item for TS12 payment SCA.
+ *
+ * Each item represents one entry from the `transaction_data` array in an
+ * OID4VP authorization request. The [rawJson] is the canonical JSON
+ * serialization used for hashing into `transaction_data_hashes`.
+ */
+data class TransactionDataItem(
+    /** Transaction type (e.g. "payment", "login_risk", "account_access", "e_mandate"). */
+    val type: String,
+    /** Canonical JSON serialization of this transaction data item. */
+    val rawJson: String,
+)
+
+/**
+ * Adapts a [Signer] (e.g. backed by WSCD/UniFFI bindings) into the
+ * full [KeystoreManager] interface expected by [SirosWallet].
+ *
+ * Delegates raw key operations (generate, sign, list) to the underlying
+ * [Signer] implementation while handling higher-level operations
+ * (JWT construction, SD-JWT VP tokens, credential storage) locally.
+ *
+ * Usage:
+ * ```kotlin
+ * val wscdSigner: Signer = ... // UniFFI-generated WSCD binding
+ * val keystore = WscdKeystoreAdapter(wscdSigner)
+ * val wallet = SirosWallet.create(activity, config.copy(keystore = keystore))
+ * ```
+ */
+class WscdKeystoreAdapter(
+    private val signer: Signer,
+) : KeystoreManager {
+
+    private val mutex = Mutex()
+    private var _isUnlocked = false
+    private val credentials = mutableMapOf<String, String>()
+
+    override val isUnlocked: Boolean get() = _isUnlocked
+
+    override suspend fun unlock(
+        prfOutput: ByteArray,
+        encryptedContainer: ByteArray,
+        hkdfSalt: ByteArray,
+        hkdfInfo: ByteArray,
+    ) {
+        // WSCD-backed keystores don't use PRF unlock —
+        // the WSCD manages its own key protection.
+        mutex.withLock { _isUnlocked = true }
+    }
+
+    override fun lock() {
+        runBlocking { mutex.withLock { _isUnlocked = false } }
+    }
+
+    override suspend fun generateKey(algorithm: String): String {
+        checkUnlocked()
+        return signer.generateKey(algorithm)
+    }
+
+    override suspend fun sign(keyId: String, payload: ByteArray, algorithm: String): ByteArray {
+        checkUnlocked()
+        return signer.sign(keyId, payload)
+    }
+
+    override suspend fun generateProof(audience: String, nonce: String): String {
+        checkUnlocked()
+        val keys = signer.listKeys()
+        val key = keys.firstOrNull()
+            ?: throw IllegalStateException("No keys available")
+        val pubKeyJson = String(signer.exportPublicKey(key.keyId), Charsets.UTF_8)
+        val jwk = Json.parseToJsonElement(pubKeyJson).jsonObject
+
+        val header = JWSHeader.Builder(jwsAlgorithm(key.algorithm))
+            .type(com.nimbusds.jose.JOSEObjectType("openid4vci-proof+jwt"))
+            .jwk(com.nimbusds.jose.jwk.JWK.parse(pubKeyJson))
+            .build()
+
+        val claims = JWTClaimsSet.Builder()
+            .audience(audience)
+            .issueTime(Date())
+            .claim("nonce", nonce)
+            .build()
+
+        val signingInput = "${base64Url(header.toJSONObject())}.${base64Url(claims.toJSONObject())}"
+        val signature = signer.sign(key.keyId, signingInput.toByteArray(Charsets.UTF_8))
+        return "$signingInput.${base64UrlEncode(signature)}"
+    }
+
+    override suspend fun signPresentation(nonce: String, audience: String, credentialIds: List<String>): String {
+        checkUnlocked()
+        val keys = signer.listKeys()
+        val key = keys.firstOrNull()
+            ?: throw IllegalStateException("No keys available")
+
+        val header = JWSHeader.Builder(jwsAlgorithm(key.algorithm))
+            .keyID(key.keyId)
+            .build()
+
+        val claims = JWTClaimsSet.Builder()
+            .audience(audience)
+            .issueTime(Date())
+            .claim("nonce", nonce)
+            .jwtID(UUID.randomUUID().toString())
+            .build()
+
+        val signingInput = "${base64Url(header.toJSONObject())}.${base64Url(claims.toJSONObject())}"
+        val signature = signer.sign(key.keyId, signingInput.toByteArray(Charsets.UTF_8))
+        return "$signingInput.${base64UrlEncode(signature)}"
+    }
+
+    override suspend fun signVpToken(
+        credential: String,
+        disclosedClaims: List<String>?,
+        nonce: String,
+        audience: String,
+        transactionData: List<TransactionDataItem>? = null,
+    ): String {
+        checkUnlocked()
+        val keys = signer.listKeys()
+        val key = keys.firstOrNull()
+            ?: throw IllegalStateException("No keys available")
+
+        // Split SD-JWT
+        val parts = credential.split("~")
+        val issuerJwt = parts[0]
+        val disclosures = parts.drop(1).filter { it.isNotEmpty() }
+
+        // Filter disclosures
+        val selected = if (!disclosedClaims.isNullOrEmpty()) {
+            disclosures.filter { disclosure ->
+                try {
+                    val decoded = String(Base64.getUrlDecoder().decode(disclosure), Charsets.UTF_8)
+                    val array = Json.parseToJsonElement(decoded).jsonObject
+                    // SD-JWT disclosures are JSON arrays [salt, name, value]
+                    val decodedArray = Json.parseToJsonElement(decoded)
+                    if (decodedArray is kotlinx.serialization.json.JsonArray && decodedArray.size >= 2) {
+                        val name = decodedArray[1].toString().trim('"')
+                        disclosedClaims.contains(name)
+                    } else false
+                } catch (_: Exception) { false }
+            }
+        } else disclosures
+
+        // Build SD-JWT presentation
+        val sdJwtPresentation = buildString {
+            append(issuerJwt)
+            selected.forEach { append("~$it") }
+            append("~")
+        }
+
+        // sd_hash
+        val sdHash = base64UrlEncode(
+            MessageDigest.getInstance("SHA-256")
+                .digest(sdJwtPresentation.toByteArray(Charsets.UTF_8))
+        )
+
+        // KB-JWT
+        val pubKeyJson = String(signer.exportPublicKey(key.keyId), Charsets.UTF_8)
+        val header = JWSHeader.Builder(jwsAlgorithm(key.algorithm))
+            .type(com.nimbusds.jose.JOSEObjectType("kb+jwt"))
+            .jwk(com.nimbusds.jose.jwk.JWK.parse(pubKeyJson))
+            .build()
+
+        val claims = JWTClaimsSet.Builder()
+            .audience(audience)
+            .issueTime(Date())
+            .claim("nonce", nonce)
+            .claim("sd_hash", sdHash)
+
+        // Include amr from WSCD security properties (E7: TS12 compliance)
+        try {
+            val props = signer.securityProperties(key.keyId)
+            if (props.amr.isNotEmpty()) {
+                claims.claim("amr", props.amr)
+            }
+        } catch (_: Exception) {
+            // Security properties not available — omit amr
+        }
+
+        // Phase I: Transaction data hashes (TS12 payment SCA)
+        if (!transactionData.isNullOrEmpty()) {
+            val md = MessageDigest.getInstance("SHA-256")
+            val hashes = transactionData.map { item ->
+                base64UrlEncode(md.digest(item.rawJson.toByteArray(Charsets.UTF_8)))
+            }
+            claims.claim("transaction_data_hashes", hashes)
+            claims.claim("transaction_data_hashes_alg", "sha-256")
+            claims.jwtID(UUID.randomUUID().toString())
+        }
+
+        val claimsSet = claims.build()
+
+        val signingInput = "${base64Url(header.toJSONObject())}.${base64Url(claimsSet.toJSONObject())}"
+        val signature = signer.sign(key.keyId, signingInput.toByteArray(Charsets.UTF_8))
+        val kbJwt = "$signingInput.${base64UrlEncode(signature)}"
+
+        return sdJwtPresentation + kbJwt
+    }
+
+    override suspend fun exportEncryptedContainer(): ByteArray {
+        // WSCD keys are not exportable as a JWE container.
+        return ByteArray(0)
+    }
+
+    override fun listKeys(): List<KeyInfo> {
+        return runBlocking {
+            signer.listKeys().map { KeyInfo(it.keyId, it.algorithm, 0L) }
+        }
+    }
+
+    // ── Attestation (WSCD-specific) ─────────────────────────────────
+
+    /**
+     * Returns the attestation certificate chain for a key, if available.
+     * For hardware-backed keys (FIDO2/CTAP2), this provides attestation
+     * proving key provenance for OID4VCI proof of possession.
+     */
+    suspend fun attestationChain(keyId: String): List<ByteArray>? {
+        return signer.attestationChain(keyId)
+    }
+
+    /**
+     * Export the public key in JWK format.
+     */
+    suspend fun exportPublicKey(keyId: String): ByteArray {
+        return signer.exportPublicKey(keyId)
+    }
+
+    // ── Migration ───────────────────────────────────────────────────
+
+    /**
+     * Migrate a key to a different WSCD plugin.
+     *
+     * If the result is [MigrationResult.ReEnrollmentRequired], the wallet
+     * should trigger credential re-issuance with the issuer.
+     */
+    suspend fun migrateKey(keyId: String, targetPlugin: String): MigrationResult {
+        return signer.migrateKey(keyId, targetPlugin)
+    }
+
+    /**
+     * Return the security properties for a key.
+     */
+    suspend fun securityProperties(keyId: String): SignerSecurityProperties {
+        return signer.securityProperties(keyId)
+    }
+
+    // ── Credential storage (local in-memory) ────────────────────────
+
+    override suspend fun saveCredential(id: String, json: String) {
+        mutex.withLock { credentials[id] = json }
+    }
+
+    override suspend fun getCredential(id: String): String? {
+        return mutex.withLock { credentials[id] }
+    }
+
+    override suspend fun getAllCredentials(): Map<String, String> {
+        return mutex.withLock { credentials.toMap() }
+    }
+
+    override suspend fun deleteCredential(id: String) {
+        mutex.withLock { credentials.remove(id) }
+    }
+
+    override suspend fun clearCredentials() {
+        mutex.withLock { credentials.clear() }
+    }
+
+    // ── Private helpers ─────────────────────────────────────────────
+
+    private fun checkUnlocked() {
+        if (!_isUnlocked) throw IllegalStateException("Keystore is locked")
+    }
+
+    private fun jwsAlgorithm(algorithm: String): JWSAlgorithm {
+        return when (algorithm.uppercase()) {
+            "ES256", "P-256" -> JWSAlgorithm.ES256
+            "EDDSA", "ED25519" -> JWSAlgorithm.EdDSA
+            else -> JWSAlgorithm.parse(algorithm)
+        }
+    }
+
+    private fun base64Url(obj: Map<String, Any>): String {
+        val json = Json.encodeToString(
+            kotlinx.serialization.json.JsonObject.serializer(),
+            kotlinx.serialization.json.JsonObject(
+                obj.mapValues { kotlinx.serialization.json.JsonPrimitive(it.value.toString()) }
+            )
+        )
+        return base64UrlEncode(json.toByteArray(Charsets.UTF_8))
+    }
+
+    private fun base64UrlEncode(data: ByteArray): String {
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(data)
+    }
+}

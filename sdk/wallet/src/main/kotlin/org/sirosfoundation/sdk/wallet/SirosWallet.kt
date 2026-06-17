@@ -692,7 +692,7 @@ class SirosWallet private constructor(
     private val scope = CoroutineScope(Dispatchers.Main + supervisorJob)
     private val sessionStore = SessionStore(activity)
     private val authProvider = createAuthProvider(activity, config)
-    private val keystore: KeystoreManager = JweKeystore()
+    private val keystore: KeystoreManager = config.keystore ?: JweKeystore()
     private val credentialStore: CredentialStore =
         config.credentialStore ?: KeystoreBackedCredentialStore(keystore)
     private val json = Json { ignoreUnknownKeys = true }
