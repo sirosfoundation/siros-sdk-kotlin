@@ -131,7 +131,17 @@ class WscdKeystoreAdapter(
         disclosedClaims: List<String>?,
         nonce: String,
         audience: String,
-        transactionData: List<TransactionDataItem>? = null,
+    ): String {
+        return signVpToken(credential, disclosedClaims, nonce, audience, null)
+    }
+
+    /** Extended VP token signing with transaction data (Phase I: TS12 payment SCA). */
+    suspend fun signVpToken(
+        credential: String,
+        disclosedClaims: List<String>?,
+        nonce: String,
+        audience: String,
+        transactionData: List<TransactionDataItem>?,
     ): String {
         checkUnlocked()
         val keys = signer.listKeys()
@@ -148,9 +158,8 @@ class WscdKeystoreAdapter(
             disclosures.filter { disclosure ->
                 try {
                     val decoded = String(Base64.getUrlDecoder().decode(disclosure), Charsets.UTF_8)
-                    val array = Json.parseToJsonElement(decoded).jsonObject
-                    // SD-JWT disclosures are JSON arrays [salt, name, value]
                     val decodedArray = Json.parseToJsonElement(decoded)
+                    // SD-JWT disclosures are JSON arrays [salt, name, value]
                     if (decodedArray is kotlinx.serialization.json.JsonArray && decodedArray.size >= 2) {
                         val name = decodedArray[1].toString().trim('"')
                         disclosedClaims.contains(name)
@@ -185,7 +194,11 @@ class WscdKeystoreAdapter(
             .claim("nonce", nonce)
             .claim("sd_hash", sdHash)
 
-        // Include amr from WSCD security properties (E7: TS12 compliance)
+        // Include amr from WSCD security properties (E7: TS12 compliance).
+        // NOTE: amr reflects the auth method from the *previous* sign operation
+        // since we query it before signing the KB-JWT. This is acceptable because
+        // WSCD-backed signing requires prior authentication, and the amr is
+        // updated during that authentication phase (not during the sign itself).
         try {
             val props = signer.securityProperties(key.keyId)
             if (props.amr.isNotEmpty()) {
@@ -217,7 +230,8 @@ class WscdKeystoreAdapter(
 
     override suspend fun exportEncryptedContainer(): ByteArray {
         // WSCD keys are not exportable as a JWE container.
-        return ByteArray(0)
+        // Return valid empty JSON so callers parsing the result don't fail.
+        return "{}".toByteArray(Charsets.UTF_8)
     }
 
     override fun listKeys(): List<KeyInfo> {
@@ -300,13 +314,28 @@ class WscdKeystoreAdapter(
     }
 
     private fun base64Url(obj: Map<String, Any>): String {
+        val jsonObj = kotlinx.serialization.json.JsonObject(
+            obj.mapValues { (_, v) -> toJsonElement(v) }
+        )
         val json = Json.encodeToString(
             kotlinx.serialization.json.JsonObject.serializer(),
-            kotlinx.serialization.json.JsonObject(
-                obj.mapValues { kotlinx.serialization.json.JsonPrimitive(it.value.toString()) }
-            )
+            jsonObj
         )
         return base64UrlEncode(json.toByteArray(Charsets.UTF_8))
+    }
+
+    private fun toJsonElement(value: Any?): kotlinx.serialization.json.JsonElement {
+        return when (value) {
+            null -> kotlinx.serialization.json.JsonNull
+            is Number -> kotlinx.serialization.json.JsonPrimitive(value)
+            is Boolean -> kotlinx.serialization.json.JsonPrimitive(value)
+            is String -> kotlinx.serialization.json.JsonPrimitive(value)
+            is Map<*, *> -> kotlinx.serialization.json.JsonObject(
+                (value as Map<String, Any?>).mapValues { (_, v) -> toJsonElement(v) }
+            )
+            is List<*> -> kotlinx.serialization.json.JsonArray(value.map { toJsonElement(it) })
+            else -> kotlinx.serialization.json.JsonPrimitive(value.toString())
+        }
     }
 
     private fun base64UrlEncode(data: ByteArray): String {

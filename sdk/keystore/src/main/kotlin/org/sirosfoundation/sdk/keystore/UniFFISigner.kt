@@ -13,23 +13,16 @@ import kotlinx.coroutines.withContext
  * [UniFFISigner] wraps the Rust `siros-wscd-manager` UniFFI bindings
  * into the SDK's [Signer] interface.
  *
- * This enables the native SDK to use any WSCD plugin (softkey, R2PS,
- * FIDO2) through the same interface used by the software [JweKeystore].
- *
- * Usage:
- * ```kotlin
- * val config = FfiWscdConfig(
- *     defaultPlugin = "softkey",
- *     pluginConfigs = emptyMap()
- * )
- * val signer = UniFFISigner(config)
- * val keystore = WscdKeystoreAdapter(signer)
- * val wallet = SirosWallet.create(activity, config.copy(keystore = keystore))
- * ```
+ * **This is a placeholder.** All methods throw [NotImplementedError] until the
+ * siros-wscd-manager AAR is published. Do not instantiate in production code.
  *
  * @param config WSCD manager configuration (default plugin, plugin configs).
  * @param transport Optional CTAP2 transport provider for FIDO2 plugin.
  */
+@Deprecated(
+    message = "UniFFISigner is a placeholder until the siros-wscd-manager AAR is published. Do not use in production.",
+    level = DeprecationLevel.WARNING,
+)
 class UniFFISigner(
     config: Any, /* FfiWscdConfig — typed when AAR is available */
     transport: Ctap2TransportProvider? = null,
