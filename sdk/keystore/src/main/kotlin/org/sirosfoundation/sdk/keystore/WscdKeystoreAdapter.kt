@@ -2,15 +2,11 @@ package org.sirosfoundation.sdk.keystore
 
 import com.nimbusds.jose.JWSAlgorithm
 import com.nimbusds.jose.JWSHeader
-import com.nimbusds.jose.Payload
 import com.nimbusds.jwt.JWTClaimsSet
-import com.nimbusds.jwt.SignedJWT
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonObject
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.Date
@@ -50,6 +46,7 @@ class WscdKeystoreAdapter(
 ) : KeystoreManager {
 
     private val mutex = Mutex()
+    @Volatile
     private var _isUnlocked = false
     private val credentials = mutableMapOf<String, String>()
 
@@ -86,7 +83,6 @@ class WscdKeystoreAdapter(
         val key = keys.firstOrNull()
             ?: throw IllegalStateException("No keys available")
         val pubKeyJson = String(signer.exportPublicKey(key.keyId), Charsets.UTF_8)
-        val jwk = Json.parseToJsonElement(pubKeyJson).jsonObject
 
         val header = JWSHeader.Builder(jwsAlgorithm(key.algorithm))
             .type(com.nimbusds.jose.JOSEObjectType("openid4vci-proof+jwt"))
@@ -280,22 +276,27 @@ class WscdKeystoreAdapter(
     // ── Credential storage (local in-memory) ────────────────────────
 
     override suspend fun saveCredential(id: String, json: String) {
+        checkUnlocked()
         mutex.withLock { credentials[id] = json }
     }
 
     override suspend fun getCredential(id: String): String? {
+        checkUnlocked()
         return mutex.withLock { credentials[id] }
     }
 
     override suspend fun getAllCredentials(): Map<String, String> {
+        checkUnlocked()
         return mutex.withLock { credentials.toMap() }
     }
 
     override suspend fun deleteCredential(id: String) {
+        checkUnlocked()
         mutex.withLock { credentials.remove(id) }
     }
 
     override suspend fun clearCredentials() {
+        checkUnlocked()
         mutex.withLock { credentials.clear() }
     }
 
