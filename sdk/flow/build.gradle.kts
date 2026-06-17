@@ -27,6 +27,7 @@ android {
 dependencies {
     implementation(project(":sdk:transport"))
     implementation(project(":sdk:keystore"))
+    implementation(project(":sdk:auth"))
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.timber)

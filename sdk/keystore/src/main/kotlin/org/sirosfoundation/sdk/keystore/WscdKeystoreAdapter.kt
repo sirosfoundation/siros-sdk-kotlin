@@ -300,6 +300,18 @@ class WscdKeystoreAdapter(
         mutex.withLock { credentials.clear() }
     }
 
+    override suspend fun generateKeypairs(count: Int): List<KeypairInfo> {
+        checkUnlocked()
+        return (1..count).map {
+            val keyId = generateKey("ES256")
+            val pubData = signer.exportPublicKey(keyId)
+            val pubJwk = kotlinx.serialization.json.Json.parseToJsonElement(
+                String(pubData, Charsets.UTF_8)
+            ) as kotlinx.serialization.json.JsonObject
+            KeypairInfo(keyId = keyId, publicKeyJWK = pubJwk)
+        }
+    }
+
     // ── Private helpers ─────────────────────────────────────────────
 
     private fun checkUnlocked() {

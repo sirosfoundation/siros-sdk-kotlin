@@ -107,10 +107,21 @@ interface KeystoreManager {
 
     /** Remove all stored credentials. */
     suspend fun clearCredentials()
+
+    /**
+     * Generate [count] keypairs and return their public JWKs.
+     * Used for key attestation requests.
+     */
+    suspend fun generateKeypairs(count: Int): List<KeypairInfo>
 }
 
 data class KeyInfo(
     val keyId: String,
     val algorithm: String,
     val createdAt: Long,
+)
+
+data class KeypairInfo(
+    val keyId: String,
+    val publicKeyJWK: kotlinx.serialization.json.JsonObject,
 )
