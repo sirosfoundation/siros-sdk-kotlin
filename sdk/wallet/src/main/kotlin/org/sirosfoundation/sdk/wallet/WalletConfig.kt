@@ -3,6 +3,7 @@ package org.sirosfoundation.sdk.wallet
 
 import okhttp3.OkHttpClient
 import org.sirosfoundation.sdk.credentials.CredentialStore
+import org.sirosfoundation.sdk.keystore.KeystoreManager
 
 /**
  * Configuration for [SirosWallet].
@@ -34,4 +35,5 @@ data class WalletConfig(
     val httpClient: OkHttpClient? = null,
     val urlRewriter: ((String) -> String)? = null,
     val requireUserAuth: Boolean = true,
+    val keystore: KeystoreManager? = null,
 )
