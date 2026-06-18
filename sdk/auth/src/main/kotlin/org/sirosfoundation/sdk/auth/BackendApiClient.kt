@@ -91,6 +91,56 @@ class BackendApiClient(
         execute(request)
     }
 
+    // ── Wallet Provider endpoints ───────────────────────────────────
+
+    /**
+     * POST /wallet-provider/key-attestation/generate — request a key attestation JWT.
+     * @param jwks list of JWK objects for the keys to attest
+     * @param nonce OpenID4VCI nonce from the issuer
+     * @return key attestation JWT string
+     */
+    suspend fun requestKeyAttestation(jwks: List<JsonObject>, nonce: String): String {
+        val body = kotlinx.serialization.json.buildJsonObject {
+            put("jwks", kotlinx.serialization.json.JsonArray(jwks))
+            put("openid4vci", kotlinx.serialization.json.buildJsonObject {
+                put("nonce", kotlinx.serialization.json.JsonPrimitive(nonce))
+            })
+        }
+        val result = post("/wallet-provider/key-attestation/generate", body)
+        return result["key_attestation"]?.let {
+            (it as? kotlinx.serialization.json.JsonPrimitive)?.content
+        } ?: throw BackendApiException(0, "Missing key_attestation in response", "")
+    }
+
+    /** POST /wallet-provider/wia/challenge — request a WIA challenge nonce. */
+    suspend fun requestWIAChallenge(): JsonObject =
+        post("/wallet-provider/wia/challenge", JsonObject(emptyMap()))
+
+    /**
+     * POST /wallet-provider/wia/generate — generate a Wallet Instance Attestation.
+     * @param pop WIA-PoP JWT (typ: oauth-client-attestation-pop+jwt)
+     * @param challenge the challenge nonce from requestWIAChallenge()
+     * @param nativeAttestation optional platform attestation evidence
+     * @return WIA JWT string
+     */
+    suspend fun generateWIA(
+        pop: String,
+        challenge: String,
+        nativeAttestation: JsonObject? = null,
+    ): String {
+        val body = kotlinx.serialization.json.buildJsonObject {
+            put("pop", kotlinx.serialization.json.JsonPrimitive(pop))
+            put("challenge", kotlinx.serialization.json.JsonPrimitive(challenge))
+            if (nativeAttestation != null) {
+                put("native_attestation", nativeAttestation)
+            }
+        }
+        val result = post("/wallet-provider/wia/generate", body)
+        return result["wallet_instance_attestation"]?.let {
+            (it as? kotlinx.serialization.json.JsonPrimitive)?.content
+        } ?: throw BackendApiException(0, "Missing wallet_instance_attestation in response", "")
+    }
+
     // ── HTTP primitives ─────────────────────────────────────────────
 
     private suspend fun get(path: String): JsonObject = withContext(Dispatchers.IO) {

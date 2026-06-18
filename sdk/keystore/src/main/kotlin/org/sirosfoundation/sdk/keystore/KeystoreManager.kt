@@ -107,10 +107,26 @@ interface KeystoreManager {
 
     /** Remove all stored credentials. */
     suspend fun clearCredentials()
+
+    /**
+     * Generate [count] keypairs and return their public JWKs.
+     * Used for key attestation requests.
+     *
+     * Default implementation throws [UnsupportedOperationException] so
+     * existing implementations continue to compile without attestation support.
+     */
+    suspend fun generateKeypairs(count: Int): List<KeypairInfo> {
+        throw UnsupportedOperationException("generateKeypairs not supported by this keystore")
+    }
 }
 
 data class KeyInfo(
     val keyId: String,
     val algorithm: String,
     val createdAt: Long,
+)
+
+data class KeypairInfo(
+    val keyId: String,
+    val publicKeyJWK: kotlinx.serialization.json.JsonObject,
 )

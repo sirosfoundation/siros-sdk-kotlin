@@ -53,7 +53,9 @@ data class SignParams(
     val audience: String? = null,
     val nonce: String? = null,
     val issuer: String? = null,
+    val count: Int? = null,
     @SerialName("response_uri") val responseUri: String? = null,
+    @SerialName("proof_types_supported") val proofTypesSupported: JsonObject? = null,
     @SerialName("credentials_to_include") val credentialsToInclude: List<JsonObject>? = null,
 )
 
@@ -62,6 +64,8 @@ data class SignResponse(
     @SerialName("proof_jwt") val proofJwt: String? = null,
     val proofs: List<String>? = null,
     @SerialName("vp_token") val vpToken: String? = null,
+    val attestation: String? = null,
+    @SerialName("proof_type") val proofType: String? = null,
 )
 
 @Serializable

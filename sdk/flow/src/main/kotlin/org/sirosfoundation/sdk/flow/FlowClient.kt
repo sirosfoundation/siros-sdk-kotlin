@@ -13,11 +13,15 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import org.sirosfoundation.sdk.auth.BackendApiClient
 import org.sirosfoundation.sdk.keystore.KeystoreManager
 import org.sirosfoundation.sdk.transport.wmp.WmpMeta
 import org.sirosfoundation.sdk.transport.wmp.WmpSession
 import timber.log.Timber
 import java.util.UUID
+
+/** Proof type precedence order (attestation preferred over jwt). */
+private val PROOF_TYPE_PRECEDENCE = listOf("attestation", "jwt")
 
 /**
  * Manages OID4VCI and OID4VP flows over a WMP session.
@@ -30,6 +34,7 @@ import java.util.UUID
 class FlowClient(
     private val session: WmpSession,
     private val keystore: KeystoreManager,
+    private val apiClient: BackendApiClient? = null,
     private val autoSign: Boolean = true,
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
@@ -97,6 +102,8 @@ class FlowClient(
             put("message_id", messageId)
             response.proofJwt?.let { put("proof_jwt", it) }
             response.vpToken?.let { put("vp_token", it) }
+            response.attestation?.let { put("attestation", it) }
+            response.proofType?.let { put("proof_type", it) }
             put("wmp", json.encodeToJsonElement(WmpMeta.serializer(), WmpMeta()))
         }
         session.sendNotification("wmp.flow.action", params)
@@ -160,11 +167,25 @@ class FlowClient(
             try {
                 val response = when (action) {
                     SignAction.GENERATE_PROOF -> {
-                        val proof = keystore.generateProof(
-                            audience = signParams.audience ?: "",
-                            nonce = signParams.nonce ?: "",
-                        )
-                        SignResponse(proofJwt = proof)
+                        // Select proof type: prefer attestation if supported and apiClient is available
+                        val selectedType = selectProofType(signParams.proofTypesSupported)
+
+                        if (selectedType == "attestation" && apiClient != null) {
+                            val count = maxOf(signParams.count ?: 1, 1)
+                            val keypairs = keystore.generateKeypairs(count)
+                            val jwks = keypairs.map { it.publicKeyJWK }
+                            val keyAttestation = apiClient.requestKeyAttestation(
+                                jwks = jwks,
+                                nonce = signParams.nonce ?: "",
+                            )
+                            SignResponse(attestation = keyAttestation, proofType = "attestation")
+                        } else {
+                            val proof = keystore.generateProof(
+                                audience = signParams.audience ?: "",
+                                nonce = signParams.nonce ?: "",
+                            )
+                            SignResponse(proofJwt = proof, proofType = "jwt")
+                        }
                     }
                     SignAction.SIGN_PRESENTATION -> {
                         val vp = keystore.signPresentation(
@@ -185,6 +206,12 @@ class FlowClient(
         } else {
             _events.send(FlowEvent.SignRequest(flowId, messageId, action, signParams))
         }
+    }
+
+    /** Select the preferred proof type from supported types. */
+    private fun selectProofType(proofTypesSupported: JsonObject?): String {
+        if (proofTypesSupported == null) return "jwt"
+        return PROOF_TYPE_PRECEDENCE.firstOrNull { proofTypesSupported.containsKey(it) } ?: "jwt"
     }
 
     private suspend fun handleMatchRequest(flowId: String, params: JsonObject) {

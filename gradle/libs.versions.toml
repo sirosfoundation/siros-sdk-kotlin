@@ -7,6 +7,7 @@ okhttp = "4.12.0"
 nimbus-jose-jwt = "10.0.2"
 androidx-core = "1.15.0"
 androidx-credentials = "1.6.0"
+play-integrity = "1.4.0"
 androidx-biometric = "1.1.0"
 androidx-security-crypto = "1.1.0"
 androidx-lifecycle = "2.8.7"
@@ -34,6 +35,7 @@ nimbus-jose-jwt = { module = "com.nimbusds:nimbus-jose-jwt", version.ref = "nimb
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidx-core" }
 androidx-credentials = { module = "androidx.credentials:credentials", version.ref = "androidx-credentials" }
 androidx-credentials-play = { module = "androidx.credentials:credentials-play-services-auth", version.ref = "androidx-credentials" }
+play-integrity = { module = "com.google.android.play:integrity", version.ref = "play-integrity" }
 androidx-biometric = { module = "androidx.biometric:biometric", version.ref = "androidx-biometric" }
 androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "androidx-security-crypto" }
 androidx-lifecycle-runtime = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "androidx-lifecycle" }

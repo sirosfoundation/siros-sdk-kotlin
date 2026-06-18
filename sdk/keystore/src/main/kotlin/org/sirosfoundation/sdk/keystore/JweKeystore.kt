@@ -464,6 +464,22 @@ class JweKeystore(
         credentials.clear()
     }
 
+    override suspend fun generateKeypairs(count: Int): List<KeypairInfo> = mutex.withLock {
+        requireUnlocked()
+        require(count >= 1) { "count must be >= 1" }
+        (1..count).map {
+            val keyId = UUID.randomUUID().toString()
+            val ecKey = ECKeyGenerator(Curve.P_256)
+                .keyID(keyId)
+                .generate()
+            keys[keyId] = ecKey
+            val pubJwk = kotlinx.serialization.json.Json.parseToJsonElement(
+                ecKey.toPublicJWK().toJSONString()
+            ) as kotlinx.serialization.json.JsonObject
+            KeypairInfo(keyId = keyId, publicKeyJWK = pubJwk)
+        }
+    }
+
     private fun requireUnlocked() {
         if (!isUnlocked) throw KeystoreException("Keystore is locked")
     }

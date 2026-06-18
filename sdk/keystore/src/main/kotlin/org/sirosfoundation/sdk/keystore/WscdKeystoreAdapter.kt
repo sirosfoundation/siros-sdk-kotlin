@@ -64,7 +64,12 @@ class WscdKeystoreAdapter(
     }
 
     override fun lock() {
-        runBlocking { mutex.withLock { _isUnlocked = false } }
+        runBlocking {
+            mutex.withLock {
+                _isUnlocked = false
+                credentials.clear()
+            }
+        }
     }
 
     override suspend fun generateKey(algorithm: String): String {
@@ -225,9 +230,9 @@ class WscdKeystoreAdapter(
     }
 
     override suspend fun exportEncryptedContainer(): ByteArray {
-        // WSCD keys are not exportable as a JWE container.
-        // Return valid empty JSON so callers parsing the result don't fail.
-        return "{}".toByteArray(Charsets.UTF_8)
+        throw UnsupportedOperationException(
+            "WSCD-backed keystores do not support encrypted container export"
+        )
     }
 
     override fun listKeys(): List<KeyInfo> {
@@ -298,6 +303,19 @@ class WscdKeystoreAdapter(
     override suspend fun clearCredentials() {
         checkUnlocked()
         mutex.withLock { credentials.clear() }
+    }
+
+    override suspend fun generateKeypairs(count: Int): List<KeypairInfo> {
+        checkUnlocked()
+        require(count >= 1) { "count must be >= 1" }
+        return (1..count).map {
+            val keyId = generateKey("ES256")
+            val pubData = signer.exportPublicKey(keyId)
+            val pubJwk = kotlinx.serialization.json.Json.parseToJsonElement(
+                String(pubData, Charsets.UTF_8)
+            ) as kotlinx.serialization.json.JsonObject
+            KeypairInfo(keyId = keyId, publicKeyJWK = pubJwk)
+        }
     }
 
     // ── Private helpers ─────────────────────────────────────────────
