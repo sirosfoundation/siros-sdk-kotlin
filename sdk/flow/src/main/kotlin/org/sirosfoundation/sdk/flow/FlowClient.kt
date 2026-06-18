@@ -174,9 +174,11 @@ class FlowClient(
                             val count = maxOf(signParams.count ?: 1, 1)
                             val keypairs = keystore.generateKeypairs(count)
                             val jwks = keypairs.map { it.publicKeyJWK }
+                            val secProps = keystore.securityProperties()
                             val keyAttestation = apiClient.requestKeyAttestation(
                                 jwks = jwks,
                                 nonce = signParams.nonce ?: "",
+                                securityProperties = secProps,
                             )
                             SignResponse(attestation = keyAttestation, proofType = "attestation")
                         } else {

@@ -118,6 +118,14 @@ interface KeystoreManager {
     suspend fun generateKeypairs(count: Int): List<KeypairInfo> {
         throw UnsupportedOperationException("generateKeypairs not supported by this keystore")
     }
+
+    /**
+     * Get the security properties for this keystore's signing keys.
+     * Used to populate KA JWT claims (CS-04 §7.1.3, Annex C §C.3.1).
+     *
+     * Default returns null (security properties not available).
+     */
+    suspend fun securityProperties(): SignerSecurityProperties? = null
 }
 
 data class KeyInfo(

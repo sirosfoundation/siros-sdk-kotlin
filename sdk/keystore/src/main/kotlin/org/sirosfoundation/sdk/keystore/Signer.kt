@@ -75,30 +75,36 @@ data class SignerKeyInfo(
     val algorithm: String,
 )
 
-/** Key storage type classification per CS-04 §7.1.3. */
-enum class KeyStorageType(val value: String) {
-    SOFTWARE("software"),
-    HARDWARE("hardware"),
-    REMOTE_HSM("remote_hsm"),
-    TRUSTED_EXECUTION("trusted_execution"),
-}
+/**
+ * Certification information for the WSCD (CS-04 §7.1.3, Annex C §C.3.1).
+ * Either the string "none" for uncertified devices, or a structured object
+ * with scheme and assurance level.
+ */
+sealed class CertificationInfo {
+    /** No certification. */
+    data object None : CertificationInfo()
 
-/** Certification level for the WSCD. */
-enum class CertificationLevel(val value: String) {
-    NONE("none"),
-    BASELINE("baseline"),
-    SUBSTANTIAL("substantial"),
-    HIGH("high"),
+    /** Certified under a specific scheme. */
+    data class Certified(
+        val scheme: String,
+        val assuranceLevel: String,
+    ) : CertificationInfo()
+
+    /** Serialize to the JSON-compatible form expected by the backend. */
+    fun toJsonValue(): Any = when (this) {
+        is None -> "none"
+        is Certified -> mapOf("scheme" to scheme, "assurance_level" to assuranceLevel)
+    }
 }
 
 /** Security properties reported by a [Signer] for a given key. */
 data class SignerSecurityProperties(
-    /** How the key material is stored. */
-    val keyStorage: KeyStorageType,
+    /** Key storage security levels — ISO 18045 AVA_VAN scale values. */
+    val keyStorage: List<String>,
     /** User authentication methods supported. */
     val userAuthentication: List<String> = emptyList(),
-    /** Certification level of the key storage. */
-    val certification: CertificationLevel = CertificationLevel.NONE,
+    /** Certification status of the key storage (CS-04 §7.1.3, Annex C §C.3.1). */
+    val certification: CertificationInfo = CertificationInfo.None,
     /** Authentication Method Reference values from the last sign operation. */
     val amr: List<String> = emptyList(),
 )

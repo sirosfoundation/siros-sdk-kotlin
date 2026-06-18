@@ -79,9 +79,9 @@ class UniFFISigner(
         withContext(Dispatchers.IO) {
             // val props = ffi.securityProperties(keyId)
             // SignerSecurityProperties(
-            //     keyStorage = KeyStorageType.from(props.keyStorage),
+            //     keyStorage = props.keyStorage,  // List<String> from FFI
             //     userAuthentication = props.userAuthentication,
-            //     certification = CertificationLevel.from(props.certification),
+            //     certification = CertificationInfo.None, // TODO: map from FFI
             //     amr = props.amr,
             // )
             TODO("Requires siros-wscd-manager AAR dependency")

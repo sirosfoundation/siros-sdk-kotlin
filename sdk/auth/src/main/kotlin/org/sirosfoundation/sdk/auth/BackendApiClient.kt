@@ -3,6 +3,8 @@ package org.sirosfoundation.sdk.auth
 
 import org.sirosfoundation.sdk.credentials.BackendApiException
 import org.sirosfoundation.sdk.credentials.NetworkException
+import org.sirosfoundation.sdk.keystore.CertificationInfo
+import org.sirosfoundation.sdk.keystore.SignerSecurityProperties
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -97,14 +99,38 @@ class BackendApiClient(
      * POST /wallet-provider/key-attestation/generate — request a key attestation JWT.
      * @param jwks list of JWK objects for the keys to attest
      * @param nonce OpenID4VCI nonce from the issuer
+     * @param securityProperties optional WSCD security properties for KA claims (CS-04 §7.1.3)
      * @return key attestation JWT string
      */
-    suspend fun requestKeyAttestation(jwks: List<JsonObject>, nonce: String): String {
+    suspend fun requestKeyAttestation(
+        jwks: List<JsonObject>,
+        nonce: String,
+        securityProperties: SignerSecurityProperties? = null,
+    ): String {
         val body = kotlinx.serialization.json.buildJsonObject {
             put("jwks", kotlinx.serialization.json.JsonArray(jwks))
             put("openid4vci", kotlinx.serialization.json.buildJsonObject {
                 put("nonce", kotlinx.serialization.json.JsonPrimitive(nonce))
             })
+            if (securityProperties != null) {
+                put("security_properties", kotlinx.serialization.json.buildJsonObject {
+                    put("key_storage", kotlinx.serialization.json.JsonArray(
+                        securityProperties.keyStorage.map { kotlinx.serialization.json.JsonPrimitive(it) }
+                    ))
+                    put("user_authentication", kotlinx.serialization.json.JsonArray(
+                        securityProperties.userAuthentication.map { kotlinx.serialization.json.JsonPrimitive(it) }
+                    ))
+                    when (val cert = securityProperties.certification) {
+                        is CertificationInfo.None ->
+                            put("certification", kotlinx.serialization.json.JsonPrimitive("none"))
+                        is CertificationInfo.Certified ->
+                            put("certification", kotlinx.serialization.json.buildJsonObject {
+                                put("scheme", kotlinx.serialization.json.JsonPrimitive(cert.scheme))
+                                put("assurance_level", kotlinx.serialization.json.JsonPrimitive(cert.assuranceLevel))
+                            })
+                    }
+                })
+            }
         }
         val result = post("/wallet-provider/key-attestation/generate", body)
         return result["key_attestation"]?.let {
