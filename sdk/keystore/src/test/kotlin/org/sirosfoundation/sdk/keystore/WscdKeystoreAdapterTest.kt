@@ -23,9 +23,12 @@ class WscdKeystoreAdapterTest {
         coEvery { it.deleteKey(any()) } returns Unit
         coEvery { it.attestationChain(any()) } returns null
         coEvery { it.securityProperties(any()) } returns SignerSecurityProperties(
-            keyStorage = KeyStorageType.HARDWARE,
+            keyStorage = listOf("hardware"),
             userAuthentication = listOf("pin"),
-            certification = CertificationLevel.SUBSTANTIAL,
+            certification = CertificationInfo.Certified(
+                scheme = "EUCC",
+                assuranceLevel = "substantial",
+            ),
         )
     }
 
