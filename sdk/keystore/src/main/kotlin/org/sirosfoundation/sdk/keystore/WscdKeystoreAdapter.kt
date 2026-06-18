@@ -302,6 +302,7 @@ class WscdKeystoreAdapter(
 
     override suspend fun generateKeypairs(count: Int): List<KeypairInfo> {
         checkUnlocked()
+        require(count >= 1) { "count must be >= 1" }
         return (1..count).map {
             val keyId = generateKey("ES256")
             val pubData = signer.exportPublicKey(keyId)

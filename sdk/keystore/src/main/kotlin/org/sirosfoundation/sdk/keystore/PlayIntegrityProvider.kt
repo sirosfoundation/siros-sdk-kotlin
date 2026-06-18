@@ -45,15 +45,23 @@ class PlayIntegrityProvider(
                 .setCloudProjectNumber(cloudProjectNumber)
                 .build()
 
-            integrityManager.requestIntegrityToken(request)
-                .addOnSuccessListener { response ->
-                    continuation.resume(response.token())
+            val task = integrityManager.requestIntegrityToken(request)
+            task.addOnSuccessListener { response ->
+                    if (continuation.isActive) {
+                        continuation.resume(response.token())
+                    }
                 }
                 .addOnFailureListener { exception ->
-                    continuation.resumeWithException(
-                        PlayIntegrityException("Play Integrity request failed", exception)
-                    )
+                    if (continuation.isActive) {
+                        continuation.resumeWithException(
+                            PlayIntegrityException("Play Integrity request failed", exception)
+                        )
+                    }
                 }
+
+            continuation.invokeOnCancellation {
+                // Task cannot be cancelled, but we ensure no resume after cancel
+            }
         }
     }
 }

@@ -466,6 +466,7 @@ class JweKeystore(
 
     override suspend fun generateKeypairs(count: Int): List<KeypairInfo> = mutex.withLock {
         requireUnlocked()
+        require(count >= 1) { "count must be >= 1" }
         (1..count).map {
             val keyId = UUID.randomUUID().toString()
             val ecKey = ECKeyGenerator(Curve.P_256)

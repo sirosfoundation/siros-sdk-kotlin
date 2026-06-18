@@ -111,8 +111,13 @@ interface KeystoreManager {
     /**
      * Generate [count] keypairs and return their public JWKs.
      * Used for key attestation requests.
+     *
+     * Default implementation throws [UnsupportedOperationException] so
+     * existing implementations continue to compile without attestation support.
      */
-    suspend fun generateKeypairs(count: Int): List<KeypairInfo>
+    suspend fun generateKeypairs(count: Int): List<KeypairInfo> {
+        throw UnsupportedOperationException("generateKeypairs not supported by this keystore")
+    }
 }
 
 data class KeyInfo(

@@ -55,7 +55,7 @@ data class SignParams(
     val issuer: String? = null,
     val count: Int? = null,
     @SerialName("response_uri") val responseUri: String? = null,
-    @SerialName("proofTypesSupported") val proofTypesSupported: JsonObject? = null,
+    @SerialName("proof_types_supported") val proofTypesSupported: JsonObject? = null,
     @SerialName("credentials_to_include") val credentialsToInclude: List<JsonObject>? = null,
 )
 

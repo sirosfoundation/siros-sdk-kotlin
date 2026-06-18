@@ -10,7 +10,7 @@ package org.sirosfoundation.sdk.keystore
 data class NativeAttestationEvidence(
     /** The attestation type: "apple_app_attest" or "google_play_integrity" */
     val type: String,
-    /** Base64-encoded attestation token */
+    /** The attestation token (opaque string — JWS for Play Integrity, Base64 CBOR for App Attest) */
     val token: String,
     /** The key identifier bound to this attestation */
     val keyId: String,

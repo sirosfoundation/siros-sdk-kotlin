@@ -171,7 +171,7 @@ class FlowClient(
                         val selectedType = selectProofType(signParams.proofTypesSupported)
 
                         if (selectedType == "attestation" && apiClient != null) {
-                            val count = signParams.count ?: 1
+                            val count = maxOf(signParams.count ?: 1, 1)
                             val keypairs = keystore.generateKeypairs(count)
                             val jwks = keypairs.map { it.publicKeyJWK }
                             val keyAttestation = apiClient.requestKeyAttestation(
