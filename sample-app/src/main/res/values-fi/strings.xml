@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Finnish translations for SIROS Wallet sample app. -->
+<resources>
+    <string name="app_name">SIROS Wallet</string>
+
+    <!-- Login screen -->
+    <string name="login_title">SIROS Wallet</string>
+    <string name="login_tagline">Digitaalinen Identiteetti Ihmisille</string>
+    <string name="login_backend_url">Palvelimen URL</string>
+    <string name="login_tenant_id">Vuokralaisen tunnus</string>
+    <string name="login_button">Kirjaudu Passkey:llä</string>
+    <string name="login_register_button">Luo tili</string>
+
+    <!-- Navigation -->
+    <string name="nav_credentials">Todistukset</string>
+    <string name="nav_add">Lisää</string>
+    <string name="nav_settings">Asetukset</string>
+
+    <!-- Top bar -->
+    <string name="topbar_title">SIROS Wallet</string>
+
+    <!-- Credentials tab -->
+    <string name="credentials_welcome">Tervetuloa, %1$s</string>
+    <string name="credentials_count_one">%1$d todistus</string>
+    <string name="credentials_count_other">%1$d todistusta</string>
+    <string name="credentials_empty_title">Ei todistuksia</string>
+    <string name="credentials_empty_subtitle">Paina Lisää aloittaaksesi</string>
+
+    <!-- Add credential screen -->
+    <string name="add_credential_title">Lisää todistus</string>
+    <string name="add_credential_loading">Ladataan saatavilla olevia todistuksia\u2026</string>
+    <string name="add_credential_empty">Ei saatavilla olevia todistuksia</string>
+    <string name="nav_back">Takaisin</string>
+
+    <!-- Credential detail screen -->
+    <string name="credential_detail_title">Todistuksen tiedot</string>
+    <string name="credential_detail_tab_info">Tiedot</string>
+    <string name="credential_detail_tab_claims">Väitteet</string>
+    <string name="credential_detail_tab_raw">Raakadata</string>
+    <string name="credential_detail_issuer">Myöntäjä</string>
+    <string name="credential_detail_format">Muoto</string>
+    <string name="credential_detail_type">Tyyppi</string>
+    <string name="credential_detail_issued">Myönnetty</string>
+    <string name="credential_detail_expires">Vanhenee</string>
+    <string name="credential_detail_no_claims">Ei väitteitä saatavilla</string>
+    <string name="credential_detail_delete">Poista todistus</string>
+    <string name="credential_detail_delete_confirm_title">Poista todistus</string>
+    <string name="credential_detail_delete_confirm_message">Haluatko varmasti poistaa \"%1$s\"? Tätä toimintoa ei voi peruuttaa.</string>
+    <string name="credential_detail_delete_confirm">Poista</string>
+
+    <!-- Settings screen -->
+    <string name="settings_title">Asetukset</string>
+    <string name="settings_account_section">Tili</string>
+    <string name="settings_signed_in_as">Kirjautunut nimellä</string>
+    <string name="settings_backend_url">Palvelin</string>
+    <string name="settings_tenant_id">Vuokralainen</string>
+    <string name="settings_credentials_stored">Tallennetut todistukset</string>
+    <string name="settings_app_version">Sovellusversio</string>
+    <string name="settings_presentation_history">Esityshistoria</string>
+    <string name="settings_logout">Kirjaudu ulos</string>
+
+    <!-- Presentation history -->
+    <string name="history_title">Esityshistoria</string>
+    <string name="history_empty">Ei esityksiä vielä</string>
+    <string name="history_presented_to">Esitetty kohteelle %1$s</string>
+    <string name="history_credentials_shared">%1$d todistusta jaettu</string>
+    <string name="history_success">Onnistui</string>
+    <string name="history_failed">Epäonnistui</string>
+
+    <!-- QR Scanner -->
+    <string name="qr_scanner_title">Skannaa QR-koodi</string>
+    <string name="qr_scanner_hint">Osoita kamera todistuksen tai esityksen QR-koodiin</string>
+    <string name="qr_scanner_permission_required">Kameralupa vaaditaan QR-koodien skannaamiseen</string>
+    <string name="qr_scanner_grant_permission">Myönnä lupa</string>
+    <string name="qr_scan_button">Skannaa QR-koodi</string>
+    <string name="qr_scanner_paste_label">Tai liitä todistustarjouksen URI</string>
+    <string name="qr_scanner_paste_button">Lunasta tarjous</string>
+
+    <!-- Flow states -->
+    <string name="flow_issuing">Myönnetään todistusta\u2026</string>
+    <string name="flow_presenting">Esitetään todistusta\u2026</string>
+    <string name="flow_processing">Käsitellään\u2026</string>
+    <string name="flow_cancel">Peruuta</string>
+
+    <!-- Error view -->
+    <string name="error_title">Jokin meni pieleen</string>
+    <string name="error_retry">Yritä uudelleen</string>
+
+    <!-- SDK error codes -->
+    <string name="error_network_error">Verkkoyhteys epäonnistui. Tarkista internetyhteytesi ja yritä uudelleen.</string>
+    <string name="error_network_timeout">Pyyntö aikakatkaistiin. Yritä uudelleen.</string>
+    <string name="error_auth_failed">Todennus epäonnistui. Yritä uudelleen.</string>
+    <string name="error_auth_expired">Istuntosi on vanhentunut. Kirjaudu uudelleen.</string>
+    <string name="error_keystore_error">Avainvarastovirhe. Suojattu tallennustila vaatii huomiota.</string>
+    <string name="error_keystore_locked">Avainvarasto on lukittu. Todenna avataksesi.</string>
+    <string name="error_wallet_error">Lompakkovirhe. Yritä uudelleen.</string>
+    <string name="error_wallet_not_connected">Lompakkoa ei ole yhdistetty. Yhdistä ensin.</string>
+    <string name="error_wallet_prf_unsupported">Todentajasi ei tue PRF:ää — lompakkotietoja ei voida suojata.</string>
+    <string name="error_idv_cancelled">Henkilöllisyyden todentaminen peruutettiin.</string>
+    <string name="error_idv_unavailable">Henkilöllisyyden todentaminen ei ole saatavilla tällä laitteella.</string>
+    <string name="error_idv_liveness_failed">Elävyystarkistus epäonnistui. Yritä uudelleen.</string>
+    <string name="error_idv_verification_failed">Henkilöllisyyden todentaminen epäonnistui. Yritä uudelleen.</string>
+    <string name="error_idv_network_error">Verkkovirhe henkilöllisyyden todentamisen aikana.</string>
+    <string name="error_ctap2_not_available">Turva-avaimen siirto ei ole saatavilla.</string>
+    <string name="error_ctap2_connection_failed">Turva-avaimeen yhdistäminen epäonnistui.</string>
+    <string name="error_ctap2_timeout">Turva-avaimen viestintä aikakatkaistiin.</string>
+    <string name="error_ctap2_device_disconnected">Turva-avain irrotettiin.</string>
+    <string name="error_insufficient_credentials">Sinulla ei ole tarvittavia todistuksia tähän pyyntöön.</string>
+    <string name="error_flow_error">Virhe tapahtui todistusprosessin aikana.</string>
+    <string name="error_generic">Odottamaton virhe tapahtui.</string>
+
+    <!-- Common -->
+    <string name="cancel">Peruuta</string>
+    <string name="ok">OK</string>
+    <string name="user_fallback_name">Käyttäjä</string>
+</resources>

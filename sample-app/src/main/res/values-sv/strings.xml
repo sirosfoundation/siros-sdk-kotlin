@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Swedish translations for SIROS Wallet sample app. -->
+<resources>
+    <string name="app_name">SIROS Wallet</string>
+
+    <!-- Login screen -->
+    <string name="login_title">SIROS Wallet</string>
+    <string name="login_tagline">Digital Identitet För Människor</string>
+    <string name="login_backend_url">Server-URL</string>
+    <string name="login_tenant_id">Klient-ID</string>
+    <string name="login_button">Logga in med Passkey</string>
+    <string name="login_register_button">Skapa konto</string>
+
+    <!-- Navigation -->
+    <string name="nav_credentials">Intyg</string>
+    <string name="nav_add">Lägg till</string>
+    <string name="nav_settings">Inställningar</string>
+
+    <!-- Top bar -->
+    <string name="topbar_title">SIROS Wallet</string>
+
+    <!-- Credentials tab -->
+    <string name="credentials_welcome">Välkommen, %1$s</string>
+    <string name="credentials_count_one">%1$d intyg</string>
+    <string name="credentials_count_other">%1$d intyg</string>
+    <string name="credentials_empty_title">Inga intyg</string>
+    <string name="credentials_empty_subtitle">Tryck på Lägg till nedan för att börja</string>
+
+    <!-- Add credential screen -->
+    <string name="add_credential_title">Lägg till intyg</string>
+    <string name="add_credential_loading">Laddar tillgängliga intyg\u2026</string>
+    <string name="add_credential_empty">Inga intyg tillgängliga</string>
+    <string name="nav_back">Tillbaka</string>
+
+    <!-- Credential detail screen -->
+    <string name="credential_detail_title">Intygsinformation</string>
+    <string name="credential_detail_tab_info">Information</string>
+    <string name="credential_detail_tab_claims">Attribut</string>
+    <string name="credential_detail_tab_raw">Rådata</string>
+    <string name="credential_detail_issuer">Utfärdare</string>
+    <string name="credential_detail_format">Format</string>
+    <string name="credential_detail_type">Typ</string>
+    <string name="credential_detail_issued">Utfärdat</string>
+    <string name="credential_detail_expires">Utgår</string>
+    <string name="credential_detail_no_claims">Inga attribut tillgängliga</string>
+    <string name="credential_detail_delete">Ta bort intyg</string>
+    <string name="credential_detail_delete_confirm_title">Ta bort intyg</string>
+    <string name="credential_detail_delete_confirm_message">Är du säker på att du vill ta bort \"%1$s\"? Denna åtgärd kan inte ångras.</string>
+    <string name="credential_detail_delete_confirm">Ta bort</string>
+
+    <!-- Settings screen -->
+    <string name="settings_title">Inställningar</string>
+    <string name="settings_account_section">Konto</string>
+    <string name="settings_signed_in_as">Inloggad som</string>
+    <string name="settings_backend_url">Server</string>
+    <string name="settings_tenant_id">Klient</string>
+    <string name="settings_credentials_stored">Lagrade intyg</string>
+    <string name="settings_app_version">Appversion</string>
+    <string name="settings_presentation_history">Presentationshistorik</string>
+    <string name="settings_logout">Logga ut</string>
+
+    <!-- Presentation history -->
+    <string name="history_title">Presentationshistorik</string>
+    <string name="history_empty">Inga presentationer ännu</string>
+    <string name="history_presented_to">Presenterat till %1$s</string>
+    <string name="history_credentials_shared">%1$d intyg delade</string>
+    <string name="history_success">Lyckades</string>
+    <string name="history_failed">Misslyckades</string>
+
+    <!-- QR Scanner -->
+    <string name="qr_scanner_title">Skanna QR-kod</string>
+    <string name="qr_scanner_hint">Rikta kameran mot en QR-kod för intyg eller presentation</string>
+    <string name="qr_scanner_permission_required">Kamerabehörighet krävs för att skanna QR-koder</string>
+    <string name="qr_scanner_grant_permission">Ge behörighet</string>
+    <string name="qr_scan_button">Skanna QR-kod</string>
+    <string name="qr_scanner_paste_label">Eller klistra in en URI för intygserbjudande</string>
+    <string name="qr_scanner_paste_button">Lös in erbjudande</string>
+
+    <!-- Flow states -->
+    <string name="flow_issuing">Utfärdar intyg\u2026</string>
+    <string name="flow_presenting">Presenterar intyg\u2026</string>
+    <string name="flow_processing">Bearbetar\u2026</string>
+    <string name="flow_cancel">Avbryt</string>
+
+    <!-- Error view -->
+    <string name="error_title">Något gick fel</string>
+    <string name="error_retry">Försök igen</string>
+
+    <!-- SDK error codes -->
+    <string name="error_network_error">Nätverksanslutningen misslyckades. Kontrollera din internetanslutning och försök igen.</string>
+    <string name="error_network_timeout">Förfrågan tog för lång tid. Försök igen.</string>
+    <string name="error_auth_failed">Autentiseringen misslyckades. Försök igen.</string>
+    <string name="error_auth_expired">Din session har löpt ut. Logga in igen.</string>
+    <string name="error_keystore_error">Nyckellagringsfel. Det säkra lagringsutrymmet behöver åtgärd.</string>
+    <string name="error_keystore_locked">Nyckellagringen är låst. Autentisera för att låsa upp.</string>
+    <string name="error_wallet_error">Plånboksfel. Försök igen.</string>
+    <string name="error_wallet_not_connected">Plånboken är inte ansluten. Anslut först.</string>
+    <string name="error_wallet_prf_unsupported">Din autentiserare stöder inte PRF — kan inte säkra plånboksdata.</string>
+    <string name="error_idv_cancelled">Identitetsverifiering avbröts.</string>
+    <string name="error_idv_unavailable">Identitetsverifiering är inte tillgänglig på denna enhet.</string>
+    <string name="error_idv_liveness_failed">Livlighetskontroll misslyckades. Försök igen.</string>
+    <string name="error_idv_verification_failed">Identitetsverifieringen misslyckades. Försök igen.</string>
+    <string name="error_idv_network_error">Nätverksfel under identitetsverifiering.</string>
+    <string name="error_ctap2_not_available">Transport för säkerhetsnyckel är inte tillgänglig.</string>
+    <string name="error_ctap2_connection_failed">Det gick inte att ansluta till säkerhetsnyckeln.</string>
+    <string name="error_ctap2_timeout">Kommunikation med säkerhetsnyckeln tog för lång tid.</string>
+    <string name="error_ctap2_device_disconnected">Säkerhetsnyckeln kopplades från.</string>
+    <string name="error_insufficient_credentials">Du har inte de intyg som krävs för denna begäran.</string>
+    <string name="error_flow_error">Ett fel uppstod under intygsflödet.</string>
+    <string name="error_generic">Ett oväntat fel inträffade.</string>
+
+    <!-- Common -->
+    <string name="cancel">Avbryt</string>
+    <string name="ok">OK</string>
+    <string name="user_fallback_name">Användare</string>
+</resources>
