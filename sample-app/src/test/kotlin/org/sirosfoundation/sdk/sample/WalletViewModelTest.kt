@@ -114,13 +114,15 @@ class WalletViewModelTest {
     fun handleAuthRedirect_sets_error_when_no_pending_flow() {
         val wallet = mockWallet()
         every { SirosWallet.create(any(), any()) } returns wallet
-        val viewModel = WalletViewModel(mockk<Activity>(relaxed = true))
+        val mockActivity = mockk<Activity>(relaxed = true)
+        every { mockActivity.getString(any()) } returns "Authentication failed"
+        val viewModel = WalletViewModel(mockActivity)
         // No pending flow ID set
 
         viewModel.handleAuthRedirect("code-123", "state-456")
 
         verify(exactly = 0) { wallet.completeAuthorization(any(), any(), any()) }
-        assertEquals("Authorization failed: no pending flow", viewModel.errorMessage.value)
+        assertEquals("Authentication failed", viewModel.errorMessage.value)
     }
 
     @Test

@@ -89,6 +89,29 @@
     <string name="error_title">Something went wrong</string>
     <string name="error_retry">Try Again</string>
 
+    <!-- SDK error codes (machine-readable code -> user-facing message) -->
+    <string name="error_network_error">Network connection failed. Please check your internet and try again.</string>
+    <string name="error_network_timeout">The request timed out. Please try again.</string>
+    <string name="error_auth_failed">Authentication failed. Please try again.</string>
+    <string name="error_auth_expired">Your session has expired. Please log in again.</string>
+    <string name="error_keystore_error">A keystore error occurred. Your secure storage may need attention.</string>
+    <string name="error_keystore_locked">The keystore is locked. Please authenticate to unlock.</string>
+    <string name="error_wallet_error">A wallet error occurred. Please try again.</string>
+    <string name="error_wallet_not_connected">Wallet is not connected. Please log in first.</string>
+    <string name="error_wallet_prf_unsupported">Your authenticator does not support PRF — cannot secure wallet data.</string>
+    <string name="error_idv_cancelled">Identity verification was cancelled.</string>
+    <string name="error_idv_unavailable">Identity verification is not available on this device.</string>
+    <string name="error_idv_liveness_failed">Liveness check failed. Please try again.</string>
+    <string name="error_idv_verification_failed">Identity verification failed. Please try again.</string>
+    <string name="error_idv_network_error">Network error during identity verification.</string>
+    <string name="error_ctap2_not_available">Security key transport is not available.</string>
+    <string name="error_ctap2_connection_failed">Failed to connect to security key.</string>
+    <string name="error_ctap2_timeout">Security key communication timed out.</string>
+    <string name="error_ctap2_device_disconnected">Security key was disconnected.</string>
+    <string name="error_insufficient_credentials">You do not have the required credentials for this request.</string>
+    <string name="error_flow_error">An error occurred during the credential flow.</string>
+    <string name="error_generic">An unexpected error occurred.</string>
+
     <!-- Common -->
     <string name="cancel">Cancel</string>
     <string name="ok">OK</string>

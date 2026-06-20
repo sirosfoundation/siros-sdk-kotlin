@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Portuguese translations for SIROS Wallet sample app. -->
+<resources>
+    <string name="app_name">SIROS Wallet</string>
+
+    <!-- Login screen -->
+    <string name="login_title">SIROS Wallet</string>
+    <string name="login_tagline">Identidade Digital Para Humanos</string>
+    <string name="login_backend_url">URL do Servidor</string>
+    <string name="login_tenant_id">ID do Inquilino</string>
+    <string name="login_button">Entrar com Passkey</string>
+    <string name="login_register_button">Criar Conta</string>
+
+    <!-- Navigation -->
+    <string name="nav_credentials">Credenciais</string>
+    <string name="nav_add">Adicionar</string>
+    <string name="nav_settings">Configurações</string>
+
+    <!-- Top bar -->
+    <string name="topbar_title">SIROS Wallet</string>
+
+    <!-- Credentials tab -->
+    <string name="credentials_welcome">Bem-vindo, %1$s</string>
+    <string name="credentials_count_one">%1$d credencial</string>
+    <string name="credentials_count_other">%1$d credenciais</string>
+    <string name="credentials_empty_title">Nenhuma credencial ainda</string>
+    <string name="credentials_empty_subtitle">Toque em Adicionar abaixo para começar</string>
+
+    <!-- Add credential screen -->
+    <string name="add_credential_title">Adicionar Credencial</string>
+    <string name="add_credential_loading">Carregando credenciais disponíveis\u2026</string>
+    <string name="add_credential_empty">Nenhuma credencial disponível</string>
+    <string name="nav_back">Voltar</string>
+
+    <!-- Credential detail screen -->
+    <string name="credential_detail_title">Detalhes da Credencial</string>
+    <string name="credential_detail_tab_info">Informações</string>
+    <string name="credential_detail_tab_claims">Atributos</string>
+    <string name="credential_detail_tab_raw">Bruto</string>
+    <string name="credential_detail_issuer">Emissor</string>
+    <string name="credential_detail_format">Formato</string>
+    <string name="credential_detail_type">Tipo</string>
+    <string name="credential_detail_issued">Emitido</string>
+    <string name="credential_detail_expires">Expira</string>
+    <string name="credential_detail_no_claims">Nenhum atributo disponível</string>
+    <string name="credential_detail_delete">Excluir Credencial</string>
+    <string name="credential_detail_delete_confirm_title">Excluir Credencial</string>
+    <string name="credential_detail_delete_confirm_message">Tem certeza de que deseja excluir \"%1$s\"? Esta ação não pode ser desfeita.</string>
+    <string name="credential_detail_delete_confirm">Excluir</string>
+
+    <!-- Settings screen -->
+    <string name="settings_title">Configurações</string>
+    <string name="settings_account_section">Conta</string>
+    <string name="settings_signed_in_as">Conectado como</string>
+    <string name="settings_backend_url">Servidor</string>
+    <string name="settings_tenant_id">Inquilino</string>
+    <string name="settings_credentials_stored">Credenciais armazenadas</string>
+    <string name="settings_app_version">Versão do aplicativo</string>
+    <string name="settings_presentation_history">Histórico de Apresentações</string>
+    <string name="settings_logout">Sair</string>
+
+    <!-- Presentation history -->
+    <string name="history_title">Histórico de Apresentações</string>
+    <string name="history_empty">Nenhuma apresentação ainda</string>
+    <string name="history_presented_to">Apresentado a %1$s</string>
+    <string name="history_credentials_shared">%1$d credencial(is) compartilhada(s)</string>
+    <string name="history_success">Sucesso</string>
+    <string name="history_failed">Falhou</string>
+
+    <!-- QR Scanner -->
+    <string name="qr_scanner_title">Escanear Código QR</string>
+    <string name="qr_scanner_hint">Aponte a câmera para um código QR de credencial ou apresentação</string>
+    <string name="qr_scanner_permission_required">Permissão de câmera é necessária para escanear códigos QR</string>
+    <string name="qr_scanner_grant_permission">Conceder Permissão</string>
+    <string name="qr_scan_button">Escanear Código QR</string>
+    <string name="qr_scanner_paste_label">Ou cole um URI de oferta de credencial</string>
+    <string name="qr_scanner_paste_button">Resgatar Oferta</string>
+
+    <!-- Flow states -->
+    <string name="flow_issuing">Emitindo Credencial\u2026</string>
+    <string name="flow_presenting">Apresentando Credencial\u2026</string>
+    <string name="flow_processing">Processando\u2026</string>
+    <string name="flow_cancel">Cancelar</string>
+
+    <!-- Error view -->
+    <string name="error_title">Algo deu errado</string>
+    <string name="error_retry">Tentar Novamente</string>
+
+    <!-- SDK error codes -->
+    <string name="error_network_error">A conexão de rede falhou. Verifique sua internet e tente novamente.</string>
+    <string name="error_network_timeout">A solicitação expirou. Tente novamente.</string>
+    <string name="error_auth_failed">A autenticação falhou. Tente novamente.</string>
+    <string name="error_auth_expired">Sua sessão expirou. Faça login novamente.</string>
+    <string name="error_keystore_error">Erro no armazenamento de chaves. Seu armazenamento seguro precisa de atenção.</string>
+    <string name="error_keystore_locked">O armazenamento de chaves está bloqueado. Autentique-se para desbloquear.</string>
+    <string name="error_wallet_error">Erro na carteira. Tente novamente.</string>
+    <string name="error_wallet_not_connected">Carteira não conectada. Faça login primeiro.</string>
+    <string name="error_wallet_prf_unsupported">Seu autenticador não suporta PRF — não é possível proteger os dados da carteira.</string>
+    <string name="error_idv_cancelled">A verificação de identidade foi cancelada.</string>
+    <string name="error_idv_unavailable">A verificação de identidade não está disponível neste dispositivo.</string>
+    <string name="error_idv_liveness_failed">A verificação de vivacidade falhou. Tente novamente.</string>
+    <string name="error_idv_verification_failed">A verificação de identidade falhou. Tente novamente.</string>
+    <string name="error_idv_network_error">Erro de rede durante a verificação de identidade.</string>
+    <string name="error_ctap2_not_available">O transporte de chave de segurança não está disponível.</string>
+    <string name="error_ctap2_connection_failed">Falha ao conectar à chave de segurança.</string>
+    <string name="error_ctap2_timeout">A comunicação com a chave de segurança expirou.</string>
+    <string name="error_ctap2_device_disconnected">A chave de segurança foi desconectada.</string>
+    <string name="error_insufficient_credentials">Você não possui as credenciais necessárias para esta solicitação.</string>
+    <string name="error_flow_error">Ocorreu um erro durante o fluxo de credencial.</string>
+    <string name="error_generic">Ocorreu um erro inesperado.</string>
+
+    <!-- Common -->
+    <string name="cancel">Cancelar</string>
+    <string name="ok">OK</string>
+    <string name="user_fallback_name">Usuário</string>
+</resources>

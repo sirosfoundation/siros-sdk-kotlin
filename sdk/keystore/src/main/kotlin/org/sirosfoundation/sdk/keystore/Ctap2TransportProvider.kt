@@ -48,10 +48,14 @@ interface Ctap2TransportProvider {
 }
 
 /** Errors specific to CTAP2 transport operations. */
-sealed class Ctap2TransportException(message: String) : Exception(message) {
-    class NotAvailable : Ctap2TransportException("CTAP2 transport not available")
-    class ConnectionFailed(detail: String) : Ctap2TransportException("Connection failed: $detail")
-    class Timeout : Ctap2TransportException("CTAP2 transport timeout")
-    class DeviceDisconnected : Ctap2TransportException("Authenticator disconnected")
-    class InvalidResponse(detail: String) : Ctap2TransportException("Invalid CTAP2 response: $detail")
+sealed class Ctap2TransportException(
+    /** Machine-readable error code for i18n mapping. */
+    val errorCode: String,
+    message: String,
+) : Exception(message) {
+    class NotAvailable : Ctap2TransportException("ctap2_not_available", "CTAP2 transport not available")
+    class ConnectionFailed(detail: String) : Ctap2TransportException("ctap2_connection_failed", "Connection failed: $detail")
+    class Timeout : Ctap2TransportException("ctap2_timeout", "CTAP2 transport timeout")
+    class DeviceDisconnected : Ctap2TransportException("ctap2_device_disconnected", "Authenticator disconnected")
+    class InvalidResponse(detail: String) : Ctap2TransportException("ctap2_invalid_response", "Invalid CTAP2 response: $detail")
 }

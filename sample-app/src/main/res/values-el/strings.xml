@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Greek translations for SIROS Wallet sample app. -->
+<resources>
+    <string name="app_name">SIROS Wallet</string>
+
+    <!-- Login screen -->
+    <string name="login_title">SIROS Wallet</string>
+    <string name="login_tagline">Ψηφιακή Ταυτότητα Για Ανθρώπους</string>
+    <string name="login_backend_url">URL Διακομιστή</string>
+    <string name="login_tenant_id">Αναγνωριστικό Ενοικιαστή</string>
+    <string name="login_button">Σύνδεση με Passkey</string>
+    <string name="login_register_button">Δημιουργία Λογαριασμού</string>
+
+    <!-- Navigation -->
+    <string name="nav_credentials">Πιστοποιητικά</string>
+    <string name="nav_add">Προσθήκη</string>
+    <string name="nav_settings">Ρυθμίσεις</string>
+
+    <!-- Top bar -->
+    <string name="topbar_title">SIROS Wallet</string>
+
+    <!-- Credentials tab -->
+    <string name="credentials_welcome">Καλώς ήρθατε, %1$s</string>
+    <string name="credentials_count_one">%1$d πιστοποιητικό</string>
+    <string name="credentials_count_other">%1$d πιστοποιητικά</string>
+    <string name="credentials_empty_title">Δεν υπάρχουν πιστοποιητικά</string>
+    <string name="credentials_empty_subtitle">Πατήστε Προσθήκη παρακάτω για να ξεκινήσετε</string>
+
+    <!-- Add credential screen -->
+    <string name="add_credential_title">Προσθήκη Πιστοποιητικού</string>
+    <string name="add_credential_loading">Φόρτωση διαθέσιμων πιστοποιητικών\u2026</string>
+    <string name="add_credential_empty">Δεν υπάρχουν διαθέσιμα πιστοποιητικά</string>
+    <string name="nav_back">Πίσω</string>
+
+    <!-- Credential detail screen -->
+    <string name="credential_detail_title">Λεπτομέρειες Πιστοποιητικού</string>
+    <string name="credential_detail_tab_info">Πληροφορίες</string>
+    <string name="credential_detail_tab_claims">Ισχυρισμοί</string>
+    <string name="credential_detail_tab_raw">Ακατέργαστο</string>
+    <string name="credential_detail_issuer">Εκδότης</string>
+    <string name="credential_detail_format">Μορφή</string>
+    <string name="credential_detail_type">Τύπος</string>
+    <string name="credential_detail_issued">Εκδόθηκε</string>
+    <string name="credential_detail_expires">Λήγει</string>
+    <string name="credential_detail_no_claims">Δεν υπάρχουν διαθέσιμοι ισχυρισμοί</string>
+    <string name="credential_detail_delete">Διαγραφή Πιστοποιητικού</string>
+    <string name="credential_detail_delete_confirm_title">Διαγραφή Πιστοποιητικού</string>
+    <string name="credential_detail_delete_confirm_message">Σίγουρα θέλετε να διαγράψετε το \"%1$s\"; Αυτή η ενέργεια δεν μπορεί να αναιρεθεί.</string>
+    <string name="credential_detail_delete_confirm">Διαγραφή</string>
+
+    <!-- Settings screen -->
+    <string name="settings_title">Ρυθμίσεις</string>
+    <string name="settings_account_section">Λογαριασμός</string>
+    <string name="settings_signed_in_as">Συνδεδεμένος ως</string>
+    <string name="settings_backend_url">Διακομιστής</string>
+    <string name="settings_tenant_id">Ενοικιαστής</string>
+    <string name="settings_credentials_stored">Αποθηκευμένα πιστοποιητικά</string>
+    <string name="settings_app_version">Έκδοση εφαρμογής</string>
+    <string name="settings_presentation_history">Ιστορικό Παρουσιάσεων</string>
+    <string name="settings_logout">Αποσύνδεση</string>
+
+    <!-- Presentation history -->
+    <string name="history_title">Ιστορικό Παρουσιάσεων</string>
+    <string name="history_empty">Δεν υπάρχουν παρουσιάσεις</string>
+    <string name="history_presented_to">Παρουσιάστηκε στον %1$s</string>
+    <string name="history_credentials_shared">%1$d πιστοποιητικά κοινοποιήθηκαν</string>
+    <string name="history_success">Επιτυχία</string>
+    <string name="history_failed">Αποτυχία</string>
+
+    <!-- QR Scanner -->
+    <string name="qr_scanner_title">Σάρωση Κωδικού QR</string>
+    <string name="qr_scanner_hint">Στρέψτε την κάμερα σε κωδικό QR πιστοποιητικού ή παρουσίασης</string>
+    <string name="qr_scanner_permission_required">Απαιτείται άδεια κάμερας για τη σάρωση κωδικών QR</string>
+    <string name="qr_scanner_grant_permission">Παραχώρηση Άδειας</string>
+    <string name="qr_scan_button">Σάρωση Κωδικού QR</string>
+    <string name="qr_scanner_paste_label">Ή επικολλήστε ένα URI προσφοράς πιστοποιητικού</string>
+    <string name="qr_scanner_paste_button">Εξαργύρωση Προσφοράς</string>
+
+    <!-- Flow states -->
+    <string name="flow_issuing">Έκδοση Πιστοποιητικού\u2026</string>
+    <string name="flow_presenting">Παρουσίαση Πιστοποιητικού\u2026</string>
+    <string name="flow_processing">Επεξεργασία\u2026</string>
+    <string name="flow_cancel">Ακύρωση</string>
+
+    <!-- Error view -->
+    <string name="error_title">Κάτι πήγε στραβά</string>
+    <string name="error_retry">Δοκιμάστε Ξανά</string>
+
+    <!-- SDK error codes -->
+    <string name="error_network_error">Η σύνδεση δικτύου απέτυχε. Ελέγξτε τη σύνδεσή σας στο διαδίκτυο και δοκιμάστε ξανά.</string>
+    <string name="error_network_timeout">Η αίτηση εξέπνευσε. Δοκιμάστε ξανά.</string>
+    <string name="error_auth_failed">Η αυθεντικοποίηση απέτυχε. Δοκιμάστε ξανά.</string>
+    <string name="error_auth_expired">Η συνεδρία σας έληξε. Συνδεθείτε ξανά.</string>
+    <string name="error_keystore_error">Σφάλμα χώρου κλειδιών. Ο ασφαλής χώρος αποθήκευσης χρειάζεται προσοχή.</string>
+    <string name="error_keystore_locked">Ο χώρος κλειδιών είναι κλειδωμένος. Πιστοποιήστε για ξεκλείδωμα.</string>
+    <string name="error_wallet_error">Σφάλμα πορτοφολιού. Δοκιμάστε ξανά.</string>
+    <string name="error_wallet_not_connected">Το πορτοφόλι δεν είναι συνδεδεμένο. Συνδεθείτε πρώτα.</string>
+    <string name="error_wallet_prf_unsupported">Ο αυθεντικοποιητής σας δεν υποστηρίζει PRF — δεν είναι δυνατή η ασφάλιση δεδομένων πορτοφολιού.</string>
+    <string name="error_idv_cancelled">Η επαλήθευση ταυτότητας ακυρώθηκε.</string>
+    <string name="error_idv_unavailable">Η επαλήθευση ταυτότητας δεν είναι διαθέσιμη σε αυτήν τη συσκευή.</string>
+    <string name="error_idv_liveness_failed">Ο έλεγχος ζωντάνιας απέτυχε. Δοκιμάστε ξανά.</string>
+    <string name="error_idv_verification_failed">Η επαλήθευση ταυτότητας απέτυχε. Δοκιμάστε ξανά.</string>
+    <string name="error_idv_network_error">Σφάλμα δικτύου κατά την επαλήθευση ταυτότητας.</string>
+    <string name="error_ctap2_not_available">Η μεταφορά κλειδιού ασφαλείας δεν είναι διαθέσιμη.</string>
+    <string name="error_ctap2_connection_failed">Αποτυχία σύνδεσης με το κλειδί ασφαλείας.</string>
+    <string name="error_ctap2_timeout">Η επικοινωνία με το κλειδί ασφαλείας εξέπνευσε.</string>
+    <string name="error_ctap2_device_disconnected">Το κλειδί ασφαλείας αποσυνδέθηκε.</string>
+    <string name="error_insufficient_credentials">Δεν διαθέτετε τα απαιτούμενα πιστοποιητικά για αυτό το αίτημα.</string>
+    <string name="error_flow_error">Παρουσιάστηκε σφάλμα κατά τη ροή πιστοποιητικού.</string>
+    <string name="error_generic">Παρουσιάστηκε ένα μη αναμενόμενο σφάλμα.</string>
+
+    <!-- Common -->
+    <string name="cancel">Ακύρωση</string>
+    <string name="ok">OK</string>
+    <string name="user_fallback_name">Χρήστης</string>
+</resources>
