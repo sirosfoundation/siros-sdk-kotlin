@@ -33,6 +33,14 @@ dependencies {
     implementation(libs.play.integrity)
     implementation(libs.timber)
 
+    // siros-wscd-manager UniFFI bindings (AAR from local maven or CI artifact).
+    // The AAR is built by `make aar` in the siros-wscd-manager crate.
+    // For local development, publish to mavenLocal:
+    //   cd siros-wscd-manager && make aar && make publish-local
+    implementation("org.sirosfoundation:siros-wscd-manager:0.1.0")
+    // JNA is required by UniFFI-generated Kotlin bindings.
+    implementation("net.java.dev.jna:jna:5.14.0@aar")
+
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
