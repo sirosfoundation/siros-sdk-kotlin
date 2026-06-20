@@ -11,6 +11,7 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        mavenLocal() // siros-wscd-manager AAR (pre-publication)
     }
 }
 
