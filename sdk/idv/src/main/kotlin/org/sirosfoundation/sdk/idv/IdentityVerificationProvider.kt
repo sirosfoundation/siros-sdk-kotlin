@@ -20,25 +20,32 @@ data class IDVResult(
 
 /**
  * Errors that can occur during identity verification.
+ *
+ * Each variant exposes a machine-readable [errorCode] for i18n mapping.
  */
-sealed class IDVException(message: String, cause: Throwable? = null) : Exception(message, cause) {
+sealed class IDVException(
+    message: String,
+    cause: Throwable? = null,
+    /** Machine-readable error code for i18n mapping. */
+    val errorCode: String = "idv_error",
+) : Exception(message, cause) {
     /** The user cancelled the verification flow. */
-    class Cancelled : IDVException("Identity verification cancelled by user")
+    class Cancelled : IDVException("Identity verification cancelled by user", errorCode = "idv_cancelled")
 
     /** The provider is not available on this device (e.g. no camera). */
-    class Unavailable(reason: String) : IDVException("IDV provider unavailable: $reason")
+    class Unavailable(reason: String) : IDVException("IDV provider unavailable: $reason", errorCode = "idv_unavailable")
 
     /** Liveness check failed. */
-    class LivenessFailed(message: String) : IDVException(message)
+    class LivenessFailed(message: String) : IDVException(message, errorCode = "idv_liveness_failed")
 
     /** Document scan or face-match failed. */
-    class VerificationFailed(message: String) : IDVException(message)
+    class VerificationFailed(message: String) : IDVException(message, errorCode = "idv_verification_failed")
 
     /** Network or backend error. */
-    class NetworkError(cause: Throwable) : IDVException("Network error during IDV", cause)
+    class NetworkError(cause: Throwable) : IDVException("Network error during IDV", cause, errorCode = "idv_network_error")
 
-    /** Provider-specific error. */
-    class ProviderError(val code: String, message: String) : IDVException("[$code] $message")
+    /** Provider-specific error with vendor-specific code. */
+    class ProviderError(val providerCode: String, message: String) : IDVException("[$providerCode] $message", errorCode = "idv_provider_$providerCode")
 }
 
 /**

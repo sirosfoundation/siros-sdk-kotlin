@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import org.sirosfoundation.sdk.credentials.CredentialOffer
 import org.sirosfoundation.sdk.credentials.PresentationRecord
+import org.sirosfoundation.sdk.credentials.SirosException
 import org.sirosfoundation.sdk.credentials.StoredCredential
 import org.sirosfoundation.sdk.wallet.SirosWallet
 import org.sirosfoundation.sdk.wallet.WalletConfig
@@ -187,7 +188,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             wallet.completeAuthorization(flowId, code, state)
         } else {
             Log.e(TAG, "Auth redirect but no pending flow")
-            _errorMessage.value = "Authorization failed: no pending flow"
+            _errorMessage.value = activity.getString(R.string.error_auth_failed)
         }
     }
 
@@ -198,7 +199,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             try {
                 wallet.login()
             } catch (e: Exception) {
-                _errorMessage.value = e.message ?: "Login failed"
+                _errorMessage.value = localizedErrorMessage(e)
             } finally {
                 _isLoading.value = false
             }
@@ -212,7 +213,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             try {
                 wallet.register("Sample User")
             } catch (e: Exception) {
-                _errorMessage.value = e.message ?: "Registration failed"
+                _errorMessage.value = localizedErrorMessage(e)
             } finally {
                 _isLoading.value = false
             }
@@ -225,7 +226,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 wallet.startIssuance(credentialOfferUri)
             } catch (e: Exception) {
                 Log.e(TAG, "startIssuance failed", e)
-                _errorMessage.value = e.message ?: "Issuance failed"
+                _errorMessage.value = localizedErrorMessage(e)
             }
         }
     }
@@ -236,7 +237,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 wallet.startPresentation(requestUri)
             } catch (e: Exception) {
                 Log.e(TAG, "startPresentation failed", e)
-                _errorMessage.value = e.message ?: "Presentation failed"
+                _errorMessage.value = localizedErrorMessage(e)
             }
         }
     }
@@ -457,5 +458,44 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         private const val DEFAULT_TENANT_ID = "default"
         private const val REDIRECT_URI = "siros-sample://callback"
         private const val REDIRECT_SCHEME = "siros-sample"
+
+        /** Map SDK error codes to Android string resource IDs. */
+        private val ERROR_CODE_RESOURCES = mapOf(
+            "network_error" to R.string.error_network_error,
+            "network_timeout" to R.string.error_network_timeout,
+            "auth_failed" to R.string.error_auth_failed,
+            "auth_expired" to R.string.error_auth_expired,
+            "keystore_error" to R.string.error_keystore_error,
+            "keystore_locked" to R.string.error_keystore_locked,
+            "wallet_error" to R.string.error_wallet_error,
+            "wallet_not_connected" to R.string.error_wallet_not_connected,
+            "wallet_prf_unsupported" to R.string.error_wallet_prf_unsupported,
+            "idv_cancelled" to R.string.error_idv_cancelled,
+            "idv_unavailable" to R.string.error_idv_unavailable,
+            "idv_liveness_failed" to R.string.error_idv_liveness_failed,
+            "idv_verification_failed" to R.string.error_idv_verification_failed,
+            "idv_network_error" to R.string.error_idv_network_error,
+            "ctap2_not_available" to R.string.error_ctap2_not_available,
+            "ctap2_connection_failed" to R.string.error_ctap2_connection_failed,
+            "ctap2_timeout" to R.string.error_ctap2_timeout,
+            "ctap2_device_disconnected" to R.string.error_ctap2_device_disconnected,
+            "insufficient_credentials" to R.string.error_insufficient_credentials,
+            "flow_error" to R.string.error_flow_error,
+        )
+    }
+
+    /**
+     * Resolve a localized error message from an exception.
+     * Uses [SirosException.errorCode] to look up a translated string resource,
+     * falling back to the generic error message if no match is found.
+     */
+    private fun localizedErrorMessage(e: Exception): String {
+        val code = (e as? SirosException)?.errorCode
+        val resId = code?.let { ERROR_CODE_RESOURCES[it] }
+        return if (resId != null) {
+            activity.getString(resId)
+        } else {
+            activity.getString(R.string.error_generic)
+        }
     }
 }
