@@ -16,6 +16,9 @@ import org.sirosfoundation.sdk.credentials.CredentialOffer
 import org.sirosfoundation.sdk.credentials.PresentationRecord
 import org.sirosfoundation.sdk.credentials.SirosException
 import org.sirosfoundation.sdk.credentials.StoredCredential
+import org.sirosfoundation.sdk.keystore.AuthProvider
+import org.sirosfoundation.sdk.keystore.UniFFISigner
+import org.sirosfoundation.sdk.keystore.WscdKeystoreAdapter
 import org.sirosfoundation.sdk.wallet.SirosWallet
 import org.sirosfoundation.sdk.wallet.WalletConfig
 import org.sirosfoundation.sdk.wallet.WalletEventListener
@@ -23,6 +26,8 @@ import org.sirosfoundation.sdk.wallet.WalletState
 import org.sirosfoundation.sdk.wallet.PresentationRequest
 import org.sirosfoundation.sdk.wallet.DeepLinkType
 import org.sirosfoundation.sdk.wallet.classifyDeepLink
+import uniffi.siros_wscd_manager.FfiR2psConfig
+import uniffi.siros_wscd_manager.FfiWscdConfig
 
 /**
  * Sample app ViewModel.
@@ -50,6 +55,17 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     fun updateBackendUrl(url: String) { _backendUrl.value = url }
     fun updateTenantId(id: String) { _tenantId.value = id }
+
+    // ── R2PS configuration ──────────────────────────────────────────
+
+    private val _r2psEnabled = MutableStateFlow(false)
+    val r2psEnabled: StateFlow<Boolean> = _r2psEnabled
+
+    private val _r2psServerUrl = MutableStateFlow(DEFAULT_R2PS_URL)
+    val r2psServerUrl: StateFlow<String> = _r2psServerUrl
+
+    fun updateR2psEnabled(enabled: Boolean) { _r2psEnabled.value = enabled }
+    fun updateR2psServerUrl(url: String) { _r2psServerUrl.value = url }
 
     // ── Add-credential state ────────────────────────────────────────
 
@@ -439,11 +455,52 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             Build.HARDWARE == "ranchu" ||
             Build.MANUFACTURER.equals("waydroid", ignoreCase = true) ||
             Build.BRAND == "google" && Build.DEVICE?.startsWith("generic") == true
+
+        // Build WSCD-backed keystore when R2PS is enabled
+        val keystore = if (_r2psEnabled.value) {
+            val wscdConfig = FfiWscdConfig(defaultPlugin = "r2ps")
+            val signer = UniFFISigner(
+                wscdConfig,
+                authProvider = object : AuthProvider {
+                    override fun requestPin(): ByteArray {
+                        // TODO: Show PIN dialog on main thread and block until user responds
+                        throw RuntimeException("PIN entry not implemented in sample app")
+                    }
+                    override fun requestWebauthnAssertion(
+                        challenge: ByteArray,
+                        rpId: String,
+                        allowedCredentials: List<ByteArray>,
+                    ): ByteArray {
+                        throw RuntimeException("WebAuthn assertion not implemented in sample app")
+                    }
+                },
+            )
+            val r2psConfig = FfiR2psConfig(
+                serverUrl = _r2psServerUrl.value,
+                clientId = "sample-app",
+                context = "wallet",
+                authMode = "opaque",
+                rpId = "",
+                allowedCredentialIds = emptyList(),
+                clientKeyPem = "", // Populated from device enrollment in production
+                serverPublicKeyPem = "", // Populated from R2PS server discovery
+            )
+            signer.registerR2psPlugin(
+                r2psConfig,
+                OkHttpR2psTransport(serverUrl = _r2psServerUrl.value),
+                SamplePakeClient(),
+            )
+            WscdKeystoreAdapter(signer)
+        } else {
+            null // Use SDK default (JweKeystore)
+        }
+
         return WalletConfig(
             backendUrl = _backendUrl.value,
             tenantId = _tenantId.value,
             redirectUri = REDIRECT_URI,
             requireUserAuth = !isEmulator,
+            keystore = keystore,
             urlRewriter = if (proxyUrl.isNotBlank()) { url ->
                 // Rewrite Docker-internal issuer URLs to the dev proxy
                 url.replace("https://vc-proxy:8443", proxyUrl)
@@ -456,6 +513,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         private const val TAG = "SIROS_VM"
         private val DEFAULT_BACKEND_URL = BuildConfig.DEFAULT_BACKEND_URL
         private const val DEFAULT_TENANT_ID = "default"
+        private const val DEFAULT_R2PS_URL = "http://192.168.240.1:9000"
         private const val REDIRECT_URI = "siros-sample://callback"
         private const val REDIRECT_SCHEME = "siros-sample"
 
