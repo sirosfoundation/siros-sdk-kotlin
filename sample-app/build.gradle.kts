@@ -57,6 +57,7 @@ android {
 
 dependencies {
     implementation(project(":sdk:wallet"))
+    implementation(project(":sdk:keystore"))
     implementation(project(":sdk:passkey-provider"))
 
     implementation(libs.kotlinx.serialization.json)
