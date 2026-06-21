@@ -292,6 +292,27 @@ class WalletEngineSession(
     }
 
     /**
+     * Send an OID4VCI §10 credential lifecycle notification to the backend,
+     * which forwards it to the issuer's notification_endpoint using the
+     * ephemeral issuance token. The client supplies the notification_id it
+     * received at issuance.
+     */
+    fun sendCredentialNotification(
+        flowId: String,
+        notificationId: String,
+        event: String,
+        eventDescription: String? = null,
+    ) {
+        send(CredentialNotificationMessage.serializer(), CredentialNotificationMessage(
+            flowId = flowId,
+            notificationId = notificationId,
+            event = event,
+            eventDescription = eventDescription,
+            timestamp = java.time.Instant.now().toString(),
+        ))
+    }
+
+    /**
      * Suspend until the engine WebSocket handshake completes or fails.
      * Call this after [connect] to ensure the session is ready before sending messages.
      */

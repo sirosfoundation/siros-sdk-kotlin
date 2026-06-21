@@ -48,6 +48,7 @@ import org.sirosfoundation.sdk.credentials.VctmFetcher
 import org.sirosfoundation.sdk.keystore.JweKeystore
 import org.sirosfoundation.sdk.keystore.KeystoreManager
 import org.sirosfoundation.sdk.transport.engine.CredentialMatch
+import org.sirosfoundation.sdk.transport.engine.CredentialNotificationEvent
 import org.sirosfoundation.sdk.transport.engine.ProofObject
 import org.sirosfoundation.sdk.transport.engine.WalletEngineSession
 import okhttp3.OkHttpClient
@@ -1079,9 +1080,20 @@ class SirosWallet private constructor(
                         metadata = metadata,
                         issuedAt = payload["iat"]?.jsonPrimitive?.longOrNull,
                         expiresAt = exp,
+                        notificationId = cred.notificationId,
                     )
                     credentialStore.save(stored)
                     eventListener?.onCredentialReceived(stored)
+
+                    // OID4VCI §10: once the credential is stored, tell the backend
+                    // to forward a credential_accepted notification to the issuer.
+                    cred.notificationId?.let { notificationId ->
+                        engine.sendCredentialNotification(
+                            flowId = msg.flowId,
+                            notificationId = notificationId,
+                            event = CredentialNotificationEvent.ACCEPTED,
+                        )
+                    }
                 }
                 activeOffer = null
                 activeVctm = null
