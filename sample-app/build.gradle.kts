@@ -29,6 +29,7 @@ android {
             manifestPlaceholders["usesCleartextTraffic"] = "false"
             buildConfigField("String", "DEFAULT_BACKEND_URL", "\"https://wallet.sirosid.dev\"")
             buildConfigField("String", "ISSUER_PROXY_URL", "\"\"")
+            buildConfigField("boolean", "R2PS_ENABLED", "false")
         }
         debug {
             // Allow connecting to local backend over cleartext for development
@@ -37,6 +38,9 @@ android {
             buildConfigField("String", "DEFAULT_BACKEND_URL", "\"http://192.168.240.1:8090\"")
             // Rewrite Docker-internal issuer URLs to the host-accessible proxy
             buildConfigField("String", "ISSUER_PROXY_URL", "\"http://192.168.240.1:8091\"")
+            // Enable WSCD-backed signing via R2PS in debug builds
+            // Requires siros-wscd-manager native lib built with r2ps feature
+            buildConfigField("boolean", "R2PS_ENABLED", "false")
         }
     }
 

@@ -24,6 +24,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import timber.log.Timber
+import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.Date
@@ -164,7 +165,9 @@ class JweKeystore(
 
                 try {
                     val ecKey = ECKey.parse(privateKeyJwk.toString())
-                    keys[kid] = ecKey
+                    // Ensure the key has the correct kid set
+                    val keyWithId = ECKey.Builder(ecKey).keyID(kid).build()
+                    keys[kid] = keyWithId
                 } catch (e: Exception) {
                     Timber.w(e, "Failed to parse keypair $kid")
                 }
@@ -172,6 +175,7 @@ class JweKeystore(
         }
 
         // Parse credentials: [{ credentialId, format, data, kid, ... }]
+        // Store as serialized StoredCredential to preserve kid binding and format.
         val credsArray = state["credentials"]
         if (credsArray is kotlinx.serialization.json.JsonArray) {
             for (entry in credsArray) {
@@ -180,7 +184,19 @@ class JweKeystore(
                     ?: continue
                 val data = credObj["data"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
                     ?: continue
-                credentials[credId] = data
+                val credKid = credObj["kid"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
+                val credFormat = credObj["format"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull } ?: ""
+
+                // Store as serialized StoredCredential JSON to preserve metadata
+                val storedJson = kotlinx.serialization.json.buildJsonObject {
+                    put("id", kotlinx.serialization.json.JsonPrimitive(credId))
+                    put("format", kotlinx.serialization.json.JsonPrimitive(credFormat))
+                    put("raw", kotlinx.serialization.json.JsonPrimitive(data))
+                    if (!credKid.isNullOrEmpty()) {
+                        put("kid", kotlinx.serialization.json.JsonPrimitive(credKid))
+                    }
+                }
+                credentials[credId] = storedJson.toString()
             }
         }
     }
@@ -195,11 +211,10 @@ class JweKeystore(
 
     override suspend fun generateKey(algorithm: String): String = mutex.withLock {
         requireUnlocked()
-        val keyId = UUID.randomUUID().toString()
-        val ecKey = ECKeyGenerator(Curve.P_256)
-            .keyID(keyId)
-            .generate()
-        keys[keyId] = ecKey
+        val ecKey = ECKeyGenerator(Curve.P_256).generate()
+        val keyId = ecKey.computeThumbprint().toString()
+        val keyWithId = ECKey.Builder(ecKey).keyID(keyId).build()
+        keys[keyId] = keyWithId
         Timber.d("Generated key: $keyId")
         keyId
     }
@@ -219,10 +234,11 @@ class JweKeystore(
         val key = keys.values.firstOrNull()
             ?: run {
                 Timber.i("No keys available, generating a new key for proof")
-                val keyId = UUID.randomUUID().toString()
-                val ecKey = ECKeyGenerator(Curve.P_256).keyID(keyId).generate()
-                keys[keyId] = ecKey
-                ecKey
+                val ecKey = ECKeyGenerator(Curve.P_256).generate()
+                val keyId = ecKey.computeThumbprint().toString()
+                val keyWithId = ECKey.Builder(ecKey).keyID(keyId).build()
+                keys[keyId] = keyWithId
+                keyWithId
             }
 
         Timber.d("generateProof: building claims for audience=$audience")
@@ -249,10 +265,11 @@ class JweKeystore(
         val key = keys.values.firstOrNull()
             ?: run {
                 Timber.i("No keys available, generating a new key for VP signing")
-                val keyId = UUID.randomUUID().toString()
-                val ecKey = ECKeyGenerator(Curve.P_256).keyID(keyId).generate()
-                keys[keyId] = ecKey
-                ecKey
+                val ecKey = ECKeyGenerator(Curve.P_256).generate()
+                val keyId = ecKey.computeThumbprint().toString()
+                val keyWithId = ECKey.Builder(ecKey).keyID(keyId).build()
+                keys[keyId] = keyWithId
+                keyWithId
             }
 
         val claims = JWTClaimsSet.Builder()
@@ -281,10 +298,11 @@ class JweKeystore(
         val key = keys.values.firstOrNull()
             ?: run {
                 Timber.i("No keys available, generating a new key for VP signing")
-                val keyId = UUID.randomUUID().toString()
-                val ecKey = ECKeyGenerator(Curve.P_256).keyID(keyId).generate()
-                keys[keyId] = ecKey
-                ecKey
+                val ecKey = ECKeyGenerator(Curve.P_256).generate()
+                val keyId = ecKey.computeThumbprint().toString()
+                val keyWithId = ECKey.Builder(ecKey).keyID(keyId).build()
+                keys[keyId] = keyWithId
+                keyWithId
             }
 
         // Split the SD-JWT into parts: IssuerJWT~disclosure1~disclosure2~...~
@@ -395,7 +413,7 @@ class JweKeystore(
                             put("kid", kotlinx.serialization.json.JsonPrimitive(kid))
                             put("keypair", kotlinx.serialization.json.buildJsonObject {
                                 put("kid", kotlinx.serialization.json.JsonPrimitive(kid))
-                                put("did", kotlinx.serialization.json.JsonPrimitive(""))
+                                put("did", kotlinx.serialization.json.JsonPrimitive(computeDidKey(ecKey)))
                                 put("alg", kotlinx.serialization.json.JsonPrimitive("ES256"))
                                 // Export public key as JWK
                                 val pubJwk = json.parseToJsonElement(ecKey.toPublicJWK().toJSONString())
@@ -409,11 +427,24 @@ class JweKeystore(
                 ))
                 put("credentials", kotlinx.serialization.json.JsonArray(
                     credentials.map { (id, data) ->
+                        // Parse StoredCredential to extract kid and format for V3 compat
+                        val parsed = try {
+                            json.parseToJsonElement(data) as? kotlinx.serialization.json.JsonObject
+                        } catch (_: Exception) { null }
+                        val credKid = parsed?.get("kid")?.let {
+                            (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                        } ?: ""
+                        val credFormat = parsed?.get("format")?.let {
+                            (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                        } ?: ""
+                        val credRaw = parsed?.get("raw")?.let {
+                            (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                        } ?: data
                         kotlinx.serialization.json.buildJsonObject {
                             put("credentialId", kotlinx.serialization.json.JsonPrimitive(id))
-                            put("format", kotlinx.serialization.json.JsonPrimitive(""))
-                            put("data", kotlinx.serialization.json.JsonPrimitive(data))
-                            put("kid", kotlinx.serialization.json.JsonPrimitive(""))
+                            put("format", kotlinx.serialization.json.JsonPrimitive(credFormat))
+                            put("data", kotlinx.serialization.json.JsonPrimitive(credRaw))
+                            put("kid", kotlinx.serialization.json.JsonPrimitive(credKid))
                             put("instanceId", kotlinx.serialization.json.JsonPrimitive(0))
                             put("batchId", kotlinx.serialization.json.JsonPrimitive(0))
                             put("credentialIssuerIdentifier", kotlinx.serialization.json.JsonPrimitive(""))
@@ -468,13 +499,12 @@ class JweKeystore(
         requireUnlocked()
         require(count >= 1) { "count must be >= 1" }
         (1..count).map {
-            val keyId = UUID.randomUUID().toString()
-            val ecKey = ECKeyGenerator(Curve.P_256)
-                .keyID(keyId)
-                .generate()
-            keys[keyId] = ecKey
+            val ecKey = ECKeyGenerator(Curve.P_256).generate()
+            val keyId = ecKey.computeThumbprint().toString()
+            val keyWithId = ECKey.Builder(ecKey).keyID(keyId).build()
+            keys[keyId] = keyWithId
             val pubJwk = kotlinx.serialization.json.Json.parseToJsonElement(
-                ecKey.toPublicJWK().toJSONString()
+                keyWithId.toPublicJWK().toJSONString()
             ) as kotlinx.serialization.json.JsonObject
             KeypairInfo(keyId = keyId, publicKeyJWK = pubJwk)
         }
@@ -482,6 +512,49 @@ class JweKeystore(
 
     private fun requireUnlocked() {
         if (!isUnlocked) throw KeystoreException("Keystore is locked")
+    }
+
+    /**
+     * Compute the did:key identifier for a P-256 EC key.
+     * Format: did:key:zDn... (Multicodec 0x1200 for P-256 public key, base58btc).
+     */
+    private fun computeDidKey(ecKey: ECKey): String {
+        val pub = ecKey.toECPublicKey()
+        // Compressed point: 0x02/0x03 prefix + 32-byte x coordinate
+        val xBytes = unsignedBigIntBytes(pub.w.affineX, 32)
+        val prefix: Byte = if (pub.w.affineY.testBit(0)) 0x03 else 0x02
+        val compressed = byteArrayOf(prefix) + xBytes
+        // Multicodec varint for P-256 public key: 0x80, 0x24
+        val multicodec = byteArrayOf(0x80.toByte(), 0x24) + compressed
+        return "did:key:z${base58Btc(multicodec)}"
+    }
+
+    /** Convert BigInteger to fixed-size unsigned byte array (big-endian, zero-padded). */
+    private fun unsignedBigIntBytes(value: java.math.BigInteger, size: Int): ByteArray {
+        val bytes = value.toByteArray()
+        return when {
+            bytes.size == size -> bytes
+            bytes.size > size -> bytes.copyOfRange(bytes.size - size, bytes.size)
+            else -> ByteArray(size - bytes.size) + bytes
+        }
+    }
+
+    /** Base58 Bitcoin encoding (no checksum). */
+    private fun base58Btc(input: ByteArray): String {
+        val alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+        var bi = java.math.BigInteger(1, input)
+        val sb = StringBuilder()
+        val base = java.math.BigInteger.valueOf(58)
+        while (bi > java.math.BigInteger.ZERO) {
+            val (quotient, remainder) = bi.divideAndRemainder(base)
+            sb.append(alphabet[remainder.toInt()])
+            bi = quotient
+        }
+        // Preserve leading zeros
+        for (b in input) {
+            if (b.toInt() == 0) sb.append('1') else break
+        }
+        return sb.reverse().toString()
     }
 
     @Serializable

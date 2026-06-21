@@ -3,8 +3,8 @@ package org.sirosfoundation.sdk.auth
 
 import org.sirosfoundation.sdk.credentials.BackendApiException
 import org.sirosfoundation.sdk.credentials.NetworkException
-import org.sirosfoundation.sdk.keystore.CertificationInfo
-import org.sirosfoundation.sdk.keystore.SignerSecurityProperties
+import org.sirosfoundation.sdk.credentials.CertificationInfo
+import org.sirosfoundation.sdk.credentials.SignerSecurityProperties
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName

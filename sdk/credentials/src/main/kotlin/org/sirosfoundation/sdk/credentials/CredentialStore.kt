@@ -19,6 +19,8 @@ data class StoredCredential(
     val id: String,
     val format: String,
     val raw: String,
+    /** Key ID (JWK thumbprint) of the keypair bound to this credential. */
+    val kid: String? = null,
     val metadata: CredentialMetadata? = null,
     @SerialName("issued_at") val issuedAt: Long? = null,
     @SerialName("expires_at") val expiresAt: Long? = null,

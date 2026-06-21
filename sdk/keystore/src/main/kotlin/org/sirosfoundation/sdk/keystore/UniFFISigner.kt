@@ -2,6 +2,8 @@ package org.sirosfoundation.sdk.keystore
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.sirosfoundation.sdk.credentials.CertificationInfo
+import org.sirosfoundation.sdk.credentials.SignerSecurityProperties
 import uniffi.siros_wscd_manager.FfiAlgorithm
 import uniffi.siros_wscd_manager.FfiAuthCallback
 import uniffi.siros_wscd_manager.FfiCertificationLevel
