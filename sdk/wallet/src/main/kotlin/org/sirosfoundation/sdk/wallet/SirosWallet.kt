@@ -678,6 +678,18 @@ class SirosWallet private constructor(
      * Also syncs the updated keystore to the backend.
      */
     suspend fun deleteCredential(credentialId: String) {
+        // Send credential_deleted notification if the credential has notification info
+        val credential = credentialStore.getAll().find { it.id == credentialId }
+        if (credential?.notificationId != null) {
+            try {
+                engineSession?.sendCredentialNotification(
+                    credentialIdentifier = credential.id,
+                    event = "credential_deleted",
+                )
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to send credential_deleted notification")
+            }
+        }
         credentialStore.delete(credentialId)
         val current = _state.value
         if (current is WalletState.Ready) {
@@ -1079,6 +1091,8 @@ class SirosWallet private constructor(
                         metadata = metadata,
                         issuedAt = payload["iat"]?.jsonPrimitive?.longOrNull,
                         expiresAt = exp,
+                        notificationId = cred.notificationId,
+                        notificationEndpoint = cred.notificationEndpoint,
                     )
                     credentialStore.save(stored)
                     eventListener?.onCredentialReceived(stored)

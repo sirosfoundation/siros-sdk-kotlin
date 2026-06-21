@@ -291,6 +291,15 @@ class WalletEngineSession(
         )
     }
 
+    /** Send a credential lifecycle notification request to the backend (OID4VCI §10). */
+    fun sendCredentialNotification(credentialIdentifier: String, event: String, eventDescription: String? = null) {
+        send(CredentialNotificationMessage.serializer(), CredentialNotificationMessage(
+            credentialIdentifier = credentialIdentifier,
+            event = event,
+            eventDescription = eventDescription,
+        ))
+    }
+
     /**
      * Suspend until the engine WebSocket handshake completes or fails.
      * Call this after [connect] to ensure the session is ready before sending messages.

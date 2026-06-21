@@ -24,6 +24,10 @@ data class StoredCredential(
     val metadata: CredentialMetadata? = null,
     @SerialName("issued_at") val issuedAt: Long? = null,
     @SerialName("expires_at") val expiresAt: Long? = null,
+    /** OID4VCI notification ID for credential lifecycle events. */
+    @SerialName("notification_id") val notificationId: String? = null,
+    /** Issuer's notification endpoint URL. */
+    @SerialName("notification_endpoint") val notificationEndpoint: String? = null,
 )
 
 @Serializable

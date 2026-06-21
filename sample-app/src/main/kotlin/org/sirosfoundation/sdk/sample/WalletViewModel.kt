@@ -109,6 +109,8 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     // ── Wallet ──────────────────────────────────────────────────────
 
+    private val notificationHelper = WalletNotificationHelper(activity)
+
     private var wallet: SirosWallet = SirosWallet.create(
         activity,
         buildWalletConfig(),
@@ -156,6 +158,10 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     presentationContinuation = cont
                     _pendingPresentationRequest.value = request
                 }
+            }
+
+            override fun onCredentialReceived(credential: StoredCredential) {
+                notificationHelper.notifyCredentialReceived(credential.metadata?.name)
             }
 
             override fun onAuthorizationRequired(
@@ -383,10 +389,12 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     }
 
     fun deleteCredential(credentialId: String) {
+        val credentialName = _selectedCredential.value?.metadata?.name
         _selectedCredential.value = null
         viewModelScope.launch {
             try {
                 wallet.deleteCredential(credentialId)
+                notificationHelper.notifyCredentialDeleted(credentialName)
             } catch (e: Exception) {
                 _errorMessage.value = e.message ?: "Delete failed"
             }

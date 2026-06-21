@@ -14,6 +14,7 @@ object MessageTypes {
     const val FLOW_ACTION = "flow_action"
     const val SIGN_RESPONSE = "sign_response"
     const val MATCH_RESPONSE = "match_response"
+    const val CREDENTIAL_NOTIFICATION = "credential_notification"
 
     // Server → Client
     const val HANDSHAKE_COMPLETE = "handshake_complete"
@@ -141,6 +142,8 @@ data class CredentialResult(
     val credential: String,
     val vct: String? = null,
     @SerialName("type_metadata") val typeMetadata: JsonElement? = null,
+    @SerialName("notification_id") val notificationId: String? = null,
+    @SerialName("notification_endpoint") val notificationEndpoint: String? = null,
 )
 
 @Serializable
@@ -157,6 +160,15 @@ data class FlowError(
     val code: String,
     val message: String,
     val details: JsonObject? = null,
+)
+
+/** Client → Server: request the backend to send a credential lifecycle notification to the issuer. */
+@Serializable
+data class CredentialNotificationMessage(
+    val type: String = MessageTypes.CREDENTIAL_NOTIFICATION,
+    @SerialName("credential_identifier") val credentialIdentifier: String,
+    val event: String,
+    @SerialName("event_description") val eventDescription: String? = null,
 )
 
 @Serializable
