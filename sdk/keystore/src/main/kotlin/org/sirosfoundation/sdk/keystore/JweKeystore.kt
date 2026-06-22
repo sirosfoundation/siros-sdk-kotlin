@@ -54,6 +54,8 @@ class JweKeystore(
     private var credentials: MutableMap<String, String> = mutableMapOf()
     @Volatile private var mainKey: SecretKey? = null
     @Volatile private var containerMetadata: ContainerData? = null
+    // Preserve full WalletStateContainer for round-trip fidelity
+    private var preservedWalletState: kotlinx.serialization.json.JsonObject? = null
 
     override val isUnlocked: Boolean get() = mainKey != null
 
@@ -69,8 +71,10 @@ class JweKeystore(
             val mainKeyInfo = container.mainKey
                 ?: throw KeystoreException("Container missing mainKey")
 
-            // Find the matching PRF key entry (use the provided hkdfSalt to match)
-            val prfKeyInfo = container.prfKeys.firstOrNull { it.hkdfSalt.contentEquals(hkdfSalt) }
+            // Find the matching PRF key entry by credentialId (passed via wallet layer)
+            // Fallback to first entry only if no credentialId match (legacy compat)
+            val prfKeyInfo = container.prfKeys.firstOrNull { it.credentialId.isNotEmpty() && it.hkdfSalt.contentEquals(hkdfSalt) }
+                ?: container.prfKeys.firstOrNull { it.hkdfSalt.contentEquals(hkdfSalt) }
                 ?: container.prfKeys.firstOrNull()
                 ?: throw KeystoreException("No PRF key entries in container")
 
@@ -85,8 +89,11 @@ class JweKeystore(
             val jweObject = JWEObject.parse(container.jwe)
             jweObject.decrypt(AESDecrypter(unwrappedMainKey))
 
-            // Parse the WalletStateContainer plaintext
+            // Parse the WalletStateContainer plaintext and preserve for round-trip
             val plaintextJson = json.parseToJsonElement(jweObject.payload.toString())
+            if (plaintextJson is kotlinx.serialization.json.JsonObject) {
+                preservedWalletState = plaintextJson
+            }
             loadWalletState(plaintextJson)
 
             // Preserve container metadata for re-export
@@ -206,6 +213,7 @@ class JweKeystore(
         credentials.clear()
         mainKey = null
         containerMetadata = null
+        preservedWalletState = null
         Timber.i("Keystore locked")
     }
 
@@ -402,6 +410,13 @@ class JweKeystore(
     }
 
     private fun buildWalletStateV3(): kotlinx.serialization.json.JsonObject {
+        // Preserve existing state if available, otherwise initialize fresh
+        val existingState = preservedWalletState
+        if (existingState != null) {
+            // Round-trip: preserve exact structure from loaded state
+            return existingState
+        }
+        // First-time or missing state: build minimal valid state
         return kotlinx.serialization.json.buildJsonObject {
             put("lastEventHash", kotlinx.serialization.json.JsonPrimitive(""))
             put("events", kotlinx.serialization.json.JsonArray(emptyList()))
@@ -413,7 +428,21 @@ class JweKeystore(
                             put("kid", kotlinx.serialization.json.JsonPrimitive(kid))
                             put("keypair", kotlinx.serialization.json.buildJsonObject {
                                 put("kid", kotlinx.serialization.json.JsonPrimitive(kid))
-                                put("did", kotlinx.serialization.json.JsonPrimitive(computeDidKey(ecKey)))
+                                // Preserve DID from original state if available; only compute for fresh keys
+                                val preservedDid = existingState?.let { state ->
+                                    (state["S"] as? kotlinx.serialization.json.JsonObject)?.let { s ->
+                                        (s["keypairs"] as? kotlinx.serialization.json.JsonArray)?.find { entry ->
+                                            (entry as? kotlinx.serialization.json.JsonObject)?.let { e ->
+                                                ((e["keypair"] as? kotlinx.serialization.json.JsonObject)?.get("kid") as? kotlinx.serialization.json.JsonPrimitive)?.content == kid
+                                            } ?: false
+                                        }?.let { matchedEntry ->
+                                            (matchedEntry as? kotlinx.serialization.json.JsonObject)?.let { e ->
+                                                ((e["keypair"] as? kotlinx.serialization.json.JsonObject)?.get("did") as? kotlinx.serialization.json.JsonPrimitive)?.content
+                                            }
+                                        }
+                                    }
+                                }
+                                put("did", kotlinx.serialization.json.JsonPrimitive(preservedDid ?: computeDidKey(ecKey)))
                                 put("alg", kotlinx.serialization.json.JsonPrimitive("ES256"))
                                 // Export public key as JWK
                                 val pubJwk = json.parseToJsonElement(ecKey.toPublicJWK().toJSONString())
@@ -427,36 +456,73 @@ class JweKeystore(
                 ))
                 put("credentials", kotlinx.serialization.json.JsonArray(
                     credentials.map { (id, data) ->
-                        // Parse StoredCredential to extract kid and format for V3 compat
+                        // Parse StoredCredential to extract metadata
                         val parsed = try {
                             json.parseToJsonElement(data) as? kotlinx.serialization.json.JsonObject
                         } catch (_: Exception) { null }
-                        val credKid = parsed?.get("kid")?.let {
-                            (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
-                        } ?: ""
-                        val credFormat = parsed?.get("format")?.let {
-                            (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
-                        } ?: ""
-                        val credRaw = parsed?.get("raw")?.let {
-                            (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
-                        } ?: data
+                        
+                        // Try to find and preserve original credential entry from preserved state
+                        val originalCred = existingState?.let { state ->
+                            (state["S"] as? kotlinx.serialization.json.JsonObject)?.let { s ->
+                                (s["credentials"] as? kotlinx.serialization.json.JsonArray)?.find { entry ->
+                                    (entry as? kotlinx.serialization.json.JsonObject)?.let { e ->
+                                        ((e["credentialId"] as? kotlinx.serialization.json.JsonPrimitive)?.content == id)
+                                    } ?: false
+                                }
+                            }
+                        } as? kotlinx.serialization.json.JsonObject
+                        
+                        // Preserve all metadata fields from original; use stored/parsed values as fallback
+                        val credKid = originalCred?.get("kid")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
+                            ?: parsed?.get("kid")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull } ?: ""
+                        val credFormat = originalCred?.get("format")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
+                            ?: parsed?.get("format")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull } ?: ""
+                        val credData = originalCred?.get("data")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
+                            ?: parsed?.get("raw")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull } ?: data
+                        val instanceId = originalCred?.get("instanceId")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+                            ?: "0"
+                        val batchId = originalCred?.get("batchId")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+                            ?: "0"
+                        val issuerIdent = originalCred?.get("credentialIssuerIdentifier")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
+                            ?: ""
+                        val configId = originalCred?.get("credentialConfigurationId")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
+                            ?: ""
+                        
                         kotlinx.serialization.json.buildJsonObject {
                             put("credentialId", kotlinx.serialization.json.JsonPrimitive(id))
                             put("format", kotlinx.serialization.json.JsonPrimitive(credFormat))
-                            put("data", kotlinx.serialization.json.JsonPrimitive(credRaw))
+                            put("data", kotlinx.serialization.json.JsonPrimitive(credData))
                             put("kid", kotlinx.serialization.json.JsonPrimitive(credKid))
-                            put("instanceId", kotlinx.serialization.json.JsonPrimitive(0))
-                            put("batchId", kotlinx.serialization.json.JsonPrimitive(0))
-                            put("credentialIssuerIdentifier", kotlinx.serialization.json.JsonPrimitive(""))
-                            put("credentialConfigurationId", kotlinx.serialization.json.JsonPrimitive(""))
+                            put("instanceId", kotlinx.serialization.json.JsonPrimitive(instanceId))
+                            put("batchId", kotlinx.serialization.json.JsonPrimitive(batchId))
+                            put("credentialIssuerIdentifier", kotlinx.serialization.json.JsonPrimitive(issuerIdent))
+                            put("credentialConfigurationId", kotlinx.serialization.json.JsonPrimitive(configId))
                         }
                     }
                 ))
-                put("presentations", kotlinx.serialization.json.JsonArray(emptyList()))
+                // Preserve presentations and issuance sessions from original state if present
+                val presentations = existingState?.let { state ->
+                    (state["S"] as? kotlinx.serialization.json.JsonObject)?.get("presentations")
+                        ?: kotlinx.serialization.json.JsonArray(emptyList())
+                } ?: kotlinx.serialization.json.JsonArray(emptyList())
+                put("presentations", presentations)
+                
                 put("settings", kotlinx.serialization.json.buildJsonObject {
-                    put("openidRefreshTokenMaxAgeInSeconds", kotlinx.serialization.json.JsonPrimitive(""))
+                    // Preserve settings from original state; use "0" as normative default for new state
+                    val refreshTokenAge = existingState?.let { state ->
+                        (state["S"] as? kotlinx.serialization.json.JsonObject)?.get("settings")?.let { s ->
+                            (s as? kotlinx.serialization.json.JsonObject)?.get("openidRefreshTokenMaxAgeInSeconds")
+                                ?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
+                        }
+                    } ?: "0"
+                    put("openidRefreshTokenMaxAgeInSeconds", kotlinx.serialization.json.JsonPrimitive(refreshTokenAge))
                 })
-                put("credentialIssuanceSessions", kotlinx.serialization.json.JsonArray(emptyList()))
+                
+                val credIssuanceSessions = existingState?.let { state ->
+                    (state["S"] as? kotlinx.serialization.json.JsonObject)?.get("credentialIssuanceSessions")
+                        ?: kotlinx.serialization.json.JsonArray(emptyList())
+                } ?: kotlinx.serialization.json.JsonArray(emptyList())
+                put("credentialIssuanceSessions", credIssuanceSessions)
             })
         }
     }
