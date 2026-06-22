@@ -64,6 +64,7 @@ class WalletEngineSession(
     private val signRequestChannel = Channel<SignRequestMessage>(Channel.BUFFERED)
     private val matchRequestChannel = Channel<MatchRequestMessage>(Channel.BUFFERED)
     private val pushChannel = Channel<PushMessage>(Channel.BUFFERED)
+    private val notificationAckChannel = Channel<NotificationAckMessage>(Channel.BUFFERED)
 
     /** All incoming messages as raw [EngineMessage] (for type-based dispatch). */
     fun messages(): Flow<EngineMessage> = incomingMessages.receiveAsFlow()
@@ -85,6 +86,17 @@ class WalletEngineSession(
 
     /** Server push notifications. */
     fun pushMessages(): Flow<PushMessage> = pushChannel.receiveAsFlow()
+
+    /**
+     * Acknowledgements for OID4VCI §10 credential notifications sent via
+     * [sendCredentialNotification]. Each value reports whether the backend
+     * forwarded the notification to the issuer (`status == "forwarded"`) or
+     * rejected it, including any `error` detail.
+     */
+    fun notificationAcks(): Flow<NotificationAckMessage> = notificationAckChannel.receiveAsFlow()
+
+    /** Whether the underlying WebSocket is currently connected. */
+    val isConnected: Boolean get() = webSocket != null
 
     /**
      * Connect to the engine WebSocket and perform the handshake.
@@ -192,6 +204,10 @@ class WalletEngineSession(
                     val msg = json.decodeFromString(PushMessage.serializer(), text)
                     pushChannel.trySend(msg)
                 }
+                MessageTypes.NOTIFICATION_ACK -> {
+                    val msg = json.decodeFromString(NotificationAckMessage.serializer(), text)
+                    notificationAckChannel.trySend(msg)
+                }
                 MessageTypes.ERROR -> {
                     val msg = json.decodeFromString(ErrorMessage.serializer(), text)
                     Timber.e("Engine error: ${msg.code} — ${msg.details}")
@@ -296,6 +312,11 @@ class WalletEngineSession(
      * which forwards it to the issuer's notification_endpoint using the
      * ephemeral issuance token. The client supplies the notification_id it
      * received at issuance.
+     *
+     * This is a no-op when the session is not connected: the notification is
+     * triggered automatically after a credential is stored, which may race with
+     * a concurrent disconnect (e.g. logout). Dropping it in that case is safe
+     * because §10 notifications are optional and best-effort.
      */
     fun sendCredentialNotification(
         flowId: String,
@@ -303,6 +324,7 @@ class WalletEngineSession(
         event: String,
         eventDescription: String? = null,
     ) {
+        if (!isConnected) return
         send(CredentialNotificationMessage.serializer(), CredentialNotificationMessage(
             flowId = flowId,
             notificationId = notificationId,
@@ -340,6 +362,7 @@ class WalletEngineSession(
         signRequestChannel.close()
         matchRequestChannel.close()
         pushChannel.close()
+        notificationAckChannel.close()
         scope.cancel()
     }
 

@@ -314,6 +314,48 @@ class WalletEngineSessionTest {
     }
 
     @Test
+    fun send_credential_notification_is_no_op_when_not_connected() {
+        val session = WalletEngineSession(
+            baseUrl = "https://wallet.example.com",
+            tenantId = "tenant-42",
+            client = client,
+        )
+        // Never connected: webSocket is null, so the send must be dropped.
+        assertTrue(!session.isConnected)
+
+        session.sendCredentialNotification(
+            flowId = "flow-77",
+            notificationId = "notif-abc",
+            event = CredentialNotificationEvent.ACCEPTED,
+        )
+
+        verify(exactly = 0) { webSocket.send(any<String>()) }
+    }
+
+    @Test
+    fun notification_ack_message_emits_to_notification_acks_flow() = runTest {
+        val session = WalletEngineSession(
+            baseUrl = "https://wallet.example.com",
+            tenantId = "tenant-42",
+            client = client,
+        )
+        session.connect("app-token")
+
+        session.notificationAcks().test {
+            listener.onMessage(
+                webSocket,
+                """{"type":"notification_ack","flow_id":"flow-77","notification_id":"notif-abc","status":"forwarded"}""",
+            )
+
+            val ack = awaitItem()
+            assertEquals("flow-77", ack.flowId)
+            assertEquals("notif-abc", ack.notificationId)
+            assertEquals("forwarded", ack.status)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
     fun start_issuance_serializes_flow_start_message() {
         val session = WalletEngineSession(
             baseUrl = "https://wallet.example.com",

@@ -43,6 +43,7 @@ import org.sirosfoundation.sdk.credentials.CredentialStore
 import org.sirosfoundation.sdk.credentials.PresentationRecord
 import org.sirosfoundation.sdk.credentials.StoredCredential
 import org.sirosfoundation.sdk.keystore.KeystoreManager
+import org.sirosfoundation.sdk.transport.engine.CredentialNotificationEvent
 import org.sirosfoundation.sdk.transport.engine.CredentialResult
 import org.sirosfoundation.sdk.transport.engine.CredentialMatch
 import org.sirosfoundation.sdk.transport.engine.FlowCompleteMessage
@@ -534,6 +535,129 @@ class SirosWalletTest {
         assertEquals("user-1", ready.userId)
         assertEquals(1, ready.credentials.size)
         assertEquals(testCredential, ready.credentials.single().raw)
+    }
+
+    @Test
+    fun connectEngine_flowComplete_sends_credential_notification_when_notification_id_present() = runTest(dispatcher) {
+        // Minimal valid JWT: {"alg":"none"}.{"sub":"test","iat":1700000000,"exp":9999999999}.
+        val testCredential = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9."
+        val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val store = FakeCredentialStore(mutableListOf())
+        val keystore = mockk<KeystoreManager>()
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        var privateDataJwe: String? = null
+        every { keystore.isUnlocked } returns true
+        every { sessionStore.privateDataJwe } answers { privateDataJwe }
+        every { sessionStore.privateDataJwe = any() } answers { privateDataJwe = firstArg() }
+        coEvery { keystore.exportEncryptedContainer() } returns """{"prfKeys":[],"jwe":"updated-jwe"}""".toByteArray()
+        coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+        val engine = mockEngineConstructor(flowComplete = completeFlow)
+        every {
+            engine.sendCredentialNotification(any(), any(), any(), any())
+        } just runs
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.FlowActive(
+                    userId = "user-1",
+                    displayName = "Alice",
+                    flowId = "flow-notify",
+                    flowType = "issuance",
+                    status = "in_progress",
+                    credentials = emptyList(),
+                )
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to sessionStore,
+            "apiClient" to apiClient,
+            "eventListener" to listener,
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        completeFlow.emit(
+            FlowCompleteMessage(
+                flowId = "flow-notify",
+                credentials = listOf(
+                    CredentialResult(
+                        format = "dc+sd-jwt",
+                        credential = testCredential,
+                        notificationId = "notif-xyz",
+                    )
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        verify(exactly = 1) {
+            engine.sendCredentialNotification(
+                flowId = "flow-notify",
+                notificationId = "notif-xyz",
+                event = CredentialNotificationEvent.ACCEPTED,
+            )
+        }
+        // The stored credential retains the issuer's notification_id.
+        assertEquals("notif-xyz", store.let { runBlocking { it.getAll() }.single().notificationId })
+    }
+
+    @Test
+    fun connectEngine_flowComplete_omits_credential_notification_without_notification_id() = runTest(dispatcher) {
+        val testCredential = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9."
+        val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val store = FakeCredentialStore(mutableListOf())
+        val keystore = mockk<KeystoreManager>()
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        var privateDataJwe: String? = null
+        every { keystore.isUnlocked } returns true
+        every { sessionStore.privateDataJwe } answers { privateDataJwe }
+        every { sessionStore.privateDataJwe = any() } answers { privateDataJwe = firstArg() }
+        coEvery { keystore.exportEncryptedContainer() } returns """{"prfKeys":[],"jwe":"updated-jwe"}""".toByteArray()
+        coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+        val engine = mockEngineConstructor(flowComplete = completeFlow)
+        every {
+            engine.sendCredentialNotification(any(), any(), any(), any())
+        } just runs
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.FlowActive(
+                    userId = "user-1",
+                    displayName = "Alice",
+                    flowId = "flow-plain",
+                    flowType = "issuance",
+                    status = "in_progress",
+                    credentials = emptyList(),
+                )
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to sessionStore,
+            "apiClient" to apiClient,
+            "eventListener" to listener,
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        completeFlow.emit(
+            FlowCompleteMessage(
+                flowId = "flow-plain",
+                credentials = listOf(
+                    CredentialResult(format = "dc+sd-jwt", credential = testCredential)
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        verify(exactly = 0) {
+            engine.sendCredentialNotification(any(), any(), any(), any())
+        }
     }
 
     @Test
