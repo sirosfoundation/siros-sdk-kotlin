@@ -11,7 +11,9 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        mavenLocal() // local development builds
+        // siros-wscd-manager AAR, published to GitHub Packages Maven.
+        // Credentials come from env (CI: GITHUB_ACTOR/GITHUB_TOKEN) or Gradle
+        // properties (local: gpr.user/gpr.key in ~/.gradle/gradle.properties).
         maven {
             name = "GitHubPackages"
             url = uri("https://maven.pkg.github.com/sirosfoundation/siros-wscd-manager")
@@ -24,6 +26,7 @@ dependencyResolutionManagement {
                 ).getOrElse("")
             }
         }
+        mavenLocal() // local-dev fallback for an unpublished AAR
     }
 }
 
