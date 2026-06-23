@@ -4,17 +4,29 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.sirosfoundation.sdk.credentials.CertificationInfo
 import org.sirosfoundation.sdk.credentials.SignerSecurityProperties
+import uniffi.siros_wscd_manager.FfiActivateLifecycleRequest
+import uniffi.siros_wscd_manager.FfiActivationOutcome
 import uniffi.siros_wscd_manager.FfiAlgorithm
 import uniffi.siros_wscd_manager.FfiAuthCallback
 import uniffi.siros_wscd_manager.FfiCertificationLevel
+import uniffi.siros_wscd_manager.FfiDestroyLifecycleRequest
+import uniffi.siros_wscd_manager.FfiDestroyMode
+import uniffi.siros_wscd_manager.FfiDestructionOutcome
+import uniffi.siros_wscd_manager.FfiFactorKind
 import uniffi.siros_wscd_manager.FfiGeneratedKey
 import uniffi.siros_wscd_manager.FfiHttpTransport
 import uniffi.siros_wscd_manager.FfiKeyStorageType
+import uniffi.siros_wscd_manager.FfiLifecycleState
+import uniffi.siros_wscd_manager.FfiLifecycleStatus
 import uniffi.siros_wscd_manager.FfiMigrationResult
 import uniffi.siros_wscd_manager.FfiOperationProgress
 import uniffi.siros_wscd_manager.FfiPakeClient
 import uniffi.siros_wscd_manager.FfiProgressCallback
 import uniffi.siros_wscd_manager.FfiR2psConfig
+import uniffi.siros_wscd_manager.FfiRegisterLifecycleRequest
+import uniffi.siros_wscd_manager.FfiRegistrationOutcome
+import uniffi.siros_wscd_manager.FfiRotateLifecycleRequest
+import uniffi.siros_wscd_manager.FfiRotationOutcome
 import uniffi.siros_wscd_manager.FfiWscdConfig
 import uniffi.siros_wscd_manager.FfiWscdException
 import uniffi.siros_wscd_manager.FfiWscdManager
@@ -33,7 +45,7 @@ import uniffi.siros_wscd_manager.FfiWscdManager
 class UniFFISigner(
     config: FfiWscdConfig,
     private val authProvider: AuthProvider? = null,
-) : Signer {
+) : Signer, SignerLifecycleManager {
 
     private val ffi: FfiWscdManager = FfiWscdManager(config)
 
@@ -126,6 +138,47 @@ class UniFFISigner(
             )
         }
 
+    override suspend fun lifecycleStatus(pluginId: String, contextId: String): LifecycleStatus =
+        withContext(Dispatchers.IO) {
+            ffi.lifecycleStatus(pluginId, contextId).toSdkLifecycleStatus()
+        }
+
+    override suspend fun registerLifecycle(request: RegisterLifecycleRequest): RegistrationOutcome =
+        withContext(Dispatchers.IO) {
+            ffi.registerLifecycle(
+                request.toFfiRequest(),
+                authCallbackBridge(),
+                noOpProgress(),
+            ).toSdkRegistrationOutcome()
+        }
+
+    override suspend fun activateLifecycle(request: ActivateLifecycleRequest): ActivationOutcome =
+        withContext(Dispatchers.IO) {
+            ffi.activateLifecycle(
+                request.toFfiRequest(),
+                authCallbackBridge(),
+                noOpProgress(),
+            ).toSdkActivationOutcome()
+        }
+
+    override suspend fun rotateLifecycle(request: RotateLifecycleRequest): RotationOutcome =
+        withContext(Dispatchers.IO) {
+            ffi.rotateLifecycle(
+                request.toFfiRequest(),
+                authCallbackBridge(),
+                noOpProgress(),
+            ).toSdkRotationOutcome()
+        }
+
+    override suspend fun destroyLifecycle(request: DestroyLifecycleRequest): DestructionOutcome =
+        withContext(Dispatchers.IO) {
+            ffi.destroyLifecycle(
+                request.toFfiRequest(),
+                authCallbackBridge(),
+                noOpProgress(),
+            ).toSdkDestructionOutcome()
+        }
+
     /**
      * Export the softkey plugin container as JSON bytes for encrypted backup.
      * The caller is responsible for JWE-wrapping the result.
@@ -189,4 +242,86 @@ class UniFFISigner(
         FfiCertificationLevel.SUBSTANTIAL -> CertificationInfo.Certified("EUCC", "substantial")
         FfiCertificationLevel.HIGH -> CertificationInfo.Certified("EUCC", "high")
     }
+
+    private fun FactorKind.toFfiFactorKind(): FfiFactorKind = when (this) {
+        FactorKind.Opaque -> FfiFactorKind.OPAQUE
+        FactorKind.WebAuthn -> FfiFactorKind.WEB_AUTHN
+        FactorKind.RawSign -> FfiFactorKind.RAW_SIGN
+    }
+
+    private fun FfiFactorKind.toSdkFactorKind(): FactorKind = when (this) {
+        FfiFactorKind.OPAQUE -> FactorKind.Opaque
+        FfiFactorKind.WEB_AUTHN -> FactorKind.WebAuthn
+        FfiFactorKind.RAW_SIGN -> FactorKind.RawSign
+    }
+
+    private fun FfiLifecycleState.toSdkLifecycleState(): LifecycleState = when (this) {
+        FfiLifecycleState.UNINITIALIZED -> LifecycleState.Uninitialized
+        FfiLifecycleState.REGISTERED -> LifecycleState.Registered
+        FfiLifecycleState.ACTIVE -> LifecycleState.Active
+        FfiLifecycleState.SUSPENDED -> LifecycleState.Suspended
+        FfiLifecycleState.DESTROYED -> LifecycleState.Destroyed
+    }
+
+    private fun DestroyMode.toFfiDestroyMode(): FfiDestroyMode = when (this) {
+        DestroyMode.LocalOnly -> FfiDestroyMode.LOCAL_ONLY
+        DestroyMode.RemoteRevokeIfSupported -> FfiDestroyMode.REMOTE_REVOKE_IF_SUPPORTED
+        DestroyMode.Strict -> FfiDestroyMode.STRICT
+    }
+
+    private fun RegisterLifecycleRequest.toFfiRequest(): FfiRegisterLifecycleRequest =
+        FfiRegisterLifecycleRequest(
+            pluginId = pluginId,
+            contextId = contextId,
+            factorKind = factorKind.toFfiFactorKind(),
+        )
+
+    private fun ActivateLifecycleRequest.toFfiRequest(): FfiActivateLifecycleRequest =
+        FfiActivateLifecycleRequest(
+            pluginId = pluginId,
+            contextId = contextId,
+        )
+
+    private fun RotateLifecycleRequest.toFfiRequest(): FfiRotateLifecycleRequest =
+        FfiRotateLifecycleRequest(
+            pluginId = pluginId,
+            contextId = contextId,
+        )
+
+    private fun DestroyLifecycleRequest.toFfiRequest(): FfiDestroyLifecycleRequest =
+        FfiDestroyLifecycleRequest(
+            pluginId = pluginId,
+            contextId = contextId,
+            mode = mode.toFfiDestroyMode(),
+            reason = reason,
+        )
+
+    private fun FfiLifecycleStatus.toSdkLifecycleStatus(): LifecycleStatus = LifecycleStatus(
+        contextId = contextId,
+        pluginId = pluginId,
+        factorKind = factorKind.toSdkFactorKind(),
+        state = state.toSdkLifecycleState(),
+        updatedAt = updatedAt,
+    )
+
+    private fun FfiRegistrationOutcome.toSdkRegistrationOutcome(): RegistrationOutcome = RegistrationOutcome(
+        contextId = contextId,
+        state = state.toSdkLifecycleState(),
+    )
+
+    private fun FfiActivationOutcome.toSdkActivationOutcome(): ActivationOutcome = ActivationOutcome(
+        contextId = contextId,
+        state = state.toSdkLifecycleState(),
+    )
+
+    private fun FfiRotationOutcome.toSdkRotationOutcome(): RotationOutcome = RotationOutcome(
+        contextId = contextId,
+        state = state.toSdkLifecycleState(),
+    )
+
+    private fun FfiDestructionOutcome.toSdkDestructionOutcome(): DestructionOutcome = DestructionOutcome(
+        contextId = contextId,
+        state = state.toSdkLifecycleState(),
+        remotePerformed = remotePerformed,
+    )
 }
