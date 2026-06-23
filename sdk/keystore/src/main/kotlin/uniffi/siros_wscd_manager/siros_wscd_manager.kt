@@ -918,14 +918,24 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_import_softkey_container(`ptr`: Pointer,`container`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_lifecycle_status(`ptr`: Pointer,`pluginId`: RustBuffer.ByValue,`contextId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
     fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_list_keys(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_migrate_key(`ptr`: Pointer,`kid`: RustBuffer.ByValue,`targetPluginId`: RustBuffer.ByValue,`auth`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_lifecycle(`ptr`: Pointer,`request`: RustBuffer.ByValue,`auth`: Long,`progress`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
     fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_r2ps_plugin(`ptr`: Pointer,`config`: RustBuffer.ByValue,`transport`: Long,`pake`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_softkey_plugin(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_activate_lifecycle(`ptr`: Pointer,`request`: RustBuffer.ByValue,`auth`: Long,`progress`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_rotate_lifecycle(`ptr`: Pointer,`request`: RustBuffer.ByValue,`auth`: Long,`progress`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
+    fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_destroy_lifecycle(`ptr`: Pointer,`request`: RustBuffer.ByValue,`auth`: Long,`progress`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
     fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_security_properties(`ptr`: Pointer,`kid`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_sign(`ptr`: Pointer,`kid`: RustBuffer.ByValue,`data`: RustBuffer.ByValue,`algorithm`: RustBuffer.ByValue,`auth`: Long,`progress`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -1332,6 +1342,58 @@ public object FfiConverterString: FfiConverter<String, RustBuffer.ByValue> {
 /**
  * @suppress
  */
+public object FfiConverterBoolean: FfiConverter<Boolean, Byte> {
+    override fun lift(value: Byte): Boolean {
+        return value.toInt() != 0
+    }
+
+    override fun read(buf: ByteBuffer): Boolean {
+        return lift(buf.get())
+    }
+
+    override fun lower(value: Boolean): Byte {
+        return if (value) 1 else 0
+    }
+
+    override fun allocationSize(value: Boolean) = 1UL
+
+    override fun write(value: Boolean, buf: ByteBuffer) {
+        buf.put(lower(value))
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalString: FfiConverterRustBuffer<String?> {
+    override fun read(buf: ByteBuffer): String? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterString.read(buf)
+    }
+
+    override fun allocationSize(value: String?): ULong {
+        return if (value == null) {
+            1UL
+        } else {
+            1UL + FfiConverterString.allocationSize(value)
+        }
+    }
+
+    override fun write(value: String?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterString.write(value, buf)
+        }
+    }
+}
+
+/**
+ * @suppress
+ */
 public object FfiConverterByteArray: FfiConverterRustBuffer<ByteArray> {
     override fun read(buf: ByteBuffer): ByteArray {
         val len = buf.getInt()
@@ -1511,6 +1573,11 @@ private class JavaLangRefCleanable(
     override fun clean() = cleanable.clean()
 }
 public interface FfiWscdManagerInterface {
+
+    /**
+     * Activate an existing lifecycle context.
+     */
+    fun `activateLifecycle`(`request`: FfiActivateLifecycleRequest, `auth`: FfiAuthCallback, `progress`: FfiProgressCallback): FfiActivationOutcome
     
     /**
      * Get the attestation chain for a key (X.509 certificate chain from hardware).
@@ -1543,6 +1610,11 @@ public interface FfiWscdManagerInterface {
      * Import a softkey container (JSON bytes), replacing the current softkey state.
      */
     fun `importSoftkeyContainer`(`container`: kotlin.ByteArray)
+
+    /**
+     * Return lifecycle status for a plugin context.
+     */
+    fun `lifecycleStatus`(`pluginId`: kotlin.String, `contextId`: kotlin.String): FfiLifecycleStatus
     
     /**
      * List all keys across all registered plugins.
@@ -1556,6 +1628,11 @@ public interface FfiWscdManagerInterface {
      * credential binding is needed with the issuer.
      */
     fun `migrateKey`(`kid`: kotlin.String, `targetPluginId`: kotlin.String, `auth`: FfiAuthCallback): FfiMigrationResult
+
+    /**
+     * Register lifecycle bindings for a context.
+     */
+    fun `registerLifecycle`(`request`: FfiRegisterLifecycleRequest, `auth`: FfiAuthCallback, `progress`: FfiProgressCallback): FfiRegistrationOutcome
     
     /**
      * Register the R2PS plugin for remote HSM signing.
@@ -1572,6 +1649,11 @@ public interface FfiWscdManagerInterface {
      * Register the built-in softkey plugin.
      */
     fun `registerSoftkeyPlugin`()
+
+    /**
+     * Rotate lifecycle bindings for a context.
+     */
+    fun `rotateLifecycle`(`request`: FfiRotateLifecycleRequest, `auth`: FfiAuthCallback, `progress`: FfiProgressCallback): FfiRotationOutcome
     
     /**
      * Get the security properties for a key (CS-04 §7.1.3).
@@ -1585,11 +1667,30 @@ public interface FfiWscdManagerInterface {
      * Sign data with the specified key.
      */
     fun `sign`(`kid`: kotlin.String, `data`: kotlin.ByteArray, `algorithm`: FfiAlgorithm, `auth`: FfiAuthCallback, `progress`: FfiProgressCallback): FfiSignature
+
+    /**
+     * Destroy lifecycle bindings for a context.
+     */
+    fun `destroyLifecycle`(`request`: FfiDestroyLifecycleRequest, `auth`: FfiAuthCallback, `progress`: FfiProgressCallback): FfiDestructionOutcome
     
     companion object
 }
 
 open class FfiWscdManager: Disposable, AutoCloseable, FfiWscdManagerInterface {
+    /**
+     * Activate an existing lifecycle context.
+     */
+    @Throws(FfiWscdException::class)override fun `activateLifecycle`(`request`: FfiActivateLifecycleRequest, `auth`: FfiAuthCallback, `progress`: FfiProgressCallback): FfiActivationOutcome {
+            return FfiConverterTypeFfiActivationOutcome.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiWscdException) { _status ->
+    UniffiLib.INSTANCE.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_activate_lifecycle(
+        it, FfiConverterTypeFfiActivateLifecycleRequest.lower(`request`),FfiConverterTypeFfiAuthCallback.lower(`auth`),FfiConverterTypeFfiProgressCallback.lower(`progress`),_status)
+}
+    }
+    )
+    }
+
 
     constructor(pointer: Pointer) {
         this.pointer = pointer
@@ -1759,6 +1860,20 @@ open class FfiWscdManager: Disposable, AutoCloseable, FfiWscdManagerInterface {
         it, FfiConverterByteArray.lower(`container`),_status)
 }
     }
+
+    /**
+     * Return lifecycle status for a plugin context.
+     */
+    @Throws(FfiWscdException::class)override fun `lifecycleStatus`(`pluginId`: kotlin.String, `contextId`: kotlin.String): FfiLifecycleStatus {
+            return FfiConverterTypeFfiLifecycleStatus.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiWscdException) { _status ->
+    UniffiLib.INSTANCE.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_lifecycle_status(
+        it, FfiConverterString.lower(`pluginId`),FfiConverterString.lower(`contextId`),_status)
+}
+    }
+    )
+    }
     
     
 
@@ -1791,6 +1906,20 @@ open class FfiWscdManager: Disposable, AutoCloseable, FfiWscdManagerInterface {
     uniffiRustCallWithError(FfiWscdException) { _status ->
     UniffiLib.INSTANCE.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_migrate_key(
         it, FfiConverterString.lower(`kid`),FfiConverterString.lower(`targetPluginId`),FfiConverterTypeFfiAuthCallback.lower(`auth`),_status)
+}
+    }
+    )
+    }
+
+    /**
+     * Register lifecycle bindings for a context.
+     */
+    @Throws(FfiWscdException::class)override fun `registerLifecycle`(`request`: FfiRegisterLifecycleRequest, `auth`: FfiAuthCallback, `progress`: FfiProgressCallback): FfiRegistrationOutcome {
+            return FfiConverterTypeFfiRegistrationOutcome.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiWscdException) { _status ->
+    UniffiLib.INSTANCE.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_lifecycle(
+        it, FfiConverterTypeFfiRegisterLifecycleRequest.lower(`request`),FfiConverterTypeFfiAuthCallback.lower(`auth`),FfiConverterTypeFfiProgressCallback.lower(`progress`),_status)
 }
     }
     )
@@ -1830,6 +1959,20 @@ open class FfiWscdManager: Disposable, AutoCloseable, FfiWscdManagerInterface {
         it, _status)
 }
     }
+
+    /**
+     * Rotate lifecycle bindings for a context.
+     */
+    @Throws(FfiWscdException::class)override fun `rotateLifecycle`(`request`: FfiRotateLifecycleRequest, `auth`: FfiAuthCallback, `progress`: FfiProgressCallback): FfiRotationOutcome {
+            return FfiConverterTypeFfiRotationOutcome.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiWscdException) { _status ->
+    UniffiLib.INSTANCE.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_rotate_lifecycle(
+        it, FfiConverterTypeFfiRotateLifecycleRequest.lower(`request`),FfiConverterTypeFfiAuthCallback.lower(`auth`),FfiConverterTypeFfiProgressCallback.lower(`progress`),_status)
+}
+    }
+    )
+    }
     
     
 
@@ -1862,6 +2005,20 @@ open class FfiWscdManager: Disposable, AutoCloseable, FfiWscdManagerInterface {
     uniffiRustCallWithError(FfiWscdException) { _status ->
     UniffiLib.INSTANCE.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_sign(
         it, FfiConverterString.lower(`kid`),FfiConverterByteArray.lower(`data`),FfiConverterTypeFfiAlgorithm.lower(`algorithm`),FfiConverterTypeFfiAuthCallback.lower(`auth`),FfiConverterTypeFfiProgressCallback.lower(`progress`),_status)
+}
+    }
+    )
+    }
+
+    /**
+     * Destroy lifecycle bindings for a context.
+     */
+    @Throws(FfiWscdException::class)override fun `destroyLifecycle`(`request`: FfiDestroyLifecycleRequest, `auth`: FfiAuthCallback, `progress`: FfiProgressCallback): FfiDestructionOutcome {
+            return FfiConverterTypeFfiDestructionOutcome.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiWscdException) { _status ->
+    UniffiLib.INSTANCE.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_destroy_lifecycle(
+        it, FfiConverterTypeFfiDestroyLifecycleRequest.lower(`request`),FfiConverterTypeFfiAuthCallback.lower(`auth`),FfiConverterTypeFfiProgressCallback.lower(`progress`),_status)
 }
     }
     )
@@ -2001,6 +2158,295 @@ public object FfiConverterTypeFfiKeyInfo: FfiConverterRustBuffer<FfiKeyInfo> {
             FfiConverterTypeFfiAlgorithm.write(value.`algorithm`, buf)
             FfiConverterString.write(value.`pluginId`, buf)
             FfiConverterLong.write(value.`createdAt`, buf)
+    }
+}
+
+
+
+data class FfiActivateLifecycleRequest (
+    var `pluginId`: kotlin.String,
+    var `contextId`: kotlin.String
+) {
+
+    companion object
+}
+
+public object FfiConverterTypeFfiActivateLifecycleRequest: FfiConverterRustBuffer<FfiActivateLifecycleRequest> {
+    override fun read(buf: ByteBuffer): FfiActivateLifecycleRequest {
+        return FfiActivateLifecycleRequest(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiActivateLifecycleRequest) = (
+            FfiConverterString.allocationSize(value.`pluginId`) +
+            FfiConverterString.allocationSize(value.`contextId`)
+    )
+
+    override fun write(value: FfiActivateLifecycleRequest, buf: ByteBuffer) {
+            FfiConverterString.write(value.`pluginId`, buf)
+            FfiConverterString.write(value.`contextId`, buf)
+    }
+}
+
+
+
+data class FfiActivationOutcome (
+    var `contextId`: kotlin.String,
+    var `state`: FfiLifecycleState
+) {
+
+    companion object
+}
+
+public object FfiConverterTypeFfiActivationOutcome: FfiConverterRustBuffer<FfiActivationOutcome> {
+    override fun read(buf: ByteBuffer): FfiActivationOutcome {
+        return FfiActivationOutcome(
+            FfiConverterString.read(buf),
+            FfiConverterTypeFfiLifecycleState.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiActivationOutcome) = (
+            FfiConverterString.allocationSize(value.`contextId`) +
+            FfiConverterTypeFfiLifecycleState.allocationSize(value.`state`)
+    )
+
+    override fun write(value: FfiActivationOutcome, buf: ByteBuffer) {
+            FfiConverterString.write(value.`contextId`, buf)
+            FfiConverterTypeFfiLifecycleState.write(value.`state`, buf)
+    }
+}
+
+
+
+data class FfiDestroyLifecycleRequest (
+    var `pluginId`: kotlin.String,
+    var `contextId`: kotlin.String,
+    var `mode`: FfiDestroyMode,
+    var `reason`: kotlin.String?
+) {
+
+    companion object
+}
+
+public object FfiConverterTypeFfiDestroyLifecycleRequest: FfiConverterRustBuffer<FfiDestroyLifecycleRequest> {
+    override fun read(buf: ByteBuffer): FfiDestroyLifecycleRequest {
+        return FfiDestroyLifecycleRequest(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterTypeFfiDestroyMode.read(buf),
+            FfiConverterOptionalString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiDestroyLifecycleRequest) = (
+            FfiConverterString.allocationSize(value.`pluginId`) +
+            FfiConverterString.allocationSize(value.`contextId`) +
+            FfiConverterTypeFfiDestroyMode.allocationSize(value.`mode`) +
+            FfiConverterOptionalString.allocationSize(value.`reason`)
+    )
+
+    override fun write(value: FfiDestroyLifecycleRequest, buf: ByteBuffer) {
+            FfiConverterString.write(value.`pluginId`, buf)
+            FfiConverterString.write(value.`contextId`, buf)
+            FfiConverterTypeFfiDestroyMode.write(value.`mode`, buf)
+            FfiConverterOptionalString.write(value.`reason`, buf)
+    }
+}
+
+
+
+data class FfiDestructionOutcome (
+    var `contextId`: kotlin.String,
+    var `state`: FfiLifecycleState,
+    var `remotePerformed`: kotlin.Boolean
+) {
+
+    companion object
+}
+
+public object FfiConverterTypeFfiDestructionOutcome: FfiConverterRustBuffer<FfiDestructionOutcome> {
+    override fun read(buf: ByteBuffer): FfiDestructionOutcome {
+        return FfiDestructionOutcome(
+            FfiConverterString.read(buf),
+            FfiConverterTypeFfiLifecycleState.read(buf),
+            FfiConverterBoolean.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiDestructionOutcome) = (
+            FfiConverterString.allocationSize(value.`contextId`) +
+            FfiConverterTypeFfiLifecycleState.allocationSize(value.`state`) +
+            FfiConverterBoolean.allocationSize(value.`remotePerformed`)
+    )
+
+    override fun write(value: FfiDestructionOutcome, buf: ByteBuffer) {
+            FfiConverterString.write(value.`contextId`, buf)
+            FfiConverterTypeFfiLifecycleState.write(value.`state`, buf)
+            FfiConverterBoolean.write(value.`remotePerformed`, buf)
+    }
+}
+
+
+
+data class FfiLifecycleStatus (
+    var `contextId`: kotlin.String,
+    var `pluginId`: kotlin.String,
+    var `factorKind`: FfiFactorKind,
+    var `state`: FfiLifecycleState,
+    var `updatedAt`: kotlin.Long
+) {
+
+    companion object
+}
+
+public object FfiConverterTypeFfiLifecycleStatus: FfiConverterRustBuffer<FfiLifecycleStatus> {
+    override fun read(buf: ByteBuffer): FfiLifecycleStatus {
+        return FfiLifecycleStatus(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterTypeFfiFactorKind.read(buf),
+            FfiConverterTypeFfiLifecycleState.read(buf),
+            FfiConverterLong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiLifecycleStatus) = (
+            FfiConverterString.allocationSize(value.`contextId`) +
+            FfiConverterString.allocationSize(value.`pluginId`) +
+            FfiConverterTypeFfiFactorKind.allocationSize(value.`factorKind`) +
+            FfiConverterTypeFfiLifecycleState.allocationSize(value.`state`) +
+            FfiConverterLong.allocationSize(value.`updatedAt`)
+    )
+
+    override fun write(value: FfiLifecycleStatus, buf: ByteBuffer) {
+            FfiConverterString.write(value.`contextId`, buf)
+            FfiConverterString.write(value.`pluginId`, buf)
+            FfiConverterTypeFfiFactorKind.write(value.`factorKind`, buf)
+            FfiConverterTypeFfiLifecycleState.write(value.`state`, buf)
+            FfiConverterLong.write(value.`updatedAt`, buf)
+    }
+}
+
+
+
+data class FfiRegisterLifecycleRequest (
+    var `pluginId`: kotlin.String,
+    var `contextId`: kotlin.String,
+    var `factorKind`: FfiFactorKind
+) {
+
+    companion object
+}
+
+public object FfiConverterTypeFfiRegisterLifecycleRequest: FfiConverterRustBuffer<FfiRegisterLifecycleRequest> {
+    override fun read(buf: ByteBuffer): FfiRegisterLifecycleRequest {
+        return FfiRegisterLifecycleRequest(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterTypeFfiFactorKind.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiRegisterLifecycleRequest) = (
+            FfiConverterString.allocationSize(value.`pluginId`) +
+            FfiConverterString.allocationSize(value.`contextId`) +
+            FfiConverterTypeFfiFactorKind.allocationSize(value.`factorKind`)
+    )
+
+    override fun write(value: FfiRegisterLifecycleRequest, buf: ByteBuffer) {
+            FfiConverterString.write(value.`pluginId`, buf)
+            FfiConverterString.write(value.`contextId`, buf)
+            FfiConverterTypeFfiFactorKind.write(value.`factorKind`, buf)
+    }
+}
+
+
+
+data class FfiRegistrationOutcome (
+    var `contextId`: kotlin.String,
+    var `state`: FfiLifecycleState
+) {
+
+    companion object
+}
+
+public object FfiConverterTypeFfiRegistrationOutcome: FfiConverterRustBuffer<FfiRegistrationOutcome> {
+    override fun read(buf: ByteBuffer): FfiRegistrationOutcome {
+        return FfiRegistrationOutcome(
+            FfiConverterString.read(buf),
+            FfiConverterTypeFfiLifecycleState.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiRegistrationOutcome) = (
+            FfiConverterString.allocationSize(value.`contextId`) +
+            FfiConverterTypeFfiLifecycleState.allocationSize(value.`state`)
+    )
+
+    override fun write(value: FfiRegistrationOutcome, buf: ByteBuffer) {
+            FfiConverterString.write(value.`contextId`, buf)
+            FfiConverterTypeFfiLifecycleState.write(value.`state`, buf)
+    }
+}
+
+
+
+data class FfiRotateLifecycleRequest (
+    var `pluginId`: kotlin.String,
+    var `contextId`: kotlin.String
+) {
+
+    companion object
+}
+
+public object FfiConverterTypeFfiRotateLifecycleRequest: FfiConverterRustBuffer<FfiRotateLifecycleRequest> {
+    override fun read(buf: ByteBuffer): FfiRotateLifecycleRequest {
+        return FfiRotateLifecycleRequest(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiRotateLifecycleRequest) = (
+            FfiConverterString.allocationSize(value.`pluginId`) +
+            FfiConverterString.allocationSize(value.`contextId`)
+    )
+
+    override fun write(value: FfiRotateLifecycleRequest, buf: ByteBuffer) {
+            FfiConverterString.write(value.`pluginId`, buf)
+            FfiConverterString.write(value.`contextId`, buf)
+    }
+}
+
+
+
+data class FfiRotationOutcome (
+    var `contextId`: kotlin.String,
+    var `state`: FfiLifecycleState
+) {
+
+    companion object
+}
+
+public object FfiConverterTypeFfiRotationOutcome: FfiConverterRustBuffer<FfiRotationOutcome> {
+    override fun read(buf: ByteBuffer): FfiRotationOutcome {
+        return FfiRotationOutcome(
+            FfiConverterString.read(buf),
+            FfiConverterTypeFfiLifecycleState.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiRotationOutcome) = (
+            FfiConverterString.allocationSize(value.`contextId`) +
+            FfiConverterTypeFfiLifecycleState.allocationSize(value.`state`)
+    )
+
+    override fun write(value: FfiRotationOutcome, buf: ByteBuffer) {
+            FfiConverterString.write(value.`contextId`, buf)
+            FfiConverterTypeFfiLifecycleState.write(value.`state`, buf)
     }
 }
 
@@ -2302,6 +2748,83 @@ public object FfiConverterTypeFfiKeyStorageType: FfiConverterRustBuffer<FfiKeySt
     override fun allocationSize(value: FfiKeyStorageType) = 4UL
 
     override fun write(value: FfiKeyStorageType, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+enum class FfiDestroyMode {
+
+    LOCAL_ONLY,
+    REMOTE_REVOKE_IF_SUPPORTED,
+    STRICT;
+    companion object
+}
+
+public object FfiConverterTypeFfiDestroyMode: FfiConverterRustBuffer<FfiDestroyMode> {
+    override fun read(buf: ByteBuffer) = try {
+        FfiDestroyMode.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FfiDestroyMode) = 4UL
+
+    override fun write(value: FfiDestroyMode, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+enum class FfiFactorKind {
+
+    OPAQUE,
+    WEB_AUTHN,
+    RAW_SIGN;
+    companion object
+}
+
+public object FfiConverterTypeFfiFactorKind: FfiConverterRustBuffer<FfiFactorKind> {
+    override fun read(buf: ByteBuffer) = try {
+        FfiFactorKind.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FfiFactorKind) = 4UL
+
+    override fun write(value: FfiFactorKind, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+enum class FfiLifecycleState {
+
+    UNINITIALIZED,
+    REGISTERED,
+    ACTIVE,
+    SUSPENDED,
+    DESTROYED;
+    companion object
+}
+
+public object FfiConverterTypeFfiLifecycleState: FfiConverterRustBuffer<FfiLifecycleState> {
+    override fun read(buf: ByteBuffer) = try {
+        FfiLifecycleState.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FfiLifecycleState) = 4UL
+
+    override fun write(value: FfiLifecycleState, buf: ByteBuffer) {
         buf.putInt(value.ordinal + 1)
     }
 }
