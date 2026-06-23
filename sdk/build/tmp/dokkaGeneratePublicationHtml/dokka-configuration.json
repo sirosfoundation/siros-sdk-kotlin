@@ -1,0 +1,34 @@
+{
+  "moduleName": "sdk",
+  "moduleVersion": null,
+  "outputDir": "/home/leifj/work/siros.org/siros-sdk-kotlin/sdk/build/dokka/html",
+  "cacheRoot": null,
+  "offlineMode": false,
+  "sourceSets": [
+  ],
+  "pluginsClasspath": [
+    "/home/leifj/.gradle/caches/modules-2/files-2.1/org.jetbrains.dokka/templating-plugin/2.0.0/2c817817579cd8c92ded6f33fd9e6b746ecf01c7/templating-plugin-2.0.0.jar",
+    "/home/leifj/.gradle/caches/modules-2/files-2.1/org.jetbrains.dokka/dokka-base/2.0.0/dcce26b10e9af3b3f2eba0403d6a9561e6da9098/dokka-base-2.0.0.jar"
+  ],
+  "pluginsConfiguration": [
+    {
+      "fqPluginName": "org.jetbrains.dokka.base.DokkaBase",
+      "serializationFormat": "JSON",
+      "values": "{\"customAssets\":[],\"customStyleSheets\":[],\"separateInheritedMembers\":false,\"mergeImplicitExpectActualDeclarations\":false}"
+    },
+    {
+      "fqPluginName": "org.jetbrains.dokka.versioning.VersioningPlugin",
+      "serializationFormat": "JSON",
+      "values": "{\"olderVersions\":[],\"renderVersionsNavigationOnAllPages\":true}"
+    }
+  ],
+  "modules": [
+  ],
+  "failOnWarning": false,
+  "delayTemplateSubstitution": false,
+  "suppressObviousFunctions": true,
+  "includes": [
+  ],
+  "suppressInheritedMembers": false,
+  "finalizeCoroutines": false
+}

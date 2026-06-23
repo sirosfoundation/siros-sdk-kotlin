@@ -8,6 +8,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -58,7 +59,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     // ── R2PS configuration ──────────────────────────────────────────
 
-    private val _r2psEnabled = MutableStateFlow(false)
+    private val _r2psEnabled = MutableStateFlow(BuildConfig.R2PS_ENABLED)
     val r2psEnabled: StateFlow<Boolean> = _r2psEnabled
 
     private val _r2psServerUrl = MutableStateFlow(DEFAULT_R2PS_URL)
@@ -113,8 +114,22 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         buildWalletConfig(),
     )
 
-    /** Observable wallet state — collect this from your Composable. */
-    val state: StateFlow<WalletState> get() = wallet.state
+    /**
+     * Observable wallet state — collect this from your Composable.
+     * Exposed via an indirection so that rebuilding the wallet (which
+     * replaces the [SirosWallet] instance) does not leave Compose
+     * subscribed to the old, destroyed instance's state flow.
+     */
+    private val _walletState = MutableStateFlow<WalletState>(wallet.state.value)
+    val state: StateFlow<WalletState> = _walletState
+    private var walletStateJob: Job? = null
+
+    private fun observeWalletState() {
+        walletStateJob?.cancel()
+        walletStateJob = viewModelScope.launch {
+            wallet.state.collect { _walletState.value = it }
+        }
+    }
 
     /** Pending authorization flow ID (set when browser opens, consumed on redirect). */
     private var pendingAuthFlowId: String? = null
@@ -127,6 +142,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private var presentationContinuation: kotlinx.coroutines.CancellableContinuation<List<String>>? = null
 
     init {
+        observeWalletState()
         setupEventListener()
     }
 
@@ -441,6 +457,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 activity,
                 buildWalletConfig(),
             )
+            observeWalletState()
             setupEventListener()
         }
     }
@@ -458,39 +475,45 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
         // Build WSCD-backed keystore when R2PS is enabled
         val keystore = if (_r2psEnabled.value) {
-            val wscdConfig = FfiWscdConfig(defaultPlugin = "r2ps")
-            val signer = UniFFISigner(
-                wscdConfig,
-                authProvider = object : AuthProvider {
-                    override fun requestPin(): ByteArray {
-                        // TODO: Show PIN dialog on main thread and block until user responds
-                        throw RuntimeException("PIN entry not implemented in sample app")
-                    }
-                    override fun requestWebauthnAssertion(
-                        challenge: ByteArray,
-                        rpId: String,
-                        allowedCredentials: List<ByteArray>,
-                    ): ByteArray {
-                        throw RuntimeException("WebAuthn assertion not implemented in sample app")
-                    }
-                },
-            )
-            val r2psConfig = FfiR2psConfig(
-                serverUrl = _r2psServerUrl.value,
-                clientId = "sample-app",
-                context = "wallet",
-                authMode = "opaque",
-                rpId = "",
-                allowedCredentialIds = emptyList(),
-                clientKeyPem = "", // Populated from device enrollment in production
-                serverPublicKeyPem = "", // Populated from R2PS server discovery
-            )
-            signer.registerR2psPlugin(
-                r2psConfig,
-                OkHttpR2psTransport(serverUrl = _r2psServerUrl.value),
-                SamplePakeClient(),
-            )
-            WscdKeystoreAdapter(signer)
+            try {
+                val wscdConfig = FfiWscdConfig(defaultPlugin = "r2ps")
+                val signer = UniFFISigner(
+                    wscdConfig,
+                    authProvider = object : AuthProvider {
+                        override fun requestPin(): ByteArray {
+                            // TODO: Show PIN dialog on main thread and block until user responds
+                            throw RuntimeException("PIN entry not implemented in sample app")
+                        }
+                        override fun requestWebauthnAssertion(
+                            challenge: ByteArray,
+                            rpId: String,
+                            allowedCredentials: List<ByteArray>,
+                        ): ByteArray {
+                            throw RuntimeException("WebAuthn assertion not implemented in sample app")
+                        }
+                    },
+                )
+                val r2psConfig = FfiR2psConfig(
+                    serverUrl = _r2psServerUrl.value,
+                    clientId = "sample-app",
+                    context = "wallet",
+                    authMode = "opaque",
+                    rpId = "",
+                    allowedCredentialIds = emptyList(),
+                    clientKeyPem = "", // Populated from device enrollment in production
+                    serverPublicKeyPem = "", // Populated from R2PS server discovery
+                )
+                signer.registerR2psPlugin(
+                    r2psConfig,
+                    OkHttpR2psTransport(serverUrl = _r2psServerUrl.value),
+                    SamplePakeClient(),
+                )
+                Log.i(TAG, "WSCD keystore initialized with R2PS at ${_r2psServerUrl.value}")
+                WscdKeystoreAdapter(signer)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to initialize WSCD/R2PS keystore, falling back to default", e)
+                null
+            }
         } else {
             null // Use SDK default (JweKeystore)
         }
@@ -513,7 +536,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         private const val TAG = "SIROS_VM"
         private val DEFAULT_BACKEND_URL = BuildConfig.DEFAULT_BACKEND_URL
         private const val DEFAULT_TENANT_ID = "default"
-        private const val DEFAULT_R2PS_URL = "http://192.168.240.1:9000"
+        private const val DEFAULT_R2PS_URL = "http://192.168.240.1:9443"
         private const val REDIRECT_URI = "siros-sample://callback"
         private const val REDIRECT_SCHEME = "siros-sample"
 
