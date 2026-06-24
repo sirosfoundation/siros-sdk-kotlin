@@ -17,7 +17,16 @@ import org.sirosfoundation.sdk.credentials.CredentialOffer
 import org.sirosfoundation.sdk.credentials.PresentationRecord
 import org.sirosfoundation.sdk.credentials.SirosException
 import org.sirosfoundation.sdk.credentials.StoredCredential
+import org.sirosfoundation.sdk.keystore.ActivateLifecycleRequest
 import org.sirosfoundation.sdk.keystore.AuthProvider
+import org.sirosfoundation.sdk.keystore.DestroyLifecycleRequest
+import org.sirosfoundation.sdk.keystore.DestroyMode
+import org.sirosfoundation.sdk.keystore.DetailedKeyInfo
+import org.sirosfoundation.sdk.keystore.FactorKind
+import org.sirosfoundation.sdk.keystore.LifecycleState
+import org.sirosfoundation.sdk.keystore.LifecycleStatus
+import org.sirosfoundation.sdk.keystore.RegisterLifecycleRequest
+import org.sirosfoundation.sdk.keystore.RotateLifecycleRequest
 import org.sirosfoundation.sdk.keystore.UniFFISigner
 import org.sirosfoundation.sdk.keystore.WscdKeystoreAdapter
 import org.sirosfoundation.sdk.wallet.SirosWallet
@@ -404,6 +413,186 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _showHistory.value = false
     }
 
+    // ── WSCD lifecycle ──────────────────────────────────────────────
+
+    private val _lifecycleState = MutableStateFlow<LifecycleState?>(null)
+    val lifecycleState: StateFlow<LifecycleState?> = _lifecycleState
+
+    private val _enrollmentInProgress = MutableStateFlow(false)
+    val enrollmentInProgress: StateFlow<Boolean> = _enrollmentInProgress
+
+    /** Stored reference to the UniFFISigner for lifecycle operations. */
+    private var wscdSigner: UniFFISigner? = null
+
+    /**
+     * Enroll the WSCD: register + activate lifecycle.
+     * Identity binding is handled separately via OID4VCI credential issuance
+     * (deferred flow + key attestation), not at this layer.
+     */
+    fun enrollWscd() {
+        _enrollmentInProgress.value = true
+        viewModelScope.launch {
+            try {
+                val signer = wscdSigner
+                if (signer == null) {
+                    _errorMessage.value = "WSCD signer not initialized"
+                    return@launch
+                }
+                val pluginId = if (_r2psEnabled.value) "r2ps" else "preview-sign"
+                val contextId = "ctx-${System.currentTimeMillis()}"
+                val factorKind = if (_r2psEnabled.value) FactorKind.Opaque else FactorKind.RawSign
+
+                val regOutcome = signer.registerLifecycle(
+                    RegisterLifecycleRequest(
+                        pluginId = pluginId,
+                        contextId = contextId,
+                        factorKind = factorKind,
+                    ),
+                )
+                _lifecycleState.value = regOutcome.state
+                Log.i(TAG, "Lifecycle registered: context=$contextId state=${regOutcome.state}")
+
+                val actOutcome = signer.activateLifecycle(
+                    ActivateLifecycleRequest(
+                        pluginId = pluginId,
+                        contextId = contextId,
+                    ),
+                )
+                _lifecycleState.value = actOutcome.state
+                lifecycleContextId = contextId
+                Log.i(TAG, "Lifecycle activated: context=$contextId state=${actOutcome.state}")
+                Log.i(MainActivity.WSCA_TEST_TAG, """{"action":"enroll","status":"ok","state":"${actOutcome.state}","context_id":"$contextId"}""")
+            } catch (e: Exception) {
+                Log.e(TAG, "WSCD enrollment failed", e)
+                Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"enroll","status":"error","error":"${e.message?.replace("\"", "'")}"}""")
+                _errorMessage.value = "Enrollment failed: ${e.message}"
+            } finally {
+                _enrollmentInProgress.value = false
+            }
+        }
+    }
+
+    // ── WSCA developer screen state ─────────────────────────────────
+
+    private val _showWscaDeveloper = MutableStateFlow(false)
+    val showWscaDeveloper: StateFlow<Boolean> = _showWscaDeveloper
+
+    private val _wscdKeys = MutableStateFlow<List<DetailedKeyInfo>>(emptyList())
+    val wscdKeys: StateFlow<List<DetailedKeyInfo>> = _wscdKeys
+
+    private val _wscdLifecycleStatus = MutableStateFlow<LifecycleStatus?>(null)
+    val wscdLifecycleStatus: StateFlow<LifecycleStatus?> = _wscdLifecycleStatus
+
+    /** The context ID used for the current lifecycle session. */
+    private var lifecycleContextId: String? = null
+
+    /** The plugin ID used for the current lifecycle session. */
+    private val activePluginId: String
+        get() = if (_r2psEnabled.value) "r2ps" else "softkey"
+
+    fun openWscaDeveloper() {
+        _showWscaDeveloper.value = true
+        refreshWscdInfo()
+    }
+
+    fun closeWscaDeveloper() {
+        _showWscaDeveloper.value = false
+    }
+
+    fun refreshWscdInfo() {
+        viewModelScope.launch {
+            val signer = wscdSigner ?: return@launch
+            try {
+                _wscdKeys.value = signer.listKeysDetailed()
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to list keys", e)
+            }
+            val ctxId = lifecycleContextId ?: return@launch
+            try {
+                _wscdLifecycleStatus.value = signer.lifecycleStatus(activePluginId, ctxId)
+                _lifecycleState.value = _wscdLifecycleStatus.value?.state
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to get lifecycle status", e)
+            }
+        }
+    }
+
+    /**
+     * Emit WSCA status as structured JSON to logcat for test automation.
+     * The test harness parses lines with tag [MainActivity.WSCA_TEST_TAG].
+     */
+    fun emitWscaTestStatus() {
+        viewModelScope.launch {
+            val signer = wscdSigner
+            val state = _lifecycleState.value?.name ?: "null"
+            val ctxId = lifecycleContextId ?: "null"
+            val plugin = activePluginId
+            val keys = try {
+                signer?.listKeysDetailed()?.joinToString(",") { k ->
+                    """{"kid":"${k.keyId}","alg":"${k.algorithm}","plugin":"${k.pluginId}","created":${k.createdAt}}"""
+                } ?: ""
+            } catch (_: Exception) { "" }
+            val json = """{"action":"status","state":"$state","context_id":"$ctxId","plugin":"$plugin","r2ps_enabled":${_r2psEnabled.value},"keys":[$keys]}"""
+            Log.i(MainActivity.WSCA_TEST_TAG, json)
+        }
+    }
+
+    fun rotateLifecycle() {
+        viewModelScope.launch {
+            val signer = wscdSigner
+            val ctxId = lifecycleContextId
+            if (signer == null || ctxId == null) {
+                _errorMessage.value = "WSCD not enrolled"
+                return@launch
+            }
+            try {
+                val outcome = signer.rotateLifecycle(
+                    RotateLifecycleRequest(
+                        pluginId = activePluginId,
+                        contextId = ctxId,
+                    ),
+                )
+                _lifecycleState.value = outcome.state
+                Log.i(TAG, "Lifecycle rotated: context=$ctxId state=${outcome.state}")
+                Log.i(MainActivity.WSCA_TEST_TAG, """{"action":"rotate","status":"ok","state":"${outcome.state}","context_id":"$ctxId"}""")
+                refreshWscdInfo()
+            } catch (e: Exception) {
+                Log.e(TAG, "Lifecycle rotation failed", e)
+                Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"rotate","status":"error","error":"${e.message?.replace("\"", "'")}"}""")
+                _errorMessage.value = "Rotation failed: ${e.message}"
+            }
+        }
+    }
+
+    fun destroyLifecycle(mode: DestroyMode) {
+        viewModelScope.launch {
+            val signer = wscdSigner
+            val ctxId = lifecycleContextId
+            if (signer == null || ctxId == null) {
+                _errorMessage.value = "WSCD not enrolled"
+                return@launch
+            }
+            try {
+                val outcome = signer.destroyLifecycle(
+                    DestroyLifecycleRequest(
+                        pluginId = activePluginId,
+                        contextId = ctxId,
+                        mode = mode,
+                    ),
+                )
+                _lifecycleState.value = outcome.state
+                lifecycleContextId = null
+                Log.i(TAG, "Lifecycle destroyed: mode=$mode state=${outcome.state}")
+                Log.i(MainActivity.WSCA_TEST_TAG, """{"action":"destroy","status":"ok","state":"${outcome.state}","mode":"$mode"}""")
+                refreshWscdInfo()
+            } catch (e: Exception) {
+                Log.e(TAG, "Lifecycle destruction failed", e)
+                Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"destroy","status":"error","error":"${e.message?.replace("\"", "'")}"}""")
+                _errorMessage.value = "Destruction failed: ${e.message}"
+            }
+        }
+    }
+
     // ── QR scanner ──────────────────────────────────────────────────
 
     fun openQrScanner() {
@@ -509,6 +698,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     SamplePakeClient(),
                 )
                 Log.i(TAG, "WSCD keystore initialized with R2PS at ${_r2psServerUrl.value}")
+                wscdSigner = signer
                 WscdKeystoreAdapter(signer)
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to initialize WSCD/R2PS keystore, falling back to default", e)

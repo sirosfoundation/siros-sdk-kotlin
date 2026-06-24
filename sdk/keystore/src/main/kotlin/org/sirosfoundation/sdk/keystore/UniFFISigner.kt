@@ -102,6 +102,21 @@ class UniFFISigner(
         }
     }
 
+    /**
+     * List keys with plugin and creation metadata.
+     * Intended for developer/diagnostic UIs — not part of the [Signer] interface.
+     */
+    suspend fun listKeysDetailed(): List<DetailedKeyInfo> = withContext(Dispatchers.IO) {
+        ffi.listKeys().map { keyInfo ->
+            DetailedKeyInfo(
+                keyId = keyInfo.kid,
+                algorithm = keyInfo.algorithm.toSdkAlgorithm(),
+                pluginId = keyInfo.pluginId,
+                createdAt = keyInfo.createdAt,
+            )
+        }
+    }
+
     override suspend fun deleteKey(keyId: String) = withContext(Dispatchers.IO) {
         ffi.deleteKey(keyId)
         publicKeyCache.remove(keyId)

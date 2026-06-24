@@ -76,6 +76,17 @@ data class SignerKeyInfo(
 )
 
 /**
+ * Extended key metadata including plugin association and creation timestamp.
+ * Intended for developer/diagnostic UIs.
+ */
+data class DetailedKeyInfo(
+    val keyId: String,
+    val algorithm: String,
+    val pluginId: String,
+    val createdAt: Long,
+)
+
+/**
  * Certification information for the WSCD (CS-04 §7.1.3, Annex C §C.3.1).
  * Either the string "none" for uncertified devices, or a structured object
  * with scheme and assurance level.
