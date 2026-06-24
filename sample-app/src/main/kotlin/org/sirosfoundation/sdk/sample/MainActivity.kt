@@ -68,6 +68,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import org.sirosfoundation.sdk.credentials.PresentationRecord
+import org.sirosfoundation.sdk.keystore.LifecycleState
 import org.sirosfoundation.sdk.wallet.WalletState
 import android.util.Log
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -285,8 +286,11 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             backendUrl = backendUrl,
                             tenantId = tenantId,
                             presentationCount = presentationHistory.size,
+                            lifecycleState = viewModel.lifecycleState.collectAsState().value,
+                            enrollmentInProgress = viewModel.enrollmentInProgress.collectAsState().value,
                             onDisconnect = viewModel::disconnect,
                             onShowHistory = viewModel::openHistory,
+                            onEnrollWscd = viewModel::enrollWscd,
                         )
                     }
                 }
@@ -622,8 +626,11 @@ fun SettingsTab(
     backendUrl: String,
     tenantId: String,
     presentationCount: Int,
+    lifecycleState: LifecycleState?,
+    enrollmentInProgress: Boolean,
     onDisconnect: () -> Unit,
     onShowHistory: () -> Unit,
+    onEnrollWscd: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -671,6 +678,43 @@ fun SettingsTab(
             shape = RoundedCornerShape(12.dp),
         ) {
             Text(stringResource(R.string.settings_presentation_history) + " ($presentationCount)")
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        // WSCD Lifecycle
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "WSCD Lifecycle",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                SettingsRow(
+                    label = "State",
+                    value = lifecycleState?.name ?: "Not enrolled",
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                    onClick = onEnrollWscd,
+                    enabled = !enrollmentInProgress && lifecycleState == null,
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    if (enrollmentInProgress) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Text("Enroll WSCD")
+                    }
+                }
+            }
         }
 
         Spacer(modifier = Modifier.height(32.dp))
