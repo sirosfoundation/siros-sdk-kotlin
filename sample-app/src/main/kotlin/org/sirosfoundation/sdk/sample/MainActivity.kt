@@ -199,6 +199,25 @@ fun WalletScreen(viewModel: WalletViewModel) {
         return
     }
 
+    // WSCA developer sub-screen
+    val showWscaDeveloper by viewModel.showWscaDeveloper.collectAsState()
+    if (showWscaDeveloper) {
+        val wscdKeys by viewModel.wscdKeys.collectAsState()
+        val wscdLifecycleStatus by viewModel.wscdLifecycleStatus.collectAsState()
+        WscaDeveloperScreen(
+            lifecycleState = viewModel.lifecycleState.collectAsState().value,
+            lifecycleStatus = wscdLifecycleStatus,
+            keys = wscdKeys,
+            r2psEnabled = r2psEnabled,
+            r2psServerUrl = r2psServerUrl,
+            onRotate = viewModel::rotateLifecycle,
+            onDestroy = viewModel::destroyLifecycle,
+            onRefresh = viewModel::refreshWscdInfo,
+            onBack = viewModel::closeWscaDeveloper,
+        )
+        return
+    }
+
     // QR scanner sub-screen
     if (showQrScanner) {
         QrScannerScreen(
@@ -291,6 +310,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onDisconnect = viewModel::disconnect,
                             onShowHistory = viewModel::openHistory,
                             onEnrollWscd = viewModel::enrollWscd,
+                            onShowWscaDeveloper = viewModel::openWscaDeveloper,
                         )
                     }
                 }
@@ -631,6 +651,7 @@ fun SettingsTab(
     onDisconnect: () -> Unit,
     onShowHistory: () -> Unit,
     onEnrollWscd: () -> Unit,
+    onShowWscaDeveloper: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -713,6 +734,14 @@ fun SettingsTab(
                     } else {
                         Text("Enroll WSCD")
                     }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onShowWscaDeveloper,
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Text("WSCA Developer")
                 }
             }
         }
