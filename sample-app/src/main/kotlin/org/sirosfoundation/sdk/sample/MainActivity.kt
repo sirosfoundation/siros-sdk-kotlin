@@ -68,6 +68,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import org.sirosfoundation.sdk.credentials.PresentationRecord
+import org.sirosfoundation.sdk.keystore.DestroyMode
 import org.sirosfoundation.sdk.keystore.LifecycleState
 import org.sirosfoundation.sdk.wallet.WalletState
 import android.util.Log
@@ -95,10 +96,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    companion object {
-        private const val REDIRECT_SCHEME = "siros-sample"
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val vmFactory = WalletViewModel.Factory(this)
@@ -120,7 +117,65 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
-        dispatchIncomingUri(intent.data)
+        if (intent.action == ACTION_WSCA_TEST && BuildConfig.DEBUG) {
+            dispatchWscaTestAction(intent)
+        } else {
+            dispatchIncomingUri(intent.data)
+        }
+    }
+
+    /**
+     * Handle WSCA test automation intents (debug builds only).
+     *
+     * Dispatches to the real ViewModel lifecycle methods — same code path
+     * as the UI buttons. Results are emitted via logcat with tag [WSCA_TEST_TAG]
+     * so the test harness can parse outcomes.
+     *
+     * Usage from adb:
+     *   adb shell am start -n $PKG/.MainActivity -a org.sirosfoundation.sdk.sample.WSCA_TEST \
+     *     --es wsca_action enroll [--es plugin_id r2ps] [--es factor_kind opaque]
+     */
+    private fun dispatchWscaTestAction(intent: android.content.Intent) {
+        if (!::viewModel.isInitialized) {
+            Log.e(WSCA_TEST_TAG, """{"action":"error","error":"ViewModel not initialized"}""")
+            return
+        }
+        val action = intent.getStringExtra("wsca_action") ?: run {
+            Log.e(WSCA_TEST_TAG, """{"action":"error","error":"missing wsca_action extra"}""")
+            return
+        }
+        Log.i(WSCA_TEST_TAG, """{"action":"$action","status":"dispatching"}""")
+        when (action) {
+            "enroll" -> viewModel.enrollWscd()
+            "rotate" -> viewModel.rotateLifecycle()
+            "destroy" -> {
+                val modeStr = intent.getStringExtra("mode") ?: "local"
+                val mode = when (modeStr) {
+                    "revoke" -> DestroyMode.RemoteRevokeIfSupported
+                    "strict" -> DestroyMode.Strict
+                    else -> DestroyMode.LocalOnly
+                }
+                viewModel.destroyLifecycle(mode)
+            }
+            "status" -> viewModel.emitWscaTestStatus()
+            "config" -> {
+                intent.getStringExtra("r2ps_enabled")?.let {
+                    viewModel.updateR2psEnabled(it.toBooleanStrictOrNull() ?: false)
+                }
+                intent.getStringExtra("r2ps_url")?.let {
+                    viewModel.updateR2psServerUrl(it)
+                }
+                Log.i(WSCA_TEST_TAG, """{"action":"config","status":"applied","r2ps_enabled":${viewModel.r2psEnabled.value},"r2ps_url":"${viewModel.r2psServerUrl.value}"}""")
+            }
+            "refresh" -> viewModel.refreshWscdInfo()
+            else -> Log.e(WSCA_TEST_TAG, """{"action":"error","error":"unknown action: $action"}""")
+        }
+    }
+
+    companion object {
+        private const val REDIRECT_SCHEME = "siros-sample"
+        internal const val ACTION_WSCA_TEST = "org.sirosfoundation.sdk.sample.WSCA_TEST"
+        internal const val WSCA_TEST_TAG = "WSCA_TEST_RESULT"
     }
 }
 

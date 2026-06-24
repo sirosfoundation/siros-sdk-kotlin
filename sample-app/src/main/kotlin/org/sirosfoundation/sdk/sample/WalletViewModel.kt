@@ -461,8 +461,10 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 _lifecycleState.value = actOutcome.state
                 lifecycleContextId = contextId
                 Log.i(TAG, "Lifecycle activated: context=$contextId state=${actOutcome.state}")
+                Log.i(MainActivity.WSCA_TEST_TAG, """{"action":"enroll","status":"ok","state":"${actOutcome.state}","context_id":"$contextId"}""")
             } catch (e: Exception) {
                 Log.e(TAG, "WSCD enrollment failed", e)
+                Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"enroll","status":"error","error":"${e.message?.replace("\"", "'")}"}""")
                 _errorMessage.value = "Enrollment failed: ${e.message}"
             } finally {
                 _enrollmentInProgress.value = false
@@ -515,6 +517,26 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         }
     }
 
+    /**
+     * Emit WSCA status as structured JSON to logcat for test automation.
+     * The test harness parses lines with tag [MainActivity.WSCA_TEST_TAG].
+     */
+    fun emitWscaTestStatus() {
+        viewModelScope.launch {
+            val signer = wscdSigner
+            val state = _lifecycleState.value?.name ?: "null"
+            val ctxId = lifecycleContextId ?: "null"
+            val plugin = activePluginId
+            val keys = try {
+                signer?.listKeysDetailed()?.joinToString(",") { k ->
+                    """{"kid":"${k.keyId}","alg":"${k.algorithm}","plugin":"${k.pluginId}","created":${k.createdAt}}"""
+                } ?: ""
+            } catch (_: Exception) { "" }
+            val json = """{"action":"status","state":"$state","context_id":"$ctxId","plugin":"$plugin","r2ps_enabled":${_r2psEnabled.value},"keys":[$keys]}"""
+            Log.i(MainActivity.WSCA_TEST_TAG, json)
+        }
+    }
+
     fun rotateLifecycle() {
         viewModelScope.launch {
             val signer = wscdSigner
@@ -532,9 +554,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 )
                 _lifecycleState.value = outcome.state
                 Log.i(TAG, "Lifecycle rotated: context=$ctxId state=${outcome.state}")
+                Log.i(MainActivity.WSCA_TEST_TAG, """{"action":"rotate","status":"ok","state":"${outcome.state}","context_id":"$ctxId"}""")
                 refreshWscdInfo()
             } catch (e: Exception) {
                 Log.e(TAG, "Lifecycle rotation failed", e)
+                Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"rotate","status":"error","error":"${e.message?.replace("\"", "'")}"}""")
                 _errorMessage.value = "Rotation failed: ${e.message}"
             }
         }
@@ -559,9 +583,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 _lifecycleState.value = outcome.state
                 lifecycleContextId = null
                 Log.i(TAG, "Lifecycle destroyed: mode=$mode state=${outcome.state}")
+                Log.i(MainActivity.WSCA_TEST_TAG, """{"action":"destroy","status":"ok","state":"${outcome.state}","mode":"$mode"}""")
                 refreshWscdInfo()
             } catch (e: Exception) {
                 Log.e(TAG, "Lifecycle destruction failed", e)
+                Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"destroy","status":"error","error":"${e.message?.replace("\"", "'")}"}""")
                 _errorMessage.value = "Destruction failed: ${e.message}"
             }
         }
