@@ -18,27 +18,34 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
  */
 class InMemoryCookieJar : CookieJar {
     private val store = mutableMapOf<String, MutableList<Cookie>>()
+    private val lock = Any()
 
     override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
-        val key = url.host
-        val existing = store.getOrPut(key) { mutableListOf() }
-        for (cookie in cookies) {
-            existing.removeAll { it.name == cookie.name && it.path == cookie.path }
-            existing.add(cookie)
+        synchronized(lock) {
+            val key = url.host
+            val existing = store.getOrPut(key) { mutableListOf() }
+            for (cookie in cookies) {
+                existing.removeAll { it.name == cookie.name && it.path == cookie.path }
+                existing.add(cookie)
+            }
         }
     }
 
     override fun loadForRequest(url: HttpUrl): List<Cookie> {
-        val key = url.host
-        val cookies = store[key] ?: return emptyList()
-        val now = System.currentTimeMillis() / 1000
-        cookies.removeAll { it.expiresAt / 1000 <= now }
-        return cookies.filter { it.matches(url) }
+        synchronized(lock) {
+            val key = url.host
+            val cookies = store[key] ?: return emptyList()
+            val now = System.currentTimeMillis()
+            cookies.removeAll { it.expiresAt <= now }
+            return cookies.filter { it.matches(url) }
+        }
     }
 
     /** Clear all stored cookies. */
     fun clear() {
-        store.clear()
+        synchronized(lock) {
+            store.clear()
+        }
     }
 }
 
@@ -58,6 +65,7 @@ class PersistentCookieJar(context: Context) : CookieJar {
     )
     // In-memory mirror for fast reads
     private val store = mutableMapOf<String, MutableList<Cookie>>()
+    private val lock = Any()
 
     init {
         // Load persisted cookies into memory
@@ -74,31 +82,37 @@ class PersistentCookieJar(context: Context) : CookieJar {
     }
 
     override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
-        val key = url.host
-        val existing = store.getOrPut(key) { mutableListOf() }
-        for (cookie in cookies) {
-            existing.removeAll { it.name == cookie.name && it.path == cookie.path }
-            existing.add(cookie)
+        synchronized(lock) {
+            val key = url.host
+            val existing = store.getOrPut(key) { mutableListOf() }
+            for (cookie in cookies) {
+                existing.removeAll { it.name == cookie.name && it.path == cookie.path }
+                existing.add(cookie)
+            }
+            persist(key, existing)
         }
-        persist(key, existing)
     }
 
     override fun loadForRequest(url: HttpUrl): List<Cookie> {
-        val key = url.host
-        val cookies = store[key] ?: return emptyList()
-        val now = System.currentTimeMillis()
-        val expired = cookies.filter { it.expiresAt <= now }
-        if (expired.isNotEmpty()) {
-            cookies.removeAll(expired.toSet())
-            persist(key, cookies)
+        synchronized(lock) {
+            val key = url.host
+            val cookies = store[key] ?: return emptyList()
+            val now = System.currentTimeMillis()
+            val expired = cookies.filter { it.expiresAt <= now }
+            if (expired.isNotEmpty()) {
+                cookies.removeAll(expired.toSet())
+                persist(key, cookies)
+            }
+            return cookies.filter { it.matches(url) }
         }
-        return cookies.filter { it.matches(url) }
     }
 
     /** Clear all stored cookies (e.g., on logout). */
     fun clear() {
-        store.clear()
-        prefs.edit().clear().apply()
+        synchronized(lock) {
+            store.clear()
+            prefs.edit().clear().apply()
+        }
     }
 
     private fun persist(host: String, cookies: List<Cookie>) {

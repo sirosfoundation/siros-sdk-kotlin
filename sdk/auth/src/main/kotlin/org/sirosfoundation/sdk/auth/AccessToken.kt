@@ -114,7 +114,7 @@ class AccessToken(jwt: String) {
             val parts = jwt.split('.')
             if (parts.size != 3) throw AuthException("Invalid JWT format")
             val payload = java.util.Base64.getUrlDecoder().decode(parts[1])
-            return json.decodeFromString(AccessTokenPayload.serializer(), String(payload))
+            return json.decodeFromString(AccessTokenPayload.serializer(), String(payload, Charsets.UTF_8))
         }
     }
 }

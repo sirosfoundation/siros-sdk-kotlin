@@ -150,7 +150,7 @@ class AuthServerClient(
      * @param challengeId The challenge ID from registerBegin.
      * @param credential The serialized WebAuthn credential attestation.
      * @param displayName Display name for the new user.
-     * @param privateData Optional initial private data (encrypted keystore).
+     * @param privateData Optional initial private data (encrypted keystore, as a string).
      * @param oidcIdToken Optional OIDC ID token.
      * @return Registration result with `uuid`, `displayName`, `tenantId`.
      */
@@ -158,7 +158,7 @@ class AuthServerClient(
         challengeId: String,
         credential: JsonObject,
         displayName: String,
-        privateData: Any? = null,
+        privateData: String? = null,
         oidcIdToken: String? = null,
     ): RegisterFinishResult = withContext(Dispatchers.IO) {
         val headers = mutableMapOf(
@@ -171,6 +171,9 @@ class AuthServerClient(
             put("challengeId", challengeId)
             put("displayName", displayName)
             put("credential", credential)
+            if (privateData != null) {
+                put("privateData", privateData)
+            }
         }
         val response = post("/auth/passkey/register/finish", body, headers)
         json.decodeFromJsonElement(RegisterFinishResult.serializer(), response)
@@ -189,29 +192,30 @@ class AuthServerClient(
     suspend fun requestAccessToken(aud: String, tac: String? = null): AccessToken {
         val key = "$tenantId::$aud::${tac ?: ""}"
 
-        // Check cache
-        pendingTokenMutex.withLock {
+        // Check cache and perform network under same lock to prevent concurrent duplicate requests.
+        return pendingTokenMutex.withLock {
             pendingTokenRequests[key]?.let { cached ->
-                if (!cached.isExpired()) return cached
+                if (!cached.isExpired()) return@withLock cached
                 pendingTokenRequests.remove(key)
             }
-        }
 
-        val token = withContext(Dispatchers.IO) {
-            val body = buildJsonObject {
-                put("aud", aud)
-                tac?.let { put("tac", it) }
-                put("tenant_id", tenantId)
+            val token = withContext(Dispatchers.IO) {
+                val body = buildJsonObject {
+                    put("aud", aud)
+                    tac?.let { put("tac", it) }
+                    put("tenant_id", tenantId)
+                }
+                val response = post("/auth/token", body, mapOf(
+                    "X-Token-Mode" to "session",
+                    "X-Tenant-ID" to tenantId,
+                ))
+                val tokenResponse = json.decodeFromJsonElement(TokenResponse.serializer(), response)
+                AccessToken(tokenResponse.accessToken)
             }
-            val response = post("/auth/token", body, mapOf("X-Token-Mode" to "session"))
-            val tokenResponse = json.decodeFromJsonElement(TokenResponse.serializer(), response)
-            AccessToken(tokenResponse.accessToken)
-        }
 
-        pendingTokenMutex.withLock {
             pendingTokenRequests[key] = token
+            token
         }
-        return token
     }
 
     // ---- Logout ----
@@ -244,16 +248,17 @@ class AuthServerClient(
 
         headers.forEach { (k, v) -> requestBuilder.header(k, v) }
 
-        val response = httpClient.newCall(requestBuilder.build()).execute()
-        val responseBody = response.body?.string()
-            ?: throw AuthException("Empty response from $path")
+        return httpClient.newCall(requestBuilder.build()).execute().use { response ->
+            val responseBody = response.body?.string()
+                ?: throw AuthException("Empty response from $path")
 
-        if (!response.isSuccessful) {
-            Timber.e("AS request failed: ${response.code} — $path")
-            throw AuthException("AS request failed: ${response.code}")
+            if (!response.isSuccessful) {
+                Timber.e("AS request failed: ${response.code} — $path")
+                throw AuthException("AS request failed: ${response.code}")
+            }
+
+            json.parseToJsonElement(responseBody).jsonObject
         }
-
-        return json.parseToJsonElement(responseBody).jsonObject
     }
 }
 
