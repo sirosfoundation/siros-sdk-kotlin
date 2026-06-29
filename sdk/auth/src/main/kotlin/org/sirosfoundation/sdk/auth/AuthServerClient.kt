@@ -226,6 +226,8 @@ class AuthServerClient(
     suspend fun logout(): Unit = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url("$baseUrl/auth/session")
+            .header("X-Token-Mode", "session")
+            .header("X-Tenant-ID", tenantId)
             .delete()
             .build()
         httpClient.newCall(request).execute().close()
