@@ -2,6 +2,7 @@
 
 package org.sirosfoundation.sdk.auth
 
+import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -38,16 +39,35 @@ data class TokenResponse(
  * requests via `/auth/token`. Uses session cookies for authentication
  * (set by the AS on successful login/register).
  *
+ * By default uses [PersistentCookieJar] so that the session cookie survives
+ * app process death (e.g., when the OS offloads the app during an issuance flow).
+ *
  * Mirrors the TypeScript `AuthServerClient` from wallet-frontend PR 177.
  */
 class AuthServerClient(
     private val baseUrl: String,
     private val tenantId: String = "default",
-    private val httpClient: OkHttpClient = OkHttpClient.Builder()
-        .cookieJar(InMemoryCookieJar())
-        .build(),
+    private val httpClient: OkHttpClient,
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
+    /**
+     * Create with persistent cookie storage (recommended for production).
+     * Session cookies survive process death.
+     */
+    constructor(
+        context: Context,
+        baseUrl: String,
+        tenantId: String = "default",
+        json: Json = Json { ignoreUnknownKeys = true },
+    ) : this(
+        baseUrl = baseUrl,
+        tenantId = tenantId,
+        httpClient = OkHttpClient.Builder()
+            .cookieJar(PersistentCookieJar(context))
+            .build(),
+        json = json,
+    )
+
     private val pendingTokenMutex = Mutex()
     private val pendingTokenRequests = mutableMapOf<String, AccessToken>()
 
