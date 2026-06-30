@@ -12,6 +12,13 @@ on:
       - '**/*.md'
       - 'docs/**'
 
+permissions:
+  contents: read
+  packages: read
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
