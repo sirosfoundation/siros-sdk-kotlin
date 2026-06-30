@@ -71,6 +71,11 @@ class AuthServerClient(
     private val pendingTokenMutex = Mutex()
     private val pendingTokenRequests = mutableMapOf<String, AccessToken>()
 
+    private fun defaultHeaders(): MutableMap<String, String> = mutableMapOf(
+        HEADER_TOKEN_MODE to "session",
+        HEADER_TENANT_ID to tenantId,
+    )
+
     // ---- Passkey Login ----
 
     /**
@@ -80,10 +85,7 @@ class AuthServerClient(
      * @return Parsed challenge response with `challengeId` and `getOptions`.
      */
     suspend fun loginBegin(oidcIdToken: String? = null): JsonObject = withContext(Dispatchers.IO) {
-        val headers = mutableMapOf(
-            "X-Token-Mode" to "session",
-            "X-Tenant-ID" to tenantId,
-        )
+        val headers = defaultHeaders()
         oidcIdToken?.let { headers["Authorization"] = "Bearer $it" }
 
         val response = post("/auth/passkey/login/begin", buildJsonObject {}, headers)
@@ -103,10 +105,7 @@ class AuthServerClient(
         credential: JsonObject,
         oidcIdToken: String? = null,
     ): LoginFinishResult = withContext(Dispatchers.IO) {
-        val headers = mutableMapOf(
-            "X-Token-Mode" to "session",
-            "X-Tenant-ID" to tenantId,
-        )
+        val headers = defaultHeaders()
         oidcIdToken?.let { headers["Authorization"] = "Bearer $it" }
 
         val body = buildJsonObject {
@@ -130,10 +129,7 @@ class AuthServerClient(
         inviteCode: String? = null,
         oidcIdToken: String? = null,
     ): JsonObject = withContext(Dispatchers.IO) {
-        val headers = mutableMapOf(
-            "X-Token-Mode" to "session",
-            "X-Tenant-ID" to tenantId,
-        )
+        val headers = defaultHeaders()
         oidcIdToken?.let { headers["Authorization"] = "Bearer $it" }
 
         val body = buildJsonObject {
@@ -161,10 +157,7 @@ class AuthServerClient(
         privateData: String? = null,
         oidcIdToken: String? = null,
     ): RegisterFinishResult = withContext(Dispatchers.IO) {
-        val headers = mutableMapOf(
-            "X-Token-Mode" to "session",
-            "X-Tenant-ID" to tenantId,
-        )
+        val headers = defaultHeaders()
         oidcIdToken?.let { headers["Authorization"] = "Bearer $it" }
 
         val body = buildJsonObject {
@@ -205,10 +198,7 @@ class AuthServerClient(
                     tac?.let { put("tac", it) }
                     put("tenant_id", tenantId)
                 }
-                val response = post("/auth/token", body, mapOf(
-                    "X-Token-Mode" to "session",
-                    "X-Tenant-ID" to tenantId,
-                ))
+                val response = post("/auth/token", body, defaultHeaders())
                 val tokenResponse = json.decodeFromJsonElement(TokenResponse.serializer(), response)
                 AccessToken(tokenResponse.accessToken)
             }
@@ -226,8 +216,8 @@ class AuthServerClient(
     suspend fun logout(): Unit = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url("$baseUrl/auth/session")
-            .header("X-Token-Mode", "session")
-            .header("X-Tenant-ID", tenantId)
+            .header(HEADER_TOKEN_MODE, "session")
+            .header(HEADER_TENANT_ID, tenantId)
             .delete()
             .build()
         httpClient.newCall(request).execute().close()
@@ -261,6 +251,11 @@ class AuthServerClient(
 
             json.parseToJsonElement(responseBody).jsonObject
         }
+    }
+
+    companion object {
+        private const val HEADER_TOKEN_MODE = "X-Token-Mode"
+        private const val HEADER_TENANT_ID = "X-Tenant-ID"
     }
 }
 
