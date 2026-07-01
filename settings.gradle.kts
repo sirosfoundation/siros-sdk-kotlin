@@ -11,7 +11,19 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        mavenLocal() // siros-wscd-manager AAR (pre-publication)
+        mavenLocal() // local development builds
+        maven {
+            name = "GitHubPackages"
+            url = uri("https://maven.pkg.github.com/sirosfoundation/siros-wscd-manager")
+            credentials {
+                username = providers.gradleProperty("gpr.user").orElse(
+                    providers.environmentVariable("GITHUB_ACTOR")
+                ).getOrElse("")
+                password = providers.gradleProperty("gpr.key").orElse(
+                    providers.environmentVariable("GITHUB_TOKEN")
+                ).getOrElse("")
+            }
+        }
     }
 }
 
