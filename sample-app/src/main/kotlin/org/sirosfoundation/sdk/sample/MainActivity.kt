@@ -159,13 +159,16 @@ class MainActivity : ComponentActivity() {
             }
             "status" -> viewModel.emitWscaTestStatus()
             "config" -> {
+                intent.getStringExtra("plugin_id")?.let {
+                    viewModel.selectPlugin(it)
+                }
                 intent.getStringExtra("r2ps_enabled")?.let {
                     viewModel.updateR2psEnabled(it.toBooleanStrictOrNull() ?: false)
                 }
                 intent.getStringExtra("r2ps_url")?.let {
                     viewModel.updateR2psServerUrl(it)
                 }
-                Log.i(WSCA_TEST_TAG, """{"action":"config","status":"applied","r2ps_enabled":${viewModel.r2psEnabled.value},"r2ps_url":"${viewModel.r2psServerUrl.value}"}""")
+                Log.i(WSCA_TEST_TAG, """{"action":"config","status":"applied","plugin_id":"${viewModel.selectedPluginId.value}","r2ps_enabled":${viewModel.r2psEnabled.value},"r2ps_url":"${viewModel.r2psServerUrl.value}"}""")
             }
             "refresh" -> viewModel.refreshWscdInfo()
             else -> Log.e(WSCA_TEST_TAG, """{"action":"error","error":"unknown action: $action"}""")
@@ -259,12 +262,17 @@ fun WalletScreen(viewModel: WalletViewModel) {
     if (showWscaDeveloper) {
         val wscdKeys by viewModel.wscdKeys.collectAsState()
         val wscdLifecycleStatus by viewModel.wscdLifecycleStatus.collectAsState()
+        val wscdKeySecurityProps by viewModel.wscdKeySecurityProps.collectAsState()
+        val selectedPluginId by viewModel.selectedPluginId.collectAsState()
         WscaDeveloperScreen(
             lifecycleState = viewModel.lifecycleState.collectAsState().value,
             lifecycleStatus = wscdLifecycleStatus,
             keys = wscdKeys,
-            r2psEnabled = r2psEnabled,
+            keySecurityProps = wscdKeySecurityProps,
+            selectedPluginId = selectedPluginId,
             r2psServerUrl = r2psServerUrl,
+            onSelectPlugin = viewModel::selectPlugin,
+            onEnroll = viewModel::enrollWscd,
             onRotate = viewModel::rotateLifecycle,
             onDestroy = viewModel::destroyLifecycle,
             onRefresh = viewModel::refreshWscdInfo,

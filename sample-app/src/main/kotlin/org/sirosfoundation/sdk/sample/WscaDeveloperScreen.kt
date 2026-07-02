@@ -18,6 +18,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -31,6 +32,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import org.sirosfoundation.sdk.credentials.CertificationInfo
+import org.sirosfoundation.sdk.credentials.SignerSecurityProperties
 import org.sirosfoundation.sdk.keystore.DestroyMode
 import org.sirosfoundation.sdk.keystore.DetailedKeyInfo
 import org.sirosfoundation.sdk.keystore.LifecycleState
@@ -49,8 +52,11 @@ fun WscaDeveloperScreen(
     lifecycleState: LifecycleState?,
     lifecycleStatus: LifecycleStatus?,
     keys: List<DetailedKeyInfo>,
-    r2psEnabled: Boolean,
+    keySecurityProps: Map<String, SignerSecurityProperties>,
+    selectedPluginId: String,
     r2psServerUrl: String,
+    onSelectPlugin: (String) -> Unit,
+    onEnroll: () -> Unit,
     onRotate: () -> Unit,
     onDestroy: (DestroyMode) -> Unit,
     onRefresh: () -> Unit,
@@ -83,8 +89,26 @@ fun WscaDeveloperScreen(
                 InfoRow("App Version", BuildConfig.VERSION_NAME)
                 InfoRow("Build Type", BuildConfig.BUILD_TYPE)
                 InfoRow("WSCD Manager", "siros-wscd-manager (UniFFI)")
-                InfoRow("Default Plugin", if (r2psEnabled) "r2ps" else "softkey")
-                if (r2psEnabled) {
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // ── Plugin Selection ────────────────────────────────────
+            SectionHeader("Plugin")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                listOf("softkey", "r2ps", "fido2").forEach { pluginId ->
+                    FilterChip(
+                        selected = selectedPluginId == pluginId,
+                        onClick = { onSelectPlugin(pluginId) },
+                        label = { Text(pluginId) },
+                    )
+                }
+            }
+            if (selectedPluginId == "r2ps") {
+                InfoCard {
                     InfoRow("R2PS Server", r2psServerUrl)
                 }
             }
@@ -106,6 +130,15 @@ fun WscaDeveloperScreen(
             Spacer(modifier = Modifier.height(12.dp))
 
             // ── Lifecycle Actions ───────────────────────────────────
+            Button(
+                onClick = onEnroll,
+                enabled = lifecycleState == null || lifecycleState == LifecycleState.Destroyed,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+            ) {
+                Text("Enroll ($selectedPluginId)")
+            }
+            Spacer(modifier = Modifier.height(8.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -180,7 +213,7 @@ fun WscaDeveloperScreen(
                             if (index > 0) {
                                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                             }
-                            KeyInfoRow(key)
+                            KeyInfoRow(key, keySecurityProps[key.keyId])
                         }
                     }
                 }
@@ -234,7 +267,7 @@ private fun InfoRow(label: String, value: String) {
 }
 
 @Composable
-private fun KeyInfoRow(key: DetailedKeyInfo) {
+private fun KeyInfoRow(key: DetailedKeyInfo, securityProps: SignerSecurityProperties?) {
     Column {
         Text(
             text = key.keyId,
@@ -261,6 +294,21 @@ private fun KeyInfoRow(key: DetailedKeyInfo) {
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+        if (securityProps != null) {
+            Spacer(modifier = Modifier.height(4.dp))
+            InfoRow("Key Storage", securityProps.keyStorage.joinToString(", "))
+            val certText = when (val cert = securityProps.certification) {
+                is CertificationInfo.None -> "none"
+                is CertificationInfo.Certified -> "${cert.scheme} (${cert.assuranceLevel})"
+            }
+            InfoRow("Certification", certText)
+            if (securityProps.userAuthentication.isNotEmpty()) {
+                InfoRow("Auth Methods", securityProps.userAuthentication.joinToString(", "))
+            }
+            if (securityProps.amr.isNotEmpty()) {
+                InfoRow("AMR", securityProps.amr.joinToString(", "))
+            }
         }
     }
 }
