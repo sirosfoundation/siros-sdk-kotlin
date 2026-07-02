@@ -24,6 +24,12 @@ data class StoredCredential(
     val metadata: CredentialMetadata? = null,
     @SerialName("issued_at") val issuedAt: Long? = null,
     @SerialName("expires_at") val expiresAt: Long? = null,
+    /**
+     * OID4VCI §10 notification identifier for this credential, if the issuer
+     * returned one. Persisted client-side and echoed back when a lifecycle
+     * event occurs.
+     */
+    @SerialName("notification_id") val notificationId: String? = null,
 )
 
 @Serializable

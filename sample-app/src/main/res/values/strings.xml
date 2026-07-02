@@ -20,7 +20,7 @@
 
     <!-- Top bar -->
     <string name="topbar_title">SIROS Wallet</string>
-    <string name="topbar_logo_description">SIROS</string>
+    <string name="topbar_logo_description" translatable="false">SIROS</string>
 
     <!-- Credentials tab -->
     <string name="credentials_welcome">Welcome, %1$s</string>

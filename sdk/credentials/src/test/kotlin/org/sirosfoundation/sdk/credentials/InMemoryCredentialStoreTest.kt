@@ -1,7 +1,9 @@
 package org.sirosfoundation.sdk.credentials
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -61,14 +63,46 @@ class InMemoryCredentialStoreTest {
         assertNull(store.getById("missing"))
     }
 
+    @Test
+    fun notification_id_persists_through_store() = runBlocking {
+        val store = InMemoryCredentialStore()
+        store.save(storedCredential(id = "cred-1", notificationId = "notif-123"))
+
+        assertEquals("notif-123", store.getById("cred-1")?.notificationId)
+    }
+
+    @Test
+    fun notification_id_round_trips_through_json() {
+        val json = Json { encodeDefaults = false }
+        val cred = storedCredential(id = "cred-1", notificationId = "notif-456")
+
+        val text = json.encodeToString(StoredCredential.serializer(), cred)
+        assertTrue(text.contains("\"notification_id\":\"notif-456\""))
+
+        val decoded = json.decodeFromString(StoredCredential.serializer(), text)
+        assertEquals("notif-456", decoded.notificationId)
+    }
+
+    @Test
+    fun notification_id_defaults_to_null_and_is_omitted() {
+        val json = Json { encodeDefaults = false }
+        val cred = storedCredential(id = "cred-1")
+        assertNull(cred.notificationId)
+
+        val text = json.encodeToString(StoredCredential.serializer(), cred)
+        assertFalse(text.contains("notification_id"))
+    }
+
     private fun storedCredential(
         id: String,
         raw: String = "raw",
         metadata: CredentialMetadata? = null,
+        notificationId: String? = null,
     ) = StoredCredential(
         id = id,
         format = CredentialFormat.DC_SD_JWT.value,
         raw = raw,
         metadata = metadata,
+        notificationId = notificationId,
     )
 }

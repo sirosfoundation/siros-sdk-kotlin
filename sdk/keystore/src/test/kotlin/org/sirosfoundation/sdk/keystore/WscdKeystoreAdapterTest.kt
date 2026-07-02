@@ -25,7 +25,7 @@ class WscdKeystoreAdapterTest {
         coEvery { it.securityProperties(any()) } returns SignerSecurityProperties(
             keyStorage = listOf("hardware"),
             userAuthentication = listOf("pin"),
-            certification = CertificationInfo.Certified(
+            certification = org.sirosfoundation.sdk.credentials.CertificationInfo.Certified(
                 scheme = "EUCC",
                 assuranceLevel = "substantial",
             ),

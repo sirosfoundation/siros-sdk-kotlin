@@ -14,6 +14,7 @@ object MessageTypes {
     const val FLOW_ACTION = "flow_action"
     const val SIGN_RESPONSE = "sign_response"
     const val MATCH_RESPONSE = "match_response"
+    const val CREDENTIAL_NOTIFICATION = "credential_notification"
 
     // Server → Client
     const val HANDSHAKE_COMPLETE = "handshake_complete"
@@ -24,6 +25,7 @@ object MessageTypes {
     const val MATCH_REQUEST = "match_request"
     const val PUSH = "push"
     const val ERROR = "error"
+    const val NOTIFICATION_ACK = "notification_ack"
 }
 
 /** Base envelope — every engine message carries at least a type. */
@@ -141,6 +143,7 @@ data class CredentialResult(
     val credential: String,
     val vct: String? = null,
     @SerialName("type_metadata") val typeMetadata: JsonElement? = null,
+    @SerialName("notification_id") val notificationId: String? = null,
 )
 
 @Serializable
@@ -212,3 +215,35 @@ data class ErrorMessage(
     @SerialName("message") val details: String,
     val timestamp: String? = null,
 )
+
+/**
+ * Outgoing OID4VCI §10 credential lifecycle notification. The client supplies
+ * the notification_id obtained at issuance; the backend supplies the issuer
+ * endpoint and access token from ephemeral flow state.
+ */
+@Serializable
+data class CredentialNotificationMessage(
+    val type: String = MessageTypes.CREDENTIAL_NOTIFICATION,
+    @SerialName("flow_id") val flowId: String,
+    @SerialName("notification_id") val notificationId: String,
+    val event: String,
+    @SerialName("event_description") val eventDescription: String? = null,
+    val timestamp: String? = null,
+)
+
+/** Incoming acknowledgement for a credential_notification. */
+@Serializable
+data class NotificationAckMessage(
+    val type: String = MessageTypes.NOTIFICATION_ACK,
+    @SerialName("flow_id") val flowId: String? = null,
+    @SerialName("notification_id") val notificationId: String? = null,
+    val status: String,
+    val error: String? = null,
+    val timestamp: String? = null,
+)
+
+/** OID4VCI §10 credential lifecycle event identifiers reportable to the backend. */
+object CredentialNotificationEvent {
+    const val ACCEPTED = "credential_accepted"
+    const val FAILURE = "credential_failure"
+}

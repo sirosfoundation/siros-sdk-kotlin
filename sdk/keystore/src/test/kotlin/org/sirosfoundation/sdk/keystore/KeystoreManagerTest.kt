@@ -16,7 +16,7 @@ class KeystoreManagerTest {
             override suspend fun sign(keyId: String, payload: ByteArray, algorithm: String) = ByteArray(0)
             override suspend fun generateProof(audience: String, nonce: String) = ""
             override suspend fun signPresentation(nonce: String, audience: String, credentialIds: List<String>) = ""
-            override suspend fun signVpToken(nonce: String, audience: String, credentialIds: List<String>, transactionData: List<Map<String, Any>>?) = ""
+            override suspend fun signVpToken(credential: String, disclosedClaims: List<String>?, nonce: String, audience: String) = ""
             override suspend fun exportEncryptedContainer() = ByteArray(0)
             override fun listKeys() = emptyList<KeyInfo>()
             override suspend fun saveCredential(id: String, json: String) {}
