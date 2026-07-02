@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 import org.sirosfoundation.sdk.credentials.CredentialOffer
 import org.sirosfoundation.sdk.credentials.PresentationRecord
 import org.sirosfoundation.sdk.credentials.SirosException
+import org.sirosfoundation.sdk.credentials.SignerSecurityProperties
 import org.sirosfoundation.sdk.credentials.StoredCredential
 import org.sirosfoundation.sdk.keystore.ActivateLifecycleRequest
 import org.sirosfoundation.sdk.keystore.AuthProvider
@@ -66,7 +67,13 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     fun updateBackendUrl(url: String) { _backendUrl.value = url }
     fun updateTenantId(id: String) { _tenantId.value = id }
 
-    // ── R2PS configuration ──────────────────────────────────────────
+    // ── Plugin / R2PS configuration ──────────────────────────────────
+
+    /** Active plugin ID: "softkey", "r2ps", or "fido2". */
+    private val _selectedPluginId = MutableStateFlow(
+        if (BuildConfig.R2PS_ENABLED) "r2ps" else "softkey",
+    )
+    val selectedPluginId: StateFlow<String> = _selectedPluginId
 
     private val _r2psEnabled = MutableStateFlow(BuildConfig.R2PS_ENABLED)
     val r2psEnabled: StateFlow<Boolean> = _r2psEnabled
@@ -74,7 +81,15 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _r2psServerUrl = MutableStateFlow(DEFAULT_R2PS_URL)
     val r2psServerUrl: StateFlow<String> = _r2psServerUrl
 
-    fun updateR2psEnabled(enabled: Boolean) { _r2psEnabled.value = enabled }
+    fun selectPlugin(pluginId: String) {
+        _selectedPluginId.value = pluginId
+        _r2psEnabled.value = pluginId == "r2ps"
+    }
+    fun updateR2psEnabled(enabled: Boolean) {
+        _r2psEnabled.value = enabled
+        if (enabled) _selectedPluginId.value = "r2ps"
+        else if (_selectedPluginId.value == "r2ps") _selectedPluginId.value = "softkey"
+    }
     fun updateR2psServerUrl(url: String) { _r2psServerUrl.value = url }
 
     // ── Add-credential state ────────────────────────────────────────
@@ -438,9 +453,12 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     _errorMessage.value = "WSCD signer not initialized"
                     return@launch
                 }
-                val pluginId = if (_r2psEnabled.value) "r2ps" else "preview-sign"
+                val pluginId = activePluginId
                 val contextId = "ctx-${System.currentTimeMillis()}"
-                val factorKind = if (_r2psEnabled.value) FactorKind.Opaque else FactorKind.RawSign
+                val factorKind = when (pluginId) {
+                    "r2ps" -> FactorKind.Opaque
+                    else -> FactorKind.RawSign
+                }
 
                 val regOutcome = signer.registerLifecycle(
                     RegisterLifecycleRequest(
@@ -480,6 +498,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _wscdKeys = MutableStateFlow<List<DetailedKeyInfo>>(emptyList())
     val wscdKeys: StateFlow<List<DetailedKeyInfo>> = _wscdKeys
 
+    private val _wscdKeySecurityProps = MutableStateFlow<Map<String, SignerSecurityProperties>>(emptyMap())
+    val wscdKeySecurityProps: StateFlow<Map<String, SignerSecurityProperties>> = _wscdKeySecurityProps
+
     private val _wscdLifecycleStatus = MutableStateFlow<LifecycleStatus?>(null)
     val wscdLifecycleStatus: StateFlow<LifecycleStatus?> = _wscdLifecycleStatus
 
@@ -488,7 +509,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     /** The plugin ID used for the current lifecycle session. */
     private val activePluginId: String
-        get() = if (_r2psEnabled.value) "r2ps" else "softkey"
+        get() = _selectedPluginId.value
 
     fun openWscaDeveloper() {
         _showWscaDeveloper.value = true
@@ -503,7 +524,17 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         viewModelScope.launch {
             val signer = wscdSigner ?: return@launch
             try {
-                _wscdKeys.value = signer.listKeysDetailed()
+                val keys = signer.listKeysDetailed()
+                _wscdKeys.value = keys
+                val props = mutableMapOf<String, SignerSecurityProperties>()
+                for (key in keys) {
+                    try {
+                        props[key.keyId] = signer.securityProperties(key.keyId)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to get security properties for ${key.keyId}", e)
+                    }
+                }
+                _wscdKeySecurityProps.value = props
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to list keys", e)
             }
@@ -662,10 +693,10 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             Build.MANUFACTURER.equals("waydroid", ignoreCase = true) ||
             Build.BRAND == "google" && Build.DEVICE?.startsWith("generic") == true
 
-        // Build WSCD-backed keystore when R2PS is enabled
-        val keystore = if (_r2psEnabled.value) {
-            try {
-                val wscdConfig = FfiWscdConfig(defaultPlugin = "r2ps")
+        // Build WSCD-backed keystore with the selected plugin
+        val selectedPlugin = _selectedPluginId.value
+        val keystore = try {
+                val wscdConfig = FfiWscdConfig(defaultPlugin = selectedPlugin)
                 val signer = UniFFISigner(
                     wscdConfig,
                     authProvider = object : AuthProvider {
@@ -682,31 +713,32 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                         }
                     },
                 )
-                val r2psConfig = FfiR2psConfig(
-                    serverUrl = _r2psServerUrl.value,
-                    clientId = "sample-app",
-                    context = "wallet",
-                    authMode = "opaque",
-                    rpId = "",
-                    allowedCredentialIds = emptyList(),
-                    clientKeyPem = "", // Populated from device enrollment in production
-                    serverPublicKeyPem = "", // Populated from R2PS server discovery
-                )
-                signer.registerR2psPlugin(
-                    r2psConfig,
-                    OkHttpR2psTransport(serverUrl = _r2psServerUrl.value),
-                    SamplePakeClient(),
-                )
-                Log.i(TAG, "WSCD keystore initialized with R2PS at ${_r2psServerUrl.value}")
+                if (selectedPlugin == "r2ps") {
+                    val r2psConfig = FfiR2psConfig(
+                        serverUrl = _r2psServerUrl.value,
+                        clientId = "sample-app",
+                        context = "wallet",
+                        authMode = "opaque",
+                        rpId = "",
+                        allowedCredentialIds = emptyList(),
+                        clientKeyPem = "", // Populated from device enrollment in production
+                        serverPublicKeyPem = "", // Populated from R2PS server discovery
+                    )
+                    signer.registerR2psPlugin(
+                        r2psConfig,
+                        OkHttpR2psTransport(serverUrl = _r2psServerUrl.value),
+                        SamplePakeClient(),
+                    )
+                    Log.i(TAG, "WSCD keystore initialized with R2PS at ${_r2psServerUrl.value}")
+                } else {
+                    Log.i(TAG, "WSCD keystore initialized with plugin: $selectedPlugin")
+                }
                 wscdSigner = signer
                 WscdKeystoreAdapter(signer)
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to initialize WSCD/R2PS keystore, falling back to default", e)
+                Log.w(TAG, "Failed to initialize WSCD keystore, falling back to default", e)
                 null
             }
-        } else {
-            null // Use SDK default (JweKeystore)
-        }
 
         return WalletConfig(
             backendUrl = _backendUrl.value,
