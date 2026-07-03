@@ -21,6 +21,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.putJsonObject
 import org.sirosfoundation.sdk.auth.AuthSession
+import org.sirosfoundation.sdk.auth.AuthServerClient
+import org.sirosfoundation.sdk.auth.AuthTokens
 import org.sirosfoundation.sdk.auth.BackendApiClient
 import org.sirosfoundation.sdk.auth.AuthProvider
 import org.sirosfoundation.sdk.auth.CredentialManagerAuthProvider
@@ -119,18 +121,57 @@ class SirosWallet private constructor(
             val hkdfSalt = ByteArray(32).also { SecureRandom().nextBytes(it) }
             val hkdfInfo = HKDF_INFO.toByteArray(Charsets.UTF_8)
 
-            val authClient = WebAuthnAuthClient(
-                baseUrl = config.backendUrl,
-                tenantId = config.tenantId,
-                authProvider = authProvider,
+            // Step 1: Get challenge from AS
+            val challengeResponse = authServerClient.registerBegin()
+            val challengeId = (challengeResponse["challengeId"] as? String)
+                ?: throw WalletException("Missing challengeId in register begin response")
+            val createOptions = (challengeResponse["createOptions"] as? Map<*, *>)
+                ?: throw WalletException("Missing createOptions")
+            val publicKey = (createOptions["publicKey"] as? Map<*, *>)
+                ?: throw WalletException("Missing publicKey in createOptions")
+
+            val rpObj = (publicKey["rp"] as? Map<*, *>)
+                ?: throw WalletException("Missing rp in publicKey")
+            val rpId = rpObj["id"] as? String ?: throw WalletException("Missing rp.id")
+            val rpName = rpObj["name"] as? String ?: rpId
+            val challenge = WebAuthnAuthClient.decodeBase64Url(publicKey["challenge"] as? String
+                ?: throw WalletException("Missing challenge"))
+            val userObj = (publicKey["user"] as? Map<*, *>)
+                ?: throw WalletException("Missing user in publicKey")
+            val userId = WebAuthnAuthClient.decodeBase64Url(userObj["id"] as? String
+                ?: throw WalletException("Missing user.id"))
+            val userName = userObj["name"] as? String ?: displayName
+
+            // Step 2: Create credential via platform AuthProvider
+            val result = authProvider.register(
+                org.sirosfoundation.sdk.auth.RegisterOptions(
+                    rpId = rpId,
+                    rpName = rpName,
+                    userId = userId,
+                    userName = userName,
+                    userDisplayName = displayName,
+                    challenge = challenge,
+                    prfSalt = prfSalt,
+                )
             )
-            val session = authClient.register(displayName, prfSalt)
+
+            // Step 3: Complete registration with AS
+            val credentialJson = kotlinx.serialization.json.buildJsonObject {
+                put("id", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.credentialId)))
+                put("rawId", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.credentialId)))
+                put("type", kotlinx.serialization.json.JsonPrimitive("public-key"))
+                put("response", kotlinx.serialization.json.buildJsonObject {
+                    put("attestationObject", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.attestationObject)))
+                    put("clientDataJSON", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.clientDataJSON)))
+                })
+            }
+            val session = authServerClient.registerFinish(
+                challengeId = challengeId,
+                credential = credentialJson,
+                displayName = displayName,
+            )
             Timber.i("Registration successful: ${session.uuid}")
 
-            // Extract PRF output from the registration result (via AuthProvider)
-            // The PRF output is returned inside the AuthSession.prfOutput field
-            // which we'll need to propagate through the auth flow.
-            // For now, re-evaluate PRF to get the output for key derivation.
             val credId = extractLastCredentialId()
                 ?: throw WalletException("No credential ID after registration")
             val prfOutput = extractLastPrfOutput()
@@ -138,24 +179,25 @@ class SirosWallet private constructor(
 
             // Derive key and initialise empty keystore
             keystore.unlock(prfOutput.first, ByteArray(0), hkdfSalt, hkdfInfo)
-
-            // Set the credential ID on the container metadata
             (keystore as? JweKeystore)?.setCredentialId(credId)
-
-            // Export the initial (empty) encrypted container
             val encryptedContainer = keystore.exportEncryptedContainer()
 
-            // Persist session + key derivation params
-            saveSession(session, credId, prfSalt, hkdfSalt, hkdfInfo)
+            // Persist session (no appToken/refreshToken — using session cookies now)
+            sessionStore.userId = session.uuid
+            sessionStore.displayName = session.displayName
+            sessionStore.tenantId = config.tenantId
+            sessionStore.credentialId = b64UrlEncode(credId)
+            sessionStore.prfSalt = b64Encode(prfSalt)
+            sessionStore.hkdfSalt = b64Encode(hkdfSalt)
+            sessionStore.hkdfInfo = b64Encode(hkdfInfo)
             sessionStore.privateDataJwe = String(encryptedContainer, Charsets.UTF_8)
 
-            // Sync the initial private data to the backend
-            setupApiClient(session)
-
+            // Set up API client with AuthTokens
+            setupApiClientWithTokens()
             syncPrivateDataToBackend()
 
-            // Connect the engine
-            connectEngine(session.appToken)
+            // Connect engine with anonymous token
+            connectEngineWithToken()
 
             _state.value = WalletState.Ready(
                 userId = session.uuid,
@@ -186,15 +228,47 @@ class SirosWallet private constructor(
     suspend fun login() {
         _state.value = WalletState.Connecting
         try {
-            // Retrieve stored PRF salt for the returning user (if available)
             val storedPrfSalt = sessionStore.prfSalt?.let { b64Decode(it) }
 
-            val authClient = WebAuthnAuthClient(
-                baseUrl = config.backendUrl,
-                tenantId = config.tenantId,
-                authProvider = authProvider,
+            // Step 1: Get challenge from AS
+            val challengeResponse = authServerClient.loginBegin()
+            val challengeId = (challengeResponse["challengeId"] as? String)
+                ?: throw WalletException("Missing challengeId in login begin response")
+            val getOptions = (challengeResponse["getOptions"] as? Map<*, *>)
+                ?: throw WalletException("Missing getOptions")
+            val publicKey = (getOptions["publicKey"] as? Map<*, *>)
+                ?: throw WalletException("Missing publicKey in getOptions")
+
+            val rpId = publicKey["rpId"] as? String
+                ?: throw WalletException("Missing rpId")
+            val challenge = WebAuthnAuthClient.decodeBase64Url(publicKey["challenge"] as? String
+                ?: throw WalletException("Missing challenge"))
+
+            // Step 2: Authenticate via platform AuthProvider
+            val result = authProvider.authenticate(
+                org.sirosfoundation.sdk.auth.AuthenticateOptions(
+                    rpId = rpId,
+                    challenge = challenge,
+                    prfSalt = storedPrfSalt,
+                )
             )
-            val session = authClient.login(prfSalt = storedPrfSalt)
+
+            // Step 3: Complete login with AS
+            val credentialJson = kotlinx.serialization.json.buildJsonObject {
+                put("id", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.credentialId)))
+                put("rawId", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.credentialId)))
+                put("type", kotlinx.serialization.json.JsonPrimitive("public-key"))
+                put("response", kotlinx.serialization.json.buildJsonObject {
+                    put("authenticatorData", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.authenticatorData)))
+                    put("clientDataJSON", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.clientDataJSON)))
+                    put("signature", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.signature)))
+                    result.userHandle?.let { put("userHandle", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(it))) }
+                })
+            }
+            val session = authServerClient.loginFinish(
+                challengeId = challengeId,
+                credential = credentialJson,
+            )
             Timber.i("Login successful: ${session.uuid}")
 
             val credId = extractLastCredentialId()
@@ -202,12 +276,10 @@ class SirosWallet private constructor(
             val prfOutput = extractLastPrfOutput()
                 ?: throw WalletException("PRF not supported by authenticator — cannot decrypt wallet data")
 
-            // Retrieve private data from the backend
-            setupApiClient(session)
+            // Set up API client with AuthTokens and fetch private data
+            setupApiClientWithTokens()
             val privateData = fetchPrivateData()
 
-            // Retrieve HKDF params from session store (if returning user)
-            // or from the private data container metadata
             val hkdfSalt = sessionStore.hkdfSalt?.let { b64Decode(it) }
                 ?: ByteArray(32).also { SecureRandom().nextBytes(it) }
             val hkdfInfo = sessionStore.hkdfInfo?.let { b64Decode(it) }
@@ -215,14 +287,19 @@ class SirosWallet private constructor(
             val prfSaltBytes = sessionStore.prfSalt?.let { b64Decode(it) }
                 ?: ByteArray(32).also { SecureRandom().nextBytes(it) }
 
-            // Unlock keystore with PRF-derived key
             keystore.unlock(prfOutput.first, privateData, hkdfSalt, hkdfInfo)
 
             // Persist session
-            saveSession(session, credId, prfSaltBytes, hkdfSalt, hkdfInfo)
+            sessionStore.userId = session.uuid
+            sessionStore.displayName = session.displayName
+            sessionStore.tenantId = config.tenantId
+            sessionStore.credentialId = b64UrlEncode(credId)
+            sessionStore.prfSalt = b64Encode(prfSaltBytes)
+            sessionStore.hkdfSalt = b64Encode(hkdfSalt)
+            sessionStore.hkdfInfo = b64Encode(hkdfInfo)
 
-            // Connect the engine
-            connectEngine(session.appToken)
+            // Connect engine with anonymous token
+            connectEngineWithToken()
 
             _state.value = WalletState.Ready(
                 userId = session.uuid,
@@ -249,6 +326,14 @@ class SirosWallet private constructor(
         keystore.lock()
         sessionStore.clear()
         apiClient = null
+        scope.launch {
+            try {
+                authTokens.clear()
+                authServerClient.logout()
+            } catch (e: Exception) {
+                Timber.w(e, "AS logout failed (non-fatal)")
+            }
+        }
         _state.value = WalletState.Disconnected
         Timber.i("Logged out")
     }
@@ -263,38 +348,27 @@ class SirosWallet private constructor(
      * Call this on app startup before showing the login screen.
      */
     suspend fun resumeSession() {
-        if (!sessionStore.hasSession) {
+        val userId = sessionStore.userId
+        if (userId == null) {
             Timber.d("No stored session to resume")
             return
         }
         _state.value = WalletState.Connecting
         try {
-            val token = sessionStore.appToken!!
-            val userId = sessionStore.userId ?: ""
             val displayName = sessionStore.displayName
 
-            // Set up the API client with the stored token
-            apiClient = BackendApiClient(config.backendUrl, config.tenantId, httpClient = httpClient).apply {
-                setAppToken(token)
-            }
+            // Set up the API client using AuthTokens (session cookie handles auth)
+            setupApiClientWithTokens()
 
-            // Verify the token is still valid by calling a lightweight endpoint
+            // Verify the session is still valid by requesting a backend token
             try {
-                apiClient!!.healthCheck()
-            } catch (e: BackendApiException) {
-                if (e.code == 401) {
-                    // Token expired — try refreshing
-                    val refreshed = refreshToken()
-                    if (!refreshed) {
-                        Timber.i("Token refresh failed, session expired")
-                        sessionStore.clear()
-                        apiClient = null
-                        _state.value = WalletState.Disconnected
-                        return
-                    }
-                } else {
-                    throw e
-                }
+                authTokens.ensureBackendToken()
+            } catch (e: AuthException) {
+                Timber.i("Session cookie expired, need re-login")
+                sessionStore.clear()
+                apiClient = null
+                _state.value = WalletState.Disconnected
+                return
             }
 
             // Unlock keystore from stored private data if available
@@ -302,19 +376,16 @@ class SirosWallet private constructor(
             val hkdfSalt = sessionStore.hkdfSalt?.let { b64Decode(it) }
             val hkdfInfo = sessionStore.hkdfInfo?.let { b64Decode(it) }
 
-            // Connect the engine (works with token alone, no keystore needed)
-            connectEngine(sessionStore.appToken!!)
+            // Connect the engine with anonymous token
+            connectEngineWithToken()
 
             if (storedJwe != null && hkdfSalt != null && hkdfInfo != null) {
-                // Keystore cannot be unlocked without PRF output.
-                // Emit KeystoreLocked so the UI can prompt the user.
                 _state.value = WalletState.KeystoreLocked(
                     userId = userId,
                     displayName = displayName,
                 )
                 Timber.i("Session resumed for user $userId (keystore locked — call unlockKeystore())")
             } else {
-                // No private data stored — fresh session, no unlock needed
                 _state.value = WalletState.Ready(
                     userId = userId,
                     displayName = displayName,
@@ -348,13 +419,40 @@ class SirosWallet private constructor(
         }
         try {
             val storedPrfSalt = sessionStore.prfSalt?.let { b64Decode(it) }
-            val authClient = WebAuthnAuthClient(
-                baseUrl = config.backendUrl,
-                tenantId = config.tenantId,
-                authProvider = authProvider,
+            // Use AS login flow to get PRF output via biometric assertion
+            val challengeResponse = authServerClient.loginBegin()
+            val challengeId = (challengeResponse["challengeId"] as? String)
+                ?: throw WalletException("Missing challengeId")
+            val getOptions = (challengeResponse["getOptions"] as? Map<*, *>)
+                ?: throw WalletException("Missing getOptions")
+            val publicKey = (getOptions["publicKey"] as? Map<*, *>)
+                ?: throw WalletException("Missing publicKey")
+            val rpId = publicKey["rpId"] as? String
+                ?: throw WalletException("Missing rpId")
+            val challenge = WebAuthnAuthClient.decodeBase64Url(publicKey["challenge"] as? String
+                ?: throw WalletException("Missing challenge"))
+
+            val result = authProvider.authenticate(
+                org.sirosfoundation.sdk.auth.AuthenticateOptions(
+                    rpId = rpId,
+                    challenge = challenge,
+                    prfSalt = storedPrfSalt,
+                )
             )
-            // Silent assertion — triggers biometric to get PRF output
-            authClient.login(prfSalt = storedPrfSalt)
+
+            // Complete login with AS (also refreshes the session cookie)
+            val credentialJson = kotlinx.serialization.json.buildJsonObject {
+                put("id", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.credentialId)))
+                put("rawId", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.credentialId)))
+                put("type", kotlinx.serialization.json.JsonPrimitive("public-key"))
+                put("response", kotlinx.serialization.json.buildJsonObject {
+                    put("authenticatorData", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.authenticatorData)))
+                    put("clientDataJSON", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.clientDataJSON)))
+                    put("signature", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.signature)))
+                    result.userHandle?.let { put("userHandle", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(it))) }
+                })
+            }
+            authServerClient.loginFinish(challengeId = challengeId, credential = credentialJson)
 
             val prfOutput = extractLastPrfOutput()
                 ?: throw WalletException("PRF not available from authenticator")
@@ -386,30 +484,6 @@ class SirosWallet private constructor(
         } catch (e: Exception) {
             Timber.e(e, "Keystore unlock failed")
             _state.value = WalletState.Error(e.message ?: "Keystore unlock failed")
-        }
-    }
-
-    /**
-     * Attempt to refresh the appToken using the stored refreshToken.
-     * @return true if refresh succeeded, false otherwise.
-     */
-    private suspend fun refreshToken(): Boolean {
-        val refreshTok = sessionStore.refreshToken ?: return false
-        return try {
-            val client = apiClient ?: return false
-            val response = client.refreshSession(refreshTok)
-            val newToken = response["appToken"]?.jsonPrimitive?.content ?: return false
-            sessionStore.appToken = newToken
-            client.setAppToken(newToken)
-            // Update refresh token if a new one was issued
-            response["refreshToken"]?.jsonPrimitive?.content?.let {
-                sessionStore.refreshToken = it
-            }
-            Timber.i("Token refreshed successfully")
-            true
-        } catch (e: Exception) {
-            Timber.w(e, "Token refresh failed")
-            false
         }
     }
 
@@ -704,6 +778,19 @@ class SirosWallet private constructor(
         if (response.isSuccessful) response.body?.string() else null
     })
 
+    // New AS-based auth
+    private val authServerClient = AuthServerClient(
+        context = activity,
+        baseUrl = config.backendUrl,
+        tenantId = config.tenantId,
+    )
+    private val authTokens = AuthTokens(authServerClient, config.tenantId).apply {
+        onSessionRejected = {
+            Timber.w("Session rejected — forcing logout")
+            scope.launch { logout() }
+        }
+    }
+
     private val _presentationHistory = mutableListOf<PresentationRecord>()
 
     /** Presentation history — most recent first. */
@@ -734,9 +821,16 @@ class SirosWallet private constructor(
     }
 
     private fun setupApiClient(session: AuthSession) {
-        Timber.d("setupApiClient: authenticated session established")
+        Timber.d("setupApiClient: legacy authenticated session established")
         apiClient = BackendApiClient(config.backendUrl, config.tenantId, httpClient = httpClient).apply {
             setAppToken(session.appToken)
+        }
+    }
+
+    private fun setupApiClientWithTokens() {
+        Timber.d("setupApiClient: using AuthTokens for automatic token management")
+        apiClient = BackendApiClient(config.backendUrl, config.tenantId, httpClient = httpClient).apply {
+            setAuthTokens(authTokens)
         }
     }
 
@@ -811,6 +905,16 @@ class SirosWallet private constructor(
         } catch (e: Exception) {
             Timber.e(e, "Failed to persist keystore")
         }
+    }
+
+    /**
+     * Connect the engine using an anonymous token from the AS.
+     * The anonymous token has read+list permissions — sufficient for
+     * flow orchestration (issuance, presentation).
+     */
+    private suspend fun connectEngineWithToken() {
+        val token = authTokens.ensureAnonymousToken()
+        connectEngine(token.raw)
     }
 
     private suspend fun connectEngine(appToken: String) {

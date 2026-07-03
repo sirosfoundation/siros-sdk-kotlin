@@ -208,6 +208,39 @@ class AuthServerClient(
         }
     }
 
+    /**
+     * Request an anonymous access token (no session cookie required).
+     *
+     * @param aud Target audience (e.g., "wallet-backend").
+     * @param tac Token Access Control string (e.g., "rl").
+     * @return Parsed [AccessToken] with claims.
+     */
+    suspend fun requestAnonymousToken(aud: String, tac: String? = null): AccessToken {
+        val key = "$tenantId::$aud::${tac ?: ""}::anonymous"
+
+        return pendingTokenMutex.withLock {
+            pendingTokenRequests[key]?.let { cached ->
+                if (!cached.isExpired()) return@withLock cached
+                pendingTokenRequests.remove(key)
+            }
+
+            val token = withContext(Dispatchers.IO) {
+                val body = buildJsonObject {
+                    put("aud", aud)
+                    tac?.let { put("tac", it) }
+                    put("tenant_id", tenantId)
+                    put("anonymous", true)
+                }
+                val response = post("/auth/token", body, defaultHeaders())
+                val tokenResponse = json.decodeFromJsonElement(TokenResponse.serializer(), response)
+                AccessToken(tokenResponse.accessToken)
+            }
+
+            pendingTokenRequests[key] = token
+            token
+        }
+    }
+
     // ---- Logout ----
 
     /**
@@ -267,6 +300,7 @@ data class LoginFinishResult(
     val uuid: String,
     val displayName: String,
     val tenantId: String,
+    val tenantDisplayName: String = "",
 )
 
 /**
@@ -277,4 +311,5 @@ data class RegisterFinishResult(
     val uuid: String,
     val displayName: String,
     val tenantId: String,
+    val tenantDisplayName: String = "",
 )
