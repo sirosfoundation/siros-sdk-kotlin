@@ -93,6 +93,9 @@ dependencies {
     // Credential image loading
     implementation(libs.coil.compose)
 
+    // CBOR codec for CTAP2 USB HID transport (FIDO2 plugin)
+    implementation("com.upokecenter:cbor:4.5.4")
+
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
