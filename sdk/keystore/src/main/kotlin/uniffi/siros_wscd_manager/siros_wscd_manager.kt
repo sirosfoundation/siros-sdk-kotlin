@@ -926,6 +926,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_lifecycle(`ptr`: Pointer,`request`: RustBuffer.ByValue,`auth`: Long,`progress`: Long,uniffi_out_err: UniffiRustCallStatus,
     ): RustBuffer.ByValue
+    fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_fido2_plugin(`ptr`: Pointer,`transport`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): Unit
     fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_r2ps_plugin(`ptr`: Pointer,`config`: RustBuffer.ByValue,`transport`: Long,`pake`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_softkey_plugin(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
@@ -1076,6 +1078,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_migrate_key(
     ): Short
+    fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_fido2_plugin(
+    ): Short
     fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_r2ps_plugin(
     ): Short
     fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_softkey_plugin(
@@ -1142,6 +1146,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_migrate_key() != 41362.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_fido2_plugin() != 25606.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_r2ps_plugin() != 56622.toShort()) {
@@ -1634,6 +1641,8 @@ public interface FfiWscdManagerInterface {
      */
     fun `registerLifecycle`(`request`: FfiRegisterLifecycleRequest, `auth`: FfiAuthCallback, `progress`: FfiProgressCallback): FfiRegistrationOutcome
     
+    fun `registerFido2Plugin`(`transport`: FfiCtap2Transport)
+    
     /**
      * Register the R2PS plugin for remote HSM signing.
      *
@@ -1925,6 +1934,15 @@ open class FfiWscdManager: Disposable, AutoCloseable, FfiWscdManagerInterface {
     )
     }
     
+
+    @Throws(FfiWscdException::class)override fun `registerFido2Plugin`(`transport`: FfiCtap2Transport)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FfiWscdException) { _status ->
+    UniffiLib.INSTANCE.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_fido2_plugin(
+        it, FfiConverterTypeFfiCtap2Transport.lower(`transport`),_status)
+}
+    }
 
     
     /**

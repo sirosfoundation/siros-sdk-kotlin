@@ -24,6 +24,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -56,6 +57,7 @@ fun WscaDeveloperScreen(
     selectedPluginId: String,
     r2psServerUrl: String,
     onSelectPlugin: (String) -> Unit,
+    onR2psServerUrlChange: (String) -> Unit,
     onEnroll: () -> Unit,
     onRotate: () -> Unit,
     onDestroy: (DestroyMode) -> Unit,
@@ -108,9 +110,15 @@ fun WscaDeveloperScreen(
                 }
             }
             if (selectedPluginId == "r2ps") {
-                InfoCard {
-                    InfoRow("R2PS Server", r2psServerUrl)
-                }
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = r2psServerUrl,
+                    onValueChange = onR2psServerUrlChange,
+                    label = { Text("R2PS Server URL") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                )
             }
 
             Spacer(modifier = Modifier.height(16.dp))

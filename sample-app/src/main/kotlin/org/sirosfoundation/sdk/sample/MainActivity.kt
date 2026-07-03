@@ -45,7 +45,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -83,6 +82,7 @@ import org.sirosfoundation.sdk.wallet.classifyDeepLink
 class MainActivity : ComponentActivity() {
     private lateinit var viewModel: WalletViewModel
     private val tag = "SIROS_MAIN"
+    private var pendingWscaIntent: android.content.Intent? = null
 
     private fun dispatchIncomingUri(uri: android.net.Uri?) {
         if (uri == null || !::viewModel.isInitialized) return
@@ -98,6 +98,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Queue WSCA test intent for dispatch after ViewModel is ready
+        if (intent?.action == ACTION_WSCA_TEST && BuildConfig.DEBUG) {
+            pendingWscaIntent = intent
+        }
         val vmFactory = WalletViewModel.Factory(this)
         setContent {
             SirosTheme {
@@ -108,6 +112,10 @@ class MainActivity : ComponentActivity() {
                     viewModel = viewModel(factory = vmFactory)
                     LaunchedEffect(Unit) {
                         dispatchIncomingUri(intent?.data)
+                        pendingWscaIntent?.let {
+                            dispatchWscaTestAction(it)
+                            pendingWscaIntent = null
+                        }
                     }
                     WalletScreen(viewModel)
                 }
@@ -118,7 +126,11 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         if (intent.action == ACTION_WSCA_TEST && BuildConfig.DEBUG) {
-            dispatchWscaTestAction(intent)
+            if (::viewModel.isInitialized) {
+                dispatchWscaTestAction(intent)
+            } else {
+                pendingWscaIntent = intent
+            }
         } else {
             dispatchIncomingUri(intent.data)
         }
@@ -188,7 +200,6 @@ fun WalletScreen(viewModel: WalletViewModel) {
     val walletState by viewModel.state.collectAsState()
     val backendUrl by viewModel.backendUrl.collectAsState()
     val tenantId by viewModel.tenantId.collectAsState()
-    val r2psEnabled by viewModel.r2psEnabled.collectAsState()
     val r2psServerUrl by viewModel.r2psServerUrl.collectAsState()
     val showAddCredential by viewModel.showAddCredential.collectAsState()
     val availableCredentials by viewModel.availableCredentials.collectAsState()
@@ -214,14 +225,10 @@ fun WalletScreen(viewModel: WalletViewModel) {
         LoginScreen(
             backendUrl = backendUrl,
             tenantId = tenantId,
-            r2psEnabled = r2psEnabled,
-            r2psServerUrl = r2psServerUrl,
             isLoading = isLoading || walletState is WalletState.Connecting,
             snackbarHostState = snackbarHostState,
             onBackendUrlChange = viewModel::updateBackendUrl,
             onTenantIdChange = viewModel::updateTenantId,
-            onR2psEnabledChange = viewModel::updateR2psEnabled,
-            onR2psServerUrlChange = viewModel::updateR2psServerUrl,
             onLogin = viewModel::login,
             onRegister = viewModel::register,
         )
@@ -272,6 +279,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
             selectedPluginId = selectedPluginId,
             r2psServerUrl = r2psServerUrl,
             onSelectPlugin = viewModel::selectPlugin,
+            onR2psServerUrlChange = viewModel::updateR2psServerUrl,
             onEnroll = viewModel::enrollWscd,
             onRotate = viewModel::rotateLifecycle,
             onDestroy = viewModel::destroyLifecycle,
@@ -457,14 +465,10 @@ fun WalletScreen(viewModel: WalletViewModel) {
 fun LoginScreen(
     backendUrl: String,
     tenantId: String,
-    r2psEnabled: Boolean,
-    r2psServerUrl: String,
     isLoading: Boolean,
     snackbarHostState: SnackbarHostState,
     onBackendUrlChange: (String) -> Unit,
     onTenantIdChange: (String) -> Unit,
-    onR2psEnabledChange: (Boolean) -> Unit,
-    onR2psServerUrlChange: (String) -> Unit,
     onLogin: () -> Unit,
     onRegister: () -> Unit,
 ) {
@@ -529,34 +533,6 @@ fun LoginScreen(
                         enabled = !isLoading,
                         shape = RoundedCornerShape(12.dp),
                     )
-
-                    // R2PS remote signing toggle
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text(
-                            text = "R2PS Remote Signing",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        Switch(
-                            checked = r2psEnabled,
-                            onCheckedChange = onR2psEnabledChange,
-                            enabled = !isLoading,
-                        )
-                    }
-                    if (r2psEnabled) {
-                        OutlinedTextField(
-                            value = r2psServerUrl,
-                            onValueChange = onR2psServerUrlChange,
-                            label = { Text("R2PS Server URL") },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            enabled = !isLoading,
-                            shape = RoundedCornerShape(12.dp),
-                        )
-                    }
 
                     Spacer(modifier = Modifier.height(4.dp))
                     Button(

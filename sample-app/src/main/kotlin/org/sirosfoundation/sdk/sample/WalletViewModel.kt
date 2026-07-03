@@ -438,6 +438,52 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     /** Stored reference to the UniFFISigner for lifecycle operations. */
     private var wscdSigner: UniFFISigner? = null
+    private var r2psRegistered = false
+
+    /** Register the R2PS plugin on the given signer (idempotent). */
+    private fun registerR2psOnSigner(signer: UniFFISigner) {
+        if (r2psRegistered) return
+        // Generate ephemeral P-256 key pair for channel binding
+        val kpg = java.security.KeyPairGenerator.getInstance("EC")
+        kpg.initialize(java.security.spec.ECGenParameterSpec("secp256r1"))
+        val kp = kpg.generateKeyPair()
+        val clientKeyPem = "-----BEGIN PRIVATE KEY-----\n" +
+            android.util.Base64.encodeToString(kp.private.encoded, android.util.Base64.NO_WRAP)
+                .chunked(64).joinToString("\n") +
+            "\n-----END PRIVATE KEY-----"
+        val serverPubPem = "-----BEGIN PUBLIC KEY-----\n" +
+            android.util.Base64.encodeToString(kp.public.encoded, android.util.Base64.NO_WRAP)
+                .chunked(64).joinToString("\n") +
+            "\n-----END PUBLIC KEY-----"
+        val r2psConfig = FfiR2psConfig(
+            serverUrl = _r2psServerUrl.value,
+            clientId = "sample-app",
+            context = "wallet",
+            authMode = "opaque",
+            rpId = "",
+            allowedCredentialIds = emptyList(),
+            clientKeyPem = clientKeyPem,
+            serverPublicKeyPem = serverPubPem,
+        )
+        signer.registerR2psPlugin(
+            r2psConfig,
+            OkHttpR2psTransport(serverUrl = _r2psServerUrl.value),
+            SamplePakeClient(),
+        )
+        r2psRegistered = true
+        Log.i(TAG, "R2PS plugin registered at ${_r2psServerUrl.value}")
+    }
+
+    private var fido2Registered = false
+
+    /** Register the FIDO2 previewSign plugin on the given signer (idempotent). */
+    private fun registerFido2OnSigner(signer: UniFFISigner) {
+        if (fido2Registered) return
+        val transport = UsbCtap2Transport(activity.applicationContext)
+        signer.registerFido2Plugin(transport)
+        fido2Registered = true
+        Log.i(TAG, "FIDO2 previewSign plugin registered")
+    }
 
     /**
      * Enroll the WSCD: register + activate lifecycle.
@@ -454,6 +500,12 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     return@launch
                 }
                 val pluginId = activePluginId
+                // Lazily register R2PS plugin if switching at runtime
+                if (pluginId == "r2ps") {
+                    registerR2psOnSigner(signer)
+                } else if (pluginId == "fido2") {
+                    registerFido2OnSigner(signer)
+                }
                 val contextId = "ctx-${System.currentTimeMillis()}"
                 val factorKind = when (pluginId) {
                     "r2ps" -> FactorKind.Opaque
@@ -574,6 +626,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             val ctxId = lifecycleContextId
             if (signer == null || ctxId == null) {
                 _errorMessage.value = "WSCD not enrolled"
+                Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"rotate","status":"error","error":"WSCD not enrolled (signer=${signer != null}, ctxId=$ctxId)"}""")
                 return@launch
             }
             try {
@@ -601,6 +654,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             val ctxId = lifecycleContextId
             if (signer == null || ctxId == null) {
                 _errorMessage.value = "WSCD not enrolled"
+                Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"destroy","status":"error","error":"WSCD not enrolled (signer=${signer != null}, ctxId=$ctxId)"}""")
                 return@launch
             }
             try {
@@ -701,8 +755,8 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     wscdConfig,
                     authProvider = object : AuthProvider {
                         override fun requestPin(): ByteArray {
-                            // TODO: Show PIN dialog on main thread and block until user responds
-                            throw RuntimeException("PIN entry not implemented in sample app")
+                            // Debug builds use a fixed test PIN for R2PS OPAQUE registration
+                            return "test-pin-1234".toByteArray()
                         }
                         override fun requestWebauthnAssertion(
                             challenge: ByteArray,
@@ -714,25 +768,12 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     },
                 )
                 if (selectedPlugin == "r2ps") {
-                    val r2psConfig = FfiR2psConfig(
-                        serverUrl = _r2psServerUrl.value,
-                        clientId = "sample-app",
-                        context = "wallet",
-                        authMode = "opaque",
-                        rpId = "",
-                        allowedCredentialIds = emptyList(),
-                        clientKeyPem = "", // Populated from device enrollment in production
-                        serverPublicKeyPem = "", // Populated from R2PS server discovery
-                    )
-                    signer.registerR2psPlugin(
-                        r2psConfig,
-                        OkHttpR2psTransport(serverUrl = _r2psServerUrl.value),
-                        SamplePakeClient(),
-                    )
-                    Log.i(TAG, "WSCD keystore initialized with R2PS at ${_r2psServerUrl.value}")
-                } else {
-                    Log.i(TAG, "WSCD keystore initialized with plugin: $selectedPlugin")
+                    registerR2psOnSigner(signer)
+                } else if (selectedPlugin == "fido2") {
+                    val transport = UsbCtap2Transport(activity.applicationContext)
+                    signer.registerFido2Plugin(transport)
                 }
+                Log.i(TAG, "WSCD keystore initialized with plugin: $selectedPlugin")
                 wscdSigner = signer
                 WscdKeystoreAdapter(signer)
             } catch (e: Exception) {

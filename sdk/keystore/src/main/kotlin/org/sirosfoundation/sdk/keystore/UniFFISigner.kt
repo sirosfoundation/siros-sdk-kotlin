@@ -22,6 +22,7 @@ import uniffi.siros_wscd_manager.FfiMigrationResult
 import uniffi.siros_wscd_manager.FfiOperationProgress
 import uniffi.siros_wscd_manager.FfiPakeClient
 import uniffi.siros_wscd_manager.FfiProgressCallback
+import uniffi.siros_wscd_manager.FfiCtap2Transport
 import uniffi.siros_wscd_manager.FfiR2psConfig
 import uniffi.siros_wscd_manager.FfiRegisterLifecycleRequest
 import uniffi.siros_wscd_manager.FfiRegistrationOutcome
@@ -69,6 +70,15 @@ class UniFFISigner(
         pakeClient: FfiPakeClient,
     ) {
         ffi.registerR2psPlugin(r2psConfig, httpTransport, pakeClient)
+    }
+
+    /**
+     * Register the FIDO2 previewSign (rawSign) plugin for hardware authenticators.
+     *
+     * @param transport CTAP2 transport handling USB/BLE/NFC communication.
+     */
+    fun registerFido2Plugin(transport: FfiCtap2Transport) {
+        ffi.registerFido2Plugin(transport)
     }
 
     override suspend fun generateKey(algorithm: String): String = withContext(Dispatchers.IO) {

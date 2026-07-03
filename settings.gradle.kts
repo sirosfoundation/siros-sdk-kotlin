@@ -11,6 +11,7 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        mavenLocal() // local-dev override: must precede GitHubPackages so local builds win
         // siros-wscd-manager AAR, published to GitHub Packages Maven.
         // Credentials come from env (CI: GITHUB_ACTOR/GITHUB_TOKEN) or Gradle
         // properties (local: gpr.user/gpr.key in ~/.gradle/gradle.properties).
@@ -26,7 +27,6 @@ dependencyResolutionManagement {
                 ).getOrElse("")
             }
         }
-        mavenLocal() // local-dev fallback for an unpublished AAR
     }
 }
 
