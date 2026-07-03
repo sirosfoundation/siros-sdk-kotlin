@@ -22,8 +22,11 @@ import timber.log.Timber
 /**
  * Authenticated HTTP client for the wallet backend REST API.
  *
- * Requires a valid `appToken` (JWT) obtained from [WebAuthnAuthClient.login]
- * or [WebAuthnAuthClient.register].
+ * Supports two auth modes:
+ * 1. Legacy: set a static `appToken` via [setAppToken].
+ * 2. New AS: provide an [AuthTokens] instance via [setAuthTokens] — tokens
+ *    are automatically requested/refreshed per request, and 401 rejections
+ *    trigger automatic retry with a fresh token.
  */
 class BackendApiClient(
     private val baseUrl: String,
@@ -32,10 +35,19 @@ class BackendApiClient(
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
     private var appToken: String? = null
+    private var authTokens: AuthTokens? = null
 
     fun setAppToken(token: String) {
         Timber.d("setAppToken: token set")
         appToken = token
+    }
+
+    /**
+     * Configure this client to use [AuthTokens] for automatic token management.
+     * When set, [setAppToken] is ignored and tokens are obtained from the AS.
+     */
+    fun setAuthTokens(tokens: AuthTokens) {
+        authTokens = tokens
     }
 
     /** GET /user/session/account-info */
@@ -85,12 +97,11 @@ class BackendApiClient(
         val body = kotlinx.serialization.json.buildJsonObject {
             put("refreshToken", kotlinx.serialization.json.JsonPrimitive(refreshToken))
         }
-        val request = Request.Builder()
+        val builder = Request.Builder()
             .url("$baseUrl/user/session/refresh")
-            .apply { addCommonHeaders(this) }
             .post(body.toString().toRequestBody("application/json".toMediaType()))
-            .build()
-        execute(request)
+        addCommonHeaders(builder)
+        execute(builder.build())
     }
 
     // ── Wallet Provider endpoints ───────────────────────────────────
@@ -170,48 +181,47 @@ class BackendApiClient(
     // ── HTTP primitives ─────────────────────────────────────────────
 
     private suspend fun get(path: String): JsonObject = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
+        val builder = Request.Builder()
             .url("$baseUrl$path")
-            .apply { addCommonHeaders(this) }
             .get()
-            .build()
-        execute(request)
+        addCommonHeaders(builder)
+        execute(builder.build())
     }
 
     private suspend fun getElement(path: String): JsonElement = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
+        val builder = Request.Builder()
             .url("$baseUrl$path")
-            .apply { addCommonHeaders(this) }
             .get()
-            .build()
-        executeRaw(request)
+        addCommonHeaders(builder)
+        executeRaw(builder.build())
     }
 
     private suspend fun post(path: String, body: JsonObject): JsonObject = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
+        val builder = Request.Builder()
             .url("$baseUrl$path")
-            .apply { addCommonHeaders(this) }
             .post(body.toString().toRequestBody("application/json".toMediaType()))
-            .build()
-        execute(request)
+        addCommonHeaders(builder)
+        execute(builder.build())
     }
 
     private suspend fun delete(path: String): JsonObject = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
+        val builder = Request.Builder()
             .url("$baseUrl$path")
-            .apply { addCommonHeaders(this) }
             .delete()
-            .build()
-        execute(request)
+        addCommonHeaders(builder)
+        execute(builder.build())
     }
 
-    private fun addCommonHeaders(builder: Request.Builder) {
+    private suspend fun addCommonHeaders(builder: Request.Builder) {
         builder.header("X-Tenant-ID", tenantId)
-        if (appToken != null) {
-            Timber.d("addCommonHeaders: sending authenticated request")
+        val tokens = authTokens
+        if (tokens != null) {
+            val token = tokens.ensureBackendToken()
+            builder.header("Authorization", "Bearer ${token.raw}")
+        } else if (appToken != null) {
             builder.header("Authorization", "Bearer $appToken")
         } else {
-            Timber.w("addCommonHeaders: appToken is NULL — request will be unauthenticated!")
+            Timber.w("addCommonHeaders: no token source — request will be unauthenticated!")
         }
     }
 

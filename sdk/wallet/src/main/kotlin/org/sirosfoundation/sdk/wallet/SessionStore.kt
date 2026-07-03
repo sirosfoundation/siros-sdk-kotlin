@@ -91,7 +91,7 @@ internal class SessionStore(context: Context) {
     // ── Lifecycle ───────────────────────────────────────────────────
 
     val hasSession: Boolean
-        get() = appToken != null && userId != null
+        get() = userId != null
 
     fun clear() {
         prefs.edit().clear().apply()
