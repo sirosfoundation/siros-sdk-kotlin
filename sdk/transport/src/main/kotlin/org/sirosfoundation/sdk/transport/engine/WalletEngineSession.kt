@@ -22,6 +22,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import org.sirosfoundation.sdk.transport.CredentialNotifier
 import timber.log.Timber
 import java.util.concurrent.TimeUnit
 
@@ -41,7 +42,7 @@ class WalletEngineSession(
     private val baseUrl: String,
     private val tenantId: String = "default",
     private val client: OkHttpClient = defaultClient(),
-) {
+) : CredentialNotifier {
     enum class State { DISCONNECTED, CONNECTING, CONNECTED, RECONNECTING, FAILED }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -318,11 +319,11 @@ class WalletEngineSession(
      * a concurrent disconnect (e.g. logout). Dropping it in that case is safe
      * because §10 notifications are optional and best-effort.
      */
-    fun sendCredentialNotification(
+    override fun sendCredentialNotification(
         flowId: String,
         notificationId: String,
         event: String,
-        eventDescription: String? = null,
+        eventDescription: String?,
     ) {
         if (!isConnected) return
         send(CredentialNotificationMessage.serializer(), CredentialNotificationMessage(

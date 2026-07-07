@@ -15,6 +15,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.sirosfoundation.sdk.auth.BackendApiClient
 import org.sirosfoundation.sdk.keystore.KeystoreManager
+import org.sirosfoundation.sdk.transport.CredentialNotifier
 import org.sirosfoundation.sdk.transport.wmp.WmpMeta
 import org.sirosfoundation.sdk.transport.wmp.WmpSession
 import timber.log.Timber
@@ -37,7 +38,7 @@ class FlowClient(
     private val apiClient: BackendApiClient? = null,
     private val autoSign: Boolean = true,
     private val json: Json = Json { ignoreUnknownKeys = true },
-) {
+) : CredentialNotifier {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val _events = Channel<FlowEvent>(Channel.BUFFERED)
 
@@ -120,6 +121,35 @@ class FlowClient(
             put("wmp", json.encodeToJsonElement(WmpMeta.serializer(), WmpMeta()))
         }
         session.sendNotification("wmp.flow.action", params)
+    }
+
+    // ===== CredentialNotifier =====
+
+    /**
+     * Send an OID4VCI §10 credential lifecycle notification over WMP.
+     * Fire-and-forget: errors are logged, never thrown.
+     */
+    override fun sendCredentialNotification(
+        flowId: String,
+        notificationId: String,
+        event: String,
+        eventDescription: String?,
+    ) {
+        if (session.state.value != org.sirosfoundation.sdk.transport.wmp.WmpSessionState.ACTIVE) return
+        scope.launch {
+            try {
+                val params = buildJsonObject {
+                    put("wmp", json.encodeToJsonElement(WmpMeta.serializer(), WmpMeta()))
+                    put("flow_id", flowId)
+                    put("notification_id", notificationId)
+                    put("event", event)
+                    eventDescription?.let { put("event_description", it) }
+                }
+                session.sendNotification("wmp.credential.notification", params)
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to send credential notification for flow $flowId")
+            }
+        }
     }
 
     private suspend fun handleNotification(notification: org.sirosfoundation.sdk.transport.wmp.JsonRpcRequest) {

@@ -49,6 +49,7 @@ import org.sirosfoundation.sdk.credentials.Vctm
 import org.sirosfoundation.sdk.credentials.VctmFetcher
 import org.sirosfoundation.sdk.keystore.JweKeystore
 import org.sirosfoundation.sdk.keystore.KeystoreManager
+import org.sirosfoundation.sdk.transport.CredentialNotifier
 import org.sirosfoundation.sdk.transport.engine.CredentialMatch
 import org.sirosfoundation.sdk.transport.engine.CredentialNotificationEvent
 import org.sirosfoundation.sdk.transport.engine.ProofObject
@@ -323,6 +324,7 @@ class SirosWallet private constructor(
     fun logout() {
         engineSession?.disconnect()
         engineSession = null
+        credentialNotifier = null
         keystore.lock()
         sessionStore.clear()
         apiClient = null
@@ -497,6 +499,7 @@ class SirosWallet private constructor(
     fun destroy() {
         engineSession?.disconnect()
         engineSession = null
+        credentialNotifier = null
         keystore.lock()
         apiClient = null
         supervisorJob.cancel()
@@ -798,6 +801,8 @@ class SirosWallet private constructor(
 
     private var apiClient: BackendApiClient? = null
     private var engineSession: WalletEngineSession? = null
+    /** Transport-independent notifier for OID4VCI §10 events. */
+    private var credentialNotifier: CredentialNotifier? = null
     private var eventListener: WalletEventListener? = null
     private var activeOffer: CredentialOffer? = null
     private var activeVctm: Vctm? = null
@@ -920,6 +925,7 @@ class SirosWallet private constructor(
     private suspend fun connectEngine(appToken: String) {
         val engine = createEngineSession(config.backendUrl, config.tenantId)
         engineSession = engine
+        credentialNotifier = engine
         engine.connect(appToken)
         engine.awaitConnected()
 
@@ -1192,7 +1198,7 @@ class SirosWallet private constructor(
                     // OID4VCI §10: once the credential is stored, tell the backend
                     // to forward a credential_accepted notification to the issuer.
                     cred.notificationId?.let { notificationId ->
-                        engine.sendCredentialNotification(
+                        credentialNotifier?.sendCredentialNotification(
                             flowId = msg.flowId,
                             notificationId = notificationId,
                             event = CredentialNotificationEvent.ACCEPTED,
