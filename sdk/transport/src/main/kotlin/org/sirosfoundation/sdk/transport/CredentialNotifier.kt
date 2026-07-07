@@ -4,8 +4,8 @@ package org.sirosfoundation.sdk.transport
  * Transport-independent interface for sending OID4VCI §10 credential
  * lifecycle notifications.
  *
- * Both the legacy WebSocket engine ([WalletEngineSession]) and the WMP
- * [FlowClient] implement this so the wallet facade can send notifications
+ * Both the legacy WebSocket engine (`WalletEngineSession`) and the WMP
+ * `FlowClient` implement this so the wallet facade can send notifications
  * regardless of the active transport binding.
  */
 interface CredentialNotifier {

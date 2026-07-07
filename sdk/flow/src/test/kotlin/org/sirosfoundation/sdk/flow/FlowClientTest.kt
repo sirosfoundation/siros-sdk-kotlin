@@ -32,6 +32,7 @@ import org.sirosfoundation.sdk.transport.wmp.JsonRpcResponse
 import org.sirosfoundation.sdk.transport.wmp.WmpCodec
 import org.sirosfoundation.sdk.transport.wmp.WmpSession
 import org.sirosfoundation.sdk.transport.wmp.WmpSessionConfig
+import org.sirosfoundation.sdk.transport.wmp.WmpSessionState
 import kotlinx.coroutines.channels.Channel
 
 class FlowClientTest {
@@ -229,6 +230,77 @@ class FlowClientTest {
                 }
             }
         }
+    }
+
+    @Test
+    fun sendCredentialNotificationSendsWmpNotification() = runBlocking {
+        val transport = FakeTransport()
+        val session = WmpSession(
+            transport = transport,
+            config = WmpSessionConfig(requestTimeoutMs = 2_000),
+        )
+
+        // Connect the session so it's ACTIVE
+        val createJob = launch { session.create("token") }
+        waitForRequestMethod(transport, "wmp.session.create")
+        val createReq = codec.decodeRequest(transport.sentMessages.last())
+        transport.receiveFromServer(createResponse(createReq.id!!).toByteArray())
+        createJob.join()
+
+        assertEquals(WmpSessionState.ACTIVE, session.state.value)
+
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns true
+
+        val client = FlowClient(session, keystore)
+        client.sendCredentialNotification(
+            flowId = "flow-123",
+            notificationId = "notif-456",
+            event = "credential_accepted",
+        )
+
+        // Wait briefly for the fire-and-forget coroutine to complete
+        delay(200)
+
+        // Find the notification in sent messages
+        val notifications = transport.sentMessages
+            .mapNotNull { runCatching { codec.decodeRequest(it) }.getOrNull() }
+            .filter { it.method == "wmp.credential.notification" }
+
+        assertEquals(1, notifications.size)
+        val params = notifications.first().params!!
+        assertEquals("flow-123", (params["flow_id"] as? JsonPrimitive)?.content)
+        assertEquals("notif-456", (params["notification_id"] as? JsonPrimitive)?.content)
+        assertEquals("credential_accepted", (params["event"] as? JsonPrimitive)?.content)
+
+        session.close()
+    }
+
+    @Test
+    fun sendCredentialNotificationNoOpWhenNotActive() = runBlocking {
+        val transport = FakeTransport()
+        val session = WmpSession(
+            transport = transport,
+            config = WmpSessionConfig(requestTimeoutMs = 2_000),
+        )
+
+        // Session is CLOSED (not connected)
+        assertEquals(WmpSessionState.CLOSED, session.state.value)
+
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns true
+
+        val client = FlowClient(session, keystore)
+        val sentBefore = transport.sentMessages.size
+        client.sendCredentialNotification(
+            flowId = "flow-123",
+            notificationId = "notif-456",
+            event = "credential_accepted",
+        )
+
+        delay(200)
+        // No messages should have been sent
+        assertEquals(sentBefore, transport.sentMessages.size)
     }
 
     private suspend fun waitForRequestMethod(transport: FakeTransport, method: String): JsonRpcRequest {
