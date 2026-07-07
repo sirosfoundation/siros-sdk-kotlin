@@ -45,8 +45,8 @@ enum class Acr(val value: String) {
 
     companion object {
         fun fromValue(value: String): Acr =
-            entries.find { it.value == value }
-                ?: throw AuthException("Unknown ACR value: $value")
+            if (value.isEmpty()) PASSKEY
+            else entries.find { it.value == value } ?: PASSKEY
     }
 }
 
@@ -55,12 +55,12 @@ enum class Acr(val value: String) {
  */
 @Serializable
 internal data class AccessTokenPayload(
-    val sub: String,
-    val aud: String,
-    @SerialName("tenant_id") val tenantId: String,
-    val tac: String,
-    val acr: String,
-    val exp: Long,
+    val sub: String = "",
+    val aud: String = "",
+    @SerialName("tenant_id") val tenantId: String = "",
+    val tac: String = "",
+    val acr: String = "",
+    val exp: Long = 0,
 )
 
 /**
