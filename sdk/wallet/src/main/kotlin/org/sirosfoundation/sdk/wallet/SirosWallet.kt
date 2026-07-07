@@ -45,6 +45,7 @@ import org.sirosfoundation.sdk.credentials.IssuerEntry
 import org.sirosfoundation.sdk.credentials.IssuerMetadata
 import org.sirosfoundation.sdk.credentials.CredentialConfiguration
 import org.sirosfoundation.sdk.credentials.CredentialUtils
+import org.sirosfoundation.sdk.auth.toPlainMap
 import org.sirosfoundation.sdk.credentials.Vctm
 import org.sirosfoundation.sdk.credentials.VctmFetcher
 import org.sirosfoundation.sdk.keystore.JweKeystore
@@ -123,7 +124,7 @@ class SirosWallet private constructor(
             val hkdfInfo = HKDF_INFO.toByteArray(Charsets.UTF_8)
 
             // Step 1: Get challenge from AS
-            val challengeResponse = authServerClient.registerBegin()
+            val challengeResponse = authServerClient.registerBegin().toPlainMap()
             val challengeId = (challengeResponse["challengeId"] as? String)
                 ?: throw WalletException("Missing challengeId in register begin response")
             val createOptions = (challengeResponse["createOptions"] as? Map<*, *>)
@@ -181,7 +182,14 @@ class SirosWallet private constructor(
             // Derive key and initialise empty keystore
             keystore.unlock(prfOutput.first, ByteArray(0), hkdfSalt, hkdfInfo)
             (keystore as? JweKeystore)?.setCredentialId(credId)
-            val encryptedContainer = keystore.exportEncryptedContainer()
+
+            // WSCD-backed keystores store keys in secure hardware and don't
+            // need encrypted container export/sync.
+            val encryptedContainer = try {
+                keystore.exportEncryptedContainer()
+            } catch (_: UnsupportedOperationException) {
+                null
+            }
 
             // Persist session (no appToken/refreshToken — using session cookies now)
             sessionStore.userId = session.uuid
@@ -191,7 +199,9 @@ class SirosWallet private constructor(
             sessionStore.prfSalt = b64Encode(prfSalt)
             sessionStore.hkdfSalt = b64Encode(hkdfSalt)
             sessionStore.hkdfInfo = b64Encode(hkdfInfo)
-            sessionStore.privateDataJwe = String(encryptedContainer, Charsets.UTF_8)
+            encryptedContainer?.let {
+                sessionStore.privateDataJwe = String(it, Charsets.UTF_8)
+            }
 
             // Set up API client with AuthTokens
             setupApiClientWithTokens()
@@ -232,7 +242,7 @@ class SirosWallet private constructor(
             val storedPrfSalt = sessionStore.prfSalt?.let { b64Decode(it) }
 
             // Step 1: Get challenge from AS
-            val challengeResponse = authServerClient.loginBegin()
+            val challengeResponse = authServerClient.loginBegin().toPlainMap()
             val challengeId = (challengeResponse["challengeId"] as? String)
                 ?: throw WalletException("Missing challengeId in login begin response")
             val getOptions = (challengeResponse["getOptions"] as? Map<*, *>)
@@ -422,7 +432,7 @@ class SirosWallet private constructor(
         try {
             val storedPrfSalt = sessionStore.prfSalt?.let { b64Decode(it) }
             // Use AS login flow to get PRF output via biometric assertion
-            val challengeResponse = authServerClient.loginBegin()
+            val challengeResponse = authServerClient.loginBegin().toPlainMap()
             val challengeId = (challengeResponse["challengeId"] as? String)
                 ?: throw WalletException("Missing challengeId")
             val getOptions = (challengeResponse["getOptions"] as? Map<*, *>)
