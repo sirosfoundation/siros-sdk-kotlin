@@ -64,6 +64,9 @@ class AuthServerClient(
         tenantId = tenantId,
         httpClient = OkHttpClient.Builder()
             .cookieJar(PersistentCookieJar(context))
+            .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .writeTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
             .build(),
         json = json,
     )

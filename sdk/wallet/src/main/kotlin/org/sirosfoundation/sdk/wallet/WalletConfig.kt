@@ -29,6 +29,8 @@ import org.sirosfoundation.sdk.keystore.KeystoreManager
 data class WalletConfig(
     val backendUrl: String,
     val tenantId: String = "default",
+    /** WebSocket engine URL. Defaults to backendUrl if not set (same-port deployment). */
+    val engineUrl: String = "",
     val redirectUri: String = "",
     val useSystemCredentialManager: Boolean = false,
     val credentialStore: CredentialStore? = null,

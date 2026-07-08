@@ -98,6 +98,20 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Allow overriding backend/engine URLs via intent extras (for test automation)
+        if (BuildConfig.DEBUG) {
+            intent?.getStringExtra("backend_url")?.let { url ->
+                Log.i(tag, "Override backend_url from intent: $url")
+                // Will be picked up by ViewModel after creation
+                getSharedPreferences("siros_test_overrides", MODE_PRIVATE)
+                    .edit().putString("backend_url", url).apply()
+            }
+            intent?.getStringExtra("engine_url")?.let { url ->
+                Log.i(tag, "Override engine_url from intent: $url")
+                getSharedPreferences("siros_test_overrides", MODE_PRIVATE)
+                    .edit().putString("engine_url", url).apply()
+            }
+        }
         // Queue WSCA test intent for dispatch after ViewModel is ready
         if (intent?.action == ACTION_WSCA_TEST && BuildConfig.DEBUG) {
             pendingWscaIntent = intent

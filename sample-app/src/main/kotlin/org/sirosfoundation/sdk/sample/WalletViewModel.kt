@@ -58,11 +58,20 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     // ── Configuration (editable before login) ───────────────────────
 
-    private val _backendUrl = MutableStateFlow(DEFAULT_BACKEND_URL)
-    val backendUrl: StateFlow<String> = _backendUrl
+    private val _backendUrl: MutableStateFlow<String>
+    val backendUrl: StateFlow<String> get() = _backendUrl
+
+    private val _engineUrl: String
 
     private val _tenantId = MutableStateFlow(DEFAULT_TENANT_ID)
     val tenantId: StateFlow<String> = _tenantId
+
+    init {
+        // Read test overrides (set via intent extras by automation scripts)
+        val prefs = activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+        _backendUrl = MutableStateFlow(prefs.getString("backend_url", null) ?: DEFAULT_BACKEND_URL)
+        _engineUrl = prefs.getString("engine_url", null) ?: BuildConfig.ENGINE_URL
+    }
 
     fun updateBackendUrl(url: String) { _backendUrl.value = url }
     fun updateTenantId(id: String) { _tenantId.value = id }
@@ -784,6 +793,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         return WalletConfig(
             backendUrl = _backendUrl.value,
             tenantId = _tenantId.value,
+            engineUrl = _engineUrl,
             redirectUri = REDIRECT_URI,
             requireUserAuth = !isEmulator,
             keystore = keystore,

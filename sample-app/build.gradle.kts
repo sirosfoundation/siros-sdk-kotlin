@@ -28,16 +28,19 @@ android {
             )
             manifestPlaceholders["usesCleartextTraffic"] = "false"
             buildConfigField("String", "DEFAULT_BACKEND_URL", "\"https://wallet.sirosid.dev\"")
+            buildConfigField("String", "ENGINE_URL", "\"\"")
             buildConfigField("String", "ISSUER_PROXY_URL", "\"\"")
             buildConfigField("boolean", "R2PS_ENABLED", "false")
         }
         debug {
             // Allow connecting to local backend over cleartext for development
             manifestPlaceholders["usesCleartextTraffic"] = "true"
-            // Waydroid reaches host-mapped wallet backend via gateway + wallet-proxy
-            buildConfigField("String", "DEFAULT_BACKEND_URL", "\"http://192.168.240.1:8090\"")
+            // USB device with ADB reverse: localhost maps to host via port forwarding
+            buildConfigField("String", "DEFAULT_BACKEND_URL", "\"http://localhost:8080\"")
+            // Engine WebSocket on separate port in dev (backend --mode=all)
+            buildConfigField("String", "ENGINE_URL", "\"http://localhost:8082\"")
             // Rewrite Docker-internal issuer URLs to the host-accessible proxy
-            buildConfigField("String", "ISSUER_PROXY_URL", "\"http://192.168.240.1:8091\"")
+            buildConfigField("String", "ISSUER_PROXY_URL", "\"\"")
             // Enable WSCD-backed signing via R2PS in debug builds
             // Requires siros-wscd-manager native lib built with r2ps feature
             buildConfigField("boolean", "R2PS_ENABLED", "false")
