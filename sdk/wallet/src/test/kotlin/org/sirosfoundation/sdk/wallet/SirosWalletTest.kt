@@ -77,13 +77,19 @@ class SirosWalletTest {
         val engine = mockk<WalletEngineSession>(relaxed = true)
         val keystore = mockk<KeystoreManager>(relaxed = true)
         val sessionStore = mockk<SessionStore>(relaxed = true)
+        val accountRegistry = mockk<AccountRegistry>(relaxed = true)
+        every { accountRegistry.listLoginableAccounts() } returns emptyList()
+        val scope = CoroutineScope(Dispatchers.Unconfined + SupervisorJob())
+        val stateFlow = MutableStateFlow<WalletState>(
+            WalletState.Ready(userId = "user-1", displayName = "Alice")
+        )
         val wallet = newWallet(
-            "_state" to MutableStateFlow<WalletState>(
-                WalletState.Ready(userId = "user-1", displayName = "Alice")
-            ),
+            "_state" to stateFlow,
             "engineSession" to engine,
             "keystore" to keystore,
             "sessionStore" to sessionStore,
+            "accountRegistry" to accountRegistry,
+            "scope" to scope,
             "apiClient" to mockk<BackendApiClient>(relaxed = true),
         )
 
