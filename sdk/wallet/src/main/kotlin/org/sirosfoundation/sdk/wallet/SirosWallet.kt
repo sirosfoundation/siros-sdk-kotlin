@@ -91,6 +91,20 @@ class SirosWallet private constructor(
     /** Observable wallet state. Collect this from your UI layer. */
     val state: StateFlow<WalletState> = _state.asStateFlow()
 
+    /** All known accounts across all tenants. Survives logout. */
+    fun listAccounts(): List<CachedAccount> = accountRegistry.listAccounts()
+
+    /** Accounts that have passkeys and can log in. */
+    fun listLoginableAccounts(): List<CachedAccount> = accountRegistry.listLoginableAccounts()
+
+    /** Remove a cached account (forgets it from the login screen). */
+    fun forgetAccount(accountId: String) {
+        accountRegistry.removeAccount(accountId)
+        if (accountRegistry.activeAccountId == accountId) {
+            logout()
+        }
+    }
+
     /** Set a listener for events that require user interaction (credential picker, etc.). */
     fun setEventListener(listener: WalletEventListener) {
         eventListener = listener
@@ -181,17 +195,38 @@ class SirosWallet private constructor(
             // Derive key and initialise empty keystore
             keystore.unlock(prfOutput.first, ByteArray(0), hkdfSalt, hkdfInfo)
             (keystore as? JweKeystore)?.setCredentialId(credId)
-            val encryptedContainer = keystore.exportEncryptedContainer()
+            val encryptedContainer = try {
+                keystore.exportEncryptedContainer()
+            } catch (_: UnsupportedOperationException) { null }
 
-            // Persist session (no appToken/refreshToken — using session cookies now)
+            // Register account in the persistent registry (survives logout)
+            val accountId = "${config.tenantId}:${session.uuid}"
+            accountRegistry.upsertAccount(CachedAccount(
+                userId = session.uuid,
+                tenantId = config.tenantId,
+                displayName = displayName,
+                backendUrl = config.backendUrl,
+                passkeys = listOf(CachedPasskey(
+                    credentialId = b64UrlEncode(credId),
+                    prfSalt = b64Encode(prfSalt),
+                )),
+                hkdfSalt = b64Encode(hkdfSalt),
+                hkdfInfo = b64Encode(hkdfInfo),
+            ))
+            accountRegistry.activeAccountId = accountId
+
+            // Scope session store to this account
+            sessionStore.activeAccountId = accountId
             sessionStore.userId = session.uuid
-            sessionStore.displayName = session.displayName
+            sessionStore.displayName = session.displayName ?: displayName
             sessionStore.tenantId = config.tenantId
             sessionStore.credentialId = b64UrlEncode(credId)
             sessionStore.prfSalt = b64Encode(prfSalt)
             sessionStore.hkdfSalt = b64Encode(hkdfSalt)
             sessionStore.hkdfInfo = b64Encode(hkdfInfo)
-            sessionStore.privateDataJwe = String(encryptedContainer, Charsets.UTF_8)
+            encryptedContainer?.let {
+                sessionStore.privateDataJwe = String(it, Charsets.UTF_8)
+            }
 
             // Set up API client with AuthTokens
             setupApiClientWithTokens()
@@ -290,7 +325,10 @@ class SirosWallet private constructor(
 
             keystore.unlock(prfOutput.first, privateData, hkdfSalt, hkdfInfo)
 
-            // Persist session
+            // Scope session store to this account
+            val accountId = "${config.tenantId}:${session.uuid}"
+            sessionStore.activeAccountId = accountId
+            accountRegistry.activeAccountId = accountId
             sessionStore.userId = session.uuid
             sessionStore.displayName = session.displayName
             sessionStore.tenantId = config.tenantId
@@ -326,7 +364,8 @@ class SirosWallet private constructor(
         engineSession = null
         credentialNotifier = null
         keystore.lock()
-        sessionStore.clear()
+        sessionStore.clear()  // clears active account's session only
+        accountRegistry.activeAccountId = null
         apiClient = null
         scope.launch {
             try {
@@ -350,6 +389,11 @@ class SirosWallet private constructor(
      * Call this on app startup before showing the login screen.
      */
     suspend fun resumeSession() {
+        // Restore the active account ID so the session store reads the right data
+        val activeId = accountRegistry.activeAccountId
+        if (activeId != null) {
+            sessionStore.activeAccountId = activeId
+        }
         val userId = sessionStore.userId
         if (userId == null) {
             Timber.d("No stored session to resume")
@@ -769,6 +813,7 @@ class SirosWallet private constructor(
     private val supervisorJob = SupervisorJob()
     private val scope = CoroutineScope(Dispatchers.Main + supervisorJob)
     private val sessionStore = SessionStore(activity)
+    private val accountRegistry = AccountRegistry(activity)
     private val authProvider = createAuthProvider(activity, config)
     private val keystore: KeystoreManager = config.keystore ?: JweKeystore()
     private val credentialStore: CredentialStore =
