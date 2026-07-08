@@ -240,6 +240,16 @@ fun WalletScreen(viewModel: WalletViewModel) {
         return
     }
 
+    // Fatal error without a valid session → full-screen error, no navigation chrome.
+    // The user must tap "Retry" (which disconnects → back to login).
+    if (walletState is WalletState.Error) {
+        ErrorView(
+            message = (walletState as WalletState.Error).message,
+            onRetry = viewModel::disconnect,
+        )
+        return
+    }
+
     // Presentation consent dialog — shown as a full-screen overlay
     if (pendingPresentation != null) {
         PresentationConsentScreen(
