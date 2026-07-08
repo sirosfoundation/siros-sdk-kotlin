@@ -92,14 +92,14 @@ class SirosWalletTest {
         verify(exactly = 1) { engine.disconnect() }
         verify(exactly = 1) { keystore.lock() }
         verify(exactly = 1) { sessionStore.clear() }
-        assertEquals(WalletState.Disconnected, wallet.state.value)
+        assertEquals(WalletState.Disconnected(), wallet.state.value)
     }
 
     @Test
     fun completeAuthorization_sends_authorization_complete_action() {
         val engine = mockk<WalletEngineSession>(relaxed = true)
         val wallet = newWallet(
-            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected),
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
             "engineSession" to engine,
         )
 
@@ -135,7 +135,7 @@ class SirosWalletTest {
             )
         )
         val wallet = newWallet(
-            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected),
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
             "apiClient" to apiClient,
             "json" to Json { ignoreUnknownKeys = true },
         )
@@ -191,7 +191,7 @@ class SirosWalletTest {
             }
         }
         val wallet = newWallet(
-            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected),
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
             "apiClient" to apiClient,
             "json" to Json { ignoreUnknownKeys = true },
         )
@@ -280,7 +280,7 @@ class SirosWalletTest {
         val engine = mockk<WalletEngineSession>(relaxed = true)
         val apiClient = mockk<BackendApiClient>()
         val wallet = newWallet(
-            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected),
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
         )
@@ -309,7 +309,7 @@ class SirosWalletTest {
             put("decision", true)
         }
         val wallet = newWallet(
-            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected),
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
         )
@@ -358,7 +358,7 @@ class SirosWalletTest {
         val apiClient = mockk<BackendApiClient>()
         coEvery { apiClient.evaluateTrust(any()) } throws IllegalStateException("trust backend offline")
         val wallet = newWallet(
-            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected),
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
         )
@@ -707,7 +707,7 @@ class SirosWalletTest {
         coEvery { keystore.generateProof(audience = "aud-1", nonce = "nonce-1") } returns "proof-jwt"
         val engine = mockEngineConstructor(signRequests = signFlow)
         val wallet = newWallet(
-            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected),
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
             "keystore" to keystore,
