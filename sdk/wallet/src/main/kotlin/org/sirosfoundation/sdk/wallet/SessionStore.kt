@@ -8,14 +8,19 @@ import androidx.security.crypto.MasterKeys
 import timber.log.Timber
 
 /**
- * Encrypted session storage backed by [EncryptedSharedPreferences].
+ * Account-keyed encrypted session storage.
  *
- * Stores the session token, PRF key derivation parameters, and the
- * raw main-key bytes so the wallet can be re-opened without requiring
- * a new WebAuthn assertion on every app launch.
+ * All session data (tokens, key material, private data JWE) is stored
+ * under a prefix derived from the active account ID (`tenantId:userId`).
+ * This allows multiple accounts to coexist in the same SharedPreferences
+ * file without interfering with each other.
  *
- * All values are encrypted at rest using an AES-256 key protected by
- * the Android Keystore. Calling [clear] wipes everything.
+ * The active account is tracked via [activeAccountId]. When set, all
+ * property reads/writes are scoped to that account. When null, reads
+ * return null and writes are no-ops.
+ *
+ * Calling [clearAccount] removes only the active account's data.
+ * Calling [clearAll] removes everything (factory reset).
  */
 internal class SessionStore(context: Context) {
 
@@ -27,89 +32,103 @@ internal class SessionStore(context: Context) {
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
     )
 
+    /**
+     * The currently active account ID (`tenantId:userId`).
+     * All property reads/writes are scoped to this account.
+     */
+    var activeAccountId: String? = null
+
+    // ── Scoped key helper ───────────────────────────────────────────
+
+    private fun getString(name: String): String? {
+        val id = activeAccountId ?: return null
+        return prefs.getString("${id}/${name}", null)
+    }
+
+    private fun putString(name: String, value: String?) {
+        val id = activeAccountId ?: return
+        val k = "${id}/${name}"
+        if (value != null) prefs.edit().putString(k, value).apply()
+        else prefs.edit().remove(k).apply()
+    }
+
     // ── Session ─────────────────────────────────────────────────────
 
     var appToken: String?
-        get() = prefs.getString(KEY_APP_TOKEN, null)
-        set(value) = prefs.edit().putString(KEY_APP_TOKEN, value).apply()
+        get() = getString("app_token")
+        set(value) = putString("app_token", value)
 
     var refreshToken: String?
-        get() = prefs.getString(KEY_REFRESH_TOKEN, null)
-        set(value) = prefs.edit().putString(KEY_REFRESH_TOKEN, value).apply()
+        get() = getString("refresh_token")
+        set(value) = putString("refresh_token", value)
 
     var userId: String?
-        get() = prefs.getString(KEY_USER_ID, null)
-        set(value) = prefs.edit().putString(KEY_USER_ID, value).apply()
+        get() = getString("user_id")
+        set(value) = putString("user_id", value)
 
     var displayName: String?
-        get() = prefs.getString(KEY_DISPLAY_NAME, null)
-        set(value) = prefs.edit().putString(KEY_DISPLAY_NAME, value).apply()
+        get() = getString("display_name")
+        set(value) = putString("display_name", value)
 
     var tenantId: String?
-        get() = prefs.getString(KEY_TENANT_ID, null)
-        set(value) = prefs.edit().putString(KEY_TENANT_ID, value).apply()
+        get() = getString("tenant_id")
+        set(value) = putString("tenant_id", value)
 
     // ── Key material ────────────────────────────────────────────────
 
-    /** Raw main-key bytes (AES-256, 32 bytes), base64-encoded. */
     var mainKey: String?
-        get() = prefs.getString(KEY_MAIN_KEY, null)
-        set(value) = prefs.edit().putString(KEY_MAIN_KEY, value).apply()
+        get() = getString("main_key")
+        set(value) = putString("main_key", value)
 
-    /** HKDF salt used during key derivation, base64-encoded. */
     var hkdfSalt: String?
-        get() = prefs.getString(KEY_HKDF_SALT, null)
-        set(value) = prefs.edit().putString(KEY_HKDF_SALT, value).apply()
+        get() = getString("hkdf_salt")
+        set(value) = putString("hkdf_salt", value)
 
-    /** HKDF info string used during key derivation, base64-encoded. */
     var hkdfInfo: String?
-        get() = prefs.getString(KEY_HKDF_INFO, null)
-        set(value) = prefs.edit().putString(KEY_HKDF_INFO, value).apply()
+        get() = getString("hkdf_info")
+        set(value) = putString("hkdf_info", value)
 
-    /** PRF salt for the registered credential, base64-encoded. */
     var prfSalt: String?
-        get() = prefs.getString(KEY_PRF_SALT, null)
-        set(value) = prefs.edit().putString(KEY_PRF_SALT, value).apply()
+        get() = getString("prf_salt")
+        set(value) = putString("prf_salt", value)
 
-    /** Credential ID of the registered passkey, base64url-encoded. */
     var credentialId: String?
-        get() = prefs.getString(KEY_CREDENTIAL_ID, null)
-        set(value) = prefs.edit().putString(KEY_CREDENTIAL_ID, value).apply()
+        get() = getString("credential_id")
+        set(value) = putString("credential_id", value)
 
     // ── Private data ────────────────────────────────────────────────
 
-    /** The encrypted JWE container, stored as-is from the backend. */
     var privateDataJwe: String?
-        get() = prefs.getString(KEY_PRIVATE_DATA_JWE, null)
-        set(value) = prefs.edit().putString(KEY_PRIVATE_DATA_JWE, value).apply()
+        get() = getString("private_data_jwe")
+        set(value) = putString("private_data_jwe", value)
 
-    /** ETag for optimistic concurrency on privateData updates. */
     var privateDataETag: String?
-        get() = prefs.getString(KEY_PRIVATE_DATA_ETAG, null)
-        set(value) = prefs.edit().putString(KEY_PRIVATE_DATA_ETAG, value).apply()
+        get() = getString("private_data_etag")
+        set(value) = putString("private_data_etag", value)
 
     // ── Lifecycle ───────────────────────────────────────────────────
 
+    /** True if the active account has session data. */
     val hasSession: Boolean
         get() = userId != null
 
-    fun clear() {
-        prefs.edit().clear().apply()
-        Timber.d("Session store cleared")
+    /** Clear the active account's session data only. */
+    fun clearAccount() {
+        val id = activeAccountId ?: return
+        val prefix = "$id/"
+        val editor = prefs.edit()
+        prefs.all.keys.filter { it.startsWith(prefix) }.forEach { editor.remove(it) }
+        editor.apply()
+        Timber.d("Session store cleared for account: $id")
     }
 
-    companion object {
-        private const val KEY_APP_TOKEN = "app_token"
-        private const val KEY_REFRESH_TOKEN = "refresh_token"
-        private const val KEY_USER_ID = "user_id"
-        private const val KEY_DISPLAY_NAME = "display_name"
-        private const val KEY_TENANT_ID = "tenant_id"
-        private const val KEY_MAIN_KEY = "main_key"
-        private const val KEY_HKDF_SALT = "hkdf_salt"
-        private const val KEY_HKDF_INFO = "hkdf_info"
-        private const val KEY_PRF_SALT = "prf_salt"
-        private const val KEY_CREDENTIAL_ID = "credential_id"
-        private const val KEY_PRIVATE_DATA_JWE = "private_data_jwe"
-        private const val KEY_PRIVATE_DATA_ETAG = "private_data_etag"
+    /** Clear all accounts' session data (factory reset). */
+    fun clearAll() {
+        prefs.edit().clear().apply()
+        activeAccountId = null
+        Timber.d("Session store cleared (all accounts)")
     }
+
+    /** Legacy alias for [clearAccount] — clears the active account only. */
+    fun clear() = clearAccount()
 }
