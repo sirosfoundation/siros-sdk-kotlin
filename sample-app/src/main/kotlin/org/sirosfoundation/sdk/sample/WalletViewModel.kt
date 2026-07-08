@@ -281,6 +281,16 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         wallet.forgetAccount(accountId)
     }
 
+    // ── Passkey Management ──────────────────────────────────────────
+
+    /** Passkeys for the active account. */
+    fun listPasskeys(): List<org.sirosfoundation.sdk.wallet.CachedPasskey> = wallet.listPasskeys()
+
+    /** Rename a passkey. */
+    fun renamePasskey(credentialId: String, nickname: String) {
+        wallet.renamePasskey(credentialId, nickname)
+    }
+
     fun startIssuance(credentialOfferUri: String) {
         viewModelScope.launch {
             try {

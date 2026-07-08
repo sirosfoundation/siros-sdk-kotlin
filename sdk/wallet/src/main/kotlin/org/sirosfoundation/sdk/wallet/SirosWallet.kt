@@ -115,6 +115,31 @@ class SirosWallet private constructor(
         }
     }
 
+    // ── Passkey Management ──────────────────────────────────────────
+
+    /**
+     * Passkeys registered for the active account.
+     * Returns from the local AccountRegistry cache (not the backend).
+     */
+    fun listPasskeys(): List<CachedPasskey> {
+        val active = accountRegistry.activeAccountId ?: return emptyList()
+        return accountRegistry.findAccount(active)?.passkeys ?: emptyList()
+    }
+
+    /**
+     * Rename a passkey (local only — updates the AccountRegistry).
+     */
+    fun renamePasskey(credentialId: String, nickname: String) {
+        val active = accountRegistry.activeAccountId ?: return
+        val account = accountRegistry.findAccount(active) ?: return
+        val updated = account.copy(
+            passkeys = account.passkeys.map {
+                if (it.credentialId == credentialId) it.copy(nickname = nickname) else it
+            }
+        )
+        accountRegistry.upsertAccount(updated)
+    }
+
     /** Set a listener for events that require user interaction (credential picker, etc.). */
     fun setEventListener(listener: WalletEventListener) {
         eventListener = listener

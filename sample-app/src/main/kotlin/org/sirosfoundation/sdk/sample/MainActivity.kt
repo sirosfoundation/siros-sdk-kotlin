@@ -25,7 +25,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -386,6 +388,8 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onEnrollWscd = viewModel::enrollWscd,
                             onShowWscaDeveloper = viewModel::openWscaDeveloper,
                             onForgetAccount = viewModel::forgetAccount,
+                            passkeys = viewModel.listPasskeys(),
+                            onRenamePasskey = viewModel::renamePasskey,
                         )
                     }
                 }
@@ -754,6 +758,8 @@ fun SettingsTab(
     onEnrollWscd: () -> Unit,
     onShowWscaDeveloper: () -> Unit,
     onForgetAccount: ((String) -> Unit)? = null,
+    passkeys: List<org.sirosfoundation.sdk.wallet.CachedPasskey> = emptyList(),
+    onRenamePasskey: ((String, String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -794,7 +800,7 @@ fun SettingsTab(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Passkeys section (placeholder for passkey management)
+        // Passkeys section
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -805,8 +811,56 @@ fun SettingsTab(
                 Text("Passkeys", style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(modifier = Modifier.height(8.dp))
-                Text("Passkey management coming soon", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (passkeys.isEmpty()) {
+                    Text("No passkeys registered", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    passkeys.forEach { passkey ->
+                        var editing by remember { mutableStateOf(false) }
+                        var nickname by remember { mutableStateOf(passkey.nickname) }
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (editing) {
+                                OutlinedTextField(
+                                    value = nickname,
+                                    onValueChange = { nickname = it },
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(8.dp),
+                                )
+                                IconButton(onClick = {
+                                    onRenamePasskey?.invoke(passkey.credentialId, nickname)
+                                    editing = false
+                                }) {
+                                    Icon(Icons.Default.Check, contentDescription = "Save",
+                                        modifier = Modifier.size(18.dp))
+                                }
+                                IconButton(onClick = { editing = false; nickname = passkey.nickname }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Cancel",
+                                        modifier = Modifier.size(18.dp))
+                                }
+                            } else {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        passkey.nickname.ifEmpty { "Passkey ${passkey.credentialId.take(8)}..." },
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                    Text(
+                                        "ID: ${passkey.credentialId.take(16)}...",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                IconButton(onClick = { editing = true }) {
+                                    Icon(Icons.Default.Edit, contentDescription = "Rename",
+                                        modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
