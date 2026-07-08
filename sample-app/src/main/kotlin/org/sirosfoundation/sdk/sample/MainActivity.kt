@@ -385,6 +385,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onShowHistory = viewModel::openHistory,
                             onEnrollWscd = viewModel::enrollWscd,
                             onShowWscaDeveloper = viewModel::openWscaDeveloper,
+                            onForgetAccount = viewModel::forgetAccount,
                         )
                     }
                 }
@@ -752,6 +753,7 @@ fun SettingsTab(
     onShowHistory: () -> Unit,
     onEnrollWscd: () -> Unit,
     onShowWscaDeveloper: () -> Unit,
+    onForgetAccount: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -787,6 +789,61 @@ fun SettingsTab(
                 SettingsRow(stringResource(R.string.settings_tenant_id), tenantId)
                 SettingsRow(stringResource(R.string.settings_credentials_stored), state.credentials.size.toString())
                 SettingsRow(stringResource(R.string.settings_app_version), BuildConfig.VERSION_NAME)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Passkeys section (placeholder for passkey management)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+                Text("Passkeys", style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("Passkey management coming soon", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
+        // Other accounts section (if there are cached accounts)
+        if (state.cachedAccounts.size > 1) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+            ) {
+                Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+                    Text("Other Accounts", style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    state.cachedAccounts
+                        .filter { it.accountId != "${tenantId}:${state.userId}" }
+                        .forEach { account ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(account.displayName, modifier = Modifier.weight(1f),
+                                    style = MaterialTheme.typography.bodyMedium)
+                                Text(account.tenantId, style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (onForgetAccount != null) {
+                                    IconButton(onClick = { onForgetAccount(account.accountId) },
+                                        modifier = Modifier.size(32.dp)) {
+                                        Icon(Icons.Default.Close, contentDescription = "Remove",
+                                            modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            }
+                        }
+                }
             }
         }
 
