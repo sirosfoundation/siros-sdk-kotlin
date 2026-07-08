@@ -1,9 +1,16 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.sirosfoundation.sdk.wallet
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.sirosfoundation.sdk.credentials.CredentialStore
 import org.sirosfoundation.sdk.keystore.KeystoreManager
+import timber.log.Timber
 
 /**
  * Configuration for [SirosWallet].
@@ -38,4 +45,63 @@ data class WalletConfig(
     val urlRewriter: ((String) -> String)? = null,
     val requireUserAuth: Boolean = true,
     val keystore: KeystoreManager? = null,
-)
+) {
+    companion object {
+        private val json = Json { ignoreUnknownKeys = true }
+
+        /**
+         * Discover the engine WebSocket URL from the backend's
+         * `/.well-known/wallet-configuration` endpoint and return a
+         * [WalletConfig] with [engineUrl] populated.
+         *
+         * Falls back to the provided [engineUrl] (or empty) if discovery
+         * fails — the SDK will then connect the engine on the same port
+         * as the backend, which works for single-port deployments.
+         */
+        suspend fun discover(
+            backendUrl: String,
+            tenantId: String = "default",
+            engineUrl: String = "",
+            redirectUri: String = "",
+            httpClient: OkHttpClient? = null,
+            requireUserAuth: Boolean = true,
+            keystore: KeystoreManager? = null,
+            urlRewriter: ((String) -> String)? = null,
+        ): WalletConfig {
+            val resolvedEngineUrl = if (engineUrl.isNotEmpty()) engineUrl
+            else discoverEngineUrl(backendUrl, httpClient) ?: ""
+
+            return WalletConfig(
+                backendUrl = backendUrl,
+                tenantId = tenantId,
+                engineUrl = resolvedEngineUrl,
+                redirectUri = redirectUri,
+                httpClient = httpClient,
+                requireUserAuth = requireUserAuth,
+                keystore = keystore,
+                urlRewriter = urlRewriter,
+            )
+        }
+
+        internal suspend fun discoverEngineUrl(
+            backendUrl: String,
+            httpClient: OkHttpClient?,
+        ): String? = withContext(Dispatchers.IO) {
+            try {
+                val client = httpClient ?: OkHttpClient()
+                val url = backendUrl.trimEnd('/') + "/.well-known/wallet-configuration"
+                val request = Request.Builder().url(url).build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) return@withContext null
+                    val body = response.body?.string() ?: return@withContext null
+                    val obj = json.parseToJsonElement(body).jsonObject
+                    val engine = obj["engine_url"]?.jsonPrimitive?.content
+                    if (engine.isNullOrEmpty()) null else engine
+                }
+            } catch (e: Exception) {
+                Timber.d("wallet-configuration discovery failed (using default): ${e.message}")
+                null
+            }
+        }
+    }
+}
