@@ -755,11 +755,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         val proxyUrl = BuildConfig.ISSUER_PROXY_URL
         // Disable user-auth-bound keys on emulators/Waydroid where the lock screen
         // cannot be reliably unlocked via ADB.
-        val isEmulator = Build.FINGERPRINT.contains("generic") ||
-            Build.PRODUCT.contains("sdk") ||
-            Build.MODEL.contains("Emulator") ||
+        val isEmulator = Build.FINGERPRINT?.contains("generic") == true ||
+            Build.PRODUCT?.contains("sdk") == true ||
+            Build.MODEL?.contains("Emulator") == true ||
             Build.HARDWARE == "ranchu" ||
-            Build.MANUFACTURER.equals("waydroid", ignoreCase = true) ||
+            Build.MANUFACTURER?.equals("waydroid", ignoreCase = true) == true ||
             Build.BRAND == "google" && Build.DEVICE?.startsWith("generic") == true
 
         // Build WSCD-backed keystore with the selected plugin
