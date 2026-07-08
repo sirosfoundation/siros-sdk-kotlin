@@ -56,16 +56,16 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         }
     }
 
-    // ── Configuration (editable before login) ───────────────────────
+    // ── Configuration ──────────────────────────────────────────────
 
-    private val _backendUrl = MutableStateFlow(DEFAULT_BACKEND_URL)
-    val backendUrl: StateFlow<String> = _backendUrl
+    /** Backend URL (read-only, from BuildConfig or intent override). */
+    val backendUrl: String = run {
+        val prefs = activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+        prefs.getString("backend_url", null) ?: DEFAULT_BACKEND_URL
+    }
 
-    private val _tenantId = MutableStateFlow(DEFAULT_TENANT_ID)
-    val tenantId: StateFlow<String> = _tenantId
-
-    fun updateBackendUrl(url: String) { _backendUrl.value = url }
-    fun updateTenantId(id: String) { _tenantId.value = id }
+    /** Tenant ID (read-only, from default). */
+    val tenantId: String = DEFAULT_TENANT_ID
 
     // ── Plugin / R2PS configuration ──────────────────────────────────
 
@@ -262,18 +262,23 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         }
     }
 
-    fun register() {
+    fun register(displayName: String) {
         rebuildWalletIfNeeded()
         _isLoading.value = true
         viewModelScope.launch {
             try {
-                wallet.register("Sample User")
+                wallet.register(displayName)
             } catch (e: Exception) {
                 _errorMessage.value = localizedErrorMessage(e)
             } finally {
                 _isLoading.value = false
             }
         }
+    }
+
+    /** Forget a cached account (remove from login screen). */
+    fun forgetAccount(accountId: String) {
+        wallet.forgetAccount(accountId)
     }
 
     fun startIssuance(credentialOfferUri: String) {
@@ -782,8 +787,8 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             }
 
         return WalletConfig(
-            backendUrl = _backendUrl.value,
-            tenantId = _tenantId.value,
+            backendUrl = backendUrl,
+            tenantId = tenantId,
             redirectUri = REDIRECT_URI,
             requireUserAuth = !isEmulator,
             keystore = keystore,

@@ -25,6 +25,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.Settings
@@ -53,6 +56,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -198,8 +202,6 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun WalletScreen(viewModel: WalletViewModel) {
     val walletState by viewModel.state.collectAsState()
-    val backendUrl by viewModel.backendUrl.collectAsState()
-    val tenantId by viewModel.tenantId.collectAsState()
     val r2psServerUrl by viewModel.r2psServerUrl.collectAsState()
     val showAddCredential by viewModel.showAddCredential.collectAsState()
     val availableCredentials by viewModel.availableCredentials.collectAsState()
@@ -222,14 +224,15 @@ fun WalletScreen(viewModel: WalletViewModel) {
 
     // Not logged in → show login screen (no app chrome)
     if (walletState is WalletState.Disconnected || walletState is WalletState.Connecting) {
+        val cachedAccounts = (walletState as? WalletState.Disconnected)?.cachedAccounts ?: emptyList()
         LoginScreen(
-            backendUrl = backendUrl,
-            tenantId = tenantId,
+            cachedAccounts = cachedAccounts,
+            backendUrl = viewModel.backendUrl,
             isLoading = isLoading || walletState is WalletState.Connecting,
             snackbarHostState = snackbarHostState,
-            onBackendUrlChange = viewModel::updateBackendUrl,
-            onTenantIdChange = viewModel::updateTenantId,
             onLogin = viewModel::login,
+            onLoginAccount = { /* TODO: login specific account */ viewModel.login() },
+            onForgetAccount = viewModel::forgetAccount,
             onRegister = viewModel::register,
         )
         return
@@ -373,8 +376,8 @@ fun WalletScreen(viewModel: WalletViewModel) {
                         )
                         2 -> SettingsTab(
                             state = state,
-                            backendUrl = backendUrl,
-                            tenantId = tenantId,
+                            backendUrl = viewModel.backendUrl,
+                            tenantId = viewModel.tenantId,
                             presentationCount = presentationHistory.size,
                             lifecycleState = viewModel.lifecycleState.collectAsState().value,
                             enrollmentInProgress = viewModel.enrollmentInProgress.collectAsState().value,
@@ -463,15 +466,20 @@ fun WalletScreen(viewModel: WalletViewModel) {
 
 @Composable
 fun LoginScreen(
+    cachedAccounts: List<org.sirosfoundation.sdk.wallet.CachedAccount>,
     backendUrl: String,
-    tenantId: String,
     isLoading: Boolean,
     snackbarHostState: SnackbarHostState,
-    onBackendUrlChange: (String) -> Unit,
-    onTenantIdChange: (String) -> Unit,
     onLogin: () -> Unit,
-    onRegister: () -> Unit,
+    onLoginAccount: (org.sirosfoundation.sdk.wallet.CachedAccount) -> Unit,
+    onForgetAccount: (String) -> Unit,
+    onRegister: (String) -> Unit,
 ) {
+    var showRegister by remember { mutableStateOf(false) }
+    var showOtherLogin by remember { mutableStateOf(false) }
+    var registerName by remember { mutableStateOf("") }
+    var showBackendInfo by remember { mutableStateOf(false) }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
@@ -494,13 +502,21 @@ fun LoginScreen(
                 text = stringResource(R.string.login_title),
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground,
             )
-            Text(
-                text = stringResource(R.string.login_tagline),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            // Info icon showing backend URL
+            Row(
+                modifier = Modifier.clickable { showBackendInfo = !showBackendInfo },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Info, contentDescription = "Backend info", modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    if (showBackendInfo) backendUrl else stringResource(R.string.login_tagline),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Spacer(modifier = Modifier.height(20.dp))
 
             Card(
@@ -510,54 +526,99 @@ fun LoginScreen(
                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
             ) {
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(20.dp),
+                    modifier = Modifier.fillMaxWidth().padding(20.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    OutlinedTextField(
-                        value = backendUrl,
-                        onValueChange = onBackendUrlChange,
-                        label = { Text(stringResource(R.string.login_backend_url)) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        enabled = !isLoading,
-                        shape = RoundedCornerShape(12.dp),
-                    )
-                    OutlinedTextField(
-                        value = tenantId,
-                        onValueChange = onTenantIdChange,
-                        label = { Text(stringResource(R.string.login_tenant_id)) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        enabled = !isLoading,
-                        shape = RoundedCornerShape(12.dp),
-                    )
-
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Button(
-                        onClick = onLogin,
-                        modifier = Modifier.fillMaxWidth().height(48.dp),
-                        enabled = !isLoading,
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        if (isLoading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                color = MaterialTheme.colorScheme.onPrimary,
-                                strokeWidth = 2.dp,
+                    when {
+                        // Mode C: Registration
+                        showRegister -> {
+                            Text(stringResource(R.string.login_register_button),
+                                style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            OutlinedTextField(
+                                value = registerName,
+                                onValueChange = { if (it.toByteArray().size <= 64) registerName = it },
+                                label = { Text("Display name") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                enabled = !isLoading,
+                                shape = RoundedCornerShape(12.dp),
+                                supportingText = { Text("${registerName.toByteArray().size}/64") },
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Button(
+                                onClick = { onRegister(registerName) },
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                enabled = !isLoading && registerName.isNotBlank(),
+                                shape = RoundedCornerShape(12.dp),
+                            ) {
+                                if (isLoading) {
+                                    CircularProgressIndicator(modifier = Modifier.size(20.dp),
+                                        color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                                Text("Sign up with passkey")
+                            }
+                            TextButton(onClick = { showRegister = false }) {
+                                Text("Already have an account? Login")
+                            }
                         }
-                        Text(stringResource(R.string.login_button))
-                    }
-                    OutlinedButton(
-                        onClick = onRegister,
-                        modifier = Modifier.fillMaxWidth().height(48.dp),
-                        enabled = !isLoading,
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        Text(stringResource(R.string.login_register_button))
+
+                        // Mode A: Cached accounts (returning users)
+                        cachedAccounts.isNotEmpty() && !showOtherLogin -> {
+                            Text("Welcome back",
+                                style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            cachedAccounts.forEach { account ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Button(
+                                        onClick = { onLoginAccount(account) },
+                                        modifier = Modifier.weight(1f).height(48.dp),
+                                        enabled = !isLoading,
+                                        shape = RoundedCornerShape(12.dp),
+                                    ) {
+                                        if (isLoading) {
+                                            CircularProgressIndicator(modifier = Modifier.size(20.dp),
+                                                color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                        }
+                                        Text(account.displayName, maxLines = 1)
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    IconButton(onClick = { onForgetAccount(account.accountId) }) {
+                                        Icon(Icons.Default.Close, contentDescription = "Forget account")
+                                    }
+                                }
+                            }
+                            TextButton(onClick = { showOtherLogin = true }) {
+                                Text("Use other account")
+                            }
+                        }
+
+                        // Mode B: Generic passkey login
+                        else -> {
+                            Button(
+                                onClick = onLogin,
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                enabled = !isLoading,
+                                shape = RoundedCornerShape(12.dp),
+                            ) {
+                                if (isLoading) {
+                                    CircularProgressIndicator(modifier = Modifier.size(20.dp),
+                                        color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                                Text(stringResource(R.string.login_button))
+                            }
+                            TextButton(onClick = { showRegister = true }) {
+                                Text("New here? Sign up")
+                            }
+                            if (cachedAccounts.isNotEmpty()) {
+                                TextButton(onClick = { showOtherLogin = false }) {
+                                    Text("Back to saved accounts")
+                                }
+                            }
+                        }
                     }
                 }
             }
