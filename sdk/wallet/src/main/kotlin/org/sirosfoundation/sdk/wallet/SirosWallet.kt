@@ -86,10 +86,20 @@ class SirosWallet private constructor(
 ) {
     // ── Public API ──────────────────────────────────────────────────
 
-    private val _state = MutableStateFlow<WalletState>(WalletState.Disconnected)
+    private val _state = MutableStateFlow<WalletState>(WalletState.Disconnected())
 
     /** Observable wallet state. Collect this from your UI layer. */
     val state: StateFlow<WalletState> = _state.asStateFlow()
+
+    /** Helper: build Disconnected with current cached accounts. */
+    private fun disconnectedState() = WalletState.Disconnected(
+        cachedAccounts = accountRegistry.listLoginableAccounts(),
+    )
+
+    /** Helper: build Ready with current cached accounts. */
+    private fun readyState(userId: String, displayName: String?, credentials: List<org.sirosfoundation.sdk.credentials.StoredCredential>) =
+        WalletState.Ready(userId = userId, displayName = displayName, credentials = credentials,
+            cachedAccounts = accountRegistry.listAccounts())
 
     /** All known accounts across all tenants. Survives logout. */
     fun listAccounts(): List<CachedAccount> = accountRegistry.listAccounts()
@@ -375,7 +385,7 @@ class SirosWallet private constructor(
                 Timber.w(e, "AS logout failed (non-fatal)")
             }
         }
-        _state.value = WalletState.Disconnected
+        _state.value = disconnectedState()
         Timber.i("Logged out")
     }
 
@@ -413,7 +423,7 @@ class SirosWallet private constructor(
                 Timber.i("Session cookie expired, need re-login")
                 sessionStore.clear()
                 apiClient = null
-                _state.value = WalletState.Disconnected
+                _state.value = disconnectedState()
                 return
             }
 
@@ -441,10 +451,10 @@ class SirosWallet private constructor(
             }
         } catch (e: SirosException) {
             Timber.e(e, "Session resume failed")
-            _state.value = WalletState.Disconnected
+            _state.value = disconnectedState()
         } catch (e: Exception) {
             Timber.e(e, "Session resume failed")
-            _state.value = WalletState.Disconnected
+            _state.value = disconnectedState()
         }
     }
 
@@ -768,11 +778,7 @@ class SirosWallet private constructor(
             } catch (e: Exception) {
                 Timber.w(e, "Failed to send cancel to backend")
             }
-            _state.value = WalletState.Ready(
-                userId = current.userId,
-                displayName = current.displayName,
-                credentials = current.credentials,
-            )
+            _state.value = readyState(current.userId, current.displayName, current.credentials)
         }
     }
 
