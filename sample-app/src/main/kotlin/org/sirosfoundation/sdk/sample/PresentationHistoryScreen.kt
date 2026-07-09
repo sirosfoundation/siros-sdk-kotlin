@@ -1,6 +1,8 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.sirosfoundation.sdk.sample
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +24,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -30,7 +33,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -50,7 +56,13 @@ import java.util.Locale
 fun PresentationHistoryScreen(
     history: List<PresentationRecord>,
     onBack: () -> Unit,
+    filterCredentialId: String? = null,
 ) {
+    val filtered = if (filterCredentialId != null) {
+        history.filter { it.credentialIds.contains(filterCredentialId) }
+    } else {
+        history
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -67,7 +79,7 @@ fun PresentationHistoryScreen(
             )
         },
     ) { padding ->
-        if (history.isEmpty()) {
+        if (filtered.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -88,7 +100,7 @@ fun PresentationHistoryScreen(
                     .padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(history) { record ->
+                items(filtered) { record ->
                     PresentationRecordCard(record)
                 }
             }
@@ -96,12 +108,14 @@ fun PresentationHistoryScreen(
     }
 }
 
+
 @Composable
 private fun PresentationRecordCard(record: PresentationRecord) {
     val dateFormatter = remember { SimpleDateFormat("MMM d, yyyy HH:mm", Locale.getDefault()) }
+    var expanded by remember { androidx.compose.runtime.mutableStateOf(false) }
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface,
@@ -163,6 +177,46 @@ private fun PresentationRecordCard(record: PresentationRecord) {
                         color = MaterialTheme.colorScheme.outline,
                     )
                 }
+            }
+        }
+
+        // Expandable detail section
+        AnimatedVisibility(visible = expanded) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = 16.dp),
+            ) {
+                HorizontalDivider(modifier = Modifier.padding(bottom = 8.dp))
+
+                if (record.credentialNames.isNotEmpty()) {
+                    Text("Credentials shared:", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    record.credentialNames.forEach { name ->
+                        Text("  • $name", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+
+                if (record.requestedClaims.isNotEmpty()) {
+                    Text("Data disclosed:", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    record.requestedClaims.forEach { claim ->
+                        val formatted = claim.split(".", "_")
+                            .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+                        Text("  • $formatted", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+
+                Text("Flow ID: ${record.flowId}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline)
+                Text("Status: ${if (record.success) "Successful" else "Failed"}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (record.success) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.error)
             }
         }
     }

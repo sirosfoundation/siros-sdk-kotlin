@@ -59,12 +59,13 @@ fun CredentialCard(
         colors = CardDefaults.cardColors(containerColor = bgColor),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(20.dp),
-            verticalArrangement = Arrangement.SpaceBetween,
-        ) {
+        Box {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.SpaceBetween,
+            ) {
             // Top: issuer badge (logo or initial)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -139,6 +140,29 @@ fun CredentialCard(
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
+                }
+            }
+        }
+
+            // Expired ribbon overlay
+            val isExpired = credential.expiresAt?.let { it < System.currentTimeMillis() } ?: false
+            if (isExpired) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                        .background(
+                            color = MaterialTheme.colorScheme.error,
+                            shape = RoundedCornerShape(4.dp),
+                        )
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                ) {
+                    Text(
+                        text = "EXPIRED",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onError,
+                        fontWeight = FontWeight.Bold,
+                    )
                 }
             }
         }

@@ -9,7 +9,10 @@ import org.sirosfoundation.sdk.credentials.StoredCredential
 sealed class WalletState {
 
     /** Not authenticated. The user must call [SirosWallet.login] or [SirosWallet.register]. */
-    data object Disconnected : WalletState()
+    data class Disconnected(
+        /** Cached accounts that can be logged into (have PRF keys). */
+        val cachedAccounts: List<CachedAccount> = emptyList(),
+    ) : WalletState()
 
     /** Authentication / keystore unlock in progress. Show a loading indicator. */
     data object Connecting : WalletState()
@@ -19,6 +22,8 @@ sealed class WalletState {
         val userId: String,
         val displayName: String?,
         val credentials: List<StoredCredential> = emptyList(),
+        /** All cached accounts (for the account switcher in settings). */
+        val cachedAccounts: List<CachedAccount> = emptyList(),
     ) : WalletState()
 
     /**

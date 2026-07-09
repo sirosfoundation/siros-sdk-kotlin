@@ -25,10 +25,16 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -53,6 +59,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -198,8 +205,6 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun WalletScreen(viewModel: WalletViewModel) {
     val walletState by viewModel.state.collectAsState()
-    val backendUrl by viewModel.backendUrl.collectAsState()
-    val tenantId by viewModel.tenantId.collectAsState()
     val r2psServerUrl by viewModel.r2psServerUrl.collectAsState()
     val showAddCredential by viewModel.showAddCredential.collectAsState()
     val availableCredentials by viewModel.availableCredentials.collectAsState()
@@ -222,15 +227,26 @@ fun WalletScreen(viewModel: WalletViewModel) {
 
     // Not logged in → show login screen (no app chrome)
     if (walletState is WalletState.Disconnected || walletState is WalletState.Connecting) {
+        val cachedAccounts = (walletState as? WalletState.Disconnected)?.cachedAccounts ?: emptyList()
         LoginScreen(
-            backendUrl = backendUrl,
-            tenantId = tenantId,
+            cachedAccounts = cachedAccounts,
+            backendUrl = viewModel.backendUrl,
             isLoading = isLoading || walletState is WalletState.Connecting,
             snackbarHostState = snackbarHostState,
-            onBackendUrlChange = viewModel::updateBackendUrl,
-            onTenantIdChange = viewModel::updateTenantId,
             onLogin = viewModel::login,
+            onLoginAccount = { /* TODO: login specific account */ viewModel.login() },
+            onForgetAccount = viewModel::forgetAccount,
             onRegister = viewModel::register,
+        )
+        return
+    }
+
+    // Fatal error without a valid session → full-screen error, no navigation chrome.
+    // The user must tap "Retry" (which disconnects → back to login).
+    if (walletState is WalletState.Error) {
+        ErrorView(
+            message = (walletState as WalletState.Error).message,
+            onRetry = viewModel::disconnect,
         )
         return
     }
@@ -316,10 +332,14 @@ fun WalletScreen(viewModel: WalletViewModel) {
                 )
             },
         ) { padding ->
+            val pendingOffer by viewModel.pendingIssuanceOffer.collectAsState()
             AddCredentialScreen(
                 offers = availableCredentials,
                 isLoading = isLoadingOffers,
                 onOfferSelected = viewModel::selectCredentialOffer,
+                pendingOffer = pendingOffer,
+                onConfirmIssuance = viewModel::confirmIssuance,
+                onCancelIssuance = viewModel::cancelIssuance,
                 modifier = Modifier.padding(padding),
             )
         }
@@ -373,8 +393,8 @@ fun WalletScreen(viewModel: WalletViewModel) {
                         )
                         2 -> SettingsTab(
                             state = state,
-                            backendUrl = backendUrl,
-                            tenantId = tenantId,
+                            backendUrl = viewModel.backendUrl,
+                            tenantId = viewModel.tenantId,
                             presentationCount = presentationHistory.size,
                             lifecycleState = viewModel.lifecycleState.collectAsState().value,
                             enrollmentInProgress = viewModel.enrollmentInProgress.collectAsState().value,
@@ -382,6 +402,9 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onShowHistory = viewModel::openHistory,
                             onEnrollWscd = viewModel::enrollWscd,
                             onShowWscaDeveloper = viewModel::openWscaDeveloper,
+                            onForgetAccount = viewModel::forgetAccount,
+                            passkeys = viewModel.listPasskeys(),
+                            onRenamePasskey = viewModel::renamePasskey,
                         )
                     }
                 }
@@ -463,15 +486,20 @@ fun WalletScreen(viewModel: WalletViewModel) {
 
 @Composable
 fun LoginScreen(
+    cachedAccounts: List<org.sirosfoundation.sdk.wallet.CachedAccount>,
     backendUrl: String,
-    tenantId: String,
     isLoading: Boolean,
     snackbarHostState: SnackbarHostState,
-    onBackendUrlChange: (String) -> Unit,
-    onTenantIdChange: (String) -> Unit,
     onLogin: () -> Unit,
-    onRegister: () -> Unit,
+    onLoginAccount: (org.sirosfoundation.sdk.wallet.CachedAccount) -> Unit,
+    onForgetAccount: (String) -> Unit,
+    onRegister: (String) -> Unit,
 ) {
+    var showRegister by remember { mutableStateOf(false) }
+    var showOtherLogin by remember { mutableStateOf(false) }
+    var registerName by remember { mutableStateOf("") }
+    var showBackendInfo by remember { mutableStateOf(false) }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
@@ -494,13 +522,21 @@ fun LoginScreen(
                 text = stringResource(R.string.login_title),
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground,
             )
-            Text(
-                text = stringResource(R.string.login_tagline),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            // Info icon showing backend URL
+            Row(
+                modifier = Modifier.clickable { showBackendInfo = !showBackendInfo },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Info, contentDescription = "Backend info", modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    if (showBackendInfo) backendUrl else stringResource(R.string.login_tagline),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Spacer(modifier = Modifier.height(20.dp))
 
             Card(
@@ -510,54 +546,99 @@ fun LoginScreen(
                 elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
             ) {
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(20.dp),
+                    modifier = Modifier.fillMaxWidth().padding(20.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    OutlinedTextField(
-                        value = backendUrl,
-                        onValueChange = onBackendUrlChange,
-                        label = { Text(stringResource(R.string.login_backend_url)) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        enabled = !isLoading,
-                        shape = RoundedCornerShape(12.dp),
-                    )
-                    OutlinedTextField(
-                        value = tenantId,
-                        onValueChange = onTenantIdChange,
-                        label = { Text(stringResource(R.string.login_tenant_id)) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        enabled = !isLoading,
-                        shape = RoundedCornerShape(12.dp),
-                    )
-
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Button(
-                        onClick = onLogin,
-                        modifier = Modifier.fillMaxWidth().height(48.dp),
-                        enabled = !isLoading,
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        if (isLoading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                color = MaterialTheme.colorScheme.onPrimary,
-                                strokeWidth = 2.dp,
+                    when {
+                        // Mode C: Registration
+                        showRegister -> {
+                            Text(stringResource(R.string.login_register_button),
+                                style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            OutlinedTextField(
+                                value = registerName,
+                                onValueChange = { if (it.toByteArray().size <= 64) registerName = it },
+                                label = { Text("Display name") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                enabled = !isLoading,
+                                shape = RoundedCornerShape(12.dp),
+                                supportingText = { Text("${registerName.toByteArray().size}/64") },
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Button(
+                                onClick = { onRegister(registerName) },
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                enabled = !isLoading && registerName.isNotBlank(),
+                                shape = RoundedCornerShape(12.dp),
+                            ) {
+                                if (isLoading) {
+                                    CircularProgressIndicator(modifier = Modifier.size(20.dp),
+                                        color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                                Text("Sign up with passkey")
+                            }
+                            TextButton(onClick = { showRegister = false }) {
+                                Text("Already have an account? Login")
+                            }
                         }
-                        Text(stringResource(R.string.login_button))
-                    }
-                    OutlinedButton(
-                        onClick = onRegister,
-                        modifier = Modifier.fillMaxWidth().height(48.dp),
-                        enabled = !isLoading,
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        Text(stringResource(R.string.login_register_button))
+
+                        // Mode A: Cached accounts (returning users)
+                        cachedAccounts.isNotEmpty() && !showOtherLogin -> {
+                            Text("Welcome back",
+                                style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            cachedAccounts.forEach { account ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Button(
+                                        onClick = { onLoginAccount(account) },
+                                        modifier = Modifier.weight(1f).height(48.dp),
+                                        enabled = !isLoading,
+                                        shape = RoundedCornerShape(12.dp),
+                                    ) {
+                                        if (isLoading) {
+                                            CircularProgressIndicator(modifier = Modifier.size(20.dp),
+                                                color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                        }
+                                        Text(account.displayName, maxLines = 1)
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    IconButton(onClick = { onForgetAccount(account.accountId) }) {
+                                        Icon(Icons.Default.Close, contentDescription = "Forget account")
+                                    }
+                                }
+                            }
+                            TextButton(onClick = { showOtherLogin = true }) {
+                                Text("Use other account")
+                            }
+                        }
+
+                        // Mode B: Generic passkey login
+                        else -> {
+                            Button(
+                                onClick = onLogin,
+                                modifier = Modifier.fillMaxWidth().height(48.dp),
+                                enabled = !isLoading,
+                                shape = RoundedCornerShape(12.dp),
+                            ) {
+                                if (isLoading) {
+                                    CircularProgressIndicator(modifier = Modifier.size(20.dp),
+                                        color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                                Text(stringResource(R.string.login_button))
+                            }
+                            TextButton(onClick = { showRegister = true }) {
+                                Text("New here? Sign up")
+                            }
+                            if (cachedAccounts.isNotEmpty()) {
+                                TextButton(onClick = { showOtherLogin = false }) {
+                                    Text("Back to saved accounts")
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -691,6 +772,9 @@ fun SettingsTab(
     onShowHistory: () -> Unit,
     onEnrollWscd: () -> Unit,
     onShowWscaDeveloper: () -> Unit,
+    onForgetAccount: ((String) -> Unit)? = null,
+    passkeys: List<org.sirosfoundation.sdk.wallet.CachedPasskey> = emptyList(),
+    onRenamePasskey: ((String, String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -726,6 +810,109 @@ fun SettingsTab(
                 SettingsRow(stringResource(R.string.settings_tenant_id), tenantId)
                 SettingsRow(stringResource(R.string.settings_credentials_stored), state.credentials.size.toString())
                 SettingsRow(stringResource(R.string.settings_app_version), BuildConfig.VERSION_NAME)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Passkeys section
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+                Text("Passkeys", style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(modifier = Modifier.height(8.dp))
+                if (passkeys.isEmpty()) {
+                    Text("No passkeys registered", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    passkeys.forEach { passkey ->
+                        var editing by remember { mutableStateOf(false) }
+                        var nickname by remember { mutableStateOf(passkey.nickname) }
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (editing) {
+                                OutlinedTextField(
+                                    value = nickname,
+                                    onValueChange = { nickname = it },
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(8.dp),
+                                )
+                                IconButton(onClick = {
+                                    onRenamePasskey?.invoke(passkey.credentialId, nickname)
+                                    editing = false
+                                }) {
+                                    Icon(Icons.Default.Check, contentDescription = "Save",
+                                        modifier = Modifier.size(18.dp))
+                                }
+                                IconButton(onClick = { editing = false; nickname = passkey.nickname }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Cancel",
+                                        modifier = Modifier.size(18.dp))
+                                }
+                            } else {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        passkey.nickname.ifEmpty { "Passkey ${passkey.credentialId.take(8)}..." },
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                    Text(
+                                        "ID: ${passkey.credentialId.take(16)}...",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                IconButton(onClick = { editing = true }) {
+                                    Icon(Icons.Default.Edit, contentDescription = "Rename",
+                                        modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Other accounts section (if there are cached accounts)
+        if (state.cachedAccounts.size > 1) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+            ) {
+                Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+                    Text("Other Accounts", style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    state.cachedAccounts
+                        .filter { it.accountId != "${tenantId}:${state.userId}" }
+                        .forEach { account ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(account.displayName, modifier = Modifier.weight(1f),
+                                    style = MaterialTheme.typography.bodyMedium)
+                                Text(account.tenantId, style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (onForgetAccount != null) {
+                                    IconButton(onClick = { onForgetAccount(account.accountId) },
+                                        modifier = Modifier.size(32.dp)) {
+                                        Icon(Icons.Default.Close, contentDescription = "Remove",
+                                            modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            }
+                        }
+                }
             }
         }
 
@@ -795,6 +982,39 @@ fun SettingsTab(
         ) {
             Text(stringResource(R.string.settings_logout))
         }
+
+        // Delete account
+        Spacer(modifier = Modifier.height(8.dp))
+        var showDeleteConfirm by remember { mutableStateOf(false) }
+        OutlinedButton(
+            onClick = { showDeleteConfirm = true },
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+        ) {
+            Text("Delete Account")
+        }
+        if (showDeleteConfirm) {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { showDeleteConfirm = false },
+                title = { Text("Delete Account?") },
+                text = { Text("This will remove all local data, credentials, and passkeys. This cannot be undone.") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showDeleteConfirm = false
+                        onDisconnect()
+                    }) {
+                        Text("Delete", color = MaterialTheme.colorScheme.error)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDeleteConfirm = false }) {
+                        Text("Cancel")
+                    }
+                },
+            )
+        }
+
         Spacer(modifier = Modifier.height(16.dp))
     }
 }

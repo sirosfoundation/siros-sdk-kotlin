@@ -44,8 +44,54 @@ fun AddCredentialScreen(
     offers: List<CredentialOffer>,
     isLoading: Boolean,
     onOfferSelected: (CredentialOffer) -> Unit,
+    pendingOffer: CredentialOffer? = null,
+    onConfirmIssuance: () -> Unit = {},
+    onCancelIssuance: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    // Issuance consent dialog
+    if (pendingOffer != null) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = onCancelIssuance,
+            title = { Text("Add Credential?") },
+            text = {
+                Column {
+                    Text("You are about to request a credential from:")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = pendingOffer.issuerName,
+                        style = androidx.compose.material3.MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = pendingOffer.credentialName,
+                        style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                        color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (pendingOffer.credentialDescription != null) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = pendingOffer.credentialDescription!!,
+                            style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+                            color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = onConfirmIssuance) {
+                    Text("Accept")
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = onCancelIssuance) {
+                    Text("Cancel")
+                }
+            },
+        )
+    }
+
     Column(modifier = modifier.fillMaxSize()) {
         if (isLoading) {
             Box(

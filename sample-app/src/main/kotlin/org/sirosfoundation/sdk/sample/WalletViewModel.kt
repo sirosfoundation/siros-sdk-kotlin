@@ -56,16 +56,16 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         }
     }
 
-    // ── Configuration (editable before login) ───────────────────────
+    // ── Configuration ──────────────────────────────────────────────
 
-    private val _backendUrl = MutableStateFlow(DEFAULT_BACKEND_URL)
-    val backendUrl: StateFlow<String> = _backendUrl
+    /** Backend URL (read-only, from BuildConfig or intent override). */
+    val backendUrl: String = run {
+        val prefs = activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+        prefs.getString("backend_url", null) ?: DEFAULT_BACKEND_URL
+    }
 
-    private val _tenantId = MutableStateFlow(DEFAULT_TENANT_ID)
-    val tenantId: StateFlow<String> = _tenantId
-
-    fun updateBackendUrl(url: String) { _backendUrl.value = url }
-    fun updateTenantId(id: String) { _tenantId.value = id }
+    /** Tenant ID (read-only, from default). */
+    val tenantId: String = DEFAULT_TENANT_ID
 
     // ── Plugin / R2PS configuration ──────────────────────────────────
 
@@ -262,18 +262,33 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         }
     }
 
-    fun register() {
+    fun register(displayName: String) {
         rebuildWalletIfNeeded()
         _isLoading.value = true
         viewModelScope.launch {
             try {
-                wallet.register("Sample User")
+                wallet.register(displayName)
             } catch (e: Exception) {
                 _errorMessage.value = localizedErrorMessage(e)
             } finally {
                 _isLoading.value = false
             }
         }
+    }
+
+    /** Forget a cached account (remove from login screen). */
+    fun forgetAccount(accountId: String) {
+        wallet.forgetAccount(accountId)
+    }
+
+    // ── Passkey Management ──────────────────────────────────────────
+
+    /** Passkeys for the active account. */
+    fun listPasskeys(): List<org.sirosfoundation.sdk.wallet.CachedPasskey> = wallet.listPasskeys()
+
+    /** Rename a passkey. */
+    fun renamePasskey(credentialId: String, nickname: String) {
+        wallet.renamePasskey(credentialId, nickname)
     }
 
     fun startIssuance(credentialOfferUri: String) {
@@ -388,12 +403,29 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     /** Close the add-credential screen. */
     fun closeAddCredential() {
         _showAddCredential.value = false
+        _pendingIssuanceOffer.value = null
     }
 
-    /** User picked a credential to issue. */
+    /** Offer awaiting user consent before issuance starts. */
+    private val _pendingIssuanceOffer = MutableStateFlow<CredentialOffer?>(null)
+    val pendingIssuanceOffer: StateFlow<CredentialOffer?> = _pendingIssuanceOffer
+
+    /** User picked a credential — show consent first. */
     fun selectCredentialOffer(offer: CredentialOffer) {
+        _pendingIssuanceOffer.value = offer
+    }
+
+    /** User confirmed issuance consent. */
+    fun confirmIssuance() {
+        val offer = _pendingIssuanceOffer.value ?: return
+        _pendingIssuanceOffer.value = null
         _showAddCredential.value = false
         viewModelScope.launch { wallet.startIssuanceByOffer(offer) }
+    }
+
+    /** User declined issuance. */
+    fun cancelIssuance() {
+        _pendingIssuanceOffer.value = null
     }
 
     // ── Credential detail ───────────────────────────────────────────
@@ -740,11 +772,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         val proxyUrl = BuildConfig.ISSUER_PROXY_URL
         // Disable user-auth-bound keys on emulators/Waydroid where the lock screen
         // cannot be reliably unlocked via ADB.
-        val isEmulator = Build.FINGERPRINT.contains("generic") ||
-            Build.PRODUCT.contains("sdk") ||
-            Build.MODEL.contains("Emulator") ||
+        val isEmulator = Build.FINGERPRINT?.contains("generic") == true ||
+            Build.PRODUCT?.contains("sdk") == true ||
+            Build.MODEL?.contains("Emulator") == true ||
             Build.HARDWARE == "ranchu" ||
-            Build.MANUFACTURER.equals("waydroid", ignoreCase = true) ||
+            Build.MANUFACTURER?.equals("waydroid", ignoreCase = true) == true ||
             Build.BRAND == "google" && Build.DEVICE?.startsWith("generic") == true
 
         // Build WSCD-backed keystore with the selected plugin
@@ -782,8 +814,8 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             }
 
         return WalletConfig(
-            backendUrl = _backendUrl.value,
-            tenantId = _tenantId.value,
+            backendUrl = backendUrl,
+            tenantId = tenantId,
             redirectUri = REDIRECT_URI,
             requireUserAuth = !isEmulator,
             keystore = keystore,
