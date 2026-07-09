@@ -403,12 +403,29 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     /** Close the add-credential screen. */
     fun closeAddCredential() {
         _showAddCredential.value = false
+        _pendingIssuanceOffer.value = null
     }
 
-    /** User picked a credential to issue. */
+    /** Offer awaiting user consent before issuance starts. */
+    private val _pendingIssuanceOffer = MutableStateFlow<CredentialOffer?>(null)
+    val pendingIssuanceOffer: StateFlow<CredentialOffer?> = _pendingIssuanceOffer
+
+    /** User picked a credential — show consent first. */
     fun selectCredentialOffer(offer: CredentialOffer) {
+        _pendingIssuanceOffer.value = offer
+    }
+
+    /** User confirmed issuance consent. */
+    fun confirmIssuance() {
+        val offer = _pendingIssuanceOffer.value ?: return
+        _pendingIssuanceOffer.value = null
         _showAddCredential.value = false
         viewModelScope.launch { wallet.startIssuanceByOffer(offer) }
+    }
+
+    /** User declined issuance. */
+    fun cancelIssuance() {
+        _pendingIssuanceOffer.value = null
     }
 
     // ── Credential detail ───────────────────────────────────────────

@@ -332,10 +332,14 @@ fun WalletScreen(viewModel: WalletViewModel) {
                 )
             },
         ) { padding ->
+            val pendingOffer by viewModel.pendingIssuanceOffer.collectAsState()
             AddCredentialScreen(
                 offers = availableCredentials,
                 isLoading = isLoadingOffers,
                 onOfferSelected = viewModel::selectCredentialOffer,
+                pendingOffer = pendingOffer,
+                onConfirmIssuance = viewModel::confirmIssuance,
+                onCancelIssuance = viewModel::cancelIssuance,
                 modifier = Modifier.padding(padding),
             )
         }
