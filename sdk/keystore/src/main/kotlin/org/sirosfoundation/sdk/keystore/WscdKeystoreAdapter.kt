@@ -229,6 +229,34 @@ class WscdKeystoreAdapter(
         return sdJwtPresentation + kbJwt
     }
 
+    override suspend fun signMdocPresentation(
+        credentialBytes: ByteArray,
+        disclosedClaims: List<String>?,
+        nonce: String,
+        audience: String,
+        responseUri: String,
+        verifierJwkThumbprint: String?,
+    ): ByteArray {
+        checkUnlocked()
+        val keys = signer.listKeys()
+        val key = keys.firstOrNull()
+            ?: throw IllegalStateException("No keys available for mDoc signing")
+
+        val builder = MdocDeviceResponseBuilder(
+            issuerSignedBytes = credentialBytes,
+            algorithm = key.algorithm,
+        )
+
+        return builder.build(
+            nonce = nonce,
+            audience = audience,
+            responseUri = responseUri,
+            verifierJwkThumbprint = verifierJwkThumbprint,
+            disclosedClaims = disclosedClaims,
+            signer = { data -> signer.sign(key.keyId, data) },
+        )
+    }
+
     override suspend fun exportEncryptedContainer(): ByteArray {
         throw UnsupportedOperationException(
             "WSCD-backed keystores do not support encrypted container export"
