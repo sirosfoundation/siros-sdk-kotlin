@@ -14,6 +14,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.contentOrNull
@@ -173,24 +174,24 @@ class SirosWallet private constructor(
 
             // Step 1: Get challenge from AS
             val challengeResponse = authServerClient.registerBegin()
-            val challengeId = (challengeResponse["challengeId"] as? String)
+            val challengeId = challengeResponse["challengeId"]?.jsonPrimitive?.contentOrNull
                 ?: throw WalletException("Missing challengeId in register begin response")
-            val createOptions = (challengeResponse["createOptions"] as? Map<*, *>)
+            val createOptions = challengeResponse["createOptions"]?.jsonObject
                 ?: throw WalletException("Missing createOptions")
-            val publicKey = (createOptions["publicKey"] as? Map<*, *>)
+            val publicKey = createOptions["publicKey"]?.jsonObject
                 ?: throw WalletException("Missing publicKey in createOptions")
 
-            val rpObj = (publicKey["rp"] as? Map<*, *>)
+            val rpObj = publicKey["rp"]?.jsonObject
                 ?: throw WalletException("Missing rp in publicKey")
-            val rpId = rpObj["id"] as? String ?: throw WalletException("Missing rp.id")
-            val rpName = rpObj["name"] as? String ?: rpId
-            val challenge = WebAuthnAuthClient.decodeBase64Url(publicKey["challenge"] as? String
+            val rpId = rpObj["id"]?.jsonPrimitive?.contentOrNull ?: throw WalletException("Missing rp.id")
+            val rpName = rpObj["name"]?.jsonPrimitive?.contentOrNull ?: rpId
+            val challenge = WebAuthnAuthClient.decodeBase64Url(publicKey["challenge"]?.jsonPrimitive?.contentOrNull
                 ?: throw WalletException("Missing challenge"))
-            val userObj = (publicKey["user"] as? Map<*, *>)
+            val userObj = publicKey["user"]?.jsonObject
                 ?: throw WalletException("Missing user in publicKey")
-            val userId = WebAuthnAuthClient.decodeBase64Url(userObj["id"] as? String
+            val userId = WebAuthnAuthClient.decodeBase64Url(userObj["id"]?.jsonPrimitive?.contentOrNull
                 ?: throw WalletException("Missing user.id"))
-            val userName = userObj["name"] as? String ?: displayName
+            val userName = userObj["name"]?.jsonPrimitive?.contentOrNull ?: displayName
 
             // Step 2: Create credential via platform AuthProvider
             val result = authProvider.register(
@@ -303,16 +304,16 @@ class SirosWallet private constructor(
 
             // Step 1: Get challenge from AS
             val challengeResponse = authServerClient.loginBegin()
-            val challengeId = (challengeResponse["challengeId"] as? String)
+            val challengeId = challengeResponse["challengeId"]?.jsonPrimitive?.contentOrNull
                 ?: throw WalletException("Missing challengeId in login begin response")
-            val getOptions = (challengeResponse["getOptions"] as? Map<*, *>)
+            val getOptions = challengeResponse["getOptions"]?.jsonObject
                 ?: throw WalletException("Missing getOptions")
-            val publicKey = (getOptions["publicKey"] as? Map<*, *>)
+            val publicKey = getOptions["publicKey"]?.jsonObject
                 ?: throw WalletException("Missing publicKey in getOptions")
 
-            val rpId = publicKey["rpId"] as? String
+            val rpId = publicKey["rpId"]?.jsonPrimitive?.contentOrNull
                 ?: throw WalletException("Missing rpId")
-            val challenge = WebAuthnAuthClient.decodeBase64Url(publicKey["challenge"] as? String
+            val challenge = WebAuthnAuthClient.decodeBase64Url(publicKey["challenge"]?.jsonPrimitive?.contentOrNull
                 ?: throw WalletException("Missing challenge"))
 
             // Step 2: Authenticate via platform AuthProvider
@@ -502,15 +503,15 @@ class SirosWallet private constructor(
             val storedPrfSalt = sessionStore.prfSalt?.let { b64Decode(it) }
             // Use AS login flow to get PRF output via biometric assertion
             val challengeResponse = authServerClient.loginBegin()
-            val challengeId = (challengeResponse["challengeId"] as? String)
+            val challengeId = challengeResponse["challengeId"]?.jsonPrimitive?.contentOrNull
                 ?: throw WalletException("Missing challengeId")
-            val getOptions = (challengeResponse["getOptions"] as? Map<*, *>)
+            val getOptions = challengeResponse["getOptions"]?.jsonObject
                 ?: throw WalletException("Missing getOptions")
-            val publicKey = (getOptions["publicKey"] as? Map<*, *>)
+            val publicKey = getOptions["publicKey"]?.jsonObject
                 ?: throw WalletException("Missing publicKey")
-            val rpId = publicKey["rpId"] as? String
+            val rpId = publicKey["rpId"]?.jsonPrimitive?.contentOrNull
                 ?: throw WalletException("Missing rpId")
-            val challenge = WebAuthnAuthClient.decodeBase64Url(publicKey["challenge"] as? String
+            val challenge = WebAuthnAuthClient.decodeBase64Url(publicKey["challenge"]?.jsonPrimitive?.contentOrNull
                 ?: throw WalletException("Missing challenge"))
 
             val result = authProvider.authenticate(
