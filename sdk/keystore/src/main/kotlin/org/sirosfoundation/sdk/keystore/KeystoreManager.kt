@@ -85,6 +85,28 @@ interface KeystoreManager {
         audience: String,
     ): String
 
+    /**
+     * Build an mDoc DeviceResponse (ISO 18013-5) for OID4VP presentation.
+     *
+     * @param credentialBytes Raw CBOR bytes of the IssuerSigned structure.
+     * @param disclosedClaims Claim names to disclose (null = all).
+     * @param nonce Verifier-provided nonce.
+     * @param audience Verifier client_id.
+     * @param responseUri Verifier response endpoint URI.
+     * @param verifierJwkThumbprint Optional JWK thumbprint for session transcript.
+     * @return Base64url-encoded DeviceResponse CBOR bytes.
+     */
+    suspend fun signMdocPresentation(
+        credentialBytes: ByteArray,
+        disclosedClaims: List<String>?,
+        nonce: String,
+        audience: String,
+        responseUri: String,
+        verifierJwkThumbprint: String?,
+    ): ByteArray {
+        throw UnsupportedOperationException("mDoc presentation not supported by this keystore")
+    }
+
     /** Export the encrypted container for backend sync. */
     suspend fun exportEncryptedContainer(): ByteArray
 

@@ -1032,7 +1032,6 @@ class SirosWallet private constructor(
                             val credsToInclude = params?.credentialsToInclude
 
                             val vpToken = if (!credsToInclude.isNullOrEmpty()) {
-                                // SD-JWT VP: build proper VP token with KB-JWT for each credential
                                 val allCreds = credentialStore.getAll()
                                 val vpParts = credsToInclude.mapNotNull { ref ->
                                     val cred = allCreds.find { it.id == ref.credentialId }
@@ -1040,12 +1039,28 @@ class SirosWallet private constructor(
                                         Timber.w("Credential ...${ref.credentialId.takeLast(4)} not found in store for VP signing")
                                         return@mapNotNull null
                                     }
-                                    keystore.signVpToken(
-                                        credential = cred.raw,
-                                        disclosedClaims = ref.disclosedClaims,
-                                        nonce = nonce,
-                                        audience = audience,
-                                    )
+
+                                    if (cred.format == "mso_mdoc") {
+                                        // mDoc DeviceResponse (ISO 18013-5)
+                                        val credBytes = android.util.Base64.decode(cred.raw, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
+                                        val deviceResponse = keystore.signMdocPresentation(
+                                            credentialBytes = credBytes,
+                                            disclosedClaims = ref.disclosedClaims,
+                                            nonce = nonce,
+                                            audience = audience,
+                                            responseUri = params?.responseUri ?: "",
+                                            verifierJwkThumbprint = params?.verifierJwkThumbprint,
+                                        )
+                                        android.util.Base64.encodeToString(deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
+                                    } else {
+                                        // SD-JWT VP token with KB-JWT
+                                        keystore.signVpToken(
+                                            credential = cred.raw,
+                                            disclosedClaims = ref.disclosedClaims,
+                                            nonce = nonce,
+                                            audience = audience,
+                                        )
+                                    }
                                 }
                                 // For single credential presentations (most common), return the token directly.
                                 // For multiple credentials, join with newline for WMP transport.
