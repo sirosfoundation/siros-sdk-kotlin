@@ -35,7 +35,7 @@ android {
             // Allow connecting to local backend over cleartext for development
             manifestPlaceholders["usesCleartextTraffic"] = "true"
             // Waydroid reaches host-mapped wallet backend via gateway + wallet-proxy
-            buildConfigField("String", "DEFAULT_BACKEND_URL", "\"http://192.168.240.1:8090\"")
+            buildConfigField("String", "DEFAULT_BACKEND_URL", "\"http://10.0.0.80:8080\"")
             // Rewrite Docker-internal issuer URLs to the host-accessible proxy
             buildConfigField("String", "ISSUER_PROXY_URL", "\"http://192.168.240.1:8091\"")
             // Enable WSCD-backed signing via R2PS in debug builds
