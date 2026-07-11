@@ -41,12 +41,12 @@ enum class TacPermission(val flag: Char) {
  */
 enum class Acr(val value: String) {
     PASSKEY("urn:siros:acr:passkey"),
-    OIDC("urn:siros:acr:oidc");
+    OIDC("urn:siros:acr:oidc"),
+    UNKNOWN("");
 
     companion object {
         fun fromValue(value: String): Acr =
-            entries.find { it.value == value }
-                ?: throw AuthException("Unknown ACR value: $value")
+            entries.find { it.value == value } ?: UNKNOWN
     }
 }
 
@@ -55,12 +55,12 @@ enum class Acr(val value: String) {
  */
 @Serializable
 internal data class AccessTokenPayload(
-    val sub: String,
-    val aud: String,
-    @SerialName("tenant_id") val tenantId: String,
-    val tac: String,
-    val acr: String,
-    val exp: Long,
+    val sub: String = "",
+    val aud: String = "",
+    @SerialName("tenant_id") val tenantId: String = "default",
+    val tac: String = "",
+    val acr: String = "",
+    val exp: Long = 0,
 )
 
 /**
