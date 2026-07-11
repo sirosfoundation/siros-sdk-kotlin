@@ -1000,7 +1000,8 @@ class SirosWallet private constructor(
     }
 
     private suspend fun connectEngine(appToken: String) {
-        val engine = createEngineSession(config.backendUrl, config.tenantId)
+        val engineBaseUrl = config.engineUrl ?: config.backendUrl
+        val engine = createEngineSession(engineBaseUrl, config.tenantId)
         engineSession = engine
         credentialNotifier = engine
         engine.connect(appToken)

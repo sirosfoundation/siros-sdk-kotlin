@@ -819,6 +819,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             redirectUri = REDIRECT_URI,
             requireUserAuth = !isEmulator,
             keystore = keystore,
+            engineUrl = BuildConfig.ENGINE_URL.ifBlank { null },
             urlRewriter = if (proxyUrl.isNotBlank()) { url ->
                 // Rewrite Docker-internal issuer URLs to the dev proxy
                 url.replace("https://vc-proxy:8443", proxyUrl)

@@ -36,4 +36,6 @@ data class WalletConfig(
     val urlRewriter: ((String) -> String)? = null,
     val requireUserAuth: Boolean = true,
     val keystore: KeystoreManager? = null,
+    /** Engine WebSocket URL. Defaults to backendUrl with port replaced by 8082. */
+    val engineUrl: String? = null,
 )
