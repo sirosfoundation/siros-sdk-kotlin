@@ -237,7 +237,7 @@ class JweKeystore(
         jwsObject.serialize().toByteArray(Charsets.UTF_8)
     }
 
-    override suspend fun generateProof(audience: String, nonce: String): String = mutex.withLock {
+    override suspend fun generateProof(audience: String, nonce: String, freshKey: Boolean): String = mutex.withLock {
         requireUnlocked()
         val key = keys.values.firstOrNull()
             ?: run {

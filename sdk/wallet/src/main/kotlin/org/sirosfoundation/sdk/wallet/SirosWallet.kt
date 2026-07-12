@@ -1015,12 +1015,13 @@ class SirosWallet private constructor(
                     when (msg.action) {
                         "generate_proof" -> {
                             val params = msg.params
-                            val proofJwt = keystore.generateProof(
-                                audience = params?.audience ?: "",
-                                nonce = params?.nonce ?: "",
-                            )
                             val count = params?.count ?: 1
                             val proofs = (1..count).map {
+                                val proofJwt = keystore.generateProof(
+                                    audience = params?.audience ?: "",
+                                    nonce = params?.nonce ?: "",
+                                    freshKey = count > 1,
+                                )
                                 ProofObject(proofType = "jwt", jwt = proofJwt)
                             }
                             Timber.d("Sending sign response with ${proofs.size} proofs for flow ${msg.flowId}, messageId=${msg.messageId}")

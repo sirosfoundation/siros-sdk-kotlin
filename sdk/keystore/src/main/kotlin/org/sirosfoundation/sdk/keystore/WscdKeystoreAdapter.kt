@@ -82,9 +82,19 @@ class WscdKeystoreAdapter(
         return signer.sign(keyId, payload)
     }
 
-    override suspend fun generateProof(audience: String, nonce: String): String {
+    override suspend fun generateProof(audience: String, nonce: String, freshKey: Boolean): String {
         checkUnlocked()
-        val keys = signer.listKeys()
+        var keys = signer.listKeys()
+        if (keys.isEmpty() || freshKey) {
+            // Auto-generate a key for VCI proof-of-possession
+            val newKeyId = signer.generateKey("ES256")
+            keys = if (freshKey) {
+                // Use only the freshly generated key
+                signer.listKeys().filter { it.keyId == newKeyId }
+            } else {
+                signer.listKeys()
+            }
+        }
         val key = keys.firstOrNull()
             ?: throw IllegalStateException("No keys available")
         val pubKeyJson = String(signer.exportPublicKey(key.keyId), Charsets.UTF_8)

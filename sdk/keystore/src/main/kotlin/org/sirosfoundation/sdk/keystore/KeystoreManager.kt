@@ -51,7 +51,7 @@ interface KeystoreManager {
      * @param nonce the c_nonce value from the issuer
      * @return the signed proof JWT
      */
-    suspend fun generateProof(audience: String, nonce: String): String
+    suspend fun generateProof(audience: String, nonce: String, freshKey: Boolean = false): String
 
     /**
      * Sign a verifiable presentation for OID4VP.
