@@ -852,6 +852,9 @@ class SirosWallet private constructor(
         config.credentialStore ?: KeystoreBackedCredentialStore(keystore)
     private val json = Json { ignoreUnknownKeys = true }
     private val httpClient = config.httpClient ?: OkHttpClient()
+
+    /** Stores trust evaluation results keyed by flow ID for use in credential selection UI. */
+    private val lastTrustResults = mutableMapOf<String, TrustResult>()
     private val vctmFetcher = VctmFetcher(httpGet = { url ->
         val request = Request.Builder().url(url).get().build()
         val response = httpClient.newCall(request).execute()
@@ -1407,7 +1410,26 @@ class SirosWallet private constructor(
                 val response = apiClient!!.evaluateTrust(evaluationRequest)
 
                 val decision = response["decision"]?.jsonPrimitive?.boolean ?: false
-                Timber.i("Trust evaluation result: decision=$decision for $subjectId")
+                val context = response["context"]?.jsonObject
+
+                // Build typed TrustResult from the PDP response
+                val trustResult = TrustResult(
+                    trusted = decision,
+                    framework = context?.get("framework")?.jsonPrimitive?.contentOrNull,
+                    reason = context?.get("reason")?.jsonPrimitive?.contentOrNull
+                        ?: context?.get("message")?.jsonPrimitive?.contentOrNull,
+                    entityName = context?.get("entity_name")?.jsonPrimitive?.contentOrNull,
+                    entityLogo = context?.get("logo_uri")?.jsonPrimitive?.contentOrNull,
+                    clientIdScheme = request?.get("context")?.jsonObject
+                        ?.get("client_id_scheme")?.jsonPrimitive?.contentOrNull,
+                    identifier = subjectId,
+                    domain = context?.get("domain")?.jsonPrimitive?.contentOrNull,
+                )
+
+                // Store for use in credential selection UI
+                lastTrustResults[flowId] = trustResult
+
+                Timber.i("Trust evaluation result: decision=$decision framework=${trustResult.framework} for $subjectId")
 
                 engine.sendTrustResult(flowId, decision)
             } catch (e: Exception) {
@@ -1454,6 +1476,7 @@ class SirosWallet private constructor(
                     listener.onCredentialSelectionRequired(
                         PresentationRequest(
                             verifierName = verifierName,
+                            trustResult = lastTrustResults.remove(flowId),
                             matchResults = matchResults,
                             candidates = candidates,
                         )

@@ -13,6 +13,8 @@ import org.sirosfoundation.sdk.credentials.StoredCredential
 data class PresentationRequest(
     /** Verifier display name (from trust evaluation), null if unknown. */
     val verifierName: String?,
+    /** Trust evaluation result with full metadata. Null if trust was not evaluated. */
+    val trustResult: TrustResult? = null,
     /** Matched credentials grouped by DCQL query. */
     val matchResults: List<CredentialMatcher.MatchResult>,
     /** Flat list of candidate credentials (convenience). */
