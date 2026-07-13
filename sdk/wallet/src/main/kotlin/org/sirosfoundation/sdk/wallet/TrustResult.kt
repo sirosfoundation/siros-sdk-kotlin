@@ -31,4 +31,8 @@ data class TrustResult(
 
     /** Domain extracted from the verifier identity. */
     val domain: String? = null,
-)
+) {
+    /** Parsed client_id_scheme providing type-safe access to the verifier identity. */
+    val parsedScheme: ClientIdScheme?
+        get() = identifier?.let { ClientIdScheme.parse(it) }
+}
