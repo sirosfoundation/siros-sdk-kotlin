@@ -855,6 +855,9 @@ class SirosWallet private constructor(
 
     /** Stores trust evaluation results keyed by flow ID for use in credential selection UI. */
     private val lastTrustResults = mutableMapOf<String, TrustResult>()
+
+    /** Persistent trust cache for degraded-mode operation. */
+    private val trustCache = TrustCache()
     private val vctmFetcher = VctmFetcher(httpGet = { url ->
         val request = Request.Builder().url(url).get().build()
         val response = httpClient.newCall(request).execute()
@@ -1382,9 +1385,10 @@ class SirosWallet private constructor(
         payload: kotlinx.serialization.json.JsonObject,
     ) {
         scope.launch {
+            val request = payload["request"]?.jsonObject
+            val subjectId = request?.get("subject_id")?.jsonPrimitive?.contentOrNull
+
             try {
-                val request = payload["request"]?.jsonObject
-                val subjectId = request?.get("subject_id")?.jsonPrimitive?.contentOrNull
                 val subjectType = request?.get("subject_type")?.jsonPrimitive?.contentOrNull
 
                 if (subjectId.isNullOrBlank()) {
@@ -1452,12 +1456,24 @@ class SirosWallet private constructor(
                 // Store for use in credential selection UI
                 lastTrustResults[flowId] = trustResult
 
+                // Populate trust cache (only positive results are stored)
+                trustCache.put(subjectId, trustResult)
+
                 Timber.i("Trust evaluation result: decision=$decision framework=${trustResult.framework} for $subjectId")
 
                 engine.sendTrustResult(flowId, decision)
             } catch (e: Exception) {
                 Timber.e(e, "Trust evaluation failed")
-                engine.sendTrustResult(flowId, false, e.message ?: "Trust evaluation failed")
+
+                // Degraded mode: check cache for a recent positive result
+                val cached = trustCache.get(subjectId ?: "")
+                if (cached != null) {
+                    Timber.w("Using cached trust result for $subjectId (backend unreachable)")
+                    lastTrustResults[flowId] = cached
+                    engine.sendTrustResult(flowId, true)
+                } else {
+                    engine.sendTrustResult(flowId, false, e.message ?: "Trust evaluation failed")
+                }
             }
         }
     }
