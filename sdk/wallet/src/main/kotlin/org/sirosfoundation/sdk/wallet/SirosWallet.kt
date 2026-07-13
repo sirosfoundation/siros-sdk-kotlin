@@ -1037,6 +1037,9 @@ class SirosWallet private constructor(
                             val audience = params?.audience ?: ""
                             val credsToInclude = params?.credentialsToInclude
 
+                            // Validate audience matches trusted verifier identity
+                            validateAudience(msg.flowId, audience)
+
                             val vpToken = if (!credsToInclude.isNullOrEmpty()) {
                                 val allCreds = credentialStore.getAll()
                                 val vpParts = credsToInclude.mapNotNull { ref ->
@@ -1345,10 +1348,30 @@ class SirosWallet private constructor(
     }
 
     /**
-     * Handle trust evaluation step from the engine.
+     * Validates that the audience for VP signing matches the trusted verifier identity.
      *
-     * Matches the wallet-frontend reference implementation (release/sirosid):
-     * 1. Extract the trust request from the flow_progress payload
+     * This is a defense-in-depth check: if a MITM between the backend engine and
+     * the signing step tries to redirect the presentation to a different verifier,
+     * this will log a warning. We don't throw (to avoid breaking existing flows
+     * where the trust evaluation step may not have run), but the mismatch is logged.
+     */
+    private fun validateAudience(flowId: String, audience: String) {
+        val trustResult = lastTrustResults[flowId] ?: return
+        val expectedId = trustResult.identifier ?: return
+
+        // The audience should contain or match the trusted identifier
+        if (audience.isNotBlank() && expectedId.isNotBlank() && audience != expectedId) {
+            Timber.w(
+                "Audience mismatch for flow $flowId: " +
+                    "sign_request audience='$audience' != trusted identifier='$expectedId'"
+            )
+        }
+    }
+
+    /**
+     * Handles trust evaluation step from the engine.
+     *
+     * 1. Extract subject_id and key material from the progress payload
      * 2. Build an AuthZEN evaluation request
      * 3. Call POST /v1/evaluate on the backend
      * 4. Send back a trust_result flow action
