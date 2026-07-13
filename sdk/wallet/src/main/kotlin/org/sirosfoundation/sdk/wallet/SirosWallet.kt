@@ -1195,6 +1195,26 @@ class SirosWallet private constructor(
                     handleTrustEvaluation(engine, msg.flowId, msg.payload!!.jsonObject)
                 }
 
+                // Handle server-side issuer trust result (informational, no response needed).
+                // This is distinct from the verifier trust flow — it does NOT overwrite
+                // lastTrustResults (which is used for credential selection consent UI).
+                if (msg.step == "trust_evaluated" &&
+                    msg.payload?.jsonObject?.get("issuer_trust_evaluated")?.jsonPrimitive?.contentOrNull == "true"
+                ) {
+                    val payload = msg.payload?.jsonObject
+                    val trustResult = TrustResult(
+                        trusted = payload?.get("trusted")?.jsonPrimitive?.contentOrNull == "true",
+                        framework = payload?.get("framework")?.jsonPrimitive?.contentOrNull,
+                        reason = payload?.get("reason")?.jsonPrimitive?.contentOrNull,
+                        entityName = null,
+                        identifier = payload?.get("issuer")?.jsonPrimitive?.contentOrNull,
+                    )
+                    // Only populate the trust cache — do NOT store in lastTrustResults
+                    // (that map is for verifier consent UI in credential_selection step)
+                    trustCache.put(trustResult.identifier ?: "", trustResult)
+                    Timber.i("Server-side issuer trust: trusted=${trustResult.trusted} for ${trustResult.identifier}")
+                }
+
                 // Handle credential selection — verifier wants credentials, user must consent
                 if (msg.step == "credential_selection") {
                     handleCredentialSelection(engine, msg.flowId, msg.payload?.jsonObject)
