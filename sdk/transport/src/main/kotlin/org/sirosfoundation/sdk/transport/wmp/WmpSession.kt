@@ -178,6 +178,10 @@ class WmpSession(
     /**
      * Send a JSON-RPC 2.0 error response for a server-initiated request.
      * Used when the peer cannot handle an inbound request.
+     *
+     * @param id The JSON-RPC request id to correlate the error with.
+     * @param code A JSON-RPC / WMP error code (see [WmpErrorCodes]).
+     * @param message A human-readable description of the error.
      */
     internal suspend fun sendErrorResponse(id: String, code: Int, message: String) {
         val response = JsonRpcResponse(id = id, error = JsonRpcError(code = code, message = message))

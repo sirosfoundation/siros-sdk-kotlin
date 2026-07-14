@@ -221,10 +221,12 @@ class WmpPeer(
                         session.sendResponse(msg.id, codec.encodeParams(result))
                     }
                 } else if (msg.id != null) {
+                    // WmpErrorCodes.FLOW_NOT_FOUND is the appropriate WMP error code
+                    // when this peer has no handler registered for the requested flow type.
                     session.sendErrorResponse(
                         msg.id,
                         WmpErrorCodes.FLOW_NOT_FOUND,
-                        "Unsupported flow type: ${p.flowType}",
+                        "No handler registered for flow type: ${p.flowType}",
                     )
                 }
                 _flowEvents.emit(FlowEvent.Started(p.flowId, p.flowType, p.params))
@@ -239,6 +241,9 @@ class WmpPeer(
                         session.sendResponse(msg.id, codec.encodeParams(result))
                     }
                 } else if (msg.id != null) {
+                    // WmpErrorCodes.FLOW_NOT_FOUND is used when this peer has no active handler
+                    // for the given flow id (e.g. flow type was never registered, or the peer
+                    // restarted and lost its flow-type tracking state).
                     session.sendErrorResponse(
                         msg.id,
                         WmpErrorCodes.FLOW_NOT_FOUND,
@@ -281,7 +286,15 @@ class WmpPeer(
                 if (handler != null) {
                     val result = handler.handleMethod(msg.method, params)
                     if (msg.id != null) {
-                        session.sendResponse(msg.id, result as? JsonObject)
+                        val resultObj = when {
+                            result == null -> null
+                            result is JsonObject -> result
+                            else -> {
+                                Timber.w("Method handler for ${msg.method} returned unexpected type (expected JsonObject or null); defaulting to null result")
+                                null
+                            }
+                        }
+                        session.sendResponse(msg.id, resultObj)
                     }
                 } else {
                     if (msg.id != null) {

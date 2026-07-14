@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -21,6 +22,7 @@ class WmpPeerTest {
     companion object {
         private const val TEST_SESSION_ID = "session-123"
         private const val TEST_RESUMPTION_TOKEN = "resume-abc"
+        private const val TEST_TIMEOUT_MS = 2_000L
     }
 
     // ---------------------------------------------------------------------------
@@ -60,11 +62,10 @@ class WmpPeerTest {
     }
 
     private class StubResolveProfile(
-        val resolveTypesHandled: List<String> = listOf("did"),
+        override val resolveTypes: List<String> = listOf("did"),
     ) : WmpProfile, WmpResolveHandler {
         override val name: String = "stub-resolve"
         override val capabilities: List<String> = emptyList()
-        override val resolveTypes get() = resolveTypesHandled
 
         var lastResolveParams: ResolveParams? = null
 
@@ -85,7 +86,7 @@ class WmpPeerTest {
 
     private suspend fun CoroutineScope.setupConnectedPeer(transport: FakeTransport, peer: WmpPeer) {
         val connectJob = launch { peer.connect("token") }
-        withTimeout(2_000) { while (transport.sentMessages.isEmpty()) delay(10) }
+        withTimeout(TEST_TIMEOUT_MS) { while (transport.sentMessages.isEmpty()) delay(10) }
         val createReq = codec.decodeRequest(transport.sentMessages.last())
         transport.receiveFromServer(createSuccessResponse(createReq.id!!).toByteArray())
         connectJob.join()
@@ -98,7 +99,7 @@ class WmpPeerTest {
     @Test
     fun inboundFlowProgressDispatchesToHandlerAndEmitsEvent() = runBlocking {
         val transport = FakeTransport()
-        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 2_000))
+        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = TEST_TIMEOUT_MS))
         val peer = WmpPeer(session)
         val profile = StubProfile()
         peer.use(profile)
@@ -119,7 +120,7 @@ class WmpPeerTest {
                 .toByteArray()
         )
 
-        val event = withTimeout(2_000) { eventDeferred.await() } as FlowEvent.Progress
+        val event = withTimeout(TEST_TIMEOUT_MS) { eventDeferred.await() } as FlowEvent.Progress
         assertEquals("f1", event.flowId)
         assertEquals("processing", event.step)
         assertNotNull(profile.lastProgressParams)
@@ -130,7 +131,7 @@ class WmpPeerTest {
     @Test
     fun inboundFlowStartRequestSendsResponse() = runBlocking {
         val transport = FakeTransport()
-        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 2_000))
+        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = TEST_TIMEOUT_MS))
         val peer = WmpPeer(session)
         peer.use(StubProfile())
 
@@ -144,7 +145,7 @@ class WmpPeerTest {
                 .toByteArray()
         )
 
-        withTimeout(2_000) {
+        withTimeout(TEST_TIMEOUT_MS) {
             while (transport.sentMessages.size <= sentBefore) delay(10)
         }
 
@@ -159,18 +160,19 @@ class WmpPeerTest {
     @Test
     fun inboundFlowActionRequestSendsResponse() = runBlocking {
         val transport = FakeTransport()
-        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 2_000))
+        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = TEST_TIMEOUT_MS))
         val peer = WmpPeer(session)
-        peer.use(StubProfile())
+        // First seed the flow type map
+        val stubProfile = StubProfile()
+        peer.use(stubProfile)
 
         setupConnectedPeer(transport, peer)
 
-        // First seed the flow type map
         transport.receiveFromServer(
             """{"jsonrpc":"2.0","method":"wmp.flow.start","params":{"wmp":{"version":"0.1"},"flow_id":"f3","flow_type":"test-flow"}}"""
                 .toByteArray()
         )
-        delay(100)
+        withTimeout(TEST_TIMEOUT_MS) { while (stubProfile.lastStartParams == null) delay(10) }
 
         val sentBefore = transport.sentMessages.size
 
@@ -180,7 +182,7 @@ class WmpPeerTest {
                 .toByteArray()
         )
 
-        withTimeout(2_000) {
+        withTimeout(TEST_TIMEOUT_MS) {
             while (transport.sentMessages.size <= sentBefore) delay(10)
         }
 
@@ -194,7 +196,7 @@ class WmpPeerTest {
     @Test
     fun flowTypeMapClearedOnComplete() = runBlocking {
         val transport = FakeTransport()
-        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 2_000))
+        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = TEST_TIMEOUT_MS))
         val peer = WmpPeer(session)
         val profile = StubProfile()
         peer.use(profile)
@@ -206,7 +208,7 @@ class WmpPeerTest {
             """{"jsonrpc":"2.0","method":"wmp.flow.start","params":{"wmp":{"version":"0.1"},"flow_id":"f4","flow_type":"test-flow"}}"""
                 .toByteArray()
         )
-        delay(100)
+        withTimeout(TEST_TIMEOUT_MS) { while (profile.lastStartParams == null) delay(10) }
 
         // Complete flow
         transport.receiveFromServer(
@@ -214,23 +216,27 @@ class WmpPeerTest {
                 .toByteArray()
         )
 
-        withTimeout(2_000) {
+        withTimeout(TEST_TIMEOUT_MS) {
             while (profile.lastCompleteParams == null) delay(10)
         }
 
         assertNotNull(profile.lastCompleteParams)
         assertEquals("f4", profile.lastCompleteParams!!.flowId)
 
-        // After complete, progress for same flow should NOT dispatch to handler (unknown type)
+        // After complete, progress for same flow should NOT dispatch to handler (unknown type).
+        // Subscribe to flowEvents to confirm dispatch completed without calling the handler.
         profile.lastProgressParams = null
+        val progressEventDeferred = async {
+            peer.flowEvents().first { it is FlowEvent.Progress && (it as FlowEvent.Progress).flowId == "f4" }
+        }
         transport.receiveFromServer(
             """{"jsonrpc":"2.0","method":"wmp.flow.progress","params":{"wmp":{"version":"0.1"},"flow_id":"f4","step":"late"}}"""
                 .toByteArray()
         )
-        delay(100)
+        withTimeout(TEST_TIMEOUT_MS) { progressEventDeferred.await() }
         // Handler should NOT have been called since flow type was forgotten
         // (lookupFlowType returns 'unknown', no handler registered for 'unknown')
-        assertTrue(profile.lastProgressParams == null)
+        assertNull(profile.lastProgressParams)
 
         peer.close()
     }
@@ -238,7 +244,7 @@ class WmpPeerTest {
     @Test
     fun flowTypeMapClearedOnError() = runBlocking {
         val transport = FakeTransport()
-        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 2_000))
+        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = TEST_TIMEOUT_MS))
         val peer = WmpPeer(session)
         val profile = StubProfile()
         peer.use(profile)
@@ -249,14 +255,14 @@ class WmpPeerTest {
             """{"jsonrpc":"2.0","method":"wmp.flow.start","params":{"wmp":{"version":"0.1"},"flow_id":"f5","flow_type":"test-flow"}}"""
                 .toByteArray()
         )
-        delay(100)
+        withTimeout(TEST_TIMEOUT_MS) { while (profile.lastStartParams == null) delay(10) }
 
         transport.receiveFromServer(
             """{"jsonrpc":"2.0","method":"wmp.flow.error","params":{"wmp":{"version":"0.1"},"flow_id":"f5","code":"ERR","message":"failed"}}"""
                 .toByteArray()
         )
 
-        withTimeout(2_000) {
+        withTimeout(TEST_TIMEOUT_MS) {
             while (profile.lastErrorParams == null) delay(10)
         }
 
@@ -269,7 +275,7 @@ class WmpPeerTest {
     @Test
     fun flowEventsEmittedForAllLifecycleSteps() = runBlocking {
         val transport = FakeTransport()
-        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 2_000))
+        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = TEST_TIMEOUT_MS))
         val peer = WmpPeer(session)
         peer.use(StubProfile())
 
@@ -291,7 +297,7 @@ class WmpPeerTest {
                 .toByteArray()
         )
 
-        withTimeout(2_000) {
+        withTimeout(TEST_TIMEOUT_MS) {
             while (events.size < 3) delay(10)
         }
 
@@ -306,7 +312,7 @@ class WmpPeerTest {
     @Test
     fun clientInitiatedStartFlowTracksFlowTypeForSubsequentProgress() = runBlocking {
         val transport = FakeTransport()
-        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 2_000))
+        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = TEST_TIMEOUT_MS))
         val peer = WmpPeer(session)
         val profile = StubProfile()
         peer.use(profile)
@@ -315,7 +321,7 @@ class WmpPeerTest {
 
         // Client initiates the flow (outgoing request); server responds with success
         val startJob = launch { peer.startFlow("test-flow", "fc1") }
-        withTimeout(2_000) {
+        withTimeout(TEST_TIMEOUT_MS) {
             // Wait for the flow.start request to be sent
             while (transport.sentMessages.size < 2) delay(10)
         }
@@ -333,9 +339,9 @@ class WmpPeerTest {
                 .toByteArray()
         )
 
-        withTimeout(2_000) { while (profile.lastProgressParams == null) delay(10) }
+        withTimeout(TEST_TIMEOUT_MS) { while (profile.lastProgressParams == null) delay(10) }
 
-        assertNotNull("Handler should be called for client-initiated flow progress", profile.lastProgressParams)
+        assertNotNull("Handler should be called for client-initiated flow", profile.lastProgressParams)
         assertEquals("fc1", profile.lastProgressParams!!.flowId)
 
         peer.close()
@@ -344,7 +350,7 @@ class WmpPeerTest {
     @Test
     fun clientCancelFlowCleansUpFlowTypeTracking() = runBlocking {
         val transport = FakeTransport()
-        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 2_000))
+        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = TEST_TIMEOUT_MS))
         val peer = WmpPeer(session)
         val profile = StubProfile()
         peer.use(profile)
@@ -356,29 +362,31 @@ class WmpPeerTest {
             """{"jsonrpc":"2.0","method":"wmp.flow.start","params":{"wmp":{"version":"0.1"},"flow_id":"fc2","flow_type":"test-flow"}}"""
                 .toByteArray()
         )
-        delay(100)
+        withTimeout(TEST_TIMEOUT_MS) { while (profile.lastStartParams == null) delay(10) }
 
-        // Client cancels the flow
+        // Client cancels the flow; flow type should be removed from tracking
         peer.cancelFlow("fc2", "user cancelled")
-        delay(100)
 
-        // Progress after cancel should NOT dispatch to handler (flow type was forgotten)
+        // Progress after cancel should NOT dispatch to handler (flow type was forgotten).
+        // Subscribe to flowEvents first so we can wait for the dispatch to complete.
         profile.lastProgressParams = null
+        val progressEventDeferred = async {
+            peer.flowEvents().first { it is FlowEvent.Progress && (it as FlowEvent.Progress).flowId == "fc2" }
+        }
         transport.receiveFromServer(
             """{"jsonrpc":"2.0","method":"wmp.flow.progress","params":{"wmp":{"version":"0.1"},"flow_id":"fc2","step":"late"}}"""
                 .toByteArray()
         )
-        delay(100)
+        withTimeout(TEST_TIMEOUT_MS) { progressEventDeferred.await() }
 
-        assertTrue("Flow handler should not receive progress after client cancel", profile.lastProgressParams == null)
-
+        assertNull("Flow handler should not receive progress after client cancel", profile.lastProgressParams)
         peer.close()
     }
 
     @Test
     fun inboundFlowStartUnknownTypeRespondsWithError() = runBlocking {
         val transport = FakeTransport()
-        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 2_000))
+        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = TEST_TIMEOUT_MS))
         val peer = WmpPeer(session)
         // No profile registered for "unknown-flow"
         peer.use(StubProfile(handledFlowTypes = listOf("test-flow")))
@@ -388,11 +396,11 @@ class WmpPeerTest {
         val sentBefore = transport.sentMessages.size
 
         transport.receiveFromServer(
-            """{"jsonrpc":"2.0","id":"err-1","method":"wmp.flow.start","params":{"wmp":{"version":"0.1"},"flow_id":"fErr","flow_type":"unknown-flow"}}"""
+            """{"jsonrpc":"2.0","id":"err-1","method":"wmp.flow.start","params":{"wmp":{"version":"0.1"},"flow_id":"unknown-flow-id","flow_type":"unknown-flow"}}"""
                 .toByteArray()
         )
 
-        withTimeout(2_000) {
+        withTimeout(TEST_TIMEOUT_MS) {
             while (transport.sentMessages.size <= sentBefore) delay(10)
         }
 
@@ -406,7 +414,7 @@ class WmpPeerTest {
     @Test
     fun inboundResolveRequestDispatchesToResolveHandler() = runBlocking {
         val transport = FakeTransport()
-        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 2_000))
+        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = TEST_TIMEOUT_MS))
         val peer = WmpPeer(session)
         val resolveProfile = StubResolveProfile()
         peer.use(resolveProfile)
@@ -420,7 +428,7 @@ class WmpPeerTest {
                 .toByteArray()
         )
 
-        withTimeout(2_000) {
+        withTimeout(TEST_TIMEOUT_MS) {
             while (transport.sentMessages.size <= sentBefore) delay(10)
         }
 
@@ -439,9 +447,9 @@ class WmpPeerTest {
     @Test
     fun inboundResolveRequestUnknownTypeRespondsWithError() = runBlocking {
         val transport = FakeTransport()
-        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 2_000))
+        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = TEST_TIMEOUT_MS))
         val peer = WmpPeer(session)
-        peer.use(StubResolveProfile(resolveTypesHandled = listOf("did")))
+        peer.use(StubResolveProfile(resolveTypes = listOf("did")))
 
         setupConnectedPeer(transport, peer)
 
@@ -452,7 +460,7 @@ class WmpPeerTest {
                 .toByteArray()
         )
 
-        withTimeout(2_000) {
+        withTimeout(TEST_TIMEOUT_MS) {
             while (transport.sentMessages.size <= sentBefore) delay(10)
         }
 
