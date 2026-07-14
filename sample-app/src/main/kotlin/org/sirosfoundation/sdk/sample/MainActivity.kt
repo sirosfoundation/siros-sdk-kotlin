@@ -230,23 +230,21 @@ fun WalletScreen(viewModel: WalletViewModel) {
     // Not logged in → show login screen (no app chrome)
     if (walletState is WalletState.Disconnected || walletState is WalletState.Connecting) {
         val cachedAccounts = (walletState as? WalletState.Disconnected)?.cachedAccounts ?: emptyList()
-        val backendUrlState by viewModel.backendUrlFlow.collectAsState()
-        val tenantIdState by viewModel.tenantIdFlow.collectAsState()
-        val engineUrlState by viewModel.engineUrlFlow.collectAsState()
-        val useWmpState by viewModel.useWmpProtocol.collectAsState()
+        val backendUrlState by viewModel.backendUrl.collectAsState()
+        val tenantIdState by viewModel.tenantId.collectAsState()
         LoginScreen(
             cachedAccounts = cachedAccounts,
             backendUrl = backendUrlState,
             tenantId = tenantIdState,
-            engineUrl = engineUrlState,
-            useWmpProtocol = useWmpState,
+            engineUrl = "",
+            useWmpProtocol = false,
             showPreLoginSettings = BuildConfig.SHOW_PRE_LOGIN_SETTINGS,
             isLoading = isLoading || walletState is WalletState.Connecting,
             snackbarHostState = snackbarHostState,
             onLogin = viewModel::login,
-            onLoginAccount = { /* TODO: login specific account */ viewModel.login() },
-            onForgetAccount = viewModel::forgetAccount,
-            onRegister = viewModel::register,
+            onLoginAccount = { viewModel.login() },
+            onForgetAccount = { },
+            onRegister = { _ -> viewModel.register() },
             onUpdateBackendUrl = viewModel::updateBackendUrl,
             onUpdateTenantId = viewModel::updateTenantId,
             onUpdateEngineUrl = viewModel::updateEngineUrl,
@@ -346,14 +344,13 @@ fun WalletScreen(viewModel: WalletViewModel) {
                 )
             },
         ) { padding ->
-            val pendingOffer by viewModel.pendingIssuanceOffer.collectAsState()
             AddCredentialScreen(
                 offers = availableCredentials,
                 isLoading = isLoadingOffers,
                 onOfferSelected = viewModel::selectCredentialOffer,
-                pendingOffer = pendingOffer,
-                onConfirmIssuance = viewModel::confirmIssuance,
-                onCancelIssuance = viewModel::cancelIssuance,
+                pendingOffer = null,
+                onConfirmIssuance = { },
+                onCancelIssuance = { },
                 modifier = Modifier.padding(padding),
             )
         }
@@ -407,9 +404,9 @@ fun WalletScreen(viewModel: WalletViewModel) {
                         )
                         2 -> SettingsTab(
                             state = state,
-                            backendUrl = viewModel.backendUrl,
-                            tenantId = viewModel.tenantId,
-                            useWmpProtocol = viewModel.useWmpProtocol.collectAsState().value,
+                            backendUrl = viewModel.backendUrl.value,
+                            tenantId = viewModel.tenantId.value,
+                            useWmpProtocol = false,
                             presentationCount = presentationHistory.size,
                             lifecycleState = viewModel.lifecycleState.collectAsState().value,
                             enrollmentInProgress = viewModel.enrollmentInProgress.collectAsState().value,
@@ -417,10 +414,6 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onShowHistory = viewModel::openHistory,
                             onEnrollWscd = viewModel::enrollWscd,
                             onShowWscaDeveloper = viewModel::openWscaDeveloper,
-                            onForgetAccount = viewModel::forgetAccount,
-                            passkeys = viewModel.listPasskeys(),
-                            onRenamePasskey = viewModel::renamePasskey,
-                            onUpdateUseWmpProtocol = viewModel::updateUseWmpProtocol,
                         )
                     }
                 }
