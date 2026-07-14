@@ -286,15 +286,7 @@ class WmpPeer(
                 if (handler != null) {
                     val result = handler.handleMethod(msg.method, params)
                     if (msg.id != null) {
-                        val resultObj = when {
-                            result == null -> null
-                            result is JsonObject -> result
-                            else -> {
-                                Timber.w("Method handler for ${msg.method} returned unexpected type (expected JsonObject or null); defaulting to null result")
-                                null
-                            }
-                        }
-                        session.sendResponse(msg.id, resultObj)
+                        session.sendResponse(msg.id, result)
                     }
                 } else {
                     if (msg.id != null) {

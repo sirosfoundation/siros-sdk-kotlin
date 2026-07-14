@@ -71,7 +71,7 @@ interface WmpMethodHandler {
     val methods: List<String>
 
     /** Process an incoming method call. Returns the result or throws. */
-    suspend fun handleMethod(method: String, params: JsonElement?): JsonElement?
+    suspend fun handleMethod(method: String, params: JsonObject?): JsonObject?
 }
 
 /**
