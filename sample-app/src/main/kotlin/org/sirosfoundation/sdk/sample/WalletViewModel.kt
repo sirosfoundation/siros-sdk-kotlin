@@ -114,6 +114,10 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _showAddCredential = MutableStateFlow(false)
     val showAddCredential: StateFlow<Boolean> = _showAddCredential
 
+    /** Offer pending user confirmation before issuance starts. */
+    private val _pendingIssuanceOffer = MutableStateFlow<CredentialOffer?>(null)
+    val pendingIssuanceOffer: StateFlow<CredentialOffer?> = _pendingIssuanceOffer
+
     // ── Credential detail state ─────────────────────────────────────
 
     private val _selectedCredential = MutableStateFlow<StoredCredential?>(null)
@@ -379,6 +383,23 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _availableCredentials.value = emptyList()
     }
 
+    // ── Account & Passkey management ────────────────────────────────
+
+    /** Remove a cached account from the local registry. */
+    fun forgetAccount(accountId: String) {
+        wallet.forgetAccount(accountId)
+    }
+
+    /** List passkeys registered for the current account. */
+    fun listPasskeys(): List<org.sirosfoundation.sdk.wallet.CachedPasskey> {
+        return wallet.listPasskeys()
+    }
+
+    /** Rename a passkey's user-visible nickname. */
+    fun renamePasskey(credentialId: String, nickname: String) {
+        wallet.renamePasskey(credentialId, nickname)
+    }
+
     /** Open the add-credential screen — fetches available offers from issuers. */
     fun openAddCredential() {
         _showAddCredential.value = true
@@ -403,8 +424,20 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     /** User picked a credential to issue. */
     fun selectCredentialOffer(offer: CredentialOffer) {
+        _pendingIssuanceOffer.value = offer
+    }
+
+    /** User confirmed the pending issuance offer. */
+    fun confirmIssuance() {
+        val offer = _pendingIssuanceOffer.value ?: return
+        _pendingIssuanceOffer.value = null
         _showAddCredential.value = false
         viewModelScope.launch { wallet.startIssuanceByOffer(offer) }
+    }
+
+    /** User cancelled the pending issuance offer. */
+    fun cancelIssuance() {
+        _pendingIssuanceOffer.value = null
     }
 
     // ── Credential detail ───────────────────────────────────────────
