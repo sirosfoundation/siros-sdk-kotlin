@@ -56,56 +56,25 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         }
     }
 
-    // ── Configuration ──────────────────────────────────────────────
+    // ── Configuration (editable before login) ───────────────────────
 
-    private val prefs = activity.getSharedPreferences("siros_settings", android.content.Context.MODE_PRIVATE)
+    private val _backendUrl: MutableStateFlow<String>
+    val backendUrl: StateFlow<String> get() = _backendUrl
 
-    /** Backend URL — editable from settings, persisted across restarts. */
-    private val _backendUrl = MutableStateFlow(
-        prefs.getString("backend_url", null) ?: DEFAULT_BACKEND_URL
-    )
-    val backendUrl: String get() = _backendUrl.value
-    val backendUrlFlow: StateFlow<String> = _backendUrl
+    private val _engineUrl: String
 
-    /** Tenant ID — editable from settings, persisted across restarts. */
-    private val _tenantId = MutableStateFlow(
-        prefs.getString("tenant_id", null) ?: DEFAULT_TENANT_ID
-    )
-    val tenantId: String get() = _tenantId.value
-    val tenantIdFlow: StateFlow<String> = _tenantId
+    private val _tenantId = MutableStateFlow(DEFAULT_TENANT_ID)
+    val tenantId: StateFlow<String> = _tenantId
 
-    /** Engine URL override — blank means derive from backendUrl. */
-    private val _engineUrl = MutableStateFlow(
-        prefs.getString("engine_url", null) ?: BuildConfig.ENGINE_URL
-    )
-    val engineUrl: String get() = _engineUrl.value
-    val engineUrlFlow: StateFlow<String> = _engineUrl
-
-    /** Use WMP JSON-RPC 2.0 protocol instead of legacy engine protocol. */
-    private val _useWmpProtocol = MutableStateFlow(
-        prefs.getBoolean("use_wmp_protocol", false)
-    )
-    val useWmpProtocol: StateFlow<Boolean> = _useWmpProtocol
-
-    fun updateBackendUrl(url: String) {
-        _backendUrl.value = url
-        prefs.edit().putString("backend_url", url).apply()
+    init {
+        // Read test overrides (set via intent extras by automation scripts)
+        val prefs = activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+        _backendUrl = MutableStateFlow(prefs.getString("backend_url", null) ?: DEFAULT_BACKEND_URL)
+        _engineUrl = prefs.getString("engine_url", null) ?: BuildConfig.ENGINE_URL
     }
 
-    fun updateTenantId(id: String) {
-        _tenantId.value = id
-        prefs.edit().putString("tenant_id", id).apply()
-    }
-
-    fun updateEngineUrl(url: String) {
-        _engineUrl.value = url
-        prefs.edit().putString("engine_url", url).apply()
-    }
-
-    fun updateUseWmpProtocol(enabled: Boolean) {
-        _useWmpProtocol.value = enabled
-        prefs.edit().putBoolean("use_wmp_protocol", enabled).apply()
-    }
+    fun updateBackendUrl(url: String) { _backendUrl.value = url }
+    fun updateTenantId(id: String) { _tenantId.value = id }
 
     // ── Plugin / R2PS configuration ──────────────────────────────────
 
@@ -302,33 +271,18 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         }
     }
 
-    fun register(displayName: String) {
+    fun register() {
         rebuildWalletIfNeeded()
         _isLoading.value = true
         viewModelScope.launch {
             try {
-                wallet.register(displayName)
+                wallet.register("Sample User")
             } catch (e: Exception) {
                 _errorMessage.value = localizedErrorMessage(e)
             } finally {
                 _isLoading.value = false
             }
         }
-    }
-
-    /** Forget a cached account (remove from login screen). */
-    fun forgetAccount(accountId: String) {
-        wallet.forgetAccount(accountId)
-    }
-
-    // ── Passkey Management ──────────────────────────────────────────
-
-    /** Passkeys for the active account. */
-    fun listPasskeys(): List<org.sirosfoundation.sdk.wallet.CachedPasskey> = wallet.listPasskeys()
-
-    /** Rename a passkey. */
-    fun renamePasskey(credentialId: String, nickname: String) {
-        wallet.renamePasskey(credentialId, nickname)
     }
 
     fun startIssuance(credentialOfferUri: String) {
@@ -443,29 +397,12 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     /** Close the add-credential screen. */
     fun closeAddCredential() {
         _showAddCredential.value = false
-        _pendingIssuanceOffer.value = null
     }
 
-    /** Offer awaiting user consent before issuance starts. */
-    private val _pendingIssuanceOffer = MutableStateFlow<CredentialOffer?>(null)
-    val pendingIssuanceOffer: StateFlow<CredentialOffer?> = _pendingIssuanceOffer
-
-    /** User picked a credential — show consent first. */
+    /** User picked a credential to issue. */
     fun selectCredentialOffer(offer: CredentialOffer) {
-        _pendingIssuanceOffer.value = offer
-    }
-
-    /** User confirmed issuance consent. */
-    fun confirmIssuance() {
-        val offer = _pendingIssuanceOffer.value ?: return
-        _pendingIssuanceOffer.value = null
         _showAddCredential.value = false
         viewModelScope.launch { wallet.startIssuanceByOffer(offer) }
-    }
-
-    /** User declined issuance. */
-    fun cancelIssuance() {
-        _pendingIssuanceOffer.value = null
     }
 
     // ── Credential detail ───────────────────────────────────────────
@@ -812,11 +749,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         val proxyUrl = BuildConfig.ISSUER_PROXY_URL
         // Disable user-auth-bound keys on emulators/Waydroid where the lock screen
         // cannot be reliably unlocked via ADB.
-        val isEmulator = Build.FINGERPRINT?.contains("generic") == true ||
-            Build.PRODUCT?.contains("sdk") == true ||
-            Build.MODEL?.contains("Emulator") == true ||
+        val isEmulator = Build.FINGERPRINT.contains("generic") ||
+            Build.PRODUCT.contains("sdk") ||
+            Build.MODEL.contains("Emulator") ||
             Build.HARDWARE == "ranchu" ||
-            Build.MANUFACTURER?.equals("waydroid", ignoreCase = true) == true ||
+            Build.MANUFACTURER.equals("waydroid", ignoreCase = true) ||
             Build.BRAND == "google" && Build.DEVICE?.startsWith("generic") == true
 
         // Build WSCD-backed keystore with the selected plugin
@@ -854,13 +791,13 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             }
 
         return WalletConfig(
-            backendUrl = backendUrl,
-            tenantId = tenantId,
+            backendUrl = _backendUrl.value,
+            tenantId = _tenantId.value,
+            // Intent extra > BuildConfig > discovery (at connect time)
+            engineUrl = _engineUrl,
             redirectUri = REDIRECT_URI,
             requireUserAuth = !isEmulator,
             keystore = keystore,
-            engineUrl = _engineUrl.value.ifBlank { null },
-            useWmpProtocol = _useWmpProtocol.value,
             urlRewriter = if (proxyUrl.isNotBlank()) { url ->
                 // Rewrite Docker-internal issuer URLs to the dev proxy
                 url.replace("https://vc-proxy:8443", proxyUrl)

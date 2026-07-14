@@ -398,6 +398,8 @@ class SirosWallet private constructor(
     fun logout() {
         engineSession?.disconnect()
         engineSession = null
+        scope.launch { wmpPeer?.close() }
+        wmpPeer = null
         credentialNotifier = null
         keystore.lock()
         sessionStore.clear()  // clears active account's session only
@@ -579,6 +581,8 @@ class SirosWallet private constructor(
     fun destroy() {
         engineSession?.disconnect()
         engineSession = null
+        scope.launch { wmpPeer?.close() }
+        wmpPeer = null
         credentialNotifier = null
         keystore.lock()
         apiClient = null
@@ -1014,7 +1018,7 @@ class SirosWallet private constructor(
     private var wmpPeer: org.sirosfoundation.sdk.transport.wmp.WmpPeer? = null
 
     private suspend fun connectViaWmp(appToken: String) {
-        val engineBaseUrl = config.engineUrl ?: config.backendUrl
+        val engineBaseUrl = (config.engineUrl ?: config.backendUrl).trimEnd('/')
         val wsUrl = engineBaseUrl.replace("http://", "ws://").replace("https://", "wss://") +
             "/api/v2/wallet?tenant_id=${config.tenantId}"
 
@@ -1040,6 +1044,8 @@ class SirosWallet private constructor(
         peer.use(profile)
         peer.connect(appToken)
         wmpPeer = peer
+        // WMP peer handles credential notifications via the profile
+        credentialNotifier = null // Notifications go through WmpPeer.sendCredentialNotification()
 
         Timber.i("Connected via WMP protocol to $wsUrl")
     }

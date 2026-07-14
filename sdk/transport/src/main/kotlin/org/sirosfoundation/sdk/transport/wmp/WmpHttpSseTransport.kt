@@ -109,15 +109,15 @@ class WmpHttpSseTransport(
         val request = Request.Builder()
             .url(sendUrl)
             .apply { extraHeaders.forEach { (k, v) -> header(k, v) } }
-            .header("Content-Type", "application/json")
-            .post(message.toString(Charsets.UTF_8).toRequestBody("application/json".toMediaType()))
+            .post(message.toRequestBody("application/json".toMediaType()))
             .build()
 
         val response = client.newCall(request).execute()
-        if (!response.isSuccessful) {
-            throw WmpSessionException("HTTP POST failed: ${response.code} ${response.message}")
+        response.use { resp ->
+            if (!resp.isSuccessful) {
+                throw WmpSessionException("HTTP POST failed: ${resp.code} ${resp.message}")
+            }
         }
-        response.close()
     }
 
     override fun incoming(): Flow<ByteArray> = incomingChannel.receiveAsFlow()
