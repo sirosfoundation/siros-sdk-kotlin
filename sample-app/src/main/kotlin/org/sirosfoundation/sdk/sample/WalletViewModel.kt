@@ -61,7 +61,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _backendUrl: MutableStateFlow<String>
     val backendUrl: StateFlow<String> get() = _backendUrl
 
-    private val _engineUrl: String
+    private var _engineUrl: String
 
     private val _tenantId = MutableStateFlow(DEFAULT_TENANT_ID)
     val tenantId: StateFlow<String> = _tenantId
@@ -75,6 +75,8 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     fun updateBackendUrl(url: String) { _backendUrl.value = url }
     fun updateTenantId(id: String) { _tenantId.value = id }
+    fun updateEngineUrl(url: String) { _engineUrl = url }
+    fun updateUseWmpProtocol(enabled: Boolean) { /* TODO: persist to prefs when WMP backend is ready */ }
 
     // ── Plugin / R2PS configuration ──────────────────────────────────
 
