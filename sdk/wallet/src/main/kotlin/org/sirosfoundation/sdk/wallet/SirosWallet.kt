@@ -1018,7 +1018,10 @@ class SirosWallet private constructor(
     private var wmpPeer: org.sirosfoundation.sdk.transport.wmp.WmpPeer? = null
 
     private suspend fun connectViaWmp(appToken: String) {
-        val engineBaseUrl = (config.engineUrl ?: config.backendUrl).trimEnd('/')
+        // Resolve engine URL: explicit config > discovery > same as backend
+        val engineBaseUrl = (config.engineUrl
+            ?: WalletConfig.discoverEngineUrl(config.backendUrl)
+            ?: config.backendUrl).trimEnd('/')
         val wsUrl = engineBaseUrl.replace("http://", "ws://").replace("https://", "wss://") +
             "/api/v2/wallet?tenant_id=${config.tenantId}"
 
@@ -1144,7 +1147,10 @@ class SirosWallet private constructor(
     // ── Legacy Engine Path ────────────────────────────────────────────
 
     private suspend fun connectEngine(appToken: String) {
-        val engineBaseUrl = config.engineUrl ?: config.backendUrl
+        // Resolve engine URL: explicit config > discovery > same as backend
+        val engineBaseUrl = config.engineUrl
+            ?: WalletConfig.discoverEngineUrl(config.backendUrl)
+            ?: config.backendUrl
         val engine = createEngineSession(engineBaseUrl, config.tenantId)
         engineSession = engine
         credentialNotifier = engine
