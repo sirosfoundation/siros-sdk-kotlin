@@ -30,7 +30,7 @@ import kotlin.math.min
  */
 class WmpSession(
     private val transport: Transport,
-    private val codec: WmpCodec = WmpCodec(),
+    internal val codec: WmpCodec = WmpCodec(),
     private val config: WmpSessionConfig = WmpSessionConfig(),
 ) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
