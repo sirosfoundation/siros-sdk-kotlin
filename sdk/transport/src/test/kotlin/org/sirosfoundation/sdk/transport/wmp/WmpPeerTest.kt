@@ -1,5 +1,6 @@
 package org.sirosfoundation.sdk.transport.wmp
 
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -15,6 +16,11 @@ import org.junit.Test
 class WmpPeerTest {
 
     private val codec = WmpCodec()
+
+    companion object {
+        private const val TEST_SESSION_ID = "session-123"
+        private const val TEST_RESUMPTION_TOKEN = "resume-abc"
+    }
 
     // ---------------------------------------------------------------------------
     // Minimal stub profile
@@ -57,9 +63,9 @@ class WmpPeerTest {
     // ---------------------------------------------------------------------------
 
     private fun createSuccessResponse(requestId: String): String =
-        """{"jsonrpc":"2.0","id":"$requestId","result":{"wmp":{"version":"0.1","session_id":"session-123"},"resumption_token":"resume-abc"}}"""
+        """{"jsonrpc":"2.0","id":"$requestId","result":{"wmp":{"version":"0.1","session_id":"$TEST_SESSION_ID"},"resumption_token":"$TEST_RESUMPTION_TOKEN"}}"""
 
-    private suspend fun connectPeer(transport: FakeTransport, peer: WmpPeer) {
+    private suspend fun CoroutineScope.setupConnectedPeer(transport: FakeTransport, peer: WmpPeer) {
         val connectJob = launch { peer.connect("token") }
         withTimeout(2_000) { while (transport.sentMessages.isEmpty()) delay(10) }
         val createReq = codec.decodeRequest(transport.sentMessages.last())
@@ -79,7 +85,7 @@ class WmpPeerTest {
         val profile = StubProfile()
         peer.use(profile)
 
-        connectPeer(transport, peer)
+        setupConnectedPeer(transport, peer)
 
         val eventDeferred = async { peer.flowEvents().first { it is FlowEvent.Progress } }
 
@@ -110,7 +116,7 @@ class WmpPeerTest {
         val peer = WmpPeer(session)
         peer.use(StubProfile())
 
-        connectPeer(transport, peer)
+        setupConnectedPeer(transport, peer)
 
         val sentBefore = transport.sentMessages.size
 
@@ -139,7 +145,7 @@ class WmpPeerTest {
         val peer = WmpPeer(session)
         peer.use(StubProfile())
 
-        connectPeer(transport, peer)
+        setupConnectedPeer(transport, peer)
 
         // First seed the flow type map
         transport.receiveFromServer(
@@ -175,7 +181,7 @@ class WmpPeerTest {
         val profile = StubProfile()
         peer.use(profile)
 
-        connectPeer(transport, peer)
+        setupConnectedPeer(transport, peer)
 
         // Start flow
         transport.receiveFromServer(
@@ -205,7 +211,7 @@ class WmpPeerTest {
         )
         delay(100)
         // Handler should NOT have been called since flow type was forgotten
-        // (lookupFlowType returns "unknown", no handler registered for "unknown")
+        // (lookupFlowType returns 'unknown', no handler registered for 'unknown')
         assertTrue(profile.lastProgressParams == null)
 
         peer.close()
@@ -219,7 +225,7 @@ class WmpPeerTest {
         val profile = StubProfile()
         peer.use(profile)
 
-        connectPeer(transport, peer)
+        setupConnectedPeer(transport, peer)
 
         transport.receiveFromServer(
             """{"jsonrpc":"2.0","method":"wmp.flow.start","params":{"wmp":{"version":"0.1"},"flow_id":"f5","flow_type":"test-flow"}}"""
@@ -249,7 +255,7 @@ class WmpPeerTest {
         val peer = WmpPeer(session)
         peer.use(StubProfile())
 
-        connectPeer(transport, peer)
+        setupConnectedPeer(transport, peer)
 
         val events = mutableListOf<FlowEvent>()
         val collectJob = launch { peer.flowEvents().collect { events.add(it) } }
