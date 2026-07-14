@@ -4,6 +4,7 @@
 [![codecov](https://codecov.io/gh/sirosfoundation/siros-sdk-kotlin/graph/badge.svg)](https://codecov.io/gh/sirosfoundation/siros-sdk-kotlin)
 [![Kotlin 2.1+](https://img.shields.io/badge/Kotlin-2.1+-purple.svg)](https://kotlinlang.org)
 [![Android SDK 28+](https://img.shields.io/badge/Android-SDK%2028%2B-green.svg)](https://developer.android.com)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/sirosfoundation/siros-sdk-kotlin/badge)](https://scorecard.dev/viewer/?uri=github.com/sirosfoundation/siros-sdk-kotlin)
 [![License](https://img.shields.io/badge/license-BSD--2--Clause-blue.svg)](LICENSE)
 
 Native Android SDK for integrating SIROS ID wallet infrastructure into existing apps.
