@@ -391,9 +391,15 @@ class OpenID4xProfileTest {
         val ctx = FakePeerContext()
         profile.init(ctx)
 
-        profile.handleProgress(FlowProgressParams(wmp = WmpMeta(), flowId = "f11", step = "sign_request", payload = buildSignPayload()))
-        profile.handleProgress(FlowProgressParams(wmp = WmpMeta(), flowId = "f11", step = "match_request"))
-        profile.handleProgress(FlowProgressParams(wmp = WmpMeta(), flowId = "f11", step = "trust_evaluation_required"))
+        profile.handleProgress(
+            FlowProgressParams(wmp = WmpMeta(), flowId = "f11", step = "sign_request", payload = buildSignPayload())
+        )
+        profile.handleProgress(
+            FlowProgressParams(wmp = WmpMeta(), flowId = "f11", step = "match_request")
+        )
+        profile.handleProgress(
+            FlowProgressParams(wmp = WmpMeta(), flowId = "f11", step = "trust_evaluation_required")
+        )
         profile.handleComplete(FlowCompleteParams(wmp = WmpMeta(), flowId = "f11"))
         profile.handleError(FlowErrorParams(wmp = WmpMeta(), flowId = "f11"))
         profile.handleCancel(FlowCancelParams(wmp = WmpMeta(), flowId = "f11"))
