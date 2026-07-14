@@ -243,7 +243,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
             snackbarHostState = snackbarHostState,
             onLogin = viewModel::login,
             onLoginAccount = { viewModel.login() },
-            onForgetAccount = { },
+            onForgetAccount = viewModel::forgetAccount,
             onRegister = { _ -> viewModel.register() },
             onUpdateBackendUrl = viewModel::updateBackendUrl,
             onUpdateTenantId = viewModel::updateTenantId,
@@ -344,13 +344,14 @@ fun WalletScreen(viewModel: WalletViewModel) {
                 )
             },
         ) { padding ->
+            val pendingOffer by viewModel.pendingIssuanceOffer.collectAsState()
             AddCredentialScreen(
                 offers = availableCredentials,
                 isLoading = isLoadingOffers,
                 onOfferSelected = viewModel::selectCredentialOffer,
-                pendingOffer = null,
-                onConfirmIssuance = { },
-                onCancelIssuance = { },
+                pendingOffer = pendingOffer,
+                onConfirmIssuance = viewModel::confirmIssuance,
+                onCancelIssuance = viewModel::cancelIssuance,
                 modifier = Modifier.padding(padding),
             )
         }
@@ -414,6 +415,9 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onShowHistory = viewModel::openHistory,
                             onEnrollWscd = viewModel::enrollWscd,
                             onShowWscaDeveloper = viewModel::openWscaDeveloper,
+                            onForgetAccount = viewModel::forgetAccount,
+                            passkeys = viewModel.listPasskeys(),
+                            onRenamePasskey = viewModel::renamePasskey,
                         )
                     }
                 }
