@@ -58,14 +58,54 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     // ── Configuration ──────────────────────────────────────────────
 
-    /** Backend URL (read-only, from BuildConfig or intent override). */
-    val backendUrl: String = run {
-        val prefs = activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+    private val prefs = activity.getSharedPreferences("siros_settings", android.content.Context.MODE_PRIVATE)
+
+    /** Backend URL — editable from settings, persisted across restarts. */
+    private val _backendUrl = MutableStateFlow(
         prefs.getString("backend_url", null) ?: DEFAULT_BACKEND_URL
+    )
+    val backendUrl: String get() = _backendUrl.value
+    val backendUrlFlow: StateFlow<String> = _backendUrl
+
+    /** Tenant ID — editable from settings, persisted across restarts. */
+    private val _tenantId = MutableStateFlow(
+        prefs.getString("tenant_id", null) ?: DEFAULT_TENANT_ID
+    )
+    val tenantId: String get() = _tenantId.value
+    val tenantIdFlow: StateFlow<String> = _tenantId
+
+    /** Engine URL override — blank means derive from backendUrl. */
+    private val _engineUrl = MutableStateFlow(
+        prefs.getString("engine_url", null) ?: BuildConfig.ENGINE_URL
+    )
+    val engineUrl: String get() = _engineUrl.value
+    val engineUrlFlow: StateFlow<String> = _engineUrl
+
+    /** Use WMP JSON-RPC 2.0 protocol instead of legacy engine protocol. */
+    private val _useWmpProtocol = MutableStateFlow(
+        prefs.getBoolean("use_wmp_protocol", false)
+    )
+    val useWmpProtocol: StateFlow<Boolean> = _useWmpProtocol
+
+    fun updateBackendUrl(url: String) {
+        _backendUrl.value = url
+        prefs.edit().putString("backend_url", url).apply()
     }
 
-    /** Tenant ID (read-only, from default). */
-    val tenantId: String = DEFAULT_TENANT_ID
+    fun updateTenantId(id: String) {
+        _tenantId.value = id
+        prefs.edit().putString("tenant_id", id).apply()
+    }
+
+    fun updateEngineUrl(url: String) {
+        _engineUrl.value = url
+        prefs.edit().putString("engine_url", url).apply()
+    }
+
+    fun updateUseWmpProtocol(enabled: Boolean) {
+        _useWmpProtocol.value = enabled
+        prefs.edit().putBoolean("use_wmp_protocol", enabled).apply()
+    }
 
     // ── Plugin / R2PS configuration ──────────────────────────────────
 
@@ -819,7 +859,8 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             redirectUri = REDIRECT_URI,
             requireUserAuth = !isEmulator,
             keystore = keystore,
-            engineUrl = BuildConfig.ENGINE_URL.ifBlank { null },
+            engineUrl = _engineUrl.value.ifBlank { null },
+            useWmpProtocol = _useWmpProtocol.value,
             urlRewriter = if (proxyUrl.isNotBlank()) { url ->
                 // Rewrite Docker-internal issuer URLs to the dev proxy
                 url.replace("https://vc-proxy:8443", proxyUrl)
