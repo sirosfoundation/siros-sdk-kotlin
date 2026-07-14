@@ -102,6 +102,9 @@ class AuthTokens(
         val list = rejections.getOrPut(name) { mutableListOf() }
         list.add(now)
 
+        // Clear the rejected token from cache so it won't be re-served
+        tokens.remove(name)
+
         // Prune old rejections outside the window
         list.removeAll { it < now - REJECTION_WINDOW_MS }
 

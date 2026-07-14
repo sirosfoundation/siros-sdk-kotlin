@@ -81,14 +81,15 @@ class AccessTokenTest {
         AccessToken("not-a-jwt")
     }
 
-    @Test(expected = AuthException::class)
-    fun `throws on unknown ACR`() {
+    @Test
+    fun `maps unknown ACR to UNKNOWN`() {
         val exp = (System.currentTimeMillis() / 1000) + 3600
         val jwt = buildJwt("""
             {"sub":"u","aud":"a","tenant_id":"t",
              "tac":"r","acr":"urn:unknown:acr","exp":$exp}
         """.trimIndent())
-        AccessToken(jwt)
+        val token = AccessToken(jwt)
+        assertEquals(Acr.UNKNOWN, token.acr)
     }
 
     @Test

@@ -30,7 +30,7 @@ import kotlin.math.min
  */
 class WmpSession(
     private val transport: Transport,
-    private val codec: WmpCodec = WmpCodec(),
+    internal val codec: WmpCodec = WmpCodec(),
     private val config: WmpSessionConfig = WmpSessionConfig(),
 ) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -160,6 +160,34 @@ class WmpSession(
         val message = codec.encodeNotification(method, params)
         sendMutex.withLock {
             transport.send(message)
+        }
+    }
+
+    /**
+     * Send a JSON-RPC 2.0 response for a server-initiated request.
+     * Used when the peer acts as the responder for inbound requests.
+     */
+    internal suspend fun sendResponse(id: String, result: kotlinx.serialization.json.JsonObject?) {
+        val response = JsonRpcResponse(id = id, result = result)
+        val message = codec.json.encodeToString(JsonRpcResponse.serializer(), response).toByteArray(Charsets.UTF_8)
+        sendMutex.withLock {
+            transport.send(message)
+        }
+    }
+
+    /**
+     * Send a JSON-RPC 2.0 error response for a server-initiated request.
+     * Used when the peer cannot handle an inbound request.
+     *
+     * @param id The JSON-RPC request id to correlate the error with.
+     * @param code A JSON-RPC / WMP error code (see [WmpErrorCodes]).
+     * @param message A human-readable description of the error.
+     */
+    internal suspend fun sendErrorResponse(id: String, code: Int, message: String) {
+        val response = JsonRpcResponse(id = id, error = JsonRpcError(code = code, message = message))
+        val msg = codec.json.encodeToString(JsonRpcResponse.serializer(), response).toByteArray(Charsets.UTF_8)
+        sendMutex.withLock {
+            transport.send(msg)
         }
     }
 

@@ -96,3 +96,141 @@ data class SessionCloseParams(
     val wmp: WmpMeta,
     val reason: String? = null,
 )
+
+// ---------------------------------------------------------------------------
+// WMP Method Constants
+// ---------------------------------------------------------------------------
+
+object WmpMethods {
+    const val SESSION_CREATE = "wmp.session.create"
+    const val SESSION_RESUME = "wmp.session.resume"
+    const val SESSION_CLOSE = "wmp.session.close"
+    const val SESSION_AUTHENTICATE = "wmp.session.authenticate"
+
+    const val FLOW_START = "wmp.flow.start"
+    const val FLOW_PROGRESS = "wmp.flow.progress"
+    const val FLOW_ACTION = "wmp.flow.action"
+    const val FLOW_COMPLETE = "wmp.flow.complete"
+    const val FLOW_ERROR = "wmp.flow.error"
+    const val FLOW_CANCEL = "wmp.flow.cancel"
+
+    const val MESSAGE_DELIVER = "wmp.message.deliver"
+    const val MESSAGE_ACK = "wmp.message.ack"
+
+    const val CAPABILITY_UPDATE = "wmp.capability.update"
+
+    const val RESOLVE = "wmp.resolve"
+
+    const val CREDENTIAL_NOTIFICATION = "wmp.credential.notification"
+}
+
+/** Standard JSON-RPC error codes used by WMP. */
+object WmpErrorCodes {
+    const val PARSE_ERROR = -32700
+    const val INVALID_REQUEST = -32600
+    const val METHOD_NOT_FOUND = -32601
+    const val INVALID_PARAMS = -32602
+    const val INTERNAL_ERROR = -32603
+
+    // WMP-specific error codes (application range)
+    const val SESSION_ERROR = -32000
+    const val AUTH_REQUIRED = -32001
+    const val AUTH_FAILED = -32002
+    const val FLOW_ERROR = -32010
+    const val FLOW_NOT_FOUND = -32011
+    const val FLOW_CANCELLED = -32012
+    const val CAPABILITY_ERROR = -32020
+    const val RELAY_ERROR = -32030
+    const val ENCRYPTION_ERROR = -32040
+    const val RESOLVE_ERROR = -32050
+}
+
+// ---------------------------------------------------------------------------
+// Flow Types
+// ---------------------------------------------------------------------------
+
+/** Parameters for wmp.flow.start. */
+@Serializable
+data class FlowStartParams(
+    val wmp: WmpMeta,
+    @SerialName("flow_id") val flowId: String,
+    @SerialName("flow_type") val flowType: String,
+    val params: JsonObject? = null,
+)
+
+/** Result for wmp.flow.start. */
+@Serializable
+data class FlowStartResult(
+    val wmp: WmpMeta? = null,
+    @SerialName("flow_id") val flowId: String,
+    @SerialName("flow_type") val flowType: String,
+)
+
+/** Parameters for wmp.flow.progress (notification). */
+@Serializable
+data class FlowProgressParams(
+    val wmp: WmpMeta? = null,
+    @SerialName("flow_id") val flowId: String,
+    val step: String,
+    val payload: JsonObject? = null,
+)
+
+/** Parameters for wmp.flow.action (request). */
+@Serializable
+data class FlowActionParams(
+    val wmp: WmpMeta? = null,
+    @SerialName("flow_id") val flowId: String,
+    val action: String,
+    val params: JsonObject? = null,
+)
+
+/** Result for wmp.flow.action. */
+@Serializable
+data class FlowActionResult(
+    val wmp: WmpMeta? = null,
+    @SerialName("flow_id") val flowId: String,
+    val accepted: Boolean = true,
+)
+
+/** Parameters for wmp.flow.complete (notification). */
+@Serializable
+data class FlowCompleteParams(
+    val wmp: WmpMeta? = null,
+    @SerialName("flow_id") val flowId: String,
+    val result: JsonObject? = null,
+)
+
+/** Parameters for wmp.flow.error (notification). */
+@Serializable
+data class FlowErrorParams(
+    val wmp: WmpMeta? = null,
+    @SerialName("flow_id") val flowId: String,
+    val code: String? = null,
+    val message: String? = null,
+    val data: JsonElement? = null,
+)
+
+/** Parameters for wmp.flow.cancel. */
+@Serializable
+data class FlowCancelParams(
+    val wmp: WmpMeta? = null,
+    @SerialName("flow_id") val flowId: String,
+    val reason: String? = null,
+)
+
+/** Parameters for wmp.resolve. */
+@Serializable
+data class ResolveParams(
+    val wmp: WmpMeta? = null,
+    val type: String,
+    val identifier: String,
+    val params: JsonObject? = null,
+)
+
+/** Result for wmp.resolve. */
+@Serializable
+data class ResolveResult(
+    val wmp: WmpMeta? = null,
+    val type: String,
+    val data: JsonObject? = null,
+)

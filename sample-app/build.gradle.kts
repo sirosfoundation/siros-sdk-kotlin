@@ -31,6 +31,7 @@ android {
             buildConfigField("String", "ENGINE_URL", "\"\"")
             buildConfigField("String", "ISSUER_PROXY_URL", "\"\"")
             buildConfigField("boolean", "R2PS_ENABLED", "false")
+            buildConfigField("boolean", "SHOW_PRE_LOGIN_SETTINGS", "false")
         }
         debug {
             // Allow connecting to local backend over cleartext for development
@@ -43,6 +44,7 @@ android {
             // Enable WSCD-backed signing via R2PS in debug builds
             // Requires siros-wscd-manager native lib built with r2ps feature
             buildConfigField("boolean", "R2PS_ENABLED", "false")
+            buildConfigField("boolean", "SHOW_PRE_LOGIN_SETTINGS", "true")
         }
     }
 

@@ -41,6 +41,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Switch
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -228,15 +230,27 @@ fun WalletScreen(viewModel: WalletViewModel) {
     // Not logged in → show login screen (no app chrome)
     if (walletState is WalletState.Disconnected || walletState is WalletState.Connecting) {
         val cachedAccounts = (walletState as? WalletState.Disconnected)?.cachedAccounts ?: emptyList()
+        val backendUrlState by viewModel.backendUrlFlow.collectAsState()
+        val tenantIdState by viewModel.tenantIdFlow.collectAsState()
+        val engineUrlState by viewModel.engineUrlFlow.collectAsState()
+        val useWmpState by viewModel.useWmpProtocol.collectAsState()
         LoginScreen(
             cachedAccounts = cachedAccounts,
-            backendUrl = viewModel.backendUrl,
+            backendUrl = backendUrlState,
+            tenantId = tenantIdState,
+            engineUrl = engineUrlState,
+            useWmpProtocol = useWmpState,
+            showPreLoginSettings = BuildConfig.SHOW_PRE_LOGIN_SETTINGS,
             isLoading = isLoading || walletState is WalletState.Connecting,
             snackbarHostState = snackbarHostState,
             onLogin = viewModel::login,
             onLoginAccount = { /* TODO: login specific account */ viewModel.login() },
             onForgetAccount = viewModel::forgetAccount,
             onRegister = viewModel::register,
+            onUpdateBackendUrl = viewModel::updateBackendUrl,
+            onUpdateTenantId = viewModel::updateTenantId,
+            onUpdateEngineUrl = viewModel::updateEngineUrl,
+            onUpdateUseWmpProtocol = viewModel::updateUseWmpProtocol,
         )
         return
     }
@@ -395,6 +409,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             state = state,
                             backendUrl = viewModel.backendUrl,
                             tenantId = viewModel.tenantId,
+                            useWmpProtocol = viewModel.useWmpProtocol.collectAsState().value,
                             presentationCount = presentationHistory.size,
                             lifecycleState = viewModel.lifecycleState.collectAsState().value,
                             enrollmentInProgress = viewModel.enrollmentInProgress.collectAsState().value,
@@ -405,6 +420,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onForgetAccount = viewModel::forgetAccount,
                             passkeys = viewModel.listPasskeys(),
                             onRenamePasskey = viewModel::renamePasskey,
+                            onUpdateUseWmpProtocol = viewModel::updateUseWmpProtocol,
                         )
                     }
                 }
@@ -484,33 +500,68 @@ fun WalletScreen(viewModel: WalletViewModel) {
 
 // ── Login Screen ────────────────────────────────────────────────────
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LoginScreen(
     cachedAccounts: List<org.sirosfoundation.sdk.wallet.CachedAccount>,
     backendUrl: String,
+    tenantId: String,
+    engineUrl: String,
+    useWmpProtocol: Boolean,
+    showPreLoginSettings: Boolean,
     isLoading: Boolean,
     snackbarHostState: SnackbarHostState,
     onLogin: () -> Unit,
     onLoginAccount: (org.sirosfoundation.sdk.wallet.CachedAccount) -> Unit,
     onForgetAccount: (String) -> Unit,
     onRegister: (String) -> Unit,
+    onUpdateBackendUrl: (String) -> Unit,
+    onUpdateTenantId: (String) -> Unit,
+    onUpdateEngineUrl: (String) -> Unit,
+    onUpdateUseWmpProtocol: (Boolean) -> Unit,
 ) {
     var showRegister by remember { mutableStateOf(false) }
     var showOtherLogin by remember { mutableStateOf(false) }
     var registerName by remember { mutableStateOf("") }
     var showBackendInfo by remember { mutableStateOf(false) }
+    var showSettingsSheet by remember { mutableStateOf(false) }
+
+    if (showSettingsSheet) {
+        PreLoginSettingsSheet(
+            backendUrl = backendUrl,
+            tenantId = tenantId,
+            engineUrl = engineUrl,
+            useWmpProtocol = useWmpProtocol,
+            onUpdateBackendUrl = onUpdateBackendUrl,
+            onUpdateTenantId = onUpdateTenantId,
+            onUpdateEngineUrl = onUpdateEngineUrl,
+            onUpdateUseWmpProtocol = onUpdateUseWmpProtocol,
+            onDismiss = { showSettingsSheet = false },
+        )
+    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 32.dp, vertical = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            // Settings gear icon (top-right)
+            if (showPreLoginSettings) {
+                IconButton(
+                    onClick = { showSettingsSheet = true },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
+                ) {
+                    Icon(Icons.Outlined.Settings, contentDescription = "Settings",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 32.dp, vertical = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
             Spacer(modifier = Modifier.height(24.dp))
             Image(
                 painter = painterResource(R.drawable.ic_siros_mark),
@@ -641,6 +692,91 @@ fun LoginScreen(
                         }
                     }
                 }
+            } // Column
+        } // Box
+    } // Scaffold padding
+    } // Scaffold
+} // LoginScreen
+
+// ── Pre-Login Settings Bottom Sheet ────────────────────────────────
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PreLoginSettingsSheet(
+    backendUrl: String,
+    tenantId: String,
+    engineUrl: String,
+    useWmpProtocol: Boolean,
+    onUpdateBackendUrl: (String) -> Unit,
+    onUpdateTenantId: (String) -> Unit,
+    onUpdateEngineUrl: (String) -> Unit,
+    onUpdateUseWmpProtocol: (Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var editBackendUrl by remember { mutableStateOf(backendUrl) }
+    var editTenantId by remember { mutableStateOf(tenantId) }
+    var editEngineUrl by remember { mutableStateOf(engineUrl) }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 32.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(
+                "Connection Settings",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                "Configure before registering. Changes take effect on next connection.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            OutlinedTextField(
+                value = editBackendUrl,
+                onValueChange = { editBackendUrl = it; onUpdateBackendUrl(it) },
+                label = { Text("Backend URL") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+            OutlinedTextField(
+                value = editTenantId,
+                onValueChange = { editTenantId = it; onUpdateTenantId(it) },
+                label = { Text("Tenant ID") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+            OutlinedTextField(
+                value = editEngineUrl,
+                onValueChange = { editEngineUrl = it; onUpdateEngineUrl(it) },
+                label = { Text("Engine URL (blank = auto)") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+
+            // Transport protocol toggle
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("WMP Protocol", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        if (useWmpProtocol) "JSON-RPC 2.0 (WMP)" else "Legacy engine protocol",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = useWmpProtocol,
+                    onCheckedChange = onUpdateUseWmpProtocol,
+                )
             }
         }
     }
@@ -765,6 +901,7 @@ fun SettingsTab(
     state: WalletState.Ready,
     backendUrl: String,
     tenantId: String,
+    useWmpProtocol: Boolean,
     presentationCount: Int,
     lifecycleState: LifecycleState?,
     enrollmentInProgress: Boolean,
@@ -775,6 +912,7 @@ fun SettingsTab(
     onForgetAccount: ((String) -> Unit)? = null,
     passkeys: List<org.sirosfoundation.sdk.wallet.CachedPasskey> = emptyList(),
     onRenamePasskey: ((String, String) -> Unit)? = null,
+    onUpdateUseWmpProtocol: ((Boolean) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -810,6 +948,7 @@ fun SettingsTab(
                 SettingsRow(stringResource(R.string.settings_tenant_id), tenantId)
                 SettingsRow(stringResource(R.string.settings_credentials_stored), state.credentials.size.toString())
                 SettingsRow(stringResource(R.string.settings_app_version), BuildConfig.VERSION_NAME)
+                SettingsRow("Transport", if (useWmpProtocol) "WMP (JSON-RPC 2.0)" else "Legacy")
             }
         }
 

@@ -38,4 +38,9 @@ data class WalletConfig(
     val keystore: KeystoreManager? = null,
     /** Engine WebSocket URL. Defaults to backendUrl with port replaced by 8082. */
     val engineUrl: String? = null,
+    /**
+     * Use the WMP (Wallet Messaging Protocol) JSON-RPC 2.0 transport instead
+     * of the legacy engine protocol. Requires go-wallet-backend with WMP support.
+     */
+    val useWmpProtocol: Boolean = false,
 )
