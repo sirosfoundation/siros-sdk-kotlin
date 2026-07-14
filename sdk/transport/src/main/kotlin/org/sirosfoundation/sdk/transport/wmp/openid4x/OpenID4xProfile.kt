@@ -4,11 +4,13 @@ package org.sirosfoundation.sdk.transport.wmp.openid4x
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import org.sirosfoundation.sdk.transport.wmp.*
 import timber.log.Timber
-import java.util.concurrent.ConcurrentHashMap
 
 // ---------------------------------------------------------------------------
 // Flow Type Constants
@@ -258,7 +260,6 @@ class OpenID4xProfile(
 ) : WmpProfile, WmpFlowHandler {
 
     private var peer: WmpPeerContext? = null
-    private val activeFlowTypes = ConcurrentHashMap<String, String>()
 
     // ---- WmpProfile ----
 
@@ -274,7 +275,6 @@ class OpenID4xProfile(
     override val flowTypes: List<String> = listOf(OID4FlowTypes.OID4VCI, OID4FlowTypes.OID4VP)
 
     override suspend fun startFlow(params: FlowStartParams): FlowStartResult {
-        activeFlowTypes[params.flowId] = params.flowType
         return FlowStartResult(flowId = params.flowId, flowType = params.flowType)
     }
 
@@ -325,11 +325,11 @@ class OpenID4xProfile(
 
     private suspend fun handleSignRequest(flowId: String, payload: JsonObject?) {
         val handler = config.onSignRequest ?: return
+        val ctx = peer ?: return
 
         val signParams = payload?.let {
             try {
-                val codec = peer?.codec ?: WmpCodec()
-                codec.json.decodeFromJsonElement(SignSubFlowParams.serializer(), it)
+                ctx.codec.json.decodeFromJsonElement(SignSubFlowParams.serializer(), it)
             } catch (e: Exception) {
                 Timber.e(e, "Failed to decode sign request params")
                 null
@@ -373,18 +373,18 @@ class OpenID4xProfile(
 
     private suspend fun sendSignResponse(flowId: String, result: SignSubFlowResult) {
         val ctx = peer ?: return
-        val params = kotlinx.serialization.json.buildJsonObject {
+        val params = buildJsonObject {
             put("wmp", ctx.codec.json.encodeToJsonElement(WmpMeta.serializer(), WmpMeta()))
-            put("flow_id", kotlinx.serialization.json.JsonPrimitive(flowId))
-            put("action", kotlinx.serialization.json.JsonPrimitive("sign_response"))
+            put("flow_id", JsonPrimitive(flowId))
+            put("action", JsonPrimitive("sign_response"))
             result.proofs?.let { proofs ->
                 put("proofs", ctx.codec.json.encodeToJsonElement(
-                    kotlinx.serialization.builtins.ListSerializer(ProofObject.serializer()),
+                    ListSerializer(ProofObject.serializer()),
                     proofs,
                 ))
             }
             result.vpToken?.let {
-                put("vp_token", kotlinx.serialization.json.JsonPrimitive(it))
+                put("vp_token", JsonPrimitive(it))
             }
         }
         ctx.notify(WmpMethods.FLOW_ACTION, params)
@@ -392,12 +392,12 @@ class OpenID4xProfile(
 
     private suspend fun sendMatchResponse(flowId: String, result: MatchResult) {
         val ctx = peer ?: return
-        val params = kotlinx.serialization.json.buildJsonObject {
+        val params = buildJsonObject {
             put("wmp", ctx.codec.json.encodeToJsonElement(WmpMeta.serializer(), WmpMeta()))
-            put("flow_id", kotlinx.serialization.json.JsonPrimitive(flowId))
-            put("action", kotlinx.serialization.json.JsonPrimitive("match_response"))
+            put("flow_id", JsonPrimitive(flowId))
+            put("action", JsonPrimitive("match_response"))
             put("matches", ctx.codec.json.encodeToJsonElement(
-                kotlinx.serialization.builtins.ListSerializer(CredentialMatch.serializer()),
+                ListSerializer(CredentialMatch.serializer()),
                 result.matches,
             ))
         }
@@ -406,24 +406,24 @@ class OpenID4xProfile(
 
     private suspend fun sendTrustResult(flowId: String, result: TrustResult) {
         val ctx = peer ?: return
-        val params = kotlinx.serialization.json.buildJsonObject {
+        val params = buildJsonObject {
             put("wmp", ctx.codec.json.encodeToJsonElement(WmpMeta.serializer(), WmpMeta()))
-            put("flow_id", kotlinx.serialization.json.JsonPrimitive(flowId))
-            put("action", kotlinx.serialization.json.JsonPrimitive("trust_result"))
-            put("trusted", kotlinx.serialization.json.JsonPrimitive(result.trusted))
-            result.framework?.let { put("framework", kotlinx.serialization.json.JsonPrimitive(it)) }
-            result.reason?.let { put("reason", kotlinx.serialization.json.JsonPrimitive(it)) }
+            put("flow_id", JsonPrimitive(flowId))
+            put("action", JsonPrimitive("trust_result"))
+            put("trusted", JsonPrimitive(result.trusted))
+            result.framework?.let { put("framework", JsonPrimitive(it)) }
+            result.reason?.let { put("reason", JsonPrimitive(it)) }
         }
         ctx.notify(WmpMethods.FLOW_ACTION, params)
     }
 
     private suspend fun sendFlowError(flowId: String, code: String, message: String?) {
         val ctx = peer ?: return
-        val params = kotlinx.serialization.json.buildJsonObject {
+        val params = buildJsonObject {
             put("wmp", ctx.codec.json.encodeToJsonElement(WmpMeta.serializer(), WmpMeta()))
-            put("flow_id", kotlinx.serialization.json.JsonPrimitive(flowId))
-            put("code", kotlinx.serialization.json.JsonPrimitive(code))
-            message?.let { put("message", kotlinx.serialization.json.JsonPrimitive(it)) }
+            put("flow_id", JsonPrimitive(flowId))
+            put("code", JsonPrimitive(code))
+            message?.let { put("message", JsonPrimitive(it)) }
         }
         ctx.notify(WmpMethods.FLOW_ERROR, params)
     }
