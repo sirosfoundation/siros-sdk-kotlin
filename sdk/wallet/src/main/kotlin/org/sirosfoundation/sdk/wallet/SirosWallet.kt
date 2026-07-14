@@ -398,6 +398,8 @@ class SirosWallet private constructor(
     fun logout() {
         engineSession?.disconnect()
         engineSession = null
+        scope.launch { wmpPeer?.close() }
+        wmpPeer = null
         credentialNotifier = null
         keystore.lock()
         sessionStore.clear()  // clears active account's session only
@@ -579,6 +581,8 @@ class SirosWallet private constructor(
     fun destroy() {
         engineSession?.disconnect()
         engineSession = null
+        scope.launch { wmpPeer?.close() }
+        wmpPeer = null
         credentialNotifier = null
         keystore.lock()
         apiClient = null
@@ -1002,8 +1006,142 @@ class SirosWallet private constructor(
      */
     private suspend fun connectEngineWithToken() {
         val token = authTokens.ensureAnonymousToken()
-        connectEngine(token.raw)
+        if (config.useWmpProtocol) {
+            connectViaWmp(token.raw)
+        } else {
+            connectEngine(token.raw)
+        }
     }
+
+    // ── WMP Protocol Path ─────────────────────────────────────────────
+
+    private var wmpPeer: org.sirosfoundation.sdk.transport.wmp.WmpPeer? = null
+
+    private suspend fun connectViaWmp(appToken: String) {
+        val engineBaseUrl = (config.engineUrl ?: config.backendUrl).trimEnd('/')
+        val wsUrl = engineBaseUrl.replace("http://", "ws://").replace("https://", "wss://") +
+            "/api/v2/wallet?tenant_id=${config.tenantId}"
+
+        val transport = org.sirosfoundation.sdk.transport.wmp.WmpWebSocketTransport(wsUrl)
+        val session = org.sirosfoundation.sdk.transport.wmp.WmpSession(transport)
+        val peer = org.sirosfoundation.sdk.transport.wmp.WmpPeer(session)
+
+        val profile = org.sirosfoundation.sdk.transport.wmp.openid4x.OpenID4xProfile(
+            org.sirosfoundation.sdk.transport.wmp.openid4x.OpenID4xConfig(
+                onSignRequest = { flowId, params -> handleWmpSignRequest(flowId, params) },
+                onMatchRequest = { flowId, payload -> handleWmpMatchRequest(flowId, payload) },
+                onTrustEvaluation = { flowId, payload -> handleWmpTrustEvaluation(flowId, payload) },
+                onComplete = { flowId, _ ->
+                    Timber.i("WMP flow $flowId complete")
+                    eventListener?.onFlowComplete(flowId)
+                },
+                onError = { flowId, code, message ->
+                    Timber.e("WMP flow $flowId error: $code — $message")
+                    eventListener?.onFlowError(flowId, "$code: $message")
+                },
+            )
+        )
+        peer.use(profile)
+        peer.connect(appToken)
+        wmpPeer = peer
+        // WMP peer handles credential notifications via the profile
+        credentialNotifier = null // Notifications go through WmpPeer.sendCredentialNotification()
+
+        Timber.i("Connected via WMP protocol to $wsUrl")
+    }
+
+    private suspend fun handleWmpSignRequest(
+        flowId: String,
+        params: org.sirosfoundation.sdk.transport.wmp.openid4x.SignSubFlowParams,
+    ): org.sirosfoundation.sdk.transport.wmp.openid4x.SignSubFlowResult {
+        return when (params.action) {
+            "generate_proof" -> {
+                val count = params.count ?: 1
+                val proofs = (1..count).map {
+                    val proofJwt = keystore.generateProof(
+                        audience = params.audience,
+                        nonce = params.nonce,
+                        freshKey = count > 1,
+                    )
+                    org.sirosfoundation.sdk.transport.wmp.openid4x.ProofObject(proofType = "jwt", jwt = proofJwt)
+                }
+                org.sirosfoundation.sdk.transport.wmp.openid4x.SignSubFlowResult(proofs = proofs)
+            }
+            "sign_presentation" -> {
+                val vpToken = keystore.signPresentation(
+                    nonce = params.nonce,
+                    audience = params.audience,
+                    credentialIds = emptyList(),
+                )
+                org.sirosfoundation.sdk.transport.wmp.openid4x.SignSubFlowResult(vpToken = vpToken)
+            }
+            else -> throw IllegalArgumentException("Unknown sign action: ${params.action}")
+        }
+    }
+
+    private suspend fun handleWmpMatchRequest(
+        flowId: String,
+        payload: kotlinx.serialization.json.JsonObject?,
+    ): org.sirosfoundation.sdk.transport.wmp.openid4x.MatchResult {
+        val allCreds = credentialStore.getAll()
+        val matches = allCreds.map { cred ->
+            org.sirosfoundation.sdk.transport.wmp.openid4x.CredentialMatch(
+                credentialId = cred.id,
+                credentialQueryId = null,
+                disclosedClaims = null,
+            )
+        }
+        return org.sirosfoundation.sdk.transport.wmp.openid4x.MatchResult(matches = matches)
+    }
+
+    private suspend fun handleWmpTrustEvaluation(
+        flowId: String,
+        payload: kotlinx.serialization.json.JsonObject?,
+    ): org.sirosfoundation.sdk.transport.wmp.openid4x.TrustResult {
+        // Delegate to the existing trust evaluation logic via BackendApiClient
+        val subjectId = payload?.get("request")?.jsonObject
+            ?.get("subject_id")?.jsonPrimitive?.contentOrNull
+
+        if (subjectId.isNullOrBlank()) {
+            return org.sirosfoundation.sdk.transport.wmp.openid4x.TrustResult(
+                trusted = false, reason = "Missing subject_id"
+            )
+        }
+
+        return try {
+            val request = payload?.get("request")?.jsonObject
+            val keyMaterial = request?.get("key_material")?.jsonObject
+            val evaluationRequest = kotlinx.serialization.json.buildJsonObject {
+                putJsonObject("subject") {
+                    put("type", kotlinx.serialization.json.JsonPrimitive("key"))
+                    put("id", kotlinx.serialization.json.JsonPrimitive(subjectId))
+                }
+                putJsonObject("resource") {
+                    val kmType = keyMaterial?.get("type")?.jsonPrimitive?.contentOrNull ?: "x5c"
+                    put("type", kotlinx.serialization.json.JsonPrimitive(kmType))
+                    put("id", kotlinx.serialization.json.JsonPrimitive(subjectId))
+                    val x5c = keyMaterial?.get("x5c")
+                    val jwk = keyMaterial?.get("jwk")
+                    if (x5c != null) put("key", x5c)
+                    else if (jwk != null) put("key", kotlinx.serialization.json.buildJsonArray { add(jwk) })
+                }
+                putJsonObject("action") {
+                    put("name", kotlinx.serialization.json.JsonPrimitive("credential-issuer"))
+                }
+                request?.get("context")?.let { put("context", it) }
+            }
+            val response = apiClient!!.evaluateTrust(evaluationRequest)
+            val decision = response["decision"]?.jsonPrimitive?.boolean ?: false
+            org.sirosfoundation.sdk.transport.wmp.openid4x.TrustResult(trusted = decision)
+        } catch (e: Exception) {
+            Timber.e(e, "WMP trust evaluation failed")
+            org.sirosfoundation.sdk.transport.wmp.openid4x.TrustResult(
+                trusted = false, reason = e.message
+            )
+        }
+    }
+
+    // ── Legacy Engine Path ────────────────────────────────────────────
 
     private suspend fun connectEngine(appToken: String) {
         val engineBaseUrl = config.engineUrl ?: config.backendUrl
