@@ -28,8 +28,26 @@ import org.sirosfoundation.sdk.idv.IDVException
  *
  * ## FaceTec SDK Integration
  *
- * To complete this implementation, add the FaceTec SDK dependency
- * and implement the capture methods using FaceTec's session API:
+ * Add the FaceTec SDK from the private vendor Maven repository:
+ *
+ * ```kotlin
+ * // settings.gradle.kts — add the vendor Maven repo
+ * dependencyResolutionManagement {
+ *     repositories {
+ *         maven {
+ *             url = uri("https://maven.pkg.github.com/sirosfoundation/vendor-maven-packages")
+ *             credentials { /* GitHub PAT with packages:read */ }
+ *         }
+ *     }
+ * }
+ *
+ * // app/build.gradle.kts
+ * dependencies {
+ *     implementation("com.facetec:facetec-sdk:10.1.6")
+ * }
+ * ```
+ *
+ * Then implement the capture methods using FaceTec's session API:
  *
  * 1. `captureLiveness`: Create a `FaceTecSession`, capture FaceScan,
  *    return `{ faceScan, auditTrailImage, lowQualityAuditTrailImage }`.
