@@ -1,6 +1,9 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.sirosfoundation.sdk.wallet
 
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import org.sirosfoundation.sdk.credentials.CredentialStore
 import org.sirosfoundation.sdk.keystore.KeystoreManager
@@ -43,4 +46,38 @@ data class WalletConfig(
      * of the legacy engine protocol. Requires go-wallet-backend with WMP support.
      */
     val useWmpProtocol: Boolean = false,
-)
+) {
+    companion object {
+        private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
+        /**
+         * Discover the engine base URL from the backend's
+         * `/.well-known/wallet-configuration` endpoint.
+         *
+         * Returns `null` if discovery fails — the caller should fall back
+         * to [backendUrl] (single-port deployment).
+         */
+        suspend fun discoverEngineUrl(backendUrl: String): String? {
+            val url = backendUrl.trimEnd('/') + "/.well-known/wallet-configuration"
+            return try {
+                val client = okhttp3.OkHttpClient.Builder()
+                    .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                    .build()
+                val request = okhttp3.Request.Builder().url(url).build()
+                val response = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    client.newCall(request).execute()
+                }
+                response.use { resp ->
+                    if (!resp.isSuccessful) return@use null
+                    val body = resp.body?.string() ?: return@use null
+                    val parsed = json.parseToJsonElement(body).jsonObject
+                    val engineUrl = parsed["engine_url"]?.jsonPrimitive?.contentOrNull
+                    if (engineUrl.isNullOrBlank()) null else engineUrl
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+}
