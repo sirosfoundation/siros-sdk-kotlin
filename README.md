@@ -53,6 +53,39 @@ Native Android SDK for integrating SIROS ID wallet infrastructure into existing 
 └─────────────────────────────────────────┘
 ```
 
+## Key Features
+
+### WMP (Wallet Messaging Protocol) Support
+
+The SDK includes a full WMP implementation as an alternative to the legacy WebSocket engine protocol:
+
+- **`WmpPeer`** — JSON-RPC 2.0 dispatch with profile-based routing
+- **`OpenID4xProfile`** — OID4VCI/OID4VP flow handling (sign, match, trust evaluation)
+- **`WmpHttpSseTransport`** — HTTP+SSE transport for firewall-restricted environments
+- **`WmpWebSocketTransport`** — WebSocket transport with `wmp.v1` subprotocol
+
+Enable via `WalletConfig(useWmpProtocol = true)`. Requires backend with WMP endpoint.
+
+### Engine URL Auto-Discovery
+
+The SDK auto-discovers the engine WebSocket URL from `/.well-known/wallet-configuration`:
+
+```kotlin
+// Resolution order: explicit engineUrl > discovery > backendUrl
+val config = WalletConfig(
+    backendUrl = "https://wallet.example.com",
+    // engineUrl = null → auto-discovered
+)
+```
+
+### Pre-Login Settings (Sample App)
+
+Debug builds expose a gear icon on the login screen for configuring:
+- Backend URL, Tenant ID, Engine URL
+- WMP protocol toggle
+
+Controlled by `SHOW_PRE_LOGIN_SETTINGS` build config (true in debug, false in release).
+
 ## Quick Start
 
 ```kotlin
