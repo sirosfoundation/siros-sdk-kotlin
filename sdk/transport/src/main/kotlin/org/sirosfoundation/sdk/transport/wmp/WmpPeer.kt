@@ -106,10 +106,14 @@ class WmpPeer(
         if (response.error != null) {
             throw WmpSessionException("flow.start failed: ${response.error.message}")
         }
-        return codec.json.decodeFromJsonElement(
+        val result = codec.json.decodeFromJsonElement(
             FlowStartResult.serializer(),
             response.result ?: throw WmpSessionException("flow.start: missing result"),
         )
+        // Track so that subsequent server-initiated progress/action/complete/error
+        // notifications for this flow are dispatched to the correct handler.
+        trackFlowType(flowId, flowType)
+        return result
     }
 
     /** Send a flow action via wmp.flow.action. */
@@ -138,6 +142,7 @@ class WmpPeer(
             FlowCancelParams(wmp = WmpMeta(), flowId = flowId, reason = reason)
         )
         notify(WmpMethods.FLOW_CANCEL, params)
+        forgetFlowType(flowId)
     }
 
     /** Send a credential notification. */
@@ -215,6 +220,12 @@ class WmpPeer(
                     if (msg.id != null) {
                         session.sendResponse(msg.id, codec.encodeParams(result))
                     }
+                } else if (msg.id != null) {
+                    session.sendErrorResponse(
+                        msg.id,
+                        WmpErrorCodes.FLOW_NOT_FOUND,
+                        "Unsupported flow type: ${p.flowType}",
+                    )
                 }
                 _flowEvents.emit(FlowEvent.Started(p.flowId, p.flowType, p.params))
             }
@@ -227,6 +238,12 @@ class WmpPeer(
                     if (msg.id != null) {
                         session.sendResponse(msg.id, codec.encodeParams(result))
                     }
+                } else if (msg.id != null) {
+                    session.sendErrorResponse(
+                        msg.id,
+                        WmpErrorCodes.FLOW_NOT_FOUND,
+                        "No handler for flow: ${p.flowId}",
+                    )
                 }
                 _flowEvents.emit(FlowEvent.Action(p.flowId, p.action, p.params))
             }
@@ -241,12 +258,39 @@ class WmpPeer(
                 _flowEvents.emit(FlowEvent.Cancelled(p.flowId, p.reason))
             }
 
+            WmpMethods.RESOLVE -> {
+                val p = decodeParams<ResolveParams>(params)
+                val handler = registry.resolveHandler(p.type)
+                if (handler != null) {
+                    val result = handler.handleResolve(p)
+                    if (msg.id != null) {
+                        session.sendResponse(msg.id, codec.encodeParams(result))
+                    }
+                } else if (msg.id != null) {
+                    session.sendErrorResponse(
+                        msg.id,
+                        WmpErrorCodes.RESOLVE_ERROR,
+                        "Unsupported resolve type: ${p.type}",
+                    )
+                }
+            }
+
             else -> {
                 // Check for custom method handlers
                 val handler = registry.methodHandler(msg.method)
                 if (handler != null) {
-                    handler.handleMethod(msg.method, params)
+                    val result = handler.handleMethod(msg.method, params)
+                    if (msg.id != null) {
+                        session.sendResponse(msg.id, result as? JsonObject)
+                    }
                 } else {
+                    if (msg.id != null) {
+                        session.sendErrorResponse(
+                            msg.id,
+                            WmpErrorCodes.METHOD_NOT_FOUND,
+                            "Unknown method: ${msg.method}",
+                        )
+                    }
                     Timber.w("Unhandled WMP method: ${msg.method}")
                 }
             }

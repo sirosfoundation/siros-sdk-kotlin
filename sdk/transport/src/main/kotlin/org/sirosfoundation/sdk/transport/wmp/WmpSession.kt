@@ -175,6 +175,18 @@ class WmpSession(
         }
     }
 
+    /**
+     * Send a JSON-RPC 2.0 error response for a server-initiated request.
+     * Used when the peer cannot handle an inbound request.
+     */
+    internal suspend fun sendErrorResponse(id: String, code: Int, message: String) {
+        val response = JsonRpcResponse(id = id, error = JsonRpcError(code = code, message = message))
+        val msg = codec.json.encodeToString(JsonRpcResponse.serializer(), response).toByteArray(Charsets.UTF_8)
+        sendMutex.withLock {
+            transport.send(msg)
+        }
+    }
+
     private fun startMessageLoop() {
         scope.launch {
             transport.incoming().collect { data ->

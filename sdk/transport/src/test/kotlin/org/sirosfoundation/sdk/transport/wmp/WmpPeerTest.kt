@@ -9,6 +9,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -56,6 +57,23 @@ class WmpPeerTest {
         override suspend fun handleComplete(params: FlowCompleteParams) { lastCompleteParams = params }
         override suspend fun handleError(params: FlowErrorParams) { lastErrorParams = params }
         override suspend fun handleCancel(params: FlowCancelParams) { lastCancelParams = params }
+    }
+
+    private class StubResolveProfile(
+        val resolveTypesHandled: List<String> = listOf("did"),
+    ) : WmpProfile, WmpResolveHandler {
+        override val name: String = "stub-resolve"
+        override val capabilities: List<String> = emptyList()
+        override val resolveTypes get() = resolveTypesHandled
+
+        var lastResolveParams: ResolveParams? = null
+
+        override fun init(ctx: WmpPeerContext) {}
+
+        override suspend fun handleResolve(params: ResolveParams): ResolveResult {
+            lastResolveParams = params
+            return ResolveResult(type = params.type)
+        }
     }
 
     // ---------------------------------------------------------------------------
@@ -282,6 +300,166 @@ class WmpPeerTest {
         assertTrue(events[2] is FlowEvent.Complete)
 
         collectJob.cancel()
+        peer.close()
+    }
+
+    @Test
+    fun clientInitiatedStartFlowTracksFlowTypeForSubsequentProgress() = runBlocking {
+        val transport = FakeTransport()
+        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 2_000))
+        val peer = WmpPeer(session)
+        val profile = StubProfile()
+        peer.use(profile)
+
+        setupConnectedPeer(transport, peer)
+
+        // Client initiates the flow (outgoing request); server responds with success
+        val startJob = launch { peer.startFlow("test-flow", "fc1") }
+        withTimeout(2_000) {
+            // Wait for the flow.start request to be sent
+            while (transport.sentMessages.size < 2) delay(10)
+        }
+        val flowStartReq = codec.decodeRequest(transport.sentMessages.last())
+        // Server acknowledges the flow start
+        transport.receiveFromServer(
+            """{"jsonrpc":"2.0","id":"${flowStartReq.id}","result":{"flow_id":"fc1","flow_type":"test-flow"}}"""
+                .toByteArray()
+        )
+        startJob.join()
+
+        // Server now sends progress for the client-initiated flow
+        transport.receiveFromServer(
+            """{"jsonrpc":"2.0","method":"wmp.flow.progress","params":{"wmp":{"version":"0.1"},"flow_id":"fc1","step":"processing"}}"""
+                .toByteArray()
+        )
+
+        withTimeout(2_000) { while (profile.lastProgressParams == null) delay(10) }
+
+        assertNotNull("Handler should be called for client-initiated flow progress", profile.lastProgressParams)
+        assertEquals("fc1", profile.lastProgressParams!!.flowId)
+
+        peer.close()
+    }
+
+    @Test
+    fun clientCancelFlowCleansUpFlowTypeTracking() = runBlocking {
+        val transport = FakeTransport()
+        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 2_000))
+        val peer = WmpPeer(session)
+        val profile = StubProfile()
+        peer.use(profile)
+
+        setupConnectedPeer(transport, peer)
+
+        // Seed the flow type map via a server-initiated flow.start
+        transport.receiveFromServer(
+            """{"jsonrpc":"2.0","method":"wmp.flow.start","params":{"wmp":{"version":"0.1"},"flow_id":"fc2","flow_type":"test-flow"}}"""
+                .toByteArray()
+        )
+        delay(100)
+
+        // Client cancels the flow
+        peer.cancelFlow("fc2", "user cancelled")
+        delay(100)
+
+        // Progress after cancel should NOT dispatch to handler (flow type was forgotten)
+        profile.lastProgressParams = null
+        transport.receiveFromServer(
+            """{"jsonrpc":"2.0","method":"wmp.flow.progress","params":{"wmp":{"version":"0.1"},"flow_id":"fc2","step":"late"}}"""
+                .toByteArray()
+        )
+        delay(100)
+
+        assertTrue("Flow handler should not receive progress after client cancel", profile.lastProgressParams == null)
+
+        peer.close()
+    }
+
+    @Test
+    fun inboundFlowStartUnknownTypeRespondsWithError() = runBlocking {
+        val transport = FakeTransport()
+        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 2_000))
+        val peer = WmpPeer(session)
+        // No profile registered for "unknown-flow"
+        peer.use(StubProfile(handledFlowTypes = listOf("test-flow")))
+
+        setupConnectedPeer(transport, peer)
+
+        val sentBefore = transport.sentMessages.size
+
+        transport.receiveFromServer(
+            """{"jsonrpc":"2.0","id":"err-1","method":"wmp.flow.start","params":{"wmp":{"version":"0.1"},"flow_id":"fErr","flow_type":"unknown-flow"}}"""
+                .toByteArray()
+        )
+
+        withTimeout(2_000) {
+            while (transport.sentMessages.size <= sentBefore) delay(10)
+        }
+
+        val responseMsg = transport.sentMessages.last().toString(Charsets.UTF_8)
+        assertTrue("Expected error response for unregistered flow type", responseMsg.contains("\"error\""))
+        assertTrue("Expected request id in error response", responseMsg.contains("\"id\":\"err-1\""))
+
+        peer.close()
+    }
+
+    @Test
+    fun inboundResolveRequestDispatchesToResolveHandler() = runBlocking {
+        val transport = FakeTransport()
+        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 2_000))
+        val peer = WmpPeer(session)
+        val resolveProfile = StubResolveProfile()
+        peer.use(resolveProfile)
+
+        setupConnectedPeer(transport, peer)
+
+        val sentBefore = transport.sentMessages.size
+
+        transport.receiveFromServer(
+            """{"jsonrpc":"2.0","id":"res-1","method":"wmp.resolve","params":{"type":"did","identifier":"did:example:123"}}"""
+                .toByteArray()
+        )
+
+        withTimeout(2_000) {
+            while (transport.sentMessages.size <= sentBefore) delay(10)
+        }
+
+        assertNotNull("Resolve handler should have been called", resolveProfile.lastResolveParams)
+        assertEquals("did", resolveProfile.lastResolveParams!!.type)
+        assertEquals("did:example:123", resolveProfile.lastResolveParams!!.identifier)
+
+        val responseMsg = transport.sentMessages.last().toString(Charsets.UTF_8)
+        assertTrue("Expected JSON-RPC response with id", responseMsg.contains("\"id\":\"res-1\""))
+        assertTrue("Expected result field", responseMsg.contains("\"result\""))
+        assertFalse("Should not contain error", responseMsg.contains("\"error\""))
+
+        peer.close()
+    }
+
+    @Test
+    fun inboundResolveRequestUnknownTypeRespondsWithError() = runBlocking {
+        val transport = FakeTransport()
+        val session = WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 2_000))
+        val peer = WmpPeer(session)
+        peer.use(StubResolveProfile(resolveTypesHandled = listOf("did")))
+
+        setupConnectedPeer(transport, peer)
+
+        val sentBefore = transport.sentMessages.size
+
+        transport.receiveFromServer(
+            """{"jsonrpc":"2.0","id":"res-2","method":"wmp.resolve","params":{"type":"unknown","identifier":"foo"}}"""
+                .toByteArray()
+        )
+
+        withTimeout(2_000) {
+            while (transport.sentMessages.size <= sentBefore) delay(10)
+        }
+
+        val responseMsg = transport.sentMessages.last().toString(Charsets.UTF_8)
+        assertTrue("Expected error response for unsupported resolve type", responseMsg.contains("\"error\""))
+        assertTrue("Expected request id", responseMsg.contains("\"id\":\"res-2\""))
+
         peer.close()
     }
 }
