@@ -10,10 +10,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import timber.log.Timber
 
 /**
@@ -148,13 +147,13 @@ class WmpPeer(
         event: String,
         eventDescription: String? = null,
     ) {
-        val params = kotlinx.serialization.json.buildJsonObject {
+        val params = buildJsonObject {
             put("wmp", codec.json.encodeToJsonElement(WmpMeta.serializer(), WmpMeta()))
-            put("flow_id", kotlinx.serialization.json.JsonPrimitive(flowId))
-            put("notification_id", kotlinx.serialization.json.JsonPrimitive(notificationId))
-            put("event", kotlinx.serialization.json.JsonPrimitive(event))
+            put("flow_id", JsonPrimitive(flowId))
+            put("notification_id", JsonPrimitive(notificationId))
+            put("event", JsonPrimitive(event))
             eventDescription?.let {
-                put("event_description", kotlinx.serialization.json.JsonPrimitive(it))
+                put("event_description", JsonPrimitive(it))
             }
         }
         notify(WmpMethods.CREDENTIAL_NOTIFICATION, params)
@@ -193,6 +192,7 @@ class WmpPeer(
                 if (handler != null) {
                     handler.handleComplete(p)
                 }
+                forgetFlowType(p.flowId)
                 _flowEvents.emit(FlowEvent.Complete(p.flowId, p.result))
             }
 
@@ -202,6 +202,7 @@ class WmpPeer(
                 if (handler != null) {
                     handler.handleError(p)
                 }
+                forgetFlowType(p.flowId)
                 _flowEvents.emit(FlowEvent.Error(p.flowId, p.code, p.message))
             }
 
@@ -211,17 +212,8 @@ class WmpPeer(
                 if (handler != null) {
                     trackFlowType(p.flowId, p.flowType)
                     val result = handler.startFlow(p)
-                    // Send response if this was a request (has id)
                     if (msg.id != null) {
-                        val resultJson = codec.encodeParams(result)
-                        val response = JsonRpcResponse(
-                            id = msg.id,
-                            result = resultJson,
-                        )
-                        session.sendNotification(
-                            msg.method,
-                            null,
-                        ) // The response is sent via the correlation mechanism
+                        session.sendResponse(msg.id, codec.encodeParams(result))
                     }
                 }
                 _flowEvents.emit(FlowEvent.Started(p.flowId, p.flowType, p.params))
@@ -231,7 +223,10 @@ class WmpPeer(
                 val p = decodeParams<FlowActionParams>(params)
                 val handler = registry.flowHandler(lookupFlowType(p.flowId))
                 if (handler != null) {
-                    handler.handleAction(p)
+                    val result = handler.handleAction(p)
+                    if (msg.id != null) {
+                        session.sendResponse(msg.id, codec.encodeParams(result))
+                    }
                 }
                 _flowEvents.emit(FlowEvent.Action(p.flowId, p.action, p.params))
             }
@@ -242,6 +237,7 @@ class WmpPeer(
                 if (handler != null) {
                     handler.handleCancel(p)
                 }
+                forgetFlowType(p.flowId)
                 _flowEvents.emit(FlowEvent.Cancelled(p.flowId, p.reason))
             }
 
@@ -272,6 +268,10 @@ class WmpPeer(
 
     private fun lookupFlowType(flowId: String): String {
         return flowTypeMap[flowId] ?: "unknown"
+    }
+
+    private fun forgetFlowType(flowId: String) {
+        flowTypeMap.remove(flowId)
     }
 }
 

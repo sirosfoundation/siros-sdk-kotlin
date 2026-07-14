@@ -163,6 +163,18 @@ class WmpSession(
         }
     }
 
+    /**
+     * Send a JSON-RPC 2.0 response for a server-initiated request.
+     * Used when the peer acts as the responder for inbound requests.
+     */
+    internal suspend fun sendResponse(id: String, result: kotlinx.serialization.json.JsonObject?) {
+        val response = JsonRpcResponse(id = id, result = result)
+        val message = codec.json.encodeToString(JsonRpcResponse.serializer(), response).toByteArray(Charsets.UTF_8)
+        sendMutex.withLock {
+            transport.send(message)
+        }
+    }
+
     private fun startMessageLoop() {
         scope.launch {
             transport.incoming().collect { data ->

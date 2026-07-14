@@ -3,13 +3,14 @@
 package org.sirosfoundation.sdk.transport.wmp
 
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * Internal registry that maps flow types, methods, and resolve types
  * to their respective handlers. Used by [WmpPeer] for dispatch.
  */
 internal class WmpRegistry {
-    private val profiles = mutableListOf<WmpProfile>()
+    private val profiles = CopyOnWriteArrayList<WmpProfile>()
     private val flowHandlers = ConcurrentHashMap<String, WmpFlowHandler>()
     private val methodHandlers = ConcurrentHashMap<String, WmpMethodHandler>()
     private val resolveHandlers = ConcurrentHashMap<String, WmpResolveHandler>()
