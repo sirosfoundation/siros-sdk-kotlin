@@ -440,6 +440,35 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _pendingIssuanceOffer.value = null
     }
 
+    // ── Identity Verification (FaceTec IDV) ─────────────────────────
+
+    /** IDV server URL — defaults to facetec-api co-hosted with the backend. */
+    val idvServerUrl: String get() = _backendUrl.value.trimEnd('/') + "/idv"
+
+    fun startIDV() {
+        _showAddCredential.value = false
+        viewModelScope.launch {
+            try {
+                _isLoading.value = true
+                val token = wallet.getAccessToken() // Auth token for facetec-api
+                val delegate = org.sirosfoundation.sdk.idv.facetec.FaceTecCaptureDelegate()
+                val client = org.sirosfoundation.sdk.idv.RemoteIDVClient(
+                    org.sirosfoundation.sdk.idv.RemoteIDVClient.Config(
+                        serverUrl = idvServerUrl,
+                        authToken = "Bearer $token",
+                    )
+                )
+                val provider = org.sirosfoundation.sdk.idv.RemoteIDVProvider(client, delegate)
+                wallet.verifyIdentityAndIssue(provider, activity)
+            } catch (e: Exception) {
+                android.util.Log.e("SIROS_VM", "IDV failed", e)
+                _errorMessage.value = e.message ?: "Identity verification failed"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
     // ── Credential detail ───────────────────────────────────────────
 
     fun openCredentialDetail(credential: StoredCredential) {

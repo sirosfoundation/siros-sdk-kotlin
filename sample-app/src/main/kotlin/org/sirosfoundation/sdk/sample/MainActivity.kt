@@ -352,6 +352,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                 pendingOffer = pendingOffer,
                 onConfirmIssuance = viewModel::confirmIssuance,
                 onCancelIssuance = viewModel::cancelIssuance,
+                onStartIDV = viewModel::startIDV,
                 modifier = Modifier.padding(padding),
             )
         }
