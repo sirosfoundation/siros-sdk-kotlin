@@ -108,6 +108,14 @@ class SirosWallet private constructor(
     /** Accounts that have passkeys and can log in. */
     fun listLoginableAccounts(): List<CachedAccount> = accountRegistry.listLoginableAccounts()
 
+    /**
+     * Get a valid access token for authenticated API calls (e.g., IDV backend).
+     * Returns the raw JWT string. Throws if no session is active.
+     */
+    suspend fun getAccessToken(): String {
+        return authTokens.ensureBackendToken().raw
+    }
+
     /** Remove a cached account (forgets it from the login screen). */
     fun forgetAccount(accountId: String) {
         accountRegistry.removeAccount(accountId)
