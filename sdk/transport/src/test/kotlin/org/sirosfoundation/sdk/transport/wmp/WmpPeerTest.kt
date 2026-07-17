@@ -449,7 +449,8 @@ class WmpPeerTest {
         val responseMsg = transport.sentMessages.last().toString(Charsets.UTF_8)
         assertTrue("Expected JSON-RPC response with id", responseMsg.contains("\"id\":\"res-1\""))
         assertTrue("Expected result field", responseMsg.contains("\"result\""))
-        assertFalse("Should not contain error", responseMsg.contains("\"error\""))
+        // encodeDefaults=true serializes null error as "error":null; check there's no actual error object
+        assertFalse("Should not contain an error object", responseMsg.contains("\"error\":{"))
 
         peer.close()
     }
