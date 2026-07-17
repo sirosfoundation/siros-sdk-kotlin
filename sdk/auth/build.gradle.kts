@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "org.sirosfoundation.sdk.auth"
+    namespace = "org.siros.sdk.auth"
     compileSdk = 35
 
     defaultConfig {

@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "org.sirosfoundation.sdk.keystore"
+    namespace = "org.siros.sdk.keystore"
     compileSdk = 35
 
     defaultConfig {
@@ -37,7 +37,7 @@ dependencies {
     // The AAR is built by `make aar` in the siros-wscd-manager crate.
     // For local development, publish to mavenLocal:
     //   cd siros-wscd-manager && make aar && make publish-local
-    implementation("org.sirosfoundation:siros-wscd-manager:0.1.0")
+    implementation("org.siros:siros-wscd-manager:0.3.3")
     // JNA is required by UniFFI-generated Kotlin bindings.
     implementation("net.java.dev.jna:jna:5.14.0@aar")
 

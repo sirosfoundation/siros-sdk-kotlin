@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "org.sirosfoundation.sdk.transport"
+    namespace = "org.siros.sdk.transport"
     compileSdk = 35
 
     defaultConfig {

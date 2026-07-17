@@ -8,7 +8,7 @@
             as documentation of the required configuration.
 
             <service
-                android:name="org.sirosfoundation.sdk.passkey.SirosCredentialProviderService"
+                android:name="org.siros.sdk.passkey.SirosCredentialProviderService"
                 android:exported="true"
                 android:permission="android.permission.BIND_CREDENTIAL_PROVIDER_SERVICE">
                 <intent-filter>

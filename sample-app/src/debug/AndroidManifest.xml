@@ -11,7 +11,7 @@
             android:exported="true">
             <!-- WSCA test automation (debug builds only) -->
             <intent-filter>
-                <action android:name="org.sirosfoundation.sdk.sample.WSCA_TEST" />
+                <action android:name="org.siros.sdk.sample.WSCA_TEST" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>

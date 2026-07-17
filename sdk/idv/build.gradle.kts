@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "org.sirosfoundation.sdk.idv"
+    namespace = "org.siros.sdk.idv"
     compileSdk = 35
 
     defaultConfig {

@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "org.sirosfoundation.sdk.sample"
+    namespace = "org.siros.sdk.sample"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "org.sirosfoundation.sdk.sample"
+        applicationId = "org.siros.sdk.sample"
         minSdk = 28
         targetSdk = 35
         versionCode = 1
