@@ -28,10 +28,8 @@ jobs:
       - name: Configure vendor Maven repository
         run: |
           mkdir -p ~/.gradle
-          cat >> gradle.properties <<EOF
-          facetecMavenUrl=${{ secrets.FACETEC_MAVEN_URL }}
-          facetecMavenToken=${{ secrets.VENDOR_PACKAGES_TOKEN }}
-          EOF
+          echo "facetecMavenUrl=${{ secrets.FACETEC_MAVEN_URL }}" >> gradle.properties
+          echo "facetecMavenToken=${{ secrets.VENDOR_PACKAGES_TOKEN }}" >> gradle.properties
 
       - name: Build SDK AARs
         run: ./gradlew assembleRelease -x test -x lint
@@ -41,11 +39,15 @@ jobs:
 
       - name: Collect artifacts
         run: |
+          VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p release-artifacts
-          # SDK modules
-          find sdk -name "*.aar" -path "*/release/*" -exec cp {} release-artifacts/ \;
+          # SDK modules — rename AARs to include module name + version
+          for aar in $(find sdk -name "*.aar" -path "*/release/*"); do
+            module=$(echo "$aar" | sed 's|sdk/\([^/]*\)/.*|\1|')
+            cp "$aar" "release-artifacts/siros-sdk-${module}-${VERSION}.aar"
+          done
           # Sample APK
-          find sample-app -name "*.apk" -path "*/debug/*" -exec cp {} release-artifacts/ \;
+          find sample-app -name "*.apk" -path "*/debug/*" -exec cp {} "release-artifacts/siros-sample-app-${VERSION}.apk" \;
           ls -la release-artifacts/
 
       - name: Create GitHub Release
