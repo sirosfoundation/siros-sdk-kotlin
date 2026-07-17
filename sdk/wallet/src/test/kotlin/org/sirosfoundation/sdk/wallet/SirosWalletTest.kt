@@ -318,6 +318,8 @@ class SirosWalletTest {
             "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -367,6 +369,8 @@ class SirosWalletTest {
             "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
