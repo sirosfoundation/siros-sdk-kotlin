@@ -406,8 +406,8 @@ fun WalletScreen(viewModel: WalletViewModel) {
                         )
                         2 -> SettingsTab(
                             state = state,
-                            backendUrl = viewModel.backendUrl.value,
-                            tenantId = viewModel.tenantId.value,
+                            backendUrl = viewModel.backendUrl.collectAsState().value,
+                            tenantId = viewModel.tenantId.collectAsState().value,
                             useWmpProtocol = false,
                             presentationCount = presentationHistory.size,
                             lifecycleState = viewModel.lifecycleState.collectAsState().value,

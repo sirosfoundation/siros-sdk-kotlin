@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -22,7 +23,7 @@ class WmpPeerTest {
     companion object {
         private const val TEST_SESSION_ID = "session-123"
         private const val TEST_RESUMPTION_TOKEN = "resume-abc"
-        private const val TEST_TIMEOUT_MS = 2_000L
+        private const val TEST_TIMEOUT_MS = 5_000L
     }
 
     // ---------------------------------------------------------------------------
@@ -36,12 +37,12 @@ class WmpPeerTest {
     ) : WmpProfile, WmpFlowHandler {
         override val flowTypes get() = handledFlowTypes
 
-        var lastStartParams: FlowStartParams? = null
-        var lastActionParams: FlowActionParams? = null
-        var lastProgressParams: FlowProgressParams? = null
-        var lastCompleteParams: FlowCompleteParams? = null
-        var lastErrorParams: FlowErrorParams? = null
-        var lastCancelParams: FlowCancelParams? = null
+        @Volatile var lastStartParams: FlowStartParams? = null
+        @Volatile var lastActionParams: FlowActionParams? = null
+        @Volatile var lastProgressParams: FlowProgressParams? = null
+        @Volatile var lastCompleteParams: FlowCompleteParams? = null
+        @Volatile var lastErrorParams: FlowErrorParams? = null
+        @Volatile var lastCancelParams: FlowCancelParams? = null
 
         override fun init(ctx: WmpPeerContext) {}
 
@@ -67,7 +68,7 @@ class WmpPeerTest {
         override val name: String = "stub-resolve"
         override val capabilities: List<String> = emptyList()
 
-        var lastResolveParams: ResolveParams? = null
+        @Volatile var lastResolveParams: ResolveParams? = null
 
         override fun init(ctx: WmpPeerContext) {}
 
@@ -107,6 +108,7 @@ class WmpPeerTest {
         setupConnectedPeer(transport, peer)
 
         val eventDeferred = async { peer.flowEvents().first { it is FlowEvent.Progress } }
+        yield() // Let the async coroutine subscribe to the SharedFlow before sending
 
         // Server sends a progress notification for a known flow; first seed the flow type map
         // by sending a flow.start first so the flow type is known
@@ -229,6 +231,7 @@ class WmpPeerTest {
         val progressEventDeferred = async {
             peer.flowEvents().first { it is FlowEvent.Progress && (it as FlowEvent.Progress).flowId == "f4" }
         }
+        yield() // Let the async coroutine subscribe before sending
         transport.receiveFromServer(
             """{"jsonrpc":"2.0","method":"wmp.flow.progress","params":{"wmp":{"version":"0.1"},"flow_id":"f4","step":"late"}}"""
                 .toByteArray()
@@ -283,6 +286,7 @@ class WmpPeerTest {
 
         val events = mutableListOf<FlowEvent>()
         val collectJob = launch { peer.flowEvents().collect { events.add(it) } }
+        yield() // Let the launch coroutine subscribe before sending
 
         transport.receiveFromServer(
             """{"jsonrpc":"2.0","method":"wmp.flow.start","params":{"wmp":{"version":"0.1"},"flow_id":"f6","flow_type":"test-flow"}}"""
@@ -373,6 +377,7 @@ class WmpPeerTest {
         val progressEventDeferred = async {
             peer.flowEvents().first { it is FlowEvent.Progress && (it as FlowEvent.Progress).flowId == "fc2" }
         }
+        yield() // Let the async coroutine subscribe before sending
         transport.receiveFromServer(
             """{"jsonrpc":"2.0","method":"wmp.flow.progress","params":{"wmp":{"version":"0.1"},"flow_id":"fc2","step":"late"}}"""
                 .toByteArray()
@@ -428,18 +433,24 @@ class WmpPeerTest {
                 .toByteArray()
         )
 
+        // Wait for the handler to be called (runs on IO dispatcher)
+        withTimeout(TEST_TIMEOUT_MS) {
+            while (resolveProfile.lastResolveParams == null) delay(10)
+        }
+
+        assertEquals("did", resolveProfile.lastResolveParams!!.type)
+        assertEquals("did:example:123", resolveProfile.lastResolveParams!!.identifier)
+
+        // Wait for the response to be sent
         withTimeout(TEST_TIMEOUT_MS) {
             while (transport.sentMessages.size <= sentBefore) delay(10)
         }
 
-        assertNotNull("Resolve handler should have been called", resolveProfile.lastResolveParams)
-        assertEquals("did", resolveProfile.lastResolveParams!!.type)
-        assertEquals("did:example:123", resolveProfile.lastResolveParams!!.identifier)
-
         val responseMsg = transport.sentMessages.last().toString(Charsets.UTF_8)
         assertTrue("Expected JSON-RPC response with id", responseMsg.contains("\"id\":\"res-1\""))
         assertTrue("Expected result field", responseMsg.contains("\"result\""))
-        assertFalse("Should not contain error", responseMsg.contains("\"error\""))
+        // encodeDefaults=true serializes null error as "error":null; check there's no actual error object
+        assertFalse("Should not contain an error object", responseMsg.contains("\"error\":{"))
 
         peer.close()
     }

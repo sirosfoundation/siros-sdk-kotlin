@@ -1,5 +1,6 @@
 package org.sirosfoundation.sdk.transport.wmp
 
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,7 +18,7 @@ class FakeTransport : Transport {
     override val state: StateFlow<TransportState> = _state
 
     private val _incoming = Channel<ByteArray>(Channel.BUFFERED)
-    private val _sent = mutableListOf<ByteArray>()
+    private val _sent = CopyOnWriteArrayList<ByteArray>()
     val sentMessages: List<ByteArray> get() = _sent.toList()
 
     override suspend fun connect() {
