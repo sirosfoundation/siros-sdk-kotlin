@@ -37,12 +37,12 @@ class WmpPeerTest {
     ) : WmpProfile, WmpFlowHandler {
         override val flowTypes get() = handledFlowTypes
 
-        var lastStartParams: FlowStartParams? = null
-        var lastActionParams: FlowActionParams? = null
-        var lastProgressParams: FlowProgressParams? = null
-        var lastCompleteParams: FlowCompleteParams? = null
-        var lastErrorParams: FlowErrorParams? = null
-        var lastCancelParams: FlowCancelParams? = null
+        @Volatile var lastStartParams: FlowStartParams? = null
+        @Volatile var lastActionParams: FlowActionParams? = null
+        @Volatile var lastProgressParams: FlowProgressParams? = null
+        @Volatile var lastCompleteParams: FlowCompleteParams? = null
+        @Volatile var lastErrorParams: FlowErrorParams? = null
+        @Volatile var lastCancelParams: FlowCancelParams? = null
 
         override fun init(ctx: WmpPeerContext) {}
 
@@ -68,7 +68,7 @@ class WmpPeerTest {
         override val name: String = "stub-resolve"
         override val capabilities: List<String> = emptyList()
 
-        var lastResolveParams: ResolveParams? = null
+        @Volatile var lastResolveParams: ResolveParams? = null
 
         override fun init(ctx: WmpPeerContext) {}
 
@@ -433,13 +433,18 @@ class WmpPeerTest {
                 .toByteArray()
         )
 
+        // Wait for the handler to be called (runs on IO dispatcher)
+        withTimeout(TEST_TIMEOUT_MS) {
+            while (resolveProfile.lastResolveParams == null) delay(10)
+        }
+
+        assertEquals("did", resolveProfile.lastResolveParams!!.type)
+        assertEquals("did:example:123", resolveProfile.lastResolveParams!!.identifier)
+
+        // Wait for the response to be sent
         withTimeout(TEST_TIMEOUT_MS) {
             while (transport.sentMessages.size <= sentBefore) delay(10)
         }
-
-        assertNotNull("Resolve handler should have been called", resolveProfile.lastResolveParams)
-        assertEquals("did", resolveProfile.lastResolveParams!!.type)
-        assertEquals("did:example:123", resolveProfile.lastResolveParams!!.identifier)
 
         val responseMsg = transport.sentMessages.last().toString(Charsets.UTF_8)
         assertTrue("Expected JSON-RPC response with id", responseMsg.contains("\"id\":\"res-1\""))
