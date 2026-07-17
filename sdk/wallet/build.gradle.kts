@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "org.sirosfoundation.sdk.wallet"
+    namespace = "org.siros.sdk.wallet"
     compileSdk = 35
 
     defaultConfig {
