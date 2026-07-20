@@ -1,0 +1,46 @@
+name: Upload to Play Store
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  upload:
+    name: Build signed AAB & upload to Play Store internal track
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Configure vendor Maven repository
+        run: |
+          echo "facetecMavenUrl=${{ secrets.FACETEC_MAVEN_URL }}" >> gradle.properties
+          echo "facetecMavenToken=${{ secrets.VENDOR_PACKAGES_TOKEN }}" >> gradle.properties
+
+      - name: Decode upload keystore
+        run: echo "${{ secrets.UPLOAD_KEYSTORE_BASE64 }}" | base64 -d > upload.jks
+
+      - name: Build signed release AAB
+        run: |
+          ./gradlew :sample-app:bundleRelease -x test -x lint \
+            -Pandroid.injected.signing.store.file=${{ github.workspace }}/upload.jks \
+            -Pandroid.injected.signing.store.password=${{ secrets.UPLOAD_KEYSTORE_PASSWORD }} \
+            -Pandroid.injected.signing.key.alias=${{ secrets.UPLOAD_KEY_ALIAS }} \
+            -Pandroid.injected.signing.key.password=${{ secrets.UPLOAD_KEY_PASSWORD }}
+
+      - name: Upload AAB to Play Store internal track
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: org.siros.sdk.sample
+          releaseFiles: sample-app/build/outputs/bundle/release/sample-app-release.aab
+          track: internal
+          status: completed
