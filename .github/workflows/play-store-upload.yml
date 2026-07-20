@@ -3,6 +3,7 @@ name: Upload to Play Store
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 jobs:
   upload:
