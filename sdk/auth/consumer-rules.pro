@@ -1,8 +1,8 @@
 # sdk:auth — keep public API interfaces and data classes
--keep class org.sirosfoundation.sdk.auth.AuthProvider { *; }
--keep class org.sirosfoundation.sdk.auth.AuthSession { *; }
--keep class org.sirosfoundation.sdk.auth.PrfOutput { *; }
+-keep class org.siros.sdk.auth.AuthProvider { *; }
+-keep class org.siros.sdk.auth.AuthSession { *; }
+-keep class org.siros.sdk.auth.PrfOutput { *; }
 # Keep serialization infrastructure
--keepclassmembers class org.sirosfoundation.sdk.auth.** {
+-keepclassmembers class org.siros.sdk.auth.** {
     kotlinx.serialization.KSerializer serializer(...);
 }
