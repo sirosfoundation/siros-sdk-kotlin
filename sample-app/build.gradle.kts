@@ -13,7 +13,7 @@ android {
         applicationId = "org.siros.sdk.sample"
         minSdk = 28
         targetSdk = 35
-        versionCode = 2
+        versionCode = 3
         versionName = "0.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -31,7 +31,7 @@ android {
             buildConfigField("String", "ENGINE_URL", "\"\"")
             buildConfigField("String", "ISSUER_PROXY_URL", "\"\"")
             buildConfigField("boolean", "R2PS_ENABLED", "false")
-            buildConfigField("boolean", "SHOW_PRE_LOGIN_SETTINGS", "false")
+            buildConfigField("boolean", "SHOW_PRE_LOGIN_SETTINGS", "true")
         }
         debug {
             // Allow connecting to local backend over cleartext for development
