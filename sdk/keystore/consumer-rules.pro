@@ -8,6 +8,8 @@
 -keep class * implements com.sun.jna.Library { *; }
 -keep class * implements com.sun.jna.Callback { *; }
 -keepclassmembers class * extends com.sun.jna.Structure { public *; }
+# JNA references java.awt (desktop-only); suppress missing class errors on Android.
+-dontwarn java.awt.**
 
 # UniFFI generated bindings
 -keep class uniffi.** { *; }
