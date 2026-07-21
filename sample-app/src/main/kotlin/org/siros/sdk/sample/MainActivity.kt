@@ -219,6 +219,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
     val showHistory by viewModel.showHistory.collectAsState()
     val showQrScanner by viewModel.showQrScanner.collectAsState()
     val pendingPresentation by viewModel.pendingPresentationRequest.collectAsState()
+    val useWmpProtocol by viewModel.useWmpProtocol.collectAsState()
 
     LaunchedEffect(errorMessage) {
         errorMessage?.let {
@@ -237,7 +238,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
             backendUrl = backendUrlState,
             tenantId = tenantIdState,
             engineUrl = "",
-            useWmpProtocol = false,
+            useWmpProtocol = useWmpProtocol,
             showPreLoginSettings = BuildConfig.SHOW_PRE_LOGIN_SETTINGS,
             isLoading = isLoading || walletState is WalletState.Connecting,
             snackbarHostState = snackbarHostState,
@@ -408,7 +409,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             state = state,
                             backendUrl = viewModel.backendUrl.collectAsState().value,
                             tenantId = viewModel.tenantId.collectAsState().value,
-                            useWmpProtocol = false,
+                            useWmpProtocol = useWmpProtocol,
                             presentationCount = presentationHistory.size,
                             lifecycleState = viewModel.lifecycleState.collectAsState().value,
                             enrollmentInProgress = viewModel.enrollmentInProgress.collectAsState().value,
@@ -540,19 +541,26 @@ fun LoginScreen(
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
+        topBar = {
+            if (showPreLoginSettings) {
+                TopAppBar(
+                    title = {},
+                    actions = {
+                        IconButton(
+                            onClick = { showSettingsSheet = true },
+                        ) {
+                            Icon(
+                                Icons.Outlined.Settings,
+                                contentDescription = "Settings",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                )
+            }
+        },
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            // Settings gear icon (top-right)
-            if (showPreLoginSettings) {
-                IconButton(
-                    onClick = { showSettingsSheet = true },
-                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
-                ) {
-                    Icon(Icons.Outlined.Settings, contentDescription = "Settings",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-
             Column(
                 modifier = Modifier
                     .fillMaxSize()
