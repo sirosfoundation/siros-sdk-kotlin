@@ -66,17 +66,27 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _tenantId = MutableStateFlow(DEFAULT_TENANT_ID)
     val tenantId: StateFlow<String> = _tenantId
 
+    private val _useWmpProtocol: MutableStateFlow<Boolean>
+    val useWmpProtocol: StateFlow<Boolean> get() = _useWmpProtocol
+
     init {
         // Read test overrides (set via intent extras by automation scripts)
         val prefs = activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
         _backendUrl = MutableStateFlow(prefs.getString("backend_url", null) ?: DEFAULT_BACKEND_URL)
         _engineUrl = prefs.getString("engine_url", null) ?: BuildConfig.ENGINE_URL
+        _useWmpProtocol = MutableStateFlow(prefs.getBoolean("use_wmp_protocol", false))
     }
 
     fun updateBackendUrl(url: String) { _backendUrl.value = url }
     fun updateTenantId(id: String) { _tenantId.value = id }
     fun updateEngineUrl(url: String) { _engineUrl = url }
-    fun updateUseWmpProtocol(enabled: Boolean) { /* TODO: persist to prefs when WMP backend is ready */ }
+    fun updateUseWmpProtocol(enabled: Boolean) {
+        _useWmpProtocol.value = enabled
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("use_wmp_protocol", enabled)
+            .apply()
+    }
 
     // ── Plugin / R2PS configuration ──────────────────────────────────
 
@@ -859,6 +869,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             tenantId = _tenantId.value,
             // Intent extra > BuildConfig > discovery (at connect time)
             engineUrl = _engineUrl,
+            useWmpProtocol = _useWmpProtocol.value,
             redirectUri = REDIRECT_URI,
             requireUserAuth = !isEmulator,
             keystore = keystore,
