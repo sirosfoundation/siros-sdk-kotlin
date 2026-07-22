@@ -175,115 +175,11 @@ class SirosWallet private constructor(
         }
         _state.value = WalletState.Connecting
         try {
-            // Generate a fresh PRF salt for this registration
-            val prfSalt = ByteArray(32).also { SecureRandom().nextBytes(it) }
-            val hkdfSalt = ByteArray(32).also { SecureRandom().nextBytes(it) }
-            val hkdfInfo = HKDF_INFO.toByteArray(Charsets.UTF_8)
-
-            // Step 1: Get challenge from AS
-            val challengeResponse = authServerClient.registerBegin()
-            val challengeId = challengeResponse["challengeId"]?.jsonPrimitive?.contentOrNull
-                ?: throw WalletException("Missing challengeId in register begin response")
-            val createOptions = challengeResponse["createOptions"]?.jsonObject
-                ?: throw WalletException("Missing createOptions")
-            val publicKey = createOptions["publicKey"]?.jsonObject
-                ?: throw WalletException("Missing publicKey in createOptions")
-
-            val rpObj = publicKey["rp"]?.jsonObject
-                ?: throw WalletException("Missing rp in publicKey")
-            val rpId = rpObj["id"]?.jsonPrimitive?.contentOrNull ?: throw WalletException("Missing rp.id")
-            val rpName = rpObj["name"]?.jsonPrimitive?.contentOrNull ?: rpId
-            val challenge = WebAuthnAuthClient.decodeBase64Url(publicKey["challenge"]?.jsonPrimitive?.contentOrNull
-                ?: throw WalletException("Missing challenge"))
-            val userObj = publicKey["user"]?.jsonObject
-                ?: throw WalletException("Missing user in publicKey")
-            val userId = WebAuthnAuthClient.decodeBase64Url(userObj["id"]?.jsonPrimitive?.contentOrNull
-                ?: throw WalletException("Missing user.id"))
-            val userName = userObj["name"]?.jsonPrimitive?.contentOrNull ?: displayName
-
-            // Step 2: Create credential via platform AuthProvider
-            val result = authProvider.register(
-                org.siros.sdk.auth.RegisterOptions(
-                    rpId = rpId,
-                    rpName = rpName,
-                    userId = userId,
-                    userName = userName,
-                    userDisplayName = displayName,
-                    challenge = challenge,
-                    prfSalt = prfSalt,
-                )
-            )
-
-            // Step 3: Complete registration with AS
-            val credentialJson = kotlinx.serialization.json.buildJsonObject {
-                put("id", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.credentialId)))
-                put("rawId", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.credentialId)))
-                put("type", kotlinx.serialization.json.JsonPrimitive("public-key"))
-                put("response", kotlinx.serialization.json.buildJsonObject {
-                    put("attestationObject", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.attestationObject)))
-                    put("clientDataJSON", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.clientDataJSON)))
-                })
+            ensureAuthMode()
+            when (authMode) {
+                AuthMode.LEGACY_AS -> legacyRegister(displayName)
+                else -> newAsRegister(displayName)
             }
-            val session = authServerClient.registerFinish(
-                challengeId = challengeId,
-                credential = credentialJson,
-                displayName = displayName,
-            )
-            Timber.i("Registration successful: ${session.uuid}")
-
-            val credId = extractLastCredentialId()
-                ?: throw WalletException("No credential ID after registration")
-            val prfOutput = extractLastPrfOutput()
-                ?: throw WalletException("PRF not supported by authenticator — cannot encrypt wallet data")
-
-            // Derive key and initialise empty keystore
-            keystore.unlock(prfOutput.first, ByteArray(0), hkdfSalt, hkdfInfo)
-            (keystore as? JweKeystore)?.setCredentialId(credId)
-            val encryptedContainer = try {
-                keystore.exportEncryptedContainer()
-            } catch (_: UnsupportedOperationException) { null }
-
-            // Register account in the persistent registry (survives logout)
-            val accountId = "${config.tenantId}:${session.uuid}"
-            accountRegistry.upsertAccount(CachedAccount(
-                userId = session.uuid,
-                tenantId = config.tenantId,
-                displayName = displayName,
-                backendUrl = config.backendUrl,
-                passkeys = listOf(CachedPasskey(
-                    credentialId = b64UrlEncode(credId),
-                    prfSalt = b64Encode(prfSalt),
-                )),
-                hkdfSalt = b64Encode(hkdfSalt),
-                hkdfInfo = b64Encode(hkdfInfo),
-            ))
-            accountRegistry.activeAccountId = accountId
-
-            // Scope session store to this account
-            sessionStore.activeAccountId = accountId
-            sessionStore.userId = session.uuid
-            sessionStore.displayName = session.displayName ?: displayName
-            sessionStore.tenantId = config.tenantId
-            sessionStore.credentialId = b64UrlEncode(credId)
-            sessionStore.prfSalt = b64Encode(prfSalt)
-            sessionStore.hkdfSalt = b64Encode(hkdfSalt)
-            sessionStore.hkdfInfo = b64Encode(hkdfInfo)
-            encryptedContainer?.let {
-                sessionStore.privateDataJwe = String(it, Charsets.UTF_8)
-            }
-
-            // Set up API client with AuthTokens
-            setupApiClientWithTokens()
-            syncPrivateDataToBackend()
-
-            // Connect engine with anonymous token
-            connectEngineWithToken()
-
-            _state.value = WalletState.Ready(
-                userId = session.uuid,
-                displayName = session.displayName,
-                credentials = credentialStore.getAll(),
-            )
         } catch (e: SirosException) {
             Timber.e(e, "Registration failed")
             _state.value = WalletState.Error(e.message ?: "Registration failed")
@@ -292,6 +188,174 @@ class SirosWallet private constructor(
             _state.value = WalletState.Error(e.message ?: "Registration failed")
             throw WalletException("Registration failed", e)
         }
+    }
+
+    private suspend fun newAsRegister(displayName: String) {
+        // Generate a fresh PRF salt for this registration
+        val prfSalt = ByteArray(32).also { SecureRandom().nextBytes(it) }
+        val hkdfSalt = ByteArray(32).also { SecureRandom().nextBytes(it) }
+        val hkdfInfo = HKDF_INFO.toByteArray(Charsets.UTF_8)
+
+        // Step 1: Get challenge from AS
+        val challengeResponse = authServerClient.registerBegin()
+        val challengeId = challengeResponse["challengeId"]?.jsonPrimitive?.contentOrNull
+            ?: throw WalletException("Missing challengeId in register begin response")
+        val createOptions = challengeResponse["createOptions"]?.jsonObject
+            ?: throw WalletException("Missing createOptions")
+        val publicKey = createOptions["publicKey"]?.jsonObject
+            ?: throw WalletException("Missing publicKey in createOptions")
+
+        val rpObj = publicKey["rp"]?.jsonObject
+            ?: throw WalletException("Missing rp in publicKey")
+        val rpId = rpObj["id"]?.jsonPrimitive?.contentOrNull ?: throw WalletException("Missing rp.id")
+        val rpName = rpObj["name"]?.jsonPrimitive?.contentOrNull ?: rpId
+        val challenge = WebAuthnAuthClient.decodeBase64Url(publicKey["challenge"]?.jsonPrimitive?.contentOrNull
+            ?: throw WalletException("Missing challenge"))
+        val userObj = publicKey["user"]?.jsonObject
+            ?: throw WalletException("Missing user in publicKey")
+        val userId = WebAuthnAuthClient.decodeBase64Url(userObj["id"]?.jsonPrimitive?.contentOrNull
+            ?: throw WalletException("Missing user.id"))
+        val userName = userObj["name"]?.jsonPrimitive?.contentOrNull ?: displayName
+
+        // Step 2: Create credential via platform AuthProvider
+        val result = authProvider.register(
+            org.siros.sdk.auth.RegisterOptions(
+                rpId = rpId,
+                rpName = rpName,
+                userId = userId,
+                userName = userName,
+                userDisplayName = displayName,
+                challenge = challenge,
+                prfSalt = prfSalt,
+            )
+        )
+
+        // Step 3: Complete registration with AS
+        val credentialJson = kotlinx.serialization.json.buildJsonObject {
+            put("id", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.credentialId)))
+            put("rawId", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.credentialId)))
+            put("type", kotlinx.serialization.json.JsonPrimitive("public-key"))
+            put("response", kotlinx.serialization.json.buildJsonObject {
+                put("attestationObject", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.attestationObject)))
+                put("clientDataJSON", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.clientDataJSON)))
+            })
+        }
+        val session = authServerClient.registerFinish(
+            challengeId = challengeId,
+            credential = credentialJson,
+            displayName = displayName,
+        )
+        Timber.i("Registration successful: ${session.uuid}")
+
+        val credId = extractLastCredentialId()
+            ?: throw WalletException("No credential ID after registration")
+        val prfOutput = extractLastPrfOutput()
+            ?: throw WalletException("PRF not supported by authenticator — cannot encrypt wallet data")
+
+        finishRegistration(
+            userId = session.uuid,
+            displayName = session.displayName,
+            givenDisplayName = displayName,
+            credId = credId,
+            prfOutput = prfOutput,
+            prfSalt = prfSalt,
+            hkdfSalt = hkdfSalt,
+            hkdfInfo = hkdfInfo,
+            appToken = null,
+        )
+    }
+
+    private suspend fun legacyRegister(displayName: String) {
+        // Generate a fresh PRF salt for this registration
+        val prfSalt = ByteArray(32).also { SecureRandom().nextBytes(it) }
+        val hkdfSalt = ByteArray(32).also { SecureRandom().nextBytes(it) }
+        val hkdfInfo = HKDF_INFO.toByteArray(Charsets.UTF_8)
+
+        val session = legacyAuthClient.register(displayName = displayName, prfSalt = prfSalt)
+        Timber.i("Legacy registration successful: ${session.uuid}")
+
+        val credId = extractLastCredentialId()
+            ?: throw WalletException("No credential ID after registration")
+        val prfOutput = extractLastPrfOutput()
+            ?: throw WalletException("PRF not supported by authenticator — cannot encrypt wallet data")
+
+        finishRegistration(
+            userId = session.uuid,
+            displayName = session.displayName,
+            givenDisplayName = displayName,
+            credId = credId,
+            prfOutput = prfOutput,
+            prfSalt = prfSalt,
+            hkdfSalt = hkdfSalt,
+            hkdfInfo = hkdfInfo,
+            appToken = session.appToken,
+        )
+    }
+
+    private suspend fun finishRegistration(
+        userId: String,
+        displayName: String?,
+        givenDisplayName: String,
+        credId: ByteArray,
+        prfOutput: PrfOutput,
+        prfSalt: ByteArray,
+        hkdfSalt: ByteArray,
+        hkdfInfo: ByteArray,
+        appToken: String?,
+    ) {
+        // Derive key and initialise empty keystore
+        keystore.unlock(prfOutput.first, ByteArray(0), hkdfSalt, hkdfInfo)
+        (keystore as? JweKeystore)?.setCredentialId(credId)
+        val encryptedContainer = try {
+            keystore.exportEncryptedContainer()
+        } catch (_: UnsupportedOperationException) { null }
+
+        // Register account in the persistent registry (survives logout)
+        val accountId = "${config.tenantId}:${userId}"
+        accountRegistry.upsertAccount(CachedAccount(
+            userId = userId,
+            tenantId = config.tenantId,
+            displayName = givenDisplayName,
+            backendUrl = config.backendUrl,
+            passkeys = listOf(CachedPasskey(
+                credentialId = b64UrlEncode(credId),
+                prfSalt = b64Encode(prfSalt),
+            )),
+            hkdfSalt = b64Encode(hkdfSalt),
+            hkdfInfo = b64Encode(hkdfInfo),
+        ))
+        accountRegistry.activeAccountId = accountId
+
+        // Scope session store to this account
+        sessionStore.activeAccountId = accountId
+        sessionStore.userId = userId
+        sessionStore.displayName = displayName ?: givenDisplayName
+        sessionStore.tenantId = config.tenantId
+        sessionStore.credentialId = b64UrlEncode(credId)
+        sessionStore.prfSalt = b64Encode(prfSalt)
+        sessionStore.hkdfSalt = b64Encode(hkdfSalt)
+        sessionStore.hkdfInfo = b64Encode(hkdfInfo)
+        encryptedContainer?.let {
+            sessionStore.privateDataJwe = String(it, Charsets.UTF_8)
+        }
+
+        if (appToken != null) {
+            setupApiClient(AuthSession(appToken = appToken, uuid = userId, displayName = displayName))
+            legacyAppToken = appToken
+            sessionStore.appToken = appToken
+        } else {
+            setupApiClientWithTokens()
+        }
+        syncPrivateDataToBackend()
+
+        // Connect engine with anonymous token (new AS) or app token (legacy AS)
+        connectEngineWithToken()
+
+        _state.value = WalletState.Ready(
+            userId = userId,
+            displayName = displayName,
+            credentials = credentialStore.getAll(),
+        )
     }
 
     /**
@@ -308,87 +372,11 @@ class SirosWallet private constructor(
     suspend fun login() {
         _state.value = WalletState.Connecting
         try {
-            val storedPrfSalt = sessionStore.prfSalt?.let { b64Decode(it) }
-
-            // Step 1: Get challenge from AS
-            val challengeResponse = authServerClient.loginBegin()
-            val challengeId = challengeResponse["challengeId"]?.jsonPrimitive?.contentOrNull
-                ?: throw WalletException("Missing challengeId in login begin response")
-            val getOptions = challengeResponse["getOptions"]?.jsonObject
-                ?: throw WalletException("Missing getOptions")
-            val publicKey = getOptions["publicKey"]?.jsonObject
-                ?: throw WalletException("Missing publicKey in getOptions")
-
-            val rpId = publicKey["rpId"]?.jsonPrimitive?.contentOrNull
-                ?: throw WalletException("Missing rpId")
-            val challenge = WebAuthnAuthClient.decodeBase64Url(publicKey["challenge"]?.jsonPrimitive?.contentOrNull
-                ?: throw WalletException("Missing challenge"))
-
-            // Step 2: Authenticate via platform AuthProvider
-            val result = authProvider.authenticate(
-                org.siros.sdk.auth.AuthenticateOptions(
-                    rpId = rpId,
-                    challenge = challenge,
-                    prfSalt = storedPrfSalt,
-                )
-            )
-
-            // Step 3: Complete login with AS
-            val credentialJson = kotlinx.serialization.json.buildJsonObject {
-                put("id", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.credentialId)))
-                put("rawId", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.credentialId)))
-                put("type", kotlinx.serialization.json.JsonPrimitive("public-key"))
-                put("response", kotlinx.serialization.json.buildJsonObject {
-                    put("authenticatorData", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.authenticatorData)))
-                    put("clientDataJSON", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.clientDataJSON)))
-                    put("signature", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.signature)))
-                    result.userHandle?.let { put("userHandle", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(it))) }
-                })
+            ensureAuthMode()
+            when (authMode) {
+                AuthMode.LEGACY_AS -> legacyLogin()
+                else -> newAsLogin()
             }
-            val session = authServerClient.loginFinish(
-                challengeId = challengeId,
-                credential = credentialJson,
-            )
-            Timber.i("Login successful: ${session.uuid}")
-
-            val credId = extractLastCredentialId()
-                ?: throw WalletException("No credential ID after login")
-            val prfOutput = extractLastPrfOutput()
-                ?: throw WalletException("PRF not supported by authenticator — cannot decrypt wallet data")
-
-            // Set up API client with AuthTokens and fetch private data
-            setupApiClientWithTokens()
-            val privateData = fetchPrivateData()
-
-            val hkdfSalt = sessionStore.hkdfSalt?.let { b64Decode(it) }
-                ?: ByteArray(32).also { SecureRandom().nextBytes(it) }
-            val hkdfInfo = sessionStore.hkdfInfo?.let { b64Decode(it) }
-                ?: HKDF_INFO.toByteArray(Charsets.UTF_8)
-            val prfSaltBytes = sessionStore.prfSalt?.let { b64Decode(it) }
-                ?: ByteArray(32).also { SecureRandom().nextBytes(it) }
-
-            keystore.unlock(prfOutput.first, privateData, hkdfSalt, hkdfInfo)
-
-            // Scope session store to this account
-            val accountId = "${config.tenantId}:${session.uuid}"
-            sessionStore.activeAccountId = accountId
-            accountRegistry.activeAccountId = accountId
-            sessionStore.userId = session.uuid
-            sessionStore.displayName = session.displayName
-            sessionStore.tenantId = config.tenantId
-            sessionStore.credentialId = b64UrlEncode(credId)
-            sessionStore.prfSalt = b64Encode(prfSaltBytes)
-            sessionStore.hkdfSalt = b64Encode(hkdfSalt)
-            sessionStore.hkdfInfo = b64Encode(hkdfInfo)
-
-            // Connect engine with anonymous token
-            connectEngineWithToken()
-
-            _state.value = WalletState.Ready(
-                userId = session.uuid,
-                displayName = session.displayName,
-                credentials = credentialStore.getAll(),
-            )
         } catch (e: SirosException) {
             Timber.e(e, "Login failed")
             _state.value = WalletState.Error(e.message ?: "Login failed")
@@ -396,6 +384,147 @@ class SirosWallet private constructor(
             Timber.e(e, "Login failed")
             _state.value = WalletState.Error(e.message ?: "Login failed")
             throw WalletException("Login failed", e)
+        }
+    }
+
+    private suspend fun newAsLogin() {
+        val storedPrfSalt = sessionStore.prfSalt?.let { b64Decode(it) }
+
+        // Step 1: Get challenge from AS
+        val challengeResponse = authServerClient.loginBegin()
+        val challengeId = challengeResponse["challengeId"]?.jsonPrimitive?.contentOrNull
+            ?: throw WalletException("Missing challengeId in login begin response")
+        val getOptions = challengeResponse["getOptions"]?.jsonObject
+            ?: throw WalletException("Missing getOptions")
+        val publicKey = getOptions["publicKey"]?.jsonObject
+            ?: throw WalletException("Missing publicKey in getOptions")
+
+        val rpId = publicKey["rpId"]?.jsonPrimitive?.contentOrNull
+            ?: throw WalletException("Missing rpId")
+        val challenge = WebAuthnAuthClient.decodeBase64Url(publicKey["challenge"]?.jsonPrimitive?.contentOrNull
+            ?: throw WalletException("Missing challenge"))
+
+        // Step 2: Authenticate via platform AuthProvider
+        val result = authProvider.authenticate(
+            org.siros.sdk.auth.AuthenticateOptions(
+                rpId = rpId,
+                challenge = challenge,
+                prfSalt = storedPrfSalt,
+            )
+        )
+
+        // Step 3: Complete login with AS
+        val credentialJson = kotlinx.serialization.json.buildJsonObject {
+            put("id", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.credentialId)))
+            put("rawId", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.credentialId)))
+            put("type", kotlinx.serialization.json.JsonPrimitive("public-key"))
+            put("response", kotlinx.serialization.json.buildJsonObject {
+                put("authenticatorData", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.authenticatorData)))
+                put("clientDataJSON", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.clientDataJSON)))
+                put("signature", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.signature)))
+                result.userHandle?.let { put("userHandle", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(it))) }
+            })
+        }
+        val session = authServerClient.loginFinish(
+            challengeId = challengeId,
+            credential = credentialJson,
+        )
+        Timber.i("Login successful: ${session.uuid}")
+
+        val credId = extractLastCredentialId()
+            ?: throw WalletException("No credential ID after login")
+        val prfOutput = extractLastPrfOutput()
+            ?: throw WalletException("PRF not supported by authenticator — cannot decrypt wallet data")
+
+        // Set up API client with AuthTokens and fetch private data
+        setupApiClientWithTokens()
+        finishLogin(session.uuid, session.displayName, credId, prfOutput)
+    }
+
+    private suspend fun legacyLogin() {
+        val storedPrfSalt = sessionStore.prfSalt?.let { b64Decode(it) }
+        val session = legacyAuthClient.login(prfSalt = storedPrfSalt)
+        Timber.i("Legacy login successful: ${session.uuid}")
+
+        val credId = extractLastCredentialId()
+            ?: throw WalletException("No credential ID after login")
+        val prfOutput = extractLastPrfOutput()
+            ?: throw WalletException("PRF not supported by authenticator — cannot decrypt wallet data")
+
+        setupApiClient(session)
+        legacyAppToken = session.appToken
+        sessionStore.appToken = session.appToken
+        finishLogin(session.uuid, session.displayName, credId, prfOutput)
+    }
+
+    private suspend fun finishLogin(
+        userId: String,
+        displayName: String?,
+        credId: ByteArray,
+        prfOutput: PrfOutput,
+    ) {
+        val privateData = fetchPrivateData()
+
+        val hkdfSalt = sessionStore.hkdfSalt?.let { b64Decode(it) }
+            ?: ByteArray(32).also { SecureRandom().nextBytes(it) }
+        val hkdfInfo = sessionStore.hkdfInfo?.let { b64Decode(it) }
+            ?: HKDF_INFO.toByteArray(Charsets.UTF_8)
+        val prfSaltBytes = sessionStore.prfSalt?.let { b64Decode(it) }
+            ?: ByteArray(32).also { SecureRandom().nextBytes(it) }
+
+        keystore.unlock(prfOutput.first, privateData, hkdfSalt, hkdfInfo)
+
+        // Scope session store to this account
+        val accountId = "${config.tenantId}:${userId}"
+        sessionStore.activeAccountId = accountId
+        accountRegistry.activeAccountId = accountId
+        sessionStore.userId = userId
+        sessionStore.displayName = displayName
+        sessionStore.tenantId = config.tenantId
+        sessionStore.credentialId = b64UrlEncode(credId)
+        sessionStore.prfSalt = b64Encode(prfSaltBytes)
+        sessionStore.hkdfSalt = b64Encode(hkdfSalt)
+        sessionStore.hkdfInfo = b64Encode(hkdfInfo)
+
+        // Connect engine with anonymous token (new AS) or app token (legacy AS)
+        connectEngineWithToken()
+
+        _state.value = WalletState.Ready(
+            userId = userId,
+            displayName = displayName,
+            credentials = credentialStore.getAll(),
+        )
+    }
+
+    /**
+     * Detect whether the backend uses the new standalone AS or the legacy
+     * wallet-backend-integrated auth endpoints.
+     *
+     * Probes `/auth/passkey/login/begin`. A 404 means the backend predates
+     * the new AS and we should fall back to `/user/login-webauthn-*`.
+     */
+    private suspend fun detectAuthMode(): AuthMode {
+        return try {
+            authServerClient.loginBegin()
+            Timber.i("Detected new AS at ${config.backendUrl}")
+            AuthMode.NEW_AS
+        } catch (e: AuthException) {
+            if (e.code == 404) {
+                Timber.i("Detected legacy AS at ${config.backendUrl} (404 on /auth/passkey/login/begin)")
+                AuthMode.LEGACY_AS
+            } else {
+                Timber.i("Assuming new AS at ${config.backendUrl} (probe returned ${e.code})")
+                AuthMode.NEW_AS
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "Auth mode detection failed, defaulting to new AS")
+            AuthMode.NEW_AS
+        }
+    }
+
+    private suspend fun ensureAuthMode() {
+        if (authMode == AuthMode.UNKNOWN) {
+            authMode = detectAuthMode()
         }
     }
 
@@ -413,6 +542,7 @@ class SirosWallet private constructor(
         sessionStore.clear()  // clears active account's session only
         accountRegistry.activeAccountId = null
         apiClient = null
+        legacyAppToken = null
         scope.launch {
             try {
                 authTokens.clear()
@@ -447,20 +577,44 @@ class SirosWallet private constructor(
         }
         _state.value = WalletState.Connecting
         try {
+            ensureAuthMode()
             val displayName = sessionStore.displayName
 
-            // Set up the API client using AuthTokens (session cookie handles auth)
-            setupApiClientWithTokens()
+            if (authMode == AuthMode.LEGACY_AS) {
+                // Legacy mode: verify the stored appToken is still valid by fetching account info
+                val storedAppToken = sessionStore.appToken
+                if (storedAppToken.isNullOrBlank()) {
+                    Timber.i("No stored legacy appToken, need re-login")
+                    sessionStore.clear()
+                    _state.value = disconnectedState()
+                    return
+                }
+                legacyAppToken = storedAppToken
+                setupApiClient(AuthSession(appToken = storedAppToken, uuid = userId, displayName = displayName))
+                try {
+                    apiClient?.getAccountInfo()
+                } catch (e: Exception) {
+                    Timber.i("Legacy session invalid, need re-login")
+                    sessionStore.clear()
+                    apiClient = null
+                    legacyAppToken = null
+                    _state.value = disconnectedState()
+                    return
+                }
+            } else {
+                // Set up the API client using AuthTokens (session cookie handles auth)
+                setupApiClientWithTokens()
 
-            // Verify the session is still valid by requesting a backend token
-            try {
-                authTokens.ensureBackendToken()
-            } catch (e: AuthException) {
-                Timber.i("Session cookie expired, need re-login")
-                sessionStore.clear()
-                apiClient = null
-                _state.value = disconnectedState()
-                return
+                // Verify the session is still valid by requesting a backend token
+                try {
+                    authTokens.ensureBackendToken()
+                } catch (e: AuthException) {
+                    Timber.i("Session cookie expired, need re-login")
+                    sessionStore.clear()
+                    apiClient = null
+                    _state.value = disconnectedState()
+                    return
+                }
             }
 
             // Unlock keystore from stored private data if available
@@ -468,7 +622,7 @@ class SirosWallet private constructor(
             val hkdfSalt = sessionStore.hkdfSalt?.let { b64Decode(it) }
             val hkdfInfo = sessionStore.hkdfInfo?.let { b64Decode(it) }
 
-            // Connect the engine with anonymous token
+            // Connect the engine with the appropriate token
             connectEngineWithToken()
 
             if (storedJwe != null && hkdfSalt != null && hkdfInfo != null) {
@@ -511,43 +665,52 @@ class SirosWallet private constructor(
         }
         try {
             val storedPrfSalt = sessionStore.prfSalt?.let { b64Decode(it) }
-            // Use AS login flow to get PRF output via biometric assertion
-            val challengeResponse = authServerClient.loginBegin()
-            val challengeId = challengeResponse["challengeId"]?.jsonPrimitive?.contentOrNull
-                ?: throw WalletException("Missing challengeId")
-            val getOptions = challengeResponse["getOptions"]?.jsonObject
-                ?: throw WalletException("Missing getOptions")
-            val publicKey = getOptions["publicKey"]?.jsonObject
-                ?: throw WalletException("Missing publicKey")
-            val rpId = publicKey["rpId"]?.jsonPrimitive?.contentOrNull
-                ?: throw WalletException("Missing rpId")
-            val challenge = WebAuthnAuthClient.decodeBase64Url(publicKey["challenge"]?.jsonPrimitive?.contentOrNull
-                ?: throw WalletException("Missing challenge"))
+            val prfOutput = if (authMode == AuthMode.LEGACY_AS) {
+                // Legacy backend: re-authenticate via the wallet-backend endpoint
+                val session = legacyAuthClient.login(prfSalt = storedPrfSalt)
+                legacyAppToken = session.appToken
+                sessionStore.appToken = session.appToken
+                extractLastPrfOutput()
+                    ?: throw WalletException("PRF not available from authenticator")
+            } else {
+                // New AS: use AS login flow to get PRF output via biometric assertion
+                val challengeResponse = authServerClient.loginBegin()
+                val challengeId = challengeResponse["challengeId"]?.jsonPrimitive?.contentOrNull
+                    ?: throw WalletException("Missing challengeId")
+                val getOptions = challengeResponse["getOptions"]?.jsonObject
+                    ?: throw WalletException("Missing getOptions")
+                val publicKey = getOptions["publicKey"]?.jsonObject
+                    ?: throw WalletException("Missing publicKey")
+                val rpId = publicKey["rpId"]?.jsonPrimitive?.contentOrNull
+                    ?: throw WalletException("Missing rpId")
+                val challenge = WebAuthnAuthClient.decodeBase64Url(publicKey["challenge"]?.jsonPrimitive?.contentOrNull
+                    ?: throw WalletException("Missing challenge"))
 
-            val result = authProvider.authenticate(
-                org.siros.sdk.auth.AuthenticateOptions(
-                    rpId = rpId,
-                    challenge = challenge,
-                    prfSalt = storedPrfSalt,
+                val result = authProvider.authenticate(
+                    org.siros.sdk.auth.AuthenticateOptions(
+                        rpId = rpId,
+                        challenge = challenge,
+                        prfSalt = storedPrfSalt,
+                    )
                 )
-            )
 
-            // Complete login with AS (also refreshes the session cookie)
-            val credentialJson = kotlinx.serialization.json.buildJsonObject {
-                put("id", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.credentialId)))
-                put("rawId", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.credentialId)))
-                put("type", kotlinx.serialization.json.JsonPrimitive("public-key"))
-                put("response", kotlinx.serialization.json.buildJsonObject {
-                    put("authenticatorData", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.authenticatorData)))
-                    put("clientDataJSON", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.clientDataJSON)))
-                    put("signature", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.signature)))
-                    result.userHandle?.let { put("userHandle", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(it))) }
-                })
+                // Complete login with AS (also refreshes the session cookie)
+                val credentialJson = kotlinx.serialization.json.buildJsonObject {
+                    put("id", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.credentialId)))
+                    put("rawId", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.credentialId)))
+                    put("type", kotlinx.serialization.json.JsonPrimitive("public-key"))
+                    put("response", kotlinx.serialization.json.buildJsonObject {
+                        put("authenticatorData", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.authenticatorData)))
+                        put("clientDataJSON", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.clientDataJSON)))
+                        put("signature", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(result.signature)))
+                        result.userHandle?.let { put("userHandle", kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(it))) }
+                    })
+                }
+                authServerClient.loginFinish(challengeId = challengeId, credential = credentialJson)
+
+                extractLastPrfOutput()
+                    ?: throw WalletException("PRF not available from authenticator")
             }
-            authServerClient.loginFinish(challengeId = challengeId, credential = credentialJson)
-
-            val prfOutput = extractLastPrfOutput()
-                ?: throw WalletException("PRF not available from authenticator")
 
             val storedJwe = sessionStore.privateDataJwe
             val hkdfSalt = sessionStore.hkdfSalt?.let { b64Decode(it) }
@@ -882,6 +1045,18 @@ class SirosWallet private constructor(
         baseUrl = config.backendUrl,
         tenantId = config.tenantId,
     )
+    private val legacyAuthClient = WebAuthnAuthClient(
+        baseUrl = config.backendUrl,
+        tenantId = config.tenantId,
+        authProvider = authProvider,
+        httpClient = httpClient,
+        json = json,
+    )
+
+    private enum class AuthMode { UNKNOWN, NEW_AS, LEGACY_AS }
+    private var authMode: AuthMode = AuthMode.UNKNOWN
+    private var legacyAppToken: String? = null
+
     private val authTokens = AuthTokens(authServerClient, config.tenantId).apply {
         onSessionRejected = {
             Timber.w("Session rejected — forcing logout")
@@ -1008,16 +1183,15 @@ class SirosWallet private constructor(
     }
 
     /**
-     * Connect the engine using an anonymous token from the AS.
-     * The anonymous token has read+list permissions — sufficient for
-     * flow orchestration (issuance, presentation).
+     * Connect the engine using an anonymous token from the AS (new AS)
+     * or the authenticated app token (legacy AS).
      */
     private suspend fun connectEngineWithToken() {
-        val token = authTokens.ensureAnonymousToken()
+        val token = legacyAppToken ?: authTokens.ensureAnonymousToken().raw
         if (config.useWmpProtocol) {
-            connectViaWmp(token.raw)
+            connectViaWmp(token)
         } else {
-            connectEngine(token.raw)
+            connectEngine(token)
         }
     }
 

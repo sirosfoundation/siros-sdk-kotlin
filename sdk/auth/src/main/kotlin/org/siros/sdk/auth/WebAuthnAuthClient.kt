@@ -153,7 +153,7 @@ class WebAuthnAuthClient(
 
         if (!response.isSuccessful) {
             Timber.e("Auth request failed: ${response.code}")
-            throw AuthException("Auth request failed: ${response.code}")
+            throw AuthException("Auth request failed: ${response.code}", code = response.code)
         }
 
         return json.parseToJsonElement(responseBody).jsonObject

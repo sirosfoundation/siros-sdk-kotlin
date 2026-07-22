@@ -53,6 +53,8 @@ class AuthException(
     message: String,
     cause: Throwable? = null,
     errorCode: String = "auth_failed",
+    /** HTTP status code when the failure came from an AS/Backend HTTP response. */
+    val code: Int? = null,
 ) : SirosException(message, cause, errorCode)
 
 /** Raised when keystore operations fail (locked, corrupt container, decryption error). */
