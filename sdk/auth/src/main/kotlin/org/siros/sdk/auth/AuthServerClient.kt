@@ -279,7 +279,7 @@ class AuthServerClient(
 
             if (!response.isSuccessful) {
                 Timber.e("AS request failed: ${response.code} — $path")
-                throw AuthException("AS request failed: ${response.code}")
+                throw AuthException("AS request failed: ${response.code}", code = response.code)
             }
 
             json.parseToJsonElement(responseBody).jsonObject
