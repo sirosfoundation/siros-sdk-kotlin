@@ -504,6 +504,7 @@ class SirosWallet private constructor(
      * the new AS and we should fall back to `/user/login-webauthn-*`.
      */
     private suspend fun detectAuthMode(): AuthMode {
+        Timber.i("Detecting auth mode for ${config.backendUrl} (tenant=${config.tenantId})")
         return try {
             authServerClient.loginBegin()
             Timber.i("Detected new AS at ${config.backendUrl}")
@@ -513,12 +514,12 @@ class SirosWallet private constructor(
                 Timber.i("Detected legacy AS at ${config.backendUrl} (404 on /auth/passkey/login/begin)")
                 AuthMode.LEGACY_AS
             } else {
-                Timber.i("Assuming new AS at ${config.backendUrl} (probe returned ${e.code})")
-                AuthMode.NEW_AS
+                Timber.e(e, "Auth mode probe failed with HTTP ${e.code} at ${config.backendUrl}; surfacing error")
+                throw e
             }
         } catch (e: Exception) {
-            Timber.w(e, "Auth mode detection failed, defaulting to new AS")
-            AuthMode.NEW_AS
+            Timber.e(e, "Auth mode detection failed at ${config.backendUrl}; surfacing error")
+            throw e
         }
     }
 

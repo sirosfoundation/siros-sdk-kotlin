@@ -45,11 +45,12 @@ data class TokenResponse(
  * Mirrors the TypeScript `AuthServerClient` from wallet-frontend PR 177.
  */
 class AuthServerClient(
-    private val baseUrl: String,
+    baseUrl: String,
     private val tenantId: String = "default",
     private val httpClient: OkHttpClient,
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
+    private val baseUrl = baseUrl.trimEnd('/')
     /**
      * Create with persistent cookie storage (recommended for production).
      * Session cookies survive process death.
@@ -273,15 +274,18 @@ class AuthServerClient(
 
         headers.forEach { (k, v) -> requestBuilder.header(k, v) }
 
+        val url = "$baseUrl$path"
+        Timber.d("AS request: POST $url (tenant=$tenantId)")
         return httpClient.newCall(requestBuilder.build()).execute().use { response ->
             val responseBody = response.body?.string()
                 ?: throw AuthException("Empty response from $path")
 
             if (!response.isSuccessful) {
-                Timber.e("AS request failed: ${response.code} — $path")
-                throw AuthException("AS request failed: ${response.code}", code = response.code)
+                Timber.e("AS request failed: ${response.code} — $url")
+                throw AuthException("AS request failed: ${response.code} — $path", code = response.code)
             }
 
+            Timber.d("AS response: ${response.code} — $path")
             json.parseToJsonElement(responseBody).jsonObject
         }
     }

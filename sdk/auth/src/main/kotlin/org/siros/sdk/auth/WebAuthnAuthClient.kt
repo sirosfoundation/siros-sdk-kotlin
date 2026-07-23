@@ -22,17 +22,18 @@ import timber.log.Timber
  * credential creation/assertion.
  */
 class WebAuthnAuthClient(
-    private val baseUrl: String,
+    baseUrl: String,
     private val tenantId: String = "default",
     private val authProvider: AuthProvider,
     private val httpClient: OkHttpClient = OkHttpClient(),
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
+    private val baseUrl = baseUrl.trimEnd('/')
     /** Register a new user with WebAuthn. Returns an authenticated session. */
     suspend fun register(displayName: String, prfSalt: ByteArray? = null): AuthSession = withContext(Dispatchers.IO) {
         // Step 1: Get registration challenge from backend
         val challengeResponse = post(
-            "$baseUrl/user/register-webauthn-begin",
+            "/user/register-webauthn-begin",
             buildJsonObject { put("displayName", displayName) },
         )
 
@@ -82,7 +83,7 @@ class WebAuthnAuthClient(
             put("credential", credential)
         }
 
-        val sessionResponse = post("$baseUrl/user/register-webauthn-finish", finishBody)
+        val sessionResponse = post("/user/register-webauthn-finish", finishBody)
         Timber.d("register finish response keys: ${sessionResponse.keys}")
         val session = json.decodeFromJsonElement(AuthSession.serializer(), sessionResponse)
         Timber.d("register session: uuid=...${session.uuid.takeLast(4)}, tenantId=${session.tenantId}")
@@ -92,7 +93,7 @@ class WebAuthnAuthClient(
     /** Authenticate an existing user with WebAuthn. Returns an authenticated session. */
     suspend fun login(prfSalt: ByteArray? = null): AuthSession = withContext(Dispatchers.IO) {
         // Step 1: Get login challenge
-        val challengeResponse = post("$baseUrl/user/login-webauthn-begin", buildJsonObject {})
+        val challengeResponse = post("/user/login-webauthn-begin", buildJsonObject {})
         // Decode tagged binary objects
         val options = TaggedBinary.decode(challengeResponse).jsonObject
         val challengeId = options["challengeId"]?.jsonPrimitive?.content
@@ -132,14 +133,16 @@ class WebAuthnAuthClient(
             put("credential", credential)
         }
 
-        val sessionResponse = post("$baseUrl/user/login-webauthn-finish", finishBody)
+        val sessionResponse = post("/user/login-webauthn-finish", finishBody)
         Timber.d("login finish response keys: ${sessionResponse.keys}")
         val session = json.decodeFromJsonElement(AuthSession.serializer(), sessionResponse)
         Timber.d("login session: uuid=...${session.uuid.takeLast(4)}, tenantId=${session.tenantId}")
         session
     }
 
-    private fun post(url: String, body: JsonObject): JsonObject {
+    private fun post(path: String, body: JsonObject): JsonObject {
+        val url = "$baseUrl$path"
+        Timber.d("Auth request: POST $url (tenant=$tenantId)")
         val request = Request.Builder()
             .url(url)
             .header("X-Tenant-ID", tenantId)
@@ -152,10 +155,11 @@ class WebAuthnAuthClient(
             ?: throw AuthException("Empty response from $url")
 
         if (!response.isSuccessful) {
-            Timber.e("Auth request failed: ${response.code}")
-            throw AuthException("Auth request failed: ${response.code}", code = response.code)
+            Timber.e("Auth request failed: ${response.code} — $url\nbody: $responseBody")
+            throw AuthException("Auth request failed: ${response.code} — $path\nbody: $responseBody", code = response.code)
         }
 
+        Timber.d("Auth response: ${response.code} — $path")
         return json.parseToJsonElement(responseBody).jsonObject
     }
 
