@@ -233,11 +233,12 @@ fun WalletScreen(viewModel: WalletViewModel) {
         val cachedAccounts = (walletState as? WalletState.Disconnected)?.cachedAccounts ?: emptyList()
         val backendUrlState by viewModel.backendUrl.collectAsState()
         val tenantIdState by viewModel.tenantId.collectAsState()
+        val engineUrlOverrideState by viewModel.engineUrlOverride.collectAsState()
         LoginScreen(
             cachedAccounts = cachedAccounts,
             backendUrl = backendUrlState,
             tenantId = tenantIdState,
-            engineUrl = "",
+            engineUrl = engineUrlOverrideState,
             useWmpProtocol = useWmpProtocol,
             showPreLoginSettings = BuildConfig.SHOW_PRE_LOGIN_SETTINGS,
             isLoading = isLoading || walletState is WalletState.Connecting,

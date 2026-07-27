@@ -61,7 +61,15 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _backendUrl: MutableStateFlow<String>
     val backendUrl: StateFlow<String> get() = _backendUrl
 
-    private var _engineUrl: String
+    // Raw text of the "Engine URL (blank = auto)" field - blank means "derive
+    // from the current backend URL" (see resolvedEngineUrl()), not "use the
+    // BuildConfig.ENGINE_URL local-dev default" as a previous version of this
+    // code did. That silently pinned every connection to 127.0.0.1:8082 even
+    // after backendUrl was changed to a remote host, which looked to the user
+    // like a hung/timed-out registration (the WebAuthn ceremony itself
+    // succeeded; only the following engine WebSocket connect failed).
+    private val _engineUrlOverride: MutableStateFlow<String>
+    val engineUrlOverride: StateFlow<String> get() = _engineUrlOverride
 
     private val _tenantId = MutableStateFlow(DEFAULT_TENANT_ID)
     val tenantId: StateFlow<String> = _tenantId
@@ -73,13 +81,30 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         // Read test overrides (set via intent extras by automation scripts)
         val prefs = activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
         _backendUrl = MutableStateFlow(prefs.getString("backend_url", null) ?: DEFAULT_BACKEND_URL)
-        _engineUrl = prefs.getString("engine_url", null) ?: BuildConfig.ENGINE_URL
+        _engineUrlOverride = MutableStateFlow(prefs.getString("engine_url", null) ?: "")
         _useWmpProtocol = MutableStateFlow(prefs.getBoolean("use_wmp_protocol", false))
     }
 
     fun updateBackendUrl(url: String) { _backendUrl.value = url }
     fun updateTenantId(id: String) { _tenantId.value = id }
-    fun updateEngineUrl(url: String) { _engineUrl = url }
+    fun updateEngineUrl(url: String) { _engineUrlOverride.value = url }
+
+    /**
+     * Resolves the engine URL to actually connect to: an explicit override if
+     * the user typed one, otherwise derived from the current backend URL -
+     * same origin for any remote/reverse-proxied deployment (engine traffic
+     * is split from backend traffic by path, e.g. wallet-proxy's
+     * /api/v2/wallet, not by port), or backendUrl with the port swapped to
+     * 8082 for plain localhost dev (where the engine really is a separate
+     * listener on the same host).
+     */
+    private fun resolvedEngineUrl(): String {
+        val override = _engineUrlOverride.value.trim()
+        if (override.isNotBlank()) return override
+        val backend = _backendUrl.value
+        val isLocalhost = backend.contains("127.0.0.1") || backend.contains("localhost")
+        return if (isLocalhost) backend.replace(Regex(":\\d+(?=/|$)"), ":8082") else backend
+    }
     fun updateUseWmpProtocol(enabled: Boolean) {
         _useWmpProtocol.value = enabled
         activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
@@ -867,8 +892,8 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         return WalletConfig(
             backendUrl = _backendUrl.value,
             tenantId = _tenantId.value,
-            // Intent extra > BuildConfig > discovery (at connect time)
-            engineUrl = _engineUrl,
+            // Explicit override > derived from backendUrl (see resolvedEngineUrl())
+            engineUrl = resolvedEngineUrl(),
             useWmpProtocol = _useWmpProtocol.value,
             redirectUri = REDIRECT_URI,
             requireUserAuth = !isEmulator,
