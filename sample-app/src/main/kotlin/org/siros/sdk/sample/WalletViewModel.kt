@@ -71,17 +71,22 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _engineUrlOverride: MutableStateFlow<String>
     val engineUrlOverride: StateFlow<String> get() = _engineUrlOverride
 
-    private val _tenantId = MutableStateFlow(DEFAULT_TENANT_ID)
-    val tenantId: StateFlow<String> = _tenantId
+    private val _tenantId: MutableStateFlow<String>
+    val tenantId: StateFlow<String> get() = _tenantId
 
     private val _useWmpProtocol: MutableStateFlow<Boolean>
     val useWmpProtocol: StateFlow<Boolean> get() = _useWmpProtocol
 
     init {
-        // Read test overrides (set via intent extras by automation scripts)
+        // Read test overrides - set either via the settings sheet UI, or (debug
+        // builds only) via `adb shell am start ... --es backend_url ... --es
+        // tenant_id ...` - see MainActivity.applyIntentTestOverrides(), which
+        // copies matching intent extras into this same prefs store before the
+        // ViewModel is constructed.
         val prefs = activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
         _backendUrl = MutableStateFlow(prefs.getString("backend_url", null) ?: DEFAULT_BACKEND_URL)
         _engineUrlOverride = MutableStateFlow(prefs.getString("engine_url", null) ?: "")
+        _tenantId = MutableStateFlow(prefs.getString("tenant_id", null) ?: DEFAULT_TENANT_ID)
         _useWmpProtocol = MutableStateFlow(prefs.getBoolean("use_wmp_protocol", false))
     }
 

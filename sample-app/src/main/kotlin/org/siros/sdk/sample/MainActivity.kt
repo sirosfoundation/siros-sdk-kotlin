@@ -93,6 +93,32 @@ class MainActivity : ComponentActivity() {
     private val tag = "SIROS_MAIN"
     private var pendingWscaIntent: android.content.Intent? = null
 
+    /**
+     * Copies backend_url/tenant_id/engine_url string extras from the launch
+     * intent into the "siros_test_overrides" prefs store WalletViewModel
+     * reads at construction time - e.g.:
+     *   adb shell am start -n org.siros.sdk.sample/.MainActivity \
+     *     --es backend_url "https://sirosid-<env>-wallet-proxy.fly.dev" \
+     *     --es tenant_id "default"
+     * Debug builds only (matches the existing ACTION_WSCA_TEST precedent) -
+     * an exported activity honoring these in a release build would let any
+     * app on the device silently redirect a real wallet's backend URL.
+     * Must run before the ViewModel is constructed (i.e. before setContent),
+     * since it only reads these prefs once, in its init block.
+     */
+    private fun applyIntentTestOverrides(intent: android.content.Intent?) {
+        if (!BuildConfig.DEBUG || intent == null) return
+        val backendUrl = intent.getStringExtra("backend_url")
+        val tenantId = intent.getStringExtra("tenant_id")
+        val engineUrl = intent.getStringExtra("engine_url")
+        if (backendUrl == null && tenantId == null && engineUrl == null) return
+        getSharedPreferences("siros_test_overrides", MODE_PRIVATE).edit().apply {
+            backendUrl?.let { putString("backend_url", it) }
+            tenantId?.let { putString("tenant_id", it) }
+            engineUrl?.let { putString("engine_url", it) }
+        }.apply()
+    }
+
     private fun dispatchIncomingUri(uri: android.net.Uri?) {
         if (uri == null || !::viewModel.isInitialized) return
 
@@ -107,6 +133,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Must run before WalletViewModel.Factory constructs the ViewModel -
+        // it only reads siros_test_overrides prefs once, in its init block.
+        applyIntentTestOverrides(intent)
         // Queue WSCA test intent for dispatch after ViewModel is ready
         if (intent?.action == ACTION_WSCA_TEST && BuildConfig.DEBUG) {
             pendingWscaIntent = intent
