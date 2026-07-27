@@ -53,7 +53,21 @@ class LocalAuthProvider(
 
     /** PRF output from the most recent register/authenticate call. */
     var lastPrfOutput: PrfOutput? = null
-        private set
+
+    /**
+     * Remove the most recently registered credential from local storage.
+     * Call this when the backend rejects the registration (e.g. origin mismatch)
+     * to avoid leaving orphaned passkeys that show up in "Welcome back".
+     */
+    fun rollbackLastRegistration() {
+        val credId = lastCredentialId ?: return
+        val alias = keyAlias(credId)
+        credStore.delete(b64url(credId))
+        try { keyStore.deleteEntry(alias) } catch (_: Exception) {}
+        lastCredentialId = null
+        lastPrfOutput = null
+        Timber.i("LocalAuthProvider: rolled back last registration")
+    }
 
     override suspend fun register(options: RegisterOptions): RegisterResult {
         // Generate a random credential ID

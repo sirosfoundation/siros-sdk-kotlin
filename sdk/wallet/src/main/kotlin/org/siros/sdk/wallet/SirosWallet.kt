@@ -121,6 +121,9 @@ class SirosWallet private constructor(
         accountRegistry.removeAccount(accountId)
         if (accountRegistry.activeAccountId == accountId) {
             logout()
+        } else {
+            // Re-emit state so UI reflects the removed account
+            _state.value = disconnectedState()
         }
     }
 
@@ -182,9 +185,11 @@ class SirosWallet private constructor(
             }
         } catch (e: SirosException) {
             Timber.e(e, "Registration failed")
+            rollbackLocalCredential()
             _state.value = WalletState.Error(e.message ?: "Registration failed")
         } catch (e: Exception) {
             Timber.e(e, "Registration failed")
+            rollbackLocalCredential()
             _state.value = WalletState.Error(e.message ?: "Registration failed")
             throw WalletException("Registration failed", e)
         }
@@ -1088,6 +1093,16 @@ class SirosWallet private constructor(
     }
 
     /**
+     * Roll back a locally-stored credential after a failed registration.
+     * Prevents orphaned passkeys from appearing in the "Welcome back" picker.
+     */
+    private fun rollbackLocalCredential() {
+        if (authProvider is LocalAuthProvider) {
+            authProvider.rollbackLastRegistration()
+        }
+    }
+
+    /**
      * Extract the last PRF output from the auth provider, regardless of type.
      */
     private fun extractLastPrfOutput(): PrfOutput? = when (authProvider) {
@@ -1719,6 +1734,26 @@ class SirosWallet private constructor(
     }
 
     /**
+     * Extracts a human-readable string from an AuthZEN evaluation response's
+     * context.reason (or similar) field, which per go-trust's
+     * EvaluationResponseContext.Reason (map[string]interface{}, e.g.
+     * {"user": "...", "admin": "..."}) may be a structured JSON object, not a
+     * plain string. Calling .jsonPrimitive directly on a JsonObject throws
+     * (it's not a safe cast) - that previously crashed EVERY trust
+     * evaluation whose response included a reason, which the outer catch
+     * turned into "trusted = false" regardless of what the PDP actually
+     * decided (decision was already true in the same response).
+     */
+    private fun reasonText(element: kotlinx.serialization.json.JsonElement?): String? = when (element) {
+        null -> null
+        is kotlinx.serialization.json.JsonObject ->
+            element["user"]?.jsonPrimitive?.contentOrNull
+                ?: element["admin"]?.jsonPrimitive?.contentOrNull
+                ?: element.toString()
+        else -> element.jsonPrimitive.contentOrNull
+    }
+
+    /**
      * Handles trust evaluation step from the engine.
      *
      * 1. Extract subject_id and key material from the progress payload
@@ -1790,8 +1825,8 @@ class SirosWallet private constructor(
                 val trustResult = TrustResult(
                     trusted = decision,
                     framework = context?.get("framework")?.jsonPrimitive?.contentOrNull,
-                    reason = context?.get("reason")?.jsonPrimitive?.contentOrNull
-                        ?: context?.get("message")?.jsonPrimitive?.contentOrNull,
+                    reason = reasonText(context?.get("reason"))
+                        ?: reasonText(context?.get("message")),
                     entityName = context?.get("entity_name")?.jsonPrimitive?.contentOrNull,
                     entityLogo = context?.get("logo_uri")?.jsonPrimitive?.contentOrNull,
                     clientIdScheme = request?.get("context")?.jsonObject
