@@ -33,6 +33,7 @@
     <string name="add_credential_title">Add Credential</string>
     <string name="add_credential_loading">Loading available credentials\u2026</string>
     <string name="add_credential_empty">No credentials available</string>
+    <string name="add_credential_retry">Try Again</string>
     <string name="nav_back">Back</string>
 
     <!-- Credential detail screen -->
@@ -46,6 +47,11 @@
     <string name="credential_detail_issued">Issued</string>
     <string name="credential_detail_expires">Expires</string>
     <string name="credential_detail_no_claims">No claims available</string>
+    <string name="credential_detail_raw_header">Header</string>
+    <string name="credential_detail_raw_payload">Payload</string>
+    <string name="credential_detail_raw_disclosure">Disclosure %1$d</string>
+    <string name="copy_to_clipboard">Copy to clipboard</string>
+    <string name="copied_to_clipboard">Copied to clipboard</string>
     <string name="credential_detail_delete">Delete Credential</string>
     <string name="credential_detail_delete_confirm_title">Delete Credential</string>
     <string name="credential_detail_delete_confirm_message">Are you sure you want to delete \"%1$s\"? This action cannot be undone.</string>
@@ -59,6 +65,8 @@
     <string name="settings_tenant_id">Tenant</string>
     <string name="settings_credentials_stored">Credentials stored</string>
     <string name="settings_app_version">App version</string>
+    <string name="settings_credential_details">Credential details</string>
+    <string name="settings_credential_details_description">Show raw claims and signed credential data when tapping a credential</string>
     <string name="settings_presentation_history">Presentation History</string>
     <string name="settings_logout">Log Out</string>
 

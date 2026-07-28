@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -81,6 +82,25 @@ import java.util.Base64
  * 2. Observing [state] and rendering the appropriate screens.
  * 3. Implementing [WalletEventListener] for credential-selection UX.
  */
+
+/**
+ * Context saved from an `authorization_required` progress message, needed to resume
+ * an OID4VCI flow after the OAuth browser redirects back to the app.
+ *
+ * The WebSocket session that started the flow very often will not survive the
+ * redirect step - Android backgrounds/throttles the app while the external browser
+ * (or Custom Tab) is in the foreground, and the engine session dies with it (see
+ * [SirosWallet.completeAuthorization]). [offerJson] is the exact `credential_offer`
+ * object the backend already parsed, round-tripped verbatim so resume never needs
+ * to re-fetch a possibly single-use `credential_offer_uri`.
+ */
+private data class PendingAuthorization(
+    val offerJson: String?,
+    val redirectUri: String,
+    val codeVerifier: String?,
+    val state: String,
+)
+
 class SirosWallet private constructor(
     private val activity: Activity,
     private val config: WalletConfig,
@@ -124,6 +144,23 @@ class SirosWallet private constructor(
         } else {
             // Re-emit state so UI reflects the removed account
             _state.value = disconnectedState()
+        }
+    }
+
+    /**
+     * Delete the currently active account: removes it from the local account
+     * registry (so it no longer lingers as a cached "Welcome back" entry on
+     * the login screen) and logs out. There's no server-side account
+     * deletion endpoint - this is [forgetAccount] scoped to whichever
+     * account is currently active, which is what "delete" is expected to do
+     * from the logged-in Settings screen.
+     */
+    fun deleteAccount() {
+        val activeId = accountRegistry.activeAccountId
+        if (activeId != null) {
+            forgetAccount(activeId)
+        } else {
+            logout()
         }
     }
 
@@ -310,7 +347,7 @@ class SirosWallet private constructor(
     ) {
         // Derive key and initialise empty keystore
         keystore.unlock(prfOutput.first, ByteArray(0), hkdfSalt, hkdfInfo)
-        (keystore as? JweKeystore)?.setCredentialId(credId)
+        keystore.setCredentialId(credId)
         val encryptedContainer = try {
             keystore.exportEncryptedContainer()
         } catch (_: UnsupportedOperationException) { null }
@@ -358,7 +395,7 @@ class SirosWallet private constructor(
 
         _state.value = WalletState.Ready(
             userId = userId,
-            displayName = displayName,
+            displayName = displayName ?: givenDisplayName,
             credentials = credentialStore.getAll(),
         )
     }
@@ -374,13 +411,27 @@ class SirosWallet private constructor(
      * 5. Unlocks the keystore.
      * 6. Opens the engine WebSocket.
      */
-    suspend fun login() {
+    /**
+     * @param accountId if given, log in as this specific cached account
+     *   (e.g. the user tapped "Welcome back, <name>") - the WebAuthn ceremony
+     *   is scoped to just that account's own passkey(s). If null, every
+     *   loginable account's passkeys are offered as candidates via WebAuthn's
+     *   `prf.evalByCredential` extension (see [loginCandidates]), since which
+     *   one the user actually authenticates with is only known once the
+     *   discoverable-credential ceremony completes.
+     */
+    suspend fun login(accountId: String? = null) {
         _state.value = WalletState.Connecting
         try {
             ensureAuthMode()
+            if (accountId != null) {
+                sessionStore.activeAccountId = accountId
+            } else {
+                restoreActiveAccountForLogin()
+            }
             when (authMode) {
-                AuthMode.LEGACY_AS -> legacyLogin()
-                else -> newAsLogin()
+                AuthMode.LEGACY_AS -> legacyLogin(accountId)
+                else -> newAsLogin(accountId)
             }
         } catch (e: SirosException) {
             Timber.e(e, "Login failed")
@@ -392,8 +443,67 @@ class SirosWallet private constructor(
         }
     }
 
-    private suspend fun newAsLogin() {
-        val storedPrfSalt = sessionStore.prfSalt?.let { b64Decode(it) }
+    /**
+     * Ensure [sessionStore] has *some* account scoped before login, purely so
+     * reads made before the WebAuthn ceremony resolves (e.g. UI state) have
+     * something sensible to show - [scopeSessionStoreToCredential] is what
+     * actually matters for correctness, since it re-scopes to whichever
+     * account the ceremony resolves to. Falls back to the single loginable
+     * account when there's exactly one, since [logout] clears
+     * [AccountRegistry.activeAccountId] and there's nothing else to restore
+     * from at that point.
+     */
+    private fun restoreActiveAccountForLogin() {
+        if (sessionStore.activeAccountId != null) return
+        accountRegistry.activeAccountId?.let {
+            sessionStore.activeAccountId = it
+            return
+        }
+        accountRegistry.listLoginableAccounts().singleOrNull()?.let {
+            sessionStore.activeAccountId = it.accountId
+        }
+    }
+
+    /**
+     * Build (credentialId, prfSalt) pairs for every passkey login should
+     * offer as a candidate - mirrors WebAuthn's `prf.evalByCredential`
+     * extension (see [org.siros.sdk.auth.AuthenticateOptions.prfSaltsByCredential],
+     * and wallet-frontend's `makeAssertionPrfExtensionInputs`). Scoped to
+     * just [accountId]'s own passkeys when given; otherwise every loginable
+     * account's passkeys are offered, so the platform authenticator can
+     * evaluate PRF with the right salt no matter which credential the user
+     * picks, all within one ceremony - no fixed/shared salt, no guessing the
+     * account in advance, no second prompt.
+     */
+    private fun loginCandidates(accountId: String?): List<Pair<ByteArray, ByteArray>> {
+        val accounts = accountId?.let { listOfNotNull(accountRegistry.findAccount(it)) }
+            ?: accountRegistry.listLoginableAccounts()
+        return accounts.flatMap { account ->
+            account.passkeys.mapNotNull { passkey ->
+                if (passkey.prfSalt.isBlank()) return@mapNotNull null
+                b64UrlDecode(passkey.credentialId) to b64Decode(passkey.prfSalt)
+            }
+        }
+    }
+
+    /**
+     * Scope [sessionStore] to whichever cached account owns [credId], now
+     * that the login ceremony has resolved which credential was actually
+     * used. [finishLogin] reads sessionStore.hkdfSalt/hkdfInfo before it
+     * derives an accountId from the server's confirmed userId, so this must
+     * run before that call, or the wrong (or a freshly-generated, WRONG)
+     * salt gets used to derive the decryption key and the correctly-resolved
+     * PRF output from [loginCandidates] ends up wasted.
+     */
+    private fun scopeSessionStoreToCredential(credId: ByteArray) {
+        val credIdB64url = b64UrlEncode(credId)
+        accountRegistry.listAccounts()
+            .find { acc -> acc.passkeys.any { it.credentialId == credIdB64url } }
+            ?.let { sessionStore.activeAccountId = it.accountId }
+    }
+
+    private suspend fun newAsLogin(accountId: String?) {
+        val prfCandidates = loginCandidates(accountId)
 
         // Step 1: Get challenge from AS
         val challengeResponse = authServerClient.loginBegin()
@@ -414,7 +524,7 @@ class SirosWallet private constructor(
             org.siros.sdk.auth.AuthenticateOptions(
                 rpId = rpId,
                 challenge = challenge,
-                prfSalt = storedPrfSalt,
+                prfSaltsByCredential = prfCandidates.ifEmpty { null },
             )
         )
 
@@ -438,6 +548,7 @@ class SirosWallet private constructor(
 
         val credId = extractLastCredentialId()
             ?: throw WalletException("No credential ID after login")
+        scopeSessionStoreToCredential(credId)
         val prfOutput = extractLastPrfOutput()
             ?: throw WalletException("PRF not supported by authenticator — cannot decrypt wallet data")
 
@@ -446,13 +557,14 @@ class SirosWallet private constructor(
         finishLogin(session.uuid, session.displayName, credId, prfOutput)
     }
 
-    private suspend fun legacyLogin() {
-        val storedPrfSalt = sessionStore.prfSalt?.let { b64Decode(it) }
-        val session = legacyAuthClient.login(prfSalt = storedPrfSalt)
+    private suspend fun legacyLogin(accountId: String?) {
+        val prfCandidates = loginCandidates(accountId)
+        val session = legacyAuthClient.login(prfSaltsByCredential = prfCandidates.ifEmpty { null })
         Timber.i("Legacy login successful: ${session.uuid}")
 
         val credId = extractLastCredentialId()
             ?: throw WalletException("No credential ID after login")
+        scopeSessionStoreToCredential(credId)
         val prfOutput = extractLastPrfOutput()
             ?: throw WalletException("PRF not supported by authenticator — cannot decrypt wallet data")
 
@@ -499,6 +611,79 @@ class SirosWallet private constructor(
             displayName = displayName,
             credentials = credentialStore.getAll(),
         )
+        hydrateReloadedCredentials()
+    }
+
+    /**
+     * After loading credentials from a reimported private-data container
+     * (fresh login here, or [unlockKeystore] after [resumeSession]), re-fetch
+     * VCTM display metadata and re-derive issuedAt/expiresAt for any
+     * credential that's missing them.
+     *
+     * privatedata-spec's container format doesn't persist `metadata`/
+     * `issuedAt`/`expiresAt` at all - wallet-frontend's own schema
+     * (`WalletSessionEventNewCredential`) has no such fields either, since it
+     * re-fetches/derives this live rather than snapshotting it into the
+     * encrypted container. Without this, a freshly-reimported credential
+     * would display with no VCTM styling/claim labels or expiry indefinitely
+     * (metadata is never null for a credential saved earlier in the same
+     * session, only for one just reconstructed from a container).
+     *
+     * Fire-and-forget: re-emits [WalletState.Ready] with the refreshed list
+     * once done, rather than blocking login/unlock on however many VCTM
+     * fetches are needed.
+     */
+    private fun hydrateReloadedCredentials() {
+        scope.launch {
+            var changed = false
+            for (cred in credentialStore.getAll()) {
+                if (cred.metadata != null) continue
+                val payload = CredentialUtils.parseJwtPayload(cred.raw) ?: continue
+                val issuedAt = payload["iat"]?.jsonPrimitive?.longOrNull
+                val expiresAt = payload["exp"]?.jsonPrimitive?.longOrNull
+                val vct = payload["vct"]?.jsonPrimitive?.contentOrNull
+                val issuerIdent = cred.credentialIssuerIdentifier
+                val configId = cred.credentialConfigurationId
+                val vctm = if (!issuerIdent.isNullOrBlank() && !configId.isNullOrBlank()) {
+                    try {
+                        vctmFetcher.fetch(issuerUrl = issuerIdent, scope = configId, vct = vct)
+                    } catch (e: Exception) {
+                        Timber.w(e, "Failed to re-fetch VCTM for reloaded credential ${cred.id}")
+                        null
+                    }
+                } else {
+                    null
+                }
+                val metadata = vctm?.let {
+                    CredentialUtils.buildMetadata(
+                        offer = CredentialOffer(
+                            credentialConfigurationId = configId ?: "",
+                            credentialIssuerIdentifier = issuerIdent ?: "",
+                            credentialName = cred.format,
+                            issuerName = issuerIdent ?: "",
+                        ),
+                        vctm = it,
+                        rawCredential = cred.raw,
+                    )
+                }
+                if (metadata != null || issuedAt != null || expiresAt != null) {
+                    credentialStore.save(
+                        cred.copy(
+                            metadata = metadata ?: cred.metadata,
+                            issuedAt = issuedAt ?: cred.issuedAt,
+                            expiresAt = expiresAt ?: cred.expiresAt,
+                        )
+                    )
+                    changed = true
+                }
+            }
+            if (changed) {
+                val current = _state.value
+                if (current is WalletState.Ready) {
+                    _state.value = current.copy(credentials = credentialStore.getAll())
+                }
+            }
+        }
     }
 
     /**
@@ -732,6 +917,7 @@ class SirosWallet private constructor(
                 displayName = current.displayName,
                 credentials = credentialStore.getAll(),
             )
+            hydrateReloadedCredentials()
             Timber.i("Keystore unlocked after session resume")
         } catch (e: KeystoreException) {
             Timber.e(e, "Keystore unlock failed: corrupt container")
@@ -995,17 +1181,60 @@ class SirosWallet private constructor(
      * Call this from your app's deep link handler when the browser redirects
      * back with `code` and `state` query parameters.
      *
+     * The original flow's WebSocket session very often will not still be alive at this
+     * point - Android backgrounds/throttles the app for however long the user spends in
+     * the external browser/Custom Tab completing the OAuth login, and the engine's
+     * WebSocket session (and with it, all server-side flow state) commonly dies within
+     * seconds of the browser taking over. This resumes on a brand-new, stateless
+     * flow_start (auth_code + code_verifier + the original credential_offer) instead of
+     * a flow_action on the possibly-gone original flow_id - the same resume contract the
+     * web client and native-android-wrapper already rely on (see go-wallet-backend's
+     * `resumeWithAuthCode`, which re-derives everything else from what's supplied here).
+     *
+     * Also forces a fresh engine WebSocket connection first (see
+     * [WalletEngineSession.forceReconnect]) rather than trusting the existing one:
+     * confirmed live that a connection left idle across the background/browser gap
+     * can become a "zombie" that still accepts local sends but never actually
+     * delivers them, silently losing the resumed flow's trust-evaluation reply (the
+     * backend then fails the flow 2 minutes later with a wait timeout that never
+     * reaches the app either, since the same dead connection can't deliver that
+     * error back either - see [WalletEventListener.onFlowError] for how a genuine
+     * failure here gets surfaced instead).
+     *
      * @param flowId The flow ID from [WalletEventListener.onAuthorizationRequired].
      * @param code The authorization code from the redirect.
      * @param state The state parameter from the redirect (for CSRF validation).
      */
     fun completeAuthorization(flowId: String, code: String, state: String) {
         val engine = engineSession ?: throw WalletException("Not connected")
-        val payload = buildJsonObject {
-            put("code", kotlinx.serialization.json.JsonPrimitive(code))
-            put("state", kotlinx.serialization.json.JsonPrimitive(state))
+        val pending = pendingAuthorizations.remove(flowId)
+        if (pending == null) {
+            Timber.w("No saved resume context for flow $flowId; falling back to same-session completion")
+            val payload = buildJsonObject {
+                put("code", kotlinx.serialization.json.JsonPrimitive(code))
+                put("state", kotlinx.serialization.json.JsonPrimitive(state))
+            }
+            engine.sendFlowAction(flowId, "authorization_complete", payload)
+            return
         }
-        engine.sendFlowAction(flowId, "authorization_complete", payload)
+        if (pending.state != state) {
+            throw WalletException("Authorization state mismatch for flow $flowId (possible CSRF)")
+        }
+        scope.launch {
+            try {
+                engine.forceReconnect()
+                engine.awaitConnected()
+                engine.resumeIssuance(
+                    offer = pending.offerJson,
+                    redirectUri = pending.redirectUri,
+                    authCode = code,
+                    codeVerifier = pending.codeVerifier,
+                )
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to resume authorization for flow $flowId")
+                eventListener?.onFlowError(flowId, e.message ?: "Failed to resume authorization")
+            }
+        }
     }
 
     /**
@@ -1036,6 +1265,9 @@ class SirosWallet private constructor(
 
     /** Stores trust evaluation results keyed by flow ID for use in credential selection UI. */
     private val lastTrustResults = mutableMapOf<String, TrustResult>()
+
+    /** Resume context for in-progress OAuth authorizations, keyed by flow ID - see [PendingAuthorization]. */
+    private val pendingAuthorizations = mutableMapOf<String, PendingAuthorization>()
 
     /** Persistent trust cache for degraded-mode operation. */
     private val trustCache = TrustCache()
@@ -1587,12 +1819,25 @@ class SirosWallet private constructor(
                         val authUrl = payload?.get("authorization_url")?.jsonPrimitive?.contentOrNull
                         val redirectUri = payload?.get("expected_redirect_uri")?.jsonPrimitive?.contentOrNull
                         val state = payload?.get("state")?.jsonPrimitive?.contentOrNull
+                        val codeVerifier = payload?.get("code_verifier")?.jsonPrimitive?.contentOrNull
+                        val offerJson = payload?.get("credential_offer")?.let { json.encodeToString(JsonElement.serializer(), it) }
                         if (authUrl != null) {
                             // Apply URL rewriter if configured
                             val rewrittenUrl = config.urlRewriter?.invoke(authUrl) ?: authUrl
                             // Extract state from URL query params if not in payload
                             val effectiveState = state ?: android.net.Uri.parse(rewrittenUrl).getQueryParameter("state") ?: ""
                             Timber.d("Authorization required: url=$rewrittenUrl state=$effectiveState")
+                            // Save resume context BEFORE handing off to the browser - see
+                            // completeAuthorization() for why the flow can't just be resumed
+                            // on its original flow_id/session.
+                            if (redirectUri != null) {
+                                pendingAuthorizations[msg.flowId] = PendingAuthorization(
+                                    offerJson = offerJson,
+                                    redirectUri = redirectUri,
+                                    codeVerifier = codeVerifier,
+                                    state = effectiveState,
+                                )
+                            }
                             eventListener?.onAuthorizationRequired(
                                 flowId = msg.flowId,
                                 authorizationUrl = rewrittenUrl,
@@ -1656,6 +1901,8 @@ class SirosWallet private constructor(
                         issuedAt = payload["iat"]?.jsonPrimitive?.longOrNull,
                         expiresAt = exp,
                         notificationId = cred.notificationId,
+                        credentialIssuerIdentifier = activeOffer?.credentialIssuerIdentifier,
+                        credentialConfigurationId = activeOffer?.credentialConfigurationId,
                     )
                     credentialStore.save(stored)
                     eventListener?.onCredentialReceived(stored)
@@ -2040,11 +2287,16 @@ class SirosWallet private constructor(
         /**
          * Create the appropriate [AuthProvider] based on config.
          *
-         * Defaults to [LocalAuthProvider] which works on API 28+ without
-         * requiring a system credential provider or Google Play Services.
-         * Set [WalletConfig.useSystemCredentialManager] to `true` to use
-         * the system Credential Manager picker instead (requires API 34+
-         * or a compatible credential provider on the device).
+         * Defaults to [CredentialManagerAuthProvider], which delegates to the
+         * system Credential Manager: it handles biometric/device-credential
+         * authorization itself and supports roaming authenticators (hybrid
+         * phone-as-authenticator, USB/NFC/BLE security keys) — required for
+         * SIROS ID's passkey-protects-private-data model. Set
+         * [WalletConfig.useSystemCredentialManager] to `false` to use
+         * [LocalAuthProvider] instead: a from-scratch KeyStore-backed passkey
+         * manager with no roaming-authenticator support, intended only as a
+         * fallback for environments without a working Credential Manager
+         * provider (e.g. some emulators).
          */
         private fun createAuthProvider(activity: Activity, config: WalletConfig): AuthProvider {
             return if (config.useSystemCredentialManager) {

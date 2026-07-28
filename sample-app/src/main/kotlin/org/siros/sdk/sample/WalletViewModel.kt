@@ -77,6 +77,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _useWmpProtocol: MutableStateFlow<Boolean>
     val useWmpProtocol: StateFlow<Boolean> get() = _useWmpProtocol
 
+    private val _showCredentialDetails: MutableStateFlow<Boolean>
+    val showCredentialDetails: StateFlow<Boolean> get() = _showCredentialDetails
+
     init {
         // Read test overrides - set either via the settings sheet UI, or (debug
         // builds only) via `adb shell am start ... --es backend_url ... --es
@@ -88,6 +91,12 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _engineUrlOverride = MutableStateFlow(prefs.getString("engine_url", null) ?: "")
         _tenantId = MutableStateFlow(prefs.getString("tenant_id", null) ?: DEFAULT_TENANT_ID)
         _useWmpProtocol = MutableStateFlow(prefs.getBoolean("use_wmp_protocol", false))
+        // Default follows build type (on for debug, off for release) - a
+        // manual override either way is persisted across restarts, so e.g. a
+        // tester can still flip it on in a release build if needed.
+        _showCredentialDetails = MutableStateFlow(
+            prefs.getBoolean("show_credential_details", BuildConfig.DEBUG)
+        )
     }
 
     fun updateBackendUrl(url: String) { _backendUrl.value = url }
@@ -115,6 +124,14 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
             .edit()
             .putBoolean("use_wmp_protocol", enabled)
+            .apply()
+    }
+
+    fun updateShowCredentialDetails(enabled: Boolean) {
+        _showCredentialDetails.value = enabled
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("show_credential_details", enabled)
             .apply()
     }
 
@@ -269,6 +286,14 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 Log.w(TAG, "No tx_code found in description, cannot auto-respond")
                 return null
             }
+
+            override fun onFlowError(flowId: String, errorMessage: String) {
+                Log.e(TAG, "Flow $flowId failed: $errorMessage")
+                if (pendingAuthFlowId == flowId) {
+                    pendingAuthFlowId = null
+                }
+                _errorMessage.value = errorMessage
+            }
         })
     }
 
@@ -303,12 +328,12 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         }
     }
 
-    fun login() {
+    fun login(accountId: String? = null) {
         rebuildWalletIfNeeded()
         _isLoading.value = true
         viewModelScope.launch {
             try {
-                wallet.login()
+                wallet.login(accountId)
             } catch (e: Exception) {
                 _errorMessage.value = localizedErrorMessage(e)
             } finally {
@@ -317,12 +342,12 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         }
     }
 
-    fun register() {
+    fun register(displayName: String) {
         rebuildWalletIfNeeded()
         _isLoading.value = true
         viewModelScope.launch {
             try {
-                wallet.register("Sample User")
+                wallet.register(displayName)
             } catch (e: Exception) {
                 _errorMessage.value = localizedErrorMessage(e)
             } finally {
@@ -423,6 +448,13 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _availableCredentials.value = emptyList()
     }
 
+    /** Delete the current account - also removes it from the cached "Welcome back" list. */
+    fun deleteAccount() {
+        wallet.deleteAccount()
+        _showAddCredential.value = false
+        _availableCredentials.value = emptyList()
+    }
+
     // ── Account & Passkey management ────────────────────────────────
 
     /** Remove a cached account from the local registry. */
@@ -451,6 +483,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             } catch (e: Exception) {
                 android.util.Log.e("SIROS_VM", "getAvailableCredentials failed", e)
                 _availableCredentials.value = emptyList()
+                _errorMessage.value = e.message ?: "Failed to load available credentials"
             } finally {
                 _isLoadingOffers.value = false
             }
@@ -512,6 +545,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     // ── Credential detail ───────────────────────────────────────────
 
     fun openCredentialDetail(credential: StoredCredential) {
+        if (!_showCredentialDetails.value) return
         _selectedCredential.value = credential
     }
 
@@ -901,6 +935,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             engineUrl = resolvedEngineUrl(),
             useWmpProtocol = _useWmpProtocol.value,
             redirectUri = REDIRECT_URI,
+            // Emulators/Waydroid don't reliably have a working Credential Manager
+            // passkey provider - fall back to the local KeyStore-backed provider there.
+            useSystemCredentialManager = !isEmulator,
             requireUserAuth = !isEmulator,
             keystore = keystore,
             urlRewriter = if (proxyUrl.isNotBlank()) { url ->

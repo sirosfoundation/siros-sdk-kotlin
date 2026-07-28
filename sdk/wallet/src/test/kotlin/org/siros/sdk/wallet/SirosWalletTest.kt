@@ -35,6 +35,7 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.siros.sdk.auth.BackendApiClient
@@ -42,6 +43,7 @@ import org.siros.sdk.credentials.CredentialMetadata
 import org.siros.sdk.credentials.CredentialStore
 import org.siros.sdk.credentials.PresentationRecord
 import org.siros.sdk.credentials.StoredCredential
+import org.siros.sdk.credentials.WalletException
 import org.siros.sdk.keystore.KeystoreManager
 import org.siros.sdk.transport.engine.CredentialNotificationEvent
 import org.siros.sdk.transport.engine.CredentialResult
@@ -107,6 +109,7 @@ class SirosWalletTest {
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
             "engineSession" to engine,
+            "pendingAuthorizations" to mutableMapOf<String, Any?>(),
         )
 
         wallet.completeAuthorization(flowId = "flow-123", code = "code-abc", state = "state-xyz")
@@ -413,6 +416,7 @@ class SirosWalletTest {
             ),
             "credentialStore" to store,
             "eventListener" to listener,
+            "pendingAuthorizations" to mutableMapOf<String, Any?>(),
         )
 
         invokeConnectEngine(wallet, "app-token")
@@ -450,6 +454,167 @@ class SirosWalletTest {
             ),
             wallet.state.value,
         )
+    }
+
+    @Test
+    fun completeAuthorization_resumes_via_stateless_flow_start_using_saved_context() = runTest(dispatcher) {
+        // The WebSocket session that started the flow is very often already gone by the
+        // time the browser redirects back (Android backgrounds/throttles the app for the
+        // OAuth login) - completeAuthorization must resume on a fresh flow_start using the
+        // code_verifier/credential_offer saved from the original authorization_required
+        // message, not a flow_action on the (likely dead) original flow_id.
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val store = FakeCredentialStore(mutableListOf())
+        val engine = mockEngineConstructor(progressFlow = progressFlow)
+        every { engine.resumeIssuance(any(), any(), any(), any(), any()) } just runs
+        every { engine.forceReconnect() } just runs
+        coEvery { engine.awaitConnected(any()) } just runs
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.Ready(userId = "user-1", displayName = "Alice")
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                tenantId = "tenant-1",
+                redirectUri = "siros://callback",
+            ),
+            "credentialStore" to store,
+            "eventListener" to listener,
+            "pendingAuthorizations" to mutableMapOf<String, Any?>(),
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "flow-auth",
+                step = "authorization_required",
+                payload = buildJsonObject {
+                    put("authorization_url", "https://issuer.example.com/auth?state=state-from-url")
+                    put("expected_redirect_uri", "siros://callback")
+                    put("state", "state-from-url")
+                    put("code_verifier", "verifier-abc")
+                    putJsonObject("credential_offer") {
+                        put("credential_issuer", "https://issuer.example.com")
+                    }
+                },
+            )
+        )
+        advanceUntilIdle()
+
+        wallet.completeAuthorization(flowId = "flow-auth", code = "auth-code-xyz", state = "state-from-url")
+        advanceUntilIdle()
+
+        verify(exactly = 1) { engine.forceReconnect() }
+        verify(exactly = 1) {
+            engine.resumeIssuance(
+                offer = match { it != null && it.contains("\"credential_issuer\":\"https://issuer.example.com\"") },
+                credentialOfferUri = null,
+                redirectUri = "siros://callback",
+                authCode = "auth-code-xyz",
+                codeVerifier = "verifier-abc",
+            )
+        }
+        verify(exactly = 0) { engine.sendFlowAction("flow-auth", "authorization_complete", any()) }
+    }
+
+    @Test
+    fun completeAuthorization_surfaces_error_via_onFlowError_when_reconnect_fails() = runTest(dispatcher) {
+        // If forcing a fresh connection fails outright, the failure must be visible to
+        // the app immediately (onFlowError) rather than leaving it stuck showing
+        // whatever UI state was current when completeAuthorization was called.
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val store = FakeCredentialStore(mutableListOf())
+        val engine = mockEngineConstructor(progressFlow = progressFlow)
+        every { engine.forceReconnect() } throws IllegalStateException("Engine WebSocket connection failed")
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.Ready(userId = "user-1", displayName = "Alice")
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                tenantId = "tenant-1",
+                redirectUri = "siros://callback",
+            ),
+            "credentialStore" to store,
+            "eventListener" to listener,
+            "pendingAuthorizations" to mutableMapOf<String, Any?>(),
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "flow-auth",
+                step = "authorization_required",
+                payload = buildJsonObject {
+                    put("authorization_url", "https://issuer.example.com/auth?state=state-from-url")
+                    put("expected_redirect_uri", "siros://callback")
+                    put("state", "state-from-url")
+                },
+            )
+        )
+        advanceUntilIdle()
+
+        wallet.completeAuthorization(flowId = "flow-auth", code = "auth-code-xyz", state = "state-from-url")
+        advanceUntilIdle()
+
+        verify(exactly = 1) { listener.onFlowError("flow-auth", any()) }
+        verify(exactly = 0) { engine.resumeIssuance(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun completeAuthorization_throws_on_state_mismatch_instead_of_resuming() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val store = FakeCredentialStore(mutableListOf())
+        val engine = mockEngineConstructor(progressFlow = progressFlow)
+        every { engine.resumeIssuance(any(), any(), any(), any(), any()) } just runs
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.Ready(userId = "user-1", displayName = "Alice")
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                tenantId = "tenant-1",
+                redirectUri = "siros://callback",
+            ),
+            "credentialStore" to store,
+            "eventListener" to listener,
+            "pendingAuthorizations" to mutableMapOf<String, Any?>(),
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "flow-auth",
+                step = "authorization_required",
+                payload = buildJsonObject {
+                    put("authorization_url", "https://issuer.example.com/auth?state=state-from-url")
+                    put("expected_redirect_uri", "siros://callback")
+                    put("state", "state-from-url")
+                },
+            )
+        )
+        advanceUntilIdle()
+
+        var thrown: Throwable? = null
+        try {
+            wallet.completeAuthorization(flowId = "flow-auth", code = "auth-code-xyz", state = "wrong-state")
+        } catch (e: Throwable) {
+            thrown = e
+        }
+        assertTrue(thrown is WalletException)
+        verify(exactly = 0) { engine.resumeIssuance(any(), any(), any(), any(), any()) }
     }
 
     @Test

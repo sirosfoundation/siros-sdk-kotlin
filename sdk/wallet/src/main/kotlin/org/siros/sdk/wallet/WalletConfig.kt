@@ -15,10 +15,14 @@ import org.siros.sdk.keystore.KeystoreManager
  * @param tenantId  Tenant identifier. Defaults to "default".
  * @param redirectUri OAuth redirect URI for authorization code flows. For native
  *        apps this is typically a custom-scheme URI or an app-link URL.
- * @param useSystemCredentialManager When `true`, use the system Credential Manager
- *        picker for passkeys (requires API 34+ or a compatible provider like Google
- *        Password Manager). When `false` (default), use the SDK's built-in
- *        KeyStore-backed passkey manager that works on API 28+.
+ * @param useSystemCredentialManager When `true` (default), use the system Credential
+ *        Manager picker for passkeys — this is required for roaming authenticator
+ *        support (hybrid/phone-as-authenticator, USB/NFC/BLE security keys) and
+ *        handles biometric/device-credential authorization itself. Set to `false`
+ *        to use the SDK's built-in KeyStore-backed passkey manager instead (local
+ *        platform authenticator only, no roaming support) — mainly useful as a
+ *        fallback on emulators/environments without a working Credential Manager
+ *        provider.
  * @param credentialStore Custom [CredentialStore] implementation. When `null`
  *        (default), the SDK uses an encrypted file-backed store. Pass your own
  *        implementation if you need custom storage (e.g. Room, SQLCipher).
@@ -33,7 +37,7 @@ data class WalletConfig(
     val backendUrl: String,
     val tenantId: String = "default",
     val redirectUri: String = "",
-    val useSystemCredentialManager: Boolean = false,
+    val useSystemCredentialManager: Boolean = true,
     val credentialStore: CredentialStore? = null,
     val httpClient: OkHttpClient? = null,
     val urlRewriter: ((String) -> String)? = null,

@@ -170,7 +170,13 @@ class CredentialManagerAuthProvider(
             put("timeout", 60000)
             put("userVerification", options.userVerification)
 
-            options.allowCredentials?.let { creds ->
+            // allowCredentials: explicit list takes priority; otherwise derive
+            // it from evalByCredential's candidate credential IDs so the
+            // system picker is filtered to exactly the passkeys we have
+            // salts for.
+            val effectiveAllowCredentials = options.allowCredentials
+                ?: options.prfSaltsByCredential?.map { (credId, _) -> AllowCredential(id = credId) }
+            effectiveAllowCredentials?.let { creds ->
                 put("allowCredentials", buildJsonArray {
                     creds.forEach { cred ->
                         add(buildJsonObject {
@@ -181,15 +187,36 @@ class CredentialManagerAuthProvider(
                 })
             }
 
-            // PRF extension for authentication
-            options.prfSalt?.let { salt ->
+            // PRF extension for authentication. evalByCredential lets each
+            // candidate credential (different accounts, or multiple passkeys
+            // on one account) use its own salt in a single ceremony - the
+            // authenticator evaluates PRF using whichever credential the
+            // user actually selects, so the caller never has to guess which
+            // account will be used before the ceremony completes. Falls back
+            // to a single shared salt (eval.first) if no per-credential
+            // salts were given.
+            if (!options.prfSaltsByCredential.isNullOrEmpty()) {
                 put("extensions", buildJsonObject {
                     put("prf", buildJsonObject {
-                        put("eval", buildJsonObject {
-                            put("first", b64url(salt))
+                        put("evalByCredential", buildJsonObject {
+                            options.prfSaltsByCredential.forEach { (credId, salt) ->
+                                put(b64url(credId), buildJsonObject {
+                                    put("first", b64url(salt))
+                                })
+                            }
                         })
                     })
                 })
+            } else {
+                options.prfSalt?.let { salt ->
+                    put("extensions", buildJsonObject {
+                        put("prf", buildJsonObject {
+                            put("eval", buildJsonObject {
+                                put("first", b64url(salt))
+                            })
+                        })
+                    })
+                }
             }
         }
         return obj.toString()

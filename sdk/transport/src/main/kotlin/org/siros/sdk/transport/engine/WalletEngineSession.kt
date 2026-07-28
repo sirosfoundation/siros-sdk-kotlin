@@ -241,6 +241,33 @@ class WalletEngineSession(
         ))
     }
 
+    /**
+     * Resume an OID4VCI issuance flow after an OAuth browser redirect returns to the app,
+     * on a fresh flow_start rather than a flow_action on the original flow_id.
+     *
+     * The backend's `resumeWithAuthCode` path is fully stateless: it re-derives issuer
+     * metadata/trust from [offer]/[credentialOfferUri] and completes the token exchange
+     * with [authCode]/[codeVerifier], so this works even if the original flow_id's session
+     * no longer exists server-side (the common case - see [WalletEngineSession] backoff
+     * reconnect logic, and SirosWallet.completeAuthorization for why that happens).
+     */
+    fun resumeIssuance(
+        offer: String? = null,
+        credentialOfferUri: String? = null,
+        redirectUri: String,
+        authCode: String,
+        codeVerifier: String?,
+    ) {
+        send(FlowStartMessage.serializer(), FlowStartMessage(
+            protocol = "oid4vci",
+            offer = offer,
+            credentialOfferUri = credentialOfferUri,
+            redirectUri = redirectUri,
+            authCode = authCode,
+            codeVerifier = codeVerifier,
+        ))
+    }
+
     /** Start an OID4VP credential presentation flow. */
     fun startPresentation(
         requestUri: String? = null,
@@ -346,6 +373,34 @@ class WalletEngineSession(
         if (_state.value == State.FAILED) {
             throw IllegalStateException("Engine WebSocket connection failed")
         }
+    }
+
+    /**
+     * Force a fresh WebSocket connection, without waiting for OkHttp to notice the
+     * current one is dead.
+     *
+     * Unlike [disconnect], this does NOT close the flow/message channels or cancel
+     * [scope] - existing flowProgress()/flowErrors()/etc. collectors keep working
+     * across the reconnect, exactly like the automatic onFailure->scheduleReconnect
+     * path already does.
+     *
+     * Needed because a WebSocket can end up in a "zombie" state where OkHttp's
+     * onClosing/onFailure callbacks never fire (the OS can silently stop delivering
+     * data to a backgrounded app's socket without a clean close - e.g. while an
+     * external OAuth browser has foreground focus for a login redirect), so the
+     * automatic reconnect logic never kicks in even though nothing sent over the
+     * socket actually reaches the server anymore. Call this before anything
+     * time-sensitive right after the app regains foreground from such a background
+     * gap, rather than trusting the existing connection is still good.
+     */
+    fun forceReconnect() {
+        val token = lastAppToken ?: return
+        webSocket?.cancel() // ungraceful - the connection may already be dead
+        webSocket = null
+        sessionId = null
+        _state.value = State.CONNECTING
+        reconnectAttempts = 0
+        doConnect(token)
     }
 
     /** Disconnect the WebSocket session. */

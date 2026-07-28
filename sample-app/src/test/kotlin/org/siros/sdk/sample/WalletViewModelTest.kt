@@ -218,7 +218,7 @@ class WalletViewModelTest {
         coEvery { wallet.register(any()) } throws IllegalStateException("registration failed")
         val viewModel = WalletViewModel(mockk<Activity>(relaxed = true))
 
-        viewModel.register()
+        viewModel.register("Test User")
         advanceUntilIdle()
 
         assertFalse(viewModel.isLoading.value)

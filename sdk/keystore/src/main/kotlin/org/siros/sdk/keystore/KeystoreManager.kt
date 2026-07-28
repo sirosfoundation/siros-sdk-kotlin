@@ -33,6 +33,15 @@ interface KeystoreManager {
     /** Lock the keystore, clearing key material from memory. */
     fun lock()
 
+    /**
+     * Attach the passkey's credential ID to a first-time (just-created) PRF
+     * key entry once it's known, immediately after registration - see
+     * `SirosWallet.finishRegistration`. No-op by default; only implementations
+     * that maintain a PRF-keyed container (e.g. [JweKeystore],
+     * [WscdKeystoreAdapter]) need to act on this.
+     */
+    fun setCredentialId(credentialId: ByteArray) {}
+
     /** Generate a new keypair and return the key ID. */
     suspend fun generateKey(algorithm: String = "ES256"): String
 

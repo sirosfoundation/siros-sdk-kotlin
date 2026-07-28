@@ -149,10 +149,15 @@ class LocalAuthProvider(
     }
 
     override suspend fun authenticate(options: AuthenticateOptions): AuthenticateResult {
-        // Find matching credentials
+        // Find matching credentials. When no explicit allowCredentials list is
+        // given, narrow to prfSaltsByCredential's candidates if present (this
+        // provider always resolves a single concrete credential itself rather
+        // than delegating to a system picker, so - unlike a discoverable
+        // multi-account flow - there's no ambiguity to preserve here).
         val candidates = credStore.getByRpId(options.rpId)
-        val credential = if (options.allowCredentials != null) {
-            val allowedIds = options.allowCredentials!!.map { b64url(it.id) }.toSet()
+        val allowedIds = options.allowCredentials?.map { b64url(it.id) }?.toSet()
+            ?: options.prfSaltsByCredential?.map { (credId, _) -> b64url(credId) }?.toSet()
+        val credential = if (allowedIds != null) {
             candidates.firstOrNull { it.credentialId in allowedIds }
         } else {
             candidates.firstOrNull()
@@ -187,8 +192,14 @@ class LocalAuthProvider(
         sig.update(signedData)
         val signature = sig.sign()
 
-        // Compute PRF output if requested
-        val prfOutput = options.prfSalt?.let { salt ->
+        // Compute PRF output if requested - prefer the per-credential salt for
+        // whichever credential was actually selected above (mirrors WebAuthn's
+        // evalByCredential), falling back to a single shared salt.
+        val prfSaltForCredential = options.prfSaltsByCredential
+            ?.firstOrNull { (credId, _) -> b64url(credId) == credential.credentialId }
+            ?.second
+            ?: options.prfSalt
+        val prfOutput = prfSaltForCredential?.let { salt ->
             computePrf(credentialId, salt)
         }
 

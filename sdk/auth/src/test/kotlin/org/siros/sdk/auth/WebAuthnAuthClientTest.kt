@@ -140,6 +140,60 @@ class WebAuthnAuthClientTest {
     }
 
     @Test
+    fun login_decodes_tagged_binary_private_data_in_finish_response() = runBlocking {
+        // privatedata-spec §3.3: privateData is tagged binary ({"$b64u": "..."}),
+        // not a plain string - AuthSession.privateData is typed as String?, so
+        // the raw finish response must be run through TaggedBinary.decode
+        // first or deserialization throws JsonDecodingException. decode()
+        // only unwraps the {"$b64u": ...} object shape to a plain string - it
+        // does NOT base64-decode the content (that's a separate step callers
+        // do if they need it; the legacy login path here never actually
+        // consumes session.privateData at all, it always re-fetches the
+        // container via a dedicated endpoint instead) - so the still-encoded
+        // string is exactly the correct, expected result.
+        server.enqueue(
+            MockResponse().setBody(
+                """
+                {
+                  "challengeId": "login-ch-1",
+                  "getOptions": {
+                    "publicKey": {
+                      "rpId": "example.com",
+                      "challenge": "bG9naW4tY2hhbGxlbmdl"
+                    }
+                  }
+                }
+                """.trimIndent()
+            )
+        )
+        server.enqueue(
+            MockResponse().setBody(
+                """
+                {
+                  "appToken": "app-token-login",
+                  "uuid": "user-456",
+                  "displayName": "Bob",
+                  "privateData": { "${"$"}b64u": "eyJmb28iOiJiYXIifQ" }
+                }
+                """.trimIndent()
+            )
+        )
+
+        val fakeProvider = FakeAuthProvider(
+            registerResult = defaultRegisterResult(),
+            authenticateResult = defaultAuthenticateResult(),
+        )
+
+        val baseUrl = server.url("/").toString().trimEnd('/')
+        val client = WebAuthnAuthClient(baseUrl = baseUrl, authProvider = fakeProvider)
+
+        val session = client.login()
+
+        assertEquals("user-456", session.uuid)
+        assertEquals("eyJmb28iOiJiYXIifQ", session.privateData)
+    }
+
+    @Test
     fun register_throws_when_public_key_missing() = runBlocking {
         server.enqueue(
             MockResponse().setBody(

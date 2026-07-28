@@ -50,6 +50,19 @@ data class AuthenticateOptions(
     val allowCredentials: List<AllowCredential>? = null,
     val userVerification: String = "preferred",
     val prfSalt: ByteArray? = null,
+    /**
+     * Per-credential PRF salts, keyed by credential ID - mirrors WebAuthn's
+     * `prf.evalByCredential` extension. Use this (instead of [prfSalt]) for a
+     * discoverable-credential login where multiple candidate credentials
+     * (different accounts, or multiple passkeys on one account) are in
+     * play: which credential the user actually picks - and therefore which
+     * salt applies - is only known once the ceremony resolves, so a single
+     * fixed [prfSalt] can't work here. If both [allowCredentials] and this
+     * are null/empty when this is non-empty, implementations should build
+     * `allowCredentials` from this list's credential IDs. Takes priority
+     * over [prfSalt] when non-empty.
+     */
+    val prfSaltsByCredential: List<Pair<ByteArray, ByteArray>>? = null,
 )
 
 data class AllowCredential(

@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -249,6 +250,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
     val showQrScanner by viewModel.showQrScanner.collectAsState()
     val pendingPresentation by viewModel.pendingPresentationRequest.collectAsState()
     val useWmpProtocol by viewModel.useWmpProtocol.collectAsState()
+    val showCredentialDetails by viewModel.showCredentialDetails.collectAsState()
 
     LaunchedEffect(errorMessage) {
         errorMessage?.let {
@@ -273,9 +275,9 @@ fun WalletScreen(viewModel: WalletViewModel) {
             isLoading = isLoading || walletState is WalletState.Connecting,
             snackbarHostState = snackbarHostState,
             onLogin = viewModel::login,
-            onLoginAccount = { viewModel.login() },
+            onLoginAccount = { account -> viewModel.login(account.accountId) },
             onForgetAccount = viewModel::forgetAccount,
-            onRegister = { _ -> viewModel.register() },
+            onRegister = { name -> viewModel.register(name) },
             onUpdateBackendUrl = viewModel::updateBackendUrl,
             onUpdateTenantId = viewModel::updateTenantId,
             onUpdateEngineUrl = viewModel::updateEngineUrl,
@@ -294,106 +296,100 @@ fun WalletScreen(viewModel: WalletViewModel) {
         return
     }
 
-    // Presentation consent dialog — shown as a full-screen overlay
-    if (pendingPresentation != null) {
-        PresentationConsentScreen(
-            request = pendingPresentation!!,
-            onAccept = viewModel::acceptPresentation,
-            onDecline = viewModel::declinePresentation,
-        )
-        return
-    }
-
-    // Credential detail sub-screen
-    if (selectedCredential != null) {
-        CredentialDetailScreen(
-            credential = selectedCredential!!,
-            onBack = viewModel::closeCredentialDetail,
-            onDelete = { viewModel.deleteCredential(selectedCredential!!.id) },
-        )
-        return
-    }
-
-    // Presentation history sub-screen
-    if (showHistory) {
-        PresentationHistoryScreen(
-            history = presentationHistory,
-            onBack = viewModel::closeHistory,
-        )
-        return
-    }
-
-    // WSCA developer sub-screen
+    // WSCA developer sub-screen state (read here so it's available in the `when` below)
     val showWscaDeveloper by viewModel.showWscaDeveloper.collectAsState()
-    if (showWscaDeveloper) {
-        val wscdKeys by viewModel.wscdKeys.collectAsState()
-        val wscdLifecycleStatus by viewModel.wscdLifecycleStatus.collectAsState()
-        val wscdKeySecurityProps by viewModel.wscdKeySecurityProps.collectAsState()
-        val selectedPluginId by viewModel.selectedPluginId.collectAsState()
-        WscaDeveloperScreen(
-            lifecycleState = viewModel.lifecycleState.collectAsState().value,
-            lifecycleStatus = wscdLifecycleStatus,
-            keys = wscdKeys,
-            keySecurityProps = wscdKeySecurityProps,
-            selectedPluginId = selectedPluginId,
-            r2psServerUrl = r2psServerUrl,
-            onSelectPlugin = viewModel::selectPlugin,
-            onR2psServerUrlChange = viewModel::updateR2psServerUrl,
-            onEnroll = viewModel::enrollWscd,
-            onRotate = viewModel::rotateLifecycle,
-            onDestroy = viewModel::destroyLifecycle,
-            onRefresh = viewModel::refreshWscdInfo,
-            onBack = viewModel::closeWscaDeveloper,
-        )
-        return
-    }
-
-    // QR scanner sub-screen
-    if (showQrScanner) {
-        QrScannerScreen(
-            onQrScanned = viewModel::handleQrResult,
-            onBack = viewModel::closeQrScanner,
-        )
-        return
-    }
-
-    // Add credential sub-screen
-    if (showAddCredential) {
-        Scaffold(
-            topBar = {
-                TopAppBar(
-                    title = { Text(stringResource(R.string.add_credential_title)) },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        titleContentColor = MaterialTheme.colorScheme.onSurface,
-                    ),
-                    navigationIcon = {
-                        IconButton(onClick = viewModel::closeAddCredential) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.nav_back))
-                        }
-                    },
-                )
-            },
-        ) { padding ->
-            val pendingOffer by viewModel.pendingIssuanceOffer.collectAsState()
-            AddCredentialScreen(
-                offers = availableCredentials,
-                isLoading = isLoadingOffers,
-                onOfferSelected = viewModel::selectCredentialOffer,
-                pendingOffer = pendingOffer,
-                onConfirmIssuance = viewModel::confirmIssuance,
-                onCancelIssuance = viewModel::cancelIssuance,
-                onStartIDV = viewModel::startIDV,
-                modifier = Modifier.padding(padding),
-            )
-        }
-        return
-    }
-
-    // Main app with bottom navigation
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    // Everything below shares one Box so the SnackbarHost always has somewhere to
+    // render, no matter which sub-screen is active - previously each sub-screen
+    // branch `return`ed before ever reaching a SnackbarHost, so post-login errors
+    // (e.g. a failed credential issuance) were silently swallowed.
+    Box(modifier = Modifier.fillMaxSize()) {
+        when {
+            // Presentation consent dialog — shown as a full-screen overlay
+            pendingPresentation != null -> PresentationConsentScreen(
+                request = pendingPresentation!!,
+                onAccept = viewModel::acceptPresentation,
+                onDecline = viewModel::declinePresentation,
+            )
+
+            // Credential detail sub-screen
+            selectedCredential != null -> CredentialDetailScreen(
+                credential = selectedCredential!!,
+                onBack = viewModel::closeCredentialDetail,
+                onDelete = { viewModel.deleteCredential(selectedCredential!!.id) },
+            )
+
+            // Presentation history sub-screen
+            showHistory -> PresentationHistoryScreen(
+                history = presentationHistory,
+                onBack = viewModel::closeHistory,
+            )
+
+            // WSCA developer sub-screen
+            showWscaDeveloper -> {
+                val wscdKeys by viewModel.wscdKeys.collectAsState()
+                val wscdLifecycleStatus by viewModel.wscdLifecycleStatus.collectAsState()
+                val wscdKeySecurityProps by viewModel.wscdKeySecurityProps.collectAsState()
+                val selectedPluginId by viewModel.selectedPluginId.collectAsState()
+                WscaDeveloperScreen(
+                    lifecycleState = viewModel.lifecycleState.collectAsState().value,
+                    lifecycleStatus = wscdLifecycleStatus,
+                    keys = wscdKeys,
+                    keySecurityProps = wscdKeySecurityProps,
+                    selectedPluginId = selectedPluginId,
+                    r2psServerUrl = r2psServerUrl,
+                    onSelectPlugin = viewModel::selectPlugin,
+                    onR2psServerUrlChange = viewModel::updateR2psServerUrl,
+                    onEnroll = viewModel::enrollWscd,
+                    onRotate = viewModel::rotateLifecycle,
+                    onDestroy = viewModel::destroyLifecycle,
+                    onRefresh = viewModel::refreshWscdInfo,
+                    onBack = viewModel::closeWscaDeveloper,
+                )
+            }
+
+            // QR scanner sub-screen
+            showQrScanner -> QrScannerScreen(
+                onQrScanned = viewModel::handleQrResult,
+                onBack = viewModel::closeQrScanner,
+            )
+
+            // Add credential sub-screen
+            showAddCredential -> {
+                Scaffold(
+                    topBar = {
+                        TopAppBar(
+                            title = { Text(stringResource(R.string.add_credential_title)) },
+                            colors = TopAppBarDefaults.topAppBarColors(
+                                containerColor = MaterialTheme.colorScheme.surface,
+                                titleContentColor = MaterialTheme.colorScheme.onSurface,
+                            ),
+                            navigationIcon = {
+                                IconButton(onClick = viewModel::closeAddCredential) {
+                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.nav_back))
+                                }
+                            },
+                        )
+                    },
+                ) { padding ->
+                    val pendingOffer by viewModel.pendingIssuanceOffer.collectAsState()
+                    AddCredentialScreen(
+                        offers = availableCredentials,
+                        isLoading = isLoadingOffers,
+                        onOfferSelected = viewModel::selectCredentialOffer,
+                        pendingOffer = pendingOffer,
+                        onConfirmIssuance = viewModel::confirmIssuance,
+                        onCancelIssuance = viewModel::cancelIssuance,
+                        onStartIDV = viewModel::startIDV,
+                        onRetry = viewModel::openAddCredential,
+                        modifier = Modifier.padding(padding),
+                    )
+                }
+            }
+
+            // Main app with bottom navigation
+            else -> Column(modifier = Modifier.fillMaxSize()) {
         // Top bar
         TopAppBar(
             title = {
@@ -444,12 +440,15 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             lifecycleState = viewModel.lifecycleState.collectAsState().value,
                             enrollmentInProgress = viewModel.enrollmentInProgress.collectAsState().value,
                             onDisconnect = viewModel::disconnect,
+                            onDeleteAccount = viewModel::deleteAccount,
                             onShowHistory = viewModel::openHistory,
                             onEnrollWscd = viewModel::enrollWscd,
                             onShowWscaDeveloper = viewModel::openWscaDeveloper,
                             onForgetAccount = viewModel::forgetAccount,
                             passkeys = viewModel.listPasskeys(),
                             onRenamePasskey = viewModel::renamePasskey,
+                            showCredentialDetails = showCredentialDetails,
+                            onUpdateShowCredentialDetails = viewModel::updateShowCredentialDetails,
                         )
                     }
                 }
@@ -524,6 +523,13 @@ fun WalletScreen(viewModel: WalletViewModel) {
                 )
             }
         }
+    }
+        }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
     }
 }
 
@@ -942,6 +948,7 @@ fun SettingsTab(
     lifecycleState: LifecycleState?,
     enrollmentInProgress: Boolean,
     onDisconnect: () -> Unit,
+    onDeleteAccount: () -> Unit,
     onShowHistory: () -> Unit,
     onEnrollWscd: () -> Unit,
     onShowWscaDeveloper: () -> Unit,
@@ -949,6 +956,8 @@ fun SettingsTab(
     passkeys: List<org.siros.sdk.wallet.CachedPasskey> = emptyList(),
     onRenamePasskey: ((String, String) -> Unit)? = null,
     onUpdateUseWmpProtocol: ((Boolean) -> Unit)? = null,
+    showCredentialDetails: Boolean = false,
+    onUpdateShowCredentialDetails: ((Boolean) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -985,6 +994,29 @@ fun SettingsTab(
                 SettingsRow(stringResource(R.string.settings_credentials_stored), state.credentials.size.toString())
                 SettingsRow(stringResource(R.string.settings_app_version), BuildConfig.VERSION_NAME)
                 SettingsRow("Transport", if (useWmpProtocol) "WMP (JSON-RPC 2.0)" else "Legacy")
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            stringResource(R.string.settings_credential_details),
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        Text(
+                            stringResource(R.string.settings_credential_details_description),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = showCredentialDetails,
+                        onCheckedChange = onUpdateShowCredentialDetails,
+                        enabled = onUpdateShowCredentialDetails != null,
+                    )
+                }
             }
         }
 
@@ -1177,7 +1209,7 @@ fun SettingsTab(
                 confirmButton = {
                     TextButton(onClick = {
                         showDeleteConfirm = false
-                        onDisconnect()
+                        onDeleteAccount()
                     }) {
                         Text("Delete", color = MaterialTheme.colorScheme.error)
                     }

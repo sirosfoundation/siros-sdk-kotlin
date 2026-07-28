@@ -81,17 +81,36 @@ class WebAuthnAuthClient(
         val finishBody = buildJsonObject {
             challengeId?.let { put("challengeId", it) }
             put("credential", credential)
+            // The backend's FinishRegistrationRequest reads displayName from
+            // THIS request, not from register-webauthn-begin's - it defaults
+            // to the literal string "User" if absent (see go-wallet-backend's
+            // WebAuthnService.FinishRegistration).
+            put("displayName", displayName)
         }
 
         val sessionResponse = post("/user/register-webauthn-finish", finishBody)
         Timber.d("register finish response keys: ${sessionResponse.keys}")
-        val session = json.decodeFromJsonElement(AuthSession.serializer(), sessionResponse)
+        // privateData (per privatedata-spec §3.3) is tagged binary
+        // ({"$b64u": "..."}), not a plain string - decode it to a plain
+        // string first or AuthSession.privateData's deserialization throws.
+        val session = json.decodeFromJsonElement(AuthSession.serializer(), TaggedBinary.decode(sessionResponse).jsonObject)
         Timber.d("register session: uuid=...${session.uuid.takeLast(4)}, tenantId=${session.tenantId}")
         session
     }
 
-    /** Authenticate an existing user with WebAuthn. Returns an authenticated session. */
-    suspend fun login(prfSalt: ByteArray? = null): AuthSession = withContext(Dispatchers.IO) {
+    /**
+     * Authenticate an existing user with WebAuthn. Returns an authenticated session.
+     *
+     * @param prfSalt single shared PRF salt (legacy/single-account case).
+     * @param prfSaltsByCredential per-credential PRF salts (credentialId to
+     *   salt) for a discoverable-credential login where multiple accounts or
+     *   passkeys are candidates - see [AuthenticateOptions.prfSaltsByCredential].
+     *   Takes priority over [prfSalt] when non-empty.
+     */
+    suspend fun login(
+        prfSalt: ByteArray? = null,
+        prfSaltsByCredential: List<Pair<ByteArray, ByteArray>>? = null,
+    ): AuthSession = withContext(Dispatchers.IO) {
         // Step 1: Get login challenge
         val challengeResponse = post("/user/login-webauthn-begin", buildJsonObject {})
         // Decode tagged binary objects
@@ -113,6 +132,7 @@ class WebAuthnAuthClient(
                 rpId = rpId,
                 challenge = challenge,
                 prfSalt = prfSalt,
+                prfSaltsByCredential = prfSaltsByCredential,
             )
         )
 
@@ -135,7 +155,13 @@ class WebAuthnAuthClient(
 
         val sessionResponse = post("/user/login-webauthn-finish", finishBody)
         Timber.d("login finish response keys: ${sessionResponse.keys}")
-        val session = json.decodeFromJsonElement(AuthSession.serializer(), sessionResponse)
+        // privateData (per privatedata-spec §3.3) is tagged binary
+        // ({"$b64u": "..."}), not a plain string - decode it to a plain
+        // string first or AuthSession.privateData's deserialization throws.
+        // Only actually non-empty once a credential has been synced, which
+        // is why this wasn't hit before WscdKeystoreAdapter's persistence
+        // fix made that sync actually succeed for WSCD-backed accounts.
+        val session = json.decodeFromJsonElement(AuthSession.serializer(), TaggedBinary.decode(sessionResponse).jsonObject)
         Timber.d("login session: uuid=...${session.uuid.takeLast(4)}, tenantId=${session.tenantId}")
         session
     }
