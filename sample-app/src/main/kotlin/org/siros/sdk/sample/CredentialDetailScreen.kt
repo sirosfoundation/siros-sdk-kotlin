@@ -265,13 +265,14 @@ private fun ClaimsTab(credential: StoredCredential) {
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Text(
+                        Spacer(modifier = Modifier.height(4.dp))
+                        CopyableTextBlock(
                             text = claim.value,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.fillMaxWidth(),
                         )
                         val desc = claim.description
                         if (desc != null) {
+                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = desc,
                                 style = MaterialTheme.typography.bodySmall,
@@ -287,18 +288,24 @@ private fun ClaimsTab(credential: StoredCredential) {
 
 @Composable
 private fun RawTab(credential: StoredCredential) {
+    // credential.raw is "<jwt>~<disclosure>~<disclosure>~..." per the SD-JWT
+    // spec, not one JSON blob - decode it into its actual parts so each is
+    // individually readable and copyable, instead of one opaque string.
+    val parts = remember(credential.raw) { CredentialUtils.parseSdJwtParts(credential.raw) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         // Security warning — raw credentials are sensitive
         Card(
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.errorContainer,
             ),
-            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+            modifier = Modifier.fillMaxWidth(),
         ) {
             Text(
                 text = "\u26a0\ufe0f This is sensitive data. Do not screenshot or share.",
@@ -307,16 +314,36 @@ private fun RawTab(credential: StoredCredential) {
                 modifier = Modifier.padding(12.dp),
             )
         }
+
+        parts.header?.let { header ->
+            RawSection(stringResource(R.string.credential_detail_raw_header), header.toString())
+        }
+        parts.payload?.let { payload ->
+            RawSection(stringResource(R.string.credential_detail_raw_payload), payload.toString())
+        }
+        parts.disclosures.forEachIndexed { index, disclosure ->
+            RawSection(
+                stringResource(R.string.credential_detail_raw_disclosure, index + 1),
+                disclosure.toString(),
+            )
+        }
+        if (parts.header == null && parts.payload == null && parts.disclosures.isEmpty()) {
+            // Unparseable - still show the raw string rather than nothing.
+            CopyableTextBlock(text = credential.raw, modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
+@Composable
+private fun RawSection(label: String, text: String) {
+    Column {
         Text(
-            text = credential.raw,
-            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .padding(12.dp)
-                .horizontalScroll(rememberScrollState()),
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Spacer(modifier = Modifier.height(4.dp))
+        CopyableTextBlock(text = text, modifier = Modifier.fillMaxWidth())
     }
 }
 

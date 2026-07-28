@@ -68,6 +68,7 @@ fun AddCredentialScreen(
     onConfirmIssuance: () -> Unit = {},
     onCancelIssuance: () -> Unit = {},
     onStartIDV: (() -> Unit)? = null,
+    onRetry: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     // Issuance consent dialog
@@ -130,11 +131,17 @@ fun AddCredentialScreen(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = stringResource(R.string.add_credential_empty),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = stringResource(R.string.add_credential_empty),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(onClick = onRetry) {
+                        Text(stringResource(R.string.add_credential_retry))
+                    }
+                }
             }
         } else {
             LazyColumn(

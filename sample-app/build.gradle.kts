@@ -80,6 +80,7 @@ dependencies {
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.material3)
+    implementation(libs.compose.material.icons.extended)
     implementation(libs.compose.ui.tooling.preview)
     debugImplementation(libs.compose.ui.tooling)
 
@@ -92,8 +93,9 @@ dependencies {
     implementation(libs.camerax.view)
     implementation(libs.mlkit.barcode)
 
-    // Credential image loading
+    // Credential image loading (SVG decoder needed for VCTM svg_templates rendering)
     implementation(libs.coil.compose)
+    implementation(libs.coil.svg)
 
     // CBOR codec for CTAP2 USB HID transport (FIDO2 plugin)
     implementation("com.upokecenter:cbor:4.5.4")

@@ -109,6 +109,62 @@ class CredentialUtilsTest {
     }
 
     @Test
+    fun `extractClaims resolves deeply nested VCTM claim paths`() {
+        // Reproduces the diploma/ELM-schema bug: claims nested several levels
+        // under a single top-level key (not a flat pid/ehic-style schema).
+        val nestedJwt: String by lazy {
+            val header = b64url("""{"alg":"ES256","typ":"vc+sd-jwt"}""")
+            val payload = b64url("""{
+                "iss": "https://issuer.example.com",
+                "iat": 1700000000,
+                "exp": 1800000000,
+                "vct": "urn:example:diploma",
+                "credentialSubject": {
+                    "givenName": {"und": "Alice"},
+                    "hasClaim": {
+                        "awardedBy": {
+                            "awardingBody": {"legalName": {"nl": "ArtEZ"}}
+                        }
+                    }
+                }
+            }""")
+            "$header.$payload.fakesig"
+        }
+        val cred = StoredCredential(
+            id = "test-id",
+            format = "vc+sd-jwt",
+            raw = nestedJwt,
+            metadata = CredentialMetadata(
+                claims = listOf(
+                    ClaimMeta(
+                        path = listOf("credentialSubject", "givenName", "und"),
+                        label = "Given Name",
+                    ),
+                    ClaimMeta(
+                        path = listOf("credentialSubject", "hasClaim", "awardedBy", "awardingBody", "legalName", "nl"),
+                        label = "Institution",
+                    ),
+                ),
+            ),
+        )
+
+        val claims = CredentialUtils.extractClaims(cred)
+
+        val givenName = claims.find { it.label == "Given Name" }
+        assertNotNull(givenName)
+        assertEquals("Alice", givenName!!.value)
+
+        val institution = claims.find { it.label == "Institution" }
+        assertNotNull(institution)
+        assertEquals("ArtEZ", institution!!.value)
+
+        // The shared top-level ancestor ("credentialSubject") must not ALSO
+        // appear as its own raw-dumped claim now that its nested values were
+        // resolved individually - this exact collapse-into-one-blob was the bug.
+        assertTrue("credentialSubject" !in claims.map { it.key })
+    }
+
+    @Test
     fun `extractClaims formats keys when no VCTM`() {
         val cred = StoredCredential(
             id = "test-id",

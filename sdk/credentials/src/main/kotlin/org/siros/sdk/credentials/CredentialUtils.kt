@@ -2,6 +2,7 @@
 package org.siros.sdk.credentials
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -48,6 +49,32 @@ object CredentialUtils {
     }
 
     /**
+     * Split a raw SD-JWT VC (`<jwt>~<disclosure>~<disclosure>~...`) into its
+     * individually-decoded parts, for display purposes (e.g. a "Raw" debug
+     * tab) - each disclosure is a separate JSON array per the SD-JWT spec, not
+     * part of one opaque blob.
+     */
+    fun parseSdJwtParts(raw: String): SdJwtParts {
+        val segments = raw.split("~")
+        val jwtSegments = segments.firstOrNull()?.split(".") ?: emptyList()
+        val header = jwtSegments.getOrNull(0)?.let { decodeJsonSegment(it) } as? JsonObject
+        val payload = jwtSegments.getOrNull(1)?.let { decodeJsonSegment(it) } as? JsonObject
+        val disclosures = segments.drop(1)
+            .filter { it.isNotBlank() }
+            .mapNotNull { decodeJsonSegment(it) }
+        return SdJwtParts(header = header, payload = payload, disclosures = disclosures)
+    }
+
+    private fun decodeJsonSegment(base64url: String): JsonElement? {
+        return try {
+            val decoded = String(Base64.getUrlDecoder().decode(padBase64(base64url)), Charsets.UTF_8)
+            json.parseToJsonElement(decoded)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
      * Extract user-facing claims from a credential, optionally using VCTM
      * claim metadata for display labels.
      *
@@ -56,21 +83,53 @@ object CredentialUtils {
      */
     fun extractClaims(credential: StoredCredential): List<DisplayClaim> {
         val payload = parseJwtPayload(credential.raw) ?: return emptyList()
-        val vctmClaims = credential.metadata?.claims
-        val claimLabels = buildClaimLabelMap(vctmClaims)
+        val vctmClaims = credential.metadata?.claims.orEmpty()
 
-        return payload.entries
-            .filter { it.key !in JWT_SKIP_KEYS }
+        // VCTM claim paths can be arbitrarily nested (e.g. diploma's ELM schema
+        // nests everything under credentialSubject) - each claim must be
+        // resolved by walking its own full path, not just matched by its first
+        // segment against a top-level key.
+        val vctmResolved = vctmClaims.mapNotNull { claim ->
+            if (claim.path.isEmpty()) return@mapNotNull null
+            val value = resolveClaimPath(payload, claim.path) ?: return@mapNotNull null
+            DisplayClaim(
+                key = claim.path.joinToString("."),
+                label = claim.label ?: formatClaimKey(claim.path.last()),
+                value = formatClaimValue(value),
+                description = claim.description,
+                mandatory = claim.mandatory,
+                svgId = claim.svgId,
+            )
+        }
+
+        // Top-level keys already resolved (as an ancestor) via a VCTM path
+        // shouldn't ALSO be dumped raw - e.g. once "credentialSubject.foo" is
+        // resolved, don't separately dump the whole "credentialSubject" blob.
+        val coveredTopLevelKeys = vctmClaims.mapNotNull { it.path.firstOrNull() }.toSet()
+        val uncovered = payload.entries
+            .filter { it.key !in JWT_SKIP_KEYS && it.key !in coveredTopLevelKeys }
             .map { (key, value) ->
-                val labelInfo = claimLabels[key]
                 DisplayClaim(
                     key = key,
-                    label = labelInfo?.label ?: formatClaimKey(key),
+                    label = formatClaimKey(key),
                     value = formatClaimValue(value),
-                    description = labelInfo?.description,
-                    mandatory = labelInfo?.mandatory ?: false,
                 )
             }
+
+        return vctmResolved + uncovered
+    }
+
+    /**
+     * Walk a VCTM claim path (e.g. ["credentialSubject", "hasClaim", "awardedBy"])
+     * through nested JSON to the leaf value it selects. Returns null if any
+     * segment is missing - the claim just isn't present in this credential.
+     */
+    private fun resolveClaimPath(root: JsonElement, path: List<String>): JsonElement? {
+        var current: JsonElement = root
+        for (segment in path) {
+            current = (current as? JsonObject)?.get(segment) ?: return null
+        }
+        return current
     }
 
     /**
@@ -116,6 +175,16 @@ object CredentialUtils {
                 description = claimDisplay?.description,
                 sd = claim.sd,
                 mandatory = claim.mandatory ?: false,
+                svgId = claim.svgId,
+            )
+        }
+
+        val svgTemplates = vctmDisplay?.rendering?.svgTemplates?.map { template ->
+            SvgTemplateInfo(
+                uri = template.uri,
+                colorScheme = template.properties?.colorScheme,
+                contrast = template.properties?.contrast,
+                orientation = template.properties?.orientation,
             )
         }
 
@@ -134,17 +203,8 @@ object CredentialUtils {
             logo = (simple?.logo?.let { LogoInfo(uri = it.uri, altText = it.altText) })
                 ?: offer.logoUri?.let { LogoInfo(uri = it) },
             claims = claims,
+            svgTemplates = svgTemplates,
         )
-    }
-
-    /**
-     * Build a lookup map from claim path (first element) to its VCTM label info.
-     */
-    private fun buildClaimLabelMap(claims: List<ClaimMeta>?): Map<String, ClaimMeta> {
-        if (claims == null) return emptyMap()
-        return claims
-            .filter { it.path.isNotEmpty() }
-            .associateBy { it.path.first() }
     }
 
     /**
@@ -185,4 +245,16 @@ data class DisplayClaim(
     val description: String? = null,
     /** Whether this claim is mandatory. */
     val mandatory: Boolean = false,
+    /** VCTM SVG template placeholder ID this claim fills, if any. */
+    val svgId: String? = null,
+)
+
+/**
+ * The individually-decoded parts of a raw SD-JWT VC string, for display.
+ */
+data class SdJwtParts(
+    val header: JsonObject?,
+    val payload: JsonObject?,
+    /** Each disclosure is a JSON array (`[salt, name, value]` or `[salt, value]`). */
+    val disclosures: List<JsonElement>,
 )
