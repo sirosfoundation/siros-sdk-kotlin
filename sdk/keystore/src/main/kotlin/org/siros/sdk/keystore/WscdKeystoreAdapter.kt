@@ -4,8 +4,6 @@ import com.nimbusds.jose.JWSAlgorithm
 import com.nimbusds.jose.JWSHeader
 import com.nimbusds.jwt.JWTClaimsSet
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import java.security.MessageDigest
 import java.util.Base64
@@ -45,12 +43,24 @@ class WscdKeystoreAdapter(
     private val signer: Signer,
 ) : KeystoreManager {
 
-    private val mutex = Mutex()
-    @Volatile
-    private var _isUnlocked = false
-    private val credentials = mutableMapOf<String, String>()
+    /**
+     * Owns the PRF-protected container (mainKey/prfKeys/jwe → V3
+     * WalletStateContainer) for just this adapter's *credentials* - the
+     * WSCD manages its own signing-key protection, but SIROS ID's core tenet
+     * is that private data, including issued credentials, is always
+     * protected by the passkey's PRF-derived secret independent of whichever
+     * WSCD backs key signing. Reusing [JweKeystore] here (rather than a
+     * WSCD-adapter-local format) guarantees byte-for-byte compatibility with
+     * wallet-frontend and JweKeystore-backed native clients per
+     * privatedata-spec - the SAME passkey must unlock the SAME credentials
+     * on any client. `generateKey`/`generateKeypairs` are never called on
+     * this instance, so its `keypairs` array stays empty forever, which is
+     * the correct, spec-compliant way to represent "this client's signing
+     * keys are WSCD-protected and not exportable into the shared container."
+     */
+    private val credentialsKeystore = JweKeystore()
 
-    override val isUnlocked: Boolean get() = _isUnlocked
+    override val isUnlocked: Boolean get() = credentialsKeystore.isUnlocked
 
     override suspend fun unlock(
         prfOutput: ByteArray,
@@ -58,18 +68,20 @@ class WscdKeystoreAdapter(
         hkdfSalt: ByteArray,
         hkdfInfo: ByteArray,
     ) {
-        // WSCD-backed keystores don't use PRF unlock —
-        // the WSCD manages its own key protection.
-        mutex.withLock { _isUnlocked = true }
+        credentialsKeystore.unlock(prfOutput, encryptedContainer, hkdfSalt, hkdfInfo)
     }
 
     override fun lock() {
-        runBlocking {
-            mutex.withLock {
-                _isUnlocked = false
-                credentials.clear()
-            }
-        }
+        credentialsKeystore.lock()
+    }
+
+    /**
+     * Attach the passkey's credential ID to a first-time (just-created) PRF
+     * key entry once it's known after registration - see
+     * [SirosWallet.finishRegistration].
+     */
+    override fun setCredentialId(credentialId: ByteArray) {
+        credentialsKeystore.setCredentialId(credentialId)
     }
 
     override suspend fun generateKey(algorithm: String): String {
@@ -268,9 +280,7 @@ class WscdKeystoreAdapter(
     }
 
     override suspend fun exportEncryptedContainer(): ByteArray {
-        throw UnsupportedOperationException(
-            "WSCD-backed keystores do not support encrypted container export"
-        )
+        return credentialsKeystore.exportEncryptedContainer()
     }
 
     override fun listKeys(): List<KeyInfo> {
@@ -316,31 +326,26 @@ class WscdKeystoreAdapter(
         return signer.securityProperties(keyId)
     }
 
-    // ── Credential storage (local in-memory) ────────────────────────
+    // ── Credential storage (delegated to credentialsKeystore) ───────
 
     override suspend fun saveCredential(id: String, json: String) {
-        checkUnlocked()
-        mutex.withLock { credentials[id] = json }
+        credentialsKeystore.saveCredential(id, json)
     }
 
     override suspend fun getCredential(id: String): String? {
-        checkUnlocked()
-        return mutex.withLock { credentials[id] }
+        return credentialsKeystore.getCredential(id)
     }
 
     override suspend fun getAllCredentials(): Map<String, String> {
-        checkUnlocked()
-        return mutex.withLock { credentials.toMap() }
+        return credentialsKeystore.getAllCredentials()
     }
 
     override suspend fun deleteCredential(id: String) {
-        checkUnlocked()
-        mutex.withLock { credentials.remove(id) }
+        credentialsKeystore.deleteCredential(id)
     }
 
     override suspend fun clearCredentials() {
-        checkUnlocked()
-        mutex.withLock { credentials.clear() }
+        credentialsKeystore.clearCredentials()
     }
 
     override suspend fun generateKeypairs(count: Int): List<KeypairInfo> {
@@ -359,7 +364,7 @@ class WscdKeystoreAdapter(
     // ── Private helpers ─────────────────────────────────────────────
 
     private fun checkUnlocked() {
-        if (!_isUnlocked) throw IllegalStateException("Keystore is locked")
+        if (!isUnlocked) throw IllegalStateException("Keystore is locked")
     }
 
     private fun jwsAlgorithm(algorithm: String): JWSAlgorithm {

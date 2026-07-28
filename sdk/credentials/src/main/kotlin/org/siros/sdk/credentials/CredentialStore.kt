@@ -30,6 +30,21 @@ data class StoredCredential(
      * event occurs.
      */
     @SerialName("notification_id") val notificationId: String? = null,
+    /**
+     * Issuer identifier this credential was obtained from - part of
+     * privatedata-spec's normative `S.credentials[]` fields (`WalletSessionEventNewCredential`
+     * in wallet-frontend), needed to re-fetch VCTM display metadata after a
+     * fresh login (wallet-frontend doesn't persist `metadata` either - it
+     * re-fetches/derives display info live rather than snapshotting it into
+     * the encrypted container).
+     */
+    @SerialName("credential_issuer_identifier") val credentialIssuerIdentifier: String? = null,
+    /**
+     * Credential configuration ID (issuance scope) this credential was
+     * requested under - part of privatedata-spec's normative fields, needed
+     * (alongside [credentialIssuerIdentifier]) to re-fetch VCTM after login.
+     */
+    @SerialName("credential_configuration_id") val credentialConfigurationId: String? = null,
 )
 
 @Serializable
@@ -43,6 +58,8 @@ data class CredentialMetadata(
     @SerialName("text_color") val textColor: String? = null,
     val logo: LogoInfo? = null,
     val claims: List<ClaimMeta>? = null,
+    /** VCTM SVG rendering templates, if the issuer's VCTM published any. */
+    @SerialName("svg_templates") val svgTemplates: List<SvgTemplateInfo>? = null,
 )
 
 /** Metadata about an individual claim within a credential. */
@@ -58,6 +75,17 @@ data class ClaimMeta(
     val sd: String? = null,
     /** Whether this claim must be present in a presentation. */
     val mandatory: Boolean = false,
+    /** VCTM SVG template placeholder ID this claim fills, if any. */
+    @SerialName("svg_id") val svgId: String? = null,
+)
+
+/** A VCTM SVG rendering template reference (VCTM section 6, `rendering.svg_templates`). */
+@Serializable
+data class SvgTemplateInfo(
+    val uri: String,
+    @SerialName("color_scheme") val colorScheme: String? = null,
+    val contrast: String? = null,
+    val orientation: String? = null,
 )
 
 /** Information about the credential issuer. */

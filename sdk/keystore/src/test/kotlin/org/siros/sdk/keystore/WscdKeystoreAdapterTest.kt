@@ -115,10 +115,58 @@ class WscdKeystoreAdapterTest {
         assertEquals("test-key-1", keys[0].keyId)
     }
 
-    @Test(expected = UnsupportedOperationException::class)
-    fun exportEncryptedContainerThrows() = runTest {
+    @Test(expected = org.siros.sdk.credentials.KeystoreException::class)
+    fun exportEncryptedContainerThrowsWhenLocked() = runTest {
         val adapter = WscdKeystoreAdapter(createMockSigner())
         adapter.exportEncryptedContainer()
+    }
+
+    @Test
+    fun exportAndRestoreCredentialsRoundTrip() = runTest {
+        val prfOutput = ByteArray(32) { it.toByte() }
+        val hkdfSalt = ByteArray(32) { (it * 2).toByte() }
+        val hkdfInfo = "test-info".toByteArray()
+
+        val adapter1 = WscdKeystoreAdapter(createMockSigner())
+        adapter1.unlock(prfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        // Realistic shape: EncryptedCredentialStore always saves the full
+        // StoredCredential JSON (id/format/raw/kid/...) - the underlying
+        // JweKeystore container only round-trips the privatedata-spec's
+        // normative fields (format/kid/raw as "data"), not arbitrary JSON.
+        adapter1.saveCredential("cred-1", """{"id":"cred-1","format":"vc+sd-jwt","raw":"header.payload.sig","kid":"key-1"}""")
+        val exported = adapter1.exportEncryptedContainer()
+        assertTrue(exported.isNotEmpty())
+
+        // A fresh adapter, unlocked with the SAME PRF material and the
+        // exported container, should recover the credential - this is what
+        // makes credentials survive logout+login for WSCD-backed keystores
+        // (previously exportEncryptedContainer() just threw, so nothing was
+        // ever persisted at all), AND (per privatedata-spec) uses the exact
+        // same container format wallet-frontend/JweKeystore-backed native
+        // clients use, so the same passkey unlocks the same credentials
+        // across any client, not just this WSCD-backed one.
+        val adapter2 = WscdKeystoreAdapter(createMockSigner())
+        adapter2.unlock(prfOutput, exported, hkdfSalt, hkdfInfo)
+        val restored = adapter2.getCredential("cred-1")
+        assertNotNull(restored)
+        assertTrue(restored!!.contains("\"format\":\"vc+sd-jwt\""))
+        assertTrue(restored.contains("header.payload.sig"))
+    }
+
+    @Test(expected = Exception::class)
+    fun unlockWithWrongPrfOutputThrows() = runTest {
+        val hkdfSalt = ByteArray(32) { (it * 2).toByte() }
+        val hkdfInfo = "test-info".toByteArray()
+
+        val adapter1 = WscdKeystoreAdapter(createMockSigner())
+        adapter1.unlock(ByteArray(32) { it.toByte() }, ByteArray(0), hkdfSalt, hkdfInfo)
+        adapter1.saveCredential("cred-1", """{"id":"cred-1","format":"vc+sd-jwt","raw":"x"}""")
+        val exported = adapter1.exportEncryptedContainer()
+
+        // A wrong PRF output must fail loudly (not silently start empty) -
+        // matches JweKeystore's own existing behavior for a wrong key.
+        val adapter2 = WscdKeystoreAdapter(createMockSigner())
+        adapter2.unlock(ByteArray(32) { (it + 1).toByte() }, exported, hkdfSalt, hkdfInfo)
     }
 
     @Test

@@ -60,6 +60,31 @@ class JweKeystoreTest {
     }
 
     @Test
+    fun credentialRoundTripPreservesPrivateDataSpecFields() = runTest {
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+
+        // Matches EncryptedCredentialStore.save()'s actual shape: the full
+        // StoredCredential JSON, including credential_issuer_identifier/
+        // credential_configuration_id - privatedata-spec's normative
+        // S.credentials[] fields (wallet-frontend's WalletSessionEventNewCredential),
+        // needed after a fresh login to re-fetch VCTM display metadata.
+        val credentialJson = """{"id":"cred-1","format":"vc+sd-jwt","raw":"header.payload.sig","kid":"key-1","credential_issuer_identifier":"https://issuer.example.com","credential_configuration_id":"diploma"}"""
+        keystore.saveCredential("cred-1", credentialJson)
+
+        val exported = keystore.exportEncryptedContainer()
+        keystore.lock()
+        keystore.unlock(fakePrfOutput, exported, hkdfSalt, hkdfInfo)
+
+        val restored = keystore.getCredential("cred-1")
+        assertNotNull(restored)
+        assertTrue(restored!!.contains("\"credential_issuer_identifier\":\"https://issuer.example.com\""))
+        assertTrue(restored.contains("\"credential_configuration_id\":\"diploma\""))
+        assertTrue(restored.contains("\"format\":\"vc+sd-jwt\""))
+        assertTrue(restored.contains("header.payload.sig"))
+    }
+
+    @Test
     fun lockClearsKeys() = runTest {
         val keystore = JweKeystore()
         keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)

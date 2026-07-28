@@ -132,7 +132,7 @@ class JweKeystore(
      * Set the credential ID on the PRF key entry (called after registration
      * when the credential ID is known).
      */
-    fun setCredentialId(credentialId: ByteArray) {
+    override fun setCredentialId(credentialId: ByteArray) {
         val meta = containerMetadata ?: return
         if (meta.prfKeys.isNotEmpty() && meta.prfKeys[0].credentialId.isEmpty()) {
             containerMetadata = meta.copy(
@@ -193,14 +193,27 @@ class JweKeystore(
                     ?: continue
                 val credKid = credObj["kid"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
                 val credFormat = credObj["format"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull } ?: ""
+                val credIssuerIdent = credObj["credentialIssuerIdentifier"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
+                val credConfigId = credObj["credentialConfigurationId"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
 
-                // Store as serialized StoredCredential JSON to preserve metadata
+                // Store as serialized StoredCredential JSON to preserve metadata.
+                // credentialIssuerIdentifier/credentialConfigurationId are part
+                // of privatedata-spec's normative fields (already written by
+                // buildWalletStateV3() below) - reconstructing them here too
+                // is what lets SirosWallet re-fetch VCTM display metadata
+                // after a fresh login (see SirosWallet.hydrateReloadedCredentials).
                 val storedJson = kotlinx.serialization.json.buildJsonObject {
                     put("id", kotlinx.serialization.json.JsonPrimitive(credId))
                     put("format", kotlinx.serialization.json.JsonPrimitive(credFormat))
                     put("raw", kotlinx.serialization.json.JsonPrimitive(data))
                     if (!credKid.isNullOrEmpty()) {
                         put("kid", kotlinx.serialization.json.JsonPrimitive(credKid))
+                    }
+                    if (!credIssuerIdent.isNullOrEmpty()) {
+                        put("credential_issuer_identifier", kotlinx.serialization.json.JsonPrimitive(credIssuerIdent))
+                    }
+                    if (!credConfigId.isNullOrEmpty()) {
+                        put("credential_configuration_id", kotlinx.serialization.json.JsonPrimitive(credConfigId))
                     }
                 }
                 credentials[credId] = storedJson.toString()
@@ -410,16 +423,21 @@ class JweKeystore(
     }
 
     private fun buildWalletStateV3(): kotlinx.serialization.json.JsonObject {
-        // Preserve existing state if available, otherwise initialize fresh
+        // Preserve existing state if available, otherwise initialize fresh.
+        // NOTE: this must NOT short-circuit and return existingState verbatim -
+        // credentials/keys added via saveCredential()/generateKey() since unlock()
+        // only live in the `keys`/`credentials` maps below, not in
+        // preservedWalletState, so an early return here would silently drop
+        // any credential added by a returning user (preservedWalletState is
+        // only ever non-null when unlock() loaded an existing container).
         val existingState = preservedWalletState
-        if (existingState != null) {
-            // Round-trip: preserve exact structure from loaded state
-            return existingState
-        }
-        // First-time or missing state: build minimal valid state
         return kotlinx.serialization.json.buildJsonObject {
-            put("lastEventHash", kotlinx.serialization.json.JsonPrimitive(""))
-            put("events", kotlinx.serialization.json.JsonArray(emptyList()))
+            val lastEventHash = existingState?.get("lastEventHash")
+                ?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull } ?: ""
+            put("lastEventHash", kotlinx.serialization.json.JsonPrimitive(lastEventHash))
+            val events = existingState?.get("events") as? kotlinx.serialization.json.JsonArray
+                ?: kotlinx.serialization.json.JsonArray(emptyList())
+            put("events", events)
             put("S", kotlinx.serialization.json.buildJsonObject {
                 put("schemaVersion", kotlinx.serialization.json.JsonPrimitive(3))
                 put("keypairs", kotlinx.serialization.json.JsonArray(
@@ -484,9 +502,9 @@ class JweKeystore(
                         val batchId = originalCred?.get("batchId")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
                             ?: "0"
                         val issuerIdent = originalCred?.get("credentialIssuerIdentifier")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
-                            ?: ""
+                            ?: parsed?.get("credential_issuer_identifier")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull } ?: ""
                         val configId = originalCred?.get("credentialConfigurationId")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
-                            ?: ""
+                            ?: parsed?.get("credential_configuration_id")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull } ?: ""
                         
                         kotlinx.serialization.json.buildJsonObject {
                             put("credentialId", kotlinx.serialization.json.JsonPrimitive(id))
