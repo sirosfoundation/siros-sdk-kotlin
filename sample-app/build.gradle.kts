@@ -77,6 +77,13 @@ dependencies {
     implementation(libs.androidx.credentials)
     implementation(libs.androidx.credentials.play)
 
+    // W3C Digital Credentials API - credential provider registration (alpha)
+    implementation(libs.androidx.credentials.registry.provider)
+    implementation(libs.androidx.credentials.registry.provider.play)
+    implementation(libs.androidx.credentials.registry.mdoc)
+    implementation(libs.androidx.credentials.registry.openid)
+    implementation(libs.androidx.credentials.registry.sdjwtvc)
+
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.material3)
@@ -98,7 +105,7 @@ dependencies {
     implementation(libs.coil.svg)
 
     // CBOR codec for CTAP2 USB HID transport (FIDO2 plugin)
-    implementation("com.upokecenter:cbor:4.5.4")
+    implementation(libs.upokecenter.cbor)
 
     testImplementation(libs.junit)
     testImplementation(libs.mockk)

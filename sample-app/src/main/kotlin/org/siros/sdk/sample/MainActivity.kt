@@ -426,11 +426,6 @@ fun WalletScreen(viewModel: WalletViewModel) {
             when (val state = walletState) {
                 is WalletState.Ready -> {
                     when (selectedTab) {
-                        0 -> CredentialsTab(
-                            state = state,
-                            onCredentialClick = viewModel::openCredentialDetail,
-                            onAddCredential = viewModel::openAddCredential,
-                        )
                         2 -> SettingsTab(
                             state = state,
                             backendUrl = viewModel.backendUrl.collectAsState().value,
@@ -449,6 +444,15 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onRenamePasskey = viewModel::renamePasskey,
                             showCredentialDetails = showCredentialDetails,
                             onUpdateShowCredentialDetails = viewModel::updateShowCredentialDetails,
+                        )
+                        // selectedTab can transiently be 1 (the "Add" action, not a
+                        // real persisted tab) right as a flow finishes and the state
+                        // drops back to Ready - fall through to the credentials list
+                        // rather than rendering nothing.
+                        else -> CredentialsTab(
+                            state = state,
+                            onCredentialClick = viewModel::openCredentialDetail,
+                            onAddCredential = viewModel::openAddCredential,
                         )
                     }
                 }

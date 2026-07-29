@@ -41,7 +41,9 @@ import androidx.compose.ui.unit.dp
 import coil.ImageLoader
 import coil.decode.SvgDecoder
 import coil.request.ImageRequest
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -76,13 +78,40 @@ fun CredentialCard(
     // template at all - never leaves the card blank/broken either way.
     val context = LocalContext.current
     val isDarkTheme = isSystemInDarkTheme()
-    var svgState by remember(credential.id) {
+    // Keyed on meta?.svgTemplates too, not just credential.id: metadata is
+    // null on the first Ready emission after a reload (hydrateReloadedCredentials()
+    // re-fetches VCTM and re-emits asynchronously) - without this, a card that
+    // composed before that re-emission would stay stuck on its initial
+    // NotApplicable/flat state forever, since credential.id alone doesn't
+    // change when svgTemplates later arrives.
+    // meta == null (not yet hydrated) is deliberately treated as "loading",
+    // not "no template" - metadata being null doesn't mean the credential has
+    // no SVG template, only that hydrateReloadedCredentials() hasn't finished
+    // yet. Collapsing that into NotApplicable was what caused a flash of the
+    // flat/blue card before the real metadata (and its SVG) arrived.
+    var svgState by remember(credential.id, meta?.svgTemplates) {
         mutableStateOf<SvgLoadState>(
-            if (meta?.svgTemplates.isNullOrEmpty()) SvgLoadState.NotApplicable else SvgLoadState.Loading
+            when {
+                meta == null -> SvgLoadState.Loading
+                meta.svgTemplates.isNullOrEmpty() -> SvgLoadState.NotApplicable
+                else -> SvgLoadState.Loading
+            }
         )
     }
-    LaunchedEffect(credential.id, isDarkTheme) {
-        val templates = meta?.svgTemplates
+    LaunchedEffect(credential.id, meta?.svgTemplates, isDarkTheme) {
+        if (meta == null) {
+            // Wait (bounded) for hydration to populate metadata; the
+            // remember/LaunchedEffect keys above cancel and re-fire this
+            // block once meta?.svgTemplates actually changes. If that never
+            // happens (VCTM fetch failed, no VCTM published, etc.) this
+            // delay completes uncancelled and we settle to the flat layout
+            // instead of spinning forever.
+            svgState = SvgLoadState.Loading
+            delay(5000)
+            svgState = SvgLoadState.NotApplicable
+            return@LaunchedEffect
+        }
+        val templates = meta.svgTemplates
         if (templates.isNullOrEmpty()) {
             svgState = SvgLoadState.NotApplicable
             return@LaunchedEffect
@@ -264,6 +293,12 @@ private suspend fun fetchAndSubstituteSvg(credential: StoredCredential, template
             val claims = CredentialUtils.extractClaims(credential)
             SvgTemplateRenderer.substitute(svgText, claims).toByteArray(Charsets.UTF_8)
         }
+    } catch (e: CancellationException) {
+        // The composable left composition (e.g. user navigated away) - not a
+        // real failure. Must propagate, not be swallowed: the LaunchedEffect
+        // key change that triggers this cancellation also re-runs the block
+        // from scratch, so there's nothing to log or fall back to here.
+        throw e
     } catch (e: Exception) {
         Timber.w(e, "Failed to fetch/render SVG template for credential ${credential.id}")
         null

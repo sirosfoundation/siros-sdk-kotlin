@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import org.siros.sdk.credentials.CredentialOffer
+import org.siros.sdk.sample.dcapi.DCAPIProviderRegistration
+import org.siros.sdk.sample.dcapi.WalletSessionHolder
 import org.siros.sdk.credentials.PresentationRecord
 import org.siros.sdk.credentials.SirosException
 import org.siros.sdk.credentials.SignerSecurityProperties
@@ -223,7 +225,24 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private fun observeWalletState() {
         walletStateJob?.cancel()
         walletStateJob = viewModelScope.launch {
-            wallet.state.collect { _walletState.value = it }
+            wallet.state.collect { newState ->
+                _walletState.value = newState
+                // Keep the DC API credential-provider registry (and the
+                // session it presents against) in sync with the wallet's
+                // actual state - see WalletSessionHolder's doc comment for
+                // why the DC API Activity needs this instead of its own
+                // login flow.
+                when (newState) {
+                    is WalletState.Ready -> {
+                        WalletSessionHolder.update(wallet)
+                        DCAPIProviderRegistration.refresh(activity, newState.credentials)
+                    }
+                    else -> {
+                        WalletSessionHolder.update(null)
+                        DCAPIProviderRegistration.clear(activity)
+                    }
+                }
+            }
         }
     }
 
@@ -505,7 +524,14 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         val offer = _pendingIssuanceOffer.value ?: return
         _pendingIssuanceOffer.value = null
         _showAddCredential.value = false
-        viewModelScope.launch { wallet.startIssuanceByOffer(offer) }
+        viewModelScope.launch {
+            try {
+                wallet.startIssuanceByOffer(offer)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start issuance for ${offer.credentialConfigurationId}", e)
+                _errorMessage.value = e.message ?: "Failed to start issuance"
+            }
+        }
     }
 
     /** User cancelled the pending issuance offer. */

@@ -58,6 +58,24 @@
                 android:resource="@xml/usb_device_filter" />
         </activity>
 
+        <!-- W3C Digital Credentials API provider entry point - launched
+             directly by the OS/Credential Manager when the user picks one
+             of this app's registered entries from a browser page's
+             navigator.credentials.get({digital:...}) picker (see
+             org.siros.sdk.sample.dcapi.DCAPIProviderRegistration). No
+             launcher/theme - this is a headless, background-capable
+             Activity, not user-facing UI. -->
+        <activity
+            android:name=".dcapi.DCAPIGetCredentialActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:excludeFromRecents="true">
+            <intent-filter>
+                <action android:name="androidx.credentials.registry.provider.action.GET_CREDENTIAL" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
     </application>
 
 </manifest>

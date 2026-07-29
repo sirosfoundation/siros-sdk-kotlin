@@ -7,6 +7,7 @@ okhttp = "4.12.0"
 nimbus-jose-jwt = "10.0.2"
 androidx-core = "1.15.0"
 androidx-credentials = "1.6.0"
+androidx-credentials-registry = "1.0.0-alpha04"
 play-integrity = "1.4.0"
 androidx-biometric = "1.1.0"
 androidx-security-crypto = "1.1.0"
@@ -25,6 +26,7 @@ dokka = "2.0.0"
 camerax = "1.4.1"
 mlkit-barcode = "17.3.0"
 coil = "2.7.0"
+upokecenter-cbor = "4.5.4"
 
 [libraries]
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
@@ -36,6 +38,11 @@ nimbus-jose-jwt = { module = "com.nimbusds:nimbus-jose-jwt", version.ref = "nimb
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidx-core" }
 androidx-credentials = { module = "androidx.credentials:credentials", version.ref = "androidx-credentials" }
 androidx-credentials-play = { module = "androidx.credentials:credentials-play-services-auth", version.ref = "androidx-credentials" }
+androidx-credentials-registry-provider = { module = "androidx.credentials.registry:registry-provider", version.ref = "androidx-credentials-registry" }
+androidx-credentials-registry-provider-play = { module = "androidx.credentials.registry:registry-provider-play-services", version.ref = "androidx-credentials-registry" }
+androidx-credentials-registry-mdoc = { module = "androidx.credentials.registry:registry-digitalcredentials-mdoc", version.ref = "androidx-credentials-registry" }
+androidx-credentials-registry-openid = { module = "androidx.credentials.registry:registry-digitalcredentials-openid", version.ref = "androidx-credentials-registry" }
+androidx-credentials-registry-sdjwtvc = { module = "androidx.credentials.registry:registry-digitalcredentials-sdjwtvc", version.ref = "androidx-credentials-registry" }
 play-integrity = { module = "com.google.android.play:integrity", version.ref = "play-integrity" }
 androidx-biometric = { module = "androidx.biometric:biometric", version.ref = "androidx-biometric" }
 androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "androidx-security-crypto" }
@@ -57,6 +64,7 @@ camerax-view = { module = "androidx.camera:camera-view", version.ref = "camerax"
 mlkit-barcode = { module = "com.google.mlkit:barcode-scanning", version.ref = "mlkit-barcode" }
 coil-compose = { module = "io.coil-kt:coil-compose", version.ref = "coil" }
 coil-svg = { module = "io.coil-kt:coil-svg", version.ref = "coil" }
+upokecenter-cbor = { module = "com.upokecenter:cbor", version.ref = "upokecenter-cbor" }
 
 kotlin-reflect = { module = "org.jetbrains.kotlin:kotlin-reflect", version.ref = "kotlin" }
 
