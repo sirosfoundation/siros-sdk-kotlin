@@ -244,6 +244,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
     val isLoading by viewModel.isLoading.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val errorMessage by viewModel.errorMessage.collectAsState()
+    val flowErrorDialog by viewModel.flowErrorDialog.collectAsState()
     val presentationHistory by viewModel.presentationHistory.collectAsState()
     val selectedCredential by viewModel.selectedCredential.collectAsState()
     val showHistory by viewModel.showHistory.collectAsState()
@@ -257,6 +258,27 @@ fun WalletScreen(viewModel: WalletViewModel) {
             snackbarHostState.showSnackbar(it)
             viewModel.clearError()
         }
+    }
+
+    // Terminal flow failure (e.g. untrusted issuer) - unlike the Snackbar above,
+    // this needs an explicit user decision rather than an auto-dismissing toast,
+    // since the flow itself is already over and won't resume on its own.
+    flowErrorDialog?.let { info ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = viewModel::dismissFlowError,
+            title = { Text(stringResource(R.string.flow_error_title)) },
+            text = { Text(info.message) },
+            confirmButton = {
+                TextButton(onClick = viewModel::retryLastFlow, enabled = info.canRetry) {
+                    Text(stringResource(R.string.error_retry))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::dismissFlowError) {
+                    Text(stringResource(R.string.flow_cancel))
+                }
+            },
+        )
     }
 
     // Not logged in → show login screen (no app chrome)

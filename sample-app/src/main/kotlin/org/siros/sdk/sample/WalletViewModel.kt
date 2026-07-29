@@ -42,6 +42,9 @@ import org.siros.sdk.wallet.classifyDeepLink
 import uniffi.siros_wscd_manager.FfiR2psConfig
 import uniffi.siros_wscd_manager.FfiWscdConfig
 
+/** A terminal issuance/presentation flow failure, shown as a dialog with Retry/Cancel. */
+data class FlowErrorInfo(val message: String, val canRetry: Boolean)
+
 /**
  * Sample app ViewModel.
  *
@@ -205,6 +208,28 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     fun clearError() { _errorMessage.value = null }
 
+    // ── Flow error feedback (issuance/presentation flows that fail server-side,
+    // e.g. an untrusted issuer) ──────────────────────────────────────────────
+    // Distinct from the transient Snackbar above: a flow error is terminal for
+    // that flow (see SirosWallet's WalletEventListener.onFlowError), so the
+    // user needs an explicit next action rather than a message that auto-dismisses.
+
+    /** Re-runs whichever flow-starting call (QR scan or offer button) last ran, for Retry. */
+    private var lastFlowRetry: (() -> Unit)? = null
+
+    private val _flowErrorDialog = MutableStateFlow<FlowErrorInfo?>(null)
+    val flowErrorDialog: StateFlow<FlowErrorInfo?> = _flowErrorDialog
+
+    fun retryLastFlow() {
+        val retry = lastFlowRetry
+        _flowErrorDialog.value = null
+        retry?.invoke()
+    }
+
+    fun dismissFlowError() {
+        _flowErrorDialog.value = null
+    }
+
     // ── Wallet ──────────────────────────────────────────────────────
 
     private var wallet: SirosWallet = SirosWallet.create(
@@ -311,7 +336,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 if (pendingAuthFlowId == flowId) {
                     pendingAuthFlowId = null
                 }
-                _errorMessage.value = errorMessage
+                _flowErrorDialog.value = FlowErrorInfo(errorMessage, canRetry = lastFlowRetry != null)
             }
         })
     }
@@ -524,6 +549,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         val offer = _pendingIssuanceOffer.value ?: return
         _pendingIssuanceOffer.value = null
         _showAddCredential.value = false
+        startIssuanceByOffer(offer)
+    }
+
+    private fun startIssuanceByOffer(offer: CredentialOffer) {
+        lastFlowRetry = { startIssuanceByOffer(offer) }
         viewModelScope.launch {
             try {
                 wallet.startIssuanceByOffer(offer)
@@ -863,6 +893,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     fun handleQrResult(uri: String) {
         _showQrScanner.value = false
+        lastFlowRetry = { handleQrResult(uri) }
         viewModelScope.launch {
             try {
                 val jUri = try { java.net.URI(uri) } catch (_: Exception) { null }

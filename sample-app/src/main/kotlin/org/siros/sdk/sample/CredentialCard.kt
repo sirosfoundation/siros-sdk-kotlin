@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -68,8 +69,14 @@ fun CredentialCard(
     val meta = credential.metadata
     val bgColor = meta?.backgroundColor?.toComposeColor()
         ?: MaterialTheme.colorScheme.primaryContainer
+    // Falls back to a color derived from the actual bgColor above (not an
+    // unrelated theme token) - a credential that declares backgroundColor
+    // without textColor previously fell back to onPrimaryContainer, which is
+    // only a valid pairing for the theme's OWN primaryContainer, not for an
+    // arbitrary issuer-declared background (e.g. a saturated blue), producing
+    // unreadable text.
     val fgColor = meta?.textColor?.toComposeColor()
-        ?: MaterialTheme.colorScheme.onPrimaryContainer
+        ?: contrastingTextColor(bgColor)
 
     // VCTM SVG template rendering (if the issuer's VCTM published one) - shows
     // a spinner while fetching (never flashes the flat color+logo layout as a
@@ -334,3 +341,7 @@ internal fun String.toComposeColor(): Color? {
         null
     }
 }
+
+/** Black or white, whichever contrasts better against [background] (relative luminance). */
+internal fun contrastingTextColor(background: Color): Color =
+    if (background.luminance() > 0.5f) Color.Black else Color.White
