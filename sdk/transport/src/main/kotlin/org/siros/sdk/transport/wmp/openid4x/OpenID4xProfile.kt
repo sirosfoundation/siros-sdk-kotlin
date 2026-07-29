@@ -157,6 +157,7 @@ data class SignSubFlowParams(
     val nonce: String,
     val audience: String,
     @SerialName("proof_type") val proofType: String? = null,
+    @SerialName("proof_types_supported") val proofTypesSupported: JsonObject? = null,
     @SerialName("parent_flow_id") val parentFlowId: String? = null,
     val count: Int? = null,
     @SerialName("transaction_data") val transactionData: List<TransactionData>? = null,
@@ -222,6 +223,7 @@ data class SignSubFlowResult(
 data class ProofObject(
     @SerialName("proof_type") val proofType: String = ProofType.JWT,
     val jwt: String? = null,
+    val attestation: String? = null,
 )
 
 /** Result of a credential matching request. */

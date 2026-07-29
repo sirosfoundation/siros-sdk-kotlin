@@ -29,6 +29,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -45,6 +46,15 @@ import org.siros.sdk.credentials.PresentationRecord
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.credentials.WalletException
 import org.siros.sdk.keystore.KeystoreManager
+import com.nimbusds.jose.JWEObject
+import com.nimbusds.jose.JWSAlgorithm
+import com.nimbusds.jose.JWSHeader
+import com.nimbusds.jose.crypto.ECDHDecrypter
+import com.nimbusds.jose.crypto.ECDSASigner
+import com.nimbusds.jose.jwk.Curve
+import com.nimbusds.jose.jwk.gen.ECKeyGenerator
+import com.nimbusds.jwt.JWTClaimsSet
+import com.nimbusds.jwt.SignedJWT
 import org.siros.sdk.transport.engine.CredentialNotificationEvent
 import org.siros.sdk.transport.engine.CredentialResult
 import org.siros.sdk.transport.engine.CredentialMatch
@@ -910,6 +920,88 @@ class SirosWalletTest {
     }
 
     @Test
+    fun connectEngine_signRequest_generates_attestation_proof_when_jwt_not_supported() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.generateKeyAttestation(nonce = "nonce-1", count = 5) } returns "attestation-jwt"
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to keystore,
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sign",
+                action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "aud-1",
+                    nonce = "nonce-1",
+                    count = 5,
+                    proofTypesSupported = buildJsonObject { putJsonObject("attestation") {} },
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        // A real external mdoc issuer (this test's motivating case) lists
+        // only "attestation" in proof_types_supported - the wallet MUST NOT
+        // fall back to jwt (go-wallet-backend rejects with "unsupported
+        // proof type" if it does), and must produce exactly ONE proof
+        // covering the whole batch, not one per credential.
+        coVerify(exactly = 1) { keystore.generateKeyAttestation(nonce = "nonce-1", count = 5) }
+        coVerify(exactly = 0) { keystore.generateProof(any(), any(), any()) }
+        verify(exactly = 1) {
+            engine.sendSignResponse(
+                "flow-sign",
+                proofs = listOf(ProofObject(proofType = "attestation", attestation = "attestation-jwt")),
+                messageId = null,
+            )
+        }
+    }
+
+    @Test
+    fun connectEngine_signRequest_prefers_jwt_when_both_proof_types_supported() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.generateProof(audience = "aud-1", nonce = "nonce-1") } returns "proof-jwt"
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to keystore,
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sign",
+                action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "aud-1",
+                    nonce = "nonce-1",
+                    proofTypesSupported = buildJsonObject {
+                        putJsonObject("jwt") {}
+                        putJsonObject("attestation") {}
+                    },
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        // Existing issuers (ours included) that already support jwt must see
+        // no behavior change from adding attestation support.
+        coVerify(exactly = 1) { keystore.generateProof(audience = "aud-1", nonce = "nonce-1") }
+        coVerify(exactly = 0) { keystore.generateKeyAttestation(any(), any()) }
+    }
+
+    @Test
     fun connectEngine_matchRequest_uses_listener_selection_tracks_history_and_sends_matches() = runTest(dispatcher) {
         val matchFlow = MutableSharedFlow<MatchRequestMessage>()
         val listener = mockk<WalletEventListener>()
@@ -970,6 +1062,282 @@ class SirosWalletTest {
         assertEquals(1, wallet.presentationHistory.size)
         assertEquals(listOf("cred-2"), wallet.presentationHistory.single().credentialIds)
         assertEquals(listOf("Credential Two"), wallet.presentationHistory.single().credentialNames)
+    }
+
+    // ── DC API (Digital Credentials API) ─────────────────────────────
+
+    @Test
+    fun handleDCAPIRequest_unsignedRequest_signsSdJwtAndReturnsUnencryptedVpToken() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
+        val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.signVpToken(any(), any(), any(), any()) } returns "signed-vp-token"
+        val listener = mockk<WalletEventListener>()
+        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf("cred-1")
+        val store = FakeCredentialStore(mutableListOf(
+            StoredCredential(
+                id = "cred-1",
+                format = "dc+sd-jwt",
+                raw = "issuer.payload.sig~disclosure~",
+                metadata = CredentialMetadata(name = "Diploma", vct = "urn:example:vct"),
+            ),
+        ))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "apiClient" to apiClient,
+            "keystore" to keystore,
+            "credentialStore" to store,
+            "eventListener" to listener,
+            "trustCache" to TrustCache(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+
+        val requestJson = buildJsonObject {
+            put("response_type", "vp_token")
+            put("nonce", "dc-nonce-1")
+            put("response_mode", "dc_api")
+            putJsonObject("dcql_query") {
+                putJsonArray("credentials") {
+                    add(buildJsonObject {
+                        put("id", "query1")
+                        put("format", "dc+sd-jwt")
+                    })
+                }
+            }
+        }.toString()
+
+        val result = wallet.handleDCAPIRequest(requestJson, origin = "https://relying-party.example")
+
+        coVerify(exactly = 1) {
+            keystore.signVpToken(
+                credential = "issuer.payload.sig~disclosure~",
+                disclosedClaims = any(),
+                nonce = "dc-nonce-1",
+                audience = "origin:https://relying-party.example",
+            )
+        }
+        assertEquals(listOf("cred-1"), result.credentialIds)
+        val parsed = Json.parseToJsonElement(result.responseJson).jsonObject
+        assertEquals("signed-vp-token", parsed["vp_token"]?.jsonObject?.get("query1")?.jsonPrimitive?.content)
+        assertEquals(1, wallet.presentationHistory.size)
+    }
+
+    @Test
+    fun handleDCAPIRequest_mdocCredential_usesSignMdocPresentationForDCAPI() = runTest(dispatcher) {
+        // Production code decodes cred.raw via android.util.Base64 before
+        // calling the keystore - the Android SDK stub jar throws on any real
+        // call in a plain (non-Robolectric) JUnit test, so it must be
+        // statically mocked here even though the decoded bytes themselves
+        // are irrelevant (the keystore call itself is mocked below).
+        io.mockk.mockkStatic(android.util.Base64::class)
+        every { android.util.Base64.decode(any<String>(), any()) } returns "fake-cbor".toByteArray()
+        every { android.util.Base64.encodeToString(any(), any()) } returns "ZGV2aWNlLXJlc3BvbnNl"
+        try {
+            val apiClient = mockk<BackendApiClient>()
+            coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
+            val keystore = mockk<KeystoreManager>()
+            coEvery {
+                keystore.signMdocPresentationForDCAPI(any(), any(), any(), any(), any())
+            } returns "device-response".toByteArray()
+            val listener = mockk<WalletEventListener>()
+            coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf("cred-mdl")
+            val store = FakeCredentialStore(mutableListOf(
+                StoredCredential(
+                    id = "cred-mdl",
+                    format = "mso_mdoc",
+                    raw = "ZmFrZS1jYm9y",
+                    metadata = CredentialMetadata(name = "mDL", doctype = "org.iso.18013.5.1.mDL"),
+                ),
+            ))
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
+                "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                "apiClient" to apiClient,
+                "keystore" to keystore,
+                "credentialStore" to store,
+                "eventListener" to listener,
+                "trustCache" to TrustCache(),
+                "_presentationHistory" to mutableListOf<PresentationRecord>(),
+            )
+
+            val requestJson = buildJsonObject {
+                put("nonce", "dc-nonce-mdl")
+                put("response_mode", "dc_api")
+            }.toString()
+
+            wallet.handleDCAPIRequest(requestJson, origin = "https://relying-party.example")
+
+            coVerify(exactly = 1) {
+                keystore.signMdocPresentationForDCAPI(
+                    credentialBytes = any(),
+                    disclosedClaims = any(),
+                    nonce = "dc-nonce-mdl",
+                    origin = "https://relying-party.example",
+                    encryptionPublicJwkThumbprint = null,
+                )
+            }
+        } finally {
+            io.mockk.unmockkStatic(android.util.Base64::class)
+        }
+    }
+
+    @Test
+    fun handleDCAPIRequest_userDeclines_throwsWalletException() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
+        val listener = mockk<WalletEventListener>()
+        coEvery { listener.onCredentialSelectionRequired(any()) } returns emptyList()
+        val store = FakeCredentialStore(mutableListOf(
+            StoredCredential(id = "cred-1", format = "dc+sd-jwt", raw = "raw", metadata = CredentialMetadata(name = "X")),
+        ))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "apiClient" to apiClient,
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "credentialStore" to store,
+            "eventListener" to listener,
+            "trustCache" to TrustCache(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+
+        var thrown: Throwable? = null
+        try {
+            wallet.handleDCAPIRequest(
+                buildJsonObject { put("nonce", "n") }.toString(),
+                origin = "https://relying-party.example",
+            )
+        } catch (e: Throwable) {
+            thrown = e
+        }
+        assertTrue(thrown is WalletException)
+    }
+
+    @Test
+    fun handleDCAPIRequest_dcApiJwtResponseMode_encryptsResponse() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
+        val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.signVpToken(any(), any(), any(), any()) } returns "signed-vp-token"
+        val listener = mockk<WalletEventListener>()
+        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf("cred-1")
+        val store = FakeCredentialStore(mutableListOf(
+            StoredCredential(id = "cred-1", format = "dc+sd-jwt", raw = "raw", metadata = CredentialMetadata(name = "X")),
+        ))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "apiClient" to apiClient,
+            "keystore" to keystore,
+            "credentialStore" to store,
+            "eventListener" to listener,
+            "trustCache" to TrustCache(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+
+        val verifierEncKey = ECKeyGenerator(Curve.P_256)
+            .keyID("enc-1")
+            .keyUse(com.nimbusds.jose.jwk.KeyUse.ENCRYPTION)
+            .generate()
+        val requestJson = buildJsonObject {
+            put("nonce", "dc-nonce-2")
+            put("response_mode", "dc_api.jwt")
+            putJsonObject("client_metadata") {
+                putJsonObject("jwks") {
+                    putJsonArray("keys") {
+                        add(Json.parseToJsonElement(
+                            verifierEncKey.toPublicJWK().toJSONString()
+                        ))
+                    }
+                }
+            }
+        }.toString()
+
+        val result = wallet.handleDCAPIRequest(requestJson, origin = "https://relying-party.example")
+
+        val parsed = Json.parseToJsonElement(result.responseJson).jsonObject
+        val jwe = parsed["response"]?.jsonPrimitive?.content
+        assertTrue("response must be a JWE, not a plain vp_token", jwe != null)
+        val jweObject = JWEObject.parse(jwe)
+        jweObject.decrypt(ECDHDecrypter(verifierEncKey))
+        assertTrue(jweObject.payload.toString().contains("signed-vp-token"))
+    }
+
+    @Test
+    fun handleDCAPIRequest_signedRequest_verifiesJwsAndUsesPayloadFields() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
+        val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.signVpToken(any(), any(), any(), any()) } returns "signed-vp-token"
+        val listener = mockk<WalletEventListener>()
+        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf("cred-1")
+        val store = FakeCredentialStore(mutableListOf(
+            StoredCredential(id = "cred-1", format = "dc+sd-jwt", raw = "raw", metadata = CredentialMetadata(name = "X")),
+        ))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "apiClient" to apiClient,
+            "keystore" to keystore,
+            "credentialStore" to store,
+            "eventListener" to listener,
+            "trustCache" to TrustCache(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+
+        val verifierSigningKey = ECKeyGenerator(Curve.P_256).keyID("verifier-key-1").generate()
+        val header = JWSHeader.Builder(JWSAlgorithm.ES256).jwk(verifierSigningKey.toPublicJWK()).build()
+        val claims = JWTClaimsSet.Builder()
+            .claim("client_id", "https://relying-party.example")
+            .claim("nonce", "dc-nonce-signed")
+            .claim("response_mode", "dc_api")
+            .build()
+        val signedJwt = SignedJWT(header, claims)
+        signedJwt.sign(ECDSASigner(verifierSigningKey))
+
+        val requestJson = buildJsonObject { put("request", signedJwt.serialize()) }.toString()
+
+        wallet.handleDCAPIRequest(requestJson, origin = "https://relying-party.example")
+
+        coVerify(exactly = 1) {
+            keystore.signVpToken(any(), any(), nonce = "dc-nonce-signed", audience = "origin:https://relying-party.example")
+        }
+        // Trust evaluation must have used the JAR's own client_id (from its
+        // verified payload), not the bare origin, since a signed request DOES
+        // assert an explicit client_id.
+        coVerify(exactly = 1) {
+            apiClient.evaluateTrust(match { it["subject"]?.jsonObject?.get("id")?.jsonPrimitive?.content == "https://relying-party.example" })
+        }
+    }
+
+    @Test
+    fun handleDCAPIRequest_signedRequestWithTamperedSignature_throws() = runTest(dispatcher) {
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+        )
+
+        val legitKey = ECKeyGenerator(Curve.P_256).keyID("legit").generate()
+        val attackerKey = ECKeyGenerator(Curve.P_256).keyID("attacker").generate()
+        // Header advertises the legitimate key, but the JWT is actually
+        // signed by a different (attacker-controlled) key - signature
+        // verification against the advertised key must fail.
+        val header = JWSHeader.Builder(JWSAlgorithm.ES256).jwk(legitKey.toPublicJWK()).build()
+        val claims = JWTClaimsSet.Builder().claim("nonce", "n").build()
+        val signedJwt = SignedJWT(header, claims)
+        signedJwt.sign(ECDSASigner(attackerKey))
+
+        var thrown: Throwable? = null
+        try {
+            wallet.handleDCAPIRequest(
+                buildJsonObject { put("request", signedJwt.serialize()) }.toString(),
+                origin = "https://relying-party.example",
+            )
+        } catch (e: Throwable) {
+            thrown = e
+        }
+        assertTrue(thrown is org.siros.sdk.wallet.dcapi.DCAPIRequestException)
     }
 
     private fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {

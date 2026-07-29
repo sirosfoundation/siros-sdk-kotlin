@@ -594,6 +594,40 @@ class JweKeystore(
         }
     }
 
+    override suspend fun generateKeyAttestation(nonce: String, count: Int): String = mutex.withLock {
+        requireUnlocked()
+        require(count >= 1) { "count must be >= 1" }
+        // Inlined key generation (not generateKeypairs(), which also takes
+        // this mutex - Mutex isn't reentrant).
+        val generated = (1..count).map {
+            val ecKey = ECKeyGenerator(Curve.P_256).generate()
+            val keyId = ecKey.computeThumbprint().toString()
+            val keyWithId = ECKey.Builder(ecKey).keyID(keyId).build()
+            keys[keyId] = keyWithId
+            keyWithId
+        }
+        // Self-attestation: this is a pure in-memory software keystore with
+        // no hardware backing or user-authentication gate, so the only
+        // truthful claim is the baseline "basic" attack-potential level.
+        val signingKey = generated.first()
+
+        val claims = JWTClaimsSet.Builder()
+            .issueTime(Date())
+            .claim("nonce", nonce)
+            .claim("attested_keys", generated.map { it.toPublicJWK().toJSONObject() })
+            .claim("key_storage", listOf("iso_18045_basic"))
+            .build()
+
+        val header = JWSHeader.Builder(JWSAlgorithm.ES256)
+            .type(com.nimbusds.jose.JOSEObjectType("key-attestation+jwt"))
+            .jwk(signingKey.toPublicJWK())
+            .build()
+
+        val jwt = SignedJWT(header, claims)
+        jwt.sign(ECDSASigner(signingKey))
+        jwt.serialize()
+    }
+
     private fun requireUnlocked() {
         if (!isUnlocked) throw KeystoreException("Keystore is locked")
     }

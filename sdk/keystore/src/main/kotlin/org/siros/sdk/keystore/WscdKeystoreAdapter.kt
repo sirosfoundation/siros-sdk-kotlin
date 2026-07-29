@@ -265,7 +265,7 @@ class WscdKeystoreAdapter(
             ?: throw IllegalStateException("No keys available for mDoc signing")
 
         val builder = MdocDeviceResponseBuilder(
-            issuerSignedBytes = credentialBytes,
+            credentialBytes = credentialBytes,
             algorithm = key.algorithm,
         )
 
@@ -274,6 +274,32 @@ class WscdKeystoreAdapter(
             audience = audience,
             responseUri = responseUri,
             verifierJwkThumbprint = verifierJwkThumbprint,
+            disclosedClaims = disclosedClaims,
+            signer = { data -> signer.sign(key.keyId, data) },
+        )
+    }
+
+    override suspend fun signMdocPresentationForDCAPI(
+        credentialBytes: ByteArray,
+        disclosedClaims: List<String>?,
+        nonce: String,
+        origin: String,
+        encryptionPublicJwkThumbprint: String?,
+    ): ByteArray {
+        checkUnlocked()
+        val keys = signer.listKeys()
+        val key = keys.firstOrNull()
+            ?: throw IllegalStateException("No keys available for mDoc DC API signing")
+
+        val builder = MdocDeviceResponseBuilder(
+            credentialBytes = credentialBytes,
+            algorithm = key.algorithm,
+        )
+
+        return builder.buildForDCAPI(
+            nonce = nonce,
+            origin = origin,
+            encryptionPublicJwkThumbprint = encryptionPublicJwkThumbprint,
             disclosedClaims = disclosedClaims,
             signer = { data -> signer.sign(key.keyId, data) },
         )
@@ -361,10 +387,85 @@ class WscdKeystoreAdapter(
         }
     }
 
+    override suspend fun generateKeyAttestation(nonce: String, count: Int): String {
+        checkUnlocked()
+        val keypairs = generateKeypairs(count)
+        // Self-attestation: signed by one of the freshly generated keys
+        // itself, matching the spec's "issued... by the Wallet's key
+        // storage component itself" option - there's no separate wallet
+        // provider or hardware attestation authority in this WSCD plugin.
+        val signingKey = keypairs.first()
+        val securityProps = try {
+            signer.securityProperties(signingKey.keyId)
+        } catch (_: Exception) {
+            null
+        }
+
+        val header = JWSHeader.Builder(JWSAlgorithm.ES256)
+            .type(com.nimbusds.jose.JOSEObjectType("key-attestation+jwt"))
+            .jwk(com.nimbusds.jose.jwk.JWK.parse(signingKey.publicKeyJWK.toString()))
+            .build()
+
+        val claimsBuilder = JWTClaimsSet.Builder()
+            .issueTime(Date())
+            .claim("nonce", nonce)
+            .claim(
+                "attested_keys",
+                keypairs.map { com.nimbusds.jose.jwk.JWK.parse(it.publicKeyJWK.toString()).toJSONObject() },
+            )
+        val keyStorage = securityProps?.keyStorage
+            ?.takeIf { it.isNotEmpty() }
+            ?.map { toIso18045AttackPotential(it) }
+            ?.distinct()
+            ?: listOf("iso_18045_basic")
+        claimsBuilder.claim("key_storage", keyStorage)
+        securityProps?.userAuthentication
+            ?.takeIf { it.isNotEmpty() }
+            ?.mapNotNull { toIso18045AttackPotential(it, omitIfNone = true) }
+            ?.distinct()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { claimsBuilder.claim("user_authentication", it) }
+        val claims = claimsBuilder.build()
+
+        val signingInput = "${base64Url(header.toJSONObject())}.${base64Url(claims.toJSONObject())}"
+        val signature = signer.sign(signingKey.keyId, signingInput.toByteArray(Charsets.UTF_8))
+        return "$signingInput.${base64UrlEncode(signature)}"
+    }
+
     // ── Private helpers ─────────────────────────────────────────────
 
     private fun checkUnlocked() {
         if (!isUnlocked) throw IllegalStateException("Keystore is locked")
+    }
+
+    /**
+     * Translate SIROS's internal WSCD key-storage/user-authentication
+     * vocabulary (`software`/`hardware`/`trusted_execution`/`remote_hsm`,
+     * see [SignerSecurityProperties]) into the OID4VCI Key Attestation JWT's
+     * registered `iso_18045_*` attack-potential-resistance values.
+     *
+     * Confirmed via a real conformance-test issuer that passing the raw
+     * internal string through unmapped (e.g. `"software"`) produces a
+     * `key_storage`/`user_authentication` value the issuer doesn't
+     * recognize - independently verified that our attestation JWT's
+     * signature itself is cryptographically valid, so an unrecognized enum
+     * value reaching a strict validator is the far more likely explanation
+     * for a rejection than the signature math.
+     *
+     * Mappings are necessarily approximate (SIROS's vocabulary is coarser
+     * than the ISO 18045 scale) - conservative/lower tiers are preferred
+     * over overclaiming resistance we can't actually back up.
+     */
+    private fun toIso18045AttackPotential(raw: String, omitIfNone: Boolean = false): String? {
+        if (raw.startsWith("iso_18045_")) return raw // already spec-compliant, pass through
+        return when (raw.lowercase()) {
+            "none" -> if (omitIfNone) null else "iso_18045_basic"
+            "software" -> "iso_18045_basic"
+            "hardware" -> "iso_18045_moderate"
+            "trusted_execution" -> "iso_18045_enhanced-basic"
+            "remote_hsm" -> "iso_18045_high"
+            else -> "iso_18045_basic"
+        }
     }
 
     private fun jwsAlgorithm(algorithm: String): JWSAlgorithm {

@@ -116,6 +116,30 @@ interface KeystoreManager {
         throw UnsupportedOperationException("mDoc presentation not supported by this keystore")
     }
 
+    /**
+     * Build an mDoc DeviceResponse (ISO 18013-5) for OID4VP presentation via
+     * the W3C Digital Credentials API, using the `OpenID4VPDCAPIHandover`
+     * session transcript (OpenID4VP 1.0 Appendix B.2.6) instead of
+     * [signMdocPresentation]'s redirect-flow `OpenID4VPHandover`.
+     *
+     * @param credentialBytes Raw CBOR bytes of the IssuerSigned structure.
+     * @param disclosedClaims Claim names to disclose (null = all).
+     * @param nonce Verifier-provided nonce.
+     * @param origin The verified browser/page origin that called `navigator.credentials.get()`.
+     * @param encryptionPublicJwkThumbprint JWK thumbprint of the verifier's response-encryption
+     *   key (present when `response_mode=dc_api.jwt`), null otherwise.
+     * @return Base64url-encoded DeviceResponse CBOR bytes.
+     */
+    suspend fun signMdocPresentationForDCAPI(
+        credentialBytes: ByteArray,
+        disclosedClaims: List<String>?,
+        nonce: String,
+        origin: String,
+        encryptionPublicJwkThumbprint: String?,
+    ): ByteArray {
+        throw UnsupportedOperationException("mDoc DC API presentation not supported by this keystore")
+    }
+
     /** Export the encrypted container for backend sync. */
     suspend fun exportEncryptedContainer(): ByteArray
 
@@ -157,6 +181,24 @@ interface KeystoreManager {
      * Default returns null (security properties not available).
      */
     suspend fun securityProperties(): SignerSecurityProperties? = null
+
+    /**
+     * Generate [count] fresh keypairs and build a single OID4VCI `attestation`
+     * proof-type Key Attestation JWT (spec: "Key Attestation in JWT format",
+     * proof type Appendix "attestation Proof Type") covering all of them via
+     * the `attested_keys` claim.
+     *
+     * Unlike the `jwt` proof type (one proof of possession per credential in
+     * the batch), the spec requires exactly one Key Attestation JWT per
+     * request regardless of [count] - the issuer is expected to mint one
+     * credential per entry in `attested_keys`.
+     *
+     * Default implementation throws [UnsupportedOperationException] so
+     * existing implementations continue to compile without attestation support.
+     */
+    suspend fun generateKeyAttestation(nonce: String, count: Int): String {
+        throw UnsupportedOperationException("generateKeyAttestation not supported by this keystore")
+    }
 }
 
 data class KeyInfo(

@@ -29,6 +29,9 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.serialization.cbor)
     implementation(libs.kotlinx.coroutines.core)
+    // Real CBOR codec for ISO 18013-5 mdoc (IssuerSigned/DeviceResponse parsing,
+    // COSE_Sign1 construction) - replaces hand-rolled byte-packing.
+    implementation(libs.upokecenter.cbor)
     implementation(libs.nimbus.jose.jwt)
     implementation(libs.play.integrity)
     implementation(libs.timber)

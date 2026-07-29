@@ -255,4 +255,122 @@ class CredentialUtilsTest {
         assertEquals("#000000", metadata.backgroundColor)
         assertNull(metadata.claims)
     }
+
+    // ── mdoc (mso_mdoc) ───────────────────────────────────────────────
+
+    private val mdocDocType = "org.iso.18013.5.1.mDL"
+    private val mdocNamespace = "org.iso.18013.5.1"
+
+    private fun buildTaggedItem(digestId: Long, elementIdentifier: String, elementValue: String): com.upokecenter.cbor.CBORObject {
+        val item = com.upokecenter.cbor.CBORObject.NewMap()
+        item[com.upokecenter.cbor.CBORObject.FromObject("digestID")] = com.upokecenter.cbor.CBORObject.FromObject(digestId)
+        item[com.upokecenter.cbor.CBORObject.FromObject("random")] = com.upokecenter.cbor.CBORObject.FromObject(ByteArray(16))
+        item[com.upokecenter.cbor.CBORObject.FromObject("elementIdentifier")] = com.upokecenter.cbor.CBORObject.FromObject(elementIdentifier)
+        item[com.upokecenter.cbor.CBORObject.FromObject("elementValue")] = com.upokecenter.cbor.CBORObject.FromObject(elementValue)
+        return com.upokecenter.cbor.CBORObject.FromObjectAndTag(item.EncodeToBytes(), 24)
+    }
+
+    /** Build a synthetic mdoc credential's raw (base64url) bytes: a DeviceResponse-shaped envelope. */
+    private fun buildMdocRaw(): String {
+        val items = com.upokecenter.cbor.CBORObject.NewArray()
+        items.Add(buildTaggedItem(0, "family_name", "Doe"))
+        items.Add(buildTaggedItem(1, "given_name", "Jane"))
+
+        val nameSpaces = com.upokecenter.cbor.CBORObject.NewMap()
+        nameSpaces[com.upokecenter.cbor.CBORObject.FromObject(mdocNamespace)] = items
+
+        val issuerAuth = com.upokecenter.cbor.CBORObject.NewArray()
+        repeat(4) { issuerAuth.Add(com.upokecenter.cbor.CBORObject.FromObject(ByteArray(0))) }
+
+        val issuerSigned = com.upokecenter.cbor.CBORObject.NewMap()
+        issuerSigned[com.upokecenter.cbor.CBORObject.FromObject("nameSpaces")] = nameSpaces
+        issuerSigned[com.upokecenter.cbor.CBORObject.FromObject("issuerAuth")] = issuerAuth
+
+        val document = com.upokecenter.cbor.CBORObject.NewMap()
+        document[com.upokecenter.cbor.CBORObject.FromObject("docType")] = com.upokecenter.cbor.CBORObject.FromObject(mdocDocType)
+        document[com.upokecenter.cbor.CBORObject.FromObject("issuerSigned")] = issuerSigned
+
+        val documents = com.upokecenter.cbor.CBORObject.NewArray()
+        documents.Add(document)
+
+        val envelope = com.upokecenter.cbor.CBORObject.NewMap()
+        envelope[com.upokecenter.cbor.CBORObject.FromObject("documents")] = documents
+        envelope[com.upokecenter.cbor.CBORObject.FromObject("status")] = com.upokecenter.cbor.CBORObject.FromObject(0)
+
+        return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(envelope.EncodeToBytes())
+    }
+
+    @Test
+    fun `extractClaims dispatches to mdoc parsing for mso_mdoc format`() {
+        val cred = StoredCredential(
+            id = "cred-1",
+            format = "mso_mdoc",
+            raw = buildMdocRaw(),
+            metadata = CredentialMetadata(
+                doctype = mdocDocType,
+                claims = listOf(
+                    ClaimMeta(path = listOf(mdocNamespace, "family_name"), label = "Family Name", mandatory = true),
+                ),
+            ),
+        )
+
+        val claims = CredentialUtils.extractClaims(cred)
+        assertEquals(2, claims.size)
+        val familyName = claims.first { it.key == "$mdocNamespace.family_name" }
+        assertEquals("Family Name", familyName.label)
+        assertEquals("Doe", familyName.value)
+        assertTrue(familyName.mandatory)
+
+        val givenName = claims.first { it.key == "$mdocNamespace.given_name" }
+        // No ClaimMeta entry for given_name - falls back to formatted key.
+        assertEquals("Given Name", givenName.label)
+        assertEquals("Jane", givenName.value)
+    }
+
+    @Test
+    fun `buildMdocMetadata populates doctype and claims from MDDL schema`() {
+        val offer = CredentialOffer(
+            credentialConfigurationId = "mdl",
+            credentialIssuerIdentifier = "https://issuer.example.com",
+            credentialName = "Driving Licence (offer)",
+            issuerName = "Test Issuer",
+        )
+        val schema = MddlSchema(
+            format = "mso_mdoc",
+            doctype = mdocDocType,
+            display = listOf(MddlDisplay(locale = java.util.Locale.getDefault().toLanguageTag(), name = "Driving Licence")),
+            claims = mapOf(
+                mdocNamespace to mapOf(
+                    "family_name" to MddlClaimMeta(
+                        display = listOf(MddlClaimDisplay(locale = java.util.Locale.getDefault().toLanguageTag(), name = "Family Name")),
+                        mandatory = true,
+                        valueType = "tstr",
+                    ),
+                ),
+            ),
+        )
+
+        val metadata = CredentialUtils.buildMdocMetadata(offer = offer, mddlSchema = schema)
+        assertEquals("Driving Licence", metadata.name)
+        assertEquals(mdocDocType, metadata.doctype)
+        assertNull(metadata.vct)
+        assertEquals(1, metadata.claims?.size)
+        assertEquals(listOf(mdocNamespace, "family_name"), metadata.claims!![0].path)
+        assertEquals("Family Name", metadata.claims!![0].label)
+        assertTrue(metadata.claims!![0].mandatory)
+    }
+
+    @Test
+    fun `buildMdocMetadata falls back to offer when no MDDL schema`() {
+        val offer = CredentialOffer(
+            credentialConfigurationId = "mdl",
+            credentialIssuerIdentifier = "https://issuer.example.com",
+            credentialName = "Driving Licence (offer)",
+            issuerName = "Test Issuer",
+        )
+        val metadata = CredentialUtils.buildMdocMetadata(offer = offer)
+        assertEquals("Driving Licence (offer)", metadata.name)
+        assertNull(metadata.doctype)
+        assertNull(metadata.claims)
+    }
 }

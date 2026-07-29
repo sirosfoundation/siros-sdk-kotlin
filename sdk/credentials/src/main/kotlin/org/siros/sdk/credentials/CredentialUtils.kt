@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.siros.sdk.credentials.mdoc.MdocCbor
 import timber.log.Timber
 import java.util.Base64
 
@@ -76,12 +77,13 @@ object CredentialUtils {
 
     /**
      * Extract user-facing claims from a credential, optionally using VCTM
-     * claim metadata for display labels.
+     * (or, for `mso_mdoc` credentials, MDDL) claim metadata for display labels.
      *
      * @param credential the stored credential
      * @return list of [DisplayClaim] with label, value, and optional description
      */
     fun extractClaims(credential: StoredCredential): List<DisplayClaim> {
+        if (credential.format == "mso_mdoc") return extractMdocClaims(credential)
         val payload = parseJwtPayload(credential.raw) ?: return emptyList()
         val vctmClaims = credential.metadata?.claims.orEmpty()
 
@@ -117,6 +119,92 @@ object CredentialUtils {
             }
 
         return vctmResolved + uncovered
+    }
+
+    /**
+     * mdoc analogue of [extractClaims]: parse a stored mdoc credential's
+     * REAL disclosed namespace/element values (via [MdocCbor], not
+     * [parseJwtPayload] which assumes a JWT-shaped `raw`) into [DisplayClaim]s,
+     * using MDDL claim metadata (`credential.metadata.claims`, populated by
+     * [buildMdocMetadata]) for labels/descriptions when available.
+     *
+     * Claim keys/paths use the `["namespace", "elementIdentifier"]` shape,
+     * consistent with how [buildMdocMetadata] populates [ClaimMeta.path].
+     */
+    fun extractMdocClaims(credential: StoredCredential): List<DisplayClaim> {
+        val document = try {
+            MdocCbor.parseStoredCredential(Base64.getUrlDecoder().decode(padBase64(credential.raw)))
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to parse mdoc credential for claim extraction")
+            return emptyList()
+        }
+
+        val claimMetaByPath = credential.metadata?.claims.orEmpty()
+            .associateBy { it.path.joinToString("/") }
+
+        return document.issuerSigned.nameSpaces.flatMap { (namespace, items) ->
+            items.map { entry ->
+                val elementId = entry.item.elementIdentifier
+                val meta = claimMetaByPath["$namespace/$elementId"]
+                DisplayClaim(
+                    key = "$namespace.$elementId",
+                    label = meta?.label ?: formatClaimKey(elementId),
+                    value = formatCborValue(entry.item.elementValue),
+                    description = meta?.description,
+                    mandatory = meta?.mandatory ?: false,
+                )
+            }
+        }
+    }
+
+    /**
+     * Build [CredentialMetadata] for an mdoc credential from its MDDL schema -
+     * the mdoc analogue of [buildMetadata]. Populates [CredentialMetadata.doctype]
+     * (unused for SD-JWT credentials) instead of [CredentialMetadata.vct].
+     */
+    fun buildMdocMetadata(offer: CredentialOffer, mddlSchema: MddlSchema? = null): CredentialMetadata {
+        val locale = java.util.Locale.getDefault().toLanguageTag()
+        val display = mddlSchema?.display?.let { displays ->
+            displays.find { it.locale == locale }
+                ?: displays.find { it.locale.startsWith(locale.take(2)) }
+                ?: displays.firstOrNull()
+        }
+
+        val claims = mddlSchema?.claims?.flatMap { (namespace, elements) ->
+            elements.map { (elementId, meta) ->
+                val claimDisplay = meta.display?.let { displays ->
+                    displays.find { it.locale == locale }
+                        ?: displays.find { it.locale.startsWith(locale.take(2)) }
+                        ?: displays.firstOrNull()
+                }
+                ClaimMeta(
+                    path = listOf(namespace, elementId),
+                    label = claimDisplay?.name,
+                    mandatory = meta.mandatory,
+                )
+            }
+        }
+
+        return CredentialMetadata(
+            name = display?.name ?: offer.credentialName,
+            description = display?.description ?: offer.credentialDescription,
+            issuer = IssuerInfo(name = offer.issuerName, url = offer.credentialIssuerIdentifier),
+            doctype = mddlSchema?.doctype,
+            backgroundColor = display?.backgroundColor ?: offer.backgroundColor,
+            textColor = display?.textColor ?: offer.textColor,
+            logo = display?.logo?.let { LogoInfo(uri = it.uri, altText = it.altText) }
+                ?: offer.logoUri?.let { LogoInfo(uri = it) },
+            claims = claims,
+        )
+    }
+
+    /** Format a decoded CBOR element value for display. */
+    private fun formatCborValue(value: com.upokecenter.cbor.CBORObject): String {
+        return when (value.type) {
+            com.upokecenter.cbor.CBORType.TextString -> value.AsString()
+            com.upokecenter.cbor.CBORType.ByteString -> "<${value.GetByteString().size} bytes>"
+            else -> value.toString()
+        }
     }
 
     /**

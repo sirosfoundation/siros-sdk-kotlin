@@ -49,8 +49,12 @@ import org.siros.sdk.credentials.CredentialConfiguration
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.Vctm
 import org.siros.sdk.credentials.VctmFetcher
+import org.siros.sdk.credentials.MddlSchemaFetcher
+import org.siros.sdk.keystore.DCAPIResponseEncryption
 import org.siros.sdk.keystore.JweKeystore
 import org.siros.sdk.keystore.KeystoreManager
+import org.siros.sdk.wallet.dcapi.DCAPIRequest
+import org.siros.sdk.wallet.dcapi.DCAPIRequestParser
 import org.siros.sdk.transport.CredentialNotifier
 import org.siros.sdk.transport.engine.CredentialMatch
 import org.siros.sdk.transport.engine.CredentialNotificationEvent
@@ -638,12 +642,41 @@ class SirosWallet private constructor(
             var changed = false
             for (cred in credentialStore.getAll()) {
                 if (cred.metadata != null) continue
+                val issuerIdent = cred.credentialIssuerIdentifier
+                val configId = cred.credentialConfigurationId
+
+                if (cred.format == "mso_mdoc") {
+                    // mdoc has no JWT iat/exp claims to re-derive here (ISO
+                    // 18013-5 validity lives in the MSO's validityInfo, inside
+                    // issuerAuth - deliberately not parsed by this wallet, see
+                    // MdocCbor's doc comment: MSO parsing is a verifier-side
+                    // concern this holder doesn't need). Only metadata (via
+                    // MDDLSchema) is re-hydrated here.
+                    if (issuerIdent.isNullOrBlank() || configId.isNullOrBlank()) continue
+                    val mddlSchema = try {
+                        mddlSchemaFetcher.fetch(issuerUrl = issuerIdent, scope = configId)
+                    } catch (e: Exception) {
+                        Timber.w(e, "Failed to re-fetch MDDL schema for reloaded credential ${cred.id}")
+                        null
+                    } ?: continue
+                    val metadata = CredentialUtils.buildMdocMetadata(
+                        offer = CredentialOffer(
+                            credentialConfigurationId = configId,
+                            credentialIssuerIdentifier = issuerIdent,
+                            credentialName = cred.format,
+                            issuerName = issuerIdent,
+                        ),
+                        mddlSchema = mddlSchema,
+                    )
+                    credentialStore.save(cred.copy(metadata = metadata))
+                    changed = true
+                    continue
+                }
+
                 val payload = CredentialUtils.parseJwtPayload(cred.raw) ?: continue
                 val issuedAt = payload["iat"]?.jsonPrimitive?.longOrNull
                 val expiresAt = payload["exp"]?.jsonPrimitive?.longOrNull
                 val vct = payload["vct"]?.jsonPrimitive?.contentOrNull
-                val issuerIdent = cred.credentialIssuerIdentifier
-                val configId = cred.credentialConfigurationId
                 val vctm = if (!issuerIdent.isNullOrBlank() && !configId.isNullOrBlank()) {
                     try {
                         vctmFetcher.fetch(issuerUrl = issuerIdent, scope = configId, vct = vct)
@@ -1062,6 +1095,7 @@ class SirosWallet private constructor(
      */
     suspend fun startIssuanceByOffer(offer: CredentialOffer) {
         val engine = engineSession ?: throw WalletException("Not connected")
+        ensureEngineConnected(engine)
         activeOffer = offer
         activeVctm = try {
             vctmFetcher.fetch(
@@ -1110,14 +1144,16 @@ class SirosWallet private constructor(
      */
     suspend fun startIssuance(offerUri: String) {
         val engine = engineSession ?: throw WalletException("Not connected")
+        ensureEngineConnected(engine)
+        val redirectUri = config.redirectUri.ifBlank { null }
         if (offerUri.startsWith("openid-credential-offer://")) {
             // Deep-link URI with inline offer — send as "offer" so the engine
             // extracts the credential_offer query parameter instead of HTTP-fetching.
-            engine.startIssuance(offer = offerUri)
+            engine.startIssuance(offer = offerUri, redirectUri = redirectUri)
         } else if (offerUri.startsWith("http")) {
-            engine.startIssuance(credentialOfferUri = offerUri)
+            engine.startIssuance(credentialOfferUri = offerUri, redirectUri = redirectUri)
         } else {
-            engine.startIssuance(offer = offerUri)
+            engine.startIssuance(offer = offerUri, redirectUri = redirectUri)
         }
     }
 
@@ -1128,7 +1164,205 @@ class SirosWallet private constructor(
      */
     suspend fun startPresentation(requestUri: String) {
         val engine = engineSession ?: throw WalletException("Not connected")
+        ensureEngineConnected(engine)
         engine.startPresentation(requestUri = requestUri)
+    }
+
+    /**
+     * The final payload to hand back to the OS/browser for a W3C Digital
+     * Credentials API presentation - Android's `PendingIntentHandler` (or
+     * the equivalent on other platforms) wraps [responseJson] as the
+     * `DigitalCredential`'s response data.
+     *
+     * For `response_mode=dc_api` (unencrypted): `{"vp_token": {...}}`.
+     * For `response_mode=dc_api.jwt`: `{"response": "<jwe-compact>"}` per
+     * OpenID4VP 1.0 Appendix A.3.2.
+     */
+    data class DCAPIPresentationResult(
+        val responseJson: String,
+        val credentialIds: List<String>,
+    )
+
+    /**
+     * Process an incoming W3C Digital Credentials API (DC API) OpenID4VP
+     * presentation request entirely client-side - mirrors wallet-frontend's
+     * proven architecture rather than the [startPresentation]/engine-relay
+     * pattern: there is no `WalletEngineSession` involvement and no
+     * DC-API-specific backend call. The only backend calls made are the SAME
+     * generic trust-evaluation ([evaluateTrustDirect]) and presentation-history
+     * persistence the redirect flow already uses (see task #74's revised
+     * finding - go-wallet-backend needs no `origin:`/`dc_api.jwt`/
+     * `OpenID4VPDCAPIHandover` support under this architecture).
+     *
+     * @param rawRequestJson the raw request data string from the OS/browser -
+     *   either a raw OpenID4VP request JSON object (unsigned protocol
+     *   variant) or `{"request": "<JWT>"}` (signed/multisigned JAR variant).
+     * @param origin the browser/page origin that made the
+     *   `navigator.credentials.get()` call, as verified by the platform
+     *   (e.g. Android's Credential Manager) - NOT read from the request body,
+     *   which is untrusted until the platform attests it.
+     * @throws WalletException if the user declines, or if not connected.
+     */
+    suspend fun handleDCAPIRequest(rawRequestJson: String, origin: String): DCAPIPresentationResult {
+        val request = DCAPIRequestParser.parse(rawRequestJson)
+
+        val subjectId = request.clientId ?: origin
+        val trustResult = try {
+            evaluateTrustDirect(
+                subjectId = subjectId,
+                subjectType = "credential_verifier",
+                keyMaterialType = when {
+                    request.keyMaterial?.x5c != null -> "x5c"
+                    request.keyMaterial?.jwk != null -> "jwk"
+                    else -> null
+                },
+                x5c = request.keyMaterial?.x5c?.let { chain ->
+                    kotlinx.serialization.json.buildJsonArray {
+                        chain.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) }
+                    }
+                },
+                jwk = request.keyMaterial?.jwk,
+                context = null,
+            )
+        } catch (e: Exception) {
+            Timber.w(e, "DC API trust evaluation failed for $subjectId")
+            trustCache.get(subjectId) ?: TrustResult(trusted = false, identifier = subjectId, reason = e.message)
+        }
+
+        val allCreds = credentialStore.getAll()
+        val dcqlOutput = if (request.dcqlQuery != null) {
+            CredentialMatcher.matchDcql(request.dcqlQuery, allCreds)
+        } else {
+            CredentialMatcher.DcqlMatchOutput(
+                queryResults = listOf(CredentialMatcher.MatchResult(
+                    queryId = "_default", format = null, candidates = allCreds, requestedClaims = emptyList(),
+                )),
+                credentialSets = null,
+                satisfiableOptions = emptyList(),
+            )
+        }
+        val matchResults = dcqlOutput.queryResults
+        val candidates = matchResults.flatMap { it.candidates }.distinctBy { it.id }
+
+        val listener = eventListener
+        val selectedIds = if (listener != null && candidates.isNotEmpty()) {
+            listener.onCredentialSelectionRequired(
+                PresentationRequest(
+                    verifierName = trustResult.entityName,
+                    trustResult = trustResult,
+                    matchResults = matchResults,
+                    candidates = candidates,
+                    credentialSets = dcqlOutput.credentialSets,
+                    satisfiableOptions = dcqlOutput.satisfiableOptions,
+                )
+            )
+        } else {
+            candidates.map { it.id }
+        }
+
+        if (selectedIds.isEmpty()) {
+            throw WalletException("User declined the DC API presentation request")
+        }
+
+        // "origin:<value>" per OpenID4VP 1.0 Appendix A is only used for the
+        // VP token audience claim at signing time - trust evaluation above
+        // uses the bare origin, matching wallet-frontend's useOID4VPFlow.ts.
+        val audience = "origin:$origin"
+        val encryptionJwk = if (request.responseMode == "dc_api.jwt") {
+            findEncryptionJwk(request.clientMetadata)
+                ?: throw WalletException("dc_api.jwt response_mode requires client_metadata.jwks with an encryption key")
+        } else {
+            null
+        }
+        val encryptionThumbprint = encryptionJwk?.computeThumbprint()?.toString()
+
+        val vpTokenObj = kotlinx.serialization.json.buildJsonObject {
+            for (id in selectedIds) {
+                val cred = allCreds.find { it.id == id } ?: continue
+                val matchResult = matchResults.firstOrNull { r -> r.candidates.any { it.id == id } }
+                val queryId = matchResult?.queryId ?: "_default"
+                val disclosedClaims = matchResult?.requestedClaims?.mapNotNull { it.lastOrNull() }
+
+                val token = if (cred.format == "mso_mdoc") {
+                    val credBytes = android.util.Base64.decode(
+                        cred.raw, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+                    )
+                    val deviceResponse = keystore.signMdocPresentationForDCAPI(
+                        credentialBytes = credBytes,
+                        disclosedClaims = disclosedClaims,
+                        nonce = request.nonce,
+                        origin = origin,
+                        encryptionPublicJwkThumbprint = encryptionThumbprint,
+                    )
+                    android.util.Base64.encodeToString(
+                        deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+                    )
+                } else {
+                    keystore.signVpToken(
+                        credential = cred.raw,
+                        disclosedClaims = disclosedClaims,
+                        nonce = request.nonce,
+                        audience = audience,
+                    )
+                }
+                put(queryId, kotlinx.serialization.json.JsonPrimitive(token))
+            }
+        }
+
+        val responseBody = kotlinx.serialization.json.buildJsonObject {
+            put("vp_token", vpTokenObj)
+        }.toString()
+
+        val finalResponseJson = if (request.responseMode == "dc_api.jwt") {
+            val jwe = DCAPIResponseEncryption.encryptResponse(responseBody, encryptionJwk!!)
+            kotlinx.serialization.json.buildJsonObject {
+                put("response", kotlinx.serialization.json.JsonPrimitive(jwe))
+            }.toString()
+        } else {
+            responseBody
+        }
+
+        _presentationHistory.add(0, PresentationRecord(
+            id = java.util.UUID.randomUUID().toString(),
+            flowId = "dc-api-${java.util.UUID.randomUUID()}",
+            verifierName = trustResult.entityName,
+            credentialIds = selectedIds,
+            credentialNames = selectedIds.mapNotNull { id -> allCreds.find { it.id == id }?.metadata?.name },
+            requestedClaims = matchResults.flatMap { it.requestedClaims.flatten() }.distinct(),
+            timestamp = System.currentTimeMillis(),
+        ))
+
+        return DCAPIPresentationResult(responseJson = finalResponseJson, credentialIds = selectedIds)
+    }
+
+    /** Find the verifier's response-encryption key (`use: "enc"`) from DC API `client_metadata.jwks`. */
+    private fun findEncryptionJwk(clientMetadata: kotlinx.serialization.json.JsonObject?): com.nimbusds.jose.jwk.JWK? {
+        val keys = clientMetadata
+            ?.get("jwks")?.jsonObject
+            ?.get("keys")?.let { it as? kotlinx.serialization.json.JsonArray }
+            ?: return null
+        val jwkObj = keys.map { it.jsonObject }
+            .firstOrNull { it["use"]?.jsonPrimitive?.contentOrNull == "enc" }
+            ?: keys.map { it.jsonObject }.firstOrNull()
+            ?: return null
+        return com.nimbusds.jose.jwk.JWK.parse(jwkObj.toString())
+    }
+
+    /**
+     * Force a fresh engine WebSocket connection before starting a new flow,
+     * rather than trusting a connection that may have gone idle since the last
+     * one. Mirrors [completeAuthorization]'s existing zombie-connection handling
+     * (see [WalletEngineSession.forceReconnect]'s doc comment) - the same failure
+     * mode isn't unique to the post-OAuth-redirect gap: a connection left open
+     * across a backend restart or any other silent network drop can look
+     * connected (no onClosing/onFailure fired yet) while actually discarding
+     * every send. Confirmed live: [startIssuanceByOffer] sent a flow_start over
+     * such a connection with no exception, no engine-side log, and no trace of
+     * the message ever reaching the backend.
+     */
+    private suspend fun ensureEngineConnected(engine: WalletEngineSession) {
+        engine.forceReconnect()
+        engine.awaitConnected()
     }
 
     /**
@@ -1272,6 +1506,11 @@ class SirosWallet private constructor(
     /** Persistent trust cache for degraded-mode operation. */
     private val trustCache = TrustCache()
     private val vctmFetcher = VctmFetcher(httpGet = { url ->
+        val request = Request.Builder().url(url).get().build()
+        val response = httpClient.newCall(request).execute()
+        if (response.isSuccessful) response.body?.string() else null
+    })
+    private val mddlSchemaFetcher = MddlSchemaFetcher(httpGet = { url ->
         val request = Request.Builder().url(url).get().build()
         val response = httpClient.newCall(request).execute()
         if (response.isSuccessful) response.body?.string() else null
@@ -1483,6 +1722,62 @@ class SirosWallet private constructor(
         Timber.i("Connected via WMP protocol to $wsUrl")
     }
 
+    /** Transport-agnostic description of one generated OID4VCI proof. */
+    private data class GeneratedProofData(
+        val proofType: String,
+        val jwt: String? = null,
+        val attestation: String? = null,
+    )
+
+    /**
+     * Decide which OID4VCI proof type to produce and generate it - shared by
+     * both the legacy WebSocket engine and the WMP transport, since both
+     * ultimately talk to the same wallet-backend engine (internal/engine/oid4vci.go's
+     * requestProofs), which advertises the issuer's proof_types_supported the
+     * same way regardless of which transport carried the request.
+     *
+     * Prefers `jwt` (simple, one proof-of-possession JWT per credential,
+     * per [org.siros.sdk.transport.wmp.openid4x.ProofType.JWT]) when the
+     * issuer supports it - unchanged from prior behavior. Falls back to
+     * `attestation` (OID4VCI Appendix F.3: a single Key Attestation JWT
+     * covering the whole batch via `attested_keys`) only when `jwt` isn't
+     * listed - e.g. a real-world mdoc issuer that requires the wallet to
+     * assert the key storage/user-authentication security properties of the
+     * credential-binding keys instead of a plain signed proof.
+     *
+     * [proofTypesSupported] (from the issuer's metadata, relayed by the
+     * backend) takes precedence when present; [proofTypeHint] is a fallback
+     * for a transport that only forwards a single pre-decided type.
+     */
+    private suspend fun generateProofsForRequest(
+        audience: String,
+        nonce: String,
+        count: Int,
+        proofTypesSupported: Set<String>?,
+        proofTypeHint: String?,
+    ): List<GeneratedProofData> {
+        val chosen = when {
+            !proofTypesSupported.isNullOrEmpty() ->
+                if ("jwt" in proofTypesSupported) "jwt"
+                else proofTypesSupported.firstOrNull { it == "attestation" } ?: proofTypesSupported.first()
+            !proofTypeHint.isNullOrBlank() -> proofTypeHint
+            else -> "jwt"
+        }
+        return if (chosen == "attestation") {
+            val attestationJwt = keystore.generateKeyAttestation(nonce = nonce, count = count)
+            listOf(GeneratedProofData(proofType = "attestation", attestation = attestationJwt))
+        } else {
+            (1..count).map {
+                val proofJwt = keystore.generateProof(
+                    audience = audience,
+                    nonce = nonce,
+                    freshKey = count > 1,
+                )
+                GeneratedProofData(proofType = "jwt", jwt = proofJwt)
+            }
+        }
+    }
+
     private suspend fun handleWmpSignRequest(
         flowId: String,
         params: org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams,
@@ -1490,13 +1785,17 @@ class SirosWallet private constructor(
         return when (params.action) {
             "generate_proof" -> {
                 val count = params.count ?: 1
-                val proofs = (1..count).map {
-                    val proofJwt = keystore.generateProof(
-                        audience = params.audience,
-                        nonce = params.nonce,
-                        freshKey = count > 1,
+                val generated = generateProofsForRequest(
+                    audience = params.audience,
+                    nonce = params.nonce,
+                    count = count,
+                    proofTypesSupported = params.proofTypesSupported?.keys,
+                    proofTypeHint = params.proofType,
+                )
+                val proofs = generated.map {
+                    org.siros.sdk.transport.wmp.openid4x.ProofObject(
+                        proofType = it.proofType, jwt = it.jwt, attestation = it.attestation,
                     )
-                    org.siros.sdk.transport.wmp.openid4x.ProofObject(proofType = "jwt", jwt = proofJwt)
                 }
                 org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult(proofs = proofs)
             }
@@ -1596,13 +1895,15 @@ class SirosWallet private constructor(
                         "generate_proof" -> {
                             val params = msg.params
                             val count = params?.count ?: 1
-                            val proofs = (1..count).map {
-                                val proofJwt = keystore.generateProof(
-                                    audience = params?.audience ?: "",
-                                    nonce = params?.nonce ?: "",
-                                    freshKey = count > 1,
-                                )
-                                ProofObject(proofType = "jwt", jwt = proofJwt)
+                            val generated = generateProofsForRequest(
+                                audience = params?.audience ?: "",
+                                nonce = params?.nonce ?: "",
+                                count = count,
+                                proofTypesSupported = params?.proofTypesSupported?.keys,
+                                proofTypeHint = params?.proofType,
+                            )
+                            val proofs = generated.map {
+                                ProofObject(proofType = it.proofType, jwt = it.jwt, attestation = it.attestation)
                             }
                             Timber.d("Sending sign response with ${proofs.size} proofs for flow ${msg.flowId}, messageId=${msg.messageId}")
                             engine.sendSignResponse(msg.flowId, proofs = proofs, messageId = msg.messageId)
@@ -1873,6 +2174,60 @@ class SirosWallet private constructor(
 
                 // Store any new credentials from the flow result
                 msg.credentials?.forEach { cred ->
+                    if (cred.format == "mso_mdoc") {
+                        // mso_mdoc credentials are base64url-encoded CBOR (a
+                        // DeviceResponse-shaped envelope, per
+                        // wallet-frontend#191), never JWT-shaped - the
+                        // parseJwtPayload-based validation/expiry/metadata
+                        // path below doesn't apply and would always fail
+                        // (base64url text has no "." characters, so
+                        // parseJwtPayload always returns null for it),
+                        // silently dropping every issued mdoc credential.
+                        val parsed = try {
+                            val bytes = android.util.Base64.decode(
+                                cred.credential,
+                                android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP,
+                            )
+                            org.siros.sdk.credentials.mdoc.MdocCbor.parseStoredCredential(bytes)
+                        } catch (e: Exception) {
+                            Timber.w(e, "Skipping unparseable mdoc credential in flow ${msg.flowId}")
+                            return@forEach
+                        }
+                        val metadata = activeOffer?.let { offer ->
+                            val mddlSchema = try {
+                                mddlSchemaFetcher.fetch(
+                                    issuerUrl = offer.credentialIssuerIdentifier,
+                                    scope = offer.credentialConfigurationId,
+                                )
+                            } catch (e: Exception) {
+                                Timber.w(e, "Failed to fetch MDDL schema for ${offer.credentialConfigurationId}")
+                                null
+                            }
+                            CredentialUtils.buildMdocMetadata(offer = offer, mddlSchema = mddlSchema)
+                        }
+                        val stored = StoredCredential(
+                            id = java.util.UUID.randomUUID().toString(),
+                            format = cred.format,
+                            raw = cred.credential,
+                            metadata = metadata,
+                            notificationId = cred.notificationId,
+                            credentialIssuerIdentifier = activeOffer?.credentialIssuerIdentifier,
+                            credentialConfigurationId = activeOffer?.credentialConfigurationId,
+                        )
+                        credentialStore.save(stored)
+                        eventListener?.onCredentialReceived(stored)
+                        Timber.d("Stored mdoc credential docType=${parsed.docType}")
+
+                        cred.notificationId?.let { notificationId ->
+                            credentialNotifier?.sendCredentialNotification(
+                                flowId = msg.flowId,
+                                notificationId = notificationId,
+                                event = CredentialNotificationEvent.ACCEPTED,
+                            )
+                        }
+                        return@forEach
+                    }
+
                     // Basic validation: ensure credential is parseable
                     val payload = CredentialUtils.parseJwtPayload(cred.credential)
                     if (payload == null) {
@@ -2028,58 +2383,17 @@ class SirosWallet private constructor(
 
                 Timber.d("Trust evaluation: subject=$subjectId type=$subjectType")
 
-                // Build AuthZEN evaluation request matching the reference implementation
                 val keyMaterial = request?.get("key_material")?.jsonObject
-                val evaluationRequest = kotlinx.serialization.json.buildJsonObject {
-                    putJsonObject("subject") {
-                        put("type", kotlinx.serialization.json.JsonPrimitive("key"))
-                        put("id", kotlinx.serialization.json.JsonPrimitive(subjectId))
-                    }
-                    putJsonObject("resource") {
-                        val kmType = keyMaterial?.get("type")?.jsonPrimitive?.contentOrNull ?: "x5c"
-                        put("type", kotlinx.serialization.json.JsonPrimitive(kmType))
-                        put("id", kotlinx.serialization.json.JsonPrimitive(subjectId))
-                        // Copy key material arrays (x5c or jwk)
-                        val x5c = keyMaterial?.get("x5c")
-                        val jwk = keyMaterial?.get("jwk")
-                        if (x5c != null) {
-                            put("key", x5c)
-                        } else if (jwk != null) {
-                            put("key", kotlinx.serialization.json.buildJsonArray {
-                                add(jwk)
-                            })
-                        }
-                    }
-                    putJsonObject("action") {
-                        put("name", kotlinx.serialization.json.JsonPrimitive(
-                            if (subjectType == "credential_verifier") "credential-verifier"
-                            else "credential-issuer"
-                        ))
-                    }
-                    // Pass through context from the engine request
-                    request?.get("context")?.let { ctx ->
-                        put("context", ctx)
-                    }
-                }
-
-                Timber.d("Calling /v1/evaluate for $subjectId")
-                val response = apiClient!!.evaluateTrust(evaluationRequest)
-
-                val decision = response["decision"]?.jsonPrimitive?.boolean ?: false
-                val context = response["context"]?.jsonObject
-
-                // Build typed TrustResult from the PDP response
-                val trustResult = TrustResult(
-                    trusted = decision,
-                    framework = context?.get("framework")?.jsonPrimitive?.contentOrNull,
-                    reason = reasonText(context?.get("reason"))
-                        ?: reasonText(context?.get("message")),
-                    entityName = context?.get("entity_name")?.jsonPrimitive?.contentOrNull,
-                    entityLogo = context?.get("logo_uri")?.jsonPrimitive?.contentOrNull,
+                val trustResult = evaluateTrustDirect(
+                    subjectId = subjectId,
+                    subjectType = subjectType,
+                    keyMaterialType = keyMaterial?.get("type")?.jsonPrimitive?.contentOrNull,
+                    x5c = keyMaterial?.get("x5c"),
+                    jwk = keyMaterial?.get("jwk"),
+                    context = request?.get("context"),
+                ).copy(
                     clientIdScheme = request?.get("context")?.jsonObject
                         ?.get("client_id_scheme")?.jsonPrimitive?.contentOrNull,
-                    identifier = subjectId,
-                    domain = context?.get("domain")?.jsonPrimitive?.contentOrNull,
                 )
 
                 // Store for use in credential selection UI
@@ -2088,9 +2402,12 @@ class SirosWallet private constructor(
                 // Populate trust cache (only positive results are stored)
                 trustCache.put(subjectId, trustResult)
 
-                Timber.i("Trust evaluation result: decision=$decision framework=${trustResult.framework} for $subjectId")
+                Timber.i(
+                    "Trust evaluation result: decision=${trustResult.trusted} " +
+                        "framework=${trustResult.framework} for $subjectId"
+                )
 
-                engine.sendTrustResult(flowId, decision)
+                engine.sendTrustResult(flowId, trustResult.trusted)
             } catch (e: Exception) {
                 Timber.e(e, "Trust evaluation failed")
 
@@ -2105,6 +2422,70 @@ class SirosWallet private constructor(
                 }
             }
         }
+    }
+
+    /**
+     * Shared low-level trust evaluation: builds an AuthZEN request from raw
+     * subject/key-material/context fields and calls `POST /v1/evaluate`.
+     *
+     * Used by both the engine-relayed `trust_evaluation` step above (payload
+     * comes from go-wallet-backend) and [handleDCAPIRequest] (built directly
+     * from a parsed OpenID4VP request) - there is no engine/backend relay
+     * for DC API presentation (see task #74's revised finding: go-wallet-backend
+     * needs no DC-API-specific support because the whole flow, including
+     * this SAME generic trust call, runs client-side, mirroring
+     * wallet-frontend's proven architecture).
+     */
+    private suspend fun evaluateTrustDirect(
+        subjectId: String,
+        subjectType: String?,
+        keyMaterialType: String?,
+        x5c: kotlinx.serialization.json.JsonElement?,
+        jwk: kotlinx.serialization.json.JsonElement?,
+        context: kotlinx.serialization.json.JsonElement?,
+    ): TrustResult {
+        val client = apiClient ?: throw WalletException("Not connected")
+
+        val evaluationRequest = kotlinx.serialization.json.buildJsonObject {
+            putJsonObject("subject") {
+                put("type", kotlinx.serialization.json.JsonPrimitive("key"))
+                put("id", kotlinx.serialization.json.JsonPrimitive(subjectId))
+            }
+            putJsonObject("resource") {
+                put("type", kotlinx.serialization.json.JsonPrimitive(keyMaterialType ?: "x5c"))
+                put("id", kotlinx.serialization.json.JsonPrimitive(subjectId))
+                if (x5c != null) {
+                    put("key", x5c)
+                } else if (jwk != null) {
+                    put("key", kotlinx.serialization.json.buildJsonArray { add(jwk) })
+                }
+            }
+            putJsonObject("action") {
+                put("name", kotlinx.serialization.json.JsonPrimitive(
+                    if (subjectType == "credential_verifier") "credential-verifier"
+                    else "credential-issuer"
+                ))
+            }
+            context?.let { put("context", it) }
+        }
+
+        Timber.d("Calling /v1/evaluate for $subjectId")
+        val response = client.evaluateTrust(evaluationRequest)
+
+        val decision = response["decision"]?.jsonPrimitive?.boolean ?: false
+        val respContext = response["context"]?.jsonObject
+
+        return TrustResult(
+            trusted = decision,
+            framework = respContext?.get("framework")?.jsonPrimitive?.contentOrNull,
+            reason = reasonText(respContext?.get("reason"))
+                ?: reasonText(respContext?.get("message")),
+            entityName = respContext?.get("entity_name")?.jsonPrimitive?.contentOrNull,
+            entityLogo = respContext?.get("logo_uri")?.jsonPrimitive?.contentOrNull,
+            clientIdScheme = null,
+            identifier = subjectId,
+            domain = respContext?.get("domain")?.jsonPrimitive?.contentOrNull,
+        )
     }
 
     /**

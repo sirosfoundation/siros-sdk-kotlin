@@ -217,4 +217,79 @@ class WscdKeystoreAdapterTest {
         assertEquals(2, keypairs.size)
         coVerify(exactly = 2) { signer.generateKey(any()) }
     }
+
+    /** A real, curve-valid P-256 public key JWK JSON - JWK.parse validates curve membership. */
+    private fun realPublicKeyJwkJson(): String =
+        com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256)
+            .generate().toPublicJWK().toJSONString()
+
+    @Test
+    fun generateKeyAttestationBuildsValidJwtWithAttestedKeysAndSecurityProperties() = runTest {
+        val signer = createMockSigner()
+        coEvery { signer.exportPublicKey(any()) } returns realPublicKeyJwkJson().toByteArray()
+        val adapter = WscdKeystoreAdapter(signer)
+        adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+
+        val jwt = adapter.generateKeyAttestation(nonce = "test-nonce-123", count = 3)
+
+        val parsed = com.nimbusds.jwt.SignedJWT.parse(jwt)
+        assertEquals("key-attestation+jwt", parsed.header.type.toString())
+        assertEquals(com.nimbusds.jose.JWSAlgorithm.ES256, parsed.header.algorithm)
+        assertNotNull(parsed.header.jwk)
+
+        val claims = parsed.jwtClaimsSet
+        assertEquals("test-nonce-123", claims.getClaim("nonce"))
+        val attestedKeys = claims.getClaim("attested_keys") as List<*>
+        assertEquals(3, attestedKeys.size)
+        // Raw WSCD vocabulary ("hardware"/"pin") must be translated to the
+        // OID4VCI spec's registered iso_18045_* values, not passed through -
+        // confirmed via a real conformance-test issuer that an unrecognized
+        // enum value here gets rejected.
+        assertEquals(listOf("iso_18045_moderate"), claims.getClaim("key_storage"))
+        assertEquals(listOf("iso_18045_basic"), claims.getClaim("user_authentication"))
+
+        // 3 keys generated for the batch, matching count - not reusing a
+        // single pre-existing key.
+        coVerify(exactly = 3) { signer.generateKey(any()) }
+    }
+
+    @Test
+    fun generateKeyAttestationMapsSoftwareKeyStorageToIso18045Basic() = runTest {
+        // The exact real-world case that caused a conformance-test issuer to
+        // reject the attestation: the "softkey" WSCD plugin reports raw
+        // key_storage=["software"], which isn't a registered iso_18045_*
+        // value on its own.
+        val signer = mockk<Signer>(relaxed = true).also {
+            coEvery { it.generateKey(any()) } returns "test-key-1"
+            coEvery { it.sign(any(), any()) } returns ByteArray(64) { i -> i.toByte() }
+            coEvery { it.exportPublicKey(any()) } returns realPublicKeyJwkJson().toByteArray()
+            coEvery { it.securityProperties(any()) } returns SignerSecurityProperties(
+                keyStorage = listOf("software"),
+                userAuthentication = emptyList(),
+            )
+        }
+        val adapter = WscdKeystoreAdapter(signer)
+        adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+
+        val jwt = adapter.generateKeyAttestation(nonce = "n", count = 1)
+        val claims = com.nimbusds.jwt.SignedJWT.parse(jwt).jwtClaimsSet
+        assertEquals(listOf("iso_18045_basic"), claims.getClaim("key_storage"))
+    }
+
+    @Test
+    fun generateKeyAttestationDefaultsKeyStorageWhenSecurityPropertiesUnavailable() = runTest {
+        val signer = mockk<Signer>(relaxed = true).also {
+            coEvery { it.generateKey(any()) } returns "test-key-1"
+            coEvery { it.sign(any(), any()) } returns ByteArray(64) { i -> i.toByte() }
+            coEvery { it.exportPublicKey(any()) } returns realPublicKeyJwkJson().toByteArray()
+            coEvery { it.securityProperties(any()) } throws IllegalStateException("not supported")
+        }
+        val adapter = WscdKeystoreAdapter(signer)
+        adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+
+        val jwt = adapter.generateKeyAttestation(nonce = "n", count = 1)
+        val claims = com.nimbusds.jwt.SignedJWT.parse(jwt).jwtClaimsSet
+        assertEquals(listOf("iso_18045_basic"), claims.getClaim("key_storage"))
+        assertEquals(null, claims.getClaim("user_authentication"))
+    }
 }

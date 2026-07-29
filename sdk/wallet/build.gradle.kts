@@ -41,6 +41,10 @@ dependencies {
     implementation(libs.androidx.credentials.play)
     implementation(libs.androidx.security.crypto)
     implementation(libs.timber)
+    // JWS verification for signed/multisigned DC API JAR requests (Appendix A) -
+    // sdk:keystore depends on this too, but only as `implementation`, so it
+    // isn't visible here transitively.
+    implementation(libs.nimbus.jose.jwt)
 
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
