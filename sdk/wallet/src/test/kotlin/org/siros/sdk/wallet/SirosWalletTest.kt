@@ -1347,6 +1347,9 @@ class SirosWalletTest {
         if (stateFlow != null && "state" !in values) {
             values["state"] = stateFlow.asStateFlow()
         }
+        if ("terminatedFlowIds" !in values) {
+            values["terminatedFlowIds"] = mutableSetOf<String>()
+        }
         values.forEach { (name, value) -> setField(wallet, name, value) }
         return wallet
     }

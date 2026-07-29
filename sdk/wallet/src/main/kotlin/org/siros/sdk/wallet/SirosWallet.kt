@@ -1151,7 +1151,27 @@ class SirosWallet private constructor(
             // extracts the credential_offer query parameter instead of HTTP-fetching.
             engine.startIssuance(offer = offerUri, redirectUri = redirectUri)
         } else if (offerUri.startsWith("http")) {
-            engine.startIssuance(credentialOfferUri = offerUri, redirectUri = redirectUri)
+            // Universal-link-style offer: the credential_offer/credential_offer_uri
+            // live in the URI's own query string (e.g. an issuer's wallet-redirect
+            // page), so the URI itself is not fetchable as the offer JSON - unlike
+            // the engine's openid-credential-offer:// handling, it only strips
+            // that query param for that exact scheme, so it must be extracted here.
+            val query = try { java.net.URI(offerUri).rawQuery } catch (_: Exception) { null }
+            val params = parseQueryParams(query)
+            when {
+                params.containsKey("credential_offer") -> {
+                    engine.startIssuance(offer = params.getValue("credential_offer"), redirectUri = redirectUri)
+                }
+                params.containsKey("credential_offer_uri") -> {
+                    engine.startIssuance(
+                        credentialOfferUri = params.getValue("credential_offer_uri"),
+                        redirectUri = redirectUri,
+                    )
+                }
+                else -> {
+                    engine.startIssuance(credentialOfferUri = offerUri, redirectUri = redirectUri)
+                }
+            }
         } else {
             engine.startIssuance(offer = offerUri, redirectUri = redirectUri)
         }
@@ -1505,6 +1525,19 @@ class SirosWallet private constructor(
 
     /** Persistent trust cache for degraded-mode operation. */
     private val trustCache = TrustCache()
+
+    /**
+     * Flow IDs that have already reached a terminal state (error or complete).
+     *
+     * The engine delivers flowProgress()/flowErrors()/flowComplete() as separate
+     * Flow collectors, so a trailing informational progress message (e.g.
+     * "trust_evaluated", sent right after the error that already failed the
+     * flow) can arrive just after the error and would otherwise flip [_state]
+     * back to [WalletState.FlowActive] with no further messages ever coming to
+     * move it back to Ready - a permanently stuck spinner. Guards against that
+     * without depending on specific step names.
+     */
+    private val terminatedFlowIds = mutableSetOf<String>()
     private val vctmFetcher = VctmFetcher(httpGet = { url ->
         val request = Request.Builder().url(url).get().build()
         val response = httpClient.newCall(request).execute()
@@ -2150,7 +2183,9 @@ class SirosWallet private constructor(
                 }
 
                 val current = _state.value
-                if (current is WalletState.Ready || current is WalletState.FlowActive) {
+                if (msg.flowId !in terminatedFlowIds &&
+                    (current is WalletState.Ready || current is WalletState.FlowActive)
+                ) {
                     val userId = (current as? WalletState.Ready)?.userId
                         ?: (current as? WalletState.FlowActive)?.userId ?: ""
                     val displayName = (current as? WalletState.Ready)?.displayName
@@ -2171,6 +2206,14 @@ class SirosWallet private constructor(
         scope.launch {
             engine.flowComplete().collect { msg ->
                 Timber.i("Flow ${msg.flowId} complete")
+                terminatedFlowIds.add(msg.flowId)
+
+                // Tracks whether any credential in this batch actually made it
+                // into the store, so a flow that "completes" per the engine
+                // but whose only credential(s) failed to parse doesn't get
+                // silently reported as success - see storeFailureReason below.
+                var storedCount = 0
+                var storeFailureReason: String? = null
 
                 // Store any new credentials from the flow result
                 msg.credentials?.forEach { cred ->
@@ -2191,6 +2234,7 @@ class SirosWallet private constructor(
                             org.siros.sdk.credentials.mdoc.MdocCbor.parseStoredCredential(bytes)
                         } catch (e: Exception) {
                             Timber.w(e, "Skipping unparseable mdoc credential in flow ${msg.flowId}")
+                            storeFailureReason = "Received credential could not be read (${e.message ?: e::class.simpleName})"
                             return@forEach
                         }
                         val metadata = activeOffer?.let { offer ->
@@ -2215,6 +2259,7 @@ class SirosWallet private constructor(
                             credentialConfigurationId = activeOffer?.credentialConfigurationId,
                         )
                         credentialStore.save(stored)
+                        storedCount++
                         eventListener?.onCredentialReceived(stored)
                         Timber.d("Stored mdoc credential docType=${parsed.docType}")
 
@@ -2232,6 +2277,7 @@ class SirosWallet private constructor(
                     val payload = CredentialUtils.parseJwtPayload(cred.credential)
                     if (payload == null) {
                         Timber.w("Skipping unparseable credential in flow ${msg.flowId}")
+                        storeFailureReason = "Received credential could not be read"
                         return@forEach
                     }
                     // Check expiry — don't store already-expired credentials
@@ -2239,6 +2285,7 @@ class SirosWallet private constructor(
                     val now = System.currentTimeMillis() / 1000
                     if (exp != null && exp < now) {
                         Timber.w("Skipping expired credential (exp=$exp, now=$now)")
+                        storeFailureReason = "Issued credential was already expired"
                         return@forEach
                     }
                     val metadata = activeOffer?.let { offer ->
@@ -2260,6 +2307,7 @@ class SirosWallet private constructor(
                         credentialConfigurationId = activeOffer?.credentialConfigurationId,
                     )
                     credentialStore.save(stored)
+                    storedCount++
                     eventListener?.onCredentialReceived(stored)
 
                     // OID4VCI §10: once the credential is stored, tell the backend
@@ -2278,7 +2326,22 @@ class SirosWallet private constructor(
                 // Persist locally + sync to backend immediately
                 persistAndSyncKeystore()
 
-                eventListener?.onFlowComplete(msg.flowId)
+                // The engine considers this flow successfully finished, but
+                // if it delivered credentials and none of them survived
+                // parsing/validation, reporting onFlowComplete here would
+                // silently strand the user - the flow "succeeds" with
+                // nothing to show for it and no indication anything went
+                // wrong. Surface it as a flow error instead so the UI's
+                // error dialog (with Retry) fires, matching how any other
+                // flow failure is handled.
+                val expectedCredentials = msg.credentials?.size ?: 0
+                if (expectedCredentials > 0 && storedCount == 0) {
+                    val reason = storeFailureReason ?: "Credential could not be processed"
+                    Timber.e("Flow ${msg.flowId} completed but no credentials were stored: $reason")
+                    eventListener?.onFlowError(msg.flowId, reason)
+                } else {
+                    eventListener?.onFlowComplete(msg.flowId)
+                }
 
                 val current = _state.value
                 val userId = (current as? WalletState.FlowActive)?.userId
@@ -2298,6 +2361,7 @@ class SirosWallet private constructor(
             engine.flowErrors().collect { msg ->
                 Timber.e("Flow ${msg.flowId} error: ${msg.error.code} — ${msg.error.message}")
                 val fid = msg.flowId ?: "unknown"
+                terminatedFlowIds.add(fid)
                 eventListener?.onFlowError(fid, msg.error.message)
 
                 val current = _state.value

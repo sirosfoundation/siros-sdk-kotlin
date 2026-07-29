@@ -102,7 +102,7 @@ fun classifyDeepLink(uriString: String, redirectScheme: String): DeepLinkType {
     return DeepLinkType.Unknown
 }
 
-private fun parseQueryParams(query: String?): Map<String, String> {
+internal fun parseQueryParams(query: String?): Map<String, String> {
     if (query.isNullOrEmpty()) return emptyMap()
     return query.split("&").associate { param ->
         val parts = param.split("=", limit = 2)
