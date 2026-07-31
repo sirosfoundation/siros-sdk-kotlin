@@ -54,6 +54,23 @@ class DCAPIResponseEncryptionTest {
     }
 
     @Test
+    fun encryptResponse_propagatesVerifierKeyIdIntoJweHeader() {
+        // The verifier looks up which of its ephemeral decryption keys to
+        // use by this exact header field (EphemeralEncryptionKeyCache in
+        // sirosfoundation/vc) - omitting it made every real decryption
+        // attempt fail with "kid not found in JWT header" before the
+        // verifier could even attempt decryption.
+        val verifierKeyPair = ECKeyGenerator(Curve.P_256).keyID("ephemeral-key-42").generate()
+
+        val jwe = DCAPIResponseEncryption.encryptResponse(
+            responseJson = """{"vp_token":{}}""",
+            verifierJwk = verifierKeyPair.toPublicJWK(),
+        )
+
+        assertEquals("ephemeral-key-42", JWEObject.parse(jwe).header.keyID)
+    }
+
+    @Test
     fun encryptResponse_rejectsNonECVerifierKey() {
         val rsaKey: RSAKey = RSAKeyGenerator(2048).generate()
         assertThrows(IllegalArgumentException::class.java) {

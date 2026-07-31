@@ -22,6 +22,7 @@ class DCAPIRequestParserTest {
                 "client_id":"web-origin:https://verifier.example.com",
                 "response_mode":"dc_api",
                 "nonce":"test-nonce",
+                "state":"test-state",
                 "dcql_query":{"credentials":[]}
             }}]}
         """.trimIndent()
@@ -31,6 +32,8 @@ class DCAPIRequestParserTest {
         assertEquals("web-origin:https://verifier.example.com", result.clientId)
         assertEquals("dc_api", result.responseMode)
         assertEquals("test-nonce", result.nonce)
+        assertEquals("test-state", result.state)
+        assertEquals("openid4vp-v1-unsigned", result.protocol)
         assertNull(result.keyMaterial)
     }
 
@@ -41,6 +44,7 @@ class DCAPIRequestParserTest {
             .claim("client_id", "x509_san_dns:verifier.example.com")
             .claim("response_mode", "dc_api.jwt")
             .claim("nonce", "test-nonce")
+            .claim("state", "test-state")
             .build()
         val header = JWSHeader.Builder(JWSAlgorithm.ES256).jwk(ecKey.toPublicJWK()).build()
         val signedJwt = SignedJWT(header, claims)
@@ -54,7 +58,22 @@ class DCAPIRequestParserTest {
         assertEquals("x509_san_dns:verifier.example.com", result.clientId)
         assertEquals("dc_api.jwt", result.responseMode)
         assertEquals("test-nonce", result.nonce)
+        assertEquals("test-state", result.state)
+        assertEquals("openid4vp-v1-signed", result.protocol)
         assertEquals(ecKey.keyID, result.keyMaterial?.jwk?.get("kid")?.toString()?.trim('"'))
+    }
+
+    @Test
+    fun `state is null when absent from the request`() {
+        val rawRequestJson = """
+            {"requests":[{"protocol":"openid4vp-v1-unsigned","data":{
+                "nonce":"test-nonce"
+            }}]}
+        """.trimIndent()
+
+        val result = DCAPIRequestParser.parse(rawRequestJson)
+
+        assertNull(result.state)
     }
 
     @Test

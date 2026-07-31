@@ -44,7 +44,16 @@ object DCAPIResponseEncryption {
         require(verifierJwk is ECKey) {
             "DC API response encryption requires an EC verifier key, got ${verifierJwk.keyType}"
         }
-        val header = JWEHeader.Builder(alg, enc).build()
+        // The verifier looks up which of its (possibly many concurrent)
+        // ephemeral decryption keys to use by the JWE header's kid - it
+        // generates that key specifically with one (see
+        // EphemeralEncryptionKeyCache.GenerateAndStore in sirosfoundation/vc)
+        // and expects it echoed back here. Omitting this was a real bug:
+        // decryption failed with "kid not found in JWT header" before the
+        // verifier could even attempt decryption.
+        val headerBuilder = JWEHeader.Builder(alg, enc)
+        verifierJwk.keyID?.let { headerBuilder.keyID(it) }
+        val header = headerBuilder.build()
         val jweObject = JWEObject(header, Payload(responseJson))
         jweObject.encrypt(ECDHEncrypter(verifierJwk))
         return jweObject.serialize()

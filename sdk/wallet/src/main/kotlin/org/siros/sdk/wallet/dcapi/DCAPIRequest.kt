@@ -50,6 +50,15 @@ data class DCAPIRequest(
      * ...}`), so it must be threaded through from the request.
      */
     val protocol: String,
+    /**
+     * OAuth2/OIDC `state` (OpenID4VP 1.0 §5.1) - the verifier's only means of
+     * correlating this response back to the right authorization session,
+     * since the response arrives via a wholly separate channel (the DC API
+     * callback) with no other correlator. The wallet MUST echo this back
+     * unchanged in its response body; omitting it left the verifier with no
+     * way to find which session's ephemeral key/DCQL query to use.
+     */
+    val state: String?,
 )
 
 /**
@@ -115,6 +124,7 @@ object DCAPIRequestParser {
             clientMetadata = obj["client_metadata"]?.jsonObject,
             keyMaterial = null,
             protocol = protocol,
+            state = obj["state"]?.jsonPrimitive?.contentOrNull,
         )
     }
 
@@ -162,6 +172,7 @@ object DCAPIRequestParser {
                 jwk = keyMaterialJwkJson,
             ),
             protocol = protocol,
+            state = payload["state"]?.jsonPrimitive?.contentOrNull,
         )
     }
 

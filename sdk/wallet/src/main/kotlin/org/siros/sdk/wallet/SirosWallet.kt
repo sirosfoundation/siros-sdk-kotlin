@@ -1328,6 +1328,14 @@ class SirosWallet private constructor(
 
         val responseBody = kotlinx.serialization.json.buildJsonObject {
             put("vp_token", vpTokenObj)
+            // The verifier's only means of correlating this response back to
+            // the right authorization session - the response arrives via the
+            // DC API callback, a wholly separate channel from the original
+            // request, with no other correlator available. Omitting this
+            // (a real bug: request.state was parsed but never echoed back)
+            // left the verifier decrypting a JWE it had no way to attribute
+            // to any session.
+            request.state?.let { put("state", kotlinx.serialization.json.JsonPrimitive(it)) }
         }.toString()
 
         val responseData = if (request.responseMode == "dc_api.jwt") {

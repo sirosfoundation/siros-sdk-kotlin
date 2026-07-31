@@ -29,6 +29,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -1236,6 +1237,7 @@ class SirosWalletTest {
             .generate()
         val requestJson = wrapDCAPIRequest("openid4vp-v1-unsigned", buildJsonObject {
             put("nonce", "dc-nonce-2")
+            put("state", "verifier-session-state")
             put("response_mode", "dc_api.jwt")
             putJsonObject("client_metadata") {
                 putJsonObject("jwks") {
@@ -1254,8 +1256,16 @@ class SirosWalletTest {
         val jwe = parsed["data"]?.jsonObject?.get("response")?.jsonPrimitive?.content
         assertTrue("response must be a JWE, not a plain vp_token", jwe != null)
         val jweObject = JWEObject.parse(jwe)
+        // The JWE header must carry the verifier's own kid so it can find
+        // the matching ephemeral private key to decrypt with (a real bug:
+        // this used to be omitted entirely).
+        assertEquals("enc-1", jweObject.header.keyID)
         jweObject.decrypt(ECDHDecrypter(verifierEncKey))
-        assertTrue(jweObject.payload.toString().contains("signed-vp-token"))
+        val decrypted = Json.parseToJsonElement(jweObject.payload.toString()).jsonObject
+        assertEquals("signed-vp-token", decrypted["vp_token"]?.jsonObject?.get("_default")?.jsonPrimitive?.contentOrNull)
+        // The verifier's ONLY means of correlating this response to a
+        // session - omitting it was a real bug ("state: missing or empty").
+        assertEquals("verifier-session-state", decrypted["state"]?.jsonPrimitive?.contentOrNull)
     }
 
     @Test
