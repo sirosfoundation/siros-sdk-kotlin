@@ -236,10 +236,17 @@ class MdocDeviceResponseBuilderTest {
         )
 
         // signingInput is the COSE Sig_structure (["Signature1", protectedHeader,
-        // externalAad, payload]) built by MdocCose.sign1Detached, not the raw
-        // DeviceAuthentication bytes directly - externalAad (index 2) IS those bytes.
+        // external_aad, payload]) built by MdocCose.sign1Detached, not the raw
+        // DeviceAuthentication bytes directly - payload (index 3) IS those
+        // bytes (external_aad, index 2, is empty - see MdocCose.sign1Detached's
+        // doc comment on why the roles aren't the other way around). payload
+        // is itself tag-24-wrapped (an "encoded CBOR data item") around the
+        // actual 4-element DeviceAuthentication array - see
+        // buildDeviceAuthentication's doc comment.
         val sigStructure = CBORObject.DecodeFromBytes(signingInput!!)
-        val deviceAuth = CBORObject.DecodeFromBytes(sigStructure[2].GetByteString())
+        assertEquals(0, sigStructure[2].GetByteString().size)
+        val outerTag = CBORObject.DecodeFromBytes(sigStructure[3].GetByteString())
+        val deviceAuth = CBORObject.DecodeFromBytes(outerTag.UntagOne().GetByteString())
         assertEquals("DeviceAuthentication", deviceAuth[0].AsString())
         val sessionTranscript = deviceAuth[1]
         assertTrue(sessionTranscript[0].isNull)
@@ -266,7 +273,8 @@ class MdocDeviceResponseBuilderTest {
         // Unencrypted dc_api response mode has no verifier encryption key -
         // must not crash, and must encode the thumbprint slot as CBOR null.
         val sigStructure = CBORObject.DecodeFromBytes(signingInput!!)
-        val deviceAuth = CBORObject.DecodeFromBytes(sigStructure[2].GetByteString())
+        val outerTag = CBORObject.DecodeFromBytes(sigStructure[3].GetByteString())
+        val deviceAuth = CBORObject.DecodeFromBytes(outerTag.UntagOne().GetByteString())
         val handover = deviceAuth[1][2]
         assertEquals("OpenID4VPDCAPIHandover", handover[0].AsString())
     }

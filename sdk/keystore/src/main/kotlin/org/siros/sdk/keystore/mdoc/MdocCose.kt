@@ -35,17 +35,30 @@ object MdocCose {
     }
 
     /**
-     * Build a detached COSE_Sign1 over [payload] with [externalAad] as the
-     * Sig_structure's `external_aad` (the ISO 18013-5 DeviceAuthentication
-     * bytes, for a DeviceResponse device signature). Returns the CBOR-encoded
-     * tag-18 4-element array `[protected, unprotected, null, signature]`.
+     * Build a detached COSE_Sign1 over [payload] (the ISO 18013-5
+     * DeviceAuthentication bytes, for a DeviceResponse device signature).
+     * Returns the CBOR-encoded tag-18 4-element array `[protected,
+     * unprotected, null, signature]`.
+     *
+     * "Detached" describes the OUTPUT wire format only (the 3rd element of
+     * the returned array is CBOR null, since the verifier reconstructs
+     * DeviceAuthentication itself from context rather than needing it
+     * embedded) - the signature is still computed over the real [payload]
+     * bytes in the Sig_structure's `payload` position, with `external_aad`
+     * left empty (`h''`). This was previously inverted (payload hardcoded
+     * empty, [payload]'s content passed as external_aad instead) - a real
+     * bug matching Google's own reference wallet's construction
+     * (https://github.com/digitalcredentialsdev/CMWallet's
+     * `generateDeviceResponse()`), confirmed by that reference's exact
+     * `sigStructure = ["Signature1", protected, byteArrayOf(),
+     * deviceAuthenticationBytes]` shape.
      *
      * @param signer signs raw bytes with the device key; must return a raw
      *   (not DER) signature for ECDSA algorithms.
      */
     suspend fun sign1Detached(
         algorithm: String,
-        externalAad: ByteArray,
+        payload: ByteArray,
         signer: suspend (ByteArray) -> ByteArray,
     ): CBORObject {
         val algValue = algorithmValue(algorithm)
@@ -55,22 +68,29 @@ object MdocCose {
         val protectedBytes = protectedHeaders.EncodeToBytes()
 
         // Sig_structure = ["Signature1", protected, external_aad, payload]
-        // Detached: payload is an empty byte string.
         val sigStructure = CBORObject.NewArray()
         sigStructure.Add(CBORObject.FromObject("Signature1"))
         sigStructure.Add(CBORObject.FromObject(protectedBytes))
-        sigStructure.Add(CBORObject.FromObject(externalAad))
         sigStructure.Add(CBORObject.FromObject(ByteArray(0)))
+        sigStructure.Add(CBORObject.FromObject(payload))
         val toBeSigned = sigStructure.EncodeToBytes()
 
         val signature = signer(toBeSigned)
 
+        // Bare 4-element array, NOT wrapped in COSE tag 18 - the mdoc
+        // convention (matching this SDK's own issuer,
+        // sirosfoundation/vc/pkg/mdoc/issuer.go's issuerAuthArray, and
+        // Google's reference wallet's generateDeviceResponse()) embeds
+        // COSE_Sign1 structures as untagged arrays; a tagged value here
+        // previously made Google's own https://digital-credentials.dev/ demo
+        // reject deviceSignature with "object of type 'cbor2.CBORTag' has no
+        // len()" trying to treat it as a plain 4-element array.
         val coseSign1 = CBORObject.NewArray()
         coseSign1.Add(CBORObject.FromObject(protectedBytes))
         coseSign1.Add(CBORObject.NewMap()) // empty unprotected headers
         coseSign1.Add(CBORObject.Null) // detached payload
         coseSign1.Add(CBORObject.FromObject(signature))
 
-        return CBORObject.FromObjectAndTag(coseSign1, 18)
+        return coseSign1
     }
 }

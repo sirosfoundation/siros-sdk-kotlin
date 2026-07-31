@@ -223,7 +223,19 @@ class MdocDeviceResponseBuilder(
         return sessionTranscript.EncodeToBytes()
     }
 
-    /** DeviceAuthentication = ["DeviceAuthentication", SessionTranscript, DocType] */
+    /**
+     * DeviceAuthentication = ["DeviceAuthentication", SessionTranscript,
+     * DocType, DeviceNameSpacesBytes], the whole 4-element array itself
+     * tag-24-wrapped (an "encoded CBOR data item"), per ISO 18013-5 §9.1.3.4
+     * and matching Google's reference wallet's `generateDeviceResponse()`
+     * (https://github.com/digitalcredentialsdev/CMWallet). This was
+     * previously a bare, untagged 3-element array (missing the namespaces
+     * element entirely and never tag-24-wrapped) - since deviceAuth's
+     * signature is computed over these exact bytes, a verifier
+     * reconstructing the correct 4-element tag-24 form (as Google's own
+     * https://digital-credentials.dev/ demo does) would always disagree with
+     * a signature computed over the old, different bytes.
+     */
     private fun buildDeviceAuthentication(docType: String, sessionTranscript: ByteArray): ByteArray {
         // sessionTranscript is already CBOR-encoded; decode it back to embed
         // as a nested CBOR item rather than a byte string.
@@ -231,8 +243,21 @@ class MdocDeviceResponseBuilder(
         deviceAuth.Add(CBORObject.FromObject("DeviceAuthentication"))
         deviceAuth.Add(CBORObject.DecodeFromBytes(sessionTranscript))
         deviceAuth.Add(CBORObject.FromObject(docType))
-        return deviceAuth.EncodeToBytes()
+        deviceAuth.Add(emptyDeviceNameSpacesTag())
+        val tagged = CBORObject.FromObjectAndTag(deviceAuth.EncodeToBytes(), 24)
+        return tagged.EncodeToBytes()
     }
+
+    /**
+     * Tag-24-wrapped empty map: this SDK never discloses claims via
+     * `deviceSigned.nameSpaces` (everything comes from `issuerSigned`
+     * instead), so this is always empty - but it must be the SAME bytes
+     * both here (embedded in the signed DeviceAuthentication) and in
+     * [assembleFinalResponse]'s actual `deviceSigned.nameSpaces` field,
+     * since a verifier reconstructs DeviceAuthentication from the latter.
+     */
+    private fun emptyDeviceNameSpacesTag(): CBORObject =
+        CBORObject.FromObjectAndTag(CBORObject.NewMap().EncodeToBytes(), 24)
 
     /**
      * Assemble the final DeviceResponse CBOR structure.
@@ -246,7 +271,7 @@ class MdocDeviceResponseBuilder(
         val deviceSignatureMap = CBORObject.NewMap()
         deviceSignatureMap["deviceSignature"] = coseSign1
         val deviceSignedMap = CBORObject.NewMap()
-        deviceSignedMap["nameSpaces"] = CBORObject.FromObjectAndTag(CBORObject.NewMap().EncodeToBytes(), 24)
+        deviceSignedMap["nameSpaces"] = emptyDeviceNameSpacesTag()
         deviceSignedMap["deviceAuth"] = deviceSignatureMap
         documentObj["deviceSigned"] = deviceSignedMap
 
