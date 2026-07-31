@@ -4,6 +4,15 @@ package org.siros.sdk.sample.dcapi
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.credentials.DigitalCredential
 import androidx.credentials.ExperimentalDigitalCredentialApi
 import androidx.credentials.GetCredentialResponse
@@ -13,10 +22,11 @@ import androidx.credentials.provider.PendingIntentHandler
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import org.siros.sdk.credentials.WalletException
+import org.siros.sdk.sample.R
 import timber.log.Timber
 
 /**
- * Headless Activity that receives the OS's Digital Credentials API
+ * Near-headless Activity that receives the OS's Digital Credentials API
  * `GET_CREDENTIAL` intent when the user picks one of this app's entries
  * from a browser page's `navigator.credentials.get({digital: {...}})`
  * picker (see [DCAPIProviderRegistration]).
@@ -32,11 +42,20 @@ import timber.log.Timber
  * [org.siros.sdk.wallet.SirosWallet.handleDCAPIRequest] - this Activity is
  * just the platform glue: extract the request + verified origin from the
  * Intent, call the SDK, and hand the result back via [PendingIntentHandler].
+ *
+ * Shows a bare spinner rather than being fully invisible/transparent:
+ * [org.siros.sdk.wallet.SirosWallet.handleDCAPIRequest] does real network
+ * work (trust evaluation, occasionally an engine reconnect) that can take
+ * more than an instant, and a blank screen during that window reads as
+ * frozen - a real test found a user swiping away what looked like a hung
+ * screen, which tears down the whole host task (including the calling
+ * browser, since this Activity runs in the caller's task).
  */
 @OptIn(ExperimentalDigitalCredentialApi::class)
 class DCAPIGetCredentialActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        setContent { LoadingSpinner() }
 
         val request = PendingIntentHandler.retrieveProviderGetCredentialRequest(intent)
         if (request == null) {
@@ -53,14 +72,13 @@ class DCAPIGetCredentialActivity : ComponentActivity() {
         }
 
         // The verified origin the OS/browser attests, NOT anything read from
-        // the request body itself. TODO(#72 follow-up): the real privileged
-        // browser allowlist JSON (Google's published list of privileged
-        // browser package/signature pairs) needs to replace this empty
-        // placeholder for getOrigin() to actually resolve a browser-supplied
-        // origin - as-is this only resolves origins for privileged-allowlist
-        // matches, which will legitimately be none until that's supplied.
+        // the request body itself - resolved against Google Password
+        // Manager's openly-published privileged browser allowlist
+        // (https://www.gstatic.com/gpm-passkeys-privileged-apps/apps.json,
+        // bundled at res/raw/gpm_privileged_apps.json), the same allowlist
+        // Chrome's own passkey/DC API origin verification is checked against.
         val origin = try {
-            request.callingAppInfo.getOrigin(PRIVILEGED_ALLOWLIST_JSON)
+            request.callingAppInfo.getOrigin(loadPrivilegedAllowlist())
         } catch (e: Exception) {
             Timber.w(e, "Could not resolve verified origin for DC API request")
             null
@@ -103,7 +121,16 @@ class DCAPIGetCredentialActivity : ComponentActivity() {
         finish()
     }
 
-    private companion object {
-        const val PRIVILEGED_ALLOWLIST_JSON = "{\"apps\":[]}"
+    private fun loadPrivilegedAllowlist(): String =
+        resources.openRawResource(R.raw.gpm_privileged_apps).bufferedReader().use { it.readText() }
+}
+
+@Composable
+private fun LoadingSpinner() {
+    Box(
+        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator(color = Color.White)
     }
 }

@@ -223,6 +223,69 @@ class WscdKeystoreAdapterTest {
         com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256)
             .generate().toPublicJWK().toJSONString()
 
+    // ── Signer key round-trip through privatedata (softkey persistence) ──
+
+    private val fakePrfOutput = ByteArray(32) { it.toByte() }
+    private val hkdfSalt = ByteArray(32) { (it + 0x10).toByte() }
+    private val hkdfInfo = "SIROS Wallet PRF".toByteArray(Charsets.UTF_8)
+
+    @Test
+    fun exportEncryptedContainerFoldsInSignersExportablePrivateKeys() = runTest {
+        val keyJwk = com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256)
+            .keyID("softkey-1").generate().toJSONString()
+        val signer = mockk<Signer>(relaxed = true)
+        coEvery { signer.exportPrivateKeypairs() } returns listOf(
+            ExportedPrivateKeypair(keyId = "softkey-1", algorithm = "ES256", privateJwk = keyJwk)
+        )
+        val adapter = WscdKeystoreAdapter(signer)
+        adapter.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+
+        adapter.exportEncryptedContainer()
+
+        coVerify(exactly = 1) { signer.exportPrivateKeypairs() }
+    }
+
+    @Test
+    fun unlockRestoresSignersPreviouslyExportedPrivateKeysFromPrivatedata() = runTest {
+        val keyJwk = com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256)
+            .keyID("softkey-1").generate().toJSONString()
+        val signer = mockk<Signer>(relaxed = true)
+        coEvery { signer.exportPrivateKeypairs() } returns listOf(
+            ExportedPrivateKeypair(keyId = "softkey-1", algorithm = "ES256", privateJwk = keyJwk)
+        )
+        val adapter = WscdKeystoreAdapter(signer)
+        adapter.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        // No keys existed yet on this first (fresh) unlock, so nothing to restore.
+        coVerify(exactly = 0) { signer.importPrivateKeypairs(any()) }
+
+        val exported = adapter.exportEncryptedContainer()
+        adapter.lock()
+
+        adapter.unlock(fakePrfOutput, exported, hkdfSalt, hkdfInfo)
+
+        coVerify(exactly = 1) {
+            signer.importPrivateKeypairs(match { restored ->
+                restored.size == 1 &&
+                    restored[0].keyId == "softkey-1" &&
+                    com.nimbusds.jose.jwk.ECKey.parse(restored[0].privateJwk).d != null
+            })
+        }
+    }
+
+    @Test
+    fun signerWithNoExportableKeysNeverTriggersImport() = runTest {
+        // The default Signer.exportPrivateKeypairs()/importPrivateKeypairs()
+        // no-ops (hardware/remote-HSM plugins have nothing exportable) -
+        // exportEncryptedContainer/unlock must stay side-effect-free for them.
+        val adapter = WscdKeystoreAdapter(createMockSigner())
+        adapter.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        val exported = adapter.exportEncryptedContainer()
+        adapter.lock()
+
+        adapter.unlock(fakePrfOutput, exported, hkdfSalt, hkdfInfo)
+        assertTrue(adapter.isUnlocked)
+    }
+
     @Test
     fun generateKeyAttestationBuildsValidJwtWithAttestedKeysAndSecurityProperties() = runTest {
         val signer = createMockSigner()

@@ -42,13 +42,21 @@ object DCAPICredentialEntryBuilder {
         }
     }
 
+    /**
+     * Split a [org.siros.sdk.credentials.DisplayClaim.key] ("$namespace.$elementIdentifier",
+     * see [CredentialUtils.extractMdocClaims]) back into its namespace/identifier
+     * parts. ISO mdoc namespaces are themselves dotted (e.g. "org.iso.18013.5.1"),
+     * so splitting on the FIRST dot mis-parses namespace="org"/
+     * identifier="iso.18013.5.1.family_name". elementIdentifier is always the
+     * last segment (mdoc element identifiers never contain dots), so this
+     * splits on the LAST dot instead.
+     */
+    internal fun splitMdocClaimKey(key: String): Pair<String, String> =
+        key.substringBeforeLast(".") to key.substringAfterLast(".")
+
     private fun buildMdocEntry(cred: StoredCredential): MdocEntry {
         val fields = CredentialUtils.extractClaims(cred).map { claim ->
-            // DisplayClaim.key for mdoc is "$namespace.$elementIdentifier" -
-            // see CredentialUtils.extractMdocClaims.
-            val parts = claim.key.split(".", limit = 2)
-            val namespace = parts[0]
-            val identifier = parts.getOrElse(1) { parts[0] }
+            val (namespace, identifier) = splitMdocClaimKey(claim.key)
             MdocField(
                 namespace,
                 identifier,

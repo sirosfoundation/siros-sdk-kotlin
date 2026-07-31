@@ -4,4 +4,25 @@
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
+
+    <!--
+        Invisible-but-not-NoDisplay theme for DCAPIGetCredentialActivity.
+        Theme.NoDisplay sets windowNoDisplay, which forces the OS to require
+        finish() to be called before onResume() completes - fine for a
+        synchronous trampoline, but DCAPIGetCredentialActivity does real
+        async work (JWS verification, DCQL matching, signing) via
+        SirosWallet.handleDCAPIRequest before it can respond, which routinely
+        takes longer than a single frame and crashes with "did not call
+        finish() prior to onResume() completing". A fully transparent theme
+        gives the same invisible UX without that synchronous constraint.
+    -->
+    <style name="Theme.SirosSDKSample.Transparent" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowDisablePreview">true</item>
+        <item name="android:windowShowWallpaper">true</item>
+    </style>
 </resources>

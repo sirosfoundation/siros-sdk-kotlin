@@ -45,7 +45,7 @@ class WscdKeystoreAdapter(
 
     /**
      * Owns the PRF-protected container (mainKey/prfKeys/jwe → V3
-     * WalletStateContainer) for just this adapter's *credentials* - the
+     * WalletStateContainer) for this adapter's *credentials* - the
      * WSCD manages its own signing-key protection, but SIROS ID's core tenet
      * is that private data, including issued credentials, is always
      * protected by the passkey's PRF-derived secret independent of whichever
@@ -53,10 +53,20 @@ class WscdKeystoreAdapter(
      * WSCD-adapter-local format) guarantees byte-for-byte compatibility with
      * wallet-frontend and JweKeystore-backed native clients per
      * privatedata-spec - the SAME passkey must unlock the SAME credentials
-     * on any client. `generateKey`/`generateKeypairs` are never called on
-     * this instance, so its `keypairs` array stays empty forever, which is
-     * the correct, spec-compliant way to represent "this client's signing
-     * keys are WSCD-protected and not exportable into the shared container."
+     * on any client.
+     *
+     * For a hardware-backed or remote-HSM-backed [signer] (FIDO2/CTAP2,
+     * R2PS), private key material never leaves that plugin - it persists on
+     * its own (a secure element, a remote server), so this instance's own
+     * `keypairs` legitimately stays empty forever. For the software
+     * ("softkey") plugin, though, there IS real private key material that
+     * only ever lives in that plugin's own process memory (see
+     * [Signer.exportPrivateKeypairs]'s doc comment) - without folding it in
+     * here too, on [unlock]/[exportEncryptedContainer], those keys would be
+     * silently lost every time the app process restarts, even though the
+     * credentials they're bound to persist fine. [Signer.exportPrivateKeypairs]/
+     * [Signer.importPrivateKeypairs] default to a no-op for plugins that
+     * don't support this, so this round-trip is harmless for those.
      */
     private val credentialsKeystore = JweKeystore()
 
@@ -69,6 +79,17 @@ class WscdKeystoreAdapter(
         hkdfInfo: ByteArray,
     ) {
         credentialsKeystore.unlock(prfOutput, encryptedContainer, hkdfSalt, hkdfInfo)
+        // Restore the signer's own private keys (if it has any exportable -
+        // see the class doc comment) from what credentialsKeystore just
+        // parsed out of privatedata's own S.keypairs. Must happen before any
+        // signer.generateKey() call in this session, since some plugins'
+        // import replaces their whole registration.
+        val restorable = credentialsKeystore.exportKeypairJwks().map { (kid, jwk) ->
+            ExportedPrivateKeypair(keyId = kid, algorithm = "ES256", privateJwk = jwk)
+        }
+        if (restorable.isNotEmpty()) {
+            signer.importPrivateKeypairs(restorable)
+        }
     }
 
     override fun lock() {
@@ -306,6 +327,13 @@ class WscdKeystoreAdapter(
     }
 
     override suspend fun exportEncryptedContainer(): ByteArray {
+        // Fold the signer's own private keys (if any are exportable - see
+        // the class doc comment) into credentialsKeystore's own keypairs
+        // before serializing, so they round-trip through privatedata
+        // instead of only living in that signer's process memory.
+        for (kp in signer.exportPrivateKeypairs()) {
+            credentialsKeystore.importKeypairJwk(kp.keyId, kp.privateJwk)
+        }
         return credentialsKeystore.exportEncryptedContainer()
     }
 

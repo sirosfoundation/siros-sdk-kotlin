@@ -60,7 +60,43 @@ interface Signer {
      * methods used in the most recent [sign] operation.
      */
     suspend fun securityProperties(keyId: String): SignerSecurityProperties
+
+    /**
+     * Export this signer's own private keys as spec-compliant JWKs
+     * (privatedata-spec §6, `S.keypairs[].keypair.privateKey`), so a
+     * software-backed signer's keys can be persisted through the same
+     * PRF-protected container as everything else instead of being lost
+     * whenever this signer's own backing process restarts.
+     *
+     * Only meaningful for plugins that hold exportable private key material
+     * in the first place - there is nothing to export from a hardware-backed
+     * or remote-HSM-backed key (their whole point is that the private key
+     * never leaves the secure element/server). Default: unsupported, returns
+     * empty - only the software ("softkey") plugin overrides this.
+     */
+    suspend fun exportPrivateKeypairs(): List<ExportedPrivateKeypair> = emptyList()
+
+    /**
+     * Restore keys previously returned by [exportPrivateKeypairs] - the
+     * counterpart used after a fresh unlock to rehydrate a software-backed
+     * signer's in-memory key store from privatedata's own `S.keypairs`.
+     * Default: no-op, since only [exportPrivateKeypairs]'s overriders need
+     * to accept keys back.
+     */
+    suspend fun importPrivateKeypairs(keypairs: List<ExportedPrivateKeypair>) {}
 }
+
+/**
+ * A signer's own private key, exported as a full JWK (including the private
+ * `d` parameter) so it can round-trip through privatedata's `S.keypairs`
+ * array (privatedata-spec §6) - see [Signer.exportPrivateKeypairs].
+ */
+data class ExportedPrivateKeypair(
+    val keyId: String,
+    val algorithm: String,
+    /** Full private JWK JSON, e.g. `{"kty":"EC","crv":"P-256","x":...,"y":...,"d":...}`. */
+    val privateJwk: String,
+)
 
 /** Result of a key migration operation. */
 sealed class MigrationResult {

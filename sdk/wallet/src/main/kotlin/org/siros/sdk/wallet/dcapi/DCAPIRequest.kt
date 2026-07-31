@@ -10,6 +10,7 @@ import com.nimbusds.jose.jwk.RSAKey
 import com.nimbusds.jose.util.X509CertUtils
 import com.nimbusds.jwt.SignedJWT
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -41,6 +42,14 @@ data class DCAPIRequest(
     val clientMetadata: JsonObject?,
     /** Present only for the signed/multisigned protocol variant. */
     val keyMaterial: DCAPIRequestKeyMaterial? = null,
+    /**
+     * The protocol identifier from the incoming request's `requests[0].protocol`
+     * (e.g. "openid4vp-v1-signed") - the platform's own reference wallet
+     * (https://github.com/digitalcredentialsdev/CMWallet) echoes this back
+     * verbatim in the final response envelope (`{"protocol": ..., "data":
+     * ...}`), so it must be threaded through from the request.
+     */
+    val protocol: String,
 )
 
 /**
@@ -67,11 +76,36 @@ object DCAPIRequestParser {
             throw DCAPIRequestException("DC API request is not valid JSON: ${e.message}")
         }
 
-        val requestJwt = outer["request"]?.jsonPrimitive?.contentOrNull
-        return if (requestJwt != null) parseSigned(requestJwt) else parseUnsigned(outer)
+        // [GetDigitalCredentialOption.requestJson] is the FULL request handed
+        // to navigator.credentials.get({digital: {requests: [{protocol,
+        // data}]}}) - {"requests": [{"protocol": ..., "data": {...}}, ...]} -
+        // not a single request's `data` object on its own. The platform
+        // picker only surfaces an entry after matching it against one of our
+        // registered protocols, so the first (and in practice only, since
+        // the caller picks one best protocol before invoking the API) entry
+        // is the one that was selected; its `data` is what the rest of this
+        // parser (signed vs. unsigned) actually operates on.
+        val requestEntries = (outer["requests"] as? JsonArray)
+            ?: throw DCAPIRequestException("DC API request missing 'requests' array")
+        val requestEntry = requestEntries.firstOrNull()?.jsonObject
+            ?: throw DCAPIRequestException("DC API request's 'requests' array is empty")
+        val data = requestEntry["data"]?.jsonObject
+            ?: throw DCAPIRequestException("DC API request's first entry is missing 'data'")
+
+        val requestJwt = data["request"]?.jsonPrimitive?.contentOrNull
+        // The platform's own reference wallet echoes this protocol identifier
+        // back verbatim in the final response envelope - see
+        // SirosWallet.handleDCAPIRequest's doc comment on why this can't just
+        // be inferred/hardcoded there. Falls back to the OpenID4VP protocol
+        // implied by this request's own shape if the entry omits it (should
+        // not happen per the DC API spec, but the response envelope still
+        // needs *some* value).
+        val protocol = requestEntry["protocol"]?.jsonPrimitive?.contentOrNull
+            ?: if (requestJwt != null) "openid4vp-v1-signed" else "openid4vp-v1-unsigned"
+        return if (requestJwt != null) parseSigned(requestJwt, protocol) else parseUnsigned(data, protocol)
     }
 
-    private fun parseUnsigned(obj: JsonObject): DCAPIRequest {
+    private fun parseUnsigned(obj: JsonObject, protocol: String): DCAPIRequest {
         return DCAPIRequest(
             clientId = obj["client_id"]?.jsonPrimitive?.contentOrNull,
             responseMode = obj["response_mode"]?.jsonPrimitive?.contentOrNull ?: "dc_api",
@@ -80,10 +114,11 @@ object DCAPIRequestParser {
             dcqlQuery = obj["dcql_query"]?.jsonObject,
             clientMetadata = obj["client_metadata"]?.jsonObject,
             keyMaterial = null,
+            protocol = protocol,
         )
     }
 
-    private fun parseSigned(jwt: String): DCAPIRequest {
+    private fun parseSigned(jwt: String, protocol: String): DCAPIRequest {
         val signedJwt = try {
             SignedJWT.parse(jwt)
         } catch (e: Exception) {
@@ -126,6 +161,7 @@ object DCAPIRequestParser {
                 x5c = x5cChain?.map { it.toString() },
                 jwk = keyMaterialJwkJson,
             ),
+            protocol = protocol,
         )
     }
 

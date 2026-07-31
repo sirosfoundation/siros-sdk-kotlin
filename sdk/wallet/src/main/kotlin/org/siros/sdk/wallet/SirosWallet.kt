@@ -1264,24 +1264,21 @@ class SirosWallet private constructor(
         val matchResults = dcqlOutput.queryResults
         val candidates = matchResults.flatMap { it.candidates }.distinctBy { it.id }
 
-        val listener = eventListener
-        val selectedIds = if (listener != null && candidates.isNotEmpty()) {
-            listener.onCredentialSelectionRequired(
-                PresentationRequest(
-                    verifierName = trustResult.entityName,
-                    trustResult = trustResult,
-                    matchResults = matchResults,
-                    candidates = candidates,
-                    credentialSets = dcqlOutput.credentialSets,
-                    satisfiableOptions = dcqlOutput.satisfiableOptions,
-                )
-            )
-        } else {
-            candidates.map { it.id }
-        }
+        // Unlike the QR/redirect flow, credential selection and consent
+        // already happened natively - the OS's own credential picker (see
+        // DCAPIProviderRegistration/DCAPIGetCredentialActivity) showed the
+        // matching registered entries and the user picked one before this
+        // Activity was ever launched. Routing through eventListener's
+        // interactive onCredentialSelectionRequired here would suspend
+        // waiting for an in-app consent screen that this headless flow
+        // never shows - and since that listener is registered globally on
+        // the shared wallet instance (by MainActivity's WalletViewModel, for
+        // the unrelated in-app flow) and stays registered even once
+        // MainActivity is backgrounded, that wait would hang forever.
+        val selectedIds = candidates.map { it.id }
 
         if (selectedIds.isEmpty()) {
-            throw WalletException("User declined the DC API presentation request")
+            throw WalletException("No credential in the wallet matches the request")
         }
 
         // "origin:<value>" per OpenID4VP 1.0 Appendix A is only used for the
@@ -1333,14 +1330,29 @@ class SirosWallet private constructor(
             put("vp_token", vpTokenObj)
         }.toString()
 
-        val finalResponseJson = if (request.responseMode == "dc_api.jwt") {
+        val responseData = if (request.responseMode == "dc_api.jwt") {
             val jwe = DCAPIResponseEncryption.encryptResponse(responseBody, encryptionJwk!!)
             kotlinx.serialization.json.buildJsonObject {
                 put("response", kotlinx.serialization.json.JsonPrimitive(jwe))
-            }.toString()
+            }
         } else {
-            responseBody
+            kotlinx.serialization.json.Json.parseToJsonElement(responseBody).jsonObject
         }
+
+        // The platform's own reference wallet
+        // (https://github.com/digitalcredentialsdev/CMWallet) wraps its
+        // response in this exact {"protocol": ..., "data": {...}} envelope
+        // before handing it to DigitalCredential() - the mirror image of the
+        // {"requests": [{"protocol", "data"}]} envelope the request itself
+        // arrives in (see DCAPIRequestParser). Returning the bare `data`
+        // object on its own, as this code did before, leaves the platform
+        // with no declared protocol to associate the response with; it
+        // fails the exchange with a generic, non-diagnostic error rather
+        // than a parse error.
+        val finalResponseJson = kotlinx.serialization.json.buildJsonObject {
+            put("protocol", kotlinx.serialization.json.JsonPrimitive(request.protocol))
+            put("data", responseData)
+        }.toString()
 
         _presentationHistory.add(0, PresentationRecord(
             id = java.util.UUID.randomUUID().toString(),

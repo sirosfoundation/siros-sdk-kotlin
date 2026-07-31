@@ -1072,8 +1072,6 @@ class SirosWalletTest {
         coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
         val keystore = mockk<KeystoreManager>()
         coEvery { keystore.signVpToken(any(), any(), any(), any()) } returns "signed-vp-token"
-        val listener = mockk<WalletEventListener>()
-        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf("cred-1")
         val store = FakeCredentialStore(mutableListOf(
             StoredCredential(
                 id = "cred-1",
@@ -1088,12 +1086,11 @@ class SirosWalletTest {
             "apiClient" to apiClient,
             "keystore" to keystore,
             "credentialStore" to store,
-            "eventListener" to listener,
             "trustCache" to TrustCache(),
             "_presentationHistory" to mutableListOf<PresentationRecord>(),
         )
 
-        val requestJson = buildJsonObject {
+        val requestJson = wrapDCAPIRequest("openid4vp-v1-unsigned", buildJsonObject {
             put("response_type", "vp_token")
             put("nonce", "dc-nonce-1")
             put("response_mode", "dc_api")
@@ -1105,7 +1102,7 @@ class SirosWalletTest {
                     })
                 }
             }
-        }.toString()
+        })
 
         val result = wallet.handleDCAPIRequest(requestJson, origin = "https://relying-party.example")
 
@@ -1119,7 +1116,9 @@ class SirosWalletTest {
         }
         assertEquals(listOf("cred-1"), result.credentialIds)
         val parsed = Json.parseToJsonElement(result.responseJson).jsonObject
-        assertEquals("signed-vp-token", parsed["vp_token"]?.jsonObject?.get("query1")?.jsonPrimitive?.content)
+        assertEquals("openid4vp-v1-unsigned", parsed["protocol"]?.jsonPrimitive?.content)
+        val data = parsed["data"]?.jsonObject
+        assertEquals("signed-vp-token", data?.get("vp_token")?.jsonObject?.get("query1")?.jsonPrimitive?.content)
         assertEquals(1, wallet.presentationHistory.size)
     }
 
@@ -1140,8 +1139,6 @@ class SirosWalletTest {
             coEvery {
                 keystore.signMdocPresentationForDCAPI(any(), any(), any(), any(), any())
             } returns "device-response".toByteArray()
-            val listener = mockk<WalletEventListener>()
-            coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf("cred-mdl")
             val store = FakeCredentialStore(mutableListOf(
                 StoredCredential(
                     id = "cred-mdl",
@@ -1156,15 +1153,14 @@ class SirosWalletTest {
                 "apiClient" to apiClient,
                 "keystore" to keystore,
                 "credentialStore" to store,
-                "eventListener" to listener,
                 "trustCache" to TrustCache(),
                 "_presentationHistory" to mutableListOf<PresentationRecord>(),
             )
 
-            val requestJson = buildJsonObject {
+            val requestJson = wrapDCAPIRequest("openid4vp-v1-unsigned", buildJsonObject {
                 put("nonce", "dc-nonce-mdl")
                 put("response_mode", "dc_api")
-            }.toString()
+            })
 
             wallet.handleDCAPIRequest(requestJson, origin = "https://relying-party.example")
 
@@ -1183,21 +1179,22 @@ class SirosWalletTest {
     }
 
     @Test
-    fun handleDCAPIRequest_userDeclines_throwsWalletException() = runTest(dispatcher) {
+    fun handleDCAPIRequest_noMatchingCredential_throwsWalletException() = runTest(dispatcher) {
+        // Selection/consent for DC API happens natively via the OS's own
+        // credential picker before this Activity/call is ever reached - so
+        // there's no in-app "decline" path to test here (see
+        // handleDCAPIRequest's doc comment on why it no longer routes
+        // through eventListener.onCredentialSelectionRequired). The
+        // analogous failure is simply no matching credential in the wallet.
         val apiClient = mockk<BackendApiClient>()
         coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
-        val listener = mockk<WalletEventListener>()
-        coEvery { listener.onCredentialSelectionRequired(any()) } returns emptyList()
-        val store = FakeCredentialStore(mutableListOf(
-            StoredCredential(id = "cred-1", format = "dc+sd-jwt", raw = "raw", metadata = CredentialMetadata(name = "X")),
-        ))
+        val store = FakeCredentialStore(mutableListOf())
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "keystore" to mockk<KeystoreManager>(relaxed = true),
             "credentialStore" to store,
-            "eventListener" to listener,
             "trustCache" to TrustCache(),
             "_presentationHistory" to mutableListOf<PresentationRecord>(),
         )
@@ -1205,7 +1202,7 @@ class SirosWalletTest {
         var thrown: Throwable? = null
         try {
             wallet.handleDCAPIRequest(
-                buildJsonObject { put("nonce", "n") }.toString(),
+                wrapDCAPIRequest("openid4vp-v1-unsigned", buildJsonObject { put("nonce", "n") }),
                 origin = "https://relying-party.example",
             )
         } catch (e: Throwable) {
@@ -1220,8 +1217,6 @@ class SirosWalletTest {
         coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
         val keystore = mockk<KeystoreManager>()
         coEvery { keystore.signVpToken(any(), any(), any(), any()) } returns "signed-vp-token"
-        val listener = mockk<WalletEventListener>()
-        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf("cred-1")
         val store = FakeCredentialStore(mutableListOf(
             StoredCredential(id = "cred-1", format = "dc+sd-jwt", raw = "raw", metadata = CredentialMetadata(name = "X")),
         ))
@@ -1231,7 +1226,6 @@ class SirosWalletTest {
             "apiClient" to apiClient,
             "keystore" to keystore,
             "credentialStore" to store,
-            "eventListener" to listener,
             "trustCache" to TrustCache(),
             "_presentationHistory" to mutableListOf<PresentationRecord>(),
         )
@@ -1240,7 +1234,7 @@ class SirosWalletTest {
             .keyID("enc-1")
             .keyUse(com.nimbusds.jose.jwk.KeyUse.ENCRYPTION)
             .generate()
-        val requestJson = buildJsonObject {
+        val requestJson = wrapDCAPIRequest("openid4vp-v1-unsigned", buildJsonObject {
             put("nonce", "dc-nonce-2")
             put("response_mode", "dc_api.jwt")
             putJsonObject("client_metadata") {
@@ -1252,12 +1246,12 @@ class SirosWalletTest {
                     }
                 }
             }
-        }.toString()
+        })
 
         val result = wallet.handleDCAPIRequest(requestJson, origin = "https://relying-party.example")
 
         val parsed = Json.parseToJsonElement(result.responseJson).jsonObject
-        val jwe = parsed["response"]?.jsonPrimitive?.content
+        val jwe = parsed["data"]?.jsonObject?.get("response")?.jsonPrimitive?.content
         assertTrue("response must be a JWE, not a plain vp_token", jwe != null)
         val jweObject = JWEObject.parse(jwe)
         jweObject.decrypt(ECDHDecrypter(verifierEncKey))
@@ -1270,8 +1264,6 @@ class SirosWalletTest {
         coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
         val keystore = mockk<KeystoreManager>()
         coEvery { keystore.signVpToken(any(), any(), any(), any()) } returns "signed-vp-token"
-        val listener = mockk<WalletEventListener>()
-        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf("cred-1")
         val store = FakeCredentialStore(mutableListOf(
             StoredCredential(id = "cred-1", format = "dc+sd-jwt", raw = "raw", metadata = CredentialMetadata(name = "X")),
         ))
@@ -1281,7 +1273,6 @@ class SirosWalletTest {
             "apiClient" to apiClient,
             "keystore" to keystore,
             "credentialStore" to store,
-            "eventListener" to listener,
             "trustCache" to TrustCache(),
             "_presentationHistory" to mutableListOf<PresentationRecord>(),
         )
@@ -1296,7 +1287,7 @@ class SirosWalletTest {
         val signedJwt = SignedJWT(header, claims)
         signedJwt.sign(ECDSASigner(verifierSigningKey))
 
-        val requestJson = buildJsonObject { put("request", signedJwt.serialize()) }.toString()
+        val requestJson = wrapDCAPIRequest("openid4vp-v1-signed", buildJsonObject { put("request", signedJwt.serialize()) })
 
         wallet.handleDCAPIRequest(requestJson, origin = "https://relying-party.example")
 
@@ -1331,7 +1322,7 @@ class SirosWalletTest {
         var thrown: Throwable? = null
         try {
             wallet.handleDCAPIRequest(
-                buildJsonObject { put("request", signedJwt.serialize()) }.toString(),
+                wrapDCAPIRequest("openid4vp-v1-signed", buildJsonObject { put("request", signedJwt.serialize()) }),
                 origin = "https://relying-party.example",
             )
         } catch (e: Throwable) {
@@ -1339,6 +1330,22 @@ class SirosWalletTest {
         }
         assertTrue(thrown is org.siros.sdk.wallet.dcapi.DCAPIRequestException)
     }
+
+    /**
+     * Wraps a request's `data` object in the envelope
+     * [org.siros.sdk.wallet.dcapi.DCAPIRequestParser.parse] actually expects
+     * from [androidx.credentials.GetDigitalCredentialOption.requestJson] -
+     * `{"requests": [{"protocol": ..., "data": {...}}]}`, not the bare
+     * `data` object on its own (see that parser's fix for why).
+     */
+    private fun wrapDCAPIRequest(protocol: String, data: JsonObject): String = buildJsonObject {
+        putJsonArray("requests") {
+            add(buildJsonObject {
+                put("protocol", protocol)
+                put("data", data)
+            })
+        }
+    }.toString()
 
     private fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {
         val wallet = allocateInstance(SirosWallet::class.java) as SirosWallet

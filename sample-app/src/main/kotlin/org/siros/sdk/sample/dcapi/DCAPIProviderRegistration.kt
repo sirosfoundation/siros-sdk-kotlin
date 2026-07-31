@@ -33,7 +33,18 @@ object DCAPIProviderRegistration {
                 clear(context)
                 return
             }
-            val registry = OpenId4VpRegistry(entries, REGISTRY_ID)
+            val registry = OpenId4VpRegistry(
+                credentialEntries = entries,
+                id = REGISTRY_ID,
+                // Explicit (added in 1.0.0-alpha05) rather than relying on
+                // whatever the library defaults to when omitted - this
+                // wallet's DCAPIRequestParser genuinely supports all three.
+                supportedProtocols = listOf(
+                    OpenId4VpRegistry.PROTOCOL_OPENID4VP_1_0_SIGNED,
+                    OpenId4VpRegistry.PROTOCOL_OPENID4VP_1_0_MULTISIGNED,
+                    OpenId4VpRegistry.PROTOCOL_OPENID4VP_1_0_UNSIGNED,
+                ),
+            )
             RegistryManager.create(context).registerCredentials(registry)
             Timber.d("DC API registry updated with ${entries.size} entries")
         } catch (e: Exception) {
