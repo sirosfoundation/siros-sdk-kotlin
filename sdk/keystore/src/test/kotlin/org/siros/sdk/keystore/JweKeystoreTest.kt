@@ -117,6 +117,44 @@ class JweKeystoreTest {
     }
 
     @Test
+    fun generateKeyProofBuildsValidPopJwt() = runTest {
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        val keyId = keystore.generateKey()
+
+        val jwt = keystore.generateKeyProof(
+            keyId = keyId,
+            typ = "oauth-client-attestation-pop+jwt",
+            audience = "https://wallet-backend.example.com",
+            extraClaims = mapOf("nonce" to "challenge-abc"),
+        )
+
+        val parsed = com.nimbusds.jwt.SignedJWT.parse(jwt)
+        assertEquals("oauth-client-attestation-pop+jwt", parsed.header.type.toString())
+        assertEquals(com.nimbusds.jose.JWSAlgorithm.ES256, parsed.header.algorithm)
+        assertNotNull(parsed.header.jwk)
+
+        val claims = parsed.jwtClaimsSet
+        assertEquals(listOf("https://wallet-backend.example.com"), claims.audience)
+        assertEquals("challenge-abc", claims.getClaim("nonce"))
+        assertNotNull(claims.issuer)
+        assertNotNull(claims.expirationTime)
+    }
+
+    @Test
+    fun generateKeyProofThrowsForUnknownKeyId() = runTest {
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+
+        try {
+            keystore.generateKeyProof(keyId = "does-not-exist", typ = "x", audience = "aud")
+            fail("expected KeystoreException")
+        } catch (e: KeystoreException) {
+            // expected
+        }
+    }
+
+    @Test
     fun signPresentationProducesJwt() = runTest {
         val keystore = JweKeystore()
         keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)

@@ -759,6 +759,112 @@ class SirosWalletTest {
         verify(exactly = 1) { engine.startIssuance(offer = offerJson, credentialOfferUri = null, redirectUri = "siros-sample://callback") }
     }
 
+    /** header.{"exp": exp}.sig - just enough for CredentialUtils.parseJwtPayload to read `exp`. */
+    private fun fakeJwtWithExp(exp: Long): String {
+        val payload = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("""{"exp":$exp}""".toByteArray(Charsets.UTF_8))
+        return "eyJhbGciOiJub25lIn0.$payload.sig"
+    }
+
+    /**
+     * OAuth Client Attestation (draft-ietf-oauth-attestation-based-client-auth-04
+     * §3.1): startIssuance must obtain a Wallet Instance Attestation (via a
+     * challenge round trip + instance-key PoP) and a fresh per-issuer PoP,
+     * and thread both into the outbound flow_start - see SirosWallet.kt's
+     * resolveClientAttestation/ensureWalletInstanceAttestation.
+     */
+    @Test
+    fun startIssuance_attachesClientAttestation_whenBackendSupportsWia() = runTest(dispatcher) {
+        val server = MockWebServer()
+        server.start()
+        try {
+            server.enqueue(MockResponse().setBody(issuerMetadataJson(server, "org.iso.18013.5.1.mDL")))
+            val engine = mockk<WalletEngineSession>(relaxed = true)
+            val sessionStore = mockk<SessionStore>(relaxed = true)
+            every { sessionStore.instanceKeyId } returns "instance-key-1"
+            val keystore = mockk<KeystoreManager>(relaxed = true)
+            coEvery {
+                keystore.generateKeyProof(keyId = any(), typ = any(), audience = any(), extraClaims = any())
+            } returns "pop-jwt"
+            val apiClient = mockk<BackendApiClient>(relaxed = true)
+            coEvery { apiClient.requestWIAChallenge() } returns buildJsonObject { put("challenge", "chal-1") }
+            val wiaJwt = fakeJwtWithExp(System.currentTimeMillis() / 1000 + 3600)
+            coEvery { apiClient.generateWIA(pop = any(), challenge = "chal-1") } returns wiaJwt
+
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+                "engineSession" to engine,
+                "sessionStore" to sessionStore,
+                "keystore" to keystore,
+                "apiClient" to apiClient,
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+                "json" to Json { ignoreUnknownKeys = true },
+                "httpClient" to OkHttpClient(),
+            )
+            val issuerUrl = server.url("/").toString().trimEnd('/')
+            val offerJson = """{"credential_issuer":"$issuerUrl","credential_configuration_ids":["org.iso.18013.5.1.mDL"]}"""
+
+            wallet.startIssuance(offerJson)
+            advanceUntilIdle()
+
+            verify(exactly = 1) {
+                engine.startIssuance(
+                    offer = offerJson,
+                    credentialOfferUri = null,
+                    redirectUri = "siros-sample://callback",
+                    clientAttestation = wiaJwt,
+                    clientAttestationPoP = "pop-jwt",
+                )
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    /** Missing/unavailable WIA support must never block issuance - engine.startIssuance still fires, with nulls. */
+    @Test
+    fun startIssuance_stillIssues_whenWiaChallengeFails() = runTest(dispatcher) {
+        val server = MockWebServer()
+        server.start()
+        try {
+            server.enqueue(MockResponse().setBody(issuerMetadataJson(server, "org.iso.18013.5.1.mDL")))
+            val engine = mockk<WalletEngineSession>(relaxed = true)
+            val sessionStore = mockk<SessionStore>(relaxed = true)
+            every { sessionStore.instanceKeyId } returns "instance-key-1"
+            val keystore = mockk<KeystoreManager>(relaxed = true)
+            val apiClient = mockk<BackendApiClient>(relaxed = true)
+            coEvery { apiClient.requestWIAChallenge() } throws java.io.IOException("backend unreachable")
+
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+                "engineSession" to engine,
+                "sessionStore" to sessionStore,
+                "keystore" to keystore,
+                "apiClient" to apiClient,
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+                "json" to Json { ignoreUnknownKeys = true },
+                "httpClient" to OkHttpClient(),
+            )
+            val issuerUrl = server.url("/").toString().trimEnd('/')
+            val offerJson = """{"credential_issuer":"$issuerUrl","credential_configuration_ids":["org.iso.18013.5.1.mDL"]}"""
+
+            wallet.startIssuance(offerJson)
+            advanceUntilIdle()
+
+            verify(exactly = 1) {
+                engine.startIssuance(
+                    offer = offerJson,
+                    credentialOfferUri = null,
+                    redirectUri = "siros-sample://callback",
+                    clientAttestation = null,
+                    clientAttestationPoP = null,
+                )
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
     private fun issuerMetadataJson(server: MockWebServer, configId: String): String {
         val issuerUrl = server.url("/").toString().trimEnd('/')
         return """

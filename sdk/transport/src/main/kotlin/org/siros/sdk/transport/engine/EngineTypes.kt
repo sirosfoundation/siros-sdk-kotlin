@@ -57,6 +57,22 @@ data class FlowStartMessage(
     @SerialName("redirect_uri") val redirectUri: String? = null,
     @SerialName("auth_code") val authCode: String? = null,
     @SerialName("code_verifier") val codeVerifier: String? = null,
+    /**
+     * OAuth Client Attestation (draft-ietf-oauth-attestation-based-client-auth-04
+     * §3.1): a Wallet Instance Attestation JWT (`typ: oauth-client-attestation+jwt`)
+     * obtained from this wallet's own backend (`/wallet-provider/wia/generate`).
+     * Forwarded by go-wallet-backend as the `OAuth-Client-Attestation` HTTP
+     * header on PAR/token requests to the credential issuer - see
+     * `internal/engine/client_attestation.go`'s `TransportSuppliedAttestation`.
+     */
+    @SerialName("client_attestation") val clientAttestation: String? = null,
+    /**
+     * The matching PoP JWT (`typ: oauth-client-attestation-pop+jwt`), freshly
+     * signed per flow with `aud` = the credential issuer's own authorization
+     * server, proving possession of the instance key the WIA above is bound
+     * to (`cnf.jwk`/`cnf.jkt`). Forwarded as `OAuth-Client-Attestation-PoP`.
+     */
+    @SerialName("client_attestation_pop") val clientAttestationPoP: String? = null,
     val timestamp: String? = null,
 )
 

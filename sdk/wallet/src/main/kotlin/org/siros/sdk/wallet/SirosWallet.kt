@@ -1045,6 +1045,106 @@ class SirosWallet private constructor(
     }
 
     /**
+     * In-memory cache for this session's Wallet Instance Attestation (WIA) -
+     * refetched when missing or close to expiry (see
+     * [ensureWalletInstanceAttestation]). Not persisted across app restarts:
+     * cheap to reissue given a challenge round trip, unlike the instance KEY
+     * itself ([SessionStore.instanceKeyId]), which must stay stable.
+     */
+    private var cachedWia: String? = null
+    private var cachedWiaExpiresAt: Long = 0
+
+    /**
+     * Get (creating once, on first use) this wallet installation's persistent
+     * OAuth Client Attestation instance key ID - see [SessionStore.instanceKeyId].
+     */
+    private suspend fun ensureInstanceKeyId(): String {
+        sessionStore.instanceKeyId?.let { return it }
+        val keyId = keystore.generateKey("ES256")
+        sessionStore.instanceKeyId = keyId
+        return keyId
+    }
+
+    /**
+     * Obtain (fetching + caching, refreshing before expiry) a Wallet Instance
+     * Attestation for this wallet instance from this wallet's own backend
+     * (draft-ietf-oauth-attestation-based-client-auth-04 §3.1 / CS-04 §7.1.2):
+     * request a single-use challenge, sign a PoP JWT over it with the
+     * instance key, and exchange both for a WIA JWT.
+     *
+     * Best-effort: returns null on any failure (network, backend not
+     * configured for WIA, etc.) rather than throwing - a missing/unavailable
+     * client attestation must never block issuance, since not every backend
+     * deployment enables this feature.
+     */
+    private suspend fun ensureWalletInstanceAttestation(): String? {
+        val now = System.currentTimeMillis() / 1000
+        cachedWia?.let { wia -> if (cachedWiaExpiresAt - now > 60) return wia }
+        return try {
+            val client = apiClient ?: return null
+            val keyId = ensureInstanceKeyId()
+            val challengeResponse = client.requestWIAChallenge()
+            val challenge = challengeResponse["challenge"]?.jsonPrimitive?.contentOrNull
+                ?: return null
+            val pop = keystore.generateKeyProof(
+                keyId = keyId,
+                typ = "oauth-client-attestation-pop+jwt",
+                // Must match the backend's configured wallet_provider_uri, if
+                // it enforces one (WIAService.validatePop only checks aud
+                // when that's non-empty) - the base backend URL is the only
+                // value discoverable client-side without a dedicated endpoint.
+                audience = config.backendUrl,
+                extraClaims = mapOf("nonce" to challenge),
+            )
+            val wia = client.generateWIA(pop = pop, challenge = challenge)
+            cachedWia = wia
+            cachedWiaExpiresAt = CredentialUtils.parseJwtPayload(wia)
+                ?.get("exp")?.jsonPrimitive?.longOrNull ?: (now + 300)
+            wia
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to obtain Wallet Instance Attestation")
+            null
+        }
+    }
+
+    /**
+     * Resolve OAuth Client Attestation (a WIA plus a fresh per-flow PoP) for
+     * an issuance flow targeting [issuerUrl] - the pair the engine forwards
+     * as `OAuth-Client-Attestation`/`OAuth-Client-Attestation-PoP` headers to
+     * the credential issuer (see go-wallet-backend's
+     * `client_attestation.go`'s `TransportSuppliedAttestation`).
+     *
+     * The PoP's `aud` targets the issuer's own authorization server if
+     * discoverable from its metadata (mirrors go-wallet-backend's
+     * `IssuerMetadata.authorizationServer()`), falling back to the credential
+     * issuer URL itself for issuers that self-host their AS at the same origin.
+     *
+     * Best-effort: returns null on any failure - missing/misconfigured WIA
+     * support must never block issuance itself.
+     */
+    private suspend fun resolveClientAttestation(issuerUrl: String): Pair<String, String>? {
+        val wia = ensureWalletInstanceAttestation() ?: return null
+        return try {
+            val asUrl = try {
+                getIssuerMetadata(issuerUrl).authorizationServers
+                    ?.firstOrNull { it.isNotBlank() } ?: issuerUrl
+            } catch (e: Exception) {
+                issuerUrl
+            }
+            val keyId = ensureInstanceKeyId()
+            val pop = keystore.generateKeyProof(
+                keyId = keyId,
+                typ = "oauth-client-attestation-pop+jwt",
+                audience = asUrl,
+            )
+            wia to pop
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to generate client attestation PoP")
+            null
+        }
+    }
+
+    /**
      * Discover all available credentials across all visible issuers.
      *
      * Returns a flat list of [CredentialOffer] items ready for display in a
@@ -1154,9 +1254,12 @@ class SirosWallet private constructor(
                 }
             })
         }
+        val clientAttestation = resolveClientAttestation(offer.credentialIssuerIdentifier)
         engine.startIssuance(
             offer = credentialOffer.toString(),
             redirectUri = config.redirectUri.ifBlank { null },
+            clientAttestation = clientAttestation?.first,
+            clientAttestationPoP = clientAttestation?.second,
         )
     }
 
@@ -1181,10 +1284,27 @@ class SirosWallet private constructor(
                 null
             }
         }
+        // Resolve OAuth Client Attestation once, independent of whether the
+        // display-metadata resolution above succeeded - a client that can't
+        // be shown a name/logo should still get an attestation attached.
+        val clientAttestation = try {
+            extractOfferJson(offerUri)?.get("credential_issuer")?.jsonPrimitive?.contentOrNull
+                ?.let { resolveClientAttestation(it) }
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to resolve client attestation for offer")
+            null
+        }
+        val attestation = clientAttestation?.first
+        val attestationPoP = clientAttestation?.second
         if (offerUri.startsWith("openid-credential-offer://")) {
             // Deep-link URI with inline offer — send as "offer" so the engine
             // extracts the credential_offer query parameter instead of HTTP-fetching.
-            engine.startIssuance(offer = offerUri, redirectUri = redirectUri)
+            engine.startIssuance(
+                offer = offerUri,
+                redirectUri = redirectUri,
+                clientAttestation = attestation,
+                clientAttestationPoP = attestationPoP,
+            )
         } else if (offerUri.startsWith("http")) {
             // Universal-link-style offer: the credential_offer/credential_offer_uri
             // live in the URI's own query string (e.g. an issuer's wallet-redirect
@@ -1195,20 +1315,37 @@ class SirosWallet private constructor(
             val params = parseQueryParams(query)
             when {
                 params.containsKey("credential_offer") -> {
-                    engine.startIssuance(offer = params.getValue("credential_offer"), redirectUri = redirectUri)
+                    engine.startIssuance(
+                        offer = params.getValue("credential_offer"),
+                        redirectUri = redirectUri,
+                        clientAttestation = attestation,
+                        clientAttestationPoP = attestationPoP,
+                    )
                 }
                 params.containsKey("credential_offer_uri") -> {
                     engine.startIssuance(
                         credentialOfferUri = params.getValue("credential_offer_uri"),
                         redirectUri = redirectUri,
+                        clientAttestation = attestation,
+                        clientAttestationPoP = attestationPoP,
                     )
                 }
                 else -> {
-                    engine.startIssuance(credentialOfferUri = offerUri, redirectUri = redirectUri)
+                    engine.startIssuance(
+                        credentialOfferUri = offerUri,
+                        redirectUri = redirectUri,
+                        clientAttestation = attestation,
+                        clientAttestationPoP = attestationPoP,
+                    )
                 }
             }
         } else {
-            engine.startIssuance(offer = offerUri, redirectUri = redirectUri)
+            engine.startIssuance(
+                offer = offerUri,
+                redirectUri = redirectUri,
+                clientAttestation = attestation,
+                clientAttestationPoP = attestationPoP,
+            )
         }
     }
 

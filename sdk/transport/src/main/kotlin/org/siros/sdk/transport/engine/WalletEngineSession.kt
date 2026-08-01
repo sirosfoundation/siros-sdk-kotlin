@@ -227,17 +227,29 @@ class WalletEngineSession(
 
     // ── Client → Server messages ────────────────────────────────────
 
-    /** Start an OID4VCI credential issuance flow. */
+    /**
+     * Start an OID4VCI credential issuance flow.
+     *
+     * @param clientAttestation optional Wallet Instance Attestation JWT (OAuth
+     *   Client Attestation, draft-ietf-oauth-attestation-based-client-auth-04
+     *   §3.1) - see [FlowStartMessage.clientAttestation].
+     * @param clientAttestationPoP the matching per-flow PoP JWT, required
+     *   whenever [clientAttestation] is set.
+     */
     fun startIssuance(
         offer: String? = null,
         credentialOfferUri: String? = null,
         redirectUri: String? = null,
+        clientAttestation: String? = null,
+        clientAttestationPoP: String? = null,
     ) {
         send(FlowStartMessage.serializer(), FlowStartMessage(
             protocol = "oid4vci",
             offer = offer,
             credentialOfferUri = credentialOfferUri,
             redirectUri = redirectUri,
+            clientAttestation = clientAttestation,
+            clientAttestationPoP = clientAttestationPoP,
         ))
     }
 

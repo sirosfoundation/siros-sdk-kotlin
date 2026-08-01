@@ -355,4 +355,62 @@ class WscdKeystoreAdapterTest {
         assertEquals(listOf("iso_18045_basic"), claims.getClaim("key_storage"))
         assertEquals(null, claims.getClaim("user_authentication"))
     }
+
+    @Test
+    fun generateKeyProofBuildsValidPopJwt() = runTest {
+        val signer = createMockSigner()
+        coEvery { signer.exportPublicKey(any()) } returns realPublicKeyJwkJson().toByteArray()
+        val adapter = WscdKeystoreAdapter(signer)
+        adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+
+        val jwt = adapter.generateKeyProof(
+            keyId = "test-key-1",
+            typ = "oauth-client-attestation-pop+jwt",
+            audience = "https://wallet-backend.example.com",
+            extraClaims = mapOf("nonce" to "challenge-abc"),
+        )
+
+        val parsed = com.nimbusds.jwt.SignedJWT.parse(jwt)
+        assertEquals("oauth-client-attestation-pop+jwt", parsed.header.type.toString())
+        assertEquals(com.nimbusds.jose.JWSAlgorithm.ES256, parsed.header.algorithm)
+        assertNotNull(parsed.header.jwk)
+
+        val claims = parsed.jwtClaimsSet
+        assertEquals(listOf("https://wallet-backend.example.com"), claims.audience)
+        assertEquals("challenge-abc", claims.getClaim("nonce"))
+        assertNotNull(claims.issuer)
+        assertNotNull(claims.issueTime)
+        assertNotNull(claims.expirationTime)
+        assertNotNull(claims.jwtid)
+    }
+
+    @Test
+    fun generateKeyProofOmitsExtraClaimsWhenNoneGiven() = runTest {
+        val signer = createMockSigner()
+        coEvery { signer.exportPublicKey(any()) } returns realPublicKeyJwkJson().toByteArray()
+        val adapter = WscdKeystoreAdapter(signer)
+        adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+
+        val jwt = adapter.generateKeyProof(
+            keyId = "test-key-1",
+            typ = "oauth-client-attestation-pop+jwt",
+            audience = "https://issuer.example.com",
+        )
+
+        val claims = com.nimbusds.jwt.SignedJWT.parse(jwt).jwtClaimsSet
+        assertEquals(null, claims.getClaim("nonce"))
+    }
+
+    @Test
+    fun generateKeyProofThrowsForUnknownKeyId() = runTest {
+        val adapter = WscdKeystoreAdapter(createMockSigner())
+        adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+
+        try {
+            adapter.generateKeyProof(keyId = "does-not-exist", typ = "x", audience = "aud")
+            fail("expected IllegalStateException")
+        } catch (e: IllegalStateException) {
+            // expected
+        }
+    }
 }

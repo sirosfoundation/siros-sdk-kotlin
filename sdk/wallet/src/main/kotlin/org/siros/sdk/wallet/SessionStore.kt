@@ -96,6 +96,18 @@ internal class SessionStore(context: Context) {
         get() = getString("credential_id")
         set(value) = putString("credential_id", value)
 
+    /**
+     * The keystore key ID used as this wallet installation's persistent
+     * OAuth Client Attestation instance key (draft-ietf-oauth-attestation-based-client-auth-04
+     * §3.1) - generated once, reused for the account's lifetime. The
+     * backend's Wallet Instance Attestation tracks/revokes instances by this
+     * key's JWK thumbprint, so a different key each time would silently
+     * register a new "instance" on every flow.
+     */
+    var instanceKeyId: String?
+        get() = getString("instance_key_id")
+        set(value) = putString("instance_key_id", value)
+
     // ── Private data ────────────────────────────────────────────────
 
     var privateDataJwe: String?

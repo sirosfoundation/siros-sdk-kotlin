@@ -302,6 +302,34 @@ class JweKeystore(
         jwt.serialize()
     }
 
+    override suspend fun generateKeyProof(
+        keyId: String,
+        typ: String,
+        audience: String,
+        extraClaims: Map<String, String>,
+    ): String = mutex.withLock {
+        requireUnlocked()
+        val key = keys[keyId] ?: throw KeystoreException("Key not found: $keyId")
+        val jkt = key.toPublicJWK().computeThumbprint().toString()
+
+        val header = JWSHeader.Builder(JWSAlgorithm.ES256)
+            .type(com.nimbusds.jose.JOSEObjectType(typ))
+            .jwk(key.toPublicJWK())
+            .build()
+
+        val claimsBuilder = JWTClaimsSet.Builder()
+            .issuer(jkt)
+            .audience(audience)
+            .issueTime(Date())
+            .expirationTime(Date(System.currentTimeMillis() + 5 * 60 * 1000))
+            .jwtID(UUID.randomUUID().toString())
+        extraClaims.forEach { (k, v) -> claimsBuilder.claim(k, v) }
+
+        val jwt = SignedJWT(header, claimsBuilder.build())
+        jwt.sign(ECDSASigner(key))
+        jwt.serialize()
+    }
+
     override suspend fun signPresentation(nonce: String, audience: String, credentialIds: List<String>): String = mutex.withLock {
         requireUnlocked()
         val key = keys.values.firstOrNull()
