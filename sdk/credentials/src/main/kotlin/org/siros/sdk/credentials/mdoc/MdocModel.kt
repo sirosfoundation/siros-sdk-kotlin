@@ -20,10 +20,19 @@ import com.upokecenter.cbor.CBORType
  * builder (`MdocDeviceResponseBuilder`, `sdk/keystore`, which depends on this
  * module) need it.
  *
- * Confirmed via `sirosfoundation/wallet-frontend#191`: a stored mdoc
- * credential's raw bytes are a full [DeviceResponseMdoc]-shaped envelope
- * (`{documents: [{docType, issuerSigned}], ...}`), not a bare IssuerSigned
- * blob - [MdocCbor.parseStoredCredential] unwraps this down to the first document.
+ * A stored mdoc credential's raw bytes can be either of two shapes,
+ * depending on the issuer:
+ * - A full `DeviceResponseMdoc`-shaped envelope (`{documents: [{docType,
+ *   issuerSigned}], ...}`) - `sirosfoundation/vc`'s own issuer convention,
+ *   confirmed via `sirosfoundation/wallet-frontend#191`.
+ * - A bare `IssuerSigned` structure (`{nameSpaces, issuerAuth}`) directly,
+ *   per OID4VCI's mso_mdoc credential response as issued by real-world/
+ *   interop issuers (confirmed against geneva2026.mdoc.online's conformance
+ *   suite) - no outer envelope, and no docType field of its own (ISO
+ *   18013-5's IssuerSigned has none); docType is read from the MSO embedded
+ *   in issuerAuth's COSE_Sign1 payload instead.
+ *
+ * [MdocCbor.parseStoredCredential] detects and handles both.
  */
 
 /** A single decoded ISO 18013-5 data element (an unwrapped `IssuerSignedItem`). */
@@ -64,16 +73,23 @@ data class DocumentMdoc(
 object MdocCbor {
 
     /**
-     * Parse a stored mdoc credential's raw bytes (a full DeviceResponseMdoc
-     * envelope, per wallet-frontend#191) and return its first document.
+     * Parse a stored mdoc credential's raw bytes and return its first
+     * document - see the file-level doc comment for the two shapes handled.
      */
     fun parseStoredCredential(bytes: ByteArray): DocumentMdoc {
         val root = CBORObject.DecodeFromBytes(bytes)
         val documents = root["documents"]
-        require(documents != null && documents.type == CBORType.Array && documents.size() > 0) {
-            "mdoc credential envelope missing documents[]"
+        if (documents != null && documents.type == CBORType.Array && documents.size() > 0) {
+            return parseDocument(documents[0])
         }
-        return parseDocument(documents[0])
+
+        val nameSpacesObj = root["nameSpaces"]
+        val issuerAuthObj = root["issuerAuth"]
+        require(nameSpacesObj != null && issuerAuthObj != null) {
+            "mdoc credential envelope missing documents[] (and not a bare IssuerSigned structure either)"
+        }
+        val docType = extractDocTypeFromIssuerAuth(issuerAuthObj)
+        return DocumentMdoc(docType, parseIssuerSigned(nameSpacesObj, issuerAuthObj))
     }
 
     private fun parseDocument(doc: CBORObject): DocumentMdoc {
@@ -83,7 +99,12 @@ object MdocCbor {
             ?: throw IllegalArgumentException("mdoc document missing issuerSigned")
         val nameSpacesObj = issuerSignedObj["nameSpaces"]
             ?: throw IllegalArgumentException("issuerSigned missing nameSpaces")
+        val issuerAuth = issuerSignedObj["issuerAuth"]
+            ?: throw IllegalArgumentException("issuerSigned missing issuerAuth")
+        return DocumentMdoc(docType, parseIssuerSigned(nameSpacesObj, issuerAuth))
+    }
 
+    private fun parseIssuerSigned(nameSpacesObj: CBORObject, issuerAuth: CBORObject): IssuerSignedMdoc {
         val nameSpaces = linkedMapOf<String, List<NamespaceItem>>()
         for (key in nameSpacesObj.keys) {
             val ns = key.AsString()
@@ -95,10 +116,28 @@ object MdocCbor {
             }
             nameSpaces[ns] = items
         }
+        return IssuerSignedMdoc(nameSpaces, issuerAuth)
+    }
 
-        val issuerAuth = issuerSignedObj["issuerAuth"]
-            ?: throw IllegalArgumentException("issuerSigned missing issuerAuth")
-        return DocumentMdoc(docType, IssuerSignedMdoc(nameSpaces, issuerAuth))
+    /**
+     * Extract `docType` from the MSO (MobileSecurityObject) embedded in a
+     * bare IssuerSigned structure's `issuerAuth` COSE_Sign1 payload (index 2
+     * of the 4-element array) - the only place docType is available when
+     * there's no enclosing `{docType, issuerSigned}` document wrapper.
+     */
+    private fun extractDocTypeFromIssuerAuth(issuerAuth: CBORObject): String {
+        require(issuerAuth.type == CBORType.Array && issuerAuth.size() >= 3) {
+            "issuerAuth is not a COSE_Sign1 array"
+        }
+        val payload = issuerAuth[2]
+        val msoBytes = if (payload.HasOneTag(24)) {
+            payload.UntagOne().GetByteString()
+        } else {
+            payload.GetByteString()
+        }
+        val mso = CBORObject.DecodeFromBytes(msoBytes)
+        return mso["docType"]?.AsString()
+            ?: throw IllegalArgumentException("MSO missing docType")
     }
 
     /** Unwrap a tag-24 (encoded-CBOR-data-item) bstr and decode the IssuerSignedItem map inside it. */
