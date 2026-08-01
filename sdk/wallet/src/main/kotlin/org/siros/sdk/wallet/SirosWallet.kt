@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -1059,33 +1060,55 @@ class SirosWallet private constructor(
             try {
                 val metadataJson = client.getIssuerMetadata(issuer.id)
                 val metadata = json.decodeFromJsonElement(IssuerMetadata.serializer(), metadataJson)
-                val issuerDisplay = metadata.display?.firstOrNull()
-                val issuerName = issuerDisplay?.name
-                    ?: java.net.URI(issuer.credentialIssuerIdentifier).host
-                    ?: issuer.credentialIssuerIdentifier
-
-                for ((configId, config) in metadata.credentialConfigurationsSupported) {
-                    val credDisplay = config.credentialMetadata?.display?.firstOrNull()
-                    val credName = credDisplay?.name ?: configId
-                    offers.add(CredentialOffer(
-                        credentialConfigurationId = configId,
-                        credentialIssuerIdentifier = issuer.credentialIssuerIdentifier,
-                        credentialName = credName,
-                        credentialDescription = credDisplay?.description,
-                        issuerName = issuerName,
-                        backgroundColor = credDisplay?.backgroundColor
-                            ?: issuerDisplay?.backgroundColor,
-                        textColor = credDisplay?.textColor
-                            ?: issuerDisplay?.textColor,
-                        logoUri = credDisplay?.logo?.uri,
-                        issuerLogoUri = issuerDisplay?.logo?.uri,
-                    ))
+                for (configId in metadata.credentialConfigurationsSupported.keys) {
+                    buildCredentialOfferFromMetadata(issuer.credentialIssuerIdentifier, configId, metadata)
+                        ?.let { offers.add(it) }
                 }
             } catch (e: Exception) {
                 Timber.w(e, "Failed to fetch metadata for ${issuer.credentialIssuerIdentifier}")
             }
         }
         offers
+    }
+
+    /**
+     * Build a [CredentialOffer] (display name/logo/colors) for one credential
+     * configuration from an issuer's already-fetched [IssuerMetadata], reading
+     * the standard OID4VCI `credential_metadata.display` field (falling back to
+     * the issuer's own top-level `display`). Shared by [getAvailableCredentials]
+     * (lists every configuration a registered issuer supports) and
+     * [startIssuance] (resolves display metadata for the single configuration
+     * named in a scanned/deep-linked offer, including from issuers - e.g.
+     * interop test issuers - never registered with this wallet).
+     *
+     * Returns null if `configId` isn't actually offered by this issuer.
+     */
+    private fun buildCredentialOfferFromMetadata(
+        issuerUrl: String,
+        configId: String,
+        metadata: IssuerMetadata,
+    ): CredentialOffer? {
+        metadata.credentialConfigurationsSupported[configId] ?: return null
+        val config = metadata.credentialConfigurationsSupported.getValue(configId)
+        val issuerDisplay = metadata.display?.firstOrNull()
+        val issuerName = issuerDisplay?.name
+            ?: java.net.URI(issuerUrl).host
+            ?: issuerUrl
+        val credDisplay = config.credentialMetadata?.display?.firstOrNull()
+        val credName = credDisplay?.name ?: configId
+        return CredentialOffer(
+            credentialConfigurationId = configId,
+            credentialIssuerIdentifier = issuerUrl,
+            credentialName = credName,
+            credentialDescription = credDisplay?.description,
+            issuerName = issuerName,
+            backgroundColor = credDisplay?.backgroundColor
+                ?: issuerDisplay?.backgroundColor,
+            textColor = credDisplay?.textColor
+                ?: issuerDisplay?.textColor,
+            logoUri = credDisplay?.logo?.uri,
+            issuerLogoUri = issuerDisplay?.logo?.uri,
+        )
     }
 
     /**
@@ -1146,6 +1169,18 @@ class SirosWallet private constructor(
         val engine = engineSession ?: throw WalletException("Not connected")
         ensureEngineConnected(engine)
         val redirectUri = config.redirectUri.ifBlank { null }
+        resolveOfferForDisplay(offerUri)?.let { offer ->
+            activeOffer = offer
+            activeVctm = try {
+                vctmFetcher.fetch(
+                    issuerUrl = offer.credentialIssuerIdentifier,
+                    scope = offer.credentialConfigurationId,
+                )
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to fetch VCTM for ${offer.credentialConfigurationId}")
+                null
+            }
+        }
         if (offerUri.startsWith("openid-credential-offer://")) {
             // Deep-link URI with inline offer — send as "offer" so the engine
             // extracts the credential_offer query parameter instead of HTTP-fetching.
@@ -1174,6 +1209,62 @@ class SirosWallet private constructor(
             }
         } else {
             engine.startIssuance(offer = offerUri, redirectUri = redirectUri)
+        }
+    }
+
+    /**
+     * Resolve display metadata (name/logo/colors) for a scanned/deep-linked
+     * credential offer, ahead of forwarding it to the engine.
+     *
+     * [activeOffer] was previously only ever set by [startIssuanceByOffer]
+     * (the picker-driven path from [getAvailableCredentials]) - the QR/
+     * deep-link entry point here never populated it, so every credential
+     * issued that way (mdoc or SD-JWT, ours or a third-party issuer's) was
+     * stored with no display metadata AND no recorded issuer/config
+     * identifiers at all (both derive from [activeOffer] at storage time),
+     * confirmed against a real geneva2026.mdoc.online mDL credential offer.
+     *
+     * Best-effort: returns null on any failure (unparseable offer, unreachable
+     * issuer, issuer doesn't support the offered configuration) rather than
+     * throwing - a missing display must never block issuance itself.
+     */
+    private suspend fun resolveOfferForDisplay(offerUri: String): CredentialOffer? {
+        return try {
+            val offerJson = extractOfferJson(offerUri) ?: return null
+            val issuerUrl = offerJson["credential_issuer"]?.jsonPrimitive?.contentOrNull ?: return null
+            val configId = offerJson["credential_configuration_ids"]?.jsonArray
+                ?.firstOrNull()?.jsonPrimitive?.contentOrNull ?: return null
+            val metadata = getIssuerMetadata(issuerUrl)
+            buildCredentialOfferFromMetadata(issuerUrl, configId, metadata)
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to resolve display metadata for offer")
+            null
+        }
+    }
+
+    /** Extract the raw `credential_offer` JSON object from any of the shapes [startIssuance] accepts. */
+    private suspend fun extractOfferJson(offerUri: String): JsonObject? {
+        return if (offerUri.startsWith("openid-credential-offer://") || offerUri.startsWith("http")) {
+            val query = try { java.net.URI(offerUri).rawQuery } catch (_: Exception) { null }
+            val params = parseQueryParams(query)
+            when {
+                params.containsKey("credential_offer") ->
+                    json.parseToJsonElement(params.getValue("credential_offer")).jsonObject
+                params.containsKey("credential_offer_uri") ->
+                    fetchOfferJson(params.getValue("credential_offer_uri"))
+                else -> null
+            }
+        } else {
+            // Not a URI at all - offerUri is itself the raw offer JSON.
+            json.parseToJsonElement(offerUri).jsonObject
+        }
+    }
+
+    private suspend fun fetchOfferJson(uri: String): JsonObject? = withContext(Dispatchers.IO) {
+        val request = Request.Builder().url(uri).get().build()
+        httpClient.newCall(request).execute().use { response ->
+            val body = response.body?.string()
+            if (!response.isSuccessful || body == null) null else json.parseToJsonElement(body).jsonObject
         }
     }
 

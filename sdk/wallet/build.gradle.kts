@@ -50,4 +50,5 @@ dependencies {
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.kotlin.reflect)
+    testImplementation(libs.okhttp.mockwebserver)
 }

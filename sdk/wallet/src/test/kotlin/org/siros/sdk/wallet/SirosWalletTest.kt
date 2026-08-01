@@ -24,6 +24,9 @@ import kotlin.reflect.jvm.isAccessible
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -662,6 +665,118 @@ class SirosWalletTest {
                 redirectUri = "siros-sample://callback",
             )
         }
+    }
+
+    /**
+     * `activeOffer` (used to build display metadata for a stored credential -
+     * see [CredentialUtils.buildMetadata]/[CredentialUtils.buildMdocMetadata])
+     * was previously only ever populated by [SirosWallet.startIssuanceByOffer].
+     * The QR/deep-link entry point, [SirosWallet.startIssuance], never set it,
+     * so credentials issued via a scanned offer (real-world issuers included)
+     * were always stored with no display metadata at all - confirmed against a
+     * real geneva2026.mdoc.online mDL credential offer. These tests confirm
+     * [SirosWallet.startIssuance] now resolves it by fetching the issuer's
+     * standard OID4VCI metadata, for both offer-URI shapes it accepts.
+     */
+    @Test
+    fun startIssuance_resolvesActiveOffer_fromBareOfferJson() = runTest(dispatcher) {
+        val server = MockWebServer()
+        server.start()
+        try {
+            server.enqueue(MockResponse().setBody(issuerMetadataJson(server, "org.iso.18013.5.1.mDL")))
+            val engine = mockk<WalletEngineSession>(relaxed = true)
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+                "engineSession" to engine,
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+                "json" to Json { ignoreUnknownKeys = true },
+                "httpClient" to OkHttpClient(),
+            )
+            val issuerUrl = server.url("/").toString().trimEnd('/')
+            val offerJson = """{"credential_issuer":"$issuerUrl","credential_configuration_ids":["org.iso.18013.5.1.mDL"]}"""
+
+            wallet.startIssuance(offerJson)
+            advanceUntilIdle()
+
+            val activeOffer = getField(wallet, "activeOffer") as? org.siros.sdk.credentials.CredentialOffer
+            assertEquals("Mobile Driving License", activeOffer?.credentialName)
+            assertEquals(issuerUrl, activeOffer?.credentialIssuerIdentifier)
+            assertEquals("org.iso.18013.5.1.mDL", activeOffer?.credentialConfigurationId)
+            verify(exactly = 1) { engine.startIssuance(offer = offerJson, credentialOfferUri = null, redirectUri = "siros-sample://callback") }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun startIssuance_resolvesActiveOffer_fromOpenidCredentialOfferDeepLink() = runTest(dispatcher) {
+        val server = MockWebServer()
+        server.start()
+        try {
+            server.enqueue(MockResponse().setBody(issuerMetadataJson(server, "org.iso.18013.5.1.mDL")))
+            val engine = mockk<WalletEngineSession>(relaxed = true)
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+                "engineSession" to engine,
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+                "json" to Json { ignoreUnknownKeys = true },
+                "httpClient" to OkHttpClient(),
+            )
+            val issuerUrl = server.url("/").toString().trimEnd('/')
+            val offerJson = """{"credential_issuer":"$issuerUrl","credential_configuration_ids":["org.iso.18013.5.1.mDL"]}"""
+            val deepLink = "openid-credential-offer://?credential_offer=" +
+                java.net.URLEncoder.encode(offerJson, "UTF-8")
+
+            wallet.startIssuance(deepLink)
+            advanceUntilIdle()
+
+            val activeOffer = getField(wallet, "activeOffer") as? org.siros.sdk.credentials.CredentialOffer
+            assertEquals("Mobile Driving License", activeOffer?.credentialName)
+            assertEquals(issuerUrl, activeOffer?.credentialIssuerIdentifier)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun startIssuance_leavesActiveOfferNull_andStillIssues_whenIssuerMetadataUnreachable() = runTest(dispatcher) {
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "engineSession" to engine,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+            "json" to Json { ignoreUnknownKeys = true },
+            "httpClient" to OkHttpClient(),
+        )
+        // No mdoc/scope matches any listening server - metadata resolution fails,
+        // but issuance must still proceed.
+        val offerJson = """{"credential_issuer":"https://issuer.invalid","credential_configuration_ids":["pid"]}"""
+
+        wallet.startIssuance(offerJson)
+        advanceUntilIdle()
+
+        assertEquals(null, getField(wallet, "activeOffer"))
+        verify(exactly = 1) { engine.startIssuance(offer = offerJson, credentialOfferUri = null, redirectUri = "siros-sample://callback") }
+    }
+
+    private fun issuerMetadataJson(server: MockWebServer, configId: String): String {
+        val issuerUrl = server.url("/").toString().trimEnd('/')
+        return """
+            {
+              "credential_issuer": "$issuerUrl",
+              "credential_configurations_supported": {
+                "$configId": {
+                  "format": "mso_mdoc",
+                  "doctype": "$configId",
+                  "credential_metadata": {
+                    "display": [
+                      {"name": "Mobile Driving License", "locale": "en-US", "logo": {"uri": "https://issuer.example.com/logo.png"}}
+                    ]
+                  }
+                }
+              }
+            }
+        """.trimIndent()
     }
 
     @Test
@@ -1480,6 +1595,12 @@ class SirosWalletTest {
         val field = target.javaClass.getDeclaredField(fieldName)
         field.isAccessible = true
         field.set(target, value)
+    }
+
+    private fun getField(target: Any, fieldName: String): Any? {
+        val field = target.javaClass.getDeclaredField(fieldName)
+        field.isAccessible = true
+        return field.get(target)
     }
 
     private fun invokeHandleTrustEvaluation(
