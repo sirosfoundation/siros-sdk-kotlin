@@ -173,7 +173,7 @@ fun CredentialCard(
                 val logoUri = meta?.logo?.uri
                 if (logoUri != null) {
                     coil.compose.AsyncImage(
-                        model = logoUri,
+                        model = coilLogoModel(logoUri),
                         contentDescription = meta?.logo?.altText ?: issuerName,
                         modifier = Modifier
                             .size(32.dp)
@@ -345,3 +345,23 @@ internal fun String.toComposeColor(): Color? {
 /** Black or white, whichever contrasts better against [background] (relative luminance). */
 internal fun contrastingTextColor(background: Color): Color =
     if (background.luminance() > 0.5f) Color.Black else Color.White
+
+/**
+ * Coil's default components handle raw byte arrays (via `ByteArrayMapper` ->
+ * `ByteBufferFetcher`, both built in) but never decode a `data:` URI *string*
+ * on their own - passing one straight to `AsyncImage.model` just fails
+ * silently. Issuer-published logos are frequently embedded this way (e.g.
+ * geneva2026.mdoc.online's `credential_metadata.display[].logo.uri`), so
+ * unwrap the base64 payload ourselves and hand Coil the bytes directly
+ * instead of the URI string.
+ */
+internal fun coilLogoModel(uri: String): Any {
+    if (!uri.startsWith("data:")) return uri
+    val comma = uri.indexOf(',')
+    if (comma < 0 || !uri.substring(0, comma).contains("base64")) return uri
+    return try {
+        java.util.Base64.getDecoder().decode(uri.substring(comma + 1))
+    } catch (e: Exception) {
+        uri
+    }
+}
