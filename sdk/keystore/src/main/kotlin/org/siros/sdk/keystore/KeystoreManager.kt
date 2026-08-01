@@ -183,6 +183,18 @@ interface KeystoreManager {
     suspend fun securityProperties(): SignerSecurityProperties? = null
 
     /**
+     * Get the security properties for a specific key, as reported by the
+     * underlying WSCD/signer. Used to populate a real backend-issued Key
+     * Attestation request's `security_properties` (CS-04 §7.1.3, Annex C
+     * §C.3.1) with the properties of the actual freshly-generated
+     * attestation keys, rather than the batch-agnostic [securityProperties]
+     * above.
+     *
+     * Default returns null (security properties not available).
+     */
+    suspend fun securityProperties(keyId: String): SignerSecurityProperties? = null
+
+    /**
      * Generate [count] fresh keypairs and build a single OID4VCI `attestation`
      * proof-type Key Attestation JWT (spec: "Key Attestation in JWT format",
      * proof type Appendix "attestation Proof Type") covering all of them via

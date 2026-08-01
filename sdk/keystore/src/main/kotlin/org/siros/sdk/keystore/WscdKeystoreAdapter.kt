@@ -376,7 +376,7 @@ class WscdKeystoreAdapter(
     /**
      * Return the security properties for a key.
      */
-    suspend fun securityProperties(keyId: String): SignerSecurityProperties {
+    override suspend fun securityProperties(keyId: String): SignerSecurityProperties {
         return signer.securityProperties(keyId)
     }
 

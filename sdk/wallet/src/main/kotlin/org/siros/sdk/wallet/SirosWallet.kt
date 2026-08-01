@@ -1817,7 +1817,8 @@ class SirosWallet private constructor(
             else -> "jwt"
         }
         return if (chosen == "attestation") {
-            val attestationJwt = keystore.generateKeyAttestation(nonce = nonce, count = count)
+            val attestationJwt = requestBackendKeyAttestation(audience, nonce, count)
+                ?: keystore.generateKeyAttestation(nonce = nonce, count = count)
             listOf(GeneratedProofData(proofType = "attestation", attestation = attestationJwt))
         } else {
             (1..count).map {
@@ -1828,6 +1829,46 @@ class SirosWallet private constructor(
                 )
                 GeneratedProofData(proofType = "jwt", jwt = proofJwt)
             }
+        }
+    }
+
+    /**
+     * Ask go-wallet-backend's real, x5c-chained Key Attestation endpoint
+     * (`POST /wallet-provider/key-attestation/generate`) to attest freshly
+     * generated keys, instead of [KeystoreManager.generateKeyAttestation]'s
+     * self-signed fallback (a bare `jwk` header - cryptographically valid
+     * but no trust anchor a real issuer can validate against).
+     *
+     * Private keys never leave the device: only the public JWKs (from
+     * [KeystoreManager.generateKeypairs]) and security properties are sent:
+     * the backend signs an attestation *over* them with its own,
+     * operator-provisioned x5c-chained key.
+     *
+     * Returns null (caller falls back to the self-signed path) when there's
+     * no backend session, the keystore can't produce raw keypairs (e.g. a
+     * non-WSCD backend that only overrides [KeystoreManager.generateKeyAttestation]
+     * directly), or the backend doesn't support/expose the endpoint (older
+     * backend version, or `wallet_provider` not configured there) - matching
+     * the same "degrade gracefully" behavior as the rest of this SDK's
+     * backend-optional flows.
+     */
+    private suspend fun requestBackendKeyAttestation(audience: String, nonce: String, count: Int): String? {
+        val client = apiClient ?: return null
+        return try {
+            val keypairs = keystore.generateKeypairs(count)
+            val securityProps = keypairs.firstOrNull()?.let { keystore.securityProperties(it.keyId) }
+            client.requestKeyAttestation(
+                jwks = keypairs.map { it.publicKeyJWK },
+                nonce = nonce,
+                securityProperties = securityProps,
+                credentialIssuer = audience,
+            )
+        } catch (e: UnsupportedOperationException) {
+            Timber.d("Keystore doesn't support raw keypair generation, using self-signed key attestation")
+            null
+        } catch (e: Exception) {
+            Timber.w(e, "Backend key attestation request failed, falling back to self-signed attestation")
+            null
         }
     }
 

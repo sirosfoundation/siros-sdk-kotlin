@@ -44,8 +44,10 @@ import org.siros.sdk.auth.BackendApiClient
 import org.siros.sdk.credentials.CredentialMetadata
 import org.siros.sdk.credentials.CredentialStore
 import org.siros.sdk.credentials.PresentationRecord
+import org.siros.sdk.credentials.SignerSecurityProperties
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.credentials.WalletException
+import org.siros.sdk.keystore.KeypairInfo
 import org.siros.sdk.keystore.KeystoreManager
 import com.nimbusds.jose.JWEObject
 import com.nimbusds.jose.JWSAlgorithm
@@ -960,6 +962,109 @@ class SirosWalletTest {
             engine.sendSignResponse(
                 "flow-sign",
                 proofs = listOf(ProofObject(proofType = "attestation", attestation = "attestation-jwt")),
+                messageId = null,
+            )
+        }
+    }
+
+    @Test
+    fun connectEngine_signRequest_usesBackendKeyAttestation_whenAvailable() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val keystore = mockk<KeystoreManager>()
+        val keypairs = listOf(
+            KeypairInfo(keyId = "key-1", publicKeyJWK = buildJsonObject { put("kty", "EC") }),
+            KeypairInfo(keyId = "key-2", publicKeyJWK = buildJsonObject { put("kty", "EC") }),
+        )
+        coEvery { keystore.generateKeypairs(2) } returns keypairs
+        val securityProps = SignerSecurityProperties(keyStorage = listOf("iso_18045_high"))
+        coEvery { keystore.securityProperties("key-1") } returns securityProps
+        val apiClient = mockk<BackendApiClient>()
+        coEvery {
+            apiClient.requestKeyAttestation(
+                jwks = keypairs.map { it.publicKeyJWK },
+                nonce = "nonce-1",
+                securityProperties = securityProps,
+                credentialIssuer = "aud-1",
+            )
+        } returns "backend-signed-attestation-jwt"
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to keystore,
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        // connectEngine builds its own real BackendApiClient - swap in the
+        // mock afterward so the backend Key Attestation call is exercised
+        // without an actual network round trip.
+        setField(wallet, "apiClient", apiClient)
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sign",
+                action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "aud-1",
+                    nonce = "nonce-1",
+                    count = 2,
+                    proofTypesSupported = buildJsonObject { putJsonObject("attestation") {} },
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        // Backend-signed attestation (real x5c trust anchor) must be
+        // preferred over the self-signed fallback when a session is active
+        // and the backend supports the endpoint.
+        coVerify(exactly = 0) { keystore.generateKeyAttestation(any(), any()) }
+        verify(exactly = 1) {
+            engine.sendSignResponse(
+                "flow-sign",
+                proofs = listOf(ProofObject(proofType = "attestation", attestation = "backend-signed-attestation-jwt")),
+                messageId = null,
+            )
+        }
+    }
+
+    @Test
+    fun connectEngine_signRequest_fallsBackToSelfSignedAttestation_whenBackendCallFails() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.generateKeypairs(any()) } throws IllegalStateException("backend session expired")
+        coEvery { keystore.generateKeyAttestation(nonce = "nonce-1", count = 3) } returns "self-signed-attestation-jwt"
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to keystore,
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sign",
+                action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "aud-1",
+                    nonce = "nonce-1",
+                    count = 3,
+                    proofTypesSupported = buildJsonObject { putJsonObject("attestation") {} },
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        // A failed backend attempt (offline wallet-provider, older backend,
+        // network error) must not surface as a hard failure - it degrades to
+        // the self-signed path, same as every other backend-optional flow.
+        verify(exactly = 1) {
+            engine.sendSignResponse(
+                "flow-sign",
+                proofs = listOf(ProofObject(proofType = "attestation", attestation = "self-signed-attestation-jwt")),
                 messageId = null,
             )
         }

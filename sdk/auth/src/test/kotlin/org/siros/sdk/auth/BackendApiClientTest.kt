@@ -5,6 +5,9 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -153,6 +156,53 @@ class BackendApiClientTest {
             assertEquals(500, e.code)
             assertTrue(e.body?.contains("boom") == true)
         }
+    }
+
+    @Test
+    fun requestKeyAttestation_sendsJwksNonceAndCredentialIssuer() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"key_attestation": "signed-jwt"}"""))
+
+        val client = newClient()
+        val jwk = buildJsonObject { put("kty", "EC") }
+        val result = client.requestKeyAttestation(
+            jwks = listOf(jwk),
+            nonce = "nonce-1",
+            securityProperties = org.siros.sdk.credentials.SignerSecurityProperties(
+                keyStorage = listOf("iso_18045_high"),
+                userAuthentication = listOf("iso_18045_high"),
+            ),
+            credentialIssuer = "https://issuer.example.com",
+        )
+
+        assertEquals("signed-jwt", result)
+        val request = server.takeRequest()
+        assertEquals("/wallet-provider/key-attestation/generate", request.path)
+        val body = kotlinx.serialization.json.Json.parseToJsonElement(request.body.readUtf8()).jsonObject
+        assertEquals(1, body["jwks"]!!.jsonArray.size)
+        assertEquals("nonce-1", body["openid4vci"]!!.jsonObject["nonce"]!!.jsonPrimitive.content)
+        assertEquals(
+            "https://issuer.example.com",
+            body["openid4vci"]!!.jsonObject["credential_issuer"]!!.jsonPrimitive.content,
+        )
+        assertEquals(
+            listOf("iso_18045_high"),
+            body["security_properties"]!!.jsonObject["key_storage"]!!.jsonArray.map { it.jsonPrimitive.content },
+        )
+    }
+
+    @Test
+    fun requestKeyAttestation_omitsCredentialIssuer_whenNotProvided() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"key_attestation": "signed-jwt"}"""))
+
+        val client = newClient()
+        client.requestKeyAttestation(
+            jwks = listOf(buildJsonObject { put("kty", "EC") }),
+            nonce = "nonce-1",
+        )
+
+        val request = server.takeRequest()
+        val body = kotlinx.serialization.json.Json.parseToJsonElement(request.body.readUtf8()).jsonObject
+        assertEquals(false, body["openid4vci"]!!.jsonObject.containsKey("credential_issuer"))
     }
 
     private fun newClient(): BackendApiClient {

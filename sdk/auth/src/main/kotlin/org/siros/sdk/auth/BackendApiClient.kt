@@ -117,11 +117,18 @@ class BackendApiClient(
         jwks: List<JsonObject>,
         nonce: String,
         securityProperties: SignerSecurityProperties? = null,
+        credentialIssuer: String? = null,
     ): String {
         val body = kotlinx.serialization.json.buildJsonObject {
             put("jwks", kotlinx.serialization.json.JsonArray(jwks))
             put("openid4vci", kotlinx.serialization.json.buildJsonObject {
                 put("nonce", kotlinx.serialization.json.JsonPrimitive(nonce))
+                // Binds the KA's `aud` claim to the target issuer, preventing
+                // a KA minted for one issuer from being replayed against
+                // another - omitted (server leaves `aud` unset) when unknown.
+                if (!credentialIssuer.isNullOrBlank()) {
+                    put("credential_issuer", kotlinx.serialization.json.JsonPrimitive(credentialIssuer))
+                }
             })
             if (securityProperties != null) {
                 put("security_properties", kotlinx.serialization.json.buildJsonObject {
