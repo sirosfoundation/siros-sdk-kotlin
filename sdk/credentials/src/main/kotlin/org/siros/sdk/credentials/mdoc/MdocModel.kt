@@ -129,15 +129,35 @@ object MdocCbor {
         require(issuerAuth.type == CBORType.Array && issuerAuth.size() >= 3) {
             "issuerAuth is not a COSE_Sign1 array"
         }
-        val payload = issuerAuth[2]
-        val msoBytes = if (payload.HasOneTag(24)) {
-            payload.UntagOne().GetByteString()
-        } else {
-            payload.GetByteString()
-        }
-        val mso = CBORObject.DecodeFromBytes(msoBytes)
+        val mso = decodeMsoFromPayload(issuerAuth[2])
         return mso["docType"]?.AsString()
             ?: throw IllegalArgumentException("MSO missing docType")
+    }
+
+    /**
+     * Decode the MSO from a COSE_Sign1 `issuerAuth`'s payload slot.
+     *
+     * Per ISO 18013-5 §9.1.2.4, this slot is itself a `bstr` (COSE_Sign1's
+     * payload is always a byte string) whose CONTENT decodes to
+     * `MobileSecurityObjectBytes = #6.24(bstr .cbor MobileSecurityObject)` -
+     * i.e. two nested CBOR decode steps are required: one to get from the
+     * payload bytes to the tag-24 wrapper, and a second to unwrap it and
+     * reach the actual MSO map. A single decode step (as this previously
+     * did) yields the tag-24 wrapper itself, not the MSO - confirmed via a
+     * real credential from geneva2026.mdoc.online's OID4VCI conformance
+     * suite, which threw "Not an array or map" trying to read `docType` off
+     * that wrapper. Also tolerates issuers that skip the tag-24 wrapper
+     * entirely and emit the MSO map directly.
+     */
+    private fun decodeMsoFromPayload(payload: CBORObject): CBORObject {
+        val outerBytes = payload.GetByteString()
+        val decoded = CBORObject.DecodeFromBytes(outerBytes)
+        return when {
+            decoded.HasOneTag(24) -> CBORObject.DecodeFromBytes(decoded.UntagOne().GetByteString())
+            decoded.type == CBORType.Map -> decoded
+            decoded.type == CBORType.ByteString -> CBORObject.DecodeFromBytes(decoded.GetByteString())
+            else -> throw IllegalArgumentException("unexpected MSO payload encoding")
+        }
     }
 
     /** Unwrap a tag-24 (encoded-CBOR-data-item) bstr and decode the IssuerSignedItem map inside it. */

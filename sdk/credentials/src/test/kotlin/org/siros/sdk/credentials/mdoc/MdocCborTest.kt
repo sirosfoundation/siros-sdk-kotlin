@@ -38,11 +38,22 @@ class MdocCborTest {
         return nameSpaces
     }
 
-    /** Build a COSE_Sign1 array whose payload is a tag-24-wrapped MSO carrying `docType`. */
+    /**
+     * Build a COSE_Sign1 array whose payload carries an MSO with `docType`,
+     * matching the REAL wire encoding (ISO 18013-5 §9.1.2.4): the payload
+     * slot is a `bstr` whose content decodes to a tag-24-wrapped bstr, which
+     * itself decodes to the actual MSO map - two nested decode steps, not
+     * one. (An earlier version of this fixture built the payload as an
+     * in-memory tagged object directly instead of a real double-encoded
+     * byte string, which matched a bug in the implementation instead of
+     * catching it - confirmed broken against a real geneva2026.mdoc.online
+     * credential.)
+     */
     private fun buildIssuerAuth(docType: String): CBORObject {
         val mso = CBORObject.NewMap()
         mso[CBORObject.FromObject("docType")] = CBORObject.FromObject(docType)
-        val payload = CBORObject.FromObjectAndTag(mso.EncodeToBytes(), 24)
+        val taggedMsoBytes = CBORObject.FromObjectAndTag(mso.EncodeToBytes(), 24).EncodeToBytes()
+        val payload = CBORObject.FromObject(taggedMsoBytes)
 
         val issuerAuth = CBORObject.NewArray()
         issuerAuth.Add(CBORObject.FromObject(ByteArray(0))) // protected headers (opaque to the wallet)
