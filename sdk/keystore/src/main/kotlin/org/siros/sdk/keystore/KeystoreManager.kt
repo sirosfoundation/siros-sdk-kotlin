@@ -214,16 +214,23 @@ interface KeystoreManager {
 
     /**
      * Build a self-signed JWT proof for an existing key: header `{typ, jwk =
-     * that key's own public JWK}`, claims `{iss = JWK thumbprint of that key,
-     * aud, iat, exp, jti, ...extraClaims}`.
+     * that key's own public JWK}`, claims `{iss, aud, iat, exp, jti, ...extraClaims}`.
      *
-     * Used for OAuth Client Attestation PoP JWTs (draft-ietf-oauth-attestation-based-client-auth-04
+     * Used for OAuth Client Attestation PoP JWTs (draft-ietf-oauth-attestation-based-client-auth-10
      * §3.1) - both the one-time proof sent to this wallet's own backend to
      * obtain a Wallet Instance Attestation (WIA) (`audience` = the wallet
      * provider/backend, `extraClaims = {"nonce": <challenge>}`), and the
      * per-issuance-flow proof sent (via the backend, forwarded as an HTTP
      * header) to a credential issuer's authorization server alongside that
-     * WIA (`audience` = the issuer's AS, no extra claims).
+     * WIA (`audience` = the issuer's AS, `extraClaims = {"challenge": ...}`
+     * when the AS publishes a `challenge_endpoint`).
+     *
+     * [issuer] is the caller's choice, not derived from the key - per the
+     * spec, `iss` should be the same OAuth `client_id` this wallet uses in
+     * the flow (matching the WIA's own `sub` claim, see
+     * `BackendApiClient.generateWIA`'s `clientId` param), not an instance
+     * identifier (that's what `cnf.jkt`, computed server-side from this
+     * proof's `jwk` header, is for).
      *
      * Deliberately takes an existing [keyId] rather than managing "the
      * instance key" internally - callers are responsible for generating one
@@ -238,6 +245,7 @@ interface KeystoreManager {
     suspend fun generateKeyProof(
         keyId: String,
         typ: String,
+        issuer: String,
         audience: String,
         extraClaims: Map<String, String> = emptyMap(),
     ): String {

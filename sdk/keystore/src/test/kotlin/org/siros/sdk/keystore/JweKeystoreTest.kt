@@ -125,6 +125,7 @@ class JweKeystoreTest {
         val jwt = keystore.generateKeyProof(
             keyId = keyId,
             typ = "oauth-client-attestation-pop+jwt",
+            issuer = "siros-sample://callback",
             audience = "https://wallet-backend.example.com",
             extraClaims = mapOf("nonce" to "challenge-abc"),
         )
@@ -137,7 +138,7 @@ class JweKeystoreTest {
         val claims = parsed.jwtClaimsSet
         assertEquals(listOf("https://wallet-backend.example.com"), claims.audience)
         assertEquals("challenge-abc", claims.getClaim("nonce"))
-        assertNotNull(claims.issuer)
+        assertEquals("siros-sample://callback", claims.issuer)
         assertNotNull(claims.expirationTime)
     }
 
@@ -147,7 +148,7 @@ class JweKeystoreTest {
         keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
 
         try {
-            keystore.generateKeyProof(keyId = "does-not-exist", typ = "x", audience = "aud")
+            keystore.generateKeyProof(keyId = "does-not-exist", typ = "x", issuer = "iss", audience = "aud")
             fail("expected KeystoreException")
         } catch (e: KeystoreException) {
             // expected

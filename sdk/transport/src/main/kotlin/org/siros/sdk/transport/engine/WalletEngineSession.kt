@@ -262,6 +262,13 @@ class WalletEngineSession(
      * with [authCode]/[codeVerifier], so this works even if the original flow_id's session
      * no longer exists server-side (the common case - see [WalletEngineSession] backoff
      * reconnect logic, and SirosWallet.completeAuthorization for why that happens).
+     *
+     * @param clientAttestation/[clientAttestationPoP] OAuth Client Attestation
+     *   for the resumed flow - go-wallet-backend's `Execute()` sets up its
+     *   attestation provider identically regardless of whether this is a
+     *   fresh flow or a resume (the setup runs before branching on
+     *   `msg.AuthCode`), so this is just as meaningful here as on the
+     *   original [startIssuance] call - see [FlowStartMessage.clientAttestation].
      */
     fun resumeIssuance(
         offer: String? = null,
@@ -269,6 +276,8 @@ class WalletEngineSession(
         redirectUri: String,
         authCode: String,
         codeVerifier: String?,
+        clientAttestation: String? = null,
+        clientAttestationPoP: String? = null,
     ) {
         send(FlowStartMessage.serializer(), FlowStartMessage(
             protocol = "oid4vci",
@@ -277,6 +286,8 @@ class WalletEngineSession(
             redirectUri = redirectUri,
             authCode = authCode,
             codeVerifier = codeVerifier,
+            clientAttestation = clientAttestation,
+            clientAttestationPoP = clientAttestationPoP,
         ))
     }
 

@@ -151,6 +151,7 @@ class WscdKeystoreAdapter(
     override suspend fun generateKeyProof(
         keyId: String,
         typ: String,
+        issuer: String,
         audience: String,
         extraClaims: Map<String, String>,
     ): String {
@@ -159,7 +160,6 @@ class WscdKeystoreAdapter(
             ?: throw IllegalStateException("Key not found: $keyId")
         val pubKeyJson = String(signer.exportPublicKey(keyId), Charsets.UTF_8)
         val pubJwk = com.nimbusds.jose.jwk.JWK.parse(pubKeyJson)
-        val jkt = pubJwk.computeThumbprint().toString()
 
         val header = JWSHeader.Builder(jwsAlgorithm(key.algorithm))
             .type(com.nimbusds.jose.JOSEObjectType(typ))
@@ -167,7 +167,7 @@ class WscdKeystoreAdapter(
             .build()
 
         val claimsBuilder = JWTClaimsSet.Builder()
-            .issuer(jkt)
+            .issuer(issuer)
             .audience(audience)
             .issueTime(Date())
             .expirationTime(Date(System.currentTimeMillis() + 5 * 60 * 1000))

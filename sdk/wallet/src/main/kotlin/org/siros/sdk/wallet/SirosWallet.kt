@@ -61,8 +61,10 @@ import org.siros.sdk.transport.engine.CredentialMatch
 import org.siros.sdk.transport.engine.CredentialNotificationEvent
 import org.siros.sdk.transport.engine.ProofObject
 import org.siros.sdk.transport.engine.WalletEngineSession
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import timber.log.Timber
 import java.security.SecureRandom
 import java.util.Base64
@@ -1068,7 +1070,7 @@ class SirosWallet private constructor(
     /**
      * Obtain (fetching + caching, refreshing before expiry) a Wallet Instance
      * Attestation for this wallet instance from this wallet's own backend
-     * (draft-ietf-oauth-attestation-based-client-auth-04 §3.1 / CS-04 §7.1.2):
+     * (draft-ietf-oauth-attestation-based-client-auth-10 §3.1 / CS-04 §7.1.2):
      * request a single-use challenge, sign a PoP JWT over it with the
      * instance key, and exchange both for a WIA JWT.
      *
@@ -1089,6 +1091,12 @@ class SirosWallet private constructor(
             val pop = keystore.generateKeyProof(
                 keyId = keyId,
                 typ = "oauth-client-attestation-pop+jwt",
+                // iss doesn't need to equal client_id for THIS PoP - it's
+                // validated by our own backend (WIAService.validatePop only
+                // checks iss is non-empty), unlike the per-issuer PoP built in
+                // resolveClientAttestation. clientAttestationClientId() is
+                // still a reasonable choice: consistent, and non-empty.
+                issuer = clientAttestationClientId(),
                 // Must match the backend's configured wallet_provider_uri, if
                 // it enforces one (WIAService.validatePop only checks aud
                 // when that's non-empty) - the base backend URL is the only
@@ -1096,7 +1104,15 @@ class SirosWallet private constructor(
                 audience = config.backendUrl,
                 extraClaims = mapOf("nonce" to challenge),
             )
-            val wia = client.generateWIA(pop = pop, challenge = challenge)
+            val wia = client.generateWIA(
+                pop = pop,
+                challenge = challenge,
+                // draft-ietf-oauth-attestation-based-client-auth-10: "the sub
+                // claim MUST specify client_id value of the OAuth Client" -
+                // confirmed via a real geneva2026.mdoc.online conformance run
+                // that flagged sub=<instance jkt> as a FAIL.
+                clientId = clientAttestationClientId(),
+            )
             cachedWia = wia
             cachedWiaExpiresAt = CredentialUtils.parseJwtPayload(wia)
                 ?.get("exp")?.jsonPrimitive?.longOrNull ?: (now + 300)
@@ -1106,6 +1122,19 @@ class SirosWallet private constructor(
             null
         }
     }
+
+    /**
+     * The OAuth `client_id` this wallet uses in OID4VCI/OID4VP flows.
+     * Mirrors go-wallet-backend's `OID4VCIHandler.clientID` default
+     * (`h.clientID = h.redirectURI`, OID4VCI §7.1's unregistered-client
+     * convention) - known to be correct for any issuer that doesn't have its
+     * own registered client_id override server-side (the common case; a
+     * registered override isn't visible to the client, so a cached WIA/PoP
+     * built against this default would be spec-inconsistent for that rarer
+     * case - a known, accepted limitation rather than something this method
+     * can resolve without per-issuer client_id discovery).
+     */
+    private fun clientAttestationClientId(): String = config.redirectUri
 
     /**
      * Resolve OAuth Client Attestation (a WIA plus a fresh per-flow PoP) for
@@ -1118,6 +1147,12 @@ class SirosWallet private constructor(
      * discoverable from its metadata (mirrors go-wallet-backend's
      * `IssuerMetadata.authorizationServer()`), falling back to the credential
      * issuer URL itself for issuers that self-host their AS at the same origin.
+     * Its `iss` is the same client_id used for the WIA's `sub` (see
+     * [ensureWalletInstanceAttestation]) - draft-ietf-oauth-attestation-based-client-auth-10
+     * requires both to match. Its `challenge` claim, when the AS publishes a
+     * `challenge_endpoint` in its metadata, is fetched fresh from there
+     * (§ "Challenge Endpoint" - POST returns `{"attestation_challenge": ...}`);
+     * omitted otherwise, since the claim is optional per spec.
      *
      * Best-effort: returns null on any failure - missing/misconfigured WIA
      * support must never block issuance itself.
@@ -1131,17 +1166,71 @@ class SirosWallet private constructor(
             } catch (e: Exception) {
                 issuerUrl
             }
+            val challenge = fetchAttestationChallenge(asUrl)
             val keyId = ensureInstanceKeyId()
             val pop = keystore.generateKeyProof(
                 keyId = keyId,
                 typ = "oauth-client-attestation-pop+jwt",
+                issuer = clientAttestationClientId(),
                 audience = asUrl,
+                extraClaims = challenge?.let { mapOf("challenge" to it) } ?: emptyMap(),
             )
             wia to pop
         } catch (e: Exception) {
             Timber.w(e, "Failed to generate client attestation PoP")
             null
         }
+    }
+
+    /**
+     * Fetch a fresh attestation challenge from [asUrl]'s own metadata-published
+     * `challenge_endpoint` (draft-ietf-oauth-attestation-based-client-auth-10
+     * §"Challenge Endpoint"), if it publishes one. Tries the OAuth 2.0
+     * Authorization Server Metadata well-known path (RFC 8414) first, falling
+     * back to the OIDC discovery path for ASes that only publish there.
+     *
+     * Returns null (never throws) if the AS doesn't publish a challenge
+     * endpoint, or on any fetch failure - the `challenge` claim is optional
+     * per spec, so its absence must never block attestation entirely.
+     */
+    private suspend fun fetchAttestationChallenge(asUrl: String): String? {
+        val metadata = fetchOAuthServerMetadata(asUrl) ?: return null
+        val challengeEndpoint = metadata["challenge_endpoint"]?.jsonPrimitive?.contentOrNull ?: return null
+        return try {
+            withContext(Dispatchers.IO) {
+                val request = Request.Builder()
+                    .url(challengeEndpoint)
+                    .post("{}".toRequestBody("application/json".toMediaType()))
+                    .build()
+                httpClient.newCall(request).execute().use { response ->
+                    val body = response.body?.string()
+                    if (!response.isSuccessful || body == null) return@withContext null
+                    json.parseToJsonElement(body).jsonObject["attestation_challenge"]
+                        ?.jsonPrimitive?.contentOrNull
+                }
+            }
+        } catch (e: Exception) {
+            Timber.d(e, "No attestation challenge available from $challengeEndpoint")
+            null
+        }
+    }
+
+    private suspend fun fetchOAuthServerMetadata(asUrl: String): JsonObject? = withContext(Dispatchers.IO) {
+        val base = asUrl.trimEnd('/')
+        for (path in listOf("/.well-known/oauth-authorization-server", "/.well-known/openid-configuration")) {
+            try {
+                val request = Request.Builder().url(base + path).get().build()
+                httpClient.newCall(request).execute().use { response ->
+                    val body = response.body?.string()
+                    if (response.isSuccessful && body != null) {
+                        return@withContext json.parseToJsonElement(body).jsonObject
+                    }
+                }
+            } catch (e: Exception) {
+                // Try the next well-known path.
+            }
+        }
+        null
     }
 
     /**
@@ -1726,11 +1815,30 @@ class SirosWallet private constructor(
             try {
                 engine.forceReconnect()
                 engine.awaitConnected()
+                // Client attestation for the resumed flow: Execute() sets up
+                // h.attestationProvider identically whether msg.AuthCode is
+                // set or not (it runs before that branch), so the ONLY thing
+                // missing here was the client never sending it - the backend
+                // already handled resume correctly. Confirmed missing via a
+                // real geneva2026.mdoc.online conformance run: the token
+                // request (which only ever happens via this resume path for
+                // redirect-based authorization_code issuers) showed "No OAuth
+                // Client Attestations were provided".
+                val clientAttestation = try {
+                    pending.offerJson
+                        ?.let { json.parseToJsonElement(it).jsonObject["credential_issuer"]?.jsonPrimitive?.contentOrNull }
+                        ?.let { resolveClientAttestation(it) }
+                } catch (e: Exception) {
+                    Timber.w(e, "Failed to resolve client attestation for resumed flow $flowId")
+                    null
+                }
                 engine.resumeIssuance(
                     offer = pending.offerJson,
                     redirectUri = pending.redirectUri,
                     authCode = code,
                     codeVerifier = pending.codeVerifier,
+                    clientAttestation = clientAttestation?.first,
+                    clientAttestationPoP = clientAttestation?.second,
                 )
             } catch (e: Exception) {
                 Timber.e(e, "Failed to resume authorization for flow $flowId")

@@ -6,6 +6,7 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.runs
+import io.mockk.slot
 import io.mockk.verify
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -537,6 +538,123 @@ class SirosWalletTest {
         verify(exactly = 0) { engine.sendFlowAction("flow-auth", "authorization_complete", any()) }
     }
 
+    /**
+     * The token request only ever happens via this resume-after-redirect path
+     * for redirect-based authorization_code issuers - go-wallet-backend's
+     * Execute() sets up its attestation provider identically whether
+     * msg.AuthCode is set or not, so completeAuthorization must resolve and
+     * attach client attestation just like startIssuance does. Confirmed
+     * missing via a real geneva2026.mdoc.online conformance run ("No OAuth
+     * Client Attestations were provided" on the token request specifically).
+     */
+    @Test
+    fun completeAuthorization_attachesClientAttestation_whenBackendSupportsWia() = runTest(dispatcher) {
+        val server = MockWebServer()
+        server.start()
+        try {
+            // resolveClientAttestation's own getIssuerMetadata call (no
+            // authorization_servers field, so asUrl falls back to issuerUrl),
+            // then two 404s for fetchAttestationChallenge's well-known-path
+            // probing (this issuer doesn't publish a challenge_endpoint -
+            // that mechanism is covered by its own dedicated test above).
+            server.enqueue(MockResponse().setBody(issuerMetadataJson(server, "org.iso.18013.5.1.mDL")))
+            server.enqueue(MockResponse().setResponseCode(404))
+            server.enqueue(MockResponse().setResponseCode(404))
+
+            val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+            val listener = mockk<WalletEventListener>(relaxed = true)
+            val store = FakeCredentialStore(mutableListOf())
+            val engine = mockEngineConstructor(progressFlow = progressFlow)
+            every { engine.resumeIssuance(any(), any(), any(), any(), any(), any(), any()) } just runs
+            every { engine.forceReconnect() } just runs
+            coEvery { engine.awaitConnected(any()) } just runs
+
+            val sessionStore = mockk<SessionStore>(relaxed = true)
+            every { sessionStore.instanceKeyId } returns "instance-key-1"
+            val keystore = mockk<KeystoreManager>(relaxed = true)
+            coEvery {
+                keystore.generateKeyProof(keyId = any(), typ = any(), issuer = any(), audience = "https://wallet.example.com", extraClaims = any())
+            } returns "wia-pop-jwt"
+            coEvery {
+                keystore.generateKeyProof(keyId = any(), typ = any(), issuer = any(), audience = server.url("/").toString().trimEnd('/'), extraClaims = any())
+            } returns "resume-pop-jwt"
+            val apiClient = mockk<BackendApiClient>(relaxed = true)
+            coEvery { apiClient.requestWIAChallenge() } returns buildJsonObject { put("challenge", "chal-1") }
+            val wiaJwt = fakeJwtWithExp(System.currentTimeMillis() / 1000 + 3600)
+            coEvery { apiClient.generateWIA(pop = any(), challenge = "chal-1", clientId = any()) } returns wiaJwt
+
+            val issuerUrl = server.url("/").toString().trimEnd('/')
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(
+                    WalletState.Ready(userId = "user-1", displayName = "Alice")
+                ),
+                "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                "config" to WalletConfig(
+                    backendUrl = "https://wallet.example.com",
+                    tenantId = "tenant-1",
+                    redirectUri = "siros://callback",
+                ),
+                "credentialStore" to store,
+                "eventListener" to listener,
+                "pendingAuthorizations" to mutableMapOf<String, Any?>(),
+                "sessionStore" to sessionStore,
+                "keystore" to keystore,
+                "apiClient" to apiClient,
+                "json" to Json { ignoreUnknownKeys = true },
+                "httpClient" to OkHttpClient(),
+            )
+
+            invokeConnectEngine(wallet, "app-token")
+            advanceUntilIdle()
+            progressFlow.emit(
+                FlowProgressMessage(
+                    flowId = "flow-auth",
+                    step = "authorization_required",
+                    payload = buildJsonObject {
+                        put("authorization_url", "$issuerUrl/auth?state=state-from-url")
+                        put("expected_redirect_uri", "siros://callback")
+                        put("state", "state-from-url")
+                        put("code_verifier", "verifier-abc")
+                        putJsonObject("credential_offer") {
+                            put("credential_issuer", issuerUrl)
+                        }
+                    },
+                )
+            )
+            advanceUntilIdle()
+
+            wallet.completeAuthorization(flowId = "flow-auth", code = "auth-code-xyz", state = "state-from-url")
+            // completeAuthorization's coroutine hops onto the real
+            // Dispatchers.IO for each MockWebServer HTTP call
+            // (getIssuerMetadata, then fetchOAuthServerMetadata's two
+            // well-known-path attempts) - genuine OS-thread work the virtual
+            // test dispatcher's advanceUntilIdle() alone doesn't wait for,
+            // and each hop-and-return needs its own real-time gap before the
+            // next advanceUntilIdle() can drain the resumed continuation.
+            repeat(10) {
+                runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(100) }
+                advanceUntilIdle()
+            }
+
+            coVerify(exactly = 1) {
+                apiClient.generateWIA(pop = any(), challenge = "chal-1", clientId = "siros://callback")
+            }
+            verify(exactly = 1) {
+                engine.resumeIssuance(
+                    offer = match { it != null && it.contains("\"credential_issuer\":\"$issuerUrl\"") },
+                    credentialOfferUri = null,
+                    redirectUri = "siros://callback",
+                    authCode = "auth-code-xyz",
+                    codeVerifier = "verifier-abc",
+                    clientAttestation = wiaJwt,
+                    clientAttestationPoP = "resume-pop-jwt",
+                )
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
     @Test
     fun completeAuthorization_surfaces_error_via_onFlowError_when_reconnect_fails() = runTest(dispatcher) {
         // If forcing a fresh connection fails outright, the failure must be visible to
@@ -784,12 +902,12 @@ class SirosWalletTest {
             every { sessionStore.instanceKeyId } returns "instance-key-1"
             val keystore = mockk<KeystoreManager>(relaxed = true)
             coEvery {
-                keystore.generateKeyProof(keyId = any(), typ = any(), audience = any(), extraClaims = any())
+                keystore.generateKeyProof(keyId = any(), typ = any(), issuer = any(), audience = any(), extraClaims = any())
             } returns "pop-jwt"
             val apiClient = mockk<BackendApiClient>(relaxed = true)
             coEvery { apiClient.requestWIAChallenge() } returns buildJsonObject { put("challenge", "chal-1") }
             val wiaJwt = fakeJwtWithExp(System.currentTimeMillis() / 1000 + 3600)
-            coEvery { apiClient.generateWIA(pop = any(), challenge = "chal-1") } returns wiaJwt
+            coEvery { apiClient.generateWIA(pop = any(), challenge = "chal-1", clientId = any()) } returns wiaJwt
 
             val wallet = newWallet(
                 "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
@@ -814,6 +932,86 @@ class SirosWalletTest {
                     redirectUri = "siros-sample://callback",
                     clientAttestation = wiaJwt,
                     clientAttestationPoP = "pop-jwt",
+                )
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    /**
+     * draft-ietf-oauth-attestation-based-client-auth-10 fixes, confirmed
+     * against a real geneva2026.mdoc.online conformance run:
+     * - the WIA's `sub` and the per-issuer PoP's `iss` must both equal the
+     *   OAuth client_id (config.redirectUri) - a real credential offer
+     *   flagged sub/iss=<instance jkt> as FAILs.
+     * - the per-issuer PoP's optional `challenge` claim, when the issuer's AS
+     *   publishes a `challenge_endpoint` in its metadata, must be fetched
+     *   from there and included - flagged as a FAIL when absent.
+     */
+    @Test
+    fun startIssuance_usesClientIdForSubAndIss_andFetchesChallengeFromIssuerAs() = runTest(dispatcher) {
+        val server = MockWebServer()
+        server.start()
+        try {
+            val configId = "org.iso.18013.5.1.mDL"
+            // startIssuance fetches issuer metadata twice - once for display
+            // (resolveOfferForDisplay), once for client attestation
+            // (resolveClientAttestation) - both against the same URL.
+            server.enqueue(MockResponse().setBody(issuerMetadataJson(server, configId)))
+            server.enqueue(MockResponse().setBody(issuerMetadataJson(server, configId)))
+            val asUrl = server.url("/").toString().trimEnd('/')
+            server.enqueue(MockResponse().setBody("""{"challenge_endpoint":"$asUrl/attestation/challenge"}"""))
+            server.enqueue(MockResponse().setBody("""{"attestation_challenge":"chal-from-issuer-as"}"""))
+
+            val engine = mockk<WalletEngineSession>(relaxed = true)
+            val sessionStore = mockk<SessionStore>(relaxed = true)
+            every { sessionStore.instanceKeyId } returns "instance-key-1"
+            val keystore = mockk<KeystoreManager>(relaxed = true)
+            coEvery {
+                keystore.generateKeyProof(
+                    keyId = any(), typ = any(), issuer = "siros-sample://callback",
+                    audience = "https://wallet.example.com", extraClaims = any(),
+                )
+            } returns "wia-pop-jwt"
+            val perIssuerExtraClaims = slot<Map<String, String>>()
+            coEvery {
+                keystore.generateKeyProof(
+                    keyId = any(), typ = any(), issuer = "siros-sample://callback",
+                    audience = asUrl, extraClaims = capture(perIssuerExtraClaims),
+                )
+            } returns "issuer-pop-jwt"
+            val apiClient = mockk<BackendApiClient>(relaxed = true)
+            coEvery { apiClient.requestWIAChallenge() } returns buildJsonObject { put("challenge", "chal-1") }
+            val wiaJwt = fakeJwtWithExp(System.currentTimeMillis() / 1000 + 3600)
+            coEvery { apiClient.generateWIA(pop = any(), challenge = "chal-1", clientId = any()) } returns wiaJwt
+
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+                "engineSession" to engine,
+                "sessionStore" to sessionStore,
+                "keystore" to keystore,
+                "apiClient" to apiClient,
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+                "json" to Json { ignoreUnknownKeys = true },
+                "httpClient" to OkHttpClient(),
+            )
+            val offerJson = """{"credential_issuer":"$asUrl","credential_configuration_ids":["$configId"]}"""
+
+            wallet.startIssuance(offerJson)
+            advanceUntilIdle()
+
+            coVerify(exactly = 1) {
+                apiClient.generateWIA(pop = any(), challenge = "chal-1", clientId = "siros-sample://callback")
+            }
+            assertEquals("chal-from-issuer-as", perIssuerExtraClaims.captured["challenge"])
+            verify(exactly = 1) {
+                engine.startIssuance(
+                    offer = offerJson,
+                    credentialOfferUri = null,
+                    redirectUri = "siros-sample://callback",
+                    clientAttestation = wiaJwt,
+                    clientAttestationPoP = "issuer-pop-jwt",
                 )
             }
         } finally {

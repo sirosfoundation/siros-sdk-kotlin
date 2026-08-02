@@ -164,17 +164,26 @@ class BackendApiClient(
      * POST /wallet-provider/wia/generate — generate a Wallet Instance Attestation.
      * @param pop WIA-PoP JWT (typ: oauth-client-attestation-pop+jwt)
      * @param challenge the challenge nonce from requestWIAChallenge()
+     * @param clientId this wallet's OAuth client_id (e.g. its redirect_uri, per
+     *   OID4VCI's unregistered-client convention) - embedded as the WIA JWT's
+     *   `sub` claim. draft-ietf-oauth-attestation-based-client-auth-10 requires
+     *   "the sub claim MUST specify client_id value of the OAuth Client";
+     *   omitting this falls back to the instance identifier (jkt) server-side.
      * @param nativeAttestation optional platform attestation evidence
      * @return WIA JWT string
      */
     suspend fun generateWIA(
         pop: String,
         challenge: String,
+        clientId: String? = null,
         nativeAttestation: JsonObject? = null,
     ): String {
         val body = kotlinx.serialization.json.buildJsonObject {
             put("pop", kotlinx.serialization.json.JsonPrimitive(pop))
             put("challenge", kotlinx.serialization.json.JsonPrimitive(challenge))
+            if (!clientId.isNullOrBlank()) {
+                put("client_id", kotlinx.serialization.json.JsonPrimitive(clientId))
+            }
             if (nativeAttestation != null) {
                 put("native_attestation", nativeAttestation)
             }

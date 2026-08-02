@@ -305,12 +305,12 @@ class JweKeystore(
     override suspend fun generateKeyProof(
         keyId: String,
         typ: String,
+        issuer: String,
         audience: String,
         extraClaims: Map<String, String>,
     ): String = mutex.withLock {
         requireUnlocked()
         val key = keys[keyId] ?: throw KeystoreException("Key not found: $keyId")
-        val jkt = key.toPublicJWK().computeThumbprint().toString()
 
         val header = JWSHeader.Builder(JWSAlgorithm.ES256)
             .type(com.nimbusds.jose.JOSEObjectType(typ))
@@ -318,7 +318,7 @@ class JweKeystore(
             .build()
 
         val claimsBuilder = JWTClaimsSet.Builder()
-            .issuer(jkt)
+            .issuer(issuer)
             .audience(audience)
             .issueTime(Date())
             .expirationTime(Date(System.currentTimeMillis() + 5 * 60 * 1000))

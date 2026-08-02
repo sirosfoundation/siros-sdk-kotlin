@@ -366,6 +366,7 @@ class WscdKeystoreAdapterTest {
         val jwt = adapter.generateKeyProof(
             keyId = "test-key-1",
             typ = "oauth-client-attestation-pop+jwt",
+            issuer = "siros-sample://callback",
             audience = "https://wallet-backend.example.com",
             extraClaims = mapOf("nonce" to "challenge-abc"),
         )
@@ -378,7 +379,7 @@ class WscdKeystoreAdapterTest {
         val claims = parsed.jwtClaimsSet
         assertEquals(listOf("https://wallet-backend.example.com"), claims.audience)
         assertEquals("challenge-abc", claims.getClaim("nonce"))
-        assertNotNull(claims.issuer)
+        assertEquals("siros-sample://callback", claims.issuer)
         assertNotNull(claims.issueTime)
         assertNotNull(claims.expirationTime)
         assertNotNull(claims.jwtid)
@@ -394,6 +395,7 @@ class WscdKeystoreAdapterTest {
         val jwt = adapter.generateKeyProof(
             keyId = "test-key-1",
             typ = "oauth-client-attestation-pop+jwt",
+            issuer = "siros-sample://callback",
             audience = "https://issuer.example.com",
         )
 
@@ -407,7 +409,7 @@ class WscdKeystoreAdapterTest {
         adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
 
         try {
-            adapter.generateKeyProof(keyId = "does-not-exist", typ = "x", audience = "aud")
+            adapter.generateKeyProof(keyId = "does-not-exist", typ = "x", issuer = "iss", audience = "aud")
             fail("expected IllegalStateException")
         } catch (e: IllegalStateException) {
             // expected
