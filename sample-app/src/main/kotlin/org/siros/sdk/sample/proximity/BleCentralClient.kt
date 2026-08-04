@@ -60,6 +60,8 @@ class BleCentralClient(
     private val signPresentation: suspend (credentialId: Long, disclosedClaims: List<String>?, sessionTranscriptBytes: ByteArray) -> ByteArray,
     /** See [RequestProximityConsent]'s doc comment. */
     private val requestConsent: RequestProximityConsent,
+    /** See [BlePeripheralServer]'s matching parameter doc comment. */
+    private val filterEligible: (List<StoredCredential>) -> List<StoredCredential>,
     /** Reports a canonical step token (see `FlowProgress.kt`'s `PROXIMITY_STEPS`) for driving the same progress-bar UI the issuance/presentation flows use. */
     private val onStep: (String) -> Unit,
     private val onComplete: (success: Boolean) -> Unit,
@@ -292,9 +294,15 @@ class BleCentralClient(
                 return
             }
         }
+        val eligible = filterEligible(family.instances)
+        if (eligible.isEmpty()) {
+            Timber.w("BleCentralClient: no eligible (unused) instances remain for the approved credential")
+            onComplete(false)
+            return
+        }
         // See BlePeripheralServer's matching comment: pick a random instance
         // from the batch, not always the same one, to preserve unlinkability.
-        val credential = family.instances.random()
+        val credential = eligible.random()
 
         onStep("submitting_response")
         val response = signPresentation(credential.id, docRequest.disclosedClaims(), sessionTranscript)

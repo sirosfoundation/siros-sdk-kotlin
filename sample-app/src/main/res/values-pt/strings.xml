@@ -49,6 +49,7 @@
     <string name="credential_detail_raw_disclosure">Divulgação %1$d</string>
     <string name="copy_to_clipboard">Copiar para a área de transferência</string>
     <string name="copied_to_clipboard">Copiado para a área de transferência</string>
+    <string name="credential_renew">Renovar</string>
     <string name="credential_detail_delete">Excluir Credencial</string>
     <string name="credential_detail_delete_confirm_title">Excluir Credencial</string>
     <string name="credential_detail_delete_confirm_message">Tem certeza de que deseja excluir \"%1$s\"? Esta ação não pode ser desfeita.</string>
@@ -66,6 +67,11 @@
     <string name="settings_credential_details_description">Mostrar atributos brutos e dados de credencial assinados ao tocar em uma credencial</string>
     <string name="settings_diagnostic_messages">Mensagens de diagnóstico</string>
     <string name="settings_diagnostic_messages_description">Mostrar o token de etapa bruto do servidor junto com o rótulo de progresso amigável durante um fluxo</string>
+    <string name="settings_credential_consumption_title">Consumo de credencial</string>
+    <string name="settings_credential_consumption_description">Controla se a apresentação de uma credencial consome uma das cópias do lote</string>
+    <string name="credential_consumption_consume_all">Consumir em toda apresentação</string>
+    <string name="credential_consumption_consume_non_zkp">Consumir apenas apresentações que não são de conhecimento zero</string>
+    <string name="credential_consumption_never_consume">Nunca consumir (padrão)</string>
     <string name="settings_presentation_history">Histórico de Apresentações</string>
     <string name="settings_logout">Sair</string>
     <string name="nfc_hce_description">Envolvimento de dispositivo mdoc ISO 18013-5</string>

@@ -23,6 +23,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -36,6 +37,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -76,7 +78,19 @@ fun CredentialCard(
      * rather than showing a misleading "0".
      */
     instances: List<CredentialInstance>? = null,
+    /**
+     * Called when the user taps "Renew" on a fully-exhausted credential
+     * (every batch instance already used - see [instances]). Only ever
+     * shown/invoked when [instances] is non-null and every instance's
+     * `sigCount > 0`; ignored (no button rendered) if null.
+     */
+    onRenewClick: (() -> Unit)? = null,
 ) {
+    // Null when the caller doesn't have batch/usage data on hand (see
+    // [instances]'s doc comment) - only gates the greyed-out/Renew state
+    // when we actually know the count, never on the strength of an absence.
+    val unusedCount = instances?.count { it.sigCount == 0 }
+    val isExhausted = unusedCount == 0
     val meta = credential.metadata
     val bgColor = meta?.backgroundColor?.toComposeColor()
         ?: MaterialTheme.colorScheme.primaryContainer
@@ -148,7 +162,7 @@ fun CredentialCard(
         modifier = modifier
             .fillMaxWidth()
             .aspectRatio(1.6f)
-            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+            .then(if (onClick != null && !isExhausted) Modifier.clickable(onClick = onClick) else Modifier),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = bgColor),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
@@ -285,8 +299,7 @@ fun CredentialCard(
             // UsagesRibbon (CredentialImage.jsx): count of batch copies not
             // yet used in a presentation (sigCount == 0), so it counts down
             // as copies get consumed rather than showing the fixed batch size.
-            if (instances != null) {
-                val unusedCount = instances.count { it.sigCount == 0 }
+            if (unusedCount != null) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
@@ -311,6 +324,29 @@ fun CredentialCard(
                         },
                         fontWeight = FontWeight.Bold,
                     )
+                }
+            }
+
+            // Every batch instance already used - grey the whole card out
+            // (it can no longer be presented, see CredentialUtils.eligibleInstances)
+            // and offer Renew instead of leaving it looking like a normal,
+            // selectable credential.
+            if (isExhausted) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.55f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (onRenewClick != null) {
+                        TextButton(onClick = onRenewClick) {
+                            Text(
+                                text = stringResource(R.string.credential_renew),
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
                 }
             }
         }

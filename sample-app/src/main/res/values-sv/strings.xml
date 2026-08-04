@@ -49,6 +49,7 @@
     <string name="credential_detail_raw_disclosure">Friläggning %1$d</string>
     <string name="copy_to_clipboard">Kopiera till urklipp</string>
     <string name="copied_to_clipboard">Kopierat till urklipp</string>
+    <string name="credential_renew">Förnya</string>
     <string name="credential_detail_delete">Ta bort intyg</string>
     <string name="credential_detail_delete_confirm_title">Ta bort intyg</string>
     <string name="credential_detail_delete_confirm_message">Är du säker på att du vill ta bort \"%1$s\"? Denna åtgärd kan inte ångras.</string>
@@ -66,6 +67,11 @@
     <string name="settings_credential_details_description">Visa rådata och signerade intygsuppgifter när du trycker på ett intyg</string>
     <string name="settings_diagnostic_messages">Diagnostikmeddelanden</string>
     <string name="settings_diagnostic_messages_description">Visa den råa steg-token från servern tillsammans med den vänliga förloppsetiketten under ett flöde</string>
+    <string name="settings_credential_consumption_title">Förbrukning av intyg</string>
+    <string name="settings_credential_consumption_description">Styr om en presentation förbrukar en av intygets kopior</string>
+    <string name="credential_consumption_consume_all">Förbruka vid varje presentation</string>
+    <string name="credential_consumption_consume_non_zkp">Förbruka endast icke-nollkunskapspresentationer</string>
+    <string name="credential_consumption_never_consume">Förbruka aldrig (standard)</string>
     <string name="settings_presentation_history">Presentationshistorik</string>
     <string name="settings_logout">Logga ut</string>
     <string name="nfc_hce_description">ISO 18013-5 mdoc-enhetsengagemang</string>

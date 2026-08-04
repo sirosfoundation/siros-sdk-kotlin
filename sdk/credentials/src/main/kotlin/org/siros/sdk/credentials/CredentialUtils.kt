@@ -367,6 +367,72 @@ object CredentialUtils {
 
         return results.sortedByDescending { it.credential.issuedAt ?: 0 }
     }
+
+    /**
+     * Every credential format this SDK currently supports discloses via
+     * salted-hash element digests (mdoc's MSO, SD-JWT's `_sd` array) - none
+     * is a real ZKP predicate proof - so [CredentialConsumptionPolicy.CONSUME_NON_ZKP]
+     * is indistinguishable from [CredentialConsumptionPolicy.CONSUME_ALL]
+     * today. Kept as a real, separate policy value (not collapsed into one)
+     * since it's the right shape for once a ZKP-based format exists; this
+     * function is the single place that would need updating then.
+     */
+    private fun isZkpFormat(format: String): Boolean = false
+
+    /**
+     * Instances from [instances] (all copies of one batch - see
+     * [StoredCredential.batchId]) that are still allowed to be used for a
+     * NEW presentation under [policy], given what [presentationHistory]
+     * shows has already been presented. Mirrors [groupForDisplay]'s own
+     * `sigCountFor` usage-counting exactly, so "eligible" and the
+     * "remaining copies" ribbon never disagree.
+     *
+     * [CredentialConsumptionPolicy.NEVER_CONSUME] (the default - today's
+     * actual behavior) returns every instance unconditionally. Otherwise, an
+     * instance is eligible only if it hasn't already been presented
+     * (`sigCount == 0`) - each instance is bound to its own device key
+     * specifically so a verifier can't correlate repeated presentations by a
+     * reused key/signature; reusing an already-presented instance would
+     * throw that guarantee away.
+     */
+    fun eligibleInstances(
+        instances: List<StoredCredential>,
+        policy: CredentialConsumptionPolicy,
+        presentationHistory: List<PresentationRecord>,
+    ): List<StoredCredential> {
+        if (policy == CredentialConsumptionPolicy.NEVER_CONSUME) return instances
+        fun sigCountFor(credentialId: Long) =
+            presentationHistory.count { credentialId in it.credentialIds }
+        return instances.filter { instance ->
+            val consumes = policy == CredentialConsumptionPolicy.CONSUME_ALL || !isZkpFormat(instance.format)
+            !consumes || sigCountFor(instance.id) == 0
+        }
+    }
+
+    /**
+     * Below this many eligible (unused) instances remaining, the UI should
+     * offer to renew/re-issue the credential rather than let it silently run
+     * out. Not user-configurable in this pass - just the stated default.
+     */
+    const val RENEW_THRESHOLD = 0
+}
+
+/**
+ * Governs whether a successful presentation exhausts the specific credential
+ * instance it used, so that instance can never be presented again.
+ *
+ * Defaults to [NEVER_CONSUME] - today's actual behavior - so introducing
+ * this setting doesn't silently change existing wallets' behavior.
+ */
+enum class CredentialConsumptionPolicy {
+    /** Every successful presentation exhausts the instance it used, regardless of format. */
+    CONSUME_ALL,
+
+    /** Same as [CONSUME_ALL] until a real ZKP presentation format exists (see [CredentialUtils.isZkpFormat]). */
+    CONSUME_NON_ZKP,
+
+    /** Instances are never exhausted - a presentation may reuse any matching instance. */
+    NEVER_CONSUME,
 }
 
 /**

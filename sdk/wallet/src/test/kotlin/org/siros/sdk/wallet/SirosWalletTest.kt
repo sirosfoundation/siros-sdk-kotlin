@@ -47,6 +47,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.siros.sdk.auth.BackendApiClient
+import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialMetadata
 import org.siros.sdk.credentials.CredentialStore
 import org.siros.sdk.credentials.PresentationRecord
@@ -2084,6 +2085,13 @@ class SirosWalletTest {
         }
         if ("terminatedFlowIds" !in values) {
             values["terminatedFlowIds"] = mutableSetOf<String>()
+        }
+        // allocateInstance bypasses property initializers entirely, so
+        // credentialConsumptionPolicy's default (NEVER_CONSUME) never runs
+        // unless set here explicitly - matches every existing test's
+        // expectation of today's actual (pre-this-feature) behavior.
+        if ("credentialConsumptionPolicy" !in values) {
+            values["credentialConsumptionPolicy"] = CredentialConsumptionPolicy.NEVER_CONSUME
         }
         values.forEach { (name, value) -> setField(wallet, name, value) }
         return wallet

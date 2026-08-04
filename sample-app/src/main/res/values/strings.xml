@@ -52,6 +52,7 @@
     <string name="credential_detail_raw_disclosure">Disclosure %1$d</string>
     <string name="copy_to_clipboard">Copy to clipboard</string>
     <string name="copied_to_clipboard">Copied to clipboard</string>
+    <string name="credential_renew">Renew</string>
     <string name="credential_detail_delete">Delete Credential</string>
     <string name="credential_detail_delete_confirm_title">Delete Credential</string>
     <string name="credential_detail_delete_confirm_message">Are you sure you want to delete \"%1$s\"? This action cannot be undone.</string>
@@ -69,6 +70,11 @@
     <string name="settings_credential_details_description">Show raw claims and signed credential data when tapping a credential</string>
     <string name="settings_diagnostic_messages">Diagnostic messages</string>
     <string name="settings_diagnostic_messages_description">Show the raw backend step token alongside the friendly progress label during a flow</string>
+    <string name="settings_credential_consumption_title">Credential consumption</string>
+    <string name="settings_credential_consumption_description">Controls whether presenting a credential uses up one of its batch copies</string>
+    <string name="credential_consumption_consume_all">Consume on every presentation</string>
+    <string name="credential_consumption_consume_non_zkp">Consume only non-zero-knowledge presentations</string>
+    <string name="credential_consumption_never_consume">Never consume (default)</string>
     <string name="settings_presentation_history">Presentation History</string>
     <string name="settings_logout">Log Out</string>
     <string name="nfc_hce_description">ISO 18013-5 mdoc device engagement</string>

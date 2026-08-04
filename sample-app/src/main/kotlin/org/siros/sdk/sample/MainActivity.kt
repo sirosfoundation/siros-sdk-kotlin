@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -45,6 +47,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -74,6 +77,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.vectorResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -344,6 +348,8 @@ fun WalletScreen(viewModel: WalletViewModel) {
                 request = pendingPresentation!!,
                 onAccept = viewModel::acceptPresentation,
                 onDecline = viewModel::declinePresentation,
+                presentationHistory = presentationHistory,
+                consumptionPolicy = viewModel.credentialConsumptionPolicy.collectAsState().value,
             )
 
             // Credential detail sub-screen
@@ -392,6 +398,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
             showProximityEngagement -> ProximityEngagementScreen(
                 getCredentials = viewModel::getCredentialsForProximity,
                 signPresentation = viewModel::signMdocPresentationForProximity,
+                filterEligible = viewModel::filterEligibleForProximity,
                 onBack = viewModel::closeProximityEngagement,
             )
 
@@ -492,6 +499,8 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onUpdateShowCredentialDetails = viewModel::updateShowCredentialDetails,
                             showDiagnosticMessages = viewModel.showDiagnosticMessages.collectAsState().value,
                             onUpdateShowDiagnosticMessages = viewModel::updateShowDiagnosticMessages,
+                            credentialConsumptionPolicy = viewModel.credentialConsumptionPolicy.collectAsState().value,
+                            onUpdateCredentialConsumptionPolicy = viewModel::updateCredentialConsumptionPolicy,
                         )
                         // selectedTab can transiently be 1 (the "Add" action, not a
                         // real persisted tab) right as a flow finishes and the state
@@ -501,6 +510,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             state = state,
                             presentationHistory = presentationHistory,
                             onCredentialClick = viewModel::openCredentialDetail,
+                            onRenewCredential = viewModel::renewCredential,
                             onAddCredential = viewModel::openAddCredential,
                         )
                     }
@@ -886,6 +896,7 @@ fun CredentialsTab(
     state: WalletState.Ready,
     presentationHistory: List<org.siros.sdk.credentials.PresentationRecord>,
     onCredentialClick: (org.siros.sdk.credentials.StoredCredential) -> Unit,
+    onRenewCredential: (org.siros.sdk.credentials.StoredCredential) -> Unit,
     onAddCredential: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -924,6 +935,7 @@ fun CredentialsTab(
                 credential = entry.credential,
                 instances = entry.instances,
                 onClick = { onCredentialClick(entry.credential) },
+                onRenewClick = { onRenewCredential(entry.credential) },
             )
         } else {
             // Horizontal pager for swiping between credential cards
@@ -938,6 +950,7 @@ fun CredentialsTab(
                     credential = entry.credential,
                     instances = entry.instances,
                     onClick = { onCredentialClick(entry.credential) },
+                    onRenewClick = { onRenewCredential(entry.credential) },
                 )
             }
             // Page indicator dots
@@ -1004,6 +1017,14 @@ fun EmptyCredentialsCard(onClick: () -> Unit) {
 
 // ── Settings Tab ────────────────────────────────────────────────────
 
+/** Localized display label for a [org.siros.sdk.credentials.CredentialConsumptionPolicy] value. */
+private fun credentialConsumptionPolicyLabelRes(policy: org.siros.sdk.credentials.CredentialConsumptionPolicy): Int =
+    when (policy) {
+        org.siros.sdk.credentials.CredentialConsumptionPolicy.CONSUME_ALL -> R.string.credential_consumption_consume_all
+        org.siros.sdk.credentials.CredentialConsumptionPolicy.CONSUME_NON_ZKP -> R.string.credential_consumption_consume_non_zkp
+        org.siros.sdk.credentials.CredentialConsumptionPolicy.NEVER_CONSUME -> R.string.credential_consumption_never_consume
+    }
+
 @Composable
 fun SettingsTab(
     state: WalletState.Ready,
@@ -1026,6 +1047,9 @@ fun SettingsTab(
     onUpdateShowCredentialDetails: ((Boolean) -> Unit)? = null,
     showDiagnosticMessages: Boolean = true,
     onUpdateShowDiagnosticMessages: ((Boolean) -> Unit)? = null,
+    credentialConsumptionPolicy: org.siros.sdk.credentials.CredentialConsumptionPolicy =
+        org.siros.sdk.credentials.CredentialConsumptionPolicy.NEVER_CONSUME,
+    onUpdateCredentialConsumptionPolicy: ((org.siros.sdk.credentials.CredentialConsumptionPolicy) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -1107,6 +1131,55 @@ fun SettingsTab(
                         onCheckedChange = onUpdateShowDiagnosticMessages,
                         enabled = onUpdateShowDiagnosticMessages != null,
                     )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Credential consumption policy section
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+                Text(
+                    stringResource(R.string.settings_credential_consumption_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    stringResource(R.string.settings_credential_consumption_description),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Column(Modifier.selectableGroup()) {
+                    for (policy in org.siros.sdk.credentials.CredentialConsumptionPolicy.entries) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .selectable(
+                                    selected = policy == credentialConsumptionPolicy,
+                                    onClick = { onUpdateCredentialConsumptionPolicy?.invoke(policy) },
+                                    role = Role.RadioButton,
+                                    enabled = onUpdateCredentialConsumptionPolicy != null,
+                                )
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = policy == credentialConsumptionPolicy,
+                                onClick = { onUpdateCredentialConsumptionPolicy?.invoke(policy) },
+                                enabled = onUpdateCredentialConsumptionPolicy != null,
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(stringResource(credentialConsumptionPolicyLabelRes(policy)), style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
                 }
             }
         }

@@ -84,6 +84,7 @@ import org.siros.sdk.sample.proximity.RequestProximityConsent
 fun ProximityEngagementScreen(
     getCredentials: suspend () -> List<StoredCredential>,
     signPresentation: suspend (credentialId: Long, disclosedClaims: List<String>?, sessionTranscriptBytes: ByteArray) -> ByteArray,
+    filterEligible: (List<StoredCredential>) -> List<StoredCredential>,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -158,6 +159,7 @@ fun ProximityEngagementScreen(
                 getCredentials = getCredentials,
                 signPresentation = signPresentation,
                 requestConsent = requestConsent,
+                filterEligible = filterEligible,
                 onStep = { step -> currentStep = step },
                 onComplete = { success ->
                     result = success
@@ -174,6 +176,7 @@ fun ProximityEngagementScreen(
                 getCredentials = getCredentials,
                 signPresentation = signPresentation,
                 requestConsent = requestConsent,
+                filterEligible = filterEligible,
                 onStep = { step -> currentStep = step },
                 onComplete = { success ->
                     result = success
@@ -260,7 +263,7 @@ fun ProximityEngagementScreen(
     }
 
     pendingConsent?.let { consent ->
-        ProximityConsentDialog(consent)
+        ProximityConsentDialog(consent, filterEligible)
     }
 }
 
@@ -358,8 +361,19 @@ private data class PendingConsent(
 )
 
 @Composable
-private fun ProximityConsentDialog(consent: PendingConsent) {
-    var selected by remember(consent) { mutableStateOf(consent.matchingFamilies.first()) }
+private fun ProximityConsentDialog(consent: PendingConsent, filterEligible: (List<StoredCredential>) -> List<StoredCredential>) {
+    // A family with zero eligible instances (every copy already used under
+    // the active consumption policy) is shown, not silently omitted - so the
+    // user isn't confused about where their credential went - but disabled:
+    // the SDK refuses to sign with an exhausted instance regardless (defense
+    // in depth), so letting the user pick one here would just fail later.
+    val eligibleFamilies = remember(consent, filterEligible) {
+        consent.matchingFamilies.filter { filterEligible(it.instances).isNotEmpty() }.toSet()
+    }
+    var selected by remember(consent) {
+        mutableStateOf(consent.matchingFamilies.firstOrNull { it in eligibleFamilies } ?: consent.matchingFamilies.first())
+    }
+    val selectedIsEligible = selected in eligibleFamilies
 
     AlertDialog(
         onDismissRequest = { consent.respond(null) },
@@ -383,6 +397,7 @@ private fun ProximityConsentDialog(consent: PendingConsent) {
                     Column(Modifier.selectableGroup()) {
                         for (family in consent.matchingFamilies) {
                             val credential = family.representative
+                            val isEligible = family in eligibleFamilies
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -390,13 +405,30 @@ private fun ProximityConsentDialog(consent: PendingConsent) {
                                         selected = family == selected,
                                         onClick = { selected = family },
                                         role = Role.RadioButton,
+                                        enabled = isEligible,
                                     )
                                     .padding(vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                RadioButton(selected = family == selected, onClick = { selected = family })
+                                RadioButton(selected = family == selected, onClick = { selected = family }, enabled = isEligible)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text(credential.metadata?.vct ?: credential.metadata?.doctype ?: consent.docType)
+                                Column {
+                                    Text(
+                                        text = credential.metadata?.vct ?: credential.metadata?.doctype ?: consent.docType,
+                                        color = if (isEligible) {
+                                            MaterialTheme.colorScheme.onSurface
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                        },
+                                    )
+                                    if (!isEligible) {
+                                        Text(
+                                            text = "No copies left - renew in Settings",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.error,
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -404,7 +436,7 @@ private fun ProximityConsentDialog(consent: PendingConsent) {
             }
         },
         confirmButton = {
-            TextButton(onClick = { consent.respond(selected) }) { Text("Share") }
+            TextButton(onClick = { consent.respond(selected) }, enabled = selectedIsEligible) { Text("Share") }
         },
         dismissButton = {
             TextButton(onClick = { consent.respond(null) }) { Text("Decline") }

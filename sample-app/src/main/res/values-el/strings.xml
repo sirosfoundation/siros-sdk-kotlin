@@ -49,6 +49,7 @@
     <string name="credential_detail_raw_disclosure">Αποκάλυψη %1$d</string>
     <string name="copy_to_clipboard">Αντιγραφή στο πρόχειρο</string>
     <string name="copied_to_clipboard">Αντιγράφηκε στο πρόχειρο</string>
+    <string name="credential_renew">Ανανέωση</string>
     <string name="credential_detail_delete">Διαγραφή Πιστοποιητικού</string>
     <string name="credential_detail_delete_confirm_title">Διαγραφή Πιστοποιητικού</string>
     <string name="credential_detail_delete_confirm_message">Σίγουρα θέλετε να διαγράψετε το \"%1$s\"; Αυτή η ενέργεια δεν μπορεί να αναιρεθεί.</string>
@@ -66,6 +67,11 @@
     <string name="settings_credential_details_description">Εμφάνιση ακατέργαστων δεδομένων και υπογεγραμμένων στοιχείων πιστοποιητικού όταν πατάτε ένα πιστοποιητικό</string>
     <string name="settings_diagnostic_messages">Διαγνωστικά μηνύματα</string>
     <string name="settings_diagnostic_messages_description">Εμφάνιση του ακατέργαστου διακριτικού βήματος του διακομιστή μαζί με τη φιλική ετικέτα προόδου κατά τη διάρκεια μιας ροής</string>
+    <string name="settings_credential_consumption_title">Κατανάλωση πιστοποιητικού</string>
+    <string name="settings_credential_consumption_description">Ελέγχει αν η παρουσίαση ενός πιστοποιητικού καταναλώνει ένα από τα αντίγραφα της παρτίδας του</string>
+    <string name="credential_consumption_consume_all">Κατανάλωση σε κάθε παρουσίαση</string>
+    <string name="credential_consumption_consume_non_zkp">Κατανάλωση μόνο σε παρουσιάσεις χωρίς μηδενική γνώση</string>
+    <string name="credential_consumption_never_consume">Ποτέ μην καταναλώνεις (προεπιλογή)</string>
     <string name="settings_presentation_history">Ιστορικό Παρουσιάσεων</string>
     <string name="settings_logout">Αποσύνδεση</string>
     <string name="nfc_hce_description">Δέσμευση συσκευής mdoc ISO 18013-5</string>

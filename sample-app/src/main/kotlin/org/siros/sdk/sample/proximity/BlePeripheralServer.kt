@@ -57,6 +57,14 @@ class BlePeripheralServer(
     private val signPresentation: suspend (credentialId: Long, disclosedClaims: List<String>?, sessionTranscriptBytes: ByteArray) -> ByteArray,
     /** See [RequestProximityConsent]'s doc comment. */
     private val requestConsent: RequestProximityConsent,
+    /**
+     * Mirrors `CredentialUtils.eligibleInstances` bound to the caller's
+     * current `SirosWallet.credentialConsumptionPolicy`/`presentationHistory` -
+     * excludes instances the active consumption policy considers already
+     * used up, so a family the user approves can't sign with an exhausted
+     * instance even if [requestConsent]'s UI failed to grey it out.
+     */
+    private val filterEligible: (List<StoredCredential>) -> List<StoredCredential>,
     /** Reports a canonical step token (see `FlowProgress.kt`'s `PROXIMITY_STEPS`) for driving the same progress-bar UI the issuance/presentation flows use. */
     private val onStep: (String) -> Unit,
     private val onComplete: (success: Boolean) -> Unit,
@@ -341,12 +349,18 @@ class BlePeripheralServer(
                 return
             }
         }
+        val eligible = filterEligible(family.instances)
+        if (eligible.isEmpty()) {
+            Timber.w("BlePeripheralServer: no eligible (unused) instances remain for the approved credential")
+            completeOnce(false)
+            return
+        }
         // Pick a random instance from the batch rather than always the same
         // one - each instance is bound to its own device key specifically so
         // repeated presentations of "the same" credential can't be
         // correlated by a verifier via a reused public key. Always picking
         // instance 0 would quietly throw that unlinkability away.
-        val credential = family.instances.random()
+        val credential = eligible.random()
 
         onStep("submitting_response")
         val response = signPresentation(credential.id, docRequest.disclosedClaims(), sessionTranscript)

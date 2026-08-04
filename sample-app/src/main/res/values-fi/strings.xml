@@ -49,6 +49,7 @@
     <string name="credential_detail_raw_disclosure">Paljastus %1$d</string>
     <string name="copy_to_clipboard">Kopioi leikepöydälle</string>
     <string name="copied_to_clipboard">Kopioitu leikepöydälle</string>
+    <string name="credential_renew">Uusi</string>
     <string name="credential_detail_delete">Poista todistus</string>
     <string name="credential_detail_delete_confirm_title">Poista todistus</string>
     <string name="credential_detail_delete_confirm_message">Haluatko varmasti poistaa \"%1$s\"? Tätä toimintoa ei voi peruuttaa.</string>
@@ -66,6 +67,11 @@
     <string name="settings_credential_details_description">Näytä raakadata ja allekirjoitetut todistustiedot, kun painat todistusta</string>
     <string name="settings_diagnostic_messages">Diagnostiikkaviestit</string>
     <string name="settings_diagnostic_messages_description">Näytä palvelimen raaka vaihetunniste ystävällisen edistymismerkinnän rinnalla prosessin aikana</string>
+    <string name="settings_credential_consumption_title">Todistuksen kuluminen</string>
+    <string name="settings_credential_consumption_description">Määrittää, kuluttaako esittäminen yhden todistuksen erän kopioista</string>
+    <string name="credential_consumption_consume_all">Kuluta jokaisella esityksellä</string>
+    <string name="credential_consumption_consume_non_zkp">Kuluta vain ei-nollatietämysesityksissä</string>
+    <string name="credential_consumption_never_consume">Älä koskaan kuluta (oletus)</string>
     <string name="settings_presentation_history">Esityshistoria</string>
     <string name="settings_logout">Kirjaudu ulos</string>
     <string name="nfc_hce_description">ISO 18013-5 mdoc-laitesitoutuminen</string>
