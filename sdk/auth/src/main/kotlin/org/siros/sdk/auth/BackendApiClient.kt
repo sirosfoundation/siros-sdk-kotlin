@@ -111,6 +111,10 @@ class BackendApiClient(
      * @param jwks list of JWK objects for the keys to attest
      * @param nonce OpenID4VCI nonce from the issuer
      * @param securityProperties optional WSCD security properties for KA claims (CS-04 §7.1.3)
+     * @param walletInstanceId optional WIA JWK Thumbprint (`cnf.jkt`) identifying this wallet
+     *   instance, sent as `wallet_instance_id` - lets the backend's KA trust gate look up this
+     *   instance's recorded `attestation_source` and lift its `security_properties` clamp when
+     *   it's genuinely native-attested. Omitted when null/blank.
      * @return key attestation JWT string
      */
     suspend fun requestKeyAttestation(
@@ -118,6 +122,7 @@ class BackendApiClient(
         nonce: String,
         securityProperties: SignerSecurityProperties? = null,
         credentialIssuer: String? = null,
+        walletInstanceId: String? = null,
     ): String {
         val body = kotlinx.serialization.json.buildJsonObject {
             put("jwks", kotlinx.serialization.json.JsonArray(jwks))
@@ -130,6 +135,13 @@ class BackendApiClient(
                     put("credential_issuer", kotlinx.serialization.json.JsonPrimitive(credentialIssuer))
                 }
             })
+            // The WIA's JWK-thumbprint identity (`cnf.jkt`) - lets the backend's
+            // KA trust gate look up this wallet instance's own recorded
+            // attestation_source and lift the K3 clamp when it's genuinely
+            // native-attested. Omitted whenever the caller has no such WIA.
+            if (!walletInstanceId.isNullOrBlank()) {
+                put("wallet_instance_id", kotlinx.serialization.json.JsonPrimitive(walletInstanceId))
+            }
             if (securityProperties != null) {
                 put("security_properties", kotlinx.serialization.json.buildJsonObject {
                     put("key_storage", kotlinx.serialization.json.JsonArray(

@@ -1202,6 +1202,36 @@ class SirosWallet private constructor(
     }
 
     /**
+     * The wallet_instance_id to send with a Key Attestation request: the
+     * JWK Thumbprint (`cnf.jkt`) of the current session's WIA-issued
+     * instance key, but only when that WIA's `attestation_source` is a
+     * verified native platform attestation (ios_app_attest /
+     * android_play_integrity) - go-wallet-backend's KA trust gate clamps to
+     * K3 for anything else anyway, so there's no value in sending an ID that
+     * won't lift the clamp, and every other failure mode (no WIA, WIA
+     * disabled, non-native tier) must resolve to omitting the field exactly
+     * like today's pre-this-change behavior.
+     *
+     * Peeks the existing WIA cache only - deliberately does NOT call
+     * [ensureWalletInstanceAttestation] (real Copilot-review finding: that
+     * would trigger a challenge+generateWIA network round trip, and retry it
+     * on every backend key-attestation attempt in deployments where WIA is
+     * unsupported/misconfigured, adding latency and log spam for a field
+     * that's optional in the first place). A WIA obtained earlier this
+     * session (e.g. during issuance) is still picked up; one that was never
+     * fetched simply omits the field, exactly like today's behavior.
+     */
+    private fun currentWalletInstanceId(): String? {
+        val now = System.currentTimeMillis() / 1000
+        val wia = cachedWia?.takeIf { cachedWiaExpiresAt - now > 60 } ?: return null
+        val nativeAttestationSources = setOf("ios_app_attest", "android_play_integrity")
+        val payload = CredentialUtils.parseJwtPayload(wia) ?: return null
+        val source = payload["attestation_source"]?.jsonPrimitive?.contentOrNull
+        if (source !in nativeAttestationSources) return null
+        return payload["cnf"]?.jsonObject?.get("jkt")?.jsonPrimitive?.contentOrNull
+    }
+
+    /**
      * The OAuth `client_id` this wallet uses in OID4VCI/OID4VP flows.
      * Mirrors go-wallet-backend's `OID4VCIHandler.clientID` default
      * (`h.clientID = h.redirectURI`, OID4VCI §7.1's unregistered-client
@@ -2341,6 +2371,7 @@ class SirosWallet private constructor(
                 nonce = nonce,
                 securityProperties = securityProps,
                 credentialIssuer = audience,
+                walletInstanceId = currentWalletInstanceId(),
             )
             // keypairs[i]'s key is exactly attested_keys[i] in the JWT just
             // built (jwks preserves list order) - the issuer is expected to

@@ -889,6 +889,15 @@ class SirosWalletTest {
         return "eyJhbGciOiJub25lIn0.$payload.sig"
     }
 
+    /** A fake WIA JWT carrying `exp`, `cnf.jkt`, and `attestation_source` - for currentWalletInstanceId() tests. */
+    private fun fakeWiaJwt(exp: Long, jkt: String?, attestationSource: String?): String {
+        val cnfField = if (jkt != null) ""","cnf":{"jkt":"$jkt"}""" else ""
+        val sourceField = if (attestationSource != null) ""","attestation_source":"$attestationSource"""" else ""
+        val payload = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("""{"exp":$exp$cnfField$sourceField}""".toByteArray(Charsets.UTF_8))
+        return "eyJhbGciOiJub25lIn0.$payload.sig"
+    }
+
     /**
      * OAuth Client Attestation (draft-ietf-oauth-attestation-based-client-auth-04
      * §3.1): startIssuance must obtain a Wallet Instance Attestation (via a
@@ -1628,6 +1637,108 @@ class SirosWalletTest {
     }
 
     @Test
+    fun currentWalletInstanceId_returnsJkt_whenWiaIsNativeAttested() = runTest(dispatcher) {
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+        )
+        setField(
+            wallet,
+            "cachedWia",
+            fakeWiaJwt(System.currentTimeMillis() / 1000 + 3600, jkt = "test-jkt", attestationSource = "ios_app_attest"),
+        )
+        setField(wallet, "cachedWiaExpiresAt", System.currentTimeMillis() / 1000 + 3600)
+
+        assertEquals("test-jkt", invokeCurrentWalletInstanceId(wallet))
+    }
+
+    @Test
+    fun currentWalletInstanceId_returnsNull_whenWiaIsNotNativeAttested() = runTest(dispatcher) {
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+        )
+        // WIA exists but was never verified as native platform attestation -
+        // the backend's KA trust gate wouldn't lift the clamp for it anyway,
+        // so walletInstanceId must stay omitted.
+        setField(
+            wallet,
+            "cachedWia",
+            fakeWiaJwt(System.currentTimeMillis() / 1000 + 3600, jkt = "test-jkt", attestationSource = "backend_attested"),
+        )
+        setField(wallet, "cachedWiaExpiresAt", System.currentTimeMillis() / 1000 + 3600)
+
+        assertEquals(null, invokeCurrentWalletInstanceId(wallet))
+    }
+
+    @Test
+    fun currentWalletInstanceId_returnsNull_whenNoWiaAvailable() = runTest(dispatcher) {
+        // No cachedWia seeded - currentWalletInstanceId() peeks the cache
+        // only (it must never trigger a WIA fetch of its own), so this must
+        // resolve to null without any backend interaction at all.
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+        )
+
+        assertEquals(null, invokeCurrentWalletInstanceId(wallet))
+    }
+
+    @Test
+    fun requestBackendKeyAttestation_includesWalletInstanceId_whenWiaIsNativeAttested() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val keystore = mockk<KeystoreManager>()
+        val keypairs = listOf(KeypairInfo(keyId = "key-1", publicKeyJWK = buildJsonObject { put("kty", "EC") }))
+        coEvery { keystore.generateKeypairs(1) } returns keypairs
+        val securityProps = SignerSecurityProperties(keyStorage = listOf("iso_18045_high"))
+        coEvery { keystore.securityProperties("key-1") } returns securityProps
+        val apiClient = mockk<BackendApiClient>()
+        coEvery {
+            apiClient.requestKeyAttestation(
+                jwks = keypairs.map { it.publicKeyJWK },
+                nonce = "nonce-1",
+                securityProperties = securityProps,
+                credentialIssuer = "aud-1",
+                walletInstanceId = "test-jkt",
+            )
+        } returns "backend-signed-attestation-jwt"
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to keystore,
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        setField(wallet, "apiClient", apiClient)
+        setField(wallet, "cachedWia", fakeWiaJwt(System.currentTimeMillis() / 1000 + 3600, jkt = "test-jkt", attestationSource = "ios_app_attest"))
+        setField(wallet, "cachedWiaExpiresAt", System.currentTimeMillis() / 1000 + 3600)
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sign",
+                action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "aud-1",
+                    nonce = "nonce-1",
+                    count = 1,
+                    proofTypesSupported = buildJsonObject { putJsonObject("attestation") {} },
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        verify(exactly = 1) {
+            engine.sendSignResponse(
+                "flow-sign",
+                proofs = listOf(ProofObject(proofType = "attestation", attestation = "backend-signed-attestation-jwt")),
+                messageId = null,
+            )
+        }
+    }
+
+    @Test
     fun connectEngine_signRequest_fallsBackToSelfSignedAttestation_whenBackendCallFails() = runTest(dispatcher) {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val keystore = mockk<KeystoreManager>()
@@ -2123,6 +2234,12 @@ class SirosWalletTest {
         )
         method.isAccessible = true
         method.invoke(wallet, engine, flowId, payload)
+    }
+
+    private fun invokeCurrentWalletInstanceId(wallet: SirosWallet): String? {
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "currentWalletInstanceId" }
+        method.isAccessible = true
+        return method.call(wallet) as String?
     }
 
     private fun invokeConnectEngine(wallet: SirosWallet, appToken: String) {
