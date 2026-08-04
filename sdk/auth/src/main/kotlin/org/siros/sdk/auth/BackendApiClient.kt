@@ -111,6 +111,10 @@ class BackendApiClient(
      * @param jwks list of JWK objects for the keys to attest
      * @param nonce OpenID4VCI nonce from the issuer
      * @param securityProperties optional WSCD security properties for KA claims (CS-04 §7.1.3)
+     * @param walletInstanceId optional WIA JWK Thumbprint (`cnf.jkt`) identifying this wallet
+     *   instance, sent as `wallet_instance_id` - lets the backend's KA trust gate look up this
+     *   instance's recorded `attestation_source` and lift its `security_properties` clamp when
+     *   it's genuinely native-attested. Omitted when null/blank.
      * @return key attestation JWT string
      */
     suspend fun requestKeyAttestation(
