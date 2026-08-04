@@ -401,11 +401,13 @@ object CredentialUtils {
         presentationHistory: List<PresentationRecord>,
     ): List<StoredCredential> {
         if (policy == CredentialConsumptionPolicy.NEVER_CONSUME) return instances
-        fun sigCountFor(credentialId: Long) =
-            presentationHistory.count { credentialId in it.credentialIds }
+        // A single pass building this set, rather than rescanning all of
+        // presentationHistory per instance (O(instances x history) before),
+        // matters once either grows - this can run on every UI recomposition.
+        val usedCredentialIds = presentationHistory.flatMapTo(HashSet()) { it.credentialIds }
         return instances.filter { instance ->
             val consumes = policy == CredentialConsumptionPolicy.CONSUME_ALL || !isZkpFormat(instance.format)
-            !consumes || sigCountFor(instance.id) == 0
+            !consumes || instance.id !in usedCredentialIds
         }
     }
 

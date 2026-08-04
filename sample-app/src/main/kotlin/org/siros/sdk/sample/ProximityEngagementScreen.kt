@@ -44,6 +44,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,6 +57,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.siros.sdk.credentials.StoredCredential
@@ -131,6 +133,16 @@ fun ProximityEngagementScreen(
     var result by remember { mutableStateOf<Boolean?>(null) }
     var blePermissionsDenied by remember { mutableStateOf(false) }
     var pendingConsent by remember { mutableStateOf<PendingConsent?>(null) }
+    // Per-role outcome, so a terminal failure is only reported once BOTH
+    // BLE roles have finished unsuccessfully - the two run concurrently, and
+    // one failing (e.g. central-client mode never finding a reader) must
+    // not preempt the other still succeeding shortly after.
+    var peripheralOutcome by remember { mutableStateOf<Boolean?>(null) }
+    var centralOutcome by remember { mutableStateOf<Boolean?>(null) }
+    // BLE callbacks run on Dispatchers.IO (see BlePeripheralServer/
+    // BleCentralClient) - Compose state writes must happen on the main
+    // thread, so every onStep/onComplete hops here first.
+    val uiScope = rememberCoroutineScope()
 
     // Bridges BlePeripheralServer/BleCentralClient's suspending consent
     // request to this screen's AlertDialog: suspends the caller (a
@@ -174,14 +186,24 @@ fun ProximityEngagementScreen(
                 signPresentation = signPresentation,
                 requestConsent = requestConsent,
                 filterEligible = filterEligible,
-                onStep = { step -> currentStep = step },
+                onStep = { step -> uiScope.launch(Dispatchers.Main.immediate) { currentStep = step } },
                 onComplete = { success ->
-                    result = success
-                    // Whichever mode the reader actually picked has now
-                    // finished (or failed) - the other is just wasting radio
-                    // time scanning/advertising for a connection that will
-                    // never come, so stop it.
-                    if (success) centralClient?.stop()
+                    uiScope.launch(Dispatchers.Main.immediate) {
+                        peripheralOutcome = success
+                        if (success) {
+                            // Whichever mode the reader actually picked has
+                            // now finished - the other is just wasting radio
+                            // time scanning/advertising for a connection
+                            // that will never come, so stop it.
+                            centralClient?.stop()
+                            result = true
+                        } else if (centralOutcome != null) {
+                            // Only report terminal failure once the OTHER
+                            // role has also finished/failed - it may yet
+                            // succeed on its own.
+                            result = false
+                        }
+                    }
                 },
             )
             centralClient = BleCentralClient(
@@ -191,10 +213,17 @@ fun ProximityEngagementScreen(
                 signPresentation = signPresentation,
                 requestConsent = requestConsent,
                 filterEligible = filterEligible,
-                onStep = { step -> currentStep = step },
+                onStep = { step -> uiScope.launch(Dispatchers.Main.immediate) { currentStep = step } },
                 onComplete = { success ->
-                    result = success
-                    if (success) peripheralServer?.stop()
+                    uiScope.launch(Dispatchers.Main.immediate) {
+                        centralOutcome = success
+                        if (success) {
+                            peripheralServer?.stop()
+                            result = true
+                        } else if (peripheralOutcome != null) {
+                            result = false
+                        }
+                    }
                 },
             )
             peripheralServer.start()

@@ -2,6 +2,7 @@
 package org.siros.sdk.keystore.mdoc
 
 import com.upokecenter.cbor.CBORObject
+import com.upokecenter.cbor.CBORType
 
 /**
  * ISO 18013-5 §12.2.4 `SessionEstablishment`/`SessionData` CBOR message
@@ -20,8 +21,17 @@ object ProximitySessionMessages {
         val map = CBORObject.DecodeFromBytes(bytes)
         val eReaderKey = map[CBORObject.FromObject("eReaderKey")]
             ?: throw IllegalArgumentException("SessionEstablishment missing eReaderKey")
+        // §9.1.1: eReaderKey is a #6.24-tagged COSE_Key - a peer sending an
+        // untagged/differently-tagged value should fail here with a clear
+        // message, not deep inside key parsing with a less actionable one.
+        if (!eReaderKey.HasOneTag(24)) {
+            throw IllegalArgumentException("SessionEstablishment.eReaderKey must be tag-24-wrapped (#6.24 COSE_Key)")
+        }
         val data = map[CBORObject.FromObject("data")]
             ?: throw IllegalArgumentException("SessionEstablishment missing data")
+        if (data.type != CBORType.ByteString) {
+            throw IllegalArgumentException("SessionEstablishment.data must be a byte string, was ${data.type}")
+        }
         return SessionEstablishment(eReaderKeyBytes = eReaderKey.EncodeToBytes(), encryptedData = data.GetByteString())
     }
 

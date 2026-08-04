@@ -30,9 +30,13 @@ object ProximitySessionTranscript {
 
     /**
      * @param deviceEngagementBytes raw (untagged) `DeviceEngagement` CBOR, as produced by [DeviceEngagement.create].
-     * @param eReaderKeyBytes the exact bytes of the incoming `SessionEstablishment` message's
-     *   `eReaderKey` field (already `#6.24`-tagged `COSE_Key`) - reused verbatim, never rebuilt,
-     *   so this transcript matches exactly what the reader itself sent.
+     * @param eReaderKeyBytes the incoming `SessionEstablishment` message's `eReaderKey` field
+     *   (already `#6.24`-tagged `COSE_Key`), as re-encoded by [ProximitySessionMessages.parseSessionEstablishment]
+     *   from the parsed CBOR value - not rebuilt from separately-derived key material, so this
+     *   matches what the reader sent for any canonically-CBOR-encoded input. A reader using a
+     *   non-canonical encoding (e.g. indefinite-length or non-minimal integers) could in principle
+     *   produce different bytes here than what was on the wire, which would derive different
+     *   session keys - not expected in practice, but worth knowing if interop debugging ever points here.
      * @param handoverSelectMessageBytes the NDEF Handover Select message bytes
      *   ([NfcHandoverSelect.build]'s output) if device engagement happened via NFC static
      *   handover; null if via QR.
