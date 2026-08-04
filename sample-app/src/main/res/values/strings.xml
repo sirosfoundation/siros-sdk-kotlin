@@ -67,6 +67,8 @@
     <string name="settings_app_version">App version</string>
     <string name="settings_credential_details">Credential details</string>
     <string name="settings_credential_details_description">Show raw claims and signed credential data when tapping a credential</string>
+    <string name="settings_diagnostic_messages">Diagnostic messages</string>
+    <string name="settings_diagnostic_messages_description">Show the raw backend step token alongside the friendly progress label during a flow</string>
     <string name="settings_presentation_history">Presentation History</string>
     <string name="settings_logout">Log Out</string>
 
@@ -93,6 +95,34 @@
     <string name="flow_processing">Processing\u2026</string>
     <string name="flow_cancel">Cancel</string>
     <string name="flow_error_title">Flow Failed</string>
+
+    <!-- Flow step labels (localized display of go-wallet-backend's FlowStep
+         tokens - see internal/engine/messages.go). flow_step_unknown is the
+         fallback for any token not in this list (e.g. a future step added on
+         the backend before the app is updated). -->
+    <string name="flow_step_parsing_offer">Reading credential offer\u2026</string>
+    <string name="flow_step_offer_parsed">Credential offer parsed</string>
+    <string name="flow_step_fetching_metadata">Fetching issuer information\u2026</string>
+    <string name="flow_step_metadata_fetched">Issuer information received</string>
+    <string name="flow_step_evaluating_trust">Checking issuer trust\u2026</string>
+    <string name="flow_step_trust_evaluated">Issuer trust verified</string>
+    <string name="flow_step_awaiting_selection">Waiting for credential selection\u2026</string>
+    <string name="flow_step_authorization_required">Waiting for authorization\u2026</string>
+    <string name="flow_step_exchanging_token">Exchanging authorization for access token\u2026</string>
+    <string name="flow_step_token_obtained">Access token received</string>
+    <string name="flow_step_requesting_credential">Requesting credential\u2026</string>
+    <string name="flow_step_deferred">Credential issuance deferred\u2026</string>
+    <string name="flow_step_parsing_request">Reading verifier request\u2026</string>
+    <string name="flow_step_request_parsed">Verifier request parsed</string>
+    <string name="flow_step_evaluating_verifier_trust">Checking verifier trust\u2026</string>
+    <string name="flow_step_match_credentials">Matching credentials\u2026</string>
+    <string name="flow_step_awaiting_consent">Waiting for your consent\u2026</string>
+    <string name="flow_step_credential_selection">Selecting credentials\u2026</string>
+    <string name="flow_step_submitting_response">Sending response to verifier\u2026</string>
+    <string name="flow_step_unknown">Processing\u2026</string>
+    <string name="flow_diagnostic_label">Diagnostic: %1$s</string>
+    <string name="flow_credentials_received">Received %1$d credential(s)</string>
+    <string name="flow_presentation_sent">Presentation sent successfully</string>
 
     <!-- Error view -->
     <string name="error_title">Something went wrong</string>

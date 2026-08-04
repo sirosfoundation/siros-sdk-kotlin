@@ -67,9 +67,18 @@ interface KeystoreManager {
      * @param nonce the verifier nonce
      * @param audience the verifier URL
      * @param credentialIds the credential identifiers to include
+     * @param kid the key ID bound to the credential(s) being presented (see
+     *   [StoredCredential.kid]) - when non-null, signing MUST use exactly
+     *   this key (throwing if it isn't available) rather than an arbitrary
+     *   one, since a wallet holding more than one key (e.g. after a batch
+     *   issuance where each credential instance is bound to its own device
+     *   key) would otherwise silently sign with the wrong key for every
+     *   credential except whichever one happens to be first. Null (the
+     *   legacy no-credential-context call shape) preserves the old
+     *   first-available-key behavior.
      * @return the signed VP JWT
      */
-    suspend fun signPresentation(nonce: String, audience: String, credentialIds: List<String>): String
+    suspend fun signPresentation(nonce: String, audience: String, credentialIds: List<Long>, kid: String? = null): String
 
     /**
      * Build a complete SD-JWT VP token with Key Binding JWT.
@@ -85,6 +94,9 @@ interface KeystoreManager {
      * @param disclosedClaims claim names to selectively disclose (null = all).
      * @param nonce the verifier-provided nonce.
      * @param audience the verifier's client_id.
+     * @param kid the key ID bound to this credential (see
+     *   [StoredCredential.kid]) - see [signPresentation]'s doc comment for
+     *   why this must be the exact key, not an arbitrary available one.
      * @return the assembled VP token string.
      */
     suspend fun signVpToken(
@@ -92,6 +104,7 @@ interface KeystoreManager {
         disclosedClaims: List<String>?,
         nonce: String,
         audience: String,
+        kid: String? = null,
     ): String
 
     /**
@@ -103,6 +116,11 @@ interface KeystoreManager {
      * @param audience Verifier client_id.
      * @param responseUri Verifier response endpoint URI.
      * @param verifierJwkThumbprint Optional JWK thumbprint for session transcript.
+     * @param kid the key ID bound to this credential (see
+     *   [StoredCredential.kid]) - the DeviceResponse's `deviceSignature` MUST
+     *   be produced with the exact device key this credential's MSO
+     *   `deviceKeyInfo.deviceKey` embeds; see [signPresentation]'s doc
+     *   comment for why signing with an arbitrary available key is unsafe.
      * @return Base64url-encoded DeviceResponse CBOR bytes.
      */
     suspend fun signMdocPresentation(
@@ -112,6 +130,7 @@ interface KeystoreManager {
         audience: String,
         responseUri: String,
         verifierJwkThumbprint: String?,
+        kid: String? = null,
     ): ByteArray {
         throw UnsupportedOperationException("mDoc presentation not supported by this keystore")
     }
@@ -128,6 +147,7 @@ interface KeystoreManager {
      * @param origin The verified browser/page origin that called `navigator.credentials.get()`.
      * @param encryptionPublicJwkThumbprint JWK thumbprint of the verifier's response-encryption
      *   key (present when `response_mode=dc_api.jwt`), null otherwise.
+     * @param kid the key ID bound to this credential (see [signMdocPresentation]'s doc comment).
      * @return Base64url-encoded DeviceResponse CBOR bytes.
      */
     suspend fun signMdocPresentationForDCAPI(
@@ -136,6 +156,7 @@ interface KeystoreManager {
         nonce: String,
         origin: String,
         encryptionPublicJwkThumbprint: String?,
+        kid: String? = null,
     ): ByteArray {
         throw UnsupportedOperationException("mDoc DC API presentation not supported by this keystore")
     }
@@ -148,20 +169,39 @@ interface KeystoreManager {
 
     // ── Credential storage (PRF-encrypted alongside keys) ───────────
 
-    /** Store a credential's raw JSON inside the encrypted container. */
-    suspend fun saveCredential(id: String, json: String)
+    /**
+     * Store a credential's raw JSON inside the encrypted container. [id] is
+     * privatedata-spec's `credentialId` (a uint32-range number, see
+     * `StoredCredential.id`) - a real JSON number on the wire, not a string.
+     */
+    suspend fun saveCredential(id: Long, json: String)
 
     /** Get a stored credential's raw JSON by ID. Returns null if not found. */
-    suspend fun getCredential(id: String): String?
+    suspend fun getCredential(id: Long): String?
 
     /** Get all stored credential JSON blobs (id → json). */
-    suspend fun getAllCredentials(): Map<String, String>
+    suspend fun getAllCredentials(): Map<Long, String>
 
     /** Remove a credential by ID. */
-    suspend fun deleteCredential(id: String)
+    suspend fun deleteCredential(id: Long)
 
     /** Remove all stored credentials. */
     suspend fun clearCredentials()
+
+    // ── Presentation-history storage (PRF-encrypted alongside keys) ─
+
+    /**
+     * Store a presentation record's raw JSON inside the encrypted container.
+     * [id] is privatedata-spec's `presentationId` (a uint32-range number,
+     * see `PresentationRecord.id`).
+     */
+    suspend fun savePresentationRecord(id: Long, json: String)
+
+    /** Get all stored presentation-record JSON blobs (id → json). */
+    suspend fun getAllPresentationRecords(): Map<Long, String>
+
+    /** Remove all stored presentation records. */
+    suspend fun clearPresentationRecords()
 
     /**
      * Generate [count] keypairs and return their public JWKs.

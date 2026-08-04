@@ -15,15 +15,18 @@ class KeystoreManagerTest {
             override suspend fun generateKey(algorithm: String) = "key-1"
             override suspend fun sign(keyId: String, payload: ByteArray, algorithm: String) = ByteArray(0)
             override suspend fun generateProof(audience: String, nonce: String, freshKey: Boolean) = ""
-            override suspend fun signPresentation(nonce: String, audience: String, credentialIds: List<String>) = ""
-            override suspend fun signVpToken(credential: String, disclosedClaims: List<String>?, nonce: String, audience: String) = ""
+            override suspend fun signPresentation(nonce: String, audience: String, credentialIds: List<Long>, kid: String?) = ""
+            override suspend fun signVpToken(credential: String, disclosedClaims: List<String>?, nonce: String, audience: String, kid: String?) = ""
             override suspend fun exportEncryptedContainer() = ByteArray(0)
             override fun listKeys() = emptyList<KeyInfo>()
-            override suspend fun saveCredential(id: String, json: String) {}
-            override suspend fun getCredential(id: String): String? = null
-            override suspend fun getAllCredentials() = emptyMap<String, String>()
-            override suspend fun deleteCredential(id: String) {}
+            override suspend fun saveCredential(id: Long, json: String) {}
+            override suspend fun getCredential(id: Long): String? = null
+            override suspend fun getAllCredentials() = emptyMap<Long, String>()
+            override suspend fun deleteCredential(id: Long) {}
             override suspend fun clearCredentials() {}
+            override suspend fun savePresentationRecord(id: Long, json: String) {}
+            override suspend fun getAllPresentationRecords() = emptyMap<Long, String>()
+            override suspend fun clearPresentationRecords() {}
         }
 
         try {

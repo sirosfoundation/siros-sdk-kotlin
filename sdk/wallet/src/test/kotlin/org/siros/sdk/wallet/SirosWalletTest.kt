@@ -41,6 +41,8 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -238,14 +240,16 @@ class SirosWalletTest {
     @Test
     fun deleteCredential_updates_ready_state_without_backend_sync_when_keystore_locked() = runBlocking {
         val remainingCredential = StoredCredential(
-            id = "cred-2",
+            id = 2L,
             format = "dc+sd-jwt",
             raw = "raw-2",
             metadata = CredentialMetadata(name = "Credential Two"),
+            batchId = 2L,
+            instanceId = 0,
         )
         val store = FakeCredentialStore(
             mutableListOf(
-                StoredCredential(id = "cred-1", format = "dc+sd-jwt", raw = "raw-1"),
+                StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw-1", batchId = 1L, instanceId = 0),
                 remainingCredential,
             )
         )
@@ -263,10 +267,10 @@ class SirosWalletTest {
             "keystore" to keystore,
         )
 
-        wallet.deleteCredential("cred-1")
+        wallet.deleteCredential(1L)
 
         val state = wallet.state.value as WalletState.Ready
-        assertEquals(listOf("cred-2"), state.credentials.map { it.id })
+        assertEquals(listOf(2L), state.credentials.map { it.id })
     }
 
     @Test
@@ -292,7 +296,7 @@ class SirosWalletTest {
             "apiClient" to apiClient,
         )
 
-        wallet.deleteCredential("missing")
+        wallet.deleteCredential(999L)
 
         coVerify(exactly = 1) { keystore.exportEncryptedContainer() }
         verify(exactly = 1) { sessionStore.privateDataJwe = containerJson }
@@ -1145,6 +1149,181 @@ class SirosWalletTest {
     }
 
     @Test
+    fun connectEngine_flowComplete_assignsSharedBatchIdAndSequentialInstanceIds_forMultiCredentialBatch() = runTest(dispatcher) {
+        // Minimal valid JWTs: {"alg":"none"}.{"sub":"test","iat":1700000000,"exp":9999999999}.
+        val cred = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9."
+        val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
+        val store = FakeCredentialStore(mutableListOf())
+        val keystore = mockk<KeystoreManager>()
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        var privateDataJwe: String? = null
+        every { keystore.isUnlocked } returns true
+        every { sessionStore.privateDataJwe } answers { privateDataJwe }
+        every { sessionStore.privateDataJwe = any() } answers { privateDataJwe = firstArg() }
+        coEvery { keystore.exportEncryptedContainer() } returns """{"prfKeys":[],"jwe":"updated-jwe"}""".toByteArray()
+        coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+        mockEngineConstructor(flowComplete = completeFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.FlowActive(
+                    userId = "user-1",
+                    displayName = "Alice",
+                    flowId = "flow-batch",
+                    flowType = "issuance",
+                    status = "in_progress",
+                    credentials = emptyList(),
+                )
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to sessionStore,
+            "apiClient" to apiClient,
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        completeFlow.emit(
+            FlowCompleteMessage(
+                flowId = "flow-batch",
+                credentials = listOf(
+                    CredentialResult(format = "dc+sd-jwt", credential = cred),
+                    CredentialResult(format = "dc+sd-jwt", credential = cred),
+                    CredentialResult(format = "dc+sd-jwt", credential = cred),
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        val stored = store.getAll()
+        assertEquals(3, stored.size)
+        val batchId = stored.first().batchId
+        assertNotNull(batchId)
+        assertTrue(stored.all { it.batchId == batchId })
+        assertEquals(listOf(0, 1, 2), stored.map { it.instanceId })
+    }
+
+    @Test
+    fun connectEngine_flowComplete_assignsPerInstanceKid_fromAttestedKeyIds_forBatchIssuance() = runTest(dispatcher) {
+        // Regression test for the wrong-key-signing bug: a batch issuance
+        // where each instance is bound to its own device key (e.g. an
+        // OID4VCI issuer minting credential N from attested_keys[N], see
+        // SirosWallet.activeAttestedKeyIds's doc comment) must record which
+        // key each STORED credential actually uses - not just its position
+        // in the batch. Directly injects activeAttestedKeyIds (the
+        // generate_proof -> attestedKeyIds wiring itself is covered by
+        // connectEngine_signRequest_usesBackendKeyAttestation_whenAvailable)
+        // to isolate testing that flowComplete correctly consumes it.
+        val cred = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9."
+        val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
+        val store = FakeCredentialStore(mutableListOf())
+        val keystore = mockk<KeystoreManager>()
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        var privateDataJwe: String? = null
+        every { keystore.isUnlocked } returns true
+        every { sessionStore.privateDataJwe } answers { privateDataJwe }
+        every { sessionStore.privateDataJwe = any() } answers { privateDataJwe = firstArg() }
+        coEvery { keystore.exportEncryptedContainer() } returns """{"prfKeys":[],"jwe":"updated-jwe"}""".toByteArray()
+        coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+        mockEngineConstructor(flowComplete = completeFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.FlowActive(
+                    userId = "user-1",
+                    displayName = "Alice",
+                    flowId = "flow-batch-keys",
+                    flowType = "issuance",
+                    status = "in_progress",
+                    credentials = emptyList(),
+                )
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to sessionStore,
+            "apiClient" to apiClient,
+            "activeAttestedKeyIds" to listOf("key-a", "key-b", "key-c"),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        completeFlow.emit(
+            FlowCompleteMessage(
+                flowId = "flow-batch-keys",
+                credentials = listOf(
+                    CredentialResult(format = "dc+sd-jwt", credential = cred),
+                    CredentialResult(format = "dc+sd-jwt", credential = cred),
+                    CredentialResult(format = "dc+sd-jwt", credential = cred),
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        val stored = store.getAll().sortedBy { it.instanceId }
+        assertEquals(3, stored.size)
+        assertEquals(listOf("key-a", "key-b", "key-c"), stored.map { it.kid })
+    }
+
+    @Test
+    fun connectEngine_flowComplete_assignsBatchIdAndZeroInstanceId_forSingleCredentialIssuance() = runTest(dispatcher) {
+        // Minimal valid JWT: {"alg":"none"}.{"sub":"test","iat":1700000000,"exp":9999999999}.
+        val cred = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9."
+        val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
+        val store = FakeCredentialStore(mutableListOf())
+        val keystore = mockk<KeystoreManager>()
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        var privateDataJwe: String? = null
+        every { keystore.isUnlocked } returns true
+        every { sessionStore.privateDataJwe } answers { privateDataJwe }
+        every { sessionStore.privateDataJwe = any() } answers { privateDataJwe = firstArg() }
+        coEvery { keystore.exportEncryptedContainer() } returns """{"prfKeys":[],"jwe":"updated-jwe"}""".toByteArray()
+        coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+        mockEngineConstructor(flowComplete = completeFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.FlowActive(
+                    userId = "user-1",
+                    displayName = "Alice",
+                    flowId = "flow-single",
+                    flowType = "issuance",
+                    status = "in_progress",
+                    credentials = emptyList(),
+                )
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to sessionStore,
+            "apiClient" to apiClient,
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        completeFlow.emit(
+            FlowCompleteMessage(
+                flowId = "flow-single",
+                credentials = listOf(CredentialResult(format = "dc+sd-jwt", credential = cred)),
+            )
+        )
+        advanceUntilIdle()
+
+        val stored = store.getAll()
+        assertEquals(1, stored.size)
+        // Every issuance response - batch of one or many - gets its own
+        // batchId (matching wallet-frontend's Date.now()-per-issuance model,
+        // see StoredCredential.batchId's KDoc); a single credential is
+        // simply a batch of one, always instanceId 0.
+        assertNotNull(stored.single().batchId)
+        assertEquals(0, stored.single().instanceId)
+    }
+
+    @Test
     fun connectEngine_flowComplete_sends_credential_notification_when_notification_id_present() = runTest(dispatcher) {
         // Minimal valid JWT: {"alg":"none"}.{"sub":"test","iat":1700000000,"exp":9999999999}.
         val testCredential = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9."
@@ -1533,22 +1712,28 @@ class SirosWalletTest {
         val store = FakeCredentialStore(
             mutableListOf(
                 StoredCredential(
-                    id = "cred-1",
+                    id = 1L,
                     format = "dc+sd-jwt",
                     raw = "raw-1",
                     metadata = CredentialMetadata(name = "Credential One", vct = "urn:example:vct"),
+                    batchId = 1L,
+                    instanceId = 0,
                 ),
                 StoredCredential(
-                    id = "cred-2",
+                    id = 2L,
                     format = "dc+sd-jwt",
                     raw = "raw-2",
                     metadata = CredentialMetadata(name = "Credential Two", vct = "urn:example:vct"),
+                    batchId = 2L,
+                    instanceId = 0,
                 ),
             )
         )
         val initialCredentials = store.getAll()
-        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf("cred-2")
+        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf(2L)
         val engine = mockEngineConstructor(matchRequests = matchFlow)
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(
                 WalletState.Ready(userId = "user-1", displayName = "Alice", credentials = initialCredentials)
@@ -1556,6 +1741,7 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
             "credentialStore" to store,
+            "keystore" to keystore,
             "eventListener" to listener,
             "_presentationHistory" to mutableListOf<PresentationRecord>(),
         )
@@ -1568,7 +1754,7 @@ class SirosWalletTest {
         coVerify(exactly = 1) {
             listener.onCredentialSelectionRequired(
                 match<PresentationRequest> { request ->
-                    request.candidates.map { it.id } == listOf("cred-1", "cred-2")
+                    request.candidates.map { it.id } == listOf(1L, 2L)
                 },
             )
         }
@@ -1578,14 +1764,14 @@ class SirosWalletTest {
                 match<List<CredentialMatch>> { matches ->
                     matches.size == 1 &&
                         matches.single().credentialQueryId == "_default" &&
-                        matches.single().credentialId == "cred-2" &&
+                        matches.single().credentialId == "2" &&
                         matches.single().format == "dc+sd-jwt" &&
                         matches.single().vct == "urn:example:vct"
                 },
             )
         }
         assertEquals(1, wallet.presentationHistory.size)
-        assertEquals(listOf("cred-2"), wallet.presentationHistory.single().credentialIds)
+        assertEquals(listOf(2L), wallet.presentationHistory.single().credentialIds)
         assertEquals(listOf("Credential Two"), wallet.presentationHistory.single().credentialNames)
     }
 
@@ -1596,13 +1782,16 @@ class SirosWalletTest {
         val apiClient = mockk<BackendApiClient>()
         coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
         val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
         coEvery { keystore.signVpToken(any(), any(), any(), any()) } returns "signed-vp-token"
         val store = FakeCredentialStore(mutableListOf(
             StoredCredential(
-                id = "cred-1",
+                id = 1L,
                 format = "dc+sd-jwt",
                 raw = "issuer.payload.sig~disclosure~",
                 metadata = CredentialMetadata(name = "Diploma", vct = "urn:example:vct"),
+                batchId = 1L,
+                instanceId = 0,
             ),
         ))
         val wallet = newWallet(
@@ -1639,7 +1828,7 @@ class SirosWalletTest {
                 audience = "origin:https://relying-party.example",
             )
         }
-        assertEquals(listOf("cred-1"), result.credentialIds)
+        assertEquals(listOf(1L), result.credentialIds)
         val parsed = Json.parseToJsonElement(result.responseJson).jsonObject
         assertEquals("openid4vp-v1-unsigned", parsed["protocol"]?.jsonPrimitive?.content)
         val data = parsed["data"]?.jsonObject
@@ -1661,15 +1850,18 @@ class SirosWalletTest {
             val apiClient = mockk<BackendApiClient>()
             coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
             val keystore = mockk<KeystoreManager>()
+            every { keystore.isUnlocked } returns false
             coEvery {
                 keystore.signMdocPresentationForDCAPI(any(), any(), any(), any(), any())
             } returns "device-response".toByteArray()
             val store = FakeCredentialStore(mutableListOf(
                 StoredCredential(
-                    id = "cred-mdl",
+                    id = 1L,
                     format = "mso_mdoc",
                     raw = "ZmFrZS1jYm9y",
                     metadata = CredentialMetadata(name = "mDL", doctype = "org.iso.18013.5.1.mDL"),
+                    batchId = 1L,
+                    instanceId = 0,
                 ),
             ))
             val wallet = newWallet(
@@ -1741,9 +1933,10 @@ class SirosWalletTest {
         val apiClient = mockk<BackendApiClient>()
         coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
         val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
         coEvery { keystore.signVpToken(any(), any(), any(), any()) } returns "signed-vp-token"
         val store = FakeCredentialStore(mutableListOf(
-            StoredCredential(id = "cred-1", format = "dc+sd-jwt", raw = "raw", metadata = CredentialMetadata(name = "X")),
+            StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw", metadata = CredentialMetadata(name = "X"), batchId = 1L, instanceId = 0),
         ))
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
@@ -1797,9 +1990,10 @@ class SirosWalletTest {
         val apiClient = mockk<BackendApiClient>()
         coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
         val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
         coEvery { keystore.signVpToken(any(), any(), any(), any()) } returns "signed-vp-token"
         val store = FakeCredentialStore(mutableListOf(
-            StoredCredential(id = "cred-1", format = "dc+sd-jwt", raw = "raw", metadata = CredentialMetadata(name = "X")),
+            StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw", metadata = CredentialMetadata(name = "X"), batchId = 1L, instanceId = 0),
         ))
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
@@ -1967,7 +2161,7 @@ class SirosWalletTest {
     ) : CredentialStore {
         override suspend fun getAll(): List<StoredCredential> = credentials.toList()
 
-        override suspend fun getById(id: String): StoredCredential? = credentials.find { it.id == id }
+        override suspend fun getById(id: Long): StoredCredential? = credentials.find { it.id == id }
 
         override suspend fun save(credential: StoredCredential) {
             credentials.removeAll { it.id == credential.id }
@@ -1978,7 +2172,7 @@ class SirosWalletTest {
             save(credential)
         }
 
-        override suspend fun delete(id: String) {
+        override suspend fun delete(id: Long) {
             credentials.removeAll { it.id == id }
         }
 

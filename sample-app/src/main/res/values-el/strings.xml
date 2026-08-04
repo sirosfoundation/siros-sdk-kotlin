@@ -81,6 +81,29 @@
     <string name="flow_presenting">Παρουσίαση Πιστοποιητικού\u2026</string>
     <string name="flow_processing">Επεξεργασία\u2026</string>
     <string name="flow_cancel">Ακύρωση</string>
+    <string name="flow_step_parsing_offer">Ανάγνωση προσφοράς πιστοποιητικού…</string>
+    <string name="flow_step_offer_parsed">Η προσφορά πιστοποιητικού αναλύθηκε</string>
+    <string name="flow_step_fetching_metadata">Λήψη στοιχείων εκδότη…</string>
+    <string name="flow_step_metadata_fetched">Τα στοιχεία εκδότη ελήφθησαν</string>
+    <string name="flow_step_evaluating_trust">Έλεγχος αξιοπιστίας εκδότη…</string>
+    <string name="flow_step_trust_evaluated">Η αξιοπιστία του εκδότη επαληθεύτηκε</string>
+    <string name="flow_step_awaiting_selection">Αναμονή επιλογής πιστοποιητικού…</string>
+    <string name="flow_step_authorization_required">Αναμονή εξουσιοδότησης…</string>
+    <string name="flow_step_exchanging_token">Ανταλλαγή εξουσιοδότησης για διακριτικό πρόσβασης…</string>
+    <string name="flow_step_token_obtained">Το διακριτικό πρόσβασης ελήφθη</string>
+    <string name="flow_step_requesting_credential">Αίτημα πιστοποιητικού…</string>
+    <string name="flow_step_deferred">Η έκδοση πιστοποιητικού αναβλήθηκε…</string>
+    <string name="flow_step_parsing_request">Ανάγνωση αιτήματος επαληθευτή…</string>
+    <string name="flow_step_request_parsed">Το αίτημα επαληθευτή αναλύθηκε</string>
+    <string name="flow_step_evaluating_verifier_trust">Έλεγχος αξιοπιστίας επαληθευτή…</string>
+    <string name="flow_step_match_credentials">Αντιστοίχιση πιστοποιητικών…</string>
+    <string name="flow_step_awaiting_consent">Αναμονή της συγκατάθεσής σας…</string>
+    <string name="flow_step_credential_selection">Επιλογή πιστοποιητικών…</string>
+    <string name="flow_step_submitting_response">Αποστολή απάντησης στον επαληθευτή…</string>
+    <string name="flow_step_unknown">Επεξεργασία…</string>
+    <string name="flow_diagnostic_label">Διαγνωστικό: %1$s</string>
+    <string name="flow_credentials_received">Ελήφθησαν %1$d πιστοποιητικά</string>
+    <string name="flow_presentation_sent">Η παρουσίαση στάλθηκε με επιτυχία</string>
 
     <!-- Error view -->
     <string name="error_title">Κάτι πήγε στραβά</string>

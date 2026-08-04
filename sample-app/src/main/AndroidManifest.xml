@@ -49,6 +49,14 @@
                 <data android:scheme="openid4vp" />
             </intent-filter>
 
+            <!-- HAIP (High Assurance Interoperability Profile) presentation request deep links -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="haip" />
+            </intent-filter>
+
             <!-- USB FIDO2 authenticator (YubiKey) auto-permission -->
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />

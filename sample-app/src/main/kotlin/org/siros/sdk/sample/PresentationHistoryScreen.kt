@@ -56,7 +56,7 @@ import java.util.Locale
 fun PresentationHistoryScreen(
     history: List<PresentationRecord>,
     onBack: () -> Unit,
-    filterCredentialId: String? = null,
+    filterCredentialId: Long? = null,
 ) {
     val filtered = if (filterCredentialId != null) {
         history.filter { it.credentialIds.contains(filterCredentialId) }

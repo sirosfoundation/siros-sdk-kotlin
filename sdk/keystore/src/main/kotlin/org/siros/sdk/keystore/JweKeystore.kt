@@ -51,7 +51,8 @@ class JweKeystore(
 
     private val mutex = Mutex()
     private var keys: MutableMap<String, ECKey> = mutableMapOf()
-    private var credentials: MutableMap<String, String> = mutableMapOf()
+    private var credentials: MutableMap<Long, String> = mutableMapOf()
+    private var presentationRecords: MutableMap<Long, String> = mutableMapOf()
     @Volatile private var mainKey: SecretKey? = null
     @Volatile private var containerMetadata: ContainerData? = null
     // Preserve full WalletStateContainer for round-trip fidelity
@@ -125,7 +126,7 @@ class JweKeystore(
             )
         }
 
-        Timber.i("Keystore unlocked with ${keys.size} keys, ${credentials.size} credentials")
+        Timber.i("Keystore unlocked with ${keys.size} keys, ${credentials.size} credentials, ${presentationRecords.size} presentation records")
     }
 
     /**
@@ -151,12 +152,16 @@ class JweKeystore(
             loadFromWalletStateV3(state)
         } else if (obj.containsKey("keys")) {
             // Legacy Kotlin-only format: { keys: [...], credentials: {...} }
+            // predates numeric credential ids entirely - defaults any
+            // unparseable (pre-migration UUID-string) key to 0, since this
+            // path is only reachable from a container exported before the
+            // privatedata-spec numeric-id alignment.
             val legacyState = json.decodeFromString(KeystoreState.serializer(), element.toString())
             keys = legacyState.keys.associate { stored ->
                 val ecKey = ECKey.parse(stored.jwk)
                 stored.keyId to ecKey
             }.toMutableMap()
-            credentials = legacyState.credentials.toMutableMap()
+            credentials = legacyState.credentials.mapKeys { it.key.toLongOrNull() ?: 0L }.toMutableMap()
         }
     }
 
@@ -181,13 +186,18 @@ class JweKeystore(
             }
         }
 
-        // Parse credentials: [{ credentialId, format, data, kid, ... }]
+        // Parse credentials: [{ credentialId, format, data, kid, batchId, instanceId, ... }]
         // Store as serialized StoredCredential to preserve kid binding and format.
+        // credentialId/batchId are privatedata-spec `number`s on the wire
+        // (matching wallet-frontend's WalletStateCredential exactly) - read
+        // via .content.toLongOrNull() rather than a strict numeric accessor
+        // so a value that arrives quoted (e.g. from a not-yet-migrated
+        // container) still parses instead of silently dropping the entry.
         val credsArray = state["credentials"]
         if (credsArray is kotlinx.serialization.json.JsonArray) {
             for (entry in credsArray) {
                 val credObj = entry as? kotlinx.serialization.json.JsonObject ?: continue
-                val credId = credObj["credentialId"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+                val credId = credObj["credentialId"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull() }
                     ?: continue
                 val data = credObj["data"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
                     ?: continue
@@ -195,6 +205,8 @@ class JweKeystore(
                 val credFormat = credObj["format"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull } ?: ""
                 val credIssuerIdent = credObj["credentialIssuerIdentifier"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
                 val credConfigId = credObj["credentialConfigurationId"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
+                val batchId = credObj["batchId"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull() } ?: 0L
+                val instanceId = credObj["instanceId"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull() } ?: 0
 
                 // Store as serialized StoredCredential JSON to preserve metadata.
                 // credentialIssuerIdentifier/credentialConfigurationId are part
@@ -206,6 +218,8 @@ class JweKeystore(
                     put("id", kotlinx.serialization.json.JsonPrimitive(credId))
                     put("format", kotlinx.serialization.json.JsonPrimitive(credFormat))
                     put("raw", kotlinx.serialization.json.JsonPrimitive(data))
+                    put("batch_id", kotlinx.serialization.json.JsonPrimitive(batchId))
+                    put("instance_id", kotlinx.serialization.json.JsonPrimitive(instanceId))
                     if (!credKid.isNullOrEmpty()) {
                         put("kid", kotlinx.serialization.json.JsonPrimitive(credKid))
                     }
@@ -219,11 +233,46 @@ class JweKeystore(
                 credentials[credId] = storedJson.toString()
             }
         }
+
+        // Parse presentations: [{ presentationId, transactionId, data,
+        // usedCredentialIds, presentationTimestampSeconds, audience }] -
+        // privatedata-spec's normative shape (wallet-frontend's
+        // WalletStatePresentation). transactionId/data have no PresentationRecord
+        // counterpart (see PresentationRecord's KDoc) and are intentionally
+        // dropped on reload, not round-tripped.
+        val presentationsArray = state["presentations"]
+        if (presentationsArray is kotlinx.serialization.json.JsonArray) {
+            for (entry in presentationsArray) {
+                val presObj = entry as? kotlinx.serialization.json.JsonObject ?: continue
+                val presId = presObj["presentationId"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull() }
+                    ?: continue
+                val usedCredentialIds = (presObj["usedCredentialIds"] as? kotlinx.serialization.json.JsonArray)
+                    ?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull() }
+                    ?: emptyList()
+                val timestampSeconds = presObj["presentationTimestampSeconds"]
+                    ?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull() } ?: 0L
+                val audience = presObj["audience"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
+
+                val recordJson = kotlinx.serialization.json.buildJsonObject {
+                    put("id", kotlinx.serialization.json.JsonPrimitive(presId))
+                    put("flow_id", kotlinx.serialization.json.JsonPrimitive(""))
+                    put("credential_ids", kotlinx.serialization.json.JsonArray(
+                        usedCredentialIds.map { kotlinx.serialization.json.JsonPrimitive(it) }
+                    ))
+                    put("timestamp", kotlinx.serialization.json.JsonPrimitive(timestampSeconds * 1000))
+                    if (!audience.isNullOrEmpty()) {
+                        put("verifier_name", kotlinx.serialization.json.JsonPrimitive(audience))
+                    }
+                }
+                presentationRecords[presId] = recordJson.toString()
+            }
+        }
     }
 
     override fun lock() {
         keys.clear()
         credentials.clear()
+        presentationRecords.clear()
         mainKey = null
         containerMetadata = null
         preservedWalletState = null
@@ -330,17 +379,9 @@ class JweKeystore(
         jwt.serialize()
     }
 
-    override suspend fun signPresentation(nonce: String, audience: String, credentialIds: List<String>): String = mutex.withLock {
+    override suspend fun signPresentation(nonce: String, audience: String, credentialIds: List<Long>, kid: String?): String = mutex.withLock {
         requireUnlocked()
-        val key = keys.values.firstOrNull()
-            ?: run {
-                Timber.i("No keys available, generating a new key for VP signing")
-                val ecKey = ECKeyGenerator(Curve.P_256).generate()
-                val keyId = ecKey.computeThumbprint().toString()
-                val keyWithId = ECKey.Builder(ecKey).keyID(keyId).build()
-                keys[keyId] = keyWithId
-                keyWithId
-            }
+        val key = selectSigningKey(kid)
 
         val claims = JWTClaimsSet.Builder()
             .audience(audience)
@@ -363,17 +404,10 @@ class JweKeystore(
         disclosedClaims: List<String>?,
         nonce: String,
         audience: String,
+        kid: String?,
     ): String = mutex.withLock {
         requireUnlocked()
-        val key = keys.values.firstOrNull()
-            ?: run {
-                Timber.i("No keys available, generating a new key for VP signing")
-                val ecKey = ECKeyGenerator(Curve.P_256).generate()
-                val keyId = ecKey.computeThumbprint().toString()
-                val keyWithId = ECKey.Builder(ecKey).keyID(keyId).build()
-                keys[keyId] = keyWithId
-                keyWithId
-            }
+        val key = selectSigningKey(kid)
 
         // Split the SD-JWT into parts: IssuerJWT~disclosure1~disclosure2~...~
         val parts = credential.split("~")
@@ -527,18 +561,20 @@ class JweKeystore(
                         val parsed = try {
                             json.parseToJsonElement(data) as? kotlinx.serialization.json.JsonObject
                         } catch (_: Exception) { null }
-                        
-                        // Try to find and preserve original credential entry from preserved state
+
+                        // Try to find and preserve original credential entry from preserved state.
+                        // credentialId is a privatedata-spec number on the wire (matching
+                        // wallet-frontend), so compare it numerically rather than as a string.
                         val originalCred = existingState?.let { state ->
                             (state["S"] as? kotlinx.serialization.json.JsonObject)?.let { s ->
                                 (s["credentials"] as? kotlinx.serialization.json.JsonArray)?.find { entry ->
                                     (entry as? kotlinx.serialization.json.JsonObject)?.let { e ->
-                                        ((e["credentialId"] as? kotlinx.serialization.json.JsonPrimitive)?.content == id)
+                                        ((e["credentialId"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull() == id)
                                     } ?: false
                                 }
                             }
                         } as? kotlinx.serialization.json.JsonObject
-                        
+
                         // Preserve all metadata fields from original; use stored/parsed values as fallback
                         val credKid = originalCred?.get("kid")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
                             ?: parsed?.get("kid")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull } ?: ""
@@ -546,15 +582,23 @@ class JweKeystore(
                             ?: parsed?.get("format")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull } ?: ""
                         val credData = originalCred?.get("data")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
                             ?: parsed?.get("raw")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull } ?: data
-                        val instanceId = originalCred?.get("instanceId")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
-                            ?: "0"
-                        val batchId = originalCred?.get("batchId")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
-                            ?: "0"
+                        // Fall back to the credential's own saved JSON (parsed) for a
+                        // credential added THIS session (saveCredential() then export,
+                        // with no matching entry in the previously-imported container
+                        // yet) - without this fallback, a freshly-saved batch
+                        // credential's batchId/instanceId would silently reset to 0 on
+                        // every export until the container is reloaded once.
+                        val instanceId = originalCred?.get("instanceId")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull() }
+                            ?: parsed?.get("instance_id")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull() }
+                            ?: 0
+                        val batchId = originalCred?.get("batchId")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull() }
+                            ?: parsed?.get("batch_id")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull() }
+                            ?: 0L
                         val issuerIdent = originalCred?.get("credentialIssuerIdentifier")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
                             ?: parsed?.get("credential_issuer_identifier")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull } ?: ""
                         val configId = originalCred?.get("credentialConfigurationId")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }
                             ?: parsed?.get("credential_configuration_id")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull } ?: ""
-                        
+
                         kotlinx.serialization.json.buildJsonObject {
                             put("credentialId", kotlinx.serialization.json.JsonPrimitive(id))
                             put("format", kotlinx.serialization.json.JsonPrimitive(credFormat))
@@ -567,13 +611,42 @@ class JweKeystore(
                         }
                     }
                 ))
-                // Preserve presentations and issuance sessions from original state if present
-                val presentations = existingState?.let { state ->
-                    (state["S"] as? kotlinx.serialization.json.JsonObject)?.get("presentations")
-                        ?: kotlinx.serialization.json.JsonArray(emptyList())
-                } ?: kotlinx.serialization.json.JsonArray(emptyList())
-                put("presentations", presentations)
-                
+                // presentations is privatedata-spec's normative S.presentations[]
+                // (wallet-frontend's WalletStatePresentation) - genuinely built
+                // from the in-memory presentationRecords map, not passed through
+                // verbatim, so a presentation recorded THIS session actually
+                // survives export/reload (see savePresentationRecord). transactionId
+                // has no PresentationRecord counterpart (see its KDoc) - each
+                // Android-recorded presentation is treated as its own
+                // single-VP transaction, reusing the same id for both fields.
+                // `data` (the raw VP) isn't captured at PresentationRecord
+                // construction time (recorded at credential-selection time,
+                // before the VP is actually signed) - written as "" rather than
+                // restructuring that flow, a known, deliberate gap.
+                put("presentations", kotlinx.serialization.json.JsonArray(
+                    presentationRecords.map { (id, data) ->
+                        val parsed = try {
+                            json.parseToJsonElement(data) as? kotlinx.serialization.json.JsonObject
+                        } catch (_: Exception) { null }
+                        val usedCredentialIds = (parsed?.get("credential_ids") as? kotlinx.serialization.json.JsonArray)
+                            ?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull() }
+                            ?: emptyList()
+                        val timestampMillis = parsed?.get("timestamp")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull() } ?: 0L
+                        val audience = parsed?.get("verifier_name")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull } ?: ""
+
+                        kotlinx.serialization.json.buildJsonObject {
+                            put("presentationId", kotlinx.serialization.json.JsonPrimitive(id))
+                            put("transactionId", kotlinx.serialization.json.JsonPrimitive(id))
+                            put("data", kotlinx.serialization.json.JsonPrimitive(""))
+                            put("usedCredentialIds", kotlinx.serialization.json.JsonArray(
+                                usedCredentialIds.map { kotlinx.serialization.json.JsonPrimitive(it) }
+                            ))
+                            put("presentationTimestampSeconds", kotlinx.serialization.json.JsonPrimitive(timestampMillis / 1000))
+                            put("audience", kotlinx.serialization.json.JsonPrimitive(audience))
+                        }
+                    }
+                ))
+
                 put("settings", kotlinx.serialization.json.buildJsonObject {
                     // Preserve settings from original state; use "0" as normative default for new state
                     val refreshTokenAge = existingState?.let { state ->
@@ -602,22 +675,22 @@ class JweKeystore(
 
     // ── Credential storage ──────────────────────────────────────────
 
-    override suspend fun saveCredential(id: String, json: String) = mutex.withLock {
+    override suspend fun saveCredential(id: Long, json: String) = mutex.withLock {
         requireUnlocked()
         credentials[id] = json
     }
 
-    override suspend fun getCredential(id: String): String? = mutex.withLock {
+    override suspend fun getCredential(id: Long): String? = mutex.withLock {
         requireUnlocked()
         credentials[id]
     }
 
-    override suspend fun getAllCredentials(): Map<String, String> = mutex.withLock {
+    override suspend fun getAllCredentials(): Map<Long, String> = mutex.withLock {
         requireUnlocked()
         credentials.toMap()
     }
 
-    override suspend fun deleteCredential(id: String): Unit = mutex.withLock {
+    override suspend fun deleteCredential(id: Long): Unit = mutex.withLock {
         requireUnlocked()
         credentials.remove(id)
         Unit
@@ -626,6 +699,23 @@ class JweKeystore(
     override suspend fun clearCredentials(): Unit = mutex.withLock {
         requireUnlocked()
         credentials.clear()
+    }
+
+    // ── Presentation-history storage ────────────────────────────────
+
+    override suspend fun savePresentationRecord(id: Long, json: String) = mutex.withLock {
+        requireUnlocked()
+        presentationRecords[id] = json
+    }
+
+    override suspend fun getAllPresentationRecords(): Map<Long, String> = mutex.withLock {
+        requireUnlocked()
+        presentationRecords.toMap()
+    }
+
+    override suspend fun clearPresentationRecords(): Unit = mutex.withLock {
+        requireUnlocked()
+        presentationRecords.clear()
     }
 
     override suspend fun generateKeypairs(count: Int): List<KeypairInfo> = mutex.withLock {
@@ -679,6 +769,31 @@ class JweKeystore(
 
     private fun requireUnlocked() {
         if (!isUnlocked) throw KeystoreException("Keystore is locked")
+    }
+
+    /**
+     * Pick the key to sign a presentation with. See
+     * [WscdKeystoreAdapter.selectSigningKey]'s doc comment for why, when
+     * [kid] is given (the credential being presented has a known bound key -
+     * see [StoredCredential.kid]), that EXACT key must be used - throwing
+     * rather than silently falling back to an arbitrary one if it's
+     * missing. [kid] is null only for genuinely credential-less call shapes,
+     * where "first available key" (generating one if none exist yet) is the
+     * only meaningful choice.
+     */
+    private fun selectSigningKey(kid: String?): ECKey {
+        if (kid != null) {
+            return keys[kid]
+                ?: throw KeystoreException("Signing key '$kid' not found - this credential's bound key is unavailable")
+        }
+        return keys.values.firstOrNull() ?: run {
+            Timber.i("No keys available, generating a new key for VP signing")
+            val ecKey = ECKeyGenerator(Curve.P_256).generate()
+            val keyId = ecKey.computeThumbprint().toString()
+            val keyWithId = ECKey.Builder(ecKey).keyID(keyId).build()
+            keys[keyId] = keyWithId
+            keyWithId
+        }
     }
 
     /**

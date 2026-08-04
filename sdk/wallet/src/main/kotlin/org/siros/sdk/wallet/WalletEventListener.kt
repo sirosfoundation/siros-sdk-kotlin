@@ -46,7 +46,7 @@ interface WalletEventListener {
      */
     suspend fun onCredentialSelectionRequired(
         request: PresentationRequest,
-    ): List<String>
+    ): List<Long>
 
     /**
      * A new credential has been received from an issuer.

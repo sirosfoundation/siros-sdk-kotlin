@@ -69,14 +69,14 @@ class JweKeystoreTest {
         // credential_configuration_id - privatedata-spec's normative
         // S.credentials[] fields (wallet-frontend's WalletSessionEventNewCredential),
         // needed after a fresh login to re-fetch VCTM display metadata.
-        val credentialJson = """{"id":"cred-1","format":"vc+sd-jwt","raw":"header.payload.sig","kid":"key-1","credential_issuer_identifier":"https://issuer.example.com","credential_configuration_id":"diploma"}"""
-        keystore.saveCredential("cred-1", credentialJson)
+        val credentialJson = """{"id":1,"format":"vc+sd-jwt","raw":"header.payload.sig","kid":"key-1","credential_issuer_identifier":"https://issuer.example.com","credential_configuration_id":"diploma"}"""
+        keystore.saveCredential(1L, credentialJson)
 
         val exported = keystore.exportEncryptedContainer()
         keystore.lock()
         keystore.unlock(fakePrfOutput, exported, hkdfSalt, hkdfInfo)
 
-        val restored = keystore.getCredential("cred-1")
+        val restored = keystore.getCredential(1L)
         assertNotNull(restored)
         assertTrue(restored!!.contains("\"credential_issuer_identifier\":\"https://issuer.example.com\""))
         assertTrue(restored.contains("\"credential_configuration_id\":\"diploma\""))
@@ -164,7 +164,7 @@ class JweKeystoreTest {
         val vp = keystore.signPresentation(
             nonce = "nonce-123",
             audience = "https://verifier.example.com",
-            credentialIds = listOf("cred-1"),
+            credentialIds = listOf(1L),
         )
 
         assertTrue(vp.contains("."))

@@ -16,7 +16,13 @@ enum class CredentialFormat(val value: String) {
 /** A stored verifiable credential with parsed metadata. */
 @Serializable
 data class StoredCredential(
-    val id: String,
+    /**
+     * A randomly-generated uint32-range identifier, matching wallet-frontend's
+     * `credentialId: number` (privatedata-spec §6) - not a UUID. Cross-client
+     * interop (the same encrypted container read by either client) requires
+     * this to be a genuine JSON number on the wire, not a string.
+     */
+    val id: Long,
     val format: String,
     val raw: String,
     /** Key ID (JWK thumbprint) of the keypair bound to this credential. */
@@ -45,6 +51,20 @@ data class StoredCredential(
      * (alongside [credentialIssuerIdentifier]) to re-fetch VCTM after login.
      */
     @SerialName("credential_configuration_id") val credentialConfigurationId: String? = null,
+    /**
+     * Identifier shared by every copy issued in the same OID4VCI response
+     * (`batch_credential_issuance`/key-attestation multi-proof issuance) -
+     * privatedata-spec's normative `S.credentials[].batchId` (`number`).
+     * Mirrors wallet-frontend exactly: ALWAYS assigned a fresh value per
+     * issuance response (`useOID4VCIFlow.ts`'s `batchId = Date.now()`), even
+     * for a single-credential issuance - there is no "no batch" sentinel on
+     * either client, since every issuance response is itself a batch of at
+     * least one. Lets the UI show one card per batch instead of one per copy
+     * (`CredentialsContextProvider.fetchVcData`/[CredentialUtils.groupForDisplay]).
+     */
+    @SerialName("batch_id") val batchId: Long,
+    /** 0-based position of this copy within its [batchId]. */
+    @SerialName("instance_id") val instanceId: Int,
 )
 
 @Serializable
@@ -121,7 +141,7 @@ interface CredentialStore {
     suspend fun getAll(): List<StoredCredential>
 
     /** Find a credential by its unique [id]. Returns null if not found. */
-    suspend fun getById(id: String): StoredCredential?
+    suspend fun getById(id: Long): StoredCredential?
 
     /** Store a new credential. Overwrites any existing credential with the same ID. */
     suspend fun save(credential: StoredCredential)
@@ -130,7 +150,7 @@ interface CredentialStore {
     suspend fun update(credential: StoredCredential)
 
     /** Delete a credential by [id]. No-op if not found. */
-    suspend fun delete(id: String)
+    suspend fun delete(id: Long)
 
     /** Remove all stored credentials. */
     suspend fun clear()
@@ -140,12 +160,12 @@ interface CredentialStore {
  * In-memory credential store for development/testing.
  */
 class InMemoryCredentialStore : CredentialStore {
-    private val store = mutableMapOf<String, StoredCredential>()
+    private val store = mutableMapOf<Long, StoredCredential>()
 
     override suspend fun getAll(): List<StoredCredential> = store.values.toList()
-    override suspend fun getById(id: String): StoredCredential? = store[id]
+    override suspend fun getById(id: Long): StoredCredential? = store[id]
     override suspend fun save(credential: StoredCredential) { store[credential.id] = credential }
     override suspend fun update(credential: StoredCredential) { store[credential.id] = credential }
-    override suspend fun delete(id: String) { store.remove(id) }
+    override suspend fun delete(id: Long) { store.remove(id) }
     override suspend fun clear() { store.clear() }
 }

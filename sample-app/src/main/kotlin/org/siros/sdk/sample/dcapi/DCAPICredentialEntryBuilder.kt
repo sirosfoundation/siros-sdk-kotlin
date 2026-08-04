@@ -64,11 +64,23 @@ object DCAPICredentialEntryBuilder {
                 setOf(VerificationFieldDisplayProperties(claim.label, claim.value) as FieldDisplayProperties),
             )
         }
+        // The real docType, parsed from the credential's own MSO - NOT
+        // cred.metadata?.doctype, which only gets populated if this
+        // credential's issuer happens to expose an MDDL schema endpoint at
+        // the SIROS-internal `/type-metadata/<scope>` convention. A
+        // standards-conformant third-party issuer (e.g. a real interop test
+        // event's mDL) has no reason to implement that, so relying on it here
+        // silently left every such credential with an empty docType - never
+        // matchable by a verifier's DCQL request, even though the credential
+        // itself and its claims were perfectly valid.
+        val docType = CredentialUtils.parseMdocDocument(cred)?.docType ?: cred.metadata?.doctype ?: ""
         return MdocEntry(
-            cred.metadata?.doctype ?: "",
+            docType,
             fields,
             setOf(entryDisplayProperties(cred) as EntryDisplayProperties),
-            cred.id,
+            // AndroidX's registry API requires a String id - stringify at
+            // this boundary rather than changing the library's own type.
+            cred.id.toString(),
         )
     }
 
@@ -86,7 +98,9 @@ object DCAPICredentialEntryBuilder {
             verifiableCredentialType = cred.metadata?.vct ?: "",
             claims = claims,
             entryDisplayPropertySet = setOf(entryDisplayProperties(cred) as EntryDisplayProperties),
-            id = cred.id,
+            // AndroidX's registry API requires a String id - stringify at
+            // this boundary rather than changing the library's own type.
+            id = cred.id.toString(),
         )
     }
 

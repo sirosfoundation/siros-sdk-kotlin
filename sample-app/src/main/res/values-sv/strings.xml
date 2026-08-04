@@ -81,6 +81,29 @@
     <string name="flow_presenting">Presenterar intyg\u2026</string>
     <string name="flow_processing">Bearbetar\u2026</string>
     <string name="flow_cancel">Avbryt</string>
+    <string name="flow_step_parsing_offer">Läser in intygserbjudande…</string>
+    <string name="flow_step_offer_parsed">Intygserbjudande inläst</string>
+    <string name="flow_step_fetching_metadata">Hämtar utfärdarinformation…</string>
+    <string name="flow_step_metadata_fetched">Utfärdarinformation mottagen</string>
+    <string name="flow_step_evaluating_trust">Kontrollerar utfärdarens tillförlitlighet…</string>
+    <string name="flow_step_trust_evaluated">Utfärdarens tillförlitlighet verifierad</string>
+    <string name="flow_step_awaiting_selection">Väntar på val av intyg…</string>
+    <string name="flow_step_authorization_required">Väntar på auktorisering…</string>
+    <string name="flow_step_exchanging_token">Byter auktorisering mot åtkomsttoken…</string>
+    <string name="flow_step_token_obtained">Åtkomsttoken mottagen</string>
+    <string name="flow_step_requesting_credential">Begär intyg…</string>
+    <string name="flow_step_deferred">Utfärdande av intyg uppskjutet…</string>
+    <string name="flow_step_parsing_request">Läser in förfrågan från kontrollant…</string>
+    <string name="flow_step_request_parsed">Förfrågan från kontrollant inläst</string>
+    <string name="flow_step_evaluating_verifier_trust">Kontrollerar kontrollantens tillförlitlighet…</string>
+    <string name="flow_step_match_credentials">Matchar intyg…</string>
+    <string name="flow_step_awaiting_consent">Väntar på ditt samtycke…</string>
+    <string name="flow_step_credential_selection">Väljer intyg…</string>
+    <string name="flow_step_submitting_response">Skickar svar till kontrollant…</string>
+    <string name="flow_step_unknown">Bearbetar…</string>
+    <string name="flow_diagnostic_label">Diagnostik: %1$s</string>
+    <string name="flow_credentials_received">Mottog %1$d intyg</string>
+    <string name="flow_presentation_sent">Presentationen skickades</string>
 
     <!-- Error view -->
     <string name="error_title">Något gick fel</string>

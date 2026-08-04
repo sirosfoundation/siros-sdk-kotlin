@@ -48,6 +48,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.siros.sdk.credentials.CredentialInstance
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.credentials.SvgTemplateRenderer
@@ -65,6 +66,16 @@ fun CredentialCard(
     credential: StoredCredential,
     onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
+    /**
+     * Every copy in this credential's batch (see [StoredCredential.batchId]),
+     * including itself - a single-copy credential still gets a one-element
+     * list. Mirrors wallet-frontend's `vcEntity.instances`: the ribbon shows
+     * how many copies haven't been used in a presentation yet. Null (the
+     * default) hides the ribbon entirely - for callers, like the detail
+     * screen's compact header, that don't have batch/usage data on hand
+     * rather than showing a misleading "0".
+     */
+    instances: List<CredentialInstance>? = null,
 ) {
     val meta = credential.metadata
     val bgColor = meta?.backgroundColor?.toComposeColor()
@@ -245,13 +256,15 @@ fun CredentialCard(
             }
             }
 
-            // Expired ribbon overlay
+            // Expired ribbon overlay - bottom-right, matching wallet-frontend's
+            // ExpiredRibbon (CredentialImage.jsx renders it opposite the
+            // usages/copy-count ribbon so the two never collide).
             // expiresAt is a JWT `exp` claim - always epoch SECONDS, not millis.
             val isExpired = credential.expiresAt?.let { it * 1000L < System.currentTimeMillis() } ?: false
             if (isExpired) {
                 Box(
                     modifier = Modifier
-                        .align(Alignment.TopEnd)
+                        .align(Alignment.BottomEnd)
                         .padding(8.dp)
                         .background(
                             color = MaterialTheme.colorScheme.error,
@@ -263,6 +276,39 @@ fun CredentialCard(
                         text = "EXPIRED",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onError,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+
+            // Remaining-copies ribbon - top-right, mirrors wallet-frontend's
+            // UsagesRibbon (CredentialImage.jsx): count of batch copies not
+            // yet used in a presentation (sigCount == 0), so it counts down
+            // as copies get consumed rather than showing the fixed batch size.
+            if (instances != null) {
+                val unusedCount = instances.count { it.sigCount == 0 }
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                        .background(
+                            color = if (unusedCount > 0) {
+                                MaterialTheme.colorScheme.tertiaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant
+                            },
+                            shape = RoundedCornerShape(50),
+                        )
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                ) {
+                    Text(
+                        text = unusedCount.toString(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (unusedCount > 0) {
+                            MaterialTheme.colorScheme.onTertiaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                         fontWeight = FontWeight.Bold,
                     )
                 }

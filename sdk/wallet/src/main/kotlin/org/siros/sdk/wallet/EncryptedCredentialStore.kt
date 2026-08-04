@@ -40,7 +40,7 @@ internal class KeystoreBackedCredentialStore(
         }
     }
 
-    override suspend fun getById(id: String): StoredCredential? {
+    override suspend fun getById(id: Long): StoredCredential? {
         if (!keystore.isUnlocked) return null
         val raw = keystore.getCredential(id) ?: return null
         return try {
@@ -64,7 +64,7 @@ internal class KeystoreBackedCredentialStore(
         save(credential)
     }
 
-    override suspend fun delete(id: String) {
+    override suspend fun delete(id: Long) {
         if (!keystore.isUnlocked) return
         keystore.deleteCredential(id)
     }

@@ -156,8 +156,8 @@ class PrivateDataSpecConformanceTest {
         // metadata: per-credential fields survive into the publicly-queryable credential store.
         val credentialsArray = plaintextState["S"]!!.jsonObject["credentials"]!!
         val expectedCredObj = (credentialsArray as JsonArray)[0].jsonObject
-        val restoredCredJson = keystore.getCredential("cred-001")
-        assertTrue("expected credential cred-001 to survive decrypt", restoredCredJson != null)
+        val restoredCredJson = keystore.getCredential(1L)
+        assertTrue("expected credential 1 to survive decrypt", restoredCredJson != null)
         val restoredCred = json.parseToJsonElement(restoredCredJson!!).jsonObject
         assertEquals(expectedCredObj["format"]!!.jsonPrimitive.content, restoredCred["format"]!!.jsonPrimitive.content)
         assertEquals(expectedCredObj["kid"]!!.jsonPrimitive.content, restoredCred["kid"]!!.jsonPrimitive.content)
@@ -220,8 +220,8 @@ class PrivateDataSpecConformanceTest {
         val keystore = JweKeystore()
         keystore.unlock(prfOutput, containerBytes, hkdfSalt, hkdfInfo)
 
-        val newCredentialJson = """{"id":"cred-999","format":"vc+sd-jwt","raw":"header.payload.sig","kid":"key-999","credential_issuer_identifier":"https://issuer2.example.com","credential_configuration_id":"other-diploma"}"""
-        keystore.saveCredential("cred-999", newCredentialJson)
+        val newCredentialJson = """{"id":999,"format":"vc+sd-jwt","raw":"header.payload.sig","kid":"key-999","credential_issuer_identifier":"https://issuer2.example.com","credential_configuration_id":"other-diploma"}"""
+        keystore.saveCredential(999L, newCredentialJson)
 
         val exported = keystore.exportEncryptedContainer()
         val redecrypted = independentlyDecrypt(exported, prfOutput, hkdfSalt, hkdfInfo)
@@ -231,11 +231,11 @@ class PrivateDataSpecConformanceTest {
         assertEquals(plaintextState["events"], redecrypted["events"])
 
         val redecryptedCreds = redecrypted["S"]!!.jsonObject["credentials"] as JsonArray
-        val credIds = redecryptedCreds.map { it.jsonObject["credentialId"]!!.jsonPrimitive.content }
-        assertTrue("original credential cred-001 must survive", "cred-001" in credIds)
-        assertTrue("newly added credential cred-999 must be present", "cred-999" in credIds)
+        val credIds = redecryptedCreds.map { it.jsonObject["credentialId"]!!.jsonPrimitive.content.toLong() }
+        assertTrue("original credential 1 must survive", 1L in credIds)
+        assertTrue("newly added credential 999 must be present", 999L in credIds)
 
-        val newCredEntry = redecryptedCreds.first { it.jsonObject["credentialId"]!!.jsonPrimitive.content == "cred-999" }.jsonObject
+        val newCredEntry = redecryptedCreds.first { it.jsonObject["credentialId"]!!.jsonPrimitive.content.toLong() == 999L }.jsonObject
         assertEquals("vc+sd-jwt", newCredEntry["format"]!!.jsonPrimitive.content)
         assertEquals("https://issuer2.example.com", newCredEntry["credentialIssuerIdentifier"]!!.jsonPrimitive.content)
         assertEquals("other-diploma", newCredEntry["credentialConfigurationId"]!!.jsonPrimitive.content)
@@ -289,7 +289,7 @@ class PrivateDataSpecConformanceTest {
 
             val creds = keystore.getAllCredentials()
             assertEquals(3, creds.size)
-            for (id in listOf("cred-001", "cred-002", "cred-003")) {
+            for (id in listOf(1L, 2L, 3L)) {
                 assertTrue("credential $id must be visible via passkey ${entries.indexOf(entry)}", creds.containsKey(id))
             }
         }

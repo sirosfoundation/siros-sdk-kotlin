@@ -81,6 +81,29 @@
     <string name="flow_presenting">Esitetään todistusta\u2026</string>
     <string name="flow_processing">Käsitellään\u2026</string>
     <string name="flow_cancel">Peruuta</string>
+    <string name="flow_step_parsing_offer">Luetaan todistustarjousta…</string>
+    <string name="flow_step_offer_parsed">Todistustarjous luettu</string>
+    <string name="flow_step_fetching_metadata">Haetaan myöntäjän tietoja…</string>
+    <string name="flow_step_metadata_fetched">Myöntäjän tiedot vastaanotettu</string>
+    <string name="flow_step_evaluating_trust">Tarkistetaan myöntäjän luotettavuutta…</string>
+    <string name="flow_step_trust_evaluated">Myöntäjän luotettavuus vahvistettu</string>
+    <string name="flow_step_awaiting_selection">Odotetaan todistuksen valintaa…</string>
+    <string name="flow_step_authorization_required">Odotetaan valtuutusta…</string>
+    <string name="flow_step_exchanging_token">Vaihdetaan valtuutus käyttöoikeustunnukseen…</string>
+    <string name="flow_step_token_obtained">Käyttöoikeustunnus vastaanotettu</string>
+    <string name="flow_step_requesting_credential">Pyydetään todistusta…</string>
+    <string name="flow_step_deferred">Todistuksen myöntäminen lykätty…</string>
+    <string name="flow_step_parsing_request">Luetaan todentajan pyyntöä…</string>
+    <string name="flow_step_request_parsed">Todentajan pyyntö luettu</string>
+    <string name="flow_step_evaluating_verifier_trust">Tarkistetaan todentajan luotettavuutta…</string>
+    <string name="flow_step_match_credentials">Kohdistetaan todistuksia…</string>
+    <string name="flow_step_awaiting_consent">Odotetaan suostumustasi…</string>
+    <string name="flow_step_credential_selection">Valitaan todistuksia…</string>
+    <string name="flow_step_submitting_response">Lähetetään vastausta todentajalle…</string>
+    <string name="flow_step_unknown">Käsitellään…</string>
+    <string name="flow_diagnostic_label">Diagnostiikka: %1$s</string>
+    <string name="flow_credentials_received">Vastaanotettu %1$d todistusta</string>
+    <string name="flow_presentation_sent">Esitys lähetetty onnistuneesti</string>
 
     <!-- Error view -->
     <string name="error_title">Jokin meni pieleen</string>

@@ -85,6 +85,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _showCredentialDetails: MutableStateFlow<Boolean>
     val showCredentialDetails: StateFlow<Boolean> get() = _showCredentialDetails
 
+    private val _showDiagnosticMessages: MutableStateFlow<Boolean>
+    val showDiagnosticMessages: StateFlow<Boolean> get() = _showDiagnosticMessages
+
     init {
         // Read test overrides - set either via the settings sheet UI, or (debug
         // builds only) via `adb shell am start ... --es backend_url ... --es
@@ -101,6 +104,13 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         // tester can still flip it on in a release build if needed.
         _showCredentialDetails = MutableStateFlow(
             prefs.getBoolean("show_credential_details", BuildConfig.DEBUG)
+        )
+        // Raw FlowStep tokens shown alongside the friendly progress label -
+        // default false: seeing both together in practice is redundant, the
+        // localized label alone is enough. Kept as an opt-in toggle for
+        // debugging (was default true during initial rollout).
+        _showDiagnosticMessages = MutableStateFlow(
+            prefs.getBoolean("show_diagnostic_messages", false)
         )
     }
 
@@ -137,6 +147,14 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
             .edit()
             .putBoolean("show_credential_details", enabled)
+            .apply()
+    }
+
+    fun updateShowDiagnosticMessages(enabled: Boolean) {
+        _showDiagnosticMessages.value = enabled
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("show_diagnostic_messages", enabled)
             .apply()
     }
 
@@ -207,6 +225,21 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     val errorMessage: StateFlow<String?> = _errorMessage
 
     fun clearError() { _errorMessage.value = null }
+
+    // ── Info feedback (non-error, transient confirmations e.g. batch receipt) ─
+
+    private val _infoMessage = MutableStateFlow<String?>(null)
+    val infoMessage: StateFlow<String?> = _infoMessage
+
+    fun clearInfo() { _infoMessage.value = null }
+
+    /**
+     * Credentials received so far in the current flow. Flows in this app run
+     * one at a time, so a plain counter reset on consumption (in
+     * onFlowComplete) is enough - no need to key it by flowId, which
+     * onCredentialReceived doesn't carry anyway.
+     */
+    private var receivedCredentialCount = 0
 
     // ── Flow error feedback (issuance/presentation flows that fail server-side,
     // e.g. an untrusted issuer) ──────────────────────────────────────────────
@@ -279,7 +312,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _pendingPresentationRequest = MutableStateFlow<PresentationRequest?>(null)
     val pendingPresentationRequest: StateFlow<PresentationRequest?> = _pendingPresentationRequest
 
-    private var presentationContinuation: kotlinx.coroutines.CancellableContinuation<List<String>>? = null
+    private var presentationContinuation: kotlinx.coroutines.CancellableContinuation<List<Long>>? = null
 
     init {
         observeWalletState()
@@ -290,7 +323,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         wallet.setEventListener(object : WalletEventListener {
             override suspend fun onCredentialSelectionRequired(
                 request: PresentationRequest,
-            ): List<String> {
+            ): List<Long> {
                 // Show consent UI and suspend until user responds
                 return kotlinx.coroutines.suspendCancellableCoroutine { cont ->
                     presentationContinuation = cont
@@ -336,13 +369,36 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 if (pendingAuthFlowId == flowId) {
                     pendingAuthFlowId = null
                 }
+                receivedCredentialCount = 0
                 _flowErrorDialog.value = FlowErrorInfo(errorMessage, canRetry = lastFlowRetry != null)
+            }
+
+            override fun onCredentialReceived(credential: StoredCredential) {
+                receivedCredentialCount++
+            }
+
+            override fun onFlowComplete(flowId: String) {
+                if (receivedCredentialCount > 0) {
+                    _infoMessage.value = activity.getString(
+                        R.string.flow_credentials_received,
+                        receivedCredentialCount,
+                    )
+                    receivedCredentialCount = 0
+                } else if ((wallet.state.value as? WalletState.FlowActive)?.flowType == "presentation") {
+                    // onFlowComplete fires before the SDK transitions FlowActive -> Ready
+                    // (see SirosWallet's handleFlowComplete/WMP onComplete), so flowType
+                    // is still readable here. Issuance gets the credential-count message
+                    // above; presentation has no analogous per-item count, so a plain
+                    // confirmation is the equivalent "something happened" signal for a
+                    // flow whose whole point is watching this screen after a QR scan.
+                    _infoMessage.value = activity.getString(R.string.flow_presentation_sent)
+                }
             }
         })
     }
 
     /** User consented to share selected credentials. */
-    fun acceptPresentation(selectedIds: List<String>) {
+    fun acceptPresentation(selectedIds: List<Long>) {
         _pendingPresentationRequest.value = null
         presentationContinuation?.resume(selectedIds, null)
         presentationContinuation = null
@@ -609,7 +665,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _selectedCredential.value = null
     }
 
-    fun deleteCredential(credentialId: String) {
+    fun deleteCredential(credentialId: Long) {
         _selectedCredential.value = null
         viewModelScope.launch {
             try {

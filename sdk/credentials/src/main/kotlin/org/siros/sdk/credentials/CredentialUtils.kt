@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.siros.sdk.credentials.mdoc.DocumentMdoc
 import org.siros.sdk.credentials.mdoc.MdocCbor
 import timber.log.Timber
 import java.util.Base64
@@ -132,12 +133,7 @@ object CredentialUtils {
      * consistent with how [buildMdocMetadata] populates [ClaimMeta.path].
      */
     fun extractMdocClaims(credential: StoredCredential): List<DisplayClaim> {
-        val document = try {
-            MdocCbor.parseStoredCredential(Base64.getUrlDecoder().decode(padBase64(credential.raw)))
-        } catch (e: Exception) {
-            Timber.w(e, "Failed to parse mdoc credential for claim extraction")
-            return emptyList()
-        }
+        val document = parseMdocDocument(credential) ?: return emptyList()
 
         val claimMetaByPath = credential.metadata?.claims.orEmpty()
             .associateBy { it.path.joinToString("/") }
@@ -154,6 +150,25 @@ object CredentialUtils {
                     mandatory = meta?.mandatory ?: false,
                 )
             }
+        }
+    }
+
+    /**
+     * Parse a stored mdoc credential's raw bytes into its [DocumentMdoc] - the
+     * credential's own authoritative content (namespaces/items, and the real
+     * `docType` embedded in its MSO), independent of [CredentialMetadata]
+     * (which is best-effort display data from a network fetch that can fail,
+     * e.g. for an mdoc issued by a third party with no MDDL schema endpoint at
+     * all). DC API registry entries need the real docType for DCQL matching
+     * even when display metadata never arrived - see the sample app's
+     * DCAPICredentialEntryBuilder.
+     */
+    fun parseMdocDocument(credential: StoredCredential): DocumentMdoc? {
+        return try {
+            MdocCbor.parseStoredCredential(Base64.getUrlDecoder().decode(padBase64(credential.raw)))
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to parse mdoc credential ${credential.id}")
+            null
         }
     }
 
@@ -317,6 +332,37 @@ object CredentialUtils {
         val rem = s.length % 4
         return if (rem == 0) s else s + "=".repeat(4 - rem)
     }
+
+    /**
+     * Group stored credentials into display-ready families, mirroring
+     * wallet-frontend's `CredentialsContextProvider.fetchVcData`: only the
+     * `instanceId == 0` credential of a batch (see [StoredCredential.batchId])
+     * is returned as a visible entry, with every sibling copy's usage count
+     * attached as [CredentialWithInstances.instances] - the UI derives its
+     * "remaining copies" badge from `instances.count { it.sigCount == 0 }`.
+     * A credential with no [StoredCredential.batchId] (single-copy issuance)
+     * is returned as its own one-instance family.
+     */
+    fun groupForDisplay(
+        credentials: List<StoredCredential>,
+        presentationHistory: List<PresentationRecord>,
+    ): List<CredentialWithInstances> {
+        fun sigCountFor(credentialId: Long) =
+            presentationHistory.count { credentialId in it.credentialIds }
+
+        // Every issuance response - batch of one or of many - shares one
+        // batchId (see StoredCredential.batchId), so grouping is uniform:
+        // no separate "standalone" case, matching wallet-frontend exactly.
+        val results = credentials.groupBy { it.batchId }.values.mapNotNull { members ->
+            val visible = members.find { it.instanceId == 0 } ?: return@mapNotNull null
+            val instances = members
+                .sortedBy { it.instanceId }
+                .map { CredentialInstance(it.instanceId, sigCountFor(it.id)) }
+            CredentialWithInstances(visible, instances)
+        }
+
+        return results.sortedByDescending { it.credential.issuedAt ?: 0 }
+    }
 }
 
 /**
@@ -336,6 +382,12 @@ data class DisplayClaim(
     /** VCTM SVG template placeholder ID this claim fills, if any. */
     val svgId: String? = null,
 )
+
+/** One member of a batch-issued credential family, alongside its usage count. */
+data class CredentialInstance(val instanceId: Int, val sigCount: Int)
+
+/** A visible credential card plus every instance in its batch (see [CredentialUtils.groupForDisplay]). */
+data class CredentialWithInstances(val credential: StoredCredential, val instances: List<CredentialInstance>)
 
 /**
  * The individually-decoded parts of a raw SD-JWT VC string, for display.

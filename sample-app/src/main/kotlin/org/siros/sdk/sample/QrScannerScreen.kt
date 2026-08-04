@@ -52,15 +52,13 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import timber.log.Timber
 import java.util.concurrent.Executors
-import org.siros.sdk.wallet.DeepLinkType
-import org.siros.sdk.wallet.classifyDeepLink
 
 /**
- * QR code scanner screen for OID4VCI credential offer URIs
- * and OID4VP presentation request URIs.
- *
- * Detects URLs containing `credential_offer_uri`, `credential_offer`,
- * or `request_uri` parameters and calls the appropriate handler.
+ * QR code scanner screen, multiplexed for both OID4VCI credential offer URIs
+ * and OID4VP presentation request URIs. Forwards any decoded barcode value to
+ * [onQrScanned] unfiltered - classification (and the deliberate fallback for
+ * unrecognized shapes) lives entirely in the caller (WalletViewModel.handleQrResult),
+ * not here.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -214,12 +212,17 @@ private fun CameraPreviewWithScanner(
                                             barcode.valueType == Barcode.TYPE_TEXT
                                         ) {
                                             val value = barcode.rawValue ?: continue
-                                            if (isWalletUri(value)) {
-                                                scanned = true
-                                                val parsed = android.net.Uri.parse(value)
-                                                Timber.d("QR scanned: ${parsed.scheme}://${parsed.host}")
-                                                onQrScanned(value)
-                                            }
+                                            // Don't pre-filter by classification here - onQrScanned
+                                            // (WalletViewModel.handleQrResult) already classifies and,
+                                            // deliberately, treats an unclassified URI as a presentation
+                                            // request attempt (covers bare reference-URL QR codes with no
+                                            // recognized scheme/query shape, e.g. some verifiers' "Link"
+                                            // pages). A stricter gate here would silently drop those before
+                                            // handleQrResult's own fallback ever runs.
+                                            scanned = true
+                                            val parsed = android.net.Uri.parse(value)
+                                            Timber.d("QR scanned: ${parsed.scheme}://${parsed.host}")
+                                            onQrScanned(value)
                                         }
                                     }
                                 }
@@ -259,16 +262,5 @@ private fun CameraPreviewWithScanner(
                 .align(Alignment.BottomCenter)
                 .padding(32.dp),
         )
-    }
-}
-
-/**
- * Check if a scanned value looks like an OID4VCI or OID4VP URI.
- */
-private fun isWalletUri(value: String): Boolean {
-    return when (classifyDeepLink(value, "siros-sample")) {
-        is DeepLinkType.CredentialOffer,
-        is DeepLinkType.PresentationRequest -> true
-        else -> false
     }
 }

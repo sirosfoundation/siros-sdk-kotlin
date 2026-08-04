@@ -230,9 +230,9 @@ class WalletViewModelTest {
     fun openHistory_copies_wallet_history_and_sets_visible() {
         val history = listOf(
             PresentationRecord(
-                id = "entry-1",
+                id = 1L,
                 flowId = "flow-1",
-                credentialIds = listOf("cred-1"),
+                credentialIds = listOf(1L),
                 credentialNames = listOf("PID"),
                 timestamp = 123L,
             )
@@ -251,14 +251,14 @@ class WalletViewModelTest {
     @Ignore("Requires native WSCD library — run as instrumented test on device")
     fun deleteCredential_clears_selection_and_surfaces_delete_errors() = runTest(dispatcher) {
         val wallet = mockWallet()
-        coEvery { wallet.deleteCredential("cred-1") } throws IllegalStateException("delete failed hard")
+        coEvery { wallet.deleteCredential(1L) } throws IllegalStateException("delete failed hard")
         every { SirosWallet.create(any(), any()) } returns wallet
         val viewModel = WalletViewModel(mockk<Activity>(relaxed = true))
         viewModel.openCredentialDetail(
-            StoredCredential(id = "cred-1", format = "dc+sd-jwt", raw = "raw")
+            StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw", batchId = 1L, instanceId = 0)
         )
 
-        viewModel.deleteCredential("cred-1")
+        viewModel.deleteCredential(1L)
         advanceUntilIdle()
 
         assertNull(viewModel.selectedCredential.value)

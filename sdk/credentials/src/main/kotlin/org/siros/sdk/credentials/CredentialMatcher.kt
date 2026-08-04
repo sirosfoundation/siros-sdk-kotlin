@@ -163,7 +163,7 @@ object CredentialMatcher {
      * Flatten match results into a single list of matching credential IDs.
      * Suitable for passing to the engine's match response.
      */
-    fun matchedCredentialIds(dcqlQuery: JsonObject, credentials: List<StoredCredential>): List<String> {
+    fun matchedCredentialIds(dcqlQuery: JsonObject, credentials: List<StoredCredential>): List<Long> {
         return match(dcqlQuery, credentials)
             .flatMap { it.candidates }
             .distinctBy { it.id }
@@ -268,7 +268,17 @@ object CredentialMatcher {
 
     private fun matchesDoctype(credential: StoredCredential, doctypeValue: String?): Boolean {
         if (doctypeValue == null) return true
-        val credDoctype = credential.metadata?.doctype ?: return false
+        // The real docType, parsed from the credential's own MSO - NOT
+        // credential.metadata?.doctype, which only gets populated if this
+        // credential's issuer happens to expose an MDDL schema endpoint at
+        // our internal /type-metadata/<scope> convention. A third-party
+        // issuer (e.g. a real interop test event's mDL) has no reason to
+        // implement that, so relying on it here silently made every such
+        // credential unmatchable via DCQL, even though it's otherwise a
+        // perfectly valid, presentable credential.
+        val credDoctype = CredentialUtils.parseMdocDocument(credential)?.docType
+            ?: credential.metadata?.doctype
+            ?: return false
         return credDoctype == doctypeValue
     }
 

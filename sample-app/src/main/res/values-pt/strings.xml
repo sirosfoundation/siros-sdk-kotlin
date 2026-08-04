@@ -81,6 +81,29 @@
     <string name="flow_presenting">Apresentando Credencial\u2026</string>
     <string name="flow_processing">Processando\u2026</string>
     <string name="flow_cancel">Cancelar</string>
+    <string name="flow_step_parsing_offer">Lendo oferta de credencial…</string>
+    <string name="flow_step_offer_parsed">Oferta de credencial analisada</string>
+    <string name="flow_step_fetching_metadata">Buscando informações do emissor…</string>
+    <string name="flow_step_metadata_fetched">Informações do emissor recebidas</string>
+    <string name="flow_step_evaluating_trust">Verificando confiança do emissor…</string>
+    <string name="flow_step_trust_evaluated">Confiança do emissor verificada</string>
+    <string name="flow_step_awaiting_selection">Aguardando seleção de credencial…</string>
+    <string name="flow_step_authorization_required">Aguardando autorização…</string>
+    <string name="flow_step_exchanging_token">Trocando autorização por token de acesso…</string>
+    <string name="flow_step_token_obtained">Token de acesso recebido</string>
+    <string name="flow_step_requesting_credential">Solicitando credencial…</string>
+    <string name="flow_step_deferred">Emissão da credencial adiada…</string>
+    <string name="flow_step_parsing_request">Lendo solicitação do verificador…</string>
+    <string name="flow_step_request_parsed">Solicitação do verificador analisada</string>
+    <string name="flow_step_evaluating_verifier_trust">Verificando confiança do verificador…</string>
+    <string name="flow_step_match_credentials">Correspondendo credenciais…</string>
+    <string name="flow_step_awaiting_consent">Aguardando seu consentimento…</string>
+    <string name="flow_step_credential_selection">Selecionando credenciais…</string>
+    <string name="flow_step_submitting_response">Enviando resposta ao verificador…</string>
+    <string name="flow_step_unknown">Processando…</string>
+    <string name="flow_diagnostic_label">Diagnóstico: %1$s</string>
+    <string name="flow_credentials_received">Recebida(s) %1$d credencial(is)</string>
+    <string name="flow_presentation_sent">Apresentação enviada com sucesso</string>
 
     <!-- Error view -->
     <string name="error_title">Algo deu errado</string>

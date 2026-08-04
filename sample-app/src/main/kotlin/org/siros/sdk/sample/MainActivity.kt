@@ -39,6 +39,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -244,6 +245,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
     val isLoading by viewModel.isLoading.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val errorMessage by viewModel.errorMessage.collectAsState()
+    val infoMessage by viewModel.infoMessage.collectAsState()
     val flowErrorDialog by viewModel.flowErrorDialog.collectAsState()
     val presentationHistory by viewModel.presentationHistory.collectAsState()
     val selectedCredential by viewModel.selectedCredential.collectAsState()
@@ -257,6 +259,13 @@ fun WalletScreen(viewModel: WalletViewModel) {
         errorMessage?.let {
             snackbarHostState.showSnackbar(it)
             viewModel.clearError()
+        }
+    }
+
+    LaunchedEffect(infoMessage) {
+        infoMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearInfo()
         }
     }
 
@@ -466,6 +475,8 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onRenamePasskey = viewModel::renamePasskey,
                             showCredentialDetails = showCredentialDetails,
                             onUpdateShowCredentialDetails = viewModel::updateShowCredentialDetails,
+                            showDiagnosticMessages = viewModel.showDiagnosticMessages.collectAsState().value,
+                            onUpdateShowDiagnosticMessages = viewModel::updateShowDiagnosticMessages,
                         )
                         // selectedTab can transiently be 1 (the "Add" action, not a
                         // real persisted tab) right as a flow finishes and the state
@@ -473,6 +484,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                         // rather than rendering nothing.
                         else -> CredentialsTab(
                             state = state,
+                            presentationHistory = presentationHistory,
                             onCredentialClick = viewModel::openCredentialDetail,
                             onAddCredential = viewModel::openAddCredential,
                         )
@@ -482,6 +494,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                     FlowActiveView(
                         state = state,
                         onCancel = viewModel::cancelCurrentFlow,
+                        showDiagnosticMessages = viewModel.showDiagnosticMessages.collectAsState().value,
                     )
                 }
                 is WalletState.Error -> {
@@ -856,10 +869,19 @@ fun PreLoginSettingsSheet(
 @Composable
 fun CredentialsTab(
     state: WalletState.Ready,
+    presentationHistory: List<org.siros.sdk.credentials.PresentationRecord>,
     onCredentialClick: (org.siros.sdk.credentials.StoredCredential) -> Unit,
     onAddCredential: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // One entry per batch (see StoredCredential.batchId) instead of one per
+    // issued copy - mirrors wallet-frontend's fetchVcData grouping so a
+    // 5-copy batch issuance shows as a single card with a remaining-copies
+    // ribbon, not five swipeable duplicates.
+    val grouped = remember(state.credentials, presentationHistory) {
+        org.siros.sdk.credentials.CredentialUtils.groupForDisplay(state.credentials, presentationHistory)
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -872,42 +894,45 @@ fun CredentialsTab(
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = if (state.credentials.size == 1) stringResource(R.string.credentials_count_one, 1)
-                   else stringResource(R.string.credentials_count_other, state.credentials.size),
+            text = if (grouped.size == 1) stringResource(R.string.credentials_count_one, 1)
+                   else stringResource(R.string.credentials_count_other, grouped.size),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(modifier = Modifier.height(16.dp))
 
-        if (state.credentials.isEmpty()) {
+        if (grouped.isEmpty()) {
             EmptyCredentialsCard(onClick = onAddCredential)
-        } else if (state.credentials.size == 1) {
+        } else if (grouped.size == 1) {
+            val entry = grouped.first()
             CredentialCard(
-                credential = state.credentials.first(),
-                onClick = { onCredentialClick(state.credentials.first()) },
+                credential = entry.credential,
+                instances = entry.instances,
+                onClick = { onCredentialClick(entry.credential) },
             )
         } else {
             // Horizontal pager for swiping between credential cards
-            val pagerState = rememberPagerState(pageCount = { state.credentials.size })
+            val pagerState = rememberPagerState(pageCount = { grouped.size })
             HorizontalPager(
                 state = pagerState,
                 contentPadding = PaddingValues(end = 32.dp),
                 pageSpacing = 12.dp,
             ) { page ->
-                val credential = state.credentials[page]
+                val entry = grouped[page]
                 CredentialCard(
-                    credential = credential,
-                    onClick = { onCredentialClick(credential) },
+                    credential = entry.credential,
+                    instances = entry.instances,
+                    onClick = { onCredentialClick(entry.credential) },
                 )
             }
             // Page indicator dots
-            if (state.credentials.size > 1) {
+            if (grouped.size > 1) {
                 Spacer(modifier = Modifier.height(12.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.Center,
                 ) {
-                    repeat(state.credentials.size) { index ->
+                    repeat(grouped.size) { index ->
                         Box(
                             modifier = Modifier
                                 .padding(horizontal = 4.dp)
@@ -984,6 +1009,8 @@ fun SettingsTab(
     onUpdateUseWmpProtocol: ((Boolean) -> Unit)? = null,
     showCredentialDetails: Boolean = false,
     onUpdateShowCredentialDetails: ((Boolean) -> Unit)? = null,
+    showDiagnosticMessages: Boolean = true,
+    onUpdateShowDiagnosticMessages: ((Boolean) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -1041,6 +1068,29 @@ fun SettingsTab(
                         checked = showCredentialDetails,
                         onCheckedChange = onUpdateShowCredentialDetails,
                         enabled = onUpdateShowCredentialDetails != null,
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            stringResource(R.string.settings_diagnostic_messages),
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        Text(
+                            stringResource(R.string.settings_diagnostic_messages_description),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = showDiagnosticMessages,
+                        onCheckedChange = onUpdateShowDiagnosticMessages,
+                        enabled = onUpdateShowDiagnosticMessages != null,
                     )
                 }
             }
@@ -1275,13 +1325,39 @@ private fun SettingsRow(label: String, value: String) {
 // ── Flow Active View ────────────────────────────────────────────────
 
 @Composable
-fun FlowActiveView(state: WalletState.FlowActive, onCancel: () -> Unit, modifier: Modifier = Modifier) {
+fun FlowActiveView(
+    state: WalletState.FlowActive,
+    onCancel: () -> Unit,
+    showDiagnosticMessages: Boolean = true,
+    modifier: Modifier = Modifier,
+) {
+    val stepProgress = flowStepProgress(state.flowType, state.status)
+
+    // Guard against a visible backward jump: real execution order can
+    // deviate slightly from the canonical step list (e.g. a step retried
+    // after a transient error), but the bar should never un-progress.
+    var maxProgress by remember(state.flowId) { mutableStateOf(0f) }
+    LaunchedEffect(stepProgress) {
+        stepProgress?.let { maxProgress = maxOf(maxProgress, it) }
+    }
+
     Column(
         modifier = modifier.fillMaxSize().padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        CircularProgressIndicator(modifier = Modifier.size(48.dp), color = MaterialTheme.colorScheme.primary)
+        if (stepProgress != null) {
+            LinearProgressIndicator(
+                progress = { maxProgress },
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.primary,
+            )
+        } else {
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
         Spacer(modifier = Modifier.height(24.dp))
         Text(
             text = when (state.flowType) {
@@ -1294,10 +1370,18 @@ fun FlowActiveView(state: WalletState.FlowActive, onCancel: () -> Unit, modifier
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = state.status,
+            text = stringResource(flowStepLabelRes(state.status)),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        if (showDiagnosticMessages) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = stringResource(R.string.flow_diagnostic_label, state.status),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            )
+        }
         Spacer(modifier = Modifier.height(32.dp))
         OutlinedButton(
             onClick = onCancel,

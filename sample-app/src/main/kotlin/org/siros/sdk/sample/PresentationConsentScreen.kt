@@ -57,7 +57,7 @@ import org.siros.sdk.wallet.PresentationRequest
 @Composable
 fun PresentationConsentScreen(
     request: PresentationRequest,
-    onAccept: (List<String>) -> Unit,
+    onAccept: (List<Long>) -> Unit,
     onDecline: () -> Unit,
     modifier: Modifier = Modifier,
 ) {

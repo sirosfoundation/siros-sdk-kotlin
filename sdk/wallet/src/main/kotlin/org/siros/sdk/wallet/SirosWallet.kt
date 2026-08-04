@@ -108,6 +108,31 @@ private data class PendingAuthorization(
     val state: String,
 )
 
+/**
+ * A randomly-generated uint32-range identifier, matching wallet-frontend's
+ * `WalletStateUtils.getRandomUint32()` exactly (CSPRNG, full 1..2^32-1 range,
+ * 0 remapped to 1) - used for both [StoredCredential.id] (`credentialId`) and
+ * [org.siros.sdk.credentials.PresentationRecord.id] (`presentationId`), so
+ * either client can read the other's privatedata-spec container.
+ */
+// A single, reused instance - constructing a fresh SecureRandom() per call is
+// a well-known anti-pattern (wasteful, and on some platforms rapid
+// back-to-back instantiation can yield correlated or even duplicate output,
+// which is exactly what previously caused two ids in the same batch-issuance
+// loop to collide and silently overwrite each other in the credential store's
+// id-keyed map).
+private val idRandom = SecureRandom()
+
+private fun randomUint32Id(): Long {
+    val bytes = ByteArray(4)
+    idRandom.nextBytes(bytes)
+    val value = ((bytes[0].toLong() and 0xFF) shl 24) or
+        ((bytes[1].toLong() and 0xFF) shl 16) or
+        ((bytes[2].toLong() and 0xFF) shl 8) or
+        (bytes[3].toLong() and 0xFF)
+    return if (value == 0L) 1L else value
+}
+
 class SirosWallet private constructor(
     private val activity: Activity,
     private val config: WalletConfig,
@@ -619,6 +644,7 @@ class SirosWallet private constructor(
             credentials = credentialStore.getAll(),
         )
         hydrateReloadedCredentials()
+        reloadPresentationHistory()
     }
 
     /**
@@ -954,6 +980,7 @@ class SirosWallet private constructor(
                 credentials = credentialStore.getAll(),
             )
             hydrateReloadedCredentials()
+            reloadPresentationHistory()
             Timber.i("Keystore unlocked after session resume")
         } catch (e: KeystoreException) {
             Timber.e(e, "Keystore unlock failed: corrupt container")
@@ -1517,7 +1544,7 @@ class SirosWallet private constructor(
      */
     data class DCAPIPresentationResult(
         val responseJson: String,
-        val credentialIds: List<String>,
+        val credentialIds: List<Long>,
     )
 
     /**
@@ -1627,6 +1654,7 @@ class SirosWallet private constructor(
                         nonce = request.nonce,
                         origin = origin,
                         encryptionPublicJwkThumbprint = encryptionThumbprint,
+                        kid = cred.kid,
                     )
                     android.util.Base64.encodeToString(
                         deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
@@ -1637,6 +1665,7 @@ class SirosWallet private constructor(
                         disclosedClaims = disclosedClaims,
                         nonce = request.nonce,
                         audience = audience,
+                        kid = cred.kid,
                     )
                 }
                 put(queryId, kotlinx.serialization.json.JsonPrimitive(token))
@@ -1679,8 +1708,8 @@ class SirosWallet private constructor(
             put("data", responseData)
         }.toString()
 
-        _presentationHistory.add(0, PresentationRecord(
-            id = java.util.UUID.randomUUID().toString(),
+        recordPresentation(PresentationRecord(
+            id = randomUint32Id(),
             flowId = "dc-api-${java.util.UUID.randomUUID()}",
             verifierName = trustResult.entityName,
             credentialIds = selectedIds,
@@ -1851,7 +1880,7 @@ class SirosWallet private constructor(
      * Delete a credential by ID.
      * Also syncs the updated keystore to the backend.
      */
-    suspend fun deleteCredential(credentialId: String) {
+    suspend fun deleteCredential(credentialId: Long) {
         credentialStore.delete(credentialId)
         val current = _state.value
         if (current is WalletState.Ready) {
@@ -1935,6 +1964,37 @@ class SirosWallet private constructor(
     /** Presentation history — most recent first. */
     val presentationHistory: List<PresentationRecord> get() = _presentationHistory.toList()
 
+    /**
+     * Record a new presentation: adds it to the in-memory history and
+     * persists it into the encrypted container (privatedata-spec's
+     * `S.presentations[]`) so [CredentialUtils.groupForDisplay]'s
+     * remaining-copies count survives an app restart instead of resetting
+     * to the full batch size every time - mirrors [deleteCredential]'s
+     * persist-after-mutation pattern.
+     */
+    private suspend fun recordPresentation(record: PresentationRecord) {
+        _presentationHistory.add(0, record)
+        if (keystore.isUnlocked) {
+            keystore.savePresentationRecord(record.id, json.encodeToString(PresentationRecord.serializer(), record))
+            persistAndSyncKeystore()
+        }
+    }
+
+    /** Reload presentation history from the encrypted container after unlock. */
+    private suspend fun reloadPresentationHistory() {
+        _presentationHistory.clear()
+        _presentationHistory.addAll(
+            keystore.getAllPresentationRecords().values.mapNotNull { raw ->
+                try {
+                    json.decodeFromString(PresentationRecord.serializer(), raw)
+                } catch (e: Exception) {
+                    Timber.w(e, "Failed to deserialize presentation record")
+                    null
+                }
+            }.sortedByDescending { it.timestamp }
+        )
+    }
+
     private var apiClient: BackendApiClient? = null
     private var engineSession: WalletEngineSession? = null
     /** Transport-independent notifier for OID4VCI §10 events. */
@@ -1942,6 +2002,19 @@ class SirosWallet private constructor(
     private var eventListener: WalletEventListener? = null
     private var activeOffer: CredentialOffer? = null
     private var activeVctm: Vctm? = null
+    /**
+     * Key IDs generated for the current batch's Key Attestation proof, in the
+     * SAME order they were submitted as `attested_keys` - an OID4VCI issuer
+     * mints credential N in the response bound to `attested_keys[N]`'s public
+     * key (per the batch-issuance convention this attestation flow already
+     * follows, see [requestBackendKeyAttestation]'s doc comment), so
+     * `StoredCredential.kid` for the credential at [StoredCredential.instanceId]
+     * `i` must be `activeAttestedKeyIds[i]` - without this, every signing
+     * operation had no way to know which of the N generated keys a given
+     * batch credential was actually bound to, and silently used an arbitrary
+     * one (see [WscdKeystoreAdapter.selectSigningKey]'s doc comment).
+     */
+    private var activeAttestedKeyIds: List<String>? = null
 
     /**
      * Extract the last credential ID from the auth provider, regardless of type.
@@ -2116,6 +2189,14 @@ class SirosWallet private constructor(
         val proofType: String,
         val jwt: String? = null,
         val attestation: String? = null,
+        /**
+         * Key IDs backing `attestation`'s `attested_keys`, in submission
+         * order - null when unavailable (the self-signed-fallback path
+         * doesn't currently expose the keys it generated internally). See
+         * [SirosWallet.activeAttestedKeyIds]'s doc comment for why this
+         * ordering matters for per-credential key selection at signing time.
+         */
+        val attestedKeyIds: List<String>? = null,
     )
 
     /**
@@ -2153,9 +2234,14 @@ class SirosWallet private constructor(
             else -> "jwt"
         }
         return if (chosen == "attestation") {
-            val attestationJwt = requestBackendKeyAttestation(audience, nonce, count)
+            val backendResult = requestBackendKeyAttestation(audience, nonce, count)
+            val attestationJwt = backendResult?.jwt
                 ?: keystore.generateKeyAttestation(nonce = nonce, count = count)
-            listOf(GeneratedProofData(proofType = "attestation", attestation = attestationJwt))
+            listOf(GeneratedProofData(
+                proofType = "attestation",
+                attestation = attestationJwt,
+                attestedKeyIds = backendResult?.keyIds,
+            ))
         } else {
             (1..count).map {
                 val proofJwt = keystore.generateProof(
@@ -2188,17 +2274,23 @@ class SirosWallet private constructor(
      * the same "degrade gracefully" behavior as the rest of this SDK's
      * backend-optional flows.
      */
-    private suspend fun requestBackendKeyAttestation(audience: String, nonce: String, count: Int): String? {
+    private suspend fun requestBackendKeyAttestation(audience: String, nonce: String, count: Int): BackendAttestationResult? {
         val client = apiClient ?: return null
         return try {
             val keypairs = keystore.generateKeypairs(count)
             val securityProps = keypairs.firstOrNull()?.let { keystore.securityProperties(it.keyId) }
-            client.requestKeyAttestation(
+            val jwt = client.requestKeyAttestation(
                 jwks = keypairs.map { it.publicKeyJWK },
                 nonce = nonce,
                 securityProperties = securityProps,
                 credentialIssuer = audience,
             )
+            // keypairs[i]'s key is exactly attested_keys[i] in the JWT just
+            // built (jwks preserves list order) - the issuer is expected to
+            // mint credential i in the eventual batch response bound to
+            // attested_keys[i], so this ordering IS the instanceId -> kid
+            // mapping the credential-storage handler needs later.
+            BackendAttestationResult(jwt = jwt, keyIds = keypairs.map { it.keyId })
         } catch (e: UnsupportedOperationException) {
             Timber.d("Keystore doesn't support raw keypair generation, using self-signed key attestation")
             null
@@ -2207,6 +2299,8 @@ class SirosWallet private constructor(
             null
         }
     }
+
+    private data class BackendAttestationResult(val jwt: String, val keyIds: List<String>)
 
     private suspend fun handleWmpSignRequest(
         flowId: String,
@@ -2222,6 +2316,7 @@ class SirosWallet private constructor(
                     proofTypesSupported = params.proofTypesSupported?.keys,
                     proofTypeHint = params.proofType,
                 )
+                activeAttestedKeyIds = generated.firstOrNull { it.attestedKeyIds != null }?.attestedKeyIds
                 val proofs = generated.map {
                     org.siros.sdk.transport.wmp.openid4x.ProofObject(
                         proofType = it.proofType, jwt = it.jwt, attestation = it.attestation,
@@ -2248,7 +2343,9 @@ class SirosWallet private constructor(
         val allCreds = credentialStore.getAll()
         val matches = allCreds.map { cred ->
             org.siros.sdk.transport.wmp.openid4x.CredentialMatch(
-                credentialId = cred.id,
+                // WMP wire protocol keeps credential_id as a string - see
+                // the other CredentialMatch construction site's comment.
+                credentialId = cred.id.toString(),
                 credentialQueryId = null,
                 disclosedClaims = null,
             )
@@ -2332,6 +2429,7 @@ class SirosWallet private constructor(
                                 proofTypesSupported = params?.proofTypesSupported?.keys,
                                 proofTypeHint = params?.proofType,
                             )
+                            activeAttestedKeyIds = generated.firstOrNull { it.attestedKeyIds != null }?.attestedKeyIds
                             val proofs = generated.map {
                                 ProofObject(proofType = it.proofType, jwt = it.jwt, attestation = it.attestation)
                             }
@@ -2351,7 +2449,10 @@ class SirosWallet private constructor(
                             val vpToken = if (!credsToInclude.isNullOrEmpty()) {
                                 val allCreds = credentialStore.getAll()
                                 val vpParts = credsToInclude.mapNotNull { ref ->
-                                    val cred = allCreds.find { it.id == ref.credentialId }
+                                    // ref.credentialId arrives as a string over the WMP wire
+                                    // protocol - see the CredentialMatch construction sites'
+                                    // comments on that separate contract from privatedata-spec.
+                                    val cred = allCreds.find { it.id == ref.credentialId.toLongOrNull() }
                                     if (cred == null) {
                                         Timber.w("Credential ...${ref.credentialId.takeLast(4)} not found in store for VP signing")
                                         return@mapNotNull null
@@ -2367,6 +2468,7 @@ class SirosWallet private constructor(
                                             audience = audience,
                                             responseUri = params?.responseUri ?: "",
                                             verifierJwkThumbprint = params?.verifierJwkThumbprint,
+                                            kid = cred.kid,
                                         )
                                         android.util.Base64.encodeToString(deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
                                     } else {
@@ -2376,6 +2478,7 @@ class SirosWallet private constructor(
                                             disclosedClaims = ref.disclosedClaims,
                                             nonce = nonce,
                                             audience = audience,
+                                            kid = cred.kid,
                                         )
                                     }
                                 }
@@ -2454,8 +2557,8 @@ class SirosWallet private constructor(
                     }
 
                     // Track this presentation
-                    _presentationHistory.add(0, PresentationRecord(
-                        id = java.util.UUID.randomUUID().toString(),
+                    recordPresentation(PresentationRecord(
+                        id = randomUint32Id(),
                         flowId = msg.flowId,
                         credentialIds = selectedIds,
                         credentialNames = selectedIds.mapNotNull { id ->
@@ -2472,7 +2575,11 @@ class SirosWallet private constructor(
                             }?.queryId
                             CredentialMatch(
                                 credentialQueryId = queryId,
-                                credentialId = cred.id,
+                                // The WMP engine's own wire protocol keeps
+                                // credential_id as a string (a separate
+                                // contract from privatedata-spec's numeric
+                                // credentialId) - stringify at this boundary.
+                                credentialId = cred.id.toString(),
                                 format = cred.format,
                                 vct = cred.metadata?.vct,
                                 availableClaims = extractAvailableClaims(cred),
@@ -2612,8 +2719,16 @@ class SirosWallet private constructor(
                 var storedCount = 0
                 var storeFailureReason: String? = null
 
+                // Shared across every copy in this response so the UI can group
+                // them into one card (see StoredCredential.batchId) - ALWAYS
+                // assigned, even for a single-credential issuance, matching
+                // wallet-frontend's useOID4VCIFlow.ts (batchId = Date.now())
+                // exactly: every issuance response is its own batch of at
+                // least one, there is no "no batch" sentinel on either client.
+                val batchId = System.currentTimeMillis()
+
                 // Store any new credentials from the flow result
-                msg.credentials?.forEach { cred ->
+                msg.credentials?.forEachIndexed { index, cred ->
                     if (cred.format == "mso_mdoc") {
                         // mso_mdoc credentials are base64url-encoded CBOR (a
                         // DeviceResponse-shaped envelope, per
@@ -2632,7 +2747,7 @@ class SirosWallet private constructor(
                         } catch (e: Exception) {
                             Timber.w(e, "Skipping unparseable mdoc credential in flow ${msg.flowId}")
                             storeFailureReason = "Received credential could not be read (${e.message ?: e::class.simpleName})"
-                            return@forEach
+                            return@forEachIndexed
                         }
                         val metadata = activeOffer?.let { offer ->
                             val mddlSchema = try {
@@ -2647,13 +2762,16 @@ class SirosWallet private constructor(
                             CredentialUtils.buildMdocMetadata(offer = offer, mddlSchema = mddlSchema)
                         }
                         val stored = StoredCredential(
-                            id = java.util.UUID.randomUUID().toString(),
+                            id = randomUint32Id(),
                             format = cred.format,
                             raw = cred.credential,
                             metadata = metadata,
                             notificationId = cred.notificationId,
                             credentialIssuerIdentifier = activeOffer?.credentialIssuerIdentifier,
                             credentialConfigurationId = activeOffer?.credentialConfigurationId,
+                            batchId = batchId,
+                            instanceId = index,
+                            kid = activeAttestedKeyIds?.getOrNull(index),
                         )
                         credentialStore.save(stored)
                         storedCount++
@@ -2667,7 +2785,7 @@ class SirosWallet private constructor(
                                 event = CredentialNotificationEvent.ACCEPTED,
                             )
                         }
-                        return@forEach
+                        return@forEachIndexed
                     }
 
                     // Basic validation: ensure credential is parseable
@@ -2675,7 +2793,7 @@ class SirosWallet private constructor(
                     if (payload == null) {
                         Timber.w("Skipping unparseable credential in flow ${msg.flowId}")
                         storeFailureReason = "Received credential could not be read"
-                        return@forEach
+                        return@forEachIndexed
                     }
                     // Check expiry — don't store already-expired credentials
                     val exp = payload["exp"]?.jsonPrimitive?.longOrNull
@@ -2683,7 +2801,7 @@ class SirosWallet private constructor(
                     if (exp != null && exp < now) {
                         Timber.w("Skipping expired credential (exp=$exp, now=$now)")
                         storeFailureReason = "Issued credential was already expired"
-                        return@forEach
+                        return@forEachIndexed
                     }
                     val metadata = activeOffer?.let { offer ->
                         CredentialUtils.buildMetadata(
@@ -2693,7 +2811,7 @@ class SirosWallet private constructor(
                         )
                     }
                     val stored = StoredCredential(
-                        id = java.util.UUID.randomUUID().toString(),
+                        id = randomUint32Id(),
                         format = cred.format,
                         raw = cred.credential,
                         metadata = metadata,
@@ -2702,6 +2820,9 @@ class SirosWallet private constructor(
                         notificationId = cred.notificationId,
                         credentialIssuerIdentifier = activeOffer?.credentialIssuerIdentifier,
                         credentialConfigurationId = activeOffer?.credentialConfigurationId,
+                        batchId = batchId,
+                        instanceId = index,
+                        kid = activeAttestedKeyIds?.getOrNull(index),
                     )
                     credentialStore.save(stored)
                     storedCount++
@@ -2719,6 +2840,7 @@ class SirosWallet private constructor(
                 }
                 activeOffer = null
                 activeVctm = null
+                activeAttestedKeyIds = null
 
                 // Persist locally + sync to backend immediately
                 persistAndSyncKeystore()
@@ -3005,8 +3127,8 @@ class SirosWallet private constructor(
                 }
 
                 // Record presentation history
-                _presentationHistory.add(0, PresentationRecord(
-                    id = java.util.UUID.randomUUID().toString(),
+                recordPresentation(PresentationRecord(
+                    id = randomUint32Id(),
                     flowId = flowId,
                     verifierName = verifierName,
                     credentialIds = selectedIds,
@@ -3030,7 +3152,10 @@ class SirosWallet private constructor(
                                 matchResult?.queryId?.let {
                                     put("credential_query_id", kotlinx.serialization.json.JsonPrimitive(it))
                                 }
-                                put("credential_id", kotlinx.serialization.json.JsonPrimitive(id))
+                                // Legacy engine JSON-RPC protocol keeps credential_id as a
+                                // string wire contract - stringify at this boundary rather
+                                // than changing an unverified backend field type.
+                                put("credential_id", kotlinx.serialization.json.JsonPrimitive(id.toString()))
                                 // Include disclosed_claims from DCQL match so backend can
                                 // round-trip them into sign_request's credentials_to_include
                                 val requestedClaims = matchResult?.requestedClaims

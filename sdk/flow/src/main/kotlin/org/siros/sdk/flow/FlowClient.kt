@@ -223,8 +223,12 @@ class FlowClient(
                         val vp = keystore.signPresentation(
                             nonce = signParams.nonce ?: "",
                             audience = signParams.audience ?: "",
-                            credentialIds = signParams.credentialsToInclude?.map {
-                                it["credential_id"]?.jsonPrimitive?.content ?: ""
+                            // credential_id arrives as a string over this
+                            // engine wire protocol (a separate contract from
+                            // privatedata-spec's numeric credentialId) - parse
+                            // it back to Long at this boundary.
+                            credentialIds = signParams.credentialsToInclude?.mapNotNull {
+                                it["credential_id"]?.jsonPrimitive?.content?.toLongOrNull()
                             } ?: emptyList(),
                         )
                         SignResponse(vpToken = vp)

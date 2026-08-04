@@ -14,16 +14,20 @@ class CredentialMatcherTest {
     fun match_filters_by_format_and_vct() {
         val credentials = listOf(
             StoredCredential(
-                id = "1",
+                id = 1L,
                 format = "dc+sd-jwt",
                 raw = "raw-1",
                 metadata = CredentialMetadata(vct = "urn:eu:pid:1"),
+                batchId = 1L,
+                instanceId = 0,
             ),
             StoredCredential(
-                id = "2",
+                id = 2L,
                 format = "mso_mdoc",
                 raw = "raw-2",
                 metadata = CredentialMetadata(doctype = "eu.europa.ec.eudi.pid.1"),
+                batchId = 2L,
+                instanceId = 0,
             ),
         )
 
@@ -50,7 +54,7 @@ class CredentialMatcherTest {
 
         assertEquals(1, results.size)
         assertEquals("q-pid", results.first().queryId)
-        assertEquals(listOf("1"), results.first().candidates.map { it.id })
+        assertEquals(listOf(1L), results.first().candidates.map { it.id })
         assertEquals(listOf(listOf("given_name")), results.first().requestedClaims)
     }
 
@@ -58,16 +62,20 @@ class CredentialMatcherTest {
     fun match_filters_by_doctype_for_mdoc() {
         val credentials = listOf(
             StoredCredential(
-                id = "pid-doc",
+                id = 1L,
                 format = "mso_mdoc",
                 raw = "raw-1",
                 metadata = CredentialMetadata(doctype = "eu.europa.ec.eudi.pid.1"),
+                batchId = 1L,
+                instanceId = 0,
             ),
             StoredCredential(
-                id = "other-doc",
+                id = 2L,
                 format = "mso_mdoc",
                 raw = "raw-2",
                 metadata = CredentialMetadata(doctype = "com.example.other"),
+                batchId = 2L,
+                instanceId = 0,
             ),
         )
 
@@ -88,14 +96,70 @@ class CredentialMatcherTest {
         ).jsonObject
 
         val matchedIds = CredentialMatcher.matchedCredentialIds(query, credentials)
-        assertEquals(listOf("pid-doc"), matchedIds)
+        assertEquals(listOf(1L), matchedIds)
+    }
+
+    @Test
+    fun match_filters_by_doctype_for_mdoc_with_no_metadata() {
+        // Mirrors a credential from a third-party issuer with no MDDL schema
+        // endpoint at our internal /type-metadata/<scope> convention - the
+        // metadata fetch fails, so `metadata` stays null, but the docType is
+        // still authoritatively present in the credential's own MSO/CBOR, so
+        // it must still be matchable.
+        val credentials = listOf(
+            StoredCredential(
+                id = 1L,
+                format = "mso_mdoc",
+                raw = buildMdocRaw("eu.europa.ec.eudi.pid.1"),
+                metadata = null,
+                batchId = 1L,
+                instanceId = 0,
+            ),
+        )
+
+        val query = json.parseToJsonElement(
+            """
+            {
+              "credentials": [
+                {
+                  "id": "q-doc",
+                  "format": "mso_mdoc",
+                  "meta": {
+                    "doctype_value": "eu.europa.ec.eudi.pid.1"
+                  }
+                }
+              ]
+            }
+            """.trimIndent()
+        ).jsonObject
+
+        val matchedIds = CredentialMatcher.matchedCredentialIds(query, credentials)
+        assertEquals(listOf(1L), matchedIds)
+    }
+
+    /** Build a synthetic mdoc credential's raw (base64url) bytes: a bare IssuerSigned structure with the given docType embedded in a stub MSO. */
+    private fun buildMdocRaw(docType: String): String {
+        val mso = com.upokecenter.cbor.CBORObject.NewMap()
+        mso[com.upokecenter.cbor.CBORObject.FromObject("docType")] = com.upokecenter.cbor.CBORObject.FromObject(docType)
+        val msoTagged = com.upokecenter.cbor.CBORObject.FromObjectAndTag(mso.EncodeToBytes(), 24)
+        val issuerAuth = com.upokecenter.cbor.CBORObject.NewArray()
+        issuerAuth.Add(com.upokecenter.cbor.CBORObject.FromObject(ByteArray(0)))
+        issuerAuth.Add(com.upokecenter.cbor.CBORObject.NewMap())
+        issuerAuth.Add(com.upokecenter.cbor.CBORObject.FromObject(msoTagged.EncodeToBytes()))
+        issuerAuth.Add(com.upokecenter.cbor.CBORObject.FromObject(ByteArray(0)))
+
+        val issuerSigned = com.upokecenter.cbor.CBORObject.NewMap()
+        issuerSigned[com.upokecenter.cbor.CBORObject.FromObject("nameSpaces")] = com.upokecenter.cbor.CBORObject.NewMap()
+        issuerSigned[com.upokecenter.cbor.CBORObject.FromObject("issuerAuth")] = issuerAuth
+
+        return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(issuerSigned.EncodeToBytes())
     }
 
     @Test
     fun match_returns_all_when_query_has_no_credentials_array() {
         val credentials = listOf(
-            StoredCredential(id = "a", format = "dc+sd-jwt", raw = "raw-a"),
-            StoredCredential(id = "b", format = "mso_mdoc", raw = "raw-b"),
+            StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw-a", batchId = 1L, instanceId = 0),
+            StoredCredential(id = 2L, format = "mso_mdoc", raw = "raw-b", batchId = 2L, instanceId = 0),
         )
 
         val query = json.parseToJsonElement("""{ "unexpected": true }""").jsonObject
@@ -103,17 +167,19 @@ class CredentialMatcherTest {
 
         assertEquals(1, results.size)
         assertEquals("_default", results.first().queryId)
-        assertTrue(results.first().candidates.map { it.id }.containsAll(listOf("a", "b")))
+        assertTrue(results.first().candidates.map { it.id }.containsAll(listOf(1L, 2L)))
     }
 
     @Test
     fun matched_credential_ids_are_distinct_across_multiple_queries() {
         val credentials = listOf(
             StoredCredential(
-                id = "pid-1",
+                id = 1L,
                 format = "dc+sd-jwt",
                 raw = "raw-1",
                 metadata = CredentialMetadata(vct = "urn:eu:pid:1"),
+                batchId = 1L,
+                instanceId = 0,
             )
         )
 
@@ -138,14 +204,14 @@ class CredentialMatcherTest {
 
         val matchedIds = CredentialMatcher.matchedCredentialIds(query, credentials)
 
-        assertEquals(listOf("pid-1"), matchedIds)
+        assertEquals(listOf(1L), matchedIds)
     }
 
     @Test
     fun match_excludes_credentials_without_required_vct_or_doctype_metadata() {
         val credentials = listOf(
-            StoredCredential(id = "missing-vct", format = "dc+sd-jwt", raw = "raw-1"),
-            StoredCredential(id = "missing-doc", format = "mso_mdoc", raw = "raw-2"),
+            StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw-1", batchId = 1L, instanceId = 0),
+            StoredCredential(id = 2L, format = "mso_mdoc", raw = "raw-2", batchId = 2L, instanceId = 0),
         )
 
         val query = json.parseToJsonElement(
@@ -177,10 +243,12 @@ class CredentialMatcherTest {
     fun match_skips_queries_without_ids_and_ignores_malformed_claim_entries() {
         val credentials = listOf(
             StoredCredential(
-                id = "1",
+                id = 1L,
                 format = "dc+sd-jwt",
                 raw = "raw-1",
                 metadata = CredentialMetadata(vct = "urn:eu:pid:1"),
+                batchId = 1L,
+                instanceId = 0,
             )
         )
 
@@ -281,16 +349,16 @@ class CredentialMatcherTest {
     fun findSatisfiableOptions_identifies_satisfiable_options() {
         val queryResults = listOf(
             CredentialMatcher.MatchResult("pid", "dc+sd-jwt",
-                listOf(StoredCredential(id = "1", format = "dc+sd-jwt", raw = "r")),
+                listOf(StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "r", batchId = 1L, instanceId = 0)),
                 emptyList()),
             CredentialMatcher.MatchResult("other_pid", "dc+sd-jwt",
                 emptyList(), // no matches
                 emptyList()),
             CredentialMatcher.MatchResult("cred_1", "dc+sd-jwt",
-                listOf(StoredCredential(id = "2", format = "dc+sd-jwt", raw = "r")),
+                listOf(StoredCredential(id = 2L, format = "dc+sd-jwt", raw = "r", batchId = 2L, instanceId = 0)),
                 emptyList()),
             CredentialMatcher.MatchResult("cred_2", "dc+sd-jwt",
-                listOf(StoredCredential(id = "3", format = "dc+sd-jwt", raw = "r")),
+                listOf(StoredCredential(id = 3L, format = "dc+sd-jwt", raw = "r", batchId = 3L, instanceId = 0)),
                 emptyList()),
         )
 
@@ -320,16 +388,20 @@ class CredentialMatcherTest {
     fun matchDcql_returns_full_output_with_credential_sets() {
         val credentials = listOf(
             StoredCredential(
-                id = "my-pid",
+                id = 1L,
                 format = "dc+sd-jwt",
                 raw = "raw-1",
                 metadata = CredentialMetadata(vct = "urn:eu:pid:1"),
+                batchId = 1L,
+                instanceId = 0,
             ),
             StoredCredential(
-                id = "my-mdl",
+                id = 2L,
                 format = "mso_mdoc",
                 raw = "raw-2",
                 metadata = CredentialMetadata(doctype = "org.iso.18013.5.1.mDL"),
+                batchId = 2L,
+                instanceId = 0,
             ),
         )
 
@@ -379,8 +451,8 @@ class CredentialMatcherTest {
     @Test
     fun matchDcql_without_credential_sets_returns_null_sets() {
         val credentials = listOf(
-            StoredCredential(id = "1", format = "dc+sd-jwt", raw = "r",
-                metadata = CredentialMetadata(vct = "urn:eu:pid:1")),
+            StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "r",
+                metadata = CredentialMetadata(vct = "urn:eu:pid:1"), batchId = 1L, instanceId = 0),
         )
 
         val query = json.parseToJsonElement(
@@ -406,8 +478,8 @@ class CredentialMatcherTest {
     @Test
     fun match_still_returns_flat_list_for_backward_compatibility() {
         val credentials = listOf(
-            StoredCredential(id = "1", format = "dc+sd-jwt", raw = "r",
-                metadata = CredentialMetadata(vct = "urn:eu:pid:1")),
+            StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "r",
+                metadata = CredentialMetadata(vct = "urn:eu:pid:1"), batchId = 1L, instanceId = 0),
         )
 
         val query = json.parseToJsonElement(

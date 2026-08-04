@@ -68,7 +68,9 @@ class CredentialUtilsTest {
     @Test
     fun `extractClaims returns user-facing claims`() {
         val cred = StoredCredential(
-            id = "test-id",
+            id = 1L,
+            batchId = 1L,
+            instanceId = 0,
             format = "vc+sd-jwt",
             raw = sampleJwt,
         )
@@ -88,7 +90,9 @@ class CredentialUtilsTest {
     @Test
     fun `extractClaims uses VCTM labels when available`() {
         val cred = StoredCredential(
-            id = "test-id",
+            id = 1L,
+            batchId = 1L,
+            instanceId = 0,
             format = "vc+sd-jwt",
             raw = sampleJwt,
             metadata = CredentialMetadata(
@@ -131,7 +135,9 @@ class CredentialUtilsTest {
             "$header.$payload.fakesig"
         }
         val cred = StoredCredential(
-            id = "test-id",
+            id = 1L,
+            batchId = 1L,
+            instanceId = 0,
             format = "vc+sd-jwt",
             raw = nestedJwt,
             metadata = CredentialMetadata(
@@ -167,7 +173,9 @@ class CredentialUtilsTest {
     @Test
     fun `extractClaims formats keys when no VCTM`() {
         val cred = StoredCredential(
-            id = "test-id",
+            id = 1L,
+            batchId = 1L,
+            instanceId = 0,
             format = "vc+sd-jwt",
             raw = sampleJwt,
         )
@@ -178,7 +186,7 @@ class CredentialUtilsTest {
 
     @Test
     fun `extractClaims returns empty for unparseable credential`() {
-        val cred = StoredCredential(id = "bad", format = "vc+sd-jwt", raw = "not-a-jwt")
+        val cred = StoredCredential(id = 2L, format = "vc+sd-jwt", raw = "not-a-jwt", batchId = 2L, instanceId = 0)
         assertTrue(CredentialUtils.extractClaims(cred).isEmpty())
     }
 
@@ -303,7 +311,9 @@ class CredentialUtilsTest {
     @Test
     fun `extractClaims dispatches to mdoc parsing for mso_mdoc format`() {
         val cred = StoredCredential(
-            id = "cred-1",
+            id = 3L,
+            batchId = 3L,
+            instanceId = 0,
             format = "mso_mdoc",
             raw = buildMdocRaw(),
             metadata = CredentialMetadata(
@@ -325,6 +335,25 @@ class CredentialUtilsTest {
         // No ClaimMeta entry for given_name - falls back to formatted key.
         assertEquals("Given Name", givenName.label)
         assertEquals("Jane", givenName.value)
+    }
+
+    @Test
+    fun `parseMdocDocument recovers the real docType with no metadata at all`() {
+        // Mirrors a credential from a third-party issuer with no MDDL schema
+        // endpoint at our internal /type-metadata/<scope> convention - the
+        // metadata fetch fails, so `metadata` stays null, but the docType is
+        // still authoritatively present in the credential's own MSO/CBOR.
+        val cred = StoredCredential(
+            id = 4L,
+            batchId = 4L,
+            instanceId = 0,
+            format = "mso_mdoc",
+            raw = buildMdocRaw(),
+            metadata = null,
+        )
+
+        val document = CredentialUtils.parseMdocDocument(cred)
+        assertEquals(mdocDocType, document?.docType)
     }
 
     @Test

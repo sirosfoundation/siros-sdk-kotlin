@@ -1,5 +1,6 @@
 package org.siros.sdk.keystore
 
+import com.upokecenter.cbor.CBORObject
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -60,15 +61,15 @@ class WscdKeystoreAdapterTest {
         adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
 
         // Store a credential
-        adapter.saveCredential("cred-1", """{"type":"VerifiableCredential"}""")
-        assertNotNull(adapter.getCredential("cred-1"))
+        adapter.saveCredential(1L, """{"type":"VerifiableCredential"}""")
+        assertNotNull(adapter.getCredential(1L))
 
         // Lock should clear
         adapter.lock()
 
         // After re-unlock, credential should be gone
         adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
-        assertEquals(null, adapter.getCredential("cred-1"))
+        assertEquals(null, adapter.getCredential(1L))
     }
 
     @Test
@@ -133,7 +134,7 @@ class WscdKeystoreAdapterTest {
         // StoredCredential JSON (id/format/raw/kid/...) - the underlying
         // JweKeystore container only round-trips the privatedata-spec's
         // normative fields (format/kid/raw as "data"), not arbitrary JSON.
-        adapter1.saveCredential("cred-1", """{"id":"cred-1","format":"vc+sd-jwt","raw":"header.payload.sig","kid":"key-1"}""")
+        adapter1.saveCredential(1L, """{"id":1,"format":"vc+sd-jwt","raw":"header.payload.sig","kid":"key-1"}""")
         val exported = adapter1.exportEncryptedContainer()
         assertTrue(exported.isNotEmpty())
 
@@ -147,7 +148,7 @@ class WscdKeystoreAdapterTest {
         // across any client, not just this WSCD-backed one.
         val adapter2 = WscdKeystoreAdapter(createMockSigner())
         adapter2.unlock(prfOutput, exported, hkdfSalt, hkdfInfo)
-        val restored = adapter2.getCredential("cred-1")
+        val restored = adapter2.getCredential(1L)
         assertNotNull(restored)
         assertTrue(restored!!.contains("\"format\":\"vc+sd-jwt\""))
         assertTrue(restored.contains("header.payload.sig"))
@@ -160,7 +161,7 @@ class WscdKeystoreAdapterTest {
 
         val adapter1 = WscdKeystoreAdapter(createMockSigner())
         adapter1.unlock(ByteArray(32) { it.toByte() }, ByteArray(0), hkdfSalt, hkdfInfo)
-        adapter1.saveCredential("cred-1", """{"id":"cred-1","format":"vc+sd-jwt","raw":"x"}""")
+        adapter1.saveCredential(1L, """{"id":1,"format":"vc+sd-jwt","raw":"x"}""")
         val exported = adapter1.exportEncryptedContainer()
 
         // A wrong PRF output must fail loudly (not silently start empty) -
@@ -175,20 +176,20 @@ class WscdKeystoreAdapterTest {
         adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
 
         // Save
-        adapter.saveCredential("id-1", """{"type":"VC"}""")
-        adapter.saveCredential("id-2", """{"type":"VC2"}""")
+        adapter.saveCredential(10L, """{"type":"VC"}""")
+        adapter.saveCredential(11L, """{"type":"VC2"}""")
 
         // Get
-        assertEquals("""{"type":"VC"}""", adapter.getCredential("id-1"))
-        assertEquals(null, adapter.getCredential("nonexistent"))
+        assertEquals("""{"type":"VC"}""", adapter.getCredential(10L))
+        assertEquals(null, adapter.getCredential(99L))
 
         // GetAll
         val all = adapter.getAllCredentials()
         assertEquals(2, all.size)
 
         // Delete
-        adapter.deleteCredential("id-1")
-        assertEquals(null, adapter.getCredential("id-1"))
+        adapter.deleteCredential(10L)
+        assertEquals(null, adapter.getCredential(10L))
         assertEquals(1, adapter.getAllCredentials().size)
 
         // Clear
@@ -410,6 +411,139 @@ class WscdKeystoreAdapterTest {
 
         try {
             adapter.generateKeyProof(keyId = "does-not-exist", typ = "x", issuer = "iss", audience = "aud")
+            fail("expected IllegalStateException")
+        } catch (e: IllegalStateException) {
+            // expected
+        }
+    }
+
+    // ── Per-credential key selection (batch issuance: one key per instance) ──
+
+    /**
+     * A mock signer with TWO keys, mirroring a batch issuance where each
+     * credential instance is bound to its own device key (e.g. Geneva 2026's
+     * OID4VCI attestation issuing 5 distinct `attested_keys` for a 5-credential
+     * batch) - regression coverage for the bug where every signing method
+     * used `listKeys().firstOrNull()` regardless of which credential was
+     * actually being presented, so only whichever credential happened to be
+     * bound to the first-listed key ever produced a verifiable signature.
+     */
+    private fun createMultiKeyMockSigner(): Signer = mockk<Signer>(relaxed = true).also {
+        coEvery { it.sign(any(), any()) } returns ByteArray(64) { it.toByte() }
+        coEvery { it.listKeys() } returns listOf(
+            SignerKeyInfo("key-a", "ES256"),
+            SignerKeyInfo("key-b", "ES256"),
+        )
+        // A real, curve-valid P-256 point - signVpToken's KB-JWT construction
+        // parses this via Nimbus's JWK.parse(), which validates x/y actually
+        // lie on the curve (unlike createMockSigner()'s placeholder JWK,
+        // which is fine for tests that never reach that parse call).
+        coEvery { it.exportPublicKey(any()) } returns """{"kty":"EC","crv":"P-256","x":"Jhu_dDVIFB80tNgyVhLBSKtwAgOsVLa3nOKsBTnPSwM","y":"6c6rmQbB_Q-dRYeVE7ToVCTQ9U7UUjn7b9_PFpnK7rU"}""".toByteArray()
+    }
+
+    private fun fakeSdJwtVc(): String = "header.payload.sig~disclosure1~"
+
+    /** Minimal synthetic mdoc credential envelope - see MdocDeviceResponseBuilderTest for the full-fidelity version. */
+    private fun buildMinimalMdocRaw(): ByteArray {
+        val item = CBORObject.NewMap()
+        item[CBORObject.FromObject("digestID")] = CBORObject.FromObject(0L)
+        item[CBORObject.FromObject("random")] = CBORObject.FromObject(ByteArray(16))
+        item[CBORObject.FromObject("elementIdentifier")] = CBORObject.FromObject("family_name")
+        item[CBORObject.FromObject("elementValue")] = CBORObject.FromObject("Doe")
+        val taggedItem = CBORObject.FromObjectAndTag(item.EncodeToBytes(), 24)
+
+        val items = CBORObject.NewArray()
+        items.Add(taggedItem)
+        val nameSpaces = CBORObject.NewMap()
+        nameSpaces[CBORObject.FromObject("org.iso.18013.5.1")] = items
+
+        val issuerAuth = CBORObject.NewArray()
+        repeat(4) { issuerAuth.Add(CBORObject.FromObject(ByteArray(0))) }
+
+        val issuerSigned = CBORObject.NewMap()
+        issuerSigned[CBORObject.FromObject("nameSpaces")] = nameSpaces
+        issuerSigned[CBORObject.FromObject("issuerAuth")] = issuerAuth
+
+        val document = CBORObject.NewMap()
+        document[CBORObject.FromObject("docType")] = CBORObject.FromObject("org.iso.18013.5.1.mDL")
+        document[CBORObject.FromObject("issuerSigned")] = issuerSigned
+
+        val documents = CBORObject.NewArray()
+        documents.Add(document)
+
+        val envelope = CBORObject.NewMap()
+        envelope[CBORObject.FromObject("documents")] = documents
+        envelope[CBORObject.FromObject("status")] = CBORObject.FromObject(0)
+        return envelope.EncodeToBytes()
+    }
+
+    @Test
+    fun signVpToken_usesTheKeyBoundToTheCredential_notWhicheverIsFirst() = runTest {
+        val signer = createMultiKeyMockSigner()
+        val adapter = WscdKeystoreAdapter(signer)
+        adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+
+        adapter.signVpToken(credential = fakeSdJwtVc(), disclosedClaims = null, nonce = "n", audience = "aud", kid = "key-b")
+
+        coVerify { signer.sign("key-b", any()) }
+    }
+
+    @Test
+    fun signVpToken_withNoKid_fallsBackToFirstKey() = runTest {
+        val signer = createMultiKeyMockSigner()
+        val adapter = WscdKeystoreAdapter(signer)
+        adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+
+        adapter.signVpToken(credential = fakeSdJwtVc(), disclosedClaims = null, nonce = "n", audience = "aud", kid = null)
+
+        coVerify { signer.sign("key-a", any()) }
+    }
+
+    @Test
+    fun signVpToken_withUnknownKid_throwsRatherThanSigningWithWrongKey() = runTest {
+        val adapter = WscdKeystoreAdapter(createMultiKeyMockSigner())
+        adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+
+        try {
+            adapter.signVpToken(credential = fakeSdJwtVc(), disclosedClaims = null, nonce = "n", audience = "aud", kid = "key-nonexistent")
+            fail("expected IllegalStateException")
+        } catch (e: IllegalStateException) {
+            // expected
+        }
+    }
+
+    @Test
+    fun signMdocPresentationForDCAPI_usesTheKeyBoundToTheCredential() = runTest {
+        val signer = createMultiKeyMockSigner()
+        val adapter = WscdKeystoreAdapter(signer)
+        adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+
+        adapter.signMdocPresentationForDCAPI(
+            credentialBytes = buildMinimalMdocRaw(),
+            disclosedClaims = null,
+            nonce = "n",
+            origin = "https://verifier.example.com",
+            encryptionPublicJwkThumbprint = null,
+            kid = "key-b",
+        )
+
+        coVerify { signer.sign("key-b", any()) }
+    }
+
+    @Test
+    fun signMdocPresentationForDCAPI_withUnknownKid_throws() = runTest {
+        val adapter = WscdKeystoreAdapter(createMultiKeyMockSigner())
+        adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+
+        try {
+            adapter.signMdocPresentationForDCAPI(
+                credentialBytes = buildMinimalMdocRaw(),
+                disclosedClaims = null,
+                nonce = "n",
+                origin = "https://verifier.example.com",
+                encryptionPublicJwkThumbprint = null,
+                kid = "key-nonexistent",
+            )
             fail("expected IllegalStateException")
         } catch (e: IllegalStateException) {
             // expected

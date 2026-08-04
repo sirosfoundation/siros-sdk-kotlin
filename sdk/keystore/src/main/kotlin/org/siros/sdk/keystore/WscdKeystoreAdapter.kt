@@ -180,11 +180,10 @@ class WscdKeystoreAdapter(
         return "$signingInput.${base64UrlEncode(signature)}"
     }
 
-    override suspend fun signPresentation(nonce: String, audience: String, credentialIds: List<String>): String {
+    override suspend fun signPresentation(nonce: String, audience: String, credentialIds: List<Long>, kid: String?): String {
         checkUnlocked()
         val keys = signer.listKeys()
-        val key = keys.firstOrNull()
-            ?: throw IllegalStateException("No keys available")
+        val key = selectSigningKey(keys, kid)
 
         val header = JWSHeader.Builder(jwsAlgorithm(key.algorithm))
             .keyID(key.keyId)
@@ -207,8 +206,9 @@ class WscdKeystoreAdapter(
         disclosedClaims: List<String>?,
         nonce: String,
         audience: String,
+        kid: String?,
     ): String {
-        return signVpToken(credential, disclosedClaims, nonce, audience, null)
+        return signVpToken(credential, disclosedClaims, nonce, audience, null, kid)
     }
 
     /** Extended VP token signing with transaction data (Phase I: TS12 payment SCA). */
@@ -218,11 +218,11 @@ class WscdKeystoreAdapter(
         nonce: String,
         audience: String,
         transactionData: List<TransactionDataItem>?,
+        kid: String? = null,
     ): String {
         checkUnlocked()
         val keys = signer.listKeys()
-        val key = keys.firstOrNull()
-            ?: throw IllegalStateException("No keys available")
+        val key = selectSigningKey(keys, kid)
 
         // Split SD-JWT
         val parts = credential.split("~")
@@ -311,11 +311,11 @@ class WscdKeystoreAdapter(
         audience: String,
         responseUri: String,
         verifierJwkThumbprint: String?,
+        kid: String?,
     ): ByteArray {
         checkUnlocked()
         val keys = signer.listKeys()
-        val key = keys.firstOrNull()
-            ?: throw IllegalStateException("No keys available for mDoc signing")
+        val key = selectSigningKey(keys, kid)
 
         val builder = MdocDeviceResponseBuilder(
             credentialBytes = credentialBytes,
@@ -338,11 +338,11 @@ class WscdKeystoreAdapter(
         nonce: String,
         origin: String,
         encryptionPublicJwkThumbprint: String?,
+        kid: String?,
     ): ByteArray {
         checkUnlocked()
         val keys = signer.listKeys()
-        val key = keys.firstOrNull()
-            ?: throw IllegalStateException("No keys available for mDoc DC API signing")
+        val key = selectSigningKey(keys, kid)
 
         val builder = MdocDeviceResponseBuilder(
             credentialBytes = credentialBytes,
@@ -414,24 +414,38 @@ class WscdKeystoreAdapter(
 
     // ── Credential storage (delegated to credentialsKeystore) ───────
 
-    override suspend fun saveCredential(id: String, json: String) {
+    override suspend fun saveCredential(id: Long, json: String) {
         credentialsKeystore.saveCredential(id, json)
     }
 
-    override suspend fun getCredential(id: String): String? {
+    override suspend fun getCredential(id: Long): String? {
         return credentialsKeystore.getCredential(id)
     }
 
-    override suspend fun getAllCredentials(): Map<String, String> {
+    override suspend fun getAllCredentials(): Map<Long, String> {
         return credentialsKeystore.getAllCredentials()
     }
 
-    override suspend fun deleteCredential(id: String) {
+    override suspend fun deleteCredential(id: Long) {
         credentialsKeystore.deleteCredential(id)
     }
 
     override suspend fun clearCredentials() {
         credentialsKeystore.clearCredentials()
+    }
+
+    // ── Presentation-history storage (delegated to credentialsKeystore) ─
+
+    override suspend fun savePresentationRecord(id: Long, json: String) {
+        credentialsKeystore.savePresentationRecord(id, json)
+    }
+
+    override suspend fun getAllPresentationRecords(): Map<Long, String> {
+        return credentialsKeystore.getAllPresentationRecords()
+    }
+
+    override suspend fun clearPresentationRecords() {
+        credentialsKeystore.clearPresentationRecords()
     }
 
     override suspend fun generateKeypairs(count: Int): List<KeypairInfo> {
@@ -496,6 +510,29 @@ class WscdKeystoreAdapter(
 
     private fun checkUnlocked() {
         if (!isUnlocked) throw IllegalStateException("Keystore is locked")
+    }
+
+    /**
+     * Pick the key to sign a presentation with. When [kid] is given (the
+     * credential being presented has a known bound key - see
+     * [StoredCredential.kid]), that EXACT key must be used - a wallet
+     * holding more than one key (e.g. after a batch issuance where each
+     * credential instance is bound to its own device key) would otherwise
+     * silently sign every credential with whichever key happens to be
+     * first, producing a structurally valid but cryptographically wrong
+     * signature for every credential except that one. Throws rather than
+     * silently falling back if the specified key isn't found, since signing
+     * with a different key is never a safe substitute. [kid] is null only
+     * for genuinely credential-less call shapes (e.g. [signPresentation]'s
+     * legacy no-credential form), where "first available key" is the only
+     * meaningful choice.
+     */
+    private fun selectSigningKey(keys: List<SignerKeyInfo>, kid: String?): SignerKeyInfo {
+        if (kid != null) {
+            return keys.firstOrNull { it.keyId == kid }
+                ?: throw IllegalStateException("Signing key '$kid' not found - this credential's bound key is unavailable")
+        }
+        return keys.firstOrNull() ?: throw IllegalStateException("No keys available for signing")
     }
 
     /**
