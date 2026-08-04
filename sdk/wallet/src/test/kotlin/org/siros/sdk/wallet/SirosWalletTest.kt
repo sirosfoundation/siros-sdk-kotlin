@@ -56,6 +56,8 @@ import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.credentials.WalletException
 import org.siros.sdk.keystore.KeypairInfo
 import org.siros.sdk.keystore.KeystoreManager
+import org.siros.sdk.keystore.NativeAttestationEvidence
+import org.siros.sdk.keystore.NativeAttestationProvider
 import com.nimbusds.jose.JWEObject
 import com.nimbusds.jose.JWSAlgorithm
 import com.nimbusds.jose.JWSHeader
@@ -930,6 +932,137 @@ class SirosWalletTest {
                 "keystore" to keystore,
                 "apiClient" to apiClient,
                 "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+                "json" to Json { ignoreUnknownKeys = true },
+                "httpClient" to OkHttpClient(),
+            )
+            val issuerUrl = server.url("/").toString().trimEnd('/')
+            val offerJson = """{"credential_issuer":"$issuerUrl","credential_configuration_ids":["org.iso.18013.5.1.mDL"]}"""
+
+            wallet.startIssuance(offerJson)
+            advanceUntilIdle()
+
+            verify(exactly = 1) {
+                engine.startIssuance(
+                    offer = offerJson,
+                    credentialOfferUri = null,
+                    redirectUri = "siros-sample://callback",
+                    clientAttestation = wiaJwt,
+                    clientAttestationPoP = "pop-jwt",
+                )
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    /**
+     * When a `nativeAttestationProvider` is configured, `ensureWalletInstanceAttestation()`
+     * must attach its evidence to the WIA generate call as `native_attestation`,
+     * snake_case `key_id` included, so the backend's KA trust gate can see it.
+     */
+    @Test
+    fun startIssuance_includesNativeAttestation_whenProviderConfigured() = runTest(dispatcher) {
+        val server = MockWebServer()
+        server.start()
+        try {
+            server.enqueue(MockResponse().setBody(issuerMetadataJson(server, "org.iso.18013.5.1.mDL")))
+            val engine = mockk<WalletEngineSession>(relaxed = true)
+            val sessionStore = mockk<SessionStore>(relaxed = true)
+            every { sessionStore.instanceKeyId } returns "instance-key-1"
+            val keystore = mockk<KeystoreManager>(relaxed = true)
+            coEvery {
+                keystore.generateKeyProof(keyId = any(), typ = any(), issuer = any(), audience = any(), extraClaims = any())
+            } returns "pop-jwt"
+            val apiClient = mockk<BackendApiClient>(relaxed = true)
+            coEvery { apiClient.requestWIAChallenge() } returns buildJsonObject { put("challenge", "chal-1") }
+            val wiaJwt = fakeJwtWithExp(System.currentTimeMillis() / 1000 + 3600)
+            val nativeAttestationSlot = slot<JsonObject>()
+            coEvery {
+                apiClient.generateWIA(pop = any(), challenge = "chal-1", clientId = any(), nativeAttestation = capture(nativeAttestationSlot))
+            } returns wiaJwt
+            val provider = object : NativeAttestationProvider {
+                override val isAvailable = true
+                override suspend fun generateEvidence(challenge: String, keyId: String) = NativeAttestationEvidence(
+                    type = "google_play_integrity",
+                    token = "integrity-token-abc",
+                    keyId = keyId,
+                    challenge = challenge,
+                )
+            }
+
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+                "engineSession" to engine,
+                "sessionStore" to sessionStore,
+                "keystore" to keystore,
+                "apiClient" to apiClient,
+                "config" to WalletConfig(
+                    backendUrl = "https://wallet.example.com",
+                    redirectUri = "siros-sample://callback",
+                    nativeAttestationProvider = provider,
+                ),
+                "json" to Json { ignoreUnknownKeys = true },
+                "httpClient" to OkHttpClient(),
+            )
+            val issuerUrl = server.url("/").toString().trimEnd('/')
+            val offerJson = """{"credential_issuer":"$issuerUrl","credential_configuration_ids":["org.iso.18013.5.1.mDL"]}"""
+
+            wallet.startIssuance(offerJson)
+            advanceUntilIdle()
+
+            val nativeAttestation = nativeAttestationSlot.captured
+            assertEquals("google_play_integrity", nativeAttestation["type"]?.jsonPrimitive?.content)
+            assertEquals("integrity-token-abc", nativeAttestation["token"]?.jsonPrimitive?.content)
+            assertEquals("instance-key-1", nativeAttestation["key_id"]?.jsonPrimitive?.content)
+            assertEquals("chal-1", nativeAttestation["challenge"]?.jsonPrimitive?.content)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    /**
+     * A native-attestation failure (device doesn't support it, Play Services
+     * missing, etc.) must degrade to a plain backend-attested WIA, not abort
+     * issuance entirely - this is the same best-effort contract as every
+     * other step of ensureWalletInstanceAttestation().
+     */
+    @Test
+    fun startIssuance_omitsNativeAttestation_whenProviderThrows() = runTest(dispatcher) {
+        val server = MockWebServer()
+        server.start()
+        try {
+            server.enqueue(MockResponse().setBody(issuerMetadataJson(server, "org.iso.18013.5.1.mDL")))
+            val engine = mockk<WalletEngineSession>(relaxed = true)
+            val sessionStore = mockk<SessionStore>(relaxed = true)
+            every { sessionStore.instanceKeyId } returns "instance-key-1"
+            val keystore = mockk<KeystoreManager>(relaxed = true)
+            coEvery {
+                keystore.generateKeyProof(keyId = any(), typ = any(), issuer = any(), audience = any(), extraClaims = any())
+            } returns "pop-jwt"
+            val apiClient = mockk<BackendApiClient>(relaxed = true)
+            coEvery { apiClient.requestWIAChallenge() } returns buildJsonObject { put("challenge", "chal-1") }
+            val wiaJwt = fakeJwtWithExp(System.currentTimeMillis() / 1000 + 3600)
+            coEvery {
+                apiClient.generateWIA(pop = any(), challenge = "chal-1", clientId = any(), nativeAttestation = null)
+            } returns wiaJwt
+            val throwingProvider = object : NativeAttestationProvider {
+                override val isAvailable = true
+                override suspend fun generateEvidence(challenge: String, keyId: String): NativeAttestationEvidence {
+                    throw IllegalStateException("device attestation unavailable")
+                }
+            }
+
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+                "engineSession" to engine,
+                "sessionStore" to sessionStore,
+                "keystore" to keystore,
+                "apiClient" to apiClient,
+                "config" to WalletConfig(
+                    backendUrl = "https://wallet.example.com",
+                    redirectUri = "siros-sample://callback",
+                    nativeAttestationProvider = throwingProvider,
+                ),
                 "json" to Json { ignoreUnknownKeys = true },
                 "httpClient" to OkHttpClient(),
             )

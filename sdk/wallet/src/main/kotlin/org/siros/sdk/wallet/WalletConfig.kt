@@ -7,6 +7,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import org.siros.sdk.credentials.CredentialStore
 import org.siros.sdk.keystore.KeystoreManager
+import org.siros.sdk.keystore.NativeAttestationProvider
 
 /**
  * Configuration for [SirosWallet].
@@ -32,6 +33,16 @@ import org.siros.sdk.keystore.KeystoreManager
  * @param urlRewriter Optional function to rewrite URLs before they are opened
  *        in the browser (e.g. to map Docker-internal hostnames to external addresses).
  *        Applied to authorization URLs in [WalletEventListener.onAuthorizationRequired].
+ * @param nativeAttestationProvider Optional platform attestation provider (e.g.
+ *        [org.siros.sdk.keystore.PlayIntegrityProvider]) used to attach real device
+ *        attestation evidence to Wallet Instance Attestation requests, so the backend's
+ *        Key Attestation trust gate can lift its software-key clamp for genuinely
+ *        Tier-1-attested instances. `SirosWallet` has no `Context` of its own (this
+ *        is a plain Kotlin class, not Android-aware), so - unlike [keystore] - this
+ *        can't be lazily constructed internally from a bare config value: the host
+ *        app must construct it (it has the `Context`/`Activity` a provider like
+ *        `PlayIntegrityProvider` needs) and inject the ready instance here. `null`
+ *        (default) omits `native_attestation` entirely, matching today's behavior.
  */
 data class WalletConfig(
     val backendUrl: String,
@@ -43,6 +54,7 @@ data class WalletConfig(
     val urlRewriter: ((String) -> String)? = null,
     val requireUserAuth: Boolean = true,
     val keystore: KeystoreManager? = null,
+    val nativeAttestationProvider: NativeAttestationProvider? = null,
     /** Engine WebSocket URL. Defaults to backendUrl with port replaced by 8082. */
     val engineUrl: String? = null,
     /**
