@@ -18,8 +18,9 @@ Requires:
     pip install bleak cbor2 cryptography
 
 Usage:
-    1. Open the SIROS sample app -> Settings -> "Proximity Engagement
-       (Interop Test)". It shows a QR code and starts advertising over BLE.
+    1. Open the SIROS sample app and tap the contactless icon in the header
+       (left of the QR icon) to open "Proximity Engagement". It shows a QR
+       code and starts advertising over BLE.
     2. Get the `mdoc:...` URI encoded in that QR code onto this machine, e.g.
        by scanning it with a phone's camera app and AirDropping/messaging
        the text to yourself, or decoding a screenshot with zbarimg:
@@ -61,10 +62,9 @@ READER_IDENTIFIER = bytes(8)
 MDOC_IDENTIFIER = bytes(7) + b"\x01"
 
 
-def parse_device_engagement(mdoc_uri: str) -> tuple[dict, ec.EllipticCurvePublicKey, uuid.UUID]:
-    """Decode a `mdoc:` URI into (raw DeviceEngagement CBOR bytes as a dict
-    for inspection, EDeviceKey.Pub, peripheralServerModeUuid) - mirrors
-    DeviceEngagement.kt's own structure exactly."""
+def parse_device_engagement(mdoc_uri: str) -> tuple[bytes, ec.EllipticCurvePublicKey, uuid.UUID]:
+    """Decode a `mdoc:` URI into (raw DeviceEngagement CBOR bytes, EDeviceKey.Pub,
+    peripheralServerModeUuid) - mirrors DeviceEngagement.kt's own structure exactly."""
     if not mdoc_uri.startswith("mdoc:"):
         raise ValueError("expected a URI starting with 'mdoc:'")
     encoded = mdoc_uri.removeprefix("mdoc:")
@@ -183,7 +183,7 @@ async def run(args: argparse.Namespace) -> None:
 
     print(f"Scanning for service {peripheral_uuid} ...")
     device = await BleakScanner.find_device_by_filter(
-        lambda d, adv: str(peripheral_uuid).lower() in [str(u).lower() for u in adv.service_uuids],
+        lambda d, adv: str(peripheral_uuid).lower() in [str(u).lower() for u in (adv.service_uuids or [])],
         timeout=args.scan_timeout,
     )
     if device is None:
@@ -192,7 +192,7 @@ async def run(args: argparse.Namespace) -> None:
     print(f"Found {device.address}, connecting...")
 
     reassembler = Reassembler()
-    response_future: asyncio.Future[bytes] = asyncio.get_event_loop().create_future()
+    response_future: asyncio.Future[bytes] = asyncio.get_running_loop().create_future()
 
     def on_server2client(_char, data: bytearray) -> None:
         message = reassembler.feed(bytes(data))

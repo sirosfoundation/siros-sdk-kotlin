@@ -1048,7 +1048,7 @@ class SirosWallet private constructor(
         disclosedClaims: List<String>?,
         sessionTranscriptBytes: ByteArray,
     ): ByteArray {
-        val credential = credentialStore.getAll().firstOrNull { it.id == credentialId }
+        val credential = credentialStore.getById(credentialId)
             ?: throw IllegalArgumentException("Credential not found: $credentialId")
         return keystore.signMdocPresentationForProximity(
             credentialBytes = CredentialUtils.decodeMdocRawBytes(credential),

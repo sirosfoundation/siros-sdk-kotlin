@@ -87,6 +87,9 @@ object BleMessageChunker {
         /** Feed one received chunk (including its prefix byte). Returns the complete message once the last part arrives, null otherwise. */
         fun feed(chunk: ByteArray): ByteArray? {
             require(chunk.isNotEmpty()) { "chunk must include its continuation-byte prefix" }
+            require(chunk[0] == 0x00.toByte() || chunk[0] == 0x01.toByte()) {
+                "chunk prefix must be 0x00 (last) or 0x01 (more coming), was ${chunk[0]}"
+            }
             val isLast = chunk[0] == 0x00.toByte()
             buffer.write(chunk, 1, chunk.size - 1)
             if (!isLast) return null

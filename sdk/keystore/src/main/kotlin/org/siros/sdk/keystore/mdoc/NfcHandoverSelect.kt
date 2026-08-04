@@ -166,17 +166,29 @@ object NfcHandoverSelect {
         messageBegin: Boolean,
         messageEnd: Boolean,
     ): ByteArray {
-        require(payload.size < 256) { "NDEF short record payload must be < 256 bytes" }
+        // NDEF short records (SR) only encode a 1-byte payload length, capping
+        // them at 255 bytes - a real DeviceEngagement payload fits comfortably
+        // today, but isn't guaranteed to forever (e.g. more retrieval methods
+        // or a larger key encoding). Fall back to a normal (non-SR) record
+        // with a 4-byte length instead of crashing static handover outright.
+        val isShortRecord = payload.size < 256
         var header = tnf
         if (messageBegin) header = header or NDEF_MB
         if (messageEnd) header = header or NDEF_ME
-        header = header or NDEF_SR
+        if (isShortRecord) header = header or NDEF_SR
         if (id != null) header = header or NDEF_IL
 
         return ByteArrayOutputStream().apply {
             write(header)
             write(type.size)
-            write(payload.size)
+            if (isShortRecord) {
+                write(payload.size)
+            } else {
+                write((payload.size ushr 24) and 0xFF)
+                write((payload.size ushr 16) and 0xFF)
+                write((payload.size ushr 8) and 0xFF)
+                write(payload.size and 0xFF)
+            }
             if (id != null) write(id.size)
             write(type)
             if (id != null) write(id)

@@ -81,6 +81,14 @@ class BlePeripheralServer(
     private var negotiatedMtu = DEFAULT_MTU
     private var deviceCipher: ProximitySessionCrypto.SessionCipher? = null
     private var server2ClientCharacteristic: BluetoothGattCharacteristic? = null
+    private var completed = false
+
+    /** Reports the presentation's outcome exactly once - a signed response being sent and the reader's STATE_END write both resolve to "complete" and would otherwise double-report. */
+    private fun completeOnce(success: Boolean) {
+        if (completed) return
+        completed = true
+        onComplete(success)
+    }
 
     @SuppressLint("MissingPermission")
     fun start() {
@@ -88,7 +96,7 @@ class BlePeripheralServer(
         val adapter = bluetoothManager.adapter
         if (adapter == null || !adapter.isEnabled) {
             Timber.w("BlePeripheralServer: Bluetooth is not available/enabled")
-            onComplete(false)
+            completeOnce(false)
             return
         }
         // §11.1.3.1: "The Peripheral device shall broadcast the service with
@@ -100,6 +108,11 @@ class BlePeripheralServer(
             ?: throw IllegalStateException("engagement does not offer peripheral server mode")
 
         val server = bluetoothManager.openGattServer(context, gattServerCallback)
+        if (server == null) {
+            Timber.w("BlePeripheralServer: openGattServer returned null (Bluetooth stack unavailable)")
+            completeOnce(false)
+            return
+        }
         gattServer = server
 
         val state = BluetoothGattCharacteristic(
@@ -129,7 +142,8 @@ class BlePeripheralServer(
         val advertiser = adapter.bluetoothLeAdvertiser
         if (advertiser == null) {
             Timber.w("BlePeripheralServer: this device cannot advertise BLE (no BluetoothLeAdvertiser)")
-            onComplete(false)
+            stop()
+            completeOnce(false)
             return
         }
         val settings = AdvertiseSettings.Builder()
@@ -162,7 +176,8 @@ class BlePeripheralServer(
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartFailure(errorCode: Int) {
             Timber.w("BlePeripheralServer: BLE advertise failed to start (error $errorCode)")
-            onComplete(false)
+            stop()
+            completeOnce(false)
         }
     }
 
@@ -210,6 +225,11 @@ class BlePeripheralServer(
             offset: Int,
             value: ByteArray,
         ) {
+            // Some GATT clients read the CCCD back afterwards to confirm
+            // notifications were actually enabled - store the value rather
+            // than just acking the write.
+            @Suppress("DEPRECATION")
+            descriptor.value = value
             if (responseNeeded) {
                 gattServer?.sendResponse(device, requestId, android.bluetooth.BluetoothGatt.GATT_SUCCESS, offset, null)
             }
@@ -221,7 +241,7 @@ class BlePeripheralServer(
         when (value[0]) {
             STATE_END -> {
                 stop()
-                onComplete(deviceCipher != null)
+                completeOnce(deviceCipher != null)
             }
         }
     }
@@ -237,7 +257,7 @@ class BlePeripheralServer(
                 }
             } catch (e: Exception) {
                 Timber.e(e, "Proximity presentation failed")
-                onComplete(false)
+                completeOnce(false)
             }
         }
     }
@@ -247,20 +267,52 @@ class BlePeripheralServer(
         onStep("parsing_request")
         val established = ProximitySessionMessages.parseSessionEstablishment(message)
         val eReaderPublicKey = ProximitySessionCrypto.parseEReaderKeyPublic(established.eReaderKeyBytes)
-        val sessionTranscript = ProximitySessionTranscript.build(
+
+        // This engagement is offered simultaneously via both QR and NFC
+        // static handover (see ProximityEngagementScreen) - the Handover
+        // field of the SessionTranscript differs by which one the reader
+        // actually used, and BLE (this class) has no way to know which. Try
+        // the QR transcript (Handover = null) first since it's the common
+        // case; if AEAD decryption fails, retry with the NFC transcript
+        // (Handover = [HandoverSelect, null]) before giving up.
+        val candidateHandovers = listOfNotNull(null, ActiveEngagement.handoverSelectBytes)
+        var requestBytes: ByteArray? = null
+        var sessionTranscript: ByteArray = ProximitySessionTranscript.build(
             deviceEngagementBytes = engagement.deviceEngagementBytes,
             eReaderKeyBytes = established.eReaderKeyBytes,
             handoverSelectMessageBytes = null,
         )
-        val keys = ProximitySessionCrypto.deriveSessionKeys(engagement.privateKey, eReaderPublicKey, sessionTranscript)
-        val requestBytes = ProximitySessionCrypto.readerCipher(keys.skReader).decrypt(established.encryptedData)
+        var keys: ProximitySessionCrypto.SessionKeys? = null
+        for (handoverSelectMessageBytes in candidateHandovers) {
+            val transcript = ProximitySessionTranscript.build(
+                deviceEngagementBytes = engagement.deviceEngagementBytes,
+                eReaderKeyBytes = established.eReaderKeyBytes,
+                handoverSelectMessageBytes = handoverSelectMessageBytes,
+            )
+            val candidateKeys = ProximitySessionCrypto.deriveSessionKeys(engagement.privateKey, eReaderPublicKey, transcript)
+            requestBytes = try {
+                ProximitySessionCrypto.readerCipher(candidateKeys.skReader).decrypt(established.encryptedData)
+            } catch (e: javax.crypto.AEADBadTagException) {
+                null
+            }
+            if (requestBytes != null) {
+                sessionTranscript = transcript
+                keys = candidateKeys
+                break
+            }
+        }
+        if (requestBytes == null || keys == null) {
+            Timber.w("BlePeripheralServer: session key derivation failed for both QR and NFC handover transcripts")
+            completeOnce(false)
+            return
+        }
         deviceCipher = ProximitySessionCrypto.deviceCipher(keys.skDevice)
 
         val docRequests = DeviceRequestParser.parse(requestBytes)
         val docRequest = docRequests.firstOrNull()
         if (docRequest == null) {
             Timber.w("BlePeripheralServer: request contained no documents")
-            onComplete(false)
+            completeOnce(false)
             return
         }
 
@@ -270,7 +322,7 @@ class BlePeripheralServer(
         }
         if (matches.isEmpty()) {
             Timber.w("BlePeripheralServer: no stored credential matches requested docType '${docRequest.docType}'")
-            onComplete(false)
+            completeOnce(false)
             return
         }
         val families = groupIntoFamilies(matches)
@@ -279,7 +331,7 @@ class BlePeripheralServer(
         val family = when (consent) {
             is ProximityConsentResult.Approved -> consent.family
             ProximityConsentResult.Denied -> {
-                onComplete(false)
+                completeOnce(false)
                 return
             }
         }
@@ -295,7 +347,7 @@ class BlePeripheralServer(
         val encrypted = deviceCipher!!.encrypt(response)
         val sessionData = ProximitySessionMessages.buildSessionData(encryptedData = encrypted)
         sendNotification(sessionData)
-        onComplete(true)
+        completeOnce(true)
     }
 
     @SuppressLint("MissingPermission")

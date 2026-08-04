@@ -69,6 +69,7 @@ class MdocHostApduService : HostApduService() {
     }
 
     private fun handleSelect(apdu: ByteArray): ByteArray {
+        if (apdu.size < 5) return SW_INS_NOT_SUPPORTED
         val p1 = apdu[2]
         val lc = apdu[4].toInt() and 0xFF
         if (apdu.size < 5 + lc) return SW_INS_NOT_SUPPORTED

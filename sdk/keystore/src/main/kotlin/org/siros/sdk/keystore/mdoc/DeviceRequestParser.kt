@@ -40,8 +40,10 @@ object DeviceRequestParser {
                 ?: throw IllegalArgumentException("DocRequest missing itemsRequest")
             val itemsRequest = CBORObject.DecodeFromBytes(itemsRequestTagged.UntagOne().GetByteString())
 
-            val docType = itemsRequest[CBORObject.FromObject("docType")].AsString()
+            val docType = (itemsRequest[CBORObject.FromObject("docType")]
+                ?: throw IllegalArgumentException("ItemsRequest missing docType")).AsString()
             val nameSpacesObj = itemsRequest[CBORObject.FromObject("nameSpaces")]
+                ?: throw IllegalArgumentException("ItemsRequest missing nameSpaces")
             val requestedItems = linkedMapOf<String, List<String>>()
             for (nsKey in nameSpacesObj.keys) {
                 val elementsObj = nameSpacesObj[nsKey]
