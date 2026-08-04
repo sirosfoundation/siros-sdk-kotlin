@@ -153,18 +153,28 @@ fun ProximityEngagementScreen(
     val requestConsent: RequestProximityConsent = { docType, requestedClaims, matchingFamilies ->
         withContext(Dispatchers.Main.immediate) {
             suspendCancellableCoroutine { continuation ->
-                pendingConsent = PendingConsent(
+                val consent = PendingConsent(
                     docType = docType,
                     requestedClaims = requestedClaims,
                     matchingFamilies = matchingFamilies,
                     respond = { chosen ->
                         pendingConsent = null
-                        continuation.resume(
-                            if (chosen != null) ProximityConsentResult.Approved(chosen) else ProximityConsentResult.Denied,
-                            onCancellation = null,
-                        )
+                        if (continuation.isActive) {
+                            continuation.resume(
+                                if (chosen != null) ProximityConsentResult.Approved(chosen) else ProximityConsentResult.Denied,
+                                onCancellation = null,
+                            )
+                        }
                     },
                 )
+                pendingConsent = consent
+                // If this suspended call is itself cancelled (e.g. the BLE
+                // role's coroutine scope is torn down by stop() while the
+                // user hasn't answered yet), clear the dialog rather than
+                // leaving a stale request on screen with no way to resolve it.
+                continuation.invokeOnCancellation {
+                    if (pendingConsent === consent) pendingConsent = null
+                }
             }
         }
     }

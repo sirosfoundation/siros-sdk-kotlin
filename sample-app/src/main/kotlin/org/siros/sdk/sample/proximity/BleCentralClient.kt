@@ -87,6 +87,7 @@ class BleCentralClient(
     private var deviceCipher: ProximitySessionCrypto.SessionCipher? = null
     private var gatt: BluetoothGatt? = null
     private var client2ServerCharacteristic: BluetoothGattCharacteristic? = null
+    private var stateCharacteristic: BluetoothGattCharacteristic? = null
     private var scanning = false
 
     @SuppressLint("MissingPermission")
@@ -169,9 +170,10 @@ class BleCentralClient(
                 return
             }
             client2ServerCharacteristic = service.getCharacteristic(CLIENT2SERVER_UUID)
+            stateCharacteristic = service.getCharacteristic(STATE_UUID)
             val identChar = service.getCharacteristic(IDENT_UUID)
             if (client2ServerCharacteristic == null || identChar == null ||
-                service.getCharacteristic(STATE_UUID) == null || service.getCharacteristic(SERVER2CLIENT_UUID) == null
+                stateCharacteristic == null || service.getCharacteristic(SERVER2CLIENT_UUID) == null
             ) {
                 Timber.w("BleCentralClient: reader's mdoc reader service is missing required characteristics")
                 onComplete(false)
@@ -243,14 +245,15 @@ class BleCentralClient(
         gatt.writeDescriptor(cccd)
     }
 
+    /** @return false if [characteristic] is null or the write couldn't be initiated/queued. */
     @Suppress("DEPRECATION")
     @SuppressLint("MissingPermission")
-    private fun writeNoResponse(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic?, value: ByteArray) {
-        if (characteristic == null) return
+    private fun writeNoResponse(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic?, value: ByteArray): Boolean {
+        if (characteristic == null) return false
         // Same API-33-vs-minSdk-28 reasoning as enableNotifications above.
         characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
         characteristic.value = value
-        gatt.writeCharacteristic(characteristic)
+        return gatt.writeCharacteristic(characteristic)
     }
 
     @SuppressLint("MissingPermission")
@@ -341,20 +344,31 @@ class BleCentralClient(
         val response = signPresentation(credential.id, docRequest.disclosedClaims(), sessionTranscript)
         val encrypted = deviceCipher!!.encrypt(response)
         val sessionData = ProximitySessionMessages.buildSessionData(encryptedData = encrypted)
-        sendData(sessionData)
+        if (!sendData(sessionData)) {
+            Timber.w("BleCentralClient: a write failed to queue - reader will not receive the full response")
+            onComplete(false)
+            return
+        }
         onComplete(true)
     }
 
-    private fun sendData(message: ByteArray) {
-        val characteristic = client2ServerCharacteristic ?: return
-        val currentGatt = gatt ?: return
+    /** @return false if any chunk's write failed to queue - the reader will not have received a complete response. */
+    private fun sendData(message: ByteArray): Boolean {
+        val characteristic = client2ServerCharacteristic ?: return false
+        val currentGatt = gatt ?: return false
         // Floor at the default MTU-3 (20 bytes): BleMessageChunker.chunk
         // requires maxChunkSize > 1, and an unexpected/invalid negotiated
         // MTU should never be allowed to produce a smaller (or negative)
         // value that would crash chunking outright.
         val maxChunkSize = minOf(negotiatedMtu - 3, 512).coerceAtLeast(DEFAULT_MTU - 3)
         for (chunk in BleMessageChunker.chunk(message, maxChunkSize)) {
-            writeNoResponse(currentGatt, characteristic, chunk)
+            if (!writeNoResponse(currentGatt, characteristic, chunk)) return false
         }
+        // §11.1.3.1: signal the end of this side's transaction once the
+        // response has been fully written - without this, a reader
+        // following the state machine strictly may keep waiting/hold the
+        // transaction open unnecessarily.
+        writeNoResponse(currentGatt, stateCharacteristic, byteArrayOf(STATE_END))
+        return true
     }
 }

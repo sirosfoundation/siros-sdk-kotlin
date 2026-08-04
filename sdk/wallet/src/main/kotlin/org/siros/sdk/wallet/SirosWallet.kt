@@ -1060,7 +1060,7 @@ class SirosWallet private constructor(
         sessionTranscriptBytes: ByteArray,
     ): ByteArray {
         val credential = credentialStore.getById(credentialId)
-            ?: throw IllegalArgumentException("Credential not found: $credentialId")
+            ?: throw WalletException("Credential not found: $credentialId")
         val allInstances = credentialStore.getAll().filter { it.batchId == credential.batchId }
         if (CredentialUtils.eligibleInstances(allInstances, credentialConsumptionPolicy, presentationHistory).none { it.id == credentialId }) {
             throw WalletException("No eligible copies of this credential remain - renew it to get more")

@@ -372,16 +372,21 @@ class BlePeripheralServer(
         val response = signPresentation(credential.id, docRequest.disclosedClaims(), sessionTranscript)
         val encrypted = deviceCipher!!.encrypt(response)
         val sessionData = ProximitySessionMessages.buildSessionData(encryptedData = encrypted)
-        sendNotification(sessionData)
+        if (!sendNotification(sessionData)) {
+            Timber.w("BlePeripheralServer: a notify failed to queue - reader will not receive the full response")
+            completeOnce(false)
+            return
+        }
         responseSent = true
         completeOnce(true)
     }
 
+    /** @return false if any chunk's notify failed to queue - the reader will not have received a complete response. */
     @SuppressLint("MissingPermission")
-    private fun sendNotification(message: ByteArray) {
-        val characteristic = server2ClientCharacteristic ?: return
-        val device = connectedDevice ?: return
-        val server = gattServer ?: return
+    private fun sendNotification(message: ByteArray): Boolean {
+        val characteristic = server2ClientCharacteristic ?: return false
+        val device = connectedDevice ?: return false
+        val server = gattServer ?: return false
         // §11.1.3.4: chunk size must respect BOTH limits - MTU-3 AND the
         // Bluetooth Core Specification's absolute 512-byte max attribute
         // value length. A negotiated MTU above 515 (observed: BlueZ
@@ -397,7 +402,10 @@ class BlePeripheralServer(
         val maxChunkSize = minOf(negotiatedMtu - 3, 512).coerceAtLeast(DEFAULT_MTU - 3)
         for (chunk in BleMessageChunker.chunk(message, maxChunkSize)) {
             characteristic.value = chunk
-            server.notifyCharacteristicChanged(device, characteristic, false)
+            if (!server.notifyCharacteristicChanged(device, characteristic, false)) {
+                return false
+            }
         }
+        return true
     }
 }
