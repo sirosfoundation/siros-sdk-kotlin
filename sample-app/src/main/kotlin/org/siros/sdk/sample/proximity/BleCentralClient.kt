@@ -258,13 +258,46 @@ class BleCentralClient(
         onStep("parsing_request")
         val established = ProximitySessionMessages.parseSessionEstablishment(message)
         val eReaderPublicKey = ProximitySessionCrypto.parseEReaderKeyPublic(established.eReaderKeyBytes)
-        val sessionTranscript = ProximitySessionTranscript.build(
+
+        // See BlePeripheralServer's matching comment: this engagement is
+        // offered via both QR and NFC static handover simultaneously, and
+        // BLE alone can't tell which one a real reader used - try the QR
+        // transcript (Handover = null) first, then the NFC transcript
+        // before giving up.
+        val candidateHandovers: List<ByteArray?> = buildList {
+            add(null)
+            ActiveEngagement.handoverSelectBytes?.let { add(it) }
+        }
+        var requestBytes: ByteArray? = null
+        var sessionTranscript: ByteArray = ProximitySessionTranscript.build(
             deviceEngagementBytes = engagement.deviceEngagementBytes,
             eReaderKeyBytes = established.eReaderKeyBytes,
             handoverSelectMessageBytes = null,
         )
-        val keys = ProximitySessionCrypto.deriveSessionKeys(engagement.privateKey, eReaderPublicKey, sessionTranscript)
-        val requestBytes = ProximitySessionCrypto.readerCipher(keys.skReader).decrypt(established.encryptedData)
+        var keys: ProximitySessionCrypto.SessionKeys? = null
+        for (handoverSelectMessageBytes in candidateHandovers) {
+            val transcript = ProximitySessionTranscript.build(
+                deviceEngagementBytes = engagement.deviceEngagementBytes,
+                eReaderKeyBytes = established.eReaderKeyBytes,
+                handoverSelectMessageBytes = handoverSelectMessageBytes,
+            )
+            val candidateKeys = ProximitySessionCrypto.deriveSessionKeys(engagement.privateKey, eReaderPublicKey, transcript)
+            requestBytes = try {
+                ProximitySessionCrypto.readerCipher(candidateKeys.skReader).decrypt(established.encryptedData)
+            } catch (e: javax.crypto.AEADBadTagException) {
+                null
+            }
+            if (requestBytes != null) {
+                sessionTranscript = transcript
+                keys = candidateKeys
+                break
+            }
+        }
+        if (requestBytes == null || keys == null) {
+            Timber.w("BleCentralClient: session key derivation failed for both QR and NFC handover transcripts")
+            onComplete(false)
+            return
+        }
         deviceCipher = ProximitySessionCrypto.deviceCipher(keys.skDevice)
 
         val docRequests = DeviceRequestParser.parse(requestBytes)

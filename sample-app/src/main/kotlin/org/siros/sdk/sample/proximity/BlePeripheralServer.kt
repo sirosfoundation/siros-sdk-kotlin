@@ -90,6 +90,12 @@ class BlePeripheralServer(
     private var deviceCipher: ProximitySessionCrypto.SessionCipher? = null
     private var server2ClientCharacteristic: BluetoothGattCharacteristic? = null
     private var completed = false
+    // Distinct from deviceCipher != null: the cipher is created right after
+    // session-key derivation, well before a response is actually signed and
+    // notified back - if the reader sends STATE_END early (e.g. mid-consent,
+    // or after a timeout), deviceCipher != null would already be true and
+    // incorrectly report success. Only set once sendNotification actually runs.
+    private var responseSent = false
 
     /** Reports the presentation's outcome exactly once - a signed response being sent and the reader's STATE_END write both resolve to "complete" and would otherwise double-report. */
     private fun completeOnce(success: Boolean) {
@@ -249,7 +255,7 @@ class BlePeripheralServer(
         when (value[0]) {
             STATE_END -> {
                 stop()
-                completeOnce(deviceCipher != null)
+                completeOnce(responseSent)
             }
         }
     }
@@ -367,6 +373,7 @@ class BlePeripheralServer(
         val encrypted = deviceCipher!!.encrypt(response)
         val sessionData = ProximitySessionMessages.buildSessionData(encryptedData = encrypted)
         sendNotification(sessionData)
+        responseSent = true
         completeOnce(true)
     }
 

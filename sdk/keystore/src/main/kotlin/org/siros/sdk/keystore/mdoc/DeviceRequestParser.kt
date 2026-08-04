@@ -2,6 +2,7 @@
 package org.siros.sdk.keystore.mdoc
 
 import com.upokecenter.cbor.CBORObject
+import com.upokecenter.cbor.CBORType
 
 /**
  * Parses an ISO 18013-5 §8.3.2.1.2.1/§8.3.2.1.2.2 `DeviceRequest`, decrypted
@@ -33,11 +34,20 @@ object DeviceRequestParser {
         val request = CBORObject.DecodeFromBytes(deviceRequestBytes)
         val docRequestsArray = request[CBORObject.FromObject("docRequests")]
             ?: throw IllegalArgumentException("DeviceRequest missing docRequests")
+        if (docRequestsArray.type != CBORType.Array) {
+            throw IllegalArgumentException("DeviceRequest.docRequests must be an array, was ${docRequestsArray.type}")
+        }
 
         return (0 until docRequestsArray.size()).map { i ->
             val docRequest = docRequestsArray[i]
             val itemsRequestTagged = docRequest[CBORObject.FromObject("itemsRequest")]
                 ?: throw IllegalArgumentException("DocRequest missing itemsRequest")
+            // §8.3.2.1.2.1: ItemsRequestBytes = #6.24(bstr .cbor ItemsRequest) -
+            // a reader sending an untagged or non-byte-string value should fail
+            // here with a clear message, not inside UntagOne()/GetByteString().
+            if (!itemsRequestTagged.HasOneTag(24) || itemsRequestTagged.type != CBORType.ByteString) {
+                throw IllegalArgumentException("DocRequest.itemsRequest must be tag-24-wrapped (#6.24 ItemsRequest)")
+            }
             val itemsRequest = CBORObject.DecodeFromBytes(itemsRequestTagged.UntagOne().GetByteString())
 
             val docType = (itemsRequest[CBORObject.FromObject("docType")]

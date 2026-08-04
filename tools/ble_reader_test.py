@@ -140,6 +140,8 @@ def chunk_message(message: bytes, max_chunk_size: int) -> list[bytes]:
     version of both implementations added the prefix ON TOP of
     max_chunk_size payload bytes, silently producing chunks one byte over
     the limit)."""
+    if max_chunk_size <= 1:
+        raise ValueError(f"max_chunk_size must allow at least 1 payload byte alongside the prefix, was {max_chunk_size}")
     payload_size = max_chunk_size - 1
     if not message:
         return [b"\x00"]
