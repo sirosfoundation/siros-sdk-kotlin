@@ -71,7 +71,6 @@ class BlePeripheralServer(
     private val onComplete: (success: Boolean) -> Unit,
 ) {
     companion object {
-        private val SERVICE_UUID = UUID.fromString("00000000-A123-48CE-896B-4C76973373E6")
         private val STATE_UUID = UUID.fromString("00000001-A123-48CE-896B-4C76973373E6")
         private val CLIENT2SERVER_UUID = UUID.fromString("00000002-A123-48CE-896B-4C76973373E6")
         private val SERVER2CLIENT_UUID = UUID.fromString("00000003-A123-48CE-896B-4C76973373E6")
@@ -101,6 +100,13 @@ class BlePeripheralServer(
             onComplete(false)
             return
         }
+        // §11.1.3.1: "The Peripheral device shall broadcast the service with
+        // the UUID as received or sent during device engagement" - the GATT
+        // service itself must be identified by this per-transaction UUID (not
+        // a fixed constant), since that's what the reader scans for and then
+        // does GATT service discovery against after connecting.
+        val serviceUuid = engagement.peripheralServerModeUuid
+            ?: throw IllegalStateException("engagement does not offer peripheral server mode")
 
         val server = bluetoothManager.openGattServer(context, gattServerCallback)
         gattServer = server
@@ -122,7 +128,7 @@ class BlePeripheralServer(
         ).apply { addDescriptor(cccd()) }
         server2ClientCharacteristic = server2Client
 
-        val service = BluetoothGattService(SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY).apply {
+        val service = BluetoothGattService(serviceUuid, BluetoothGattService.SERVICE_TYPE_PRIMARY).apply {
             addCharacteristic(state)
             addCharacteristic(client2Server)
             addCharacteristic(server2Client)
@@ -140,8 +146,6 @@ class BlePeripheralServer(
             .setConnectable(true)
             .setTimeout(0)
             .build()
-        val serviceUuid = engagement.peripheralServerModeUuid
-            ?: throw IllegalStateException("engagement does not offer peripheral server mode")
         val advertiseData = AdvertiseData.Builder()
             .addServiceUuid(ParcelUuid(serviceUuid))
             .setIncludeDeviceName(false)
