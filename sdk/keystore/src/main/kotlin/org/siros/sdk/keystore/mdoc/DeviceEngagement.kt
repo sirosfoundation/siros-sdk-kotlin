@@ -54,6 +54,14 @@ object DeviceEngagement {
         /** The ephemeral `EDeviceKey` key pair generated for this engagement. */
         val publicKey: ECPublicKey,
         val privateKey: ECPrivateKey,
+        /**
+         * `EDeviceKeyBytes` (`#6.24(bstr .cbor EDeviceKey)`) exactly as
+         * embedded in [deviceEngagementBytes] - needed as the `Ident`
+         * characteristic's IKM (§11.1.3.1) when verifying a reader's
+         * identity in mdoc central client mode; kept as its own field
+         * rather than re-parsed from [deviceEngagementBytes] each time.
+         */
+        val eDeviceKeyBytes: ByteArray,
         /** Fresh UUID advertised for BLE peripheral-server-mode discovery, if that mode is offered. */
         val peripheralServerModeUuid: UUID?,
         /** Fresh UUID advertised for BLE central-client-mode discovery, if that mode is offered. */
@@ -97,10 +105,15 @@ object DeviceEngagement {
             mdocUri = mdocUri,
             publicKey = publicKey,
             privateKey = privateKey,
+            eDeviceKeyBytes = eDeviceKeyBytes(publicKey),
             peripheralServerModeUuid = peripheralUuid,
             centralClientModeUuid = centralUuid,
         )
     }
+
+    /** `EDeviceKeyBytes = #6.24(bstr .cbor EDeviceKey)`, per §9.1/§12.2.4. */
+    private fun eDeviceKeyBytes(publicKey: ECPublicKey): ByteArray =
+        CBORObject.FromObjectAndTag(coseKey(publicKey).EncodeToBytes(), 24).EncodeToBytes()
 
     /**
      * Encode the `DeviceEngagement` CBOR structure per §8.2.1.1:

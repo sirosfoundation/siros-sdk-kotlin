@@ -173,6 +173,7 @@ class NfcHandoverSelectTest {
                     mdocUri = "mdoc:",
                     publicKey = DeviceEngagement.create().publicKey,
                     privateKey = DeviceEngagement.create().privateKey,
+                    eDeviceKeyBytes = ByteArray(0),
                     peripheralServerModeUuid = null,
                     centralClientModeUuid = null,
                 ),

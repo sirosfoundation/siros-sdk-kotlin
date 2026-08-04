@@ -40,25 +40,13 @@ import java.util.UUID
  * session transcript, and notifies the encrypted `SessionData` response back
  * via `Server2Client`.
  *
- * "mdoc central client mode" (the mdoc as GATT client, scanning for and
- * connecting to a reader's advertised GATT server) is NOT implemented here -
- * see the proximity plan's Phase 3.2 scoping note; peripheral-server-mode
- * alone is a complete, spec-valid BLE data-retrieval option and was
- * prioritized to reach a testable state faster.
+ * Real hardware-verified end to end (see the proximity plan's Phase 3.1-3.3
+ * completion notes and `project_kotlin_sdk_ble_proximity_verified` memory) -
+ * a real Android device running this class completed a full presentation
+ * against `tools/ble_reader_test.py` on a Linux host's Bluetooth adapter.
  *
- * No consent UI yet: the first mdoc credential whose real docType (parsed
- * from its own MSO, not display metadata - see [CredentialUtils.parseMdocDocument])
- * matches the request is presented automatically, disclosing exactly the
- * requested element identifiers. This is a real, deliberate scope cut for
- * this first testable cut, not an oversight - see the plan's Phase 3.1-3.3
- * completion notes.
- *
- * UNVERIFIED ON REAL HARDWARE: this class has only been verified via
- * `assembleDebug` compiling successfully - `BluetoothGattServer`/
- * `BluetoothLeAdvertiser` cannot be exercised by JVM unit tests. Test with a
- * real Android device against a real mdoc reader (e.g.
- * `sirosfoundation/siros-verifier-app` or Google's `multipaz`) before
- * relying on this for Geneva 2026.
+ * Every matching credential is offered to the user via [requestConsent]
+ * before signing - no auto-selection.
  */
 class BlePeripheralServer(
     private val context: Context,
@@ -67,7 +55,10 @@ class BlePeripheralServer(
     private val getCredentials: suspend () -> List<StoredCredential>,
     /** Mirrors `SirosWallet.signMdocPresentationForProximity`. */
     private val signPresentation: suspend (credentialId: Long, disclosedClaims: List<String>?, sessionTranscriptBytes: ByteArray) -> ByteArray,
-    private val onLog: (String) -> Unit,
+    /** See [RequestProximityConsent]'s doc comment. */
+    private val requestConsent: RequestProximityConsent,
+    /** Reports a canonical step token (see `FlowProgress.kt`'s `PROXIMITY_STEPS`) for driving the same progress-bar UI the issuance/presentation flows use. */
+    private val onStep: (String) -> Unit,
     private val onComplete: (success: Boolean) -> Unit,
 ) {
     companion object {
@@ -96,7 +87,7 @@ class BlePeripheralServer(
         val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
         val adapter = bluetoothManager.adapter
         if (adapter == null || !adapter.isEnabled) {
-            onLog("Bluetooth is not available/enabled")
+            Timber.w("BlePeripheralServer: Bluetooth is not available/enabled")
             onComplete(false)
             return
         }
@@ -137,7 +128,7 @@ class BlePeripheralServer(
 
         val advertiser = adapter.bluetoothLeAdvertiser
         if (advertiser == null) {
-            onLog("This device cannot advertise BLE (no BluetoothLeAdvertiser)")
+            Timber.w("BlePeripheralServer: this device cannot advertise BLE (no BluetoothLeAdvertiser)")
             onComplete(false)
             return
         }
@@ -151,7 +142,7 @@ class BlePeripheralServer(
             .setIncludeDeviceName(false)
             .build()
         advertiser.startAdvertising(settings, advertiseData, advertiseCallback)
-        onLog("Advertising mdoc peripheral service as $serviceUuid")
+        onStep("waiting_for_reader")
     }
 
     @SuppressLint("MissingPermission")
@@ -170,7 +161,7 @@ class BlePeripheralServer(
 
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartFailure(errorCode: Int) {
-            onLog("BLE advertise failed to start (error $errorCode)")
+            Timber.w("BlePeripheralServer: BLE advertise failed to start (error $errorCode)")
             onComplete(false)
         }
     }
@@ -180,9 +171,8 @@ class BlePeripheralServer(
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
             if (newState == BluetoothGatt.STATE_CONNECTED) {
                 connectedDevice = device
-                onLog("Reader connected")
+                onStep("reader_connected")
             } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
-                onLog("Reader disconnected")
                 if (device == connectedDevice) connectedDevice = null
             }
         }
@@ -229,9 +219,7 @@ class BlePeripheralServer(
     private fun handleStateWrite(value: ByteArray) {
         if (value.isEmpty()) return
         when (value[0]) {
-            STATE_START -> onLog("Reader signaled Start")
             STATE_END -> {
-                onLog("Reader signaled End")
                 stop()
                 onComplete(deviceCipher != null)
             }
@@ -245,11 +233,10 @@ class BlePeripheralServer(
                 if (deviceCipher == null) {
                     handleSessionEstablishment(message)
                 } else {
-                    onLog("Additional SessionData messages after the first request are not yet handled")
+                    Timber.w("BlePeripheralServer: additional SessionData messages after the first request are not yet handled")
                 }
             } catch (e: Exception) {
                 Timber.e(e, "Proximity presentation failed")
-                onLog("Presentation failed: ${e.message}")
                 onComplete(false)
             }
         }
@@ -257,6 +244,7 @@ class BlePeripheralServer(
 
     @SuppressLint("MissingPermission")
     private suspend fun handleSessionEstablishment(message: ByteArray) {
+        onStep("parsing_request")
         val established = ProximitySessionMessages.parseSessionEstablishment(message)
         val eReaderPublicKey = ProximitySessionCrypto.parseEReaderKeyPublic(established.eReaderKeyBytes)
         val sessionTranscript = ProximitySessionTranscript.build(
@@ -271,24 +259,42 @@ class BlePeripheralServer(
         val docRequests = DeviceRequestParser.parse(requestBytes)
         val docRequest = docRequests.firstOrNull()
         if (docRequest == null) {
-            onLog("Request contained no documents")
-            return
-        }
-
-        val credential = getCredentials().firstOrNull { cred ->
-            cred.format == "mso_mdoc" && CredentialUtils.parseMdocDocument(cred)?.docType == docRequest.docType
-        }
-        if (credential == null) {
-            onLog("No stored credential matches requested docType '${docRequest.docType}'")
+            Timber.w("BlePeripheralServer: request contained no documents")
             onComplete(false)
             return
         }
 
+        onStep("match_credentials")
+        val matches = getCredentials().filter { cred ->
+            cred.format == "mso_mdoc" && CredentialUtils.parseMdocDocument(cred)?.docType == docRequest.docType
+        }
+        if (matches.isEmpty()) {
+            Timber.w("BlePeripheralServer: no stored credential matches requested docType '${docRequest.docType}'")
+            onComplete(false)
+            return
+        }
+        val families = groupIntoFamilies(matches)
+        onStep("awaiting_consent")
+        val consent = requestConsent(docRequest.docType, docRequest.disclosedClaims(), families)
+        val family = when (consent) {
+            is ProximityConsentResult.Approved -> consent.family
+            ProximityConsentResult.Denied -> {
+                onComplete(false)
+                return
+            }
+        }
+        // Pick a random instance from the batch rather than always the same
+        // one - each instance is bound to its own device key specifically so
+        // repeated presentations of "the same" credential can't be
+        // correlated by a verifier via a reused public key. Always picking
+        // instance 0 would quietly throw that unlinkability away.
+        val credential = family.instances.random()
+
+        onStep("submitting_response")
         val response = signPresentation(credential.id, docRequest.disclosedClaims(), sessionTranscript)
         val encrypted = deviceCipher!!.encrypt(response)
         val sessionData = ProximitySessionMessages.buildSessionData(encryptedData = encrypted)
         sendNotification(sessionData)
-        onLog("Sent DeviceResponse for ${docRequest.docType}")
         onComplete(true)
     }
 

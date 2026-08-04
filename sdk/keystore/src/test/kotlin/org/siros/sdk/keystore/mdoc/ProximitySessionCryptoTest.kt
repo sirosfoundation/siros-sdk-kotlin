@@ -177,4 +177,26 @@ class ProximitySessionCryptoTest {
         assertEquals(BigInteger(1, hex(eReaderKeyX)), parsedPub.w.affineX)
         assertEquals(BigInteger(1, hex(eReaderKeyY)), parsedPub.w.affineY)
     }
+
+    @Test
+    fun computeIdent_matchesRfc5869NoSaltSemantics_notATrulyEmptyHmacKey() {
+        // Independently cross-checked against Python's `cryptography` HKDF
+        // with salt=None (its own correct RFC 5869 "no salt" default) -
+        // confirms HKDF-Extract's "no salt" case is a 32-byte all-zero key,
+        // NOT a zero-length one (HMAC-SHA256 treats those as different keys).
+        val ikm = ByteArray(88) { it.toByte() }
+        val ident = ProximitySessionCrypto.computeIdent(ikm)
+
+        assertEquals(16, ident.size)
+        assertArrayEquals(hex("0cd459a9fa6e6f91cba134e5e8c3c3ee"), ident)
+    }
+
+    @Test
+    fun computeIdent_isDeterministic_andDiffersByInput() {
+        val ikm1 = ByteArray(32) { it.toByte() }
+        val ikm2 = ByteArray(32) { (it + 1).toByte() }
+
+        assertArrayEquals(ProximitySessionCrypto.computeIdent(ikm1), ProximitySessionCrypto.computeIdent(ikm1))
+        assertTrue(!ProximitySessionCrypto.computeIdent(ikm1).contentEquals(ProximitySessionCrypto.computeIdent(ikm2)))
+    }
 }

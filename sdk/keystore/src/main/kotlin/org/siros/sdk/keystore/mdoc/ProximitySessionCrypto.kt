@@ -113,6 +113,22 @@ object ProximitySessionCrypto {
         return KeyFactory.getInstance("EC").generatePublic(ECPublicKeySpec(point, params)) as ECPublicKey
     }
 
+    /**
+     * §11.1.3.1 `Ident` characteristic value: `HKDF-SHA256(IKM=EDeviceKeyBytes,
+     * salt=<none>, info="BLEIdent", L=16)`. In "mdoc central client mode",
+     * the mdoc reads this from the reader's GATT service and MUST terminate
+     * the connection if it doesn't match - it's the only defense against
+     * connecting to the wrong (or an impersonating) reader.
+     *
+     * RFC 5869 §2.2: when no salt is provided, HKDF-Extract uses a salt of
+     * `HashLen` zero bytes (32, for SHA-256) - NOT a zero-length byte array.
+     * `HMAC-SHA256` with a truly empty key is a different (and, on some JCE
+     * providers, outright rejected) computation from one with a 32-byte
+     * all-zero key.
+     */
+    fun computeIdent(eDeviceKeyBytes: ByteArray): ByteArray =
+        hkdfSha256(ikm = eDeviceKeyBytes, salt = ByteArray(32), info = "BLEIdent".toByteArray(Charsets.US_ASCII), length = 16)
+
     private fun p256Params(): ECParameterSpec {
         val params = AlgorithmParameters.getInstance("EC")
         params.init(ECGenParameterSpec("secp256r1"))

@@ -9,20 +9,33 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -36,27 +49,35 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.suspendCancellableCoroutine
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.keystore.mdoc.DeviceEngagement
 import org.siros.sdk.keystore.mdoc.NfcHandoverSelect
 import org.siros.sdk.sample.proximity.ActiveEngagement
+import org.siros.sdk.sample.proximity.BleCentralClient
 import org.siros.sdk.sample.proximity.BlePeripheralServer
+import org.siros.sdk.sample.proximity.CredentialFamily
+import org.siros.sdk.sample.proximity.ProximityConsentResult
+import org.siros.sdk.sample.proximity.RequestProximityConsent
 
 /**
  * ISO 18013-5 §8.2/§9.2 device engagement, shown as a QR code (§8.2.2.3),
  * NFC static handover (§9.2.1, via [ActiveEngagement]/`MdocHostApduService`),
- * AND a real "mdoc peripheral server mode" BLE GATT server ([BlePeripheralServer])
- * that a real mdoc reader can connect to, decrypt a request from, and
- * receive a signed `DeviceResponse` back from - this is a genuinely
- * completable proximity presentation, not just an engagement demo, PROVIDED
- * a stored credential's docType matches what the reader asks for.
- *
- * "mdoc central client mode" (this device scanning for and connecting to a
- * reader's own GATT server) is not implemented - see [BlePeripheralServer]'s
- * doc comment.
+ * a real "mdoc peripheral server mode" BLE GATT server ([BlePeripheralServer]),
+ * AND a real "mdoc central client mode" BLE GATT client ([BleCentralClient])
+ * - the engagement offers both BLE modes (§8.2.2.3's `BleOptions`), and both
+ * run simultaneously since it isn't known in advance which one a given
+ * reader will pick; whichever one actually completes a presentation stops
+ * the other. This is a genuinely completable proximity presentation, not
+ * just an engagement demo, PROVIDED a stored credential's docType matches
+ * what the reader asks for - and, now, provided the user approves the
+ * consent dialog this screen shows once a matching credential is found.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -72,7 +93,11 @@ fun ProximityEngagementScreen(
     val qrBitmap = remember(engagement) { QrCodeGenerator.generate(engagement.mdocUri) }
 
     val blePermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        listOf(Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_CONNECT)
+        listOf(
+            Manifest.permission.BLUETOOTH_ADVERTISE,
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.BLUETOOTH_SCAN,
+        )
     } else {
         emptyList()
     }
@@ -93,7 +118,30 @@ fun ProximityEngagementScreen(
         }
     }
 
-    var statusLines by remember { mutableStateOf(listOf("Starting...")) }
+    var currentStep by remember { mutableStateOf("waiting_for_reader") }
+    var result by remember { mutableStateOf<Boolean?>(null) }
+    var blePermissionsDenied by remember { mutableStateOf(false) }
+    var pendingConsent by remember { mutableStateOf<PendingConsent?>(null) }
+
+    // Bridges BlePeripheralServer/BleCentralClient's suspending consent
+    // request to this screen's AlertDialog: suspends the caller (a
+    // background BLE coroutine) until the user taps Approve or Deny.
+    val requestConsent: RequestProximityConsent = { docType, requestedClaims, matchingFamilies ->
+        suspendCancellableCoroutine { continuation ->
+            pendingConsent = PendingConsent(
+                docType = docType,
+                requestedClaims = requestedClaims,
+                matchingFamilies = matchingFamilies,
+                respond = { chosen ->
+                    pendingConsent = null
+                    continuation.resume(
+                        if (chosen != null) ProximityConsentResult.Approved(chosen) else ProximityConsentResult.Denied,
+                        onCancellation = null,
+                    )
+                },
+            )
+        }
+    }
 
     DisposableEffect(engagement) {
         ActiveEngagement.handoverSelectBytes = NfcHandoverSelect.build(engagement)
@@ -101,23 +149,46 @@ fun ProximityEngagementScreen(
     }
 
     DisposableEffect(engagement, hasBlePermissions) {
-        var server: BlePeripheralServer? = null
+        var peripheralServer: BlePeripheralServer? = null
+        var centralClient: BleCentralClient? = null
         if (hasBlePermissions) {
-            server = BlePeripheralServer(
+            peripheralServer = BlePeripheralServer(
                 context = context,
                 engagement = engagement,
                 getCredentials = getCredentials,
                 signPresentation = signPresentation,
-                onLog = { line -> statusLines = statusLines + line },
+                requestConsent = requestConsent,
+                onStep = { step -> currentStep = step },
                 onComplete = { success ->
-                    statusLines = statusLines + if (success) "Presentation complete" else "Presentation did not complete"
+                    result = success
+                    // Whichever mode the reader actually picked has now
+                    // finished (or failed) - the other is just wasting radio
+                    // time scanning/advertising for a connection that will
+                    // never come, so stop it.
+                    if (success) centralClient?.stop()
                 },
             )
-            server.start()
+            centralClient = BleCentralClient(
+                context = context,
+                engagement = engagement,
+                getCredentials = getCredentials,
+                signPresentation = signPresentation,
+                requestConsent = requestConsent,
+                onStep = { step -> currentStep = step },
+                onComplete = { success ->
+                    result = success
+                    if (success) peripheralServer?.stop()
+                },
+            )
+            peripheralServer.start()
+            centralClient.start()
         } else {
-            statusLines = listOf("Bluetooth permissions not granted - BLE data retrieval disabled (QR/NFC engagement still active)")
+            blePermissionsDenied = true
         }
-        onDispose { server?.stop() }
+        onDispose {
+            peripheralServer?.stop()
+            centralClient?.stop()
+        }
     }
 
     Scaffold(
@@ -136,48 +207,207 @@ fun ProximityEngagementScreen(
             )
         },
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
-            Text(
-                text = "Scan with an ISO 18013-5 mdoc reader",
-                style = MaterialTheme.typography.titleMedium,
-                textAlign = TextAlign.Center,
+        when {
+            result != null -> ProximityTerminalView(
+                success = result == true,
+                onClose = onBack,
+                modifier = Modifier.fillMaxSize().padding(padding),
             )
-            Spacer(modifier = Modifier.height(16.dp))
-            Image(
-                bitmap = qrBitmap.asImageBitmap(),
-                contentDescription = "Device engagement QR code",
-                modifier = Modifier.fillMaxWidth().height(280.dp),
+            currentStep != "waiting_for_reader" -> ProximityProgressView(
+                step = currentStep,
+                modifier = Modifier.fillMaxSize().padding(padding),
             )
-            Spacer(modifier = Modifier.height(16.dp))
-            HorizontalDivider()
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "NFC is also active: tap this device against a reader's NFC antenna " +
-                    "for static handover instead of scanning the QR code. BLE peripheral " +
-                    "server mode is advertising - a real reader can connect and complete a " +
-                    "presentation if a stored credential matches its requested docType.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            HorizontalDivider()
-            Spacer(modifier = Modifier.height(8.dp))
-            for (line in statusLines.takeLast(6)) {
+            else -> Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
                 Text(
-                    text = line,
-                    style = MaterialTheme.typography.bodySmall,
+                    text = "Scan with an ISO 18013-5 mdoc reader",
+                    style = MaterialTheme.typography.titleMedium,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Image(
+                    bitmap = qrBitmap.asImageBitmap(),
+                    contentDescription = "Device engagement QR code",
+                    modifier = Modifier.fillMaxWidth().height(280.dp),
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = if (blePermissionsDenied) {
+                        "Bluetooth permissions not granted - BLE data retrieval disabled " +
+                            "(QR/NFC engagement still active)."
+                    } else {
+                        "NFC is also active: tap this device against a reader's NFC antenna " +
+                            "for static handover instead of scanning the QR code. Both BLE data " +
+                            "retrieval modes are active - peripheral server mode is advertising, and " +
+                            "central client mode is scanning for a reader - a real reader can " +
+                            "complete a presentation via whichever mode it supports, if a stored " +
+                            "credential matches its requested docType."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
                 )
             }
         }
     }
+
+    pendingConsent?.let { consent ->
+        ProximityConsentDialog(consent)
+    }
+}
+
+/**
+ * Progress bar + step label for an in-flight proximity presentation, once a
+ * reader has connected - mirrors [FlowActiveView]'s look for the
+ * issuance/redirect-presentation flows, using the "proximity" step list.
+ */
+@Composable
+private fun ProximityProgressView(step: String, modifier: Modifier = Modifier) {
+    val stepProgress = flowStepProgress("proximity", step)
+
+    // Same monotonic guard as FlowActiveView: real execution order can
+    // deviate slightly (e.g. both BLE modes reporting steps interleaved
+    // before one wins), but the bar should never visibly un-progress.
+    var maxProgress by remember { mutableStateOf(0f) }
+    LaunchedEffect(stepProgress) {
+        stepProgress?.let { maxProgress = maxOf(maxProgress, it) }
+    }
+
+    Column(
+        modifier = modifier.padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        if (stepProgress != null) {
+            LinearProgressIndicator(
+                progress = { maxProgress },
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.primary,
+            )
+        } else {
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(
+            text = stringResource(R.string.flow_presenting),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Medium,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = stringResource(flowStepLabelRes(step)),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * Terminal state once a proximity presentation has completed or failed -
+ * shows a clear "Close" action rather than "Cancel", since there is nothing
+ * left to cancel: per the user's explicit requirement, this UX must not
+ * offer a Cancel button once the flow is done.
+ */
+@Composable
+private fun ProximityTerminalView(success: Boolean, onClose: () -> Unit, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(
+            imageVector = if (success) Icons.Filled.CheckCircle else Icons.Filled.Error,
+            contentDescription = null,
+            tint = if (success) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+            modifier = Modifier.height(64.dp).width(64.dp),
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(
+            text = stringResource(
+                if (success) R.string.flow_presentation_sent else R.string.proximity_presentation_failed,
+            ),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(modifier = Modifier.height(32.dp))
+        Button(onClick = onClose) {
+            Text(stringResource(R.string.flow_close))
+        }
+    }
+}
+
+/** Holds one in-flight consent request's details plus how to answer it - see [RequestProximityConsent]. */
+private data class PendingConsent(
+    val docType: String,
+    val requestedClaims: List<String>,
+    val matchingFamilies: List<CredentialFamily>,
+    /** Call with the chosen family to approve, or null to deny. */
+    val respond: (CredentialFamily?) -> Unit,
+)
+
+@Composable
+private fun ProximityConsentDialog(consent: PendingConsent) {
+    var selected by remember(consent) { mutableStateOf(consent.matchingFamilies.first()) }
+
+    AlertDialog(
+        onDismissRequest = { consent.respond(null) },
+        title = { Text("Share credential?") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                // A real, recognizable preview of the actual credential -
+                // not just its raw docType string - so the user can tell at
+                // a glance whether this is really their own mDL/etc.
+                CredentialCard(credential = selected.representative, modifier = Modifier.fillMaxWidth())
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("A reader is requesting the following, from this credential:", style = MaterialTheme.typography.bodyMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+                for (claim in consent.requestedClaims) {
+                    Text("• $claim", style = MaterialTheme.typography.bodyMedium)
+                }
+                if (consent.matchingFamilies.size > 1) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("You have more than one matching credential - choose which to share:", style = MaterialTheme.typography.labelLarge)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Column(Modifier.selectableGroup()) {
+                        for (family in consent.matchingFamilies) {
+                            val credential = family.representative
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .selectable(
+                                        selected = family == selected,
+                                        onClick = { selected = family },
+                                        role = Role.RadioButton,
+                                    )
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(selected = family == selected, onClick = { selected = family })
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(credential.metadata?.vct ?: credential.metadata?.doctype ?: consent.docType)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { consent.respond(selected) }) { Text("Share") }
+        },
+        dismissButton = {
+            TextButton(onClick = { consent.respond(null) }) { Text("Decline") }
+        },
+    )
 }
