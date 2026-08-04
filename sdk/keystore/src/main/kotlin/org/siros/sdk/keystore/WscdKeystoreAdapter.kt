@@ -358,6 +358,28 @@ class WscdKeystoreAdapter(
         )
     }
 
+    override suspend fun signMdocPresentationForProximity(
+        credentialBytes: ByteArray,
+        disclosedClaims: List<String>?,
+        sessionTranscriptBytes: ByteArray,
+        kid: String?,
+    ): ByteArray {
+        checkUnlocked()
+        val keys = signer.listKeys()
+        val key = selectSigningKey(keys, kid)
+
+        val builder = MdocDeviceResponseBuilder(
+            credentialBytes = credentialBytes,
+            algorithm = key.algorithm,
+        )
+
+        return builder.buildForProximity(
+            sessionTranscriptBytes = sessionTranscriptBytes,
+            disclosedClaims = disclosedClaims,
+            signer = { data -> signer.sign(key.keyId, data) },
+        )
+    }
+
     override suspend fun exportEncryptedContainer(): ByteArray {
         // Fold the signer's own private keys (if any are exportable - see
         // the class doc comment) into credentialsKeystore's own keypairs

@@ -172,6 +172,10 @@ object CredentialUtils {
         }
     }
 
+    /** Decode [StoredCredential.raw]'s base64url encoding, without the CBOR parsing [parseMdocDocument] also does - for callers (e.g. proximity presentation) that need the raw bytes to pass to a `KeystoreManager` signing method. */
+    fun decodeMdocRawBytes(credential: StoredCredential): ByteArray =
+        Base64.getUrlDecoder().decode(padBase64(credential.raw))
+
     /**
      * Build [CredentialMetadata] for an mdoc credential from its MDDL schema -
      * the mdoc analogue of [buildMetadata]. Populates [CredentialMetadata.doctype]

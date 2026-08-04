@@ -100,6 +100,9 @@ dependencies {
     implementation(libs.camerax.view)
     implementation(libs.mlkit.barcode)
 
+    // QR code generation (mdoc: device engagement display)
+    implementation(libs.zxing.core)
+
     // Credential image loading (SVG decoder needed for VCTM svg_templates rendering)
     implementation(libs.coil.compose)
     implementation(libs.coil.svg)

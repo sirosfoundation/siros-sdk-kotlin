@@ -216,6 +216,29 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _showQrScanner = MutableStateFlow(false)
     val showQrScanner: StateFlow<Boolean> = _showQrScanner
 
+    // ── Proximity (ISO 18013-5) engagement state ────────────────────
+
+    private val _showProximityEngagement = MutableStateFlow(false)
+    val showProximityEngagement: StateFlow<Boolean> = _showProximityEngagement
+
+    fun openProximityEngagement() {
+        _showProximityEngagement.value = true
+    }
+
+    fun closeProximityEngagement() {
+        _showProximityEngagement.value = false
+    }
+
+    /** For `BlePeripheralServer`'s injected `getCredentials` dependency - see its constructor doc comment. */
+    suspend fun getCredentialsForProximity() = wallet.getCredentials()
+
+    /** For `BlePeripheralServer`'s injected `signPresentation` dependency. */
+    suspend fun signMdocPresentationForProximity(
+        credentialId: Long,
+        disclosedClaims: List<String>?,
+        sessionTranscriptBytes: ByteArray,
+    ) = wallet.signMdocPresentationForProximity(credentialId, disclosedClaims, sessionTranscriptBytes)
+
     // ── Loading / error feedback ────────────────────────────────────
 
     private val _isLoading = MutableStateFlow(false)

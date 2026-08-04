@@ -1032,6 +1032,33 @@ class SirosWallet private constructor(
     }
 
     /**
+     * Sign an mDoc DeviceResponse for an ISO 18013-5 proximity (BLE)
+     * presentation - the local, engine-free counterpart to the redirect/
+     * DC-API presentation paths (`handleSignRequest`/`handleWmpSignRequest`),
+     * since proximity presentation has no wallet-backend/engine round trip
+     * at all: the reader IS the counterpart, connected directly over BLE.
+     *
+     * @param credentialId the [StoredCredential.id] of the mdoc credential to present.
+     * @param disclosedClaims element identifiers to disclose (see [DeviceRequestParser.DocRequest.disclosedClaims]).
+     * @param sessionTranscriptBytes the proximity `SessionTranscript` bytes, from `ProximitySessionTranscript.build`.
+     * @return CBOR-encoded DeviceResponse bytes.
+     */
+    suspend fun signMdocPresentationForProximity(
+        credentialId: Long,
+        disclosedClaims: List<String>?,
+        sessionTranscriptBytes: ByteArray,
+    ): ByteArray {
+        val credential = credentialStore.getAll().firstOrNull { it.id == credentialId }
+            ?: throw IllegalArgumentException("Credential not found: $credentialId")
+        return keystore.signMdocPresentationForProximity(
+            credentialBytes = CredentialUtils.decodeMdocRawBytes(credential),
+            disclosedClaims = disclosedClaims,
+            sessionTranscriptBytes = sessionTranscriptBytes,
+            kid = credential.kid,
+        )
+    }
+
+    /**
      * Fetch the list of available credential issuers from the backend.
      *
      * Requires an active session (call after [login] or [register]).

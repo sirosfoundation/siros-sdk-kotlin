@@ -71,6 +71,7 @@
     <string name="settings_diagnostic_messages_description">Show the raw backend step token alongside the friendly progress label during a flow</string>
     <string name="settings_presentation_history">Presentation History</string>
     <string name="settings_logout">Log Out</string>
+    <string name="nfc_hce_description">ISO 18013-5 mdoc device engagement</string>
 
     <!-- Presentation history -->
     <string name="history_title">Presentation History</string>

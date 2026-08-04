@@ -251,6 +251,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
     val selectedCredential by viewModel.selectedCredential.collectAsState()
     val showHistory by viewModel.showHistory.collectAsState()
     val showQrScanner by viewModel.showQrScanner.collectAsState()
+    val showProximityEngagement by viewModel.showProximityEngagement.collectAsState()
     val pendingPresentation by viewModel.pendingPresentationRequest.collectAsState()
     val useWmpProtocol by viewModel.useWmpProtocol.collectAsState()
     val showCredentialDetails by viewModel.showCredentialDetails.collectAsState()
@@ -386,6 +387,13 @@ fun WalletScreen(viewModel: WalletViewModel) {
                 onBack = viewModel::closeQrScanner,
             )
 
+            // ISO 18013-5 proximity engagement (QR + NFC + BLE) sub-screen
+            showProximityEngagement -> ProximityEngagementScreen(
+                getCredentials = viewModel::getCredentialsForProximity,
+                signPresentation = viewModel::signMdocPresentationForProximity,
+                onBack = viewModel::closeProximityEngagement,
+            )
+
             // Add credential sub-screen
             showAddCredential -> {
                 Scaffold(
@@ -470,6 +478,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onShowHistory = viewModel::openHistory,
                             onEnrollWscd = viewModel::enrollWscd,
                             onShowWscaDeveloper = viewModel::openWscaDeveloper,
+                            onShowProximityEngagement = viewModel::openProximityEngagement,
                             onForgetAccount = viewModel::forgetAccount,
                             passkeys = viewModel.listPasskeys(),
                             onRenamePasskey = viewModel::renamePasskey,
@@ -1003,6 +1012,7 @@ fun SettingsTab(
     onShowHistory: () -> Unit,
     onEnrollWscd: () -> Unit,
     onShowWscaDeveloper: () -> Unit,
+    onShowProximityEngagement: () -> Unit,
     onForgetAccount: ((String) -> Unit)? = null,
     passkeys: List<org.siros.sdk.wallet.CachedPasskey> = emptyList(),
     onRenamePasskey: ((String, String) -> Unit)? = null,
@@ -1251,6 +1261,14 @@ fun SettingsTab(
                     shape = RoundedCornerShape(12.dp),
                 ) {
                     Text("WSCA Developer")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onShowProximityEngagement,
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Text("Proximity Engagement (Interop Test)")
                 }
             }
         }
