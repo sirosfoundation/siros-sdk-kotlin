@@ -1182,6 +1182,23 @@ class SirosWallet private constructor(
                 audience = config.backendUrl,
                 extraClaims = mapOf("nonce" to challenge),
             )
+            // Best-effort, on its OWN try/catch (not the outer one): a
+            // native-attestation failure must degrade to a plain
+            // backend-attested WIA, not abort issuance entirely.
+            val nativeAttestation = config.nativeAttestationProvider?.let { provider ->
+                try {
+                    val evidence = provider.generateEvidence(challenge, keyId)
+                    buildJsonObject {
+                        put("type", kotlinx.serialization.json.JsonPrimitive(evidence.type))
+                        put("token", kotlinx.serialization.json.JsonPrimitive(evidence.token))
+                        put("key_id", kotlinx.serialization.json.JsonPrimitive(evidence.keyId))
+                        put("challenge", kotlinx.serialization.json.JsonPrimitive(evidence.challenge))
+                    }
+                } catch (e: Exception) {
+                    Timber.w(e, "Native attestation evidence generation failed, continuing without it")
+                    null
+                }
+            }
             val wia = client.generateWIA(
                 pop = pop,
                 challenge = challenge,
@@ -1190,6 +1207,7 @@ class SirosWallet private constructor(
                 // confirmed via a real geneva2026.mdoc.online conformance run
                 // that flagged sub=<instance jkt> as a FAIL.
                 clientId = clientAttestationClientId(),
+                nativeAttestation = nativeAttestation,
             )
             cachedWia = wia
             cachedWiaExpiresAt = CredentialUtils.parseJwtPayload(wia)

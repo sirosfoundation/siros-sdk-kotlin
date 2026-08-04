@@ -31,6 +31,10 @@ android {
             buildConfigField("String", "ISSUER_PROXY_URL", "\"\"")
             buildConfigField("boolean", "R2PS_ENABLED", "false")
             buildConfigField("boolean", "SHOW_PRE_LOGIN_SETTINGS", "true")
+            // 0 = unset/disabled - native attestation stays off until a real
+            // Play Console/Firebase cloud project number is supplied (can't
+            // be hardcoded into the SDK/sample app).
+            buildConfigField("long", "PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER", "0L")
         }
         debug {
             // Allow connecting to local backend over cleartext for development
@@ -43,6 +47,7 @@ android {
             // Requires siros-wscd-manager native lib built with r2ps feature
             buildConfigField("boolean", "R2PS_ENABLED", "false")
             buildConfigField("boolean", "SHOW_PRE_LOGIN_SETTINGS", "true")
+            buildConfigField("long", "PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER", "0L")
         }
     }
 

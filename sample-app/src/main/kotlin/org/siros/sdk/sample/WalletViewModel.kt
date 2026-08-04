@@ -30,6 +30,7 @@ import org.siros.sdk.keystore.DetailedKeyInfo
 import org.siros.sdk.keystore.FactorKind
 import org.siros.sdk.keystore.LifecycleState
 import org.siros.sdk.keystore.LifecycleStatus
+import org.siros.sdk.keystore.PlayIntegrityProvider
 import org.siros.sdk.keystore.RegisterLifecycleRequest
 import org.siros.sdk.keystore.RotateLifecycleRequest
 import org.siros.sdk.keystore.UniFFISigner
@@ -1119,6 +1120,18 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 null
             }
 
+        // 0/unset = disabled (default) - a real cloud project number is tied
+        // to the host app's own Play Console/Firebase project and can't be
+        // hardcoded into the SDK or sample app; native attestation simply
+        // stays off (matching pre-native-attestation behavior) until one is
+        // supplied.
+        val playIntegrityCloudProjectNumber = BuildConfig.PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER
+        val nativeAttestationProvider = if (playIntegrityCloudProjectNumber != 0L) {
+            PlayIntegrityProvider(activity, playIntegrityCloudProjectNumber)
+        } else {
+            null
+        }
+
         return WalletConfig(
             backendUrl = _backendUrl.value,
             tenantId = _tenantId.value,
@@ -1131,6 +1144,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             useSystemCredentialManager = !isEmulator,
             requireUserAuth = !isEmulator,
             keystore = keystore,
+            nativeAttestationProvider = nativeAttestationProvider,
             urlRewriter = if (proxyUrl.isNotBlank()) { url ->
                 // Rewrite Docker-internal issuer URLs to the dev proxy
                 url.replace("https://vc-proxy:8443", proxyUrl)
