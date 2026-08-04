@@ -1673,12 +1673,12 @@ class SirosWalletTest {
 
     @Test
     fun currentWalletInstanceId_returnsNull_whenNoWiaAvailable() = runTest(dispatcher) {
-        val apiClient = mockk<BackendApiClient>()
-        coEvery { apiClient.requestWIAChallenge() } throws IllegalStateException("no backend session")
+        // No cachedWia seeded - currentWalletInstanceId() peeks the cache
+        // only (it must never trigger a WIA fetch of its own), so this must
+        // resolve to null without any backend interaction at all.
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
-            "apiClient" to apiClient,
         )
 
         assertEquals(null, invokeCurrentWalletInstanceId(wallet))
@@ -2239,7 +2239,7 @@ class SirosWalletTest {
     private fun invokeCurrentWalletInstanceId(wallet: SirosWallet): String? {
         val method = wallet::class.declaredMemberFunctions.first { it.name == "currentWalletInstanceId" }
         method.isAccessible = true
-        return kotlinx.coroutines.runBlocking { method.callSuspend(wallet) as String? }
+        return method.call(wallet) as String?
     }
 
     private fun invokeConnectEngine(wallet: SirosWallet, appToken: String) {

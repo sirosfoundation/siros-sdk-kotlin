@@ -1211,10 +1211,20 @@ class SirosWallet private constructor(
      * won't lift the clamp, and every other failure mode (no WIA, WIA
      * disabled, non-native tier) must resolve to omitting the field exactly
      * like today's pre-this-change behavior.
+     *
+     * Peeks the existing WIA cache only - deliberately does NOT call
+     * [ensureWalletInstanceAttestation] (real Copilot-review finding: that
+     * would trigger a challenge+generateWIA network round trip, and retry it
+     * on every backend key-attestation attempt in deployments where WIA is
+     * unsupported/misconfigured, adding latency and log spam for a field
+     * that's optional in the first place). A WIA obtained earlier this
+     * session (e.g. during issuance) is still picked up; one that was never
+     * fetched simply omits the field, exactly like today's behavior.
      */
-    private suspend fun currentWalletInstanceId(): String? {
+    private fun currentWalletInstanceId(): String? {
+        val now = System.currentTimeMillis() / 1000
+        val wia = cachedWia?.takeIf { cachedWiaExpiresAt - now > 60 } ?: return null
         val nativeAttestationSources = setOf("ios_app_attest", "android_play_integrity")
-        val wia = ensureWalletInstanceAttestation() ?: return null
         val payload = CredentialUtils.parseJwtPayload(wia) ?: return null
         val source = payload["attestation_source"]?.jsonPrimitive?.contentOrNull
         if (source !in nativeAttestationSources) return null
