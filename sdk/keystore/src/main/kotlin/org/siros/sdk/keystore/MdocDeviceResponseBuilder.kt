@@ -109,6 +109,34 @@ class MdocDeviceResponseBuilder(
         return assembleFinalResponse(disclosedDocument, coseSign1)
     }
 
+    /**
+     * Build the CBOR-encoded DeviceResponse for an ISO 18013-5 proximity
+     * (BLE) presentation, using the caller-supplied proximity
+     * `SessionTranscript` bytes (§9.1.5.1: `[DeviceEngagementBytes,
+     * EReaderKeyBytes, Handover]`) instead of building an
+     * `OpenID4VPHandover`/`OpenID4VPDCAPIHandover` transcript here - unlike
+     * those two remote-presentation flows, this transcript depends on
+     * BLE-session-specific context (the engagement and reader key) that
+     * lives in the proximity transport layer, not this builder.
+     *
+     * @param sessionTranscriptBytes CBOR-encoded `SessionTranscript`, from
+     *   `ProximitySessionTranscript.build`.
+     * @param disclosedClaims Element identifiers to disclose (null = disclose all namespaces/elements).
+     * @param signer Function that signs raw bytes with the device key; must return a raw (not DER) signature.
+     * @return CBOR-encoded DeviceResponse bytes.
+     */
+    suspend fun buildForProximity(
+        sessionTranscriptBytes: ByteArray,
+        disclosedClaims: List<String>?,
+        signer: suspend (ByteArray) -> ByteArray,
+    ): ByteArray {
+        val disclosedDocument = parseAndFilter(disclosedClaims)
+        val deviceAuthBytes = buildDeviceAuthentication(disclosedDocument.docType, sessionTranscriptBytes)
+        val coseSign1 = MdocCose.sign1Detached(algorithm, deviceAuthBytes, signer)
+
+        return assembleFinalResponse(disclosedDocument, coseSign1)
+    }
+
     private fun parseAndFilter(disclosedClaims: List<String>?): org.siros.sdk.credentials.mdoc.DocumentMdoc {
         val document = MdocCbor.parseStoredCredential(credentialBytes)
         return if (disclosedClaims == null) {

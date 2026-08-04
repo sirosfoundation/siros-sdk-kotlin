@@ -161,6 +161,30 @@ interface KeystoreManager {
         throw UnsupportedOperationException("mDoc DC API presentation not supported by this keystore")
     }
 
+    /**
+     * Build an mDoc DeviceResponse (ISO 18013-5) for a proximity (BLE)
+     * presentation, using the caller-supplied proximity `SessionTranscript`
+     * bytes (§9.1.5.1) instead of [signMdocPresentation]'s redirect-flow
+     * `OpenID4VPHandover` or [signMdocPresentationForDCAPI]'s
+     * `OpenID4VPDCAPIHandover` - see `ProximitySessionTranscript`'s doc
+     * comment for how that transcript is built from the device engagement,
+     * reader key, and handover context.
+     *
+     * @param credentialBytes Raw CBOR bytes of the IssuerSigned structure.
+     * @param disclosedClaims Claim names to disclose (null = all).
+     * @param sessionTranscriptBytes CBOR-encoded proximity `SessionTranscript`.
+     * @param kid the key ID bound to this credential (see [signMdocPresentation]'s doc comment).
+     * @return CBOR-encoded DeviceResponse bytes.
+     */
+    suspend fun signMdocPresentationForProximity(
+        credentialBytes: ByteArray,
+        disclosedClaims: List<String>?,
+        sessionTranscriptBytes: ByteArray,
+        kid: String? = null,
+    ): ByteArray {
+        throw UnsupportedOperationException("mDoc proximity presentation not supported by this keystore")
+    }
+
     /** Export the encrypted container for backend sync. */
     suspend fun exportEncryptedContainer(): ByteArray
 

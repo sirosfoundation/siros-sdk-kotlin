@@ -39,6 +39,14 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
+          # Without this, CodeQL's own internal autobuild still runs for
+          # java-kotlin during the analyze step below, ON TOP OF the
+          # explicit "Build (Gradle)" step - and that internal autobuild
+          # invocation doesn't get this job's GITHUB_TOKEN env var, so it
+          # 401s resolving the private org.siros:siros-wscd-manager package
+          # from GitHub Packages. build-mode: manual tells CodeQL to trust
+          # the explicit build step below instead of re-building itself.
+          build-mode: ${{ matrix.language == 'java-kotlin' && 'manual' || 'none' }}
 
       - name: Build (Gradle)
         if: matrix.language == 'java-kotlin'

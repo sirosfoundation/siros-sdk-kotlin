@@ -13,7 +13,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialOffer
+import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.sample.dcapi.DCAPIProviderRegistration
 import org.siros.sdk.sample.dcapi.WalletSessionHolder
 import org.siros.sdk.credentials.PresentationRecord
@@ -88,6 +90,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _showDiagnosticMessages: MutableStateFlow<Boolean>
     val showDiagnosticMessages: StateFlow<Boolean> get() = _showDiagnosticMessages
 
+    private val _credentialConsumptionPolicy: MutableStateFlow<CredentialConsumptionPolicy>
+    val credentialConsumptionPolicy: StateFlow<CredentialConsumptionPolicy> get() = _credentialConsumptionPolicy
+
     init {
         // Read test overrides - set either via the settings sheet UI, or (debug
         // builds only) via `adb shell am start ... --es backend_url ... --es
@@ -111,6 +116,18 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         // debugging (was default true during initial rollout).
         _showDiagnosticMessages = MutableStateFlow(
             prefs.getBoolean("show_diagnostic_messages", false)
+        )
+        // Core wallet policy (not a UI-only preference like the toggles
+        // above) - persisted here, but enforced by SirosWallet itself. Can't
+        // set it on `wallet` right here - that property initializes later in
+        // declaration order - see its own initializer and rebuildWalletIfNeeded(),
+        // both of which apply this value to whichever SirosWallet instance is current.
+        _credentialConsumptionPolicy = MutableStateFlow(
+            runCatching {
+                CredentialConsumptionPolicy.valueOf(
+                    prefs.getString("credential_consumption_policy", null) ?: ""
+                )
+            }.getOrDefault(CredentialConsumptionPolicy.NEVER_CONSUME)
         )
     }
 
@@ -155,6 +172,15 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
             .edit()
             .putBoolean("show_diagnostic_messages", enabled)
+            .apply()
+    }
+
+    fun updateCredentialConsumptionPolicy(policy: CredentialConsumptionPolicy) {
+        _credentialConsumptionPolicy.value = policy
+        wallet.credentialConsumptionPolicy = policy
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putString("credential_consumption_policy", policy.name)
             .apply()
     }
 
@@ -216,6 +242,33 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _showQrScanner = MutableStateFlow(false)
     val showQrScanner: StateFlow<Boolean> = _showQrScanner
 
+    // ── Proximity (ISO 18013-5) engagement state ────────────────────
+
+    private val _showProximityEngagement = MutableStateFlow(false)
+    val showProximityEngagement: StateFlow<Boolean> = _showProximityEngagement
+
+    fun openProximityEngagement() {
+        _showProximityEngagement.value = true
+    }
+
+    fun closeProximityEngagement() {
+        _showProximityEngagement.value = false
+    }
+
+    /** For `BlePeripheralServer`'s injected `getCredentials` dependency - see its constructor doc comment. */
+    suspend fun getCredentialsForProximity() = wallet.getCredentials()
+
+    /** For `BlePeripheralServer`'s injected `signPresentation` dependency. */
+    suspend fun signMdocPresentationForProximity(
+        credentialId: Long,
+        disclosedClaims: List<String>?,
+        sessionTranscriptBytes: ByteArray,
+    ) = wallet.signMdocPresentationForProximity(credentialId, disclosedClaims, sessionTranscriptBytes)
+
+    /** For `BlePeripheralServer`/`BleCentralClient`'s injected `filterEligible` dependency. */
+    fun filterEligibleForProximity(instances: List<StoredCredential>): List<StoredCredential> =
+        CredentialUtils.eligibleInstances(instances, wallet.credentialConsumptionPolicy, wallet.presentationHistory)
+
     // ── Loading / error feedback ────────────────────────────────────
 
     private val _isLoading = MutableStateFlow(false)
@@ -268,7 +321,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private var wallet: SirosWallet = SirosWallet.create(
         activity,
         buildWalletConfig(),
-    )
+    ).also { it.credentialConsumptionPolicy = _credentialConsumptionPolicy.value }
 
     /**
      * Observable wallet state — collect this from your Composable.
@@ -606,6 +659,31 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _pendingIssuanceOffer.value = null
         _showAddCredential.value = false
         startIssuanceByOffer(offer)
+    }
+
+    /**
+     * Re-request a fresh batch of [credential] directly from its own
+     * issuer/config (already stored on it - see
+     * [StoredCredential.credentialIssuerIdentifier]/[StoredCredential.credentialConfigurationId]),
+     * skipping the generic issuer-browsing screen entirely - for
+     * [CredentialCard]'s "Renew" action once every batch instance has been
+     * used up (see [CredentialUtils.eligibleInstances]).
+     */
+    fun renewCredential(credential: StoredCredential) {
+        val issuerId = credential.credentialIssuerIdentifier
+        val configId = credential.credentialConfigurationId
+        if (issuerId == null || configId == null) {
+            _errorMessage.value = "Cannot renew this credential - issuer information is missing"
+            return
+        }
+        startIssuanceByOffer(
+            CredentialOffer(
+                credentialConfigurationId = configId,
+                credentialIssuerIdentifier = issuerId,
+                credentialName = credential.metadata?.name ?: credential.format,
+                issuerName = credential.metadata?.issuer?.name ?: issuerId,
+            ),
+        )
     }
 
     private fun startIssuanceByOffer(offer: CredentialOffer) {
@@ -990,7 +1068,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             wallet = SirosWallet.create(
                 activity,
                 buildWalletConfig(),
-            )
+            ).also { it.credentialConsumptionPolicy = _credentialConsumptionPolicy.value }
             observeWalletState()
             setupEventListener()
         }

@@ -30,6 +30,7 @@
     <string name="add_credential_title">Προσθήκη Πιστοποιητικού</string>
     <string name="add_credential_loading">Φόρτωση διαθέσιμων πιστοποιητικών\u2026</string>
     <string name="add_credential_empty">Δεν υπάρχουν διαθέσιμα πιστοποιητικά</string>
+    <string name="add_credential_retry">Δοκιμάστε Ξανά</string>
     <string name="nav_back">Πίσω</string>
 
     <!-- Credential detail screen -->
@@ -43,6 +44,12 @@
     <string name="credential_detail_issued">Εκδόθηκε</string>
     <string name="credential_detail_expires">Λήγει</string>
     <string name="credential_detail_no_claims">Δεν υπάρχουν διαθέσιμοι ισχυρισμοί</string>
+    <string name="credential_detail_raw_header">Κεφαλίδα</string>
+    <string name="credential_detail_raw_payload">Ωφέλιμο φορτίο</string>
+    <string name="credential_detail_raw_disclosure">Αποκάλυψη %1$d</string>
+    <string name="copy_to_clipboard">Αντιγραφή στο πρόχειρο</string>
+    <string name="copied_to_clipboard">Αντιγράφηκε στο πρόχειρο</string>
+    <string name="credential_renew">Ανανέωση</string>
     <string name="credential_detail_delete">Διαγραφή Πιστοποιητικού</string>
     <string name="credential_detail_delete_confirm_title">Διαγραφή Πιστοποιητικού</string>
     <string name="credential_detail_delete_confirm_message">Σίγουρα θέλετε να διαγράψετε το \"%1$s\"; Αυτή η ενέργεια δεν μπορεί να αναιρεθεί.</string>
@@ -56,8 +63,18 @@
     <string name="settings_tenant_id">Ενοικιαστής</string>
     <string name="settings_credentials_stored">Αποθηκευμένα πιστοποιητικά</string>
     <string name="settings_app_version">Έκδοση εφαρμογής</string>
+    <string name="settings_credential_details">Λεπτομέρειες πιστοποιητικού</string>
+    <string name="settings_credential_details_description">Εμφάνιση ακατέργαστων δεδομένων και υπογεγραμμένων στοιχείων πιστοποιητικού όταν πατάτε ένα πιστοποιητικό</string>
+    <string name="settings_diagnostic_messages">Διαγνωστικά μηνύματα</string>
+    <string name="settings_diagnostic_messages_description">Εμφάνιση του ακατέργαστου διακριτικού βήματος του διακομιστή μαζί με τη φιλική ετικέτα προόδου κατά τη διάρκεια μιας ροής</string>
+    <string name="settings_credential_consumption_title">Κατανάλωση πιστοποιητικού</string>
+    <string name="settings_credential_consumption_description">Ελέγχει αν η παρουσίαση ενός πιστοποιητικού καταναλώνει ένα από τα αντίγραφα της παρτίδας του</string>
+    <string name="credential_consumption_consume_all">Κατανάλωση σε κάθε παρουσίαση</string>
+    <string name="credential_consumption_consume_non_zkp">Κατανάλωση μόνο σε παρουσιάσεις χωρίς μηδενική γνώση</string>
+    <string name="credential_consumption_never_consume">Ποτέ μην καταναλώνεις (προεπιλογή)</string>
     <string name="settings_presentation_history">Ιστορικό Παρουσιάσεων</string>
     <string name="settings_logout">Αποσύνδεση</string>
+    <string name="nfc_hce_description">Δέσμευση συσκευής mdoc ISO 18013-5</string>
 
     <!-- Presentation history -->
     <string name="history_title">Ιστορικό Παρουσιάσεων</string>
@@ -81,6 +98,8 @@
     <string name="flow_presenting">Παρουσίαση Πιστοποιητικού\u2026</string>
     <string name="flow_processing">Επεξεργασία\u2026</string>
     <string name="flow_cancel">Ακύρωση</string>
+    <string name="flow_close">Κλείσιμο</string>
+    <string name="flow_error_title">Η Ροή Απέτυχε</string>
     <string name="flow_step_parsing_offer">Ανάγνωση προσφοράς πιστοποιητικού…</string>
     <string name="flow_step_offer_parsed">Η προσφορά πιστοποιητικού αναλύθηκε</string>
     <string name="flow_step_fetching_metadata">Λήψη στοιχείων εκδότη…</string>
@@ -104,6 +123,9 @@
     <string name="flow_diagnostic_label">Διαγνωστικό: %1$s</string>
     <string name="flow_credentials_received">Ελήφθησαν %1$d πιστοποιητικά</string>
     <string name="flow_presentation_sent">Η παρουσίαση στάλθηκε με επιτυχία</string>
+    <string name="flow_step_waiting_for_reader">Αναμονή σύνδεσης αναγνώστη…</string>
+    <string name="flow_step_reader_connected">Ο αναγνώστης συνδέθηκε, έλεγχος αιτήματος…</string>
+    <string name="proximity_presentation_failed">Η παρουσίαση δεν ολοκληρώθηκε</string>
 
     <!-- Error view -->
     <string name="error_title">Κάτι πήγε στραβά</string>

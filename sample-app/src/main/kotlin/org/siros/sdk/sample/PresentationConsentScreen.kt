@@ -42,7 +42,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.siros.sdk.credentials.ClaimMeta
+import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialMatcher
+import org.siros.sdk.credentials.CredentialUtils
+import org.siros.sdk.credentials.PresentationRecord
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.wallet.PresentationRequest
 
@@ -59,8 +62,21 @@ fun PresentationConsentScreen(
     request: PresentationRequest,
     onAccept: (List<Long>) -> Unit,
     onDecline: () -> Unit,
+    presentationHistory: List<PresentationRecord> = emptyList(),
+    consumptionPolicy: CredentialConsumptionPolicy = CredentialConsumptionPolicy.NEVER_CONSUME,
     modifier: Modifier = Modifier,
 ) {
+    // A query is unsatisfiable if every candidate that matched it has
+    // already been used up under the active consumption policy (see
+    // CredentialUtils.eligibleInstances) - the SDK itself refuses to sign
+    // with an exhausted instance regardless (defense in depth), but the user
+    // shouldn't be let all the way to "Share" only to have it silently fail.
+    val exhaustedQueryIds = remember(request, presentationHistory, consumptionPolicy) {
+        request.matchResults.filter { mr ->
+            mr.candidates.isNotEmpty() &&
+                CredentialUtils.eligibleInstances(mr.candidates, consumptionPolicy, presentationHistory).isEmpty()
+        }.map { it.queryId }.toSet()
+    }
     val totalSteps = request.matchResults.size + 2 // preview + per-credential + summary
     var currentStep by remember { mutableStateOf(0) }
 
@@ -97,7 +113,7 @@ fun PresentationConsentScreen(
         // Content area
         Box(modifier = Modifier.weight(1f)) {
             when {
-                currentStep == 0 -> PreviewStep(request)
+                currentStep == 0 -> PreviewStep(request, exhaustedQueryIds)
                 currentStep <= request.matchResults.size -> {
                     val matchResult = request.matchResults[currentStep - 1]
                     ClaimSelectionStep(
@@ -146,7 +162,10 @@ fun PresentationConsentScreen(
                 }
             } else {
                 Button(
-                    onClick = { onAccept(request.candidates.map { it.id }) },
+                    onClick = {
+                        onAccept(CredentialUtils.eligibleInstances(request.candidates, consumptionPolicy, presentationHistory).map { it.id })
+                    },
+                    enabled = exhaustedQueryIds.isEmpty(),
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(12.dp),
                 ) {
@@ -186,7 +205,7 @@ private fun StepBar(currentStep: Int, totalSteps: Int) {
 // ── Step 1: Preview ─────────────────────────────────────────────────
 
 @Composable
-private fun PreviewStep(request: PresentationRequest) {
+private fun PreviewStep(request: PresentationRequest, exhaustedQueryIds: Set<String> = emptySet()) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -230,9 +249,16 @@ private fun PreviewStep(request: PresentationRequest) {
 
         // Overview of matched credentials
         request.matchResults.forEach { matchResult ->
+            val isExhausted = matchResult.queryId in exhaustedQueryIds
             Card(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isExhausted) {
+                        MaterialTheme.colorScheme.errorContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    },
+                ),
                 shape = RoundedCornerShape(12.dp),
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
@@ -246,6 +272,15 @@ private fun PreviewStep(request: PresentationRequest) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 8.dp),
                     )
+                    if (isExhausted) {
+                        Text(
+                            text = "No eligible copies remain - renew this credential in Settings",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
                 }
             }
         }

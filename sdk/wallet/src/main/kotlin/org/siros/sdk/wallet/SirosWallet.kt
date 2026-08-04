@@ -47,6 +47,7 @@ import org.siros.sdk.credentials.PresentationRecord
 import org.siros.sdk.credentials.IssuerEntry
 import org.siros.sdk.credentials.IssuerMetadata
 import org.siros.sdk.credentials.CredentialConfiguration
+import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.Vctm
 import org.siros.sdk.credentials.VctmFetcher
@@ -225,6 +226,16 @@ class SirosWallet private constructor(
     fun setEventListener(listener: WalletEventListener) {
         eventListener = listener
     }
+
+    /**
+     * Governs whether a successful presentation exhausts the credential
+     * instance it used (see [CredentialUtils.eligibleInstances]). Defaults
+     * to [CredentialConsumptionPolicy.NEVER_CONSUME] so existing behavior
+     * doesn't change until a host app opts in. This is core wallet policy,
+     * not a UI-only preference - the host app is responsible for persisting
+     * the user's choice across restarts and setting it here on startup.
+     */
+    var credentialConsumptionPolicy: CredentialConsumptionPolicy = CredentialConsumptionPolicy.NEVER_CONSUME
 
     /**
      * Register a new user with a passkey.
@@ -1032,6 +1043,46 @@ class SirosWallet private constructor(
     }
 
     /**
+     * Sign an mDoc DeviceResponse for an ISO 18013-5 proximity (BLE)
+     * presentation - the local, engine-free counterpart to the redirect/
+     * DC-API presentation paths (`handleSignRequest`/`handleWmpSignRequest`),
+     * since proximity presentation has no wallet-backend/engine round trip
+     * at all: the reader IS the counterpart, connected directly over BLE.
+     *
+     * @param credentialId the [StoredCredential.id] of the mdoc credential to present.
+     * @param disclosedClaims element identifiers to disclose (see [DeviceRequestParser.DocRequest.disclosedClaims]).
+     * @param sessionTranscriptBytes the proximity `SessionTranscript` bytes, from `ProximitySessionTranscript.build`.
+     * @return CBOR-encoded DeviceResponse bytes.
+     */
+    suspend fun signMdocPresentationForProximity(
+        credentialId: Long,
+        disclosedClaims: List<String>?,
+        sessionTranscriptBytes: ByteArray,
+    ): ByteArray {
+        val credential = credentialStore.getById(credentialId)
+            ?: throw WalletException("Credential not found: $credentialId")
+        val allInstances = credentialStore.getAll().filter { it.batchId == credential.batchId }
+        if (CredentialUtils.eligibleInstances(allInstances, credentialConsumptionPolicy, presentationHistory).none { it.id == credentialId }) {
+            throw WalletException("No eligible copies of this credential remain - renew it to get more")
+        }
+        val response = keystore.signMdocPresentationForProximity(
+            credentialBytes = CredentialUtils.decodeMdocRawBytes(credential),
+            disclosedClaims = disclosedClaims,
+            sessionTranscriptBytes = sessionTranscriptBytes,
+            kid = credential.kid,
+        )
+        recordPresentation(PresentationRecord(
+            id = randomUint32Id(),
+            flowId = "proximity-${java.util.UUID.randomUUID()}",
+            credentialIds = listOf(credentialId),
+            credentialNames = listOfNotNull(credential.metadata?.name),
+            requestedClaims = disclosedClaims ?: emptyList(),
+            timestamp = System.currentTimeMillis(),
+        ))
+        return response
+    }
+
+    /**
      * Fetch the list of available credential issuers from the backend.
      *
      * Requires an active session (call after [login] or [register]).
@@ -1619,10 +1670,16 @@ class SirosWallet private constructor(
         // the shared wallet instance (by MainActivity's WalletViewModel, for
         // the unrelated in-app flow) and stays registered even once
         // MainActivity is backgrounded, that wait would hang forever.
-        val selectedIds = candidates.map { it.id }
+        val selectedIds = CredentialUtils.eligibleInstances(candidates, credentialConsumptionPolicy, presentationHistory).map { it.id }
 
         if (selectedIds.isEmpty()) {
-            throw WalletException("No credential in the wallet matches the request")
+            throw WalletException(
+                if (candidates.isEmpty()) {
+                    "No credential in the wallet matches the request"
+                } else {
+                    "No eligible copies of the requested credential remain - renew it to get more"
+                },
+            )
         }
 
         // "origin:<value>" per OpenID4VP 1.0 Appendix A is only used for the
@@ -2553,7 +2610,15 @@ class SirosWallet private constructor(
                             )
                         )
                     } else {
-                        candidates.map { it.id }
+                        CredentialUtils.eligibleInstances(candidates, credentialConsumptionPolicy, presentationHistory).map { it.id }
+                    }
+
+                    // The app is trusted to only return IDs it was offered,
+                    // but shouldn't be the only thing enforcing consumption -
+                    // re-validate here too (defense in depth).
+                    val eligibleIds = CredentialUtils.eligibleInstances(candidates, credentialConsumptionPolicy, presentationHistory).map { it.id }.toSet()
+                    if (selectedIds.any { it !in eligibleIds }) {
+                        throw WalletException("Selected credential has no eligible copies remaining - renew it to get more")
                     }
 
                     // Track this presentation
@@ -3114,7 +3179,7 @@ class SirosWallet private constructor(
                         )
                     )
                 } else {
-                    candidates.map { it.id }
+                    CredentialUtils.eligibleInstances(candidates, credentialConsumptionPolicy, presentationHistory).map { it.id }
                 }
 
                 if (selectedIds.isEmpty()) {
@@ -3124,6 +3189,14 @@ class SirosWallet private constructor(
                     }
                     engine.sendFlowAction(flowId, "decline", declinePayload)
                     return@launch
+                }
+
+                // The app is trusted to only return IDs it was offered, but
+                // shouldn't be the only thing enforcing consumption -
+                // re-validate here too (defense in depth).
+                val eligibleIds = CredentialUtils.eligibleInstances(candidates, credentialConsumptionPolicy, presentationHistory).map { it.id }.toSet()
+                if (selectedIds.any { it !in eligibleIds }) {
+                    throw WalletException("Selected credential has no eligible copies remaining - renew it to get more")
                 }
 
                 // Record presentation history

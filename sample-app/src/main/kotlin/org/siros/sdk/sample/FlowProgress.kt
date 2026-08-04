@@ -38,6 +38,22 @@ private val PRESENTATION_STEPS = listOf(
     "submitting_response",
 )
 
+/**
+ * ISO 18013-5 BLE proximity presentation - a local-only flow (no
+ * wallet-backend/engine involved, see `SirosWallet.signMdocPresentationForProximity`),
+ * but conceptually the same operation as [PRESENTATION_STEPS] once a reader
+ * has connected, so those steps are reused verbatim below rather than
+ * duplicated.
+ */
+private val PROXIMITY_STEPS = listOf(
+    "waiting_for_reader",
+    "reader_connected",
+    "parsing_request",
+    "match_credentials",
+    "awaiting_consent",
+    "submitting_response",
+)
+
 private val STEP_LABEL_RES: Map<String, Int> = mapOf(
     "parsing_offer" to R.string.flow_step_parsing_offer,
     "offer_parsed" to R.string.flow_step_offer_parsed,
@@ -58,6 +74,8 @@ private val STEP_LABEL_RES: Map<String, Int> = mapOf(
     "awaiting_consent" to R.string.flow_step_awaiting_consent,
     "credential_selection" to R.string.flow_step_credential_selection,
     "submitting_response" to R.string.flow_step_submitting_response,
+    "waiting_for_reader" to R.string.flow_step_waiting_for_reader,
+    "reader_connected" to R.string.flow_step_reader_connected,
 )
 
 /** Localized label resource for a raw FlowStep token, falling back to a generic "Processing…" for unrecognized tokens. */
@@ -72,6 +90,7 @@ fun flowStepProgress(flowType: String, step: String): Float? {
     val steps = when (flowType) {
         "issuance" -> ISSUANCE_STEPS
         "presentation" -> PRESENTATION_STEPS
+        "proximity" -> PROXIMITY_STEPS
         else -> return null
     }
     val index = steps.indexOf(step)

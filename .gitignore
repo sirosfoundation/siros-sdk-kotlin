@@ -10,3 +10,5 @@
 *.keystore
 /sdk/*/build/
 /sample-app/build/
+/tools/.venv/
+/tools/__pycache__/
