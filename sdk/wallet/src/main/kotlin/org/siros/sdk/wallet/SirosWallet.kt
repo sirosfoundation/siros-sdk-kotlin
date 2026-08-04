@@ -1194,6 +1194,12 @@ class SirosWallet private constructor(
                         put("key_id", kotlinx.serialization.json.JsonPrimitive(evidence.keyId))
                         put("challenge", kotlinx.serialization.json.JsonPrimitive(evidence.challenge))
                     }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // Must propagate, not degrade to null - swallowing this
+                    // breaks structured concurrency (e.g. the parent scope
+                    // being cancelled during issuance would silently fail to
+                    // stop this coroutine).
+                    throw e
                 } catch (e: Exception) {
                     Timber.w(e, "Native attestation evidence generation failed, continuing without it")
                     null
