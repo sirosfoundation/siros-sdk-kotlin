@@ -30,6 +30,7 @@
     <string name="add_credential_title">Adicionar Credencial</string>
     <string name="add_credential_loading">Carregando credenciais disponíveis\u2026</string>
     <string name="add_credential_empty">Nenhuma credencial disponível</string>
+    <string name="add_credential_retry">Tentar Novamente</string>
     <string name="nav_back">Voltar</string>
 
     <!-- Credential detail screen -->
@@ -43,6 +44,11 @@
     <string name="credential_detail_issued">Emitido</string>
     <string name="credential_detail_expires">Expira</string>
     <string name="credential_detail_no_claims">Nenhum atributo disponível</string>
+    <string name="credential_detail_raw_header">Cabeçalho</string>
+    <string name="credential_detail_raw_payload">Carga útil</string>
+    <string name="credential_detail_raw_disclosure">Divulgação %1$d</string>
+    <string name="copy_to_clipboard">Copiar para a área de transferência</string>
+    <string name="copied_to_clipboard">Copiado para a área de transferência</string>
     <string name="credential_detail_delete">Excluir Credencial</string>
     <string name="credential_detail_delete_confirm_title">Excluir Credencial</string>
     <string name="credential_detail_delete_confirm_message">Tem certeza de que deseja excluir \"%1$s\"? Esta ação não pode ser desfeita.</string>
@@ -56,8 +62,13 @@
     <string name="settings_tenant_id">Inquilino</string>
     <string name="settings_credentials_stored">Credenciais armazenadas</string>
     <string name="settings_app_version">Versão do aplicativo</string>
+    <string name="settings_credential_details">Detalhes da credencial</string>
+    <string name="settings_credential_details_description">Mostrar atributos brutos e dados de credencial assinados ao tocar em uma credencial</string>
+    <string name="settings_diagnostic_messages">Mensagens de diagnóstico</string>
+    <string name="settings_diagnostic_messages_description">Mostrar o token de etapa bruto do servidor junto com o rótulo de progresso amigável durante um fluxo</string>
     <string name="settings_presentation_history">Histórico de Apresentações</string>
     <string name="settings_logout">Sair</string>
+    <string name="nfc_hce_description">Envolvimento de dispositivo mdoc ISO 18013-5</string>
 
     <!-- Presentation history -->
     <string name="history_title">Histórico de Apresentações</string>
@@ -81,6 +92,8 @@
     <string name="flow_presenting">Apresentando Credencial\u2026</string>
     <string name="flow_processing">Processando\u2026</string>
     <string name="flow_cancel">Cancelar</string>
+    <string name="flow_close">Fechar</string>
+    <string name="flow_error_title">Falha no Fluxo</string>
     <string name="flow_step_parsing_offer">Lendo oferta de credencial…</string>
     <string name="flow_step_offer_parsed">Oferta de credencial analisada</string>
     <string name="flow_step_fetching_metadata">Buscando informações do emissor…</string>
@@ -104,6 +117,9 @@
     <string name="flow_diagnostic_label">Diagnóstico: %1$s</string>
     <string name="flow_credentials_received">Recebida(s) %1$d credencial(is)</string>
     <string name="flow_presentation_sent">Apresentação enviada com sucesso</string>
+    <string name="flow_step_waiting_for_reader">Aguardando a conexão de um leitor…</string>
+    <string name="flow_step_reader_connected">Leitor conectado, verificando a solicitação…</string>
+    <string name="proximity_presentation_failed">A apresentação não foi concluída</string>
 
     <!-- Error view -->
     <string name="error_title">Algo deu errado</string>

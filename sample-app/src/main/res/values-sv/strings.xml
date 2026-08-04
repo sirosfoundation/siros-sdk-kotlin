@@ -30,6 +30,7 @@
     <string name="add_credential_title">Lägg till intyg</string>
     <string name="add_credential_loading">Laddar tillgängliga intyg\u2026</string>
     <string name="add_credential_empty">Inga intyg tillgängliga</string>
+    <string name="add_credential_retry">Försök igen</string>
     <string name="nav_back">Tillbaka</string>
 
     <!-- Credential detail screen -->
@@ -43,6 +44,11 @@
     <string name="credential_detail_issued">Utfärdat</string>
     <string name="credential_detail_expires">Utgår</string>
     <string name="credential_detail_no_claims">Inga attribut tillgängliga</string>
+    <string name="credential_detail_raw_header">Header</string>
+    <string name="credential_detail_raw_payload">Nyttolast</string>
+    <string name="credential_detail_raw_disclosure">Friläggning %1$d</string>
+    <string name="copy_to_clipboard">Kopiera till urklipp</string>
+    <string name="copied_to_clipboard">Kopierat till urklipp</string>
     <string name="credential_detail_delete">Ta bort intyg</string>
     <string name="credential_detail_delete_confirm_title">Ta bort intyg</string>
     <string name="credential_detail_delete_confirm_message">Är du säker på att du vill ta bort \"%1$s\"? Denna åtgärd kan inte ångras.</string>
@@ -56,8 +62,13 @@
     <string name="settings_tenant_id">Klient</string>
     <string name="settings_credentials_stored">Lagrade intyg</string>
     <string name="settings_app_version">Appversion</string>
+    <string name="settings_credential_details">Intygsdetaljer</string>
+    <string name="settings_credential_details_description">Visa rådata och signerade intygsuppgifter när du trycker på ett intyg</string>
+    <string name="settings_diagnostic_messages">Diagnostikmeddelanden</string>
+    <string name="settings_diagnostic_messages_description">Visa den råa steg-token från servern tillsammans med den vänliga förloppsetiketten under ett flöde</string>
     <string name="settings_presentation_history">Presentationshistorik</string>
     <string name="settings_logout">Logga ut</string>
+    <string name="nfc_hce_description">ISO 18013-5 mdoc-enhetsengagemang</string>
 
     <!-- Presentation history -->
     <string name="history_title">Presentationshistorik</string>
@@ -81,6 +92,8 @@
     <string name="flow_presenting">Presenterar intyg\u2026</string>
     <string name="flow_processing">Bearbetar\u2026</string>
     <string name="flow_cancel">Avbryt</string>
+    <string name="flow_close">Stäng</string>
+    <string name="flow_error_title">Flödet misslyckades</string>
     <string name="flow_step_parsing_offer">Läser in intygserbjudande…</string>
     <string name="flow_step_offer_parsed">Intygserbjudande inläst</string>
     <string name="flow_step_fetching_metadata">Hämtar utfärdarinformation…</string>
@@ -104,6 +117,9 @@
     <string name="flow_diagnostic_label">Diagnostik: %1$s</string>
     <string name="flow_credentials_received">Mottog %1$d intyg</string>
     <string name="flow_presentation_sent">Presentationen skickades</string>
+    <string name="flow_step_waiting_for_reader">Väntar på att en läsare ska ansluta…</string>
+    <string name="flow_step_reader_connected">Läsare ansluten, verifierar begäran…</string>
+    <string name="proximity_presentation_failed">Presentationen slutfördes inte</string>
 
     <!-- Error view -->
     <string name="error_title">Något gick fel</string>

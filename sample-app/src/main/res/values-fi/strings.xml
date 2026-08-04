@@ -30,6 +30,7 @@
     <string name="add_credential_title">Lisää todistus</string>
     <string name="add_credential_loading">Ladataan saatavilla olevia todistuksia\u2026</string>
     <string name="add_credential_empty">Ei saatavilla olevia todistuksia</string>
+    <string name="add_credential_retry">Yritä uudelleen</string>
     <string name="nav_back">Takaisin</string>
 
     <!-- Credential detail screen -->
@@ -43,6 +44,11 @@
     <string name="credential_detail_issued">Myönnetty</string>
     <string name="credential_detail_expires">Vanhenee</string>
     <string name="credential_detail_no_claims">Ei väitteitä saatavilla</string>
+    <string name="credential_detail_raw_header">Header</string>
+    <string name="credential_detail_raw_payload">Hyötykuorma</string>
+    <string name="credential_detail_raw_disclosure">Paljastus %1$d</string>
+    <string name="copy_to_clipboard">Kopioi leikepöydälle</string>
+    <string name="copied_to_clipboard">Kopioitu leikepöydälle</string>
     <string name="credential_detail_delete">Poista todistus</string>
     <string name="credential_detail_delete_confirm_title">Poista todistus</string>
     <string name="credential_detail_delete_confirm_message">Haluatko varmasti poistaa \"%1$s\"? Tätä toimintoa ei voi peruuttaa.</string>
@@ -56,8 +62,13 @@
     <string name="settings_tenant_id">Vuokralainen</string>
     <string name="settings_credentials_stored">Tallennetut todistukset</string>
     <string name="settings_app_version">Sovellusversio</string>
+    <string name="settings_credential_details">Todistuksen tiedot</string>
+    <string name="settings_credential_details_description">Näytä raakadata ja allekirjoitetut todistustiedot, kun painat todistusta</string>
+    <string name="settings_diagnostic_messages">Diagnostiikkaviestit</string>
+    <string name="settings_diagnostic_messages_description">Näytä palvelimen raaka vaihetunniste ystävällisen edistymismerkinnän rinnalla prosessin aikana</string>
     <string name="settings_presentation_history">Esityshistoria</string>
     <string name="settings_logout">Kirjaudu ulos</string>
+    <string name="nfc_hce_description">ISO 18013-5 mdoc-laitesitoutuminen</string>
 
     <!-- Presentation history -->
     <string name="history_title">Esityshistoria</string>
@@ -81,6 +92,8 @@
     <string name="flow_presenting">Esitetään todistusta\u2026</string>
     <string name="flow_processing">Käsitellään\u2026</string>
     <string name="flow_cancel">Peruuta</string>
+    <string name="flow_close">Sulje</string>
+    <string name="flow_error_title">Prosessi epäonnistui</string>
     <string name="flow_step_parsing_offer">Luetaan todistustarjousta…</string>
     <string name="flow_step_offer_parsed">Todistustarjous luettu</string>
     <string name="flow_step_fetching_metadata">Haetaan myöntäjän tietoja…</string>
@@ -104,6 +117,9 @@
     <string name="flow_diagnostic_label">Diagnostiikka: %1$s</string>
     <string name="flow_credentials_received">Vastaanotettu %1$d todistusta</string>
     <string name="flow_presentation_sent">Esitys lähetetty onnistuneesti</string>
+    <string name="flow_step_waiting_for_reader">Odotetaan lukijan yhdistämistä…</string>
+    <string name="flow_step_reader_connected">Lukija yhdistetty, tarkistetaan pyyntöä…</string>
+    <string name="proximity_presentation_failed">Esitys ei valmistunut</string>
 
     <!-- Error view -->
     <string name="error_title">Jokin meni pieleen</string>
