@@ -661,10 +661,7 @@ internal interface UniffiCallbackInterfaceFfiAuthCallbackMethod1 : com.sun.jna.C
     fun callback(`uniffiHandle`: Long,`challenge`: RustBuffer.ByValue,`rpId`: RustBuffer.ByValue,`allowedCredentials`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
 }
 internal interface UniffiCallbackInterfaceFfiCtap2TransportMethod0 : com.sun.jna.Callback {
-    fun callback(`uniffiHandle`: Long,`rpId`: RustBuffer.ByValue,`userId`: RustBuffer.ByValue,`clientDataHash`: RustBuffer.ByValue,`generateKey`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
-}
-internal interface UniffiCallbackInterfaceFfiCtap2TransportMethod1 : com.sun.jna.Callback {
-    fun callback(`uniffiHandle`: Long,`rpId`: RustBuffer.ByValue,`challenge`: RustBuffer.ByValue,`credentialId`: RustBuffer.ByValue,`sign`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+    fun callback(`uniffiHandle`: Long,`command`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
 }
 internal interface UniffiCallbackInterfaceFfiHttpTransportMethod0 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`body`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
@@ -703,21 +700,18 @@ internal open class UniffiVTableCallbackInterfaceFfiAuthCallback(
     }
 
 }
-@Structure.FieldOrder("ctap2MakeCredential", "ctap2GetAssertion", "uniffiFree")
+@Structure.FieldOrder("ctap2SendCommand", "uniffiFree")
 internal open class UniffiVTableCallbackInterfaceFfiCtap2Transport(
-    @JvmField internal var `ctap2MakeCredential`: UniffiCallbackInterfaceFfiCtap2TransportMethod0? = null,
-    @JvmField internal var `ctap2GetAssertion`: UniffiCallbackInterfaceFfiCtap2TransportMethod1? = null,
+    @JvmField internal var `ctap2SendCommand`: UniffiCallbackInterfaceFfiCtap2TransportMethod0? = null,
     @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
 ) : Structure() {
     class UniffiByValue(
-        `ctap2MakeCredential`: UniffiCallbackInterfaceFfiCtap2TransportMethod0? = null,
-        `ctap2GetAssertion`: UniffiCallbackInterfaceFfiCtap2TransportMethod1? = null,
+        `ctap2SendCommand`: UniffiCallbackInterfaceFfiCtap2TransportMethod0? = null,
         `uniffiFree`: UniffiCallbackInterfaceFree? = null,
-    ): UniffiVTableCallbackInterfaceFfiCtap2Transport(`ctap2MakeCredential`,`ctap2GetAssertion`,`uniffiFree`,), Structure.ByValue
+    ): UniffiVTableCallbackInterfaceFfiCtap2Transport(`ctap2SendCommand`,`uniffiFree`,), Structure.ByValue
 
    internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceFfiCtap2Transport) {
-        `ctap2MakeCredential` = other.`ctap2MakeCredential`
-        `ctap2GetAssertion` = other.`ctap2GetAssertion`
+        `ctap2SendCommand` = other.`ctap2SendCommand`
         `uniffiFree` = other.`uniffiFree`
     }
 
@@ -779,7 +773,6 @@ internal open class UniffiVTableCallbackInterfaceFfiProgressCallback(
     }
 
 }
-
 
 
 
@@ -1128,9 +1121,7 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_siros_wscd_manager_checksum_method_ffiauthcallback_request_webauthn_assertion(
     ): Short
-    fun uniffi_siros_wscd_manager_checksum_method_ffictap2transport_ctap2_make_credential(
-    ): Short
-    fun uniffi_siros_wscd_manager_checksum_method_ffictap2transport_ctap2_get_assertion(
+    fun uniffi_siros_wscd_manager_checksum_method_ffictap2transport_ctap2_send_command(
     ): Short
     fun uniffi_siros_wscd_manager_checksum_method_ffihttptransport_send(
     ): Short
@@ -1227,10 +1218,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_siros_wscd_manager_checksum_method_ffiauthcallback_request_webauthn_assertion() != 26796.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_siros_wscd_manager_checksum_method_ffictap2transport_ctap2_make_credential() != 17919.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_siros_wscd_manager_checksum_method_ffictap2transport_ctap2_get_assertion() != 26248.toShort()) {
+    if (lib.uniffi_siros_wscd_manager_checksum_method_ffictap2transport_ctap2_send_command() != 64354.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_siros_wscd_manager_checksum_method_ffihttptransport_send() != 15795.toShort()) {
@@ -2334,74 +2322,6 @@ public object FfiConverterTypeFfiEcPublicKey: FfiConverterRustBuffer<FfiEcPublic
 
 
 
-data class FfiFido2GeneratedKey (
-    var `keyHandle`: kotlin.ByteArray, 
-    var `publicKeyCose`: kotlin.ByteArray, 
-    var `algorithm`: kotlin.Long, 
-    var `attestationObject`: kotlin.ByteArray
-) {
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeFfiFido2GeneratedKey: FfiConverterRustBuffer<FfiFido2GeneratedKey> {
-    override fun read(buf: ByteBuffer): FfiFido2GeneratedKey {
-        return FfiFido2GeneratedKey(
-            FfiConverterByteArray.read(buf),
-            FfiConverterByteArray.read(buf),
-            FfiConverterLong.read(buf),
-            FfiConverterByteArray.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: FfiFido2GeneratedKey) = (
-            FfiConverterByteArray.allocationSize(value.`keyHandle`) +
-            FfiConverterByteArray.allocationSize(value.`publicKeyCose`) +
-            FfiConverterLong.allocationSize(value.`algorithm`) +
-            FfiConverterByteArray.allocationSize(value.`attestationObject`)
-    )
-
-    override fun write(value: FfiFido2GeneratedKey, buf: ByteBuffer) {
-            FfiConverterByteArray.write(value.`keyHandle`, buf)
-            FfiConverterByteArray.write(value.`publicKeyCose`, buf)
-            FfiConverterLong.write(value.`algorithm`, buf)
-            FfiConverterByteArray.write(value.`attestationObject`, buf)
-    }
-}
-
-
-
-data class FfiGenerateKeyInput (
-    var `algorithms`: List<kotlin.Long>
-) {
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeFfiGenerateKeyInput: FfiConverterRustBuffer<FfiGenerateKeyInput> {
-    override fun read(buf: ByteBuffer): FfiGenerateKeyInput {
-        return FfiGenerateKeyInput(
-            FfiConverterSequenceLong.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: FfiGenerateKeyInput) = (
-            FfiConverterSequenceLong.allocationSize(value.`algorithms`)
-    )
-
-    override fun write(value: FfiGenerateKeyInput, buf: ByteBuffer) {
-            FfiConverterSequenceLong.write(value.`algorithms`, buf)
-    }
-}
-
-
-
 data class FfiGeneratedKey (
     var `kid`: kotlin.String, 
     var `publicKeyJwk`: kotlin.String
@@ -2513,38 +2433,6 @@ public object FfiConverterTypeFfiLifecycleStatus: FfiConverterRustBuffer<FfiLife
             FfiConverterTypeFfiFactorKind.write(value.`factorKind`, buf)
             FfiConverterTypeFfiLifecycleState.write(value.`state`, buf)
             FfiConverterLong.write(value.`updatedAt`, buf)
-    }
-}
-
-
-
-data class FfiMakeCredentialResult (
-    var `credentialId`: kotlin.ByteArray, 
-    var `generatedKey`: FfiFido2GeneratedKey
-) {
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeFfiMakeCredentialResult: FfiConverterRustBuffer<FfiMakeCredentialResult> {
-    override fun read(buf: ByteBuffer): FfiMakeCredentialResult {
-        return FfiMakeCredentialResult(
-            FfiConverterByteArray.read(buf),
-            FfiConverterTypeFfiFido2GeneratedKey.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: FfiMakeCredentialResult) = (
-            FfiConverterByteArray.allocationSize(value.`credentialId`) +
-            FfiConverterTypeFfiFido2GeneratedKey.allocationSize(value.`generatedKey`)
-    )
-
-    override fun write(value: FfiMakeCredentialResult, buf: ByteBuffer) {
-            FfiConverterByteArray.write(value.`credentialId`, buf)
-            FfiConverterTypeFfiFido2GeneratedKey.write(value.`generatedKey`, buf)
     }
 }
 
@@ -2800,70 +2688,6 @@ public object FfiConverterTypeFfiSecurityProperties: FfiConverterRustBuffer<FfiS
             FfiConverterSequenceString.write(value.`userAuthentication`, buf)
             FfiConverterTypeFfiCertificationLevel.write(value.`certification`, buf)
             FfiConverterSequenceString.write(value.`amr`, buf)
-    }
-}
-
-
-
-data class FfiSignInput (
-    var `keyHandle`: kotlin.ByteArray, 
-    var `tbs`: kotlin.ByteArray, 
-    var `additionalArgs`: kotlin.ByteArray?
-) {
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeFfiSignInput: FfiConverterRustBuffer<FfiSignInput> {
-    override fun read(buf: ByteBuffer): FfiSignInput {
-        return FfiSignInput(
-            FfiConverterByteArray.read(buf),
-            FfiConverterByteArray.read(buf),
-            FfiConverterOptionalByteArray.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: FfiSignInput) = (
-            FfiConverterByteArray.allocationSize(value.`keyHandle`) +
-            FfiConverterByteArray.allocationSize(value.`tbs`) +
-            FfiConverterOptionalByteArray.allocationSize(value.`additionalArgs`)
-    )
-
-    override fun write(value: FfiSignInput, buf: ByteBuffer) {
-            FfiConverterByteArray.write(value.`keyHandle`, buf)
-            FfiConverterByteArray.write(value.`tbs`, buf)
-            FfiConverterOptionalByteArray.write(value.`additionalArgs`, buf)
-    }
-}
-
-
-
-data class FfiSignResult (
-    var `signature`: kotlin.ByteArray
-) {
-    
-    companion object
-}
-
-/**
- * @suppress
- */
-public object FfiConverterTypeFfiSignResult: FfiConverterRustBuffer<FfiSignResult> {
-    override fun read(buf: ByteBuffer): FfiSignResult {
-        return FfiSignResult(
-            FfiConverterByteArray.read(buf),
-        )
-    }
-
-    override fun allocationSize(value: FfiSignResult) = (
-            FfiConverterByteArray.allocationSize(value.`signature`)
-    )
-
-    override fun write(value: FfiSignResult, buf: ByteBuffer) {
-            FfiConverterByteArray.write(value.`signature`, buf)
     }
 }
 
@@ -3678,21 +3502,24 @@ public object FfiConverterTypeFfiAuthCallback: FfiConverterCallbackInterface<Ffi
 
 
 /**
- * Host-provided CTAP2 transport for the previewSign (WebAuthn "sign
- * extension") plugin.
+ * Host-provided raw CTAP2 message transport for the previewSign (WebAuthn
+ * "sign extension") plugin.
  *
- * The host SDK talks raw CTAP2 to the authenticator (BLE/NFC/USB) and is
- * responsible for producing these already-structured results — using its
- * own CBOR handling, or by calling the free functions
- * [`decode_cose_ec2_public_key`] / [`extract_previewsign_signature`]
- * exported from this crate to reuse the same parsing logic the WASM
- * browser transport uses, instead of reimplementing it.
+ * The host SDK owns the channel to the authenticator (BLE/NFC/USB) and
+ * all of its transport-specific framing (CTAPHID chunking over USB HID,
+ * NFCCTAP_MSG/ISO 7816 APDU wrapping over NFC, ...) - this callback sees
+ * only the logical CTAP2 message layer: `command` is a leading
+ * command-code byte followed by CBOR params (already built by this
+ * crate); the return value is a leading status byte followed by CBOR
+ * body (or just the status byte on error), exactly as received from the
+ * authenticator. ALL previewSign CBOR request-building and
+ * response-parsing lives in [`crate::preview_sign_protocol`] - do not
+ * reimplement it in a host SDK. This design is confirmed against real
+ * YubiKey 5.8 hardware (2026-08-04).
  */
 public interface FfiCtap2Transport {
     
-    fun `ctap2MakeCredential`(`rpId`: kotlin.String, `userId`: kotlin.ByteArray, `clientDataHash`: kotlin.ByteArray, `generateKey`: FfiGenerateKeyInput): FfiMakeCredentialResult
-    
-    fun `ctap2GetAssertion`(`rpId`: kotlin.String, `challenge`: kotlin.ByteArray, `credentialId`: kotlin.ByteArray, `sign`: FfiSignInput): FfiSignResult
+    fun `ctap2SendCommand`(`command`: kotlin.ByteArray): kotlin.ByteArray
     
     companion object
 }
@@ -3701,38 +3528,15 @@ public interface FfiCtap2Transport {
 
 // Put the implementation in an object so we don't pollute the top-level namespace
 internal object uniffiCallbackInterfaceFfiCtap2Transport {
-    internal object `ctap2MakeCredential`: UniffiCallbackInterfaceFfiCtap2TransportMethod0 {
-        override fun callback(`uniffiHandle`: Long,`rpId`: RustBuffer.ByValue,`userId`: RustBuffer.ByValue,`clientDataHash`: RustBuffer.ByValue,`generateKey`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+    internal object `ctap2SendCommand`: UniffiCallbackInterfaceFfiCtap2TransportMethod0 {
+        override fun callback(`uniffiHandle`: Long,`command`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
             val uniffiObj = FfiConverterTypeFfiCtap2Transport.handleMap.get(uniffiHandle)
             val makeCall = { ->
-                uniffiObj.`ctap2MakeCredential`(
-                    FfiConverterString.lift(`rpId`),
-                    FfiConverterByteArray.lift(`userId`),
-                    FfiConverterByteArray.lift(`clientDataHash`),
-                    FfiConverterTypeFfiGenerateKeyInput.lift(`generateKey`),
+                uniffiObj.`ctap2SendCommand`(
+                    FfiConverterByteArray.lift(`command`),
                 )
             }
-            val writeReturn = { value: FfiMakeCredentialResult -> uniffiOutReturn.setValue(FfiConverterTypeFfiMakeCredentialResult.lower(value)) }
-            uniffiTraitInterfaceCallWithError(
-                uniffiCallStatus,
-                makeCall,
-                writeReturn,
-                { e: FfiWscdException -> FfiConverterTypeFfiWscdError.lower(e) }
-            )
-        }
-    }
-    internal object `ctap2GetAssertion`: UniffiCallbackInterfaceFfiCtap2TransportMethod1 {
-        override fun callback(`uniffiHandle`: Long,`rpId`: RustBuffer.ByValue,`challenge`: RustBuffer.ByValue,`credentialId`: RustBuffer.ByValue,`sign`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
-            val uniffiObj = FfiConverterTypeFfiCtap2Transport.handleMap.get(uniffiHandle)
-            val makeCall = { ->
-                uniffiObj.`ctap2GetAssertion`(
-                    FfiConverterString.lift(`rpId`),
-                    FfiConverterByteArray.lift(`challenge`),
-                    FfiConverterByteArray.lift(`credentialId`),
-                    FfiConverterTypeFfiSignInput.lift(`sign`),
-                )
-            }
-            val writeReturn = { value: FfiSignResult -> uniffiOutReturn.setValue(FfiConverterTypeFfiSignResult.lower(value)) }
+            val writeReturn = { value: kotlin.ByteArray -> uniffiOutReturn.setValue(FfiConverterByteArray.lower(value)) }
             uniffiTraitInterfaceCallWithError(
                 uniffiCallStatus,
                 makeCall,
@@ -3749,8 +3553,7 @@ internal object uniffiCallbackInterfaceFfiCtap2Transport {
     }
 
     internal var vtable = UniffiVTableCallbackInterfaceFfiCtap2Transport.UniffiByValue(
-        `ctap2MakeCredential`,
-        `ctap2GetAssertion`,
+        `ctap2SendCommand`,
         uniffiFree,
     )
 
@@ -4060,38 +3863,6 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
 /**
  * @suppress
  */
-public object FfiConverterOptionalByteArray: FfiConverterRustBuffer<kotlin.ByteArray?> {
-    override fun read(buf: ByteBuffer): kotlin.ByteArray? {
-        if (buf.get().toInt() == 0) {
-            return null
-        }
-        return FfiConverterByteArray.read(buf)
-    }
-
-    override fun allocationSize(value: kotlin.ByteArray?): ULong {
-        if (value == null) {
-            return 1UL
-        } else {
-            return 1UL + FfiConverterByteArray.allocationSize(value)
-        }
-    }
-
-    override fun write(value: kotlin.ByteArray?, buf: ByteBuffer) {
-        if (value == null) {
-            buf.put(0)
-        } else {
-            buf.put(1)
-            FfiConverterByteArray.write(value, buf)
-        }
-    }
-}
-
-
-
-
-/**
- * @suppress
- */
 public object FfiConverterOptionalTypeFfiAttestationChain: FfiConverterRustBuffer<FfiAttestationChain?> {
     override fun read(buf: ByteBuffer): FfiAttestationChain? {
         if (buf.get().toInt() == 0) {
@@ -4114,34 +3885,6 @@ public object FfiConverterOptionalTypeFfiAttestationChain: FfiConverterRustBuffe
         } else {
             buf.put(1)
             FfiConverterTypeFfiAttestationChain.write(value, buf)
-        }
-    }
-}
-
-
-
-
-/**
- * @suppress
- */
-public object FfiConverterSequenceLong: FfiConverterRustBuffer<List<kotlin.Long>> {
-    override fun read(buf: ByteBuffer): List<kotlin.Long> {
-        val len = buf.getInt()
-        return List<kotlin.Long>(len) {
-            FfiConverterLong.read(buf)
-        }
-    }
-
-    override fun allocationSize(value: List<kotlin.Long>): ULong {
-        val sizeForLength = 4UL
-        val sizeForItems = value.map { FfiConverterLong.allocationSize(it) }.sum()
-        return sizeForLength + sizeForItems
-    }
-
-    override fun write(value: List<kotlin.Long>, buf: ByteBuffer) {
-        buf.putInt(value.size)
-        value.iterator().forEach {
-            FfiConverterLong.write(it, buf)
         }
     }
 }
