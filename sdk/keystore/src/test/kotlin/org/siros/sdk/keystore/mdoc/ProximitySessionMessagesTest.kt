@@ -90,9 +90,28 @@ class BleMessageChunkerTest {
         assertEquals(0x01, chunks[0][0].toInt())
         assertEquals(0x01, chunks[1][0].toInt())
         assertEquals(0x00, chunks[2][0].toInt())
-        assertEquals(11, chunks[0].size) // prefix + 10
-        assertEquals(11, chunks[1].size)
-        assertEquals(6, chunks[2].size) // prefix + 5 remaining
+        // Total wire size (prefix + payload) must never exceed maxChunkSize -
+        // NOT prefix + maxChunkSize, which real BLE hardware rejects.
+        assertEquals(10, chunks[0].size)
+        assertEquals(10, chunks[1].size)
+        assertEquals(8, chunks[2].size) // prefix + 7 remaining
+    }
+
+    @Test
+    fun chunk_neverProducesAWireSizeLargerThanMaxChunkSize() {
+        for (maxChunkSize in listOf(2, 3, 10, 20, 512)) {
+            for (messageSize in listOf(0, 1, maxChunkSize - 1, maxChunkSize, maxChunkSize + 1, maxChunkSize * 3 + 1)) {
+                if (messageSize < 0) continue
+                val message = ByteArray(messageSize) { it.toByte() }
+                val chunks = BleMessageChunker.chunk(message, maxChunkSize)
+                for (c in chunks) {
+                    assertTrue(
+                        "chunk of size ${c.size} exceeds maxChunkSize $maxChunkSize (message=$messageSize)",
+                        c.size <= maxChunkSize,
+                    )
+                }
+            }
+        }
     }
 
     @Test

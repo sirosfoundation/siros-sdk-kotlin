@@ -51,14 +51,27 @@ object ProximitySessionMessages {
  */
 object BleMessageChunker {
 
-    /** Split [message] into chunks no larger than [maxChunkSize] (already MTU-3-adjusted by the caller), each with its continuation-byte prefix. */
+    /**
+     * Split [message] into chunks whose TOTAL wire size (1-byte prefix +
+     * payload) never exceeds [maxChunkSize] - i.e. [maxChunkSize] is the
+     * already MTU-3-adjusted (and 512-byte-attribute-capped) limit on what
+     * can actually go out over the air in one write/notify, not a
+     * payload-only figure. Each payload slice is therefore at most
+     * `maxChunkSize - 1` bytes, reserving room for the prefix byte - an
+     * earlier version of this function took [maxChunkSize] payload bytes
+     * and then added the prefix on top, silently producing chunks one byte
+     * OVER the caller's limit (caught via a real BLE notifyCharacteristicChanged
+     * rejection: "Notification should not be longer than max length of an
+     * attribute value").
+     */
     fun chunk(message: ByteArray, maxChunkSize: Int): List<ByteArray> {
-        require(maxChunkSize > 0) { "maxChunkSize must be positive" }
+        require(maxChunkSize > 1) { "maxChunkSize must allow at least 1 payload byte alongside the prefix" }
+        val payloadSize = maxChunkSize - 1
         if (message.isEmpty()) return listOf(byteArrayOf(0x00))
         val chunks = mutableListOf<ByteArray>()
         var offset = 0
         while (offset < message.size) {
-            val end = minOf(offset + maxChunkSize, message.size)
+            val end = minOf(offset + payloadSize, message.size)
             val isLast = end == message.size
             val prefix = if (isLast) 0x00.toByte() else 0x01.toByte()
             chunks.add(byteArrayOf(prefix) + message.copyOfRange(offset, end))

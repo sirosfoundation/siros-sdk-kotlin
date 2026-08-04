@@ -297,7 +297,15 @@ class BlePeripheralServer(
         val characteristic = server2ClientCharacteristic ?: return
         val device = connectedDevice ?: return
         val server = gattServer ?: return
-        val maxChunkSize = negotiatedMtu - 3
+        // §11.1.3.4: chunk size must respect BOTH limits - MTU-3 AND the
+        // Bluetooth Core Specification's absolute 512-byte max attribute
+        // value length. A negotiated MTU above 515 (observed: BlueZ
+        // negotiating 517 without this being visible at the client's own
+        // API layer) makes MTU-3 alone exceed 512, which
+        // notifyCharacteristicChanged rejects outright ("Notification
+        // should not be longer than max length of an attribute value") -
+        // found via a real BLE central connecting to this server.
+        val maxChunkSize = minOf(negotiatedMtu - 3, 512)
         for (chunk in BleMessageChunker.chunk(message, maxChunkSize)) {
             characteristic.value = chunk
             server.notifyCharacteristicChanged(device, characteristic, false)
