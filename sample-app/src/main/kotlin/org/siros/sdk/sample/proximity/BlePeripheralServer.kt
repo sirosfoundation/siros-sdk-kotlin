@@ -275,7 +275,13 @@ class BlePeripheralServer(
         // the QR transcript (Handover = null) first since it's the common
         // case; if AEAD decryption fails, retry with the NFC transcript
         // (Handover = [HandoverSelect, null]) before giving up.
-        val candidateHandovers = listOfNotNull(null, ActiveEngagement.handoverSelectBytes)
+        // NB: not `listOfNotNull(null, ...)` - that drops the literal null
+        // entry (it's designed to filter nulls out), which would silently
+        // skip the QR candidate entirely.
+        val candidateHandovers: List<ByteArray?> = buildList {
+            add(null)
+            ActiveEngagement.handoverSelectBytes?.let { add(it) }
+        }
         var requestBytes: ByteArray? = null
         var sessionTranscript: ByteArray = ProximitySessionTranscript.build(
             deviceEngagementBytes = engagement.deviceEngagementBytes,
