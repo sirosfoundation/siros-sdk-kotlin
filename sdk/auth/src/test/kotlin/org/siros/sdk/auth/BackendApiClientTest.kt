@@ -205,6 +205,37 @@ class BackendApiClientTest {
         assertEquals(false, body["openid4vci"]!!.jsonObject.containsKey("credential_issuer"))
     }
 
+    @Test
+    fun requestKeyAttestation_sendsWalletInstanceId_whenProvided() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"key_attestation": "signed-jwt"}"""))
+
+        val client = newClient()
+        client.requestKeyAttestation(
+            jwks = listOf(buildJsonObject { put("kty", "EC") }),
+            nonce = "nonce-1",
+            walletInstanceId = "test-jkt",
+        )
+
+        val request = server.takeRequest()
+        val body = kotlinx.serialization.json.Json.parseToJsonElement(request.body.readUtf8()).jsonObject
+        assertEquals("test-jkt", body["wallet_instance_id"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun requestKeyAttestation_omitsWalletInstanceId_whenNotProvided() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"key_attestation": "signed-jwt"}"""))
+
+        val client = newClient()
+        client.requestKeyAttestation(
+            jwks = listOf(buildJsonObject { put("kty", "EC") }),
+            nonce = "nonce-1",
+        )
+
+        val request = server.takeRequest()
+        val body = kotlinx.serialization.json.Json.parseToJsonElement(request.body.readUtf8()).jsonObject
+        assertEquals(false, body.containsKey("wallet_instance_id"))
+    }
+
     private fun newClient(): BackendApiClient {
         val baseUrl = server.url("/").toString().trimEnd('/')
         return BackendApiClient(baseUrl = baseUrl, tenantId = "default")

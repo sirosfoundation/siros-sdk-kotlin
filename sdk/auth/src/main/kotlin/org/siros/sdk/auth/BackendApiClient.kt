@@ -118,6 +118,7 @@ class BackendApiClient(
         nonce: String,
         securityProperties: SignerSecurityProperties? = null,
         credentialIssuer: String? = null,
+        walletInstanceId: String? = null,
     ): String {
         val body = kotlinx.serialization.json.buildJsonObject {
             put("jwks", kotlinx.serialization.json.JsonArray(jwks))
@@ -130,6 +131,13 @@ class BackendApiClient(
                     put("credential_issuer", kotlinx.serialization.json.JsonPrimitive(credentialIssuer))
                 }
             })
+            // The WIA's JWK-thumbprint identity (`cnf.jkt`) - lets the backend's
+            // KA trust gate look up this wallet instance's own recorded
+            // attestation_source and lift the K3 clamp when it's genuinely
+            // native-attested. Omitted whenever the caller has no such WIA.
+            if (!walletInstanceId.isNullOrBlank()) {
+                put("wallet_instance_id", kotlinx.serialization.json.JsonPrimitive(walletInstanceId))
+            }
             if (securityProperties != null) {
                 put("security_properties", kotlinx.serialization.json.buildJsonObject {
                     put("key_storage", kotlinx.serialization.json.JsonArray(
