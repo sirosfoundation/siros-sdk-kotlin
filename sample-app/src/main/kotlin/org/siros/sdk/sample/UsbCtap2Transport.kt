@@ -11,9 +11,7 @@ import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
-import android.util.Base64
 import android.util.Log
-import com.upokecenter.cbor.CBORObject
 import uniffi.siros_wscd_manager.FfiCtap2Transport
 import uniffi.siros_wscd_manager.FfiWscdException
 import java.io.ByteArrayOutputStream
@@ -24,14 +22,17 @@ import kotlin.random.Random
 /**
  * USB HID CTAP2 transport for FIDO2 authenticators (e.g. YubiKey).
  *
- * Implements the [FfiCtap2Transport] callback interface so the Rust
- * previewSign plugin can perform makeCredential and getAssertion
- * operations on a hardware authenticator connected via USB.
- *
- * Protocol layers:
+ * Implements the [FfiCtap2Transport] callback interface, which is now a
+ * single raw send/receive method (`ctap2SendCommand`) - all previewSign
+ * CBOR request-building and response-parsing lives in Rust
+ * (`siros-wscd-manager`'s `preview_sign_protocol` module), confirmed
+ * against real YubiKey 5.8 hardware. This class only owns the physical
+ * transport layers below that:
  * 1. USB HID — 64-byte packets to/from the authenticator
  * 2. CTAPHID — channel allocation + command framing (FIDO v2.1 §11.2)
- * 3. CTAP2 CBOR — authenticatorMakeCredential / authenticatorGetAssertion
+ *
+ * It has no CTAP2/CBOR knowledge of its own - it just moves a command's
+ * bytes to the authenticator and returns whatever bytes come back.
  */
 class UsbCtap2Transport(private val context: Context) : FfiCtap2Transport {
 
@@ -47,22 +48,13 @@ class UsbCtap2Transport(private val context: Context) : FfiCtap2Transport {
         private const val CTAPHID_ERROR: Byte = (0x3F or 0x80).toByte()
         private const val CTAPHID_KEEPALIVE: Byte = (0x3B or 0x80).toByte()
 
-        // CTAP2 commands
-        private const val CTAP2_MAKE_CREDENTIAL: Byte = 0x01
-        private const val CTAP2_GET_ASSERTION: Byte = 0x02
-
         // Broadcast channel for CTAPHID_INIT
         private val CID_BROADCAST = byteArrayOf(0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte())
 
-        // COSE key map labels
-        private const val COSE_KEY_ALG = 3
-        private const val COSE_KEY_X = -2
-        private const val COSE_KEY_Y = -3
-
         // HID packet size
         private const val HID_PACKET_SIZE = 64
-        private const val INIT_DATA_SIZE = 57  // 64 - 4(CID) - 1(CMD) - 2(LEN)
-        private const val CONT_DATA_SIZE = 59  // 64 - 4(CID) - 1(SEQ)
+        private const val INIT_DATA_SIZE = 57 // 64 - 4(CID) - 1(CMD) - 2(LEN)
+        private const val CONT_DATA_SIZE = 59 // 64 - 4(CID) - 1(SEQ)
 
         // Timeout for USB operations (ms)
         private const val USB_TIMEOUT_MS = 30_000
@@ -261,7 +253,7 @@ class UsbCtap2Transport(private val context: Context) : FfiCtap2Transport {
             val received = session.connection.bulkTransfer(session.inEp, buffer, buffer.size, 50)
             if (received <= 0) break
             drained++
-            if (drained > 50) break  // safety limit
+            if (drained > 50) break // safety limit
         }
         if (drained > 0) {
             Log.i(TAG, "Drained $drained stale packets from USB pipe")
@@ -394,232 +386,24 @@ class UsbCtap2Transport(private val context: Context) : FfiCtap2Transport {
         return buffer
     }
 
-    // ── CTAP2 CBOR commands ──────────────────────────────────────────────────
+    // ── FfiCtap2Transport ─────────────────────────────────────────────────────
 
-    override fun ctap2MakeCredential(
-        clientDataHash: ByteArray,
-        rpId: String,
-        userId: ByteArray,
-        algorithms: List<Long>,
-    ): ByteArray {
-        Log.i(TAG, "makeCredential: rpId=$rpId, algorithms=$algorithms")
-
+    /**
+     * Send a raw CTAP2 command (already CBOR-encoded with its leading
+     * command byte, built by Rust's `preview_sign_protocol` module) and
+     * return the raw response bytes exactly as received (leading status
+     * byte + CBOR body). No CBOR knowledge here - Rust does all
+     * encoding/decoding on both sides of this call.
+     */
+    override fun ctap2SendCommand(command: ByteArray): ByteArray {
         val session = openFidoDevice()
         try {
             val cid = ctaphidInit(session)
-
-            // Build CBOR for authenticatorMakeCredential (0x01)
-            // Use NewOrderedMap to preserve insertion order (CTAP canonical)
-            val params = CBORObject.NewOrderedMap()
-            params[CBORObject.FromObject(1)] = CBORObject.FromObject(clientDataHash)  // clientDataHash
-            
-            val rpMap = CBORObject.NewOrderedMap()
-            rpMap[CBORObject.FromObject("id")] = CBORObject.FromObject(rpId)
-            rpMap[CBORObject.FromObject("name")] = CBORObject.FromObject(rpId)
-            params[CBORObject.FromObject(2)] = rpMap
-            
-            val userMap = CBORObject.NewOrderedMap()
-            userMap[CBORObject.FromObject("id")] = CBORObject.FromObject(userId)
-            userMap[CBORObject.FromObject("name")] = CBORObject.FromObject("wscd-user")
-            userMap[CBORObject.FromObject("displayName")] = CBORObject.FromObject("WSCD User")
-            params[CBORObject.FromObject(3)] = userMap
-            
-            val algEntry = CBORObject.NewOrderedMap()
-            algEntry[CBORObject.FromObject("alg")] = CBORObject.FromObject(-7)
-            algEntry[CBORObject.FromObject("type")] = CBORObject.FromObject("public-key")
-            val pubKeyCredParams = CBORObject.NewArray()
-            pubKeyCredParams.Add(algEntry)
-            params[CBORObject.FromObject(4)] = pubKeyCredParams
-
-            // No options — skip rk and uv for maximum compatibility
-            // YubiKey will default to non-resident, no UV
-
-            val cbor = params.EncodeToBytes()
-            val payload = ByteArray(1 + cbor.size)
-            payload[0] = CTAP2_MAKE_CREDENTIAL
-            cbor.copyInto(payload, 1)
-
-            val response = ctaphidCbor(session, cid, payload)
-
-            // First byte is CTAP2 status
-            val status = response[0].toInt() and 0xFF
-            if (status != 0x00) {
-                throw FfiWscdException.Plugin("CTAP2 makeCredential error: 0x${status.toString(16)}")
-            }
-
-            // Parse attestation object from response[1..]
-            val attObj = CBORObject.DecodeFromBytes(response.copyOfRange(1, response.size))
-            return parseAttestationObject(attObj)
+            return ctaphidCbor(session, cid, command)
         } finally {
             session.close()
         }
     }
-
-    override fun ctap2GetAssertion(
-        rpId: String,
-        challenge: ByteArray,
-        credentialHandles: List<ByteArray>,
-        dataToSign: List<ByteArray>,
-    ): List<ByteArray> {
-        Log.i(TAG, "getAssertion: rpId=$rpId, credentials=${credentialHandles.size}")
-
-        val session = openFidoDevice()
-        try {
-            val cid = ctaphidInit(session)
-
-            // Build CBOR for authenticatorGetAssertion (0x02)
-            val params = CBORObject.NewMap()
-            params.Set(CBORObject.FromObject(1), CBORObject.FromObject(rpId))       // rpId
-            params.Set(CBORObject.FromObject(2), CBORObject.FromObject(challenge)) // clientDataHash
-
-            // allowList
-            params.Set(CBORObject.FromObject(3), CBORObject.NewArray().apply {
-                for (handle in credentialHandles) {
-                    Add(CBORObject.NewMap().apply {
-                        Set("type", CBORObject.FromObject("public-key"))
-                        Set("id", CBORObject.FromObject(handle))
-                    })
-                }
-            })
-
-            // Options - no UV for compatibility
-            // (YubiKey requires PIN setup for UV)
-
-            // rawSign extension: pass data-to-sign in extensions (key 6)
-            if (dataToSign.isNotEmpty()) {
-                params.Set(CBORObject.FromObject(6), CBORObject.NewMap().apply {
-                    Set("rawSign", CBORObject.NewMap().apply {
-                        Set("dataToSign", CBORObject.NewArray().apply {
-                            for (data in dataToSign) {
-                                Add(CBORObject.FromObject(data))
-                            }
-                        })
-                    })
-                })
-            }
-
-            val cbor = params.EncodeToBytes()
-            val payload = ByteArray(1 + cbor.size)
-            payload[0] = CTAP2_GET_ASSERTION
-            cbor.copyInto(payload, 1)
-
-            val response = ctaphidCbor(session, cid, payload)
-
-            val status = response[0].toInt() and 0xFF
-            if (status != 0x00) {
-                throw FfiWscdException.Plugin("CTAP2 getAssertion error: 0x${status.toString(16)}")
-            }
-
-            // Parse assertion response
-            val assertObj = CBORObject.DecodeFromBytes(response.copyOfRange(1, response.size))
-            return parseAssertionSignatures(assertObj, dataToSign.size)
-        } finally {
-            session.close()
-        }
-    }
-
-    // ── Response parsing ─────────────────────────────────────────────────────
-
-    /**
-     * Parse CBOR attestation object into the JSON format expected by PreviewSignPlugin:
-     * { "key_handle": "<base64url>", "public_key": {"x": "<b64u>", "y": "<b64u>"}, "algorithm": -7, "attestation_object": "<b64u>" }
-     */
-    private fun parseAttestationObject(attObj: CBORObject): ByteArray {
-        // CTAP2 makeCredential response uses integer keys:
-        // 1 = fmt (text), 2 = authData (bytes), 3 = attStmt (map)
-        val authDataObj: CBORObject = attObj.get(CBORObject.FromObject(2))
-            ?: attObj.get("authData")  // fallback to string key
-            ?: throw FfiWscdException.Plugin("Missing authData in attestation object")
-        val authData: ByteArray = authDataObj.GetByteString()
-
-        // authData layout:
-        // rpIdHash(32) || flags(1) || signCount(4) || attestedCredentialData { aaguid(16) || credIdLen(2) || credId(N) || credPubKey(COSE) }
-        if (authData.size < 37) {
-            throw FfiWscdException.Plugin("authData too short: ${authData.size}")
-        }
-
-        val flags = authData[32].toInt() and 0xFF
-        val hasAttestedData = (flags and 0x40) != 0
-
-        if (!hasAttestedData) {
-            throw FfiWscdException.Plugin("authData does not contain attested credential data")
-        }
-
-        // Parse attested credential data starting at offset 37
-        var offset = 37
-        // aaguid (16 bytes) - skip
-        offset += 16
-
-        // credIdLen (2 bytes big-endian)
-        val credIdLen = ((authData[offset].toInt() and 0xFF) shl 8) or (authData[offset + 1].toInt() and 0xFF)
-        offset += 2
-
-        // credId (credential handle)
-        val credId = authData.copyOfRange(offset, offset + credIdLen)
-        offset += credIdLen
-
-        // credPubKey (COSE key - CBOR encoded)
-        val coseKey = CBORObject.DecodeFromBytes(authData.copyOfRange(offset, authData.size))
-
-        val xObj: CBORObject = coseKey.get(CBORObject.FromObject(COSE_KEY_X))
-            ?: throw FfiWscdException.Plugin("Missing x coordinate in COSE key")
-        val x: ByteArray = xObj.GetByteString()
-        val yObj: CBORObject = coseKey.get(CBORObject.FromObject(COSE_KEY_Y))
-            ?: throw FfiWscdException.Plugin("Missing y coordinate in COSE key")
-        val y: ByteArray = yObj.GetByteString()
-        val algObj: CBORObject? = coseKey.get(CBORObject.FromObject(COSE_KEY_ALG))
-        val algorithm: Long = algObj?.AsInt64() ?: -7L
-
-        // Re-encode the entire attestation object
-        val attObjBytes = attObj.EncodeToBytes()
-
-        // Build the JSON response expected by PreviewSignPlugin
-        val json = org.json.JSONObject().apply {
-            put("key_handle", base64UrlEncode(credId))
-            put("public_key", org.json.JSONObject().apply {
-                put("x", base64UrlEncode(x))
-                put("y", base64UrlEncode(y))
-            })
-            put("algorithm", algorithm)
-            put("attestation_object", base64UrlEncode(attObjBytes))
-        }
-
-        Log.i(TAG, "makeCredential success: credId=${credId.size} bytes, alg=$algorithm")
-        return json.toString().toByteArray()
-    }
-
-    /**
-     * Parse assertion response to extract signatures.
-     *
-     * Standard assertion response: { 1: credential, 2: authData, 3: signature }
-     * With rawSign extension, signatures may be in extensions (key 4).
-     */
-    private fun parseAssertionSignatures(assertObj: CBORObject, expectedCount: Int): List<ByteArray> {
-        // Try rawSign extension response first
-        val extensions: CBORObject? = assertObj.get(CBORObject.FromObject(4))
-        if (extensions != null) {
-            val rawSign: CBORObject? = extensions.get("rawSign")
-            if (rawSign != null) {
-                val sigs: CBORObject? = rawSign.get("signatures")
-                if (sigs != null && sigs.type == com.upokecenter.cbor.CBORType.Array) {
-                    return (0 until sigs.size()).map { i ->
-                        sigs.get(i).GetByteString()
-                    }
-                }
-            }
-        }
-
-        // Fall back to standard signature field
-        val signature: ByteArray = assertObj.get(CBORObject.FromObject(3))?.GetByteString()
-            ?: throw FfiWscdException.Plugin("No signature in assertion response")
-
-        return listOf(signature)
-    }
-
-    // ── Helpers ──────────────────────────────────────────────────────────────
-
-    private fun base64UrlEncode(data: ByteArray): String =
-        Base64.encodeToString(data, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
 
     private fun ByteArray.toHex(): String =
         joinToString("") { "%02x".format(it) }
