@@ -14,6 +14,13 @@
     <uses-permission
         android:name="android.permission.BLUETOOTH_SCAN"
         android:usesPermissionFlags="neverForLocation" />
+    <!-- BLE scanning on Android 10/11 (API 28-30) requires this classic
+         permission regardless of BLUETOOTH_SCAN's neverForLocation flag,
+         which only exists on API 31+ - without it, BleCentralClient's scan
+         silently returns zero results on pre-S devices. ACCESS_COARSE_LOCATION
+         must be requested alongside ACCESS_FINE_LOCATION (Android requires both). -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="30" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
     <uses-feature android:name="android.hardware.nfc.hce" android:required="false" />

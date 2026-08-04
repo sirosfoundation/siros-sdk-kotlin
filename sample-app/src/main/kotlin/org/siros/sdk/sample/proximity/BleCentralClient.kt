@@ -315,7 +315,11 @@ class BleCentralClient(
     private fun sendData(message: ByteArray) {
         val characteristic = client2ServerCharacteristic ?: return
         val currentGatt = gatt ?: return
-        val maxChunkSize = minOf(negotiatedMtu - 3, 512)
+        // Floor at the default MTU-3 (20 bytes): BleMessageChunker.chunk
+        // requires maxChunkSize > 1, and an unexpected/invalid negotiated
+        // MTU should never be allowed to produce a smaller (or negative)
+        // value that would crash chunking outright.
+        val maxChunkSize = minOf(negotiatedMtu - 3, 512).coerceAtLeast(DEFAULT_MTU - 3)
         for (chunk in BleMessageChunker.chunk(message, maxChunkSize)) {
             writeNoResponse(currentGatt, characteristic, chunk)
         }

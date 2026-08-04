@@ -383,7 +383,11 @@ class BlePeripheralServer(
         // notifyCharacteristicChanged rejects outright ("Notification
         // should not be longer than max length of an attribute value") -
         // found via a real BLE central connecting to this server.
-        val maxChunkSize = minOf(negotiatedMtu - 3, 512)
+        // Also floor at the default MTU-3 (20 bytes): BleMessageChunker.chunk
+        // requires maxChunkSize > 1, and an unexpected/invalid negotiated
+        // MTU should never be allowed to produce a smaller (or negative)
+        // value that would crash chunking outright.
+        val maxChunkSize = minOf(negotiatedMtu - 3, 512).coerceAtLeast(DEFAULT_MTU - 3)
         for (chunk in BleMessageChunker.chunk(message, maxChunkSize)) {
             characteristic.value = chunk
             server.notifyCharacteristicChanged(device, characteristic, false)

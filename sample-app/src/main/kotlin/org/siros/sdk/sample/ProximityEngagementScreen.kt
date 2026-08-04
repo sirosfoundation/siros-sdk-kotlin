@@ -55,7 +55,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.keystore.mdoc.DeviceEngagement
 import org.siros.sdk.keystore.mdoc.NfcHandoverSelect
@@ -100,7 +102,13 @@ fun ProximityEngagementScreen(
             Manifest.permission.BLUETOOTH_SCAN,
         )
     } else {
-        emptyList()
+        // BLUETOOTH_ADVERTISE/CONNECT don't exist pre-S (peripheral-server
+        // mode already worked without them via the legacy BLUETOOTH/
+        // BLUETOOTH_ADMIN manifest permissions) - but scanning for
+        // central-client-mode needs this classic runtime permission on
+        // API 28-30, since BLUETOOTH_SCAN's neverForLocation exemption is
+        // an S+-only concept.
+        listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
     }
     var hasBlePermissions by remember {
         mutableStateOf(
@@ -126,21 +134,26 @@ fun ProximityEngagementScreen(
 
     // Bridges BlePeripheralServer/BleCentralClient's suspending consent
     // request to this screen's AlertDialog: suspends the caller (a
-    // background BLE coroutine) until the user taps Approve or Deny.
+    // background BLE coroutine running on Dispatchers.IO) until the user
+    // taps Approve or Deny. withContext(Main.immediate) hops back to the
+    // main thread first - Compose state writes (pendingConsent) must
+    // happen there, not on IO.
     val requestConsent: RequestProximityConsent = { docType, requestedClaims, matchingFamilies ->
-        suspendCancellableCoroutine { continuation ->
-            pendingConsent = PendingConsent(
-                docType = docType,
-                requestedClaims = requestedClaims,
-                matchingFamilies = matchingFamilies,
-                respond = { chosen ->
-                    pendingConsent = null
-                    continuation.resume(
-                        if (chosen != null) ProximityConsentResult.Approved(chosen) else ProximityConsentResult.Denied,
-                        onCancellation = null,
-                    )
-                },
-            )
+        withContext(Dispatchers.Main.immediate) {
+            suspendCancellableCoroutine { continuation ->
+                pendingConsent = PendingConsent(
+                    docType = docType,
+                    requestedClaims = requestedClaims,
+                    matchingFamilies = matchingFamilies,
+                    respond = { chosen ->
+                        pendingConsent = null
+                        continuation.resume(
+                            if (chosen != null) ProximityConsentResult.Approved(chosen) else ProximityConsentResult.Denied,
+                            onCancellation = null,
+                        )
+                    },
+                )
+            }
         }
     }
 
@@ -153,6 +166,7 @@ fun ProximityEngagementScreen(
         var peripheralServer: BlePeripheralServer? = null
         var centralClient: BleCentralClient? = null
         if (hasBlePermissions) {
+            blePermissionsDenied = false
             peripheralServer = BlePeripheralServer(
                 context = context,
                 engagement = engagement,
