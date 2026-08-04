@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Contactless
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.TextButton
@@ -451,6 +452,12 @@ fun WalletScreen(viewModel: WalletViewModel) {
                 titleContentColor = MaterialTheme.colorScheme.onSurface,
             ),
             actions = {
+                IconButton(onClick = viewModel::openProximityEngagement) {
+                    Icon(
+                        Icons.Filled.Contactless,
+                        "Proximity Engagement (Interop Test)",
+                    )
+                }
                 IconButton(onClick = viewModel::openQrScanner) {
                     Icon(
                         ImageVector.vectorResource(R.drawable.ic_qr_scan),
@@ -478,7 +485,6 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onShowHistory = viewModel::openHistory,
                             onEnrollWscd = viewModel::enrollWscd,
                             onShowWscaDeveloper = viewModel::openWscaDeveloper,
-                            onShowProximityEngagement = viewModel::openProximityEngagement,
                             onForgetAccount = viewModel::forgetAccount,
                             passkeys = viewModel.listPasskeys(),
                             onRenamePasskey = viewModel::renamePasskey,
@@ -1012,7 +1018,6 @@ fun SettingsTab(
     onShowHistory: () -> Unit,
     onEnrollWscd: () -> Unit,
     onShowWscaDeveloper: () -> Unit,
-    onShowProximityEngagement: () -> Unit,
     onForgetAccount: ((String) -> Unit)? = null,
     passkeys: List<org.siros.sdk.wallet.CachedPasskey> = emptyList(),
     onRenamePasskey: ((String, String) -> Unit)? = null,
@@ -1261,14 +1266,6 @@ fun SettingsTab(
                     shape = RoundedCornerShape(12.dp),
                 ) {
                     Text("WSCA Developer")
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedButton(
-                    onClick = onShowProximityEngagement,
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Text("Proximity Engagement (Interop Test)")
                 }
             }
         }
