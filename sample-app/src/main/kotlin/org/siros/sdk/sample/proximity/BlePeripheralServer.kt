@@ -40,7 +40,9 @@ import java.util.UUID
  * Real hardware-verified end to end (see the proximity plan's Phase 3.1-3.3
  * completion notes and `project_kotlin_sdk_ble_proximity_verified` memory) -
  * a real Android device running this class completed a full presentation
- * against `tools/ble_reader_test.py` on a Linux host's Bluetooth adapter.
+ * against siros-verifier-cli's `siros-verify read` command
+ * (https://github.com/sirosfoundation/siros-verifier-cli) on a Linux host's
+ * Bluetooth adapter.
  * This class now only handles the BLE/GATT transport; the proximity
  * protocol itself lives in [MdocProximitySession] (SDK-level, shared with
  * [BleCentralClient]).

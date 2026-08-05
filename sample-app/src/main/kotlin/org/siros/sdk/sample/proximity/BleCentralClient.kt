@@ -43,9 +43,10 @@ import java.util.UUID
  * client/server role for a given transaction).
  *
  * UNVERIFIED ON REAL HARDWARE beyond compiling - there is no second BLE
- * GATT-server test tool available yet (`tools/ble_reader_test.py` uses
- * `bleak`, which is central/client-only on every platform, the same role
- * this class plays - it cannot stand in as a peripheral to test against).
+ * GATT-server test tool available yet (siros-verifier-cli's `siros-verify read`,
+ * https://github.com/sirosfoundation/siros-verifier-cli, uses `bleak`, which is
+ * central/client-only on every platform, the same role this class plays - it
+ * cannot stand in as a peripheral to test against).
  * Needs testing against either a real ISO 18013-5 reader or a purpose-built
  * BlueZ-peripheral test script before relying on it.
  */
