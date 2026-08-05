@@ -17,14 +17,12 @@ import android.os.ParcelUuid
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.keystore.mdoc.BleMessageChunker
 import org.siros.sdk.keystore.mdoc.DeviceEngagement
-import org.siros.sdk.keystore.mdoc.DeviceRequestParser
+import org.siros.sdk.keystore.mdoc.MdocProximitySession
 import org.siros.sdk.keystore.mdoc.ProximitySessionCrypto
-import org.siros.sdk.keystore.mdoc.ProximitySessionMessages
-import org.siros.sdk.keystore.mdoc.ProximitySessionTranscript
+import org.siros.sdk.keystore.mdoc.RequestProximityConsent
 import timber.log.Timber
 import java.util.UUID
 
@@ -37,12 +35,12 @@ import java.util.UUID
  * reader's "mdoc reader service" (Table 6: `State`, `Client2Server`,
  * `Server2Client`, `Ident`), verifies the reader's identity via the `Ident`
  * characteristic, then runs the same session-establishment/session-data
- * protocol as [BlePeripheralServer] with the GATT roles reversed: this mdoc
- * WRITES to `Client2Server` and receives via `Server2Client` notify
- * (§11.1.3.4: "Client2Server" always carries GATT-client-to-server traffic
- * and "Server2Client" always carries the reverse, regardless of which side -
- * mdoc or reader - holds the GATT client/server role for a given
- * transaction).
+ * protocol as [BlePeripheralServer] (via the shared [MdocProximitySession])
+ * with the GATT roles reversed: this mdoc WRITES to `Client2Server` and
+ * receives via `Server2Client` notify (§11.1.3.4: "Client2Server" always
+ * carries GATT-client-to-server traffic and "Server2Client" always carries
+ * the reverse, regardless of which side - mdoc or reader - holds the GATT
+ * client/server role for a given transaction).
  *
  * UNVERIFIED ON REAL HARDWARE beyond compiling - there is no second BLE
  * GATT-server test tool available yet (`tools/ble_reader_test.py` uses
@@ -55,14 +53,14 @@ class BleCentralClient(
     private val context: Context,
     private val engagement: DeviceEngagement.Engagement,
     /** Mirrors `SirosWallet.getCredentials` - see [BlePeripheralServer]'s matching parameter doc comment. */
-    private val getCredentials: suspend () -> List<StoredCredential>,
+    getCredentials: suspend () -> List<StoredCredential>,
     /** Mirrors `SirosWallet.signMdocPresentationForProximity`. */
-    private val signPresentation: suspend (credentialId: Long, disclosedClaims: List<String>?, sessionTranscriptBytes: ByteArray) -> ByteArray,
+    signPresentation: suspend (credentialId: Long, disclosedClaims: List<String>?, sessionTranscriptBytes: ByteArray) -> ByteArray,
     /** See [RequestProximityConsent]'s doc comment. */
-    private val requestConsent: RequestProximityConsent,
+    requestConsent: RequestProximityConsent,
     /** See [BlePeripheralServer]'s matching parameter doc comment. */
-    private val filterEligible: (List<StoredCredential>) -> List<StoredCredential>,
-    /** Reports a canonical step token (see `FlowProgress.kt`'s `PROXIMITY_STEPS`) for driving the same progress-bar UI the issuance/presentation flows use. */
+    filterEligible: (List<StoredCredential>) -> List<StoredCredential>,
+    /** Reports a canonical step token (see `FlowStepCatalog.proximitySteps`) for driving the same progress-bar UI the issuance/presentation flows use. */
     private val onStep: (String) -> Unit,
     private val onComplete: (success: Boolean) -> Unit,
 ) {
@@ -83,8 +81,17 @@ class BleCentralClient(
 
     private val scope = CoroutineScope(Dispatchers.IO)
     private val reassembler = BleMessageChunker.Reassembler()
+    private val session = MdocProximitySession(
+        engagement = engagement,
+        getHandoverSelectBytes = { ActiveEngagement.handoverSelectBytes },
+        getCredentials = getCredentials,
+        signPresentation = signPresentation,
+        requestConsent = requestConsent,
+        filterEligible = filterEligible,
+        onStep = onStep,
+        logTag = "BleCentralClient",
+    )
     private var negotiatedMtu = DEFAULT_MTU
-    private var deviceCipher: ProximitySessionCrypto.SessionCipher? = null
     private var gatt: BluetoothGatt? = null
     private var client2ServerCharacteristic: BluetoothGattCharacteristic? = null
     private var stateCharacteristic: BluetoothGattCharacteristic? = null
@@ -223,7 +230,22 @@ class BleCentralClient(
             val message = reassembler.feed(value) ?: return
             scope.launch {
                 try {
-                    handleSessionEstablishment(message)
+                    if (session.established) {
+                        Timber.w("BleCentralClient: additional SessionData messages after the first request are not yet handled")
+                        return@launch
+                    }
+                    when (val result = session.handleSessionEstablishment(message)) {
+                        is MdocProximitySession.Result.Response -> {
+                            if (!sendData(result.sessionData)) {
+                                Timber.w("BleCentralClient: a write failed to queue - reader will not receive the full response")
+                                onComplete(false)
+                                return@launch
+                            }
+                            onComplete(true)
+                        }
+                        MdocProximitySession.Result.Denied -> onComplete(false)
+                        is MdocProximitySession.Result.Failed -> onComplete(false)
+                    }
                 } catch (e: Exception) {
                     Timber.e(e, "Proximity presentation failed")
                     onComplete(false)
@@ -254,102 +276,6 @@ class BleCentralClient(
         characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
         characteristic.value = value
         return gatt.writeCharacteristic(characteristic)
-    }
-
-    @SuppressLint("MissingPermission")
-    private suspend fun handleSessionEstablishment(message: ByteArray) {
-        onStep("parsing_request")
-        val established = ProximitySessionMessages.parseSessionEstablishment(message)
-        val eReaderPublicKey = ProximitySessionCrypto.parseEReaderKeyPublic(established.eReaderKeyBytes)
-
-        // See BlePeripheralServer's matching comment: this engagement is
-        // offered via both QR and NFC static handover simultaneously, and
-        // BLE alone can't tell which one a real reader used - try the QR
-        // transcript (Handover = null) first, then the NFC transcript
-        // before giving up.
-        val candidateHandovers: List<ByteArray?> = buildList {
-            add(null)
-            ActiveEngagement.handoverSelectBytes?.let { add(it) }
-        }
-        var requestBytes: ByteArray? = null
-        var sessionTranscript: ByteArray = ProximitySessionTranscript.build(
-            deviceEngagementBytes = engagement.deviceEngagementBytes,
-            eReaderKeyBytes = established.eReaderKeyBytes,
-            handoverSelectMessageBytes = null,
-        )
-        var keys: ProximitySessionCrypto.SessionKeys? = null
-        for (handoverSelectMessageBytes in candidateHandovers) {
-            val transcript = ProximitySessionTranscript.build(
-                deviceEngagementBytes = engagement.deviceEngagementBytes,
-                eReaderKeyBytes = established.eReaderKeyBytes,
-                handoverSelectMessageBytes = handoverSelectMessageBytes,
-            )
-            val candidateKeys = ProximitySessionCrypto.deriveSessionKeys(engagement.privateKey, eReaderPublicKey, transcript)
-            requestBytes = try {
-                ProximitySessionCrypto.readerCipher(candidateKeys.skReader).decrypt(established.encryptedData)
-            } catch (e: javax.crypto.AEADBadTagException) {
-                null
-            }
-            if (requestBytes != null) {
-                sessionTranscript = transcript
-                keys = candidateKeys
-                break
-            }
-        }
-        if (requestBytes == null || keys == null) {
-            Timber.w("BleCentralClient: session key derivation failed for both QR and NFC handover transcripts")
-            onComplete(false)
-            return
-        }
-        deviceCipher = ProximitySessionCrypto.deviceCipher(keys.skDevice)
-
-        val docRequests = DeviceRequestParser.parse(requestBytes)
-        val docRequest = docRequests.firstOrNull()
-        if (docRequest == null) {
-            Timber.w("BleCentralClient: request contained no documents")
-            onComplete(false)
-            return
-        }
-
-        onStep("match_credentials")
-        val matches = getCredentials().filter { cred ->
-            cred.format == "mso_mdoc" && CredentialUtils.parseMdocDocument(cred)?.docType == docRequest.docType
-        }
-        if (matches.isEmpty()) {
-            Timber.w("BleCentralClient: no stored credential matches requested docType '${docRequest.docType}'")
-            onComplete(false)
-            return
-        }
-        val families = groupIntoFamilies(matches)
-        onStep("awaiting_consent")
-        val consent = requestConsent(docRequest.docType, docRequest.disclosedClaims(), families)
-        val family = when (consent) {
-            is ProximityConsentResult.Approved -> consent.family
-            ProximityConsentResult.Denied -> {
-                onComplete(false)
-                return
-            }
-        }
-        val eligible = filterEligible(family.instances)
-        if (eligible.isEmpty()) {
-            Timber.w("BleCentralClient: no eligible (unused) instances remain for the approved credential")
-            onComplete(false)
-            return
-        }
-        // See BlePeripheralServer's matching comment: pick a random instance
-        // from the batch, not always the same one, to preserve unlinkability.
-        val credential = eligible.random()
-
-        onStep("submitting_response")
-        val response = signPresentation(credential.id, docRequest.disclosedClaims(), sessionTranscript)
-        val encrypted = deviceCipher!!.encrypt(response)
-        val sessionData = ProximitySessionMessages.buildSessionData(encryptedData = encrypted)
-        if (!sendData(sessionData)) {
-            Timber.w("BleCentralClient: a write failed to queue - reader will not receive the full response")
-            onComplete(false)
-            return
-        }
-        onComplete(true)
     }
 
     /** @return false if any chunk's write failed to queue - the reader will not have received a complete response. */

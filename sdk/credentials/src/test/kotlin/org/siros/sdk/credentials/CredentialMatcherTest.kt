@@ -1,14 +1,50 @@
 package org.siros.sdk.credentials
 
+import com.upokecenter.cbor.CBORObject
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Base64
 
 class CredentialMatcherTest {
 
     private val json = Json { ignoreUnknownKeys = true }
+
+    /**
+     * A minimal but REAL CBOR-encoded bare `IssuerSigned` structure (no
+     * enclosing `{documents: [...]}` envelope), base64url-encoded the same
+     * way [StoredCredential.raw] is stored - see `MdocCborTest`'s matching
+     * fixture builder for why the payload must be a real double-encoded
+     * byte string, not an in-memory tagged object.
+     */
+    private fun mdocRaw(docType: String): String {
+        val item = CBORObject.NewMap()
+        item[CBORObject.FromObject("digestID")] = CBORObject.FromObject(0L)
+        item[CBORObject.FromObject("random")] = CBORObject.FromObject(ByteArray(16))
+        item[CBORObject.FromObject("elementIdentifier")] = CBORObject.FromObject("given_name")
+        item[CBORObject.FromObject("elementValue")] = CBORObject.FromObject("Jane")
+        val items = CBORObject.NewArray()
+        items.Add(CBORObject.FromObjectAndTag(item.EncodeToBytes(), 24))
+        val nameSpaces = CBORObject.NewMap()
+        nameSpaces[CBORObject.FromObject("org.iso.18013.5.1")] = items
+
+        val mso = CBORObject.NewMap()
+        mso[CBORObject.FromObject("docType")] = CBORObject.FromObject(docType)
+        val taggedMsoBytes = CBORObject.FromObjectAndTag(mso.EncodeToBytes(), 24).EncodeToBytes()
+        val issuerAuth = CBORObject.NewArray()
+        issuerAuth.Add(CBORObject.FromObject(ByteArray(0)))
+        issuerAuth.Add(CBORObject.NewMap())
+        issuerAuth.Add(CBORObject.FromObject(taggedMsoBytes))
+        issuerAuth.Add(CBORObject.FromObject(ByteArray(64)))
+
+        val bareIssuerSigned = CBORObject.NewMap()
+        bareIssuerSigned[CBORObject.FromObject("nameSpaces")] = nameSpaces
+        bareIssuerSigned[CBORObject.FromObject("issuerAuth")] = issuerAuth
+
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bareIssuerSigned.EncodeToBytes())
+    }
 
     @Test
     fun match_filters_by_format_and_vct() {
@@ -503,5 +539,43 @@ class CredentialMatcherTest {
         val results = CredentialMatcher.match(query, credentials)
         assertEquals(1, results.size)
         assertEquals("pid", results[0].queryId)
+    }
+
+    @Test
+    fun matchMdocDocType_filtersByRealDocTypeParsedFromCbor() {
+        val credentials = listOf(
+            StoredCredential(id = 1L, format = "mso_mdoc", raw = mdocRaw("org.iso.18013.5.1.mDL"), batchId = 1L, instanceId = 0),
+            StoredCredential(id = 2L, format = "mso_mdoc", raw = mdocRaw("eu.europa.ec.eudi.pid.1"), batchId = 2L, instanceId = 0),
+        )
+
+        val matches = CredentialMatcher.matchMdocDocType(credentials, "org.iso.18013.5.1.mDL")
+
+        assertEquals(listOf(1L), matches.map { it.id })
+    }
+
+    @Test
+    fun matchMdocDocType_excludesNonMdocFormatsEvenWithMatchingDocType() {
+        // A DCQL/SD-JWT credential should never be selectable by an
+        // ISO 18013-5 proximity request's bare docType string, regardless
+        // of what its (irrelevant) format-specific fields happen to contain.
+        val credentials = listOf(
+            StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "not-cbor-at-all", batchId = 1L, instanceId = 0),
+            StoredCredential(id = 2L, format = "mso_mdoc", raw = mdocRaw("org.iso.18013.5.1.mDL"), batchId = 2L, instanceId = 0),
+        )
+
+        val matches = CredentialMatcher.matchMdocDocType(credentials, "org.iso.18013.5.1.mDL")
+
+        assertEquals(listOf(2L), matches.map { it.id })
+    }
+
+    @Test
+    fun matchMdocDocType_returnsEmptyWhenNoDocTypeMatches() {
+        val credentials = listOf(
+            StoredCredential(id = 1L, format = "mso_mdoc", raw = mdocRaw("com.example.other"), batchId = 1L, instanceId = 0),
+        )
+
+        val matches = CredentialMatcher.matchMdocDocType(credentials, "org.iso.18013.5.1.mDL")
+
+        assertTrue(matches.isEmpty())
     }
 }

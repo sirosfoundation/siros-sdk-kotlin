@@ -417,6 +417,27 @@ object CredentialUtils {
      * out. Not user-configurable in this pass - just the stated default.
      */
     const val RENEW_THRESHOLD = 0
+
+    /**
+     * Group stored credentials into one [CredentialFamily] per
+     * [StoredCredential.batchId], for callers (mdoc proximity consent) that
+     * need every instance's full [StoredCredential] - not just its usage
+     * count, as [groupForDisplay]'s [CredentialInstance] carries - because a
+     * proximity session signs with whichever approved instance it picks.
+     *
+     * Uses the same convention as [groupForDisplay]: a batch is only
+     * representable if it has an `instanceId == 0` member; a batch missing
+     * one (shouldn't happen in practice, but [groupForDisplay] treats it as
+     * unrepresentable rather than guessing) is skipped rather than falling
+     * back to an arbitrary member, so the two grouping functions never
+     * disagree about which batches are displayable.
+     */
+    fun groupIntoFamilies(credentials: List<StoredCredential>): List<CredentialFamily> {
+        return credentials.groupBy { it.batchId }.values.mapNotNull { members ->
+            val representative = members.find { it.instanceId == 0 } ?: return@mapNotNull null
+            CredentialFamily(representative = representative, instances = members)
+        }
+    }
 }
 
 /**
@@ -460,6 +481,23 @@ data class CredentialInstance(val instanceId: Int, val sigCount: Int)
 
 /** A visible credential card plus every instance in its batch (see [CredentialUtils.groupForDisplay]). */
 data class CredentialWithInstances(val credential: StoredCredential, val instances: List<CredentialInstance>)
+
+/**
+ * One credential "type" as the user should see it: every [StoredCredential]
+ * instance sharing a [StoredCredential.batchId] is the SAME credential from
+ * a batch issuance (see [CredentialUtils.groupForDisplay]'s doc comment for
+ * why - each instance is bound to its own device key purely for
+ * unlinkability, not a distinct credential the user chose to hold multiple
+ * of). A proximity consent prompt must offer one choice per family, never
+ * one per raw instance, or a 5-instance batch reads as "you have 5 driver's
+ * licenses." See [CredentialUtils.groupIntoFamilies].
+ */
+data class CredentialFamily(
+    /** The instance shown to the user for display (matches [CredentialUtils.groupForDisplay]'s convention of the `instanceId == 0` member). */
+    val representative: StoredCredential,
+    /** Every instance in this batch - the proximity session picks one of these to actually sign with once the family is approved. */
+    val instances: List<StoredCredential>,
+)
 
 /**
  * The individually-decoded parts of a raw SD-JWT VC string, for display.
