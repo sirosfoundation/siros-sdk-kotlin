@@ -55,6 +55,7 @@ import org.siros.sdk.credentials.MddlSchemaFetcher
 import org.siros.sdk.keystore.DCAPIResponseEncryption
 import org.siros.sdk.keystore.JweKeystore
 import org.siros.sdk.keystore.KeystoreManager
+import org.siros.sdk.keystore.WscdManager
 import org.siros.sdk.wallet.dcapi.DCAPIRequest
 import org.siros.sdk.wallet.dcapi.DCAPIRequestParser
 import org.siros.sdk.transport.CredentialNotifier
@@ -2008,6 +2009,29 @@ class SirosWallet private constructor(
     private val accountRegistry = AccountRegistry(activity)
     private val authProvider = createAuthProvider(activity, config)
     private val keystore: KeystoreManager = config.keystore ?: JweKeystore()
+
+    /**
+     * WSCD hardware-key lifecycle (enroll/rotate/destroy) and
+     * additional-plugin registration (FIDO2 rawSign, R2PS remote HSM) -
+     * `null` unless [keystore] is WSCD-backed (see [WscdKeystoreAdapter]).
+     * The default JWE-encrypted keystore has no such concept.
+     */
+    val wscdManager: WscdManager? get() = keystore as? WscdManager
+
+    /**
+     * Static feature availability - lets a consumer gate its own UI
+     * without probing by side effect (e.g. attempting a WSCD plugin
+     * registration and catching the resulting exception). Reflects what's
+     * *configured*, not runtime plugin-registration state the app already
+     * controls itself (e.g. whether FIDO2 specifically has been
+     * registered on [wscdManager]).
+     */
+    val capabilities: WalletCapabilities
+        get() = WalletCapabilities(
+            nativeAttestation = config.nativeAttestationProvider != null,
+            wscd = wscdManager != null,
+        )
+
     private val credentialStore: CredentialStore =
         config.credentialStore ?: KeystoreBackedCredentialStore(keystore)
     private val json = Json { ignoreUnknownKeys = true }
@@ -2074,6 +2098,17 @@ class SirosWallet private constructor(
 
     /** Presentation history — most recent first. */
     val presentationHistory: List<PresentationRecord> get() = _presentationHistory.toList()
+
+    /**
+     * Filters [instances] down to the ones this wallet's own
+     * [credentialConsumptionPolicy] and [presentationHistory] currently
+     * consider eligible (i.e. not yet consumed) - the same computation
+     * this class performs internally before every presentation, exposed as
+     * a convenience so consent/selection UI doesn't need to thread both
+     * properties through [CredentialUtils.eligibleInstances] itself.
+     */
+    fun eligibleInstances(instances: List<StoredCredential>): List<StoredCredential> =
+        CredentialUtils.eligibleInstances(instances, credentialConsumptionPolicy, presentationHistory)
 
     /**
      * Record a new presentation: adds it to the in-memory history and

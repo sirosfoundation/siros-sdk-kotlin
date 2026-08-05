@@ -41,7 +41,40 @@ data class TransactionDataItem(
  */
 class WscdKeystoreAdapter(
     private val signer: Signer,
-) : KeystoreManager {
+) : KeystoreManager, WscdManager {
+
+    /**
+     * Non-null only when [signer] is itself WSCD-backed (i.e. a
+     * [UniFFISigner]) - a plain software [Signer] has no lifecycle or
+     * plugin-registration concept.
+     */
+    private val wscdManager: WscdManager? = signer as? WscdManager
+
+    private fun requireWscdManager(): WscdManager = wscdManager
+        ?: throw UnsupportedOperationException(
+            "WSCD lifecycle/plugin registration not supported - this keystore's signer is not WSCD-backed"
+        )
+
+    override suspend fun lifecycleStatus(pluginId: String, contextId: String): LifecycleStatus =
+        requireWscdManager().lifecycleStatus(pluginId, contextId)
+
+    override suspend fun registerLifecycle(request: RegisterLifecycleRequest): RegistrationOutcome =
+        requireWscdManager().registerLifecycle(request)
+
+    override suspend fun activateLifecycle(request: ActivateLifecycleRequest): ActivationOutcome =
+        requireWscdManager().activateLifecycle(request)
+
+    override suspend fun rotateLifecycle(request: RotateLifecycleRequest): RotationOutcome =
+        requireWscdManager().rotateLifecycle(request)
+
+    override suspend fun destroyLifecycle(request: DestroyLifecycleRequest): DestructionOutcome =
+        requireWscdManager().destroyLifecycle(request)
+
+    override fun registerFido2Plugin(transport: Ctap2TransportProvider) =
+        requireWscdManager().registerFido2Plugin(transport)
+
+    override fun registerR2psPlugin(config: R2psConfig, transport: R2psTransportProvider) =
+        requireWscdManager().registerR2psPlugin(config, transport)
 
     /**
      * Owns the PRF-protected container (mainKey/prfKeys/jwe → V3

@@ -1,6 +1,7 @@
 package org.siros.sdk.keystore
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -27,7 +28,6 @@ import uniffi.siros_wscd_manager.FfiLifecycleState
 import uniffi.siros_wscd_manager.FfiLifecycleStatus
 import uniffi.siros_wscd_manager.FfiMigrationResult
 import uniffi.siros_wscd_manager.FfiOperationProgress
-import uniffi.siros_wscd_manager.FfiPakeClient
 import uniffi.siros_wscd_manager.FfiProgressCallback
 import uniffi.siros_wscd_manager.FfiCtap2Transport
 import uniffi.siros_wscd_manager.FfiR2psConfig
@@ -53,7 +53,7 @@ import uniffi.siros_wscd_manager.FfiWscdManager
 class UniFFISigner(
     config: FfiWscdConfig,
     private val authProvider: AuthProvider? = null,
-) : Signer, SignerLifecycleManager {
+) : Signer, WscdManager {
 
     private val ffi: FfiWscdManager = FfiWscdManager(config)
 
@@ -64,28 +64,23 @@ class UniFFISigner(
         ffi.registerSoftkeyPlugin()
     }
 
-    /**
-     * Register the R2PS remote HSM plugin.
-     *
-     * @param r2psConfig R2PS server connection parameters.
-     * @param httpTransport HTTP transport for R2PS protocol messages.
-     * @param pakeClient OPAQUE (RFC 9807) client for PAKE authentication.
-     */
-    fun registerR2psPlugin(
-        r2psConfig: FfiR2psConfig,
-        httpTransport: FfiHttpTransport,
-        pakeClient: FfiPakeClient,
-    ) {
-        ffi.registerR2psPlugin(r2psConfig, httpTransport, pakeClient)
+    override fun registerR2psPlugin(config: R2psConfig, transport: R2psTransportProvider) {
+        val authMode = config.authMode
+        val ffiConfig = FfiR2psConfig(
+            serverUrl = config.serverUrl,
+            clientId = config.clientId,
+            context = config.context,
+            authMode = if (authMode is R2psAuthMode.WebAuthn) "webauthn" else "opaque",
+            rpId = (authMode as? R2psAuthMode.WebAuthn)?.rpId ?: "",
+            allowedCredentialIds = (authMode as? R2psAuthMode.WebAuthn)?.allowedCredentialIds ?: emptyList(),
+            clientKeyPem = config.clientKeyPem,
+            serverPublicKeyPem = config.serverPublicKeyPem,
+        )
+        ffi.registerR2psPlugin(ffiConfig, R2psTransportBridge(transport))
     }
 
-    /**
-     * Register the FIDO2 previewSign (rawSign) plugin for hardware authenticators.
-     *
-     * @param transport CTAP2 transport handling USB/BLE/NFC communication.
-     */
-    fun registerFido2Plugin(transport: FfiCtap2Transport) {
-        ffi.registerFido2Plugin(transport)
+    override fun registerFido2Plugin(transport: Ctap2TransportProvider) {
+        ffi.registerFido2Plugin(Ctap2TransportBridge(transport))
     }
 
     override suspend fun generateKey(algorithm: String): String = withContext(Dispatchers.IO) {
@@ -432,4 +427,30 @@ class UniFFISigner(
         state = state.toSdkLifecycleState(),
         remotePerformed = remotePerformed,
     )
+}
+
+/**
+ * Bridges the suspend-based [Ctap2TransportProvider] to the synchronous
+ * [FfiCtap2Transport] callback interface UniFFI generates. `runBlocking` is
+ * safe here - this callback is invoked from Rust's own background FFI
+ * thread pool, never the Android main thread.
+ *
+ * Lazily connects on first use and stays connected, matching this
+ * codebase's other WSCD callback bridges' lifecycle.
+ */
+private class Ctap2TransportBridge(private val provider: Ctap2TransportProvider) : FfiCtap2Transport {
+    private var connected = false
+
+    override fun ctap2SendCommand(command: ByteArray): ByteArray = runBlocking {
+        if (!connected) {
+            provider.connect()
+            connected = true
+        }
+        provider.send(command)
+    }
+}
+
+/** Bridges the suspend-based [R2psTransportProvider] to [FfiHttpTransport]. */
+private class R2psTransportBridge(private val provider: R2psTransportProvider) : FfiHttpTransport {
+    override fun send(body: ByteArray): ByteArray = runBlocking { provider.send(body) }
 }

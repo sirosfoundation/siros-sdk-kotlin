@@ -666,18 +666,6 @@ internal interface UniffiCallbackInterfaceFfiCtap2TransportMethod0 : com.sun.jna
 internal interface UniffiCallbackInterfaceFfiHttpTransportMethod0 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`body`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
 }
-internal interface UniffiCallbackInterfaceFfiPakeClientMethod0 : com.sun.jna.Callback {
-    fun callback(`uniffiHandle`: Long,`password`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
-}
-internal interface UniffiCallbackInterfaceFfiPakeClientMethod1 : com.sun.jna.Callback {
-    fun callback(`uniffiHandle`: Long,`serverResp`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
-}
-internal interface UniffiCallbackInterfaceFfiPakeClientMethod2 : com.sun.jna.Callback {
-    fun callback(`uniffiHandle`: Long,`password`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
-}
-internal interface UniffiCallbackInterfaceFfiPakeClientMethod3 : com.sun.jna.Callback {
-    fun callback(`uniffiHandle`: Long,`serverResp`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
-}
 internal interface UniffiCallbackInterfaceFfiProgressCallbackMethod0 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`progress`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
@@ -728,31 +716,6 @@ internal open class UniffiVTableCallbackInterfaceFfiHttpTransport(
 
    internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceFfiHttpTransport) {
         `send` = other.`send`
-        `uniffiFree` = other.`uniffiFree`
-    }
-
-}
-@Structure.FieldOrder("registrationInit", "registrationFinalize", "authInit", "authFinalize", "uniffiFree")
-internal open class UniffiVTableCallbackInterfaceFfiPakeClient(
-    @JvmField internal var `registrationInit`: UniffiCallbackInterfaceFfiPakeClientMethod0? = null,
-    @JvmField internal var `registrationFinalize`: UniffiCallbackInterfaceFfiPakeClientMethod1? = null,
-    @JvmField internal var `authInit`: UniffiCallbackInterfaceFfiPakeClientMethod2? = null,
-    @JvmField internal var `authFinalize`: UniffiCallbackInterfaceFfiPakeClientMethod3? = null,
-    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
-) : Structure() {
-    class UniffiByValue(
-        `registrationInit`: UniffiCallbackInterfaceFfiPakeClientMethod0? = null,
-        `registrationFinalize`: UniffiCallbackInterfaceFfiPakeClientMethod1? = null,
-        `authInit`: UniffiCallbackInterfaceFfiPakeClientMethod2? = null,
-        `authFinalize`: UniffiCallbackInterfaceFfiPakeClientMethod3? = null,
-        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
-    ): UniffiVTableCallbackInterfaceFfiPakeClient(`registrationInit`,`registrationFinalize`,`authInit`,`authFinalize`,`uniffiFree`,), Structure.ByValue
-
-   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceFfiPakeClient) {
-        `registrationInit` = other.`registrationInit`
-        `registrationFinalize` = other.`registrationFinalize`
-        `authInit` = other.`authInit`
-        `authFinalize` = other.`authFinalize`
         `uniffiFree` = other.`uniffiFree`
     }
 
@@ -882,11 +845,6 @@ internal open class UniffiVTableCallbackInterfaceFfiProgressCallback(
 
 
 
-
-
-
-
-
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -900,7 +858,6 @@ internal interface UniffiLib : Library {
                 uniffiCallbackInterfaceFfiAuthCallback.register(lib)
                 uniffiCallbackInterfaceFfiCtap2Transport.register(lib)
                 uniffiCallbackInterfaceFfiHttpTransport.register(lib)
-                uniffiCallbackInterfaceFfiPakeClient.register(lib)
                 uniffiCallbackInterfaceFfiProgressCallback.register(lib)
                 }
         }
@@ -941,7 +898,7 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_lifecycle(`ptr`: Pointer,`request`: RustBuffer.ByValue,`auth`: Long,`progress`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_r2ps_plugin(`ptr`: Pointer,`config`: RustBuffer.ByValue,`transport`: Long,`pake`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_r2ps_plugin(`ptr`: Pointer,`config`: RustBuffer.ByValue,`transport`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_softkey_plugin(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -956,8 +913,6 @@ internal interface UniffiLib : Library {
     fun uniffi_siros_wscd_manager_fn_init_callback_vtable_ffictap2transport(`vtable`: UniffiVTableCallbackInterfaceFfiCtap2Transport,
     ): Unit
     fun uniffi_siros_wscd_manager_fn_init_callback_vtable_ffihttptransport(`vtable`: UniffiVTableCallbackInterfaceFfiHttpTransport,
-    ): Unit
-    fun uniffi_siros_wscd_manager_fn_init_callback_vtable_ffipakeclient(`vtable`: UniffiVTableCallbackInterfaceFfiPakeClient,
     ): Unit
     fun uniffi_siros_wscd_manager_fn_init_callback_vtable_ffiprogresscallback(`vtable`: UniffiVTableCallbackInterfaceFfiProgressCallback,
     ): Unit
@@ -1125,14 +1080,6 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_siros_wscd_manager_checksum_method_ffihttptransport_send(
     ): Short
-    fun uniffi_siros_wscd_manager_checksum_method_ffipakeclient_registration_init(
-    ): Short
-    fun uniffi_siros_wscd_manager_checksum_method_ffipakeclient_registration_finalize(
-    ): Short
-    fun uniffi_siros_wscd_manager_checksum_method_ffipakeclient_auth_init(
-    ): Short
-    fun uniffi_siros_wscd_manager_checksum_method_ffipakeclient_auth_finalize(
-    ): Short
     fun uniffi_siros_wscd_manager_checksum_method_ffiprogresscallback_on_progress(
     ): Short
     fun ffi_siros_wscd_manager_uniffi_contract_version(
@@ -1194,7 +1141,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_lifecycle() != 59574.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_r2ps_plugin() != 56622.toShort()) {
+    if (lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_r2ps_plugin() != 61563.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_softkey_plugin() != 48657.toShort()) {
@@ -1222,18 +1169,6 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_siros_wscd_manager_checksum_method_ffihttptransport_send() != 15795.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_siros_wscd_manager_checksum_method_ffipakeclient_registration_init() != 57335.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_siros_wscd_manager_checksum_method_ffipakeclient_registration_finalize() != 62528.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_siros_wscd_manager_checksum_method_ffipakeclient_auth_init() != 50797.toShort()) {
-        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
-    }
-    if (lib.uniffi_siros_wscd_manager_checksum_method_ffipakeclient_auth_finalize() != 11635.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_siros_wscd_manager_checksum_method_ffiprogresscallback_on_progress() != 24301.toShort()) {
@@ -1674,11 +1609,14 @@ public interface FfiWscdManagerInterface {
      *
      * The host SDK must provide:
      * - `transport`: HTTP transport for sending R2PS protocol messages
-     * - `pake`: OPAQUE (RFC 9807) client compatible with bytemare/opaque
      * - `config`: R2PS server connection parameters including PEM-encoded P-256
      * keys for JWS/JWE envelope protection
+     *
+     * OPAQUE (RFC 9807) PAKE authentication (used when `config.auth_mode ==
+     * "opaque"`) is handled entirely in Rust via `r2ps_client::OpaqueClient`
+     * - no host-provided PAKE callback is needed (or possible) any more.
      */
-    fun `registerR2psPlugin`(`config`: FfiR2psConfig, `transport`: FfiHttpTransport, `pake`: FfiPakeClient)
+    fun `registerR2psPlugin`(`config`: FfiR2psConfig, `transport`: FfiHttpTransport)
     
     /**
      * Register the built-in softkey plugin.
@@ -2003,16 +1941,19 @@ open class FfiWscdManager: Disposable, AutoCloseable, FfiWscdManagerInterface {
      *
      * The host SDK must provide:
      * - `transport`: HTTP transport for sending R2PS protocol messages
-     * - `pake`: OPAQUE (RFC 9807) client compatible with bytemare/opaque
      * - `config`: R2PS server connection parameters including PEM-encoded P-256
      * keys for JWS/JWE envelope protection
+     *
+     * OPAQUE (RFC 9807) PAKE authentication (used when `config.auth_mode ==
+     * "opaque"`) is handled entirely in Rust via `r2ps_client::OpaqueClient`
+     * - no host-provided PAKE callback is needed (or possible) any more.
      */
-    @Throws(FfiWscdException::class)override fun `registerR2psPlugin`(`config`: FfiR2psConfig, `transport`: FfiHttpTransport, `pake`: FfiPakeClient)
+    @Throws(FfiWscdException::class)override fun `registerR2psPlugin`(`config`: FfiR2psConfig, `transport`: FfiHttpTransport)
         = 
     callWithPointer {
     uniffiRustCallWithError(FfiWscdException) { _status ->
     UniffiLib.INSTANCE.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_r2ps_plugin(
-        it, FfiConverterTypeFfiR2psConfig.lower(`config`),FfiConverterTypeFfiHttpTransport.lower(`transport`),FfiConverterTypeFfiPakeClient.lower(`pake`),_status)
+        it, FfiConverterTypeFfiR2psConfig.lower(`config`),FfiConverterTypeFfiHttpTransport.lower(`transport`),_status)
 }
     }
     
@@ -3634,143 +3575,6 @@ internal object uniffiCallbackInterfaceFfiHttpTransport {
  * @suppress
  */
 public object FfiConverterTypeFfiHttpTransport: FfiConverterCallbackInterface<FfiHttpTransport>()
-
-
-
-
-
-/**
- * Host-provided OPAQUE (RFC 9807) client for R2PS PAKE authentication.
- *
- * The wire format must be compatible with bytemare/opaque (Go).
- * The host SDK should use a platform OPAQUE library that implements the
- * same VOPRF suite (P256-SHA256) as the server.
- */
-public interface FfiPakeClient {
-    
-    /**
-     * Start registration: returns serialized RegistrationRequest.
-     */
-    fun `registrationInit`(`password`: kotlin.ByteArray): kotlin.ByteArray
-    
-    /**
-     * Finalize registration: consumes RegistrationResponse, returns RegistrationRecord.
-     */
-    fun `registrationFinalize`(`serverResp`: kotlin.ByteArray): kotlin.ByteArray
-    
-    /**
-     * Start authentication: returns serialized KE1.
-     */
-    fun `authInit`(`password`: kotlin.ByteArray): kotlin.ByteArray
-    
-    /**
-     * Finalize authentication: consumes KE2, returns KE3 + session_key concatenated.
-     */
-    fun `authFinalize`(`serverResp`: kotlin.ByteArray): kotlin.ByteArray
-    
-    companion object
-}
-
-
-
-// Put the implementation in an object so we don't pollute the top-level namespace
-internal object uniffiCallbackInterfaceFfiPakeClient {
-    internal object `registrationInit`: UniffiCallbackInterfaceFfiPakeClientMethod0 {
-        override fun callback(`uniffiHandle`: Long,`password`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
-            val uniffiObj = FfiConverterTypeFfiPakeClient.handleMap.get(uniffiHandle)
-            val makeCall = { ->
-                uniffiObj.`registrationInit`(
-                    FfiConverterByteArray.lift(`password`),
-                )
-            }
-            val writeReturn = { value: kotlin.ByteArray -> uniffiOutReturn.setValue(FfiConverterByteArray.lower(value)) }
-            uniffiTraitInterfaceCallWithError(
-                uniffiCallStatus,
-                makeCall,
-                writeReturn,
-                { e: FfiWscdException -> FfiConverterTypeFfiWscdError.lower(e) }
-            )
-        }
-    }
-    internal object `registrationFinalize`: UniffiCallbackInterfaceFfiPakeClientMethod1 {
-        override fun callback(`uniffiHandle`: Long,`serverResp`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
-            val uniffiObj = FfiConverterTypeFfiPakeClient.handleMap.get(uniffiHandle)
-            val makeCall = { ->
-                uniffiObj.`registrationFinalize`(
-                    FfiConverterByteArray.lift(`serverResp`),
-                )
-            }
-            val writeReturn = { value: kotlin.ByteArray -> uniffiOutReturn.setValue(FfiConverterByteArray.lower(value)) }
-            uniffiTraitInterfaceCallWithError(
-                uniffiCallStatus,
-                makeCall,
-                writeReturn,
-                { e: FfiWscdException -> FfiConverterTypeFfiWscdError.lower(e) }
-            )
-        }
-    }
-    internal object `authInit`: UniffiCallbackInterfaceFfiPakeClientMethod2 {
-        override fun callback(`uniffiHandle`: Long,`password`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
-            val uniffiObj = FfiConverterTypeFfiPakeClient.handleMap.get(uniffiHandle)
-            val makeCall = { ->
-                uniffiObj.`authInit`(
-                    FfiConverterByteArray.lift(`password`),
-                )
-            }
-            val writeReturn = { value: kotlin.ByteArray -> uniffiOutReturn.setValue(FfiConverterByteArray.lower(value)) }
-            uniffiTraitInterfaceCallWithError(
-                uniffiCallStatus,
-                makeCall,
-                writeReturn,
-                { e: FfiWscdException -> FfiConverterTypeFfiWscdError.lower(e) }
-            )
-        }
-    }
-    internal object `authFinalize`: UniffiCallbackInterfaceFfiPakeClientMethod3 {
-        override fun callback(`uniffiHandle`: Long,`serverResp`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
-            val uniffiObj = FfiConverterTypeFfiPakeClient.handleMap.get(uniffiHandle)
-            val makeCall = { ->
-                uniffiObj.`authFinalize`(
-                    FfiConverterByteArray.lift(`serverResp`),
-                )
-            }
-            val writeReturn = { value: kotlin.ByteArray -> uniffiOutReturn.setValue(FfiConverterByteArray.lower(value)) }
-            uniffiTraitInterfaceCallWithError(
-                uniffiCallStatus,
-                makeCall,
-                writeReturn,
-                { e: FfiWscdException -> FfiConverterTypeFfiWscdError.lower(e) }
-            )
-        }
-    }
-
-    internal object uniffiFree: UniffiCallbackInterfaceFree {
-        override fun callback(handle: Long) {
-            FfiConverterTypeFfiPakeClient.handleMap.remove(handle)
-        }
-    }
-
-    internal var vtable = UniffiVTableCallbackInterfaceFfiPakeClient.UniffiByValue(
-        `registrationInit`,
-        `registrationFinalize`,
-        `authInit`,
-        `authFinalize`,
-        uniffiFree,
-    )
-
-    // Registers the foreign callback with the Rust side.
-    // This method is generated for each callback interface.
-    internal fun register(lib: UniffiLib) {
-        lib.uniffi_siros_wscd_manager_fn_init_callback_vtable_ffipakeclient(vtable)
-    }
-}
-
-/**
- * The ffiConverter which transforms the Callbacks in to handles to pass to Rust.
- *
- * @suppress
- */
-public object FfiConverterTypeFfiPakeClient: FfiConverterCallbackInterface<FfiPakeClient>()
 
 
 
