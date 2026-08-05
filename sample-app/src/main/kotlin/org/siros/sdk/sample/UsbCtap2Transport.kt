@@ -12,8 +12,8 @@ import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
 import android.util.Log
-import uniffi.siros_wscd_manager.FfiCtap2Transport
-import uniffi.siros_wscd_manager.FfiWscdException
+import org.siros.sdk.keystore.Ctap2TransportException
+import org.siros.sdk.keystore.Ctap2TransportProvider
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -22,8 +22,7 @@ import kotlin.random.Random
 /**
  * USB HID CTAP2 transport for FIDO2 authenticators (e.g. YubiKey).
  *
- * Implements the [FfiCtap2Transport] callback interface, which is now a
- * single raw send/receive method (`ctap2SendCommand`) - all previewSign
+ * Implements the SDK-level [Ctap2TransportProvider] - all previewSign
  * CBOR request-building and response-parsing lives in Rust
  * (`siros-wscd-manager`'s `preview_sign_protocol` module), confirmed
  * against real YubiKey 5.8 hardware. This class only owns the physical
@@ -33,8 +32,14 @@ import kotlin.random.Random
  *
  * It has no CTAP2/CBOR knowledge of its own - it just moves a command's
  * bytes to the authenticator and returns whatever bytes come back.
+ *
+ * [connect] opens the USB device and allocates a CTAPHID channel once;
+ * [send] reuses that channel for every command; [disconnect] releases it.
  */
-class UsbCtap2Transport(private val context: Context) : FfiCtap2Transport {
+class UsbCtap2Transport(private val context: Context) : Ctap2TransportProvider {
+
+    private var session: UsbSession? = null
+    private var cid: ByteArray? = null
 
     companion object {
         private const val TAG = "UsbCtap2Transport"
@@ -70,7 +75,7 @@ class UsbCtap2Transport(private val context: Context) : FfiCtap2Transport {
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
         val device = usbManager.deviceList.values.firstOrNull { d ->
             d.vendorId == YUBICO_VENDOR_ID && hasFidoInterface(d)
-        } ?: throw FfiWscdException.NoPlugin("No FIDO2 USB device found")
+        } ?: throw Ctap2TransportException.NotAvailable()
 
         Log.i(TAG, "Found FIDO2 device: ${device.productName} (${device.vendorId}:${device.productId})")
 
@@ -105,10 +110,10 @@ class UsbCtap2Transport(private val context: Context) : FfiCtap2Transport {
             context.unregisterReceiver(receiver)
 
             if (!answered) {
-                throw FfiWscdException.Plugin("USB permission request timed out")
+                throw Ctap2TransportException.ConnectionFailed("USB permission request timed out")
             }
             if (!granted) {
-                throw FfiWscdException.Plugin("USB permission denied by user")
+                throw Ctap2TransportException.ConnectionFailed("USB permission denied by user")
             }
             Log.i(TAG, "USB permission granted")
         }
@@ -117,11 +122,11 @@ class UsbCtap2Transport(private val context: Context) : FfiCtap2Transport {
         val (iface, inEp, outEp) = findFidoEndpoints(device)
 
         val connection = usbManager.openDevice(device)
-            ?: throw FfiWscdException.Plugin("Failed to open USB device")
+            ?: throw Ctap2TransportException.ConnectionFailed("Failed to open USB device")
 
         if (!connection.claimInterface(iface, true)) {
             connection.close()
-            throw FfiWscdException.Plugin("Failed to claim FIDO HID interface")
+            throw Ctap2TransportException.ConnectionFailed("Failed to claim FIDO HID interface")
         }
 
         return UsbSession(connection, iface, inEp, outEp)
@@ -168,7 +173,7 @@ class UsbCtap2Transport(private val context: Context) : FfiCtap2Transport {
         val (iface, inEp, outEp) = candidates.firstOrNull { (iface, _, _) ->
             iface.interfaceSubclass == 0 && iface.interfaceProtocol == 0
         } ?: candidates.firstOrNull()
-            ?: throw FfiWscdException.Plugin("No FIDO HID endpoints found on device")
+            ?: throw Ctap2TransportException.ConnectionFailed("No FIDO HID endpoints found on device")
 
         return EndpointInfo(iface, inEp, outEp)
     }
@@ -239,7 +244,7 @@ class UsbCtap2Transport(private val context: Context) : FfiCtap2Transport {
             return cid
         }
 
-        throw FfiWscdException.Plugin("Failed to allocate CTAPHID channel after $retries retries")
+        throw Ctap2TransportException.ConnectionFailed("Failed to allocate CTAPHID channel after $retries retries")
     }
 
     /**
@@ -321,7 +326,7 @@ class UsbCtap2Transport(private val context: Context) : FfiCtap2Transport {
                 retries++
                 Log.w(TAG, "Skipping packet with wrong CID: ${initPacket.copyOfRange(0, 4).toHex()} (expected ${expectedCid.toHex()})")
                 if (retries > 10) {
-                    throw FfiWscdException.Plugin("Too many packets with wrong CID")
+                    throw Ctap2TransportException.InvalidResponse("Too many packets with wrong CID")
                 }
                 continue
             }
@@ -337,7 +342,7 @@ class UsbCtap2Transport(private val context: Context) : FfiCtap2Transport {
                 }
                 // Keep reading — the authenticator will eventually send the real response
                 if (keepaliveCount > 600) { // ~30s at 20 keepalives/sec
-                    throw FfiWscdException.Plugin("Timed out waiting for authenticator (>600 keepalives)")
+                    throw Ctap2TransportException.Timeout()
                 }
                 continue
             }
@@ -349,7 +354,7 @@ class UsbCtap2Transport(private val context: Context) : FfiCtap2Transport {
         val cmd = initPacket[4]
         if (cmd == CTAPHID_ERROR) {
             val errorCode = initPacket[7].toInt() and 0xFF
-            throw FfiWscdException.Plugin("CTAPHID error: 0x${errorCode.toString(16)}")
+            throw Ctap2TransportException.InvalidResponse("CTAPHID error: 0x${errorCode.toString(16)}")
         }
 
         val totalLen = ((initPacket[5].toInt() and 0xFF) shl 8) or (initPacket[6].toInt() and 0xFF)
@@ -373,7 +378,7 @@ class UsbCtap2Transport(private val context: Context) : FfiCtap2Transport {
     private fun sendPacket(session: UsbSession, packet: ByteArray) {
         val sent = session.connection.bulkTransfer(session.outEp, packet, packet.size, USB_TIMEOUT_MS)
         if (sent < 0) {
-            throw FfiWscdException.Plugin("USB bulk transfer send failed (rc=$sent)")
+            throw Ctap2TransportException.DeviceDisconnected()
         }
     }
 
@@ -381,12 +386,34 @@ class UsbCtap2Transport(private val context: Context) : FfiCtap2Transport {
         val buffer = ByteArray(HID_PACKET_SIZE)
         val received = session.connection.bulkTransfer(session.inEp, buffer, buffer.size, USB_TIMEOUT_MS)
         if (received < 0) {
-            throw FfiWscdException.Plugin("USB bulk transfer receive failed (rc=$received)")
+            throw Ctap2TransportException.DeviceDisconnected()
         }
         return buffer
     }
 
-    // ── FfiCtap2Transport ─────────────────────────────────────────────────────
+    // ── Ctap2TransportProvider ────────────────────────────────────────────────
+
+    override suspend fun isAvailable(): Boolean {
+        val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
+        return usbManager.deviceList.values.any { it.vendorId == YUBICO_VENDOR_ID && hasFidoInterface(it) }
+    }
+
+    override suspend fun connect() {
+        val newSession = openFidoDevice()
+        try {
+            cid = ctaphidInit(newSession)
+        } catch (e: Exception) {
+            newSession.close()
+            throw e
+        }
+        session = newSession
+    }
+
+    override suspend fun disconnect() {
+        session?.close()
+        session = null
+        cid = null
+    }
 
     /**
      * Send a raw CTAP2 command (already CBOR-encoded with its leading
@@ -395,14 +422,10 @@ class UsbCtap2Transport(private val context: Context) : FfiCtap2Transport {
      * byte + CBOR body). No CBOR knowledge here - Rust does all
      * encoding/decoding on both sides of this call.
      */
-    override fun ctap2SendCommand(command: ByteArray): ByteArray {
-        val session = openFidoDevice()
-        try {
-            val cid = ctaphidInit(session)
-            return ctaphidCbor(session, cid, command)
-        } finally {
-            session.close()
-        }
+    override suspend fun send(command: ByteArray): ByteArray {
+        val activeSession = session ?: throw Ctap2TransportException.DeviceDisconnected()
+        val activeCid = cid ?: throw Ctap2TransportException.DeviceDisconnected()
+        return ctaphidCbor(activeSession, activeCid, command)
     }
 
     private fun ByteArray.toHex(): String =

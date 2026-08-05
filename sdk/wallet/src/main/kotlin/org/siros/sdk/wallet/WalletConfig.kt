@@ -97,3 +97,9 @@ data class WalletConfig(
         }
     }
 }
+
+/** See [SirosWallet.capabilities]. */
+data class WalletCapabilities(
+    val nativeAttestation: Boolean,
+    val wscd: Boolean,
+)

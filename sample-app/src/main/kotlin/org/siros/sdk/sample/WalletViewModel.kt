@@ -31,10 +31,13 @@ import org.siros.sdk.keystore.FactorKind
 import org.siros.sdk.keystore.LifecycleState
 import org.siros.sdk.keystore.LifecycleStatus
 import org.siros.sdk.keystore.PlayIntegrityProvider
+import org.siros.sdk.keystore.R2psAuthMode
+import org.siros.sdk.keystore.R2psConfig
 import org.siros.sdk.keystore.RegisterLifecycleRequest
 import org.siros.sdk.keystore.RotateLifecycleRequest
 import org.siros.sdk.keystore.UniFFISigner
 import org.siros.sdk.keystore.WscdKeystoreAdapter
+import org.siros.sdk.keystore.WscdManager
 import org.siros.sdk.wallet.SirosWallet
 import org.siros.sdk.wallet.WalletConfig
 import org.siros.sdk.wallet.WalletEventListener
@@ -42,7 +45,6 @@ import org.siros.sdk.wallet.WalletState
 import org.siros.sdk.wallet.PresentationRequest
 import org.siros.sdk.wallet.DeepLinkType
 import org.siros.sdk.wallet.classifyDeepLink
-import uniffi.siros_wscd_manager.FfiR2psConfig
 import uniffi.siros_wscd_manager.FfiWscdConfig
 
 /** A terminal issuance/presentation flow failure, shown as a dialog with Retry/Cancel. */
@@ -774,14 +776,21 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _enrollmentInProgress = MutableStateFlow(false)
     val enrollmentInProgress: StateFlow<Boolean> = _enrollmentInProgress
 
-    /** Stored reference to the UniFFISigner for lifecycle operations. */
+    /**
+     * Stored reference to the UniFFISigner for diagnostic-only calls
+     * ([UniFFISigner.listKeysDetailed]/[UniFFISigner.securityProperties])
+     * that aren't part of the [WscdManager]/[org.siros.sdk.keystore.KeystoreManager]
+     * surface at all - everything else (lifecycle, plugin registration)
+     * goes through [wallet]'s own [SirosWallet.wscdManager].
+     */
     private var wscdSigner: UniFFISigner? = null
     private var r2psRegistered = false
 
-    /** Register the R2PS plugin on the given signer (idempotent). */
-    private fun registerR2psOnSigner(signer: UniFFISigner) {
+    /** Register the R2PS plugin on the given manager (idempotent). */
+    private fun registerR2psOnSigner(manager: WscdManager) {
         if (r2psRegistered) return
-        // Generate ephemeral P-256 key pair for channel binding
+        // Generate ephemeral P-256 key pair for the R2PS message envelope
+        // (JWS/JWE identity) - required regardless of auth mode.
         val kpg = java.security.KeyPairGenerator.getInstance("EC")
         kpg.initialize(java.security.spec.ECGenParameterSpec("secp256r1"))
         val kp = kpg.generateKeyPair()
@@ -793,32 +802,26 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             android.util.Base64.encodeToString(kp.public.encoded, android.util.Base64.NO_WRAP)
                 .chunked(64).joinToString("\n") +
             "\n-----END PUBLIC KEY-----"
-        val r2psConfig = FfiR2psConfig(
+        val r2psConfig = R2psConfig(
             serverUrl = _r2psServerUrl.value,
             clientId = "sample-app",
             context = "wallet",
-            authMode = "opaque",
-            rpId = "",
-            allowedCredentialIds = emptyList(),
             clientKeyPem = clientKeyPem,
             serverPublicKeyPem = serverPubPem,
+            authMode = R2psAuthMode.Opaque,
         )
-        signer.registerR2psPlugin(
-            r2psConfig,
-            OkHttpR2psTransport(serverUrl = _r2psServerUrl.value),
-            SamplePakeClient(),
-        )
+        manager.registerR2psPlugin(r2psConfig, OkHttpR2psTransport(serverUrl = _r2psServerUrl.value))
         r2psRegistered = true
         Log.i(TAG, "R2PS plugin registered at ${_r2psServerUrl.value}")
     }
 
     private var fido2Registered = false
 
-    /** Register the FIDO2 previewSign plugin on the given signer (idempotent). */
-    private fun registerFido2OnSigner(signer: UniFFISigner) {
+    /** Register the FIDO2 previewSign plugin on the given manager (idempotent). */
+    private fun registerFido2OnSigner(manager: WscdManager) {
         if (fido2Registered) return
         val transport = UsbCtap2Transport(activity.applicationContext)
-        signer.registerFido2Plugin(transport)
+        manager.registerFido2Plugin(transport)
         fido2Registered = true
         Log.i(TAG, "FIDO2 previewSign plugin registered")
     }
@@ -832,17 +835,17 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _enrollmentInProgress.value = true
         viewModelScope.launch {
             try {
-                val signer = wscdSigner
-                if (signer == null) {
+                val manager = wallet.wscdManager
+                if (manager == null) {
                     _errorMessage.value = "WSCD signer not initialized"
                     return@launch
                 }
                 val pluginId = activePluginId
                 // Lazily register R2PS plugin if switching at runtime
                 if (pluginId == "r2ps") {
-                    registerR2psOnSigner(signer)
+                    registerR2psOnSigner(manager)
                 } else if (pluginId == "fido2") {
-                    registerFido2OnSigner(signer)
+                    registerFido2OnSigner(manager)
                 }
                 val contextId = "ctx-${System.currentTimeMillis()}"
                 val factorKind = when (pluginId) {
@@ -850,7 +853,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     else -> FactorKind.RawSign
                 }
 
-                val regOutcome = signer.registerLifecycle(
+                val regOutcome = manager.registerLifecycle(
                     RegisterLifecycleRequest(
                         pluginId = pluginId,
                         contextId = contextId,
@@ -860,7 +863,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 _lifecycleState.value = regOutcome.state
                 Log.i(TAG, "Lifecycle registered: context=$contextId state=${regOutcome.state}")
 
-                val actOutcome = signer.activateLifecycle(
+                val actOutcome = manager.activateLifecycle(
                     ActivateLifecycleRequest(
                         pluginId = pluginId,
                         contextId = contextId,
@@ -912,25 +915,28 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     fun refreshWscdInfo() {
         viewModelScope.launch {
-            val signer = wscdSigner ?: return@launch
-            try {
-                val keys = signer.listKeysDetailed()
-                _wscdKeys.value = keys
-                val props = mutableMapOf<String, SignerSecurityProperties>()
-                for (key in keys) {
-                    try {
-                        props[key.keyId] = signer.securityProperties(key.keyId)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Failed to get security properties for ${key.keyId}", e)
+            val signer = wscdSigner
+            if (signer != null) {
+                try {
+                    val keys = signer.listKeysDetailed()
+                    _wscdKeys.value = keys
+                    val props = mutableMapOf<String, SignerSecurityProperties>()
+                    for (key in keys) {
+                        try {
+                            props[key.keyId] = signer.securityProperties(key.keyId)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to get security properties for ${key.keyId}", e)
+                        }
                     }
+                    _wscdKeySecurityProps.value = props
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to list keys", e)
                 }
-                _wscdKeySecurityProps.value = props
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to list keys", e)
             }
+            val manager = wallet.wscdManager ?: return@launch
             val ctxId = lifecycleContextId ?: return@launch
             try {
-                _wscdLifecycleStatus.value = signer.lifecycleStatus(activePluginId, ctxId)
+                _wscdLifecycleStatus.value = manager.lifecycleStatus(activePluginId, ctxId)
                 _lifecycleState.value = _wscdLifecycleStatus.value?.state
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to get lifecycle status", e)
@@ -960,15 +966,15 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     fun rotateLifecycle() {
         viewModelScope.launch {
-            val signer = wscdSigner
+            val manager = wallet.wscdManager
             val ctxId = lifecycleContextId
-            if (signer == null || ctxId == null) {
+            if (manager == null || ctxId == null) {
                 _errorMessage.value = "WSCD not enrolled"
-                Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"rotate","status":"error","error":"WSCD not enrolled (signer=${signer != null}, ctxId=$ctxId)"}""")
+                Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"rotate","status":"error","error":"WSCD not enrolled (manager=${manager != null}, ctxId=$ctxId)"}""")
                 return@launch
             }
             try {
-                val outcome = signer.rotateLifecycle(
+                val outcome = manager.rotateLifecycle(
                     RotateLifecycleRequest(
                         pluginId = activePluginId,
                         contextId = ctxId,
@@ -988,15 +994,15 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     fun destroyLifecycle(mode: DestroyMode) {
         viewModelScope.launch {
-            val signer = wscdSigner
+            val manager = wallet.wscdManager
             val ctxId = lifecycleContextId
-            if (signer == null || ctxId == null) {
+            if (manager == null || ctxId == null) {
                 _errorMessage.value = "WSCD not enrolled"
-                Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"destroy","status":"error","error":"WSCD not enrolled (signer=${signer != null}, ctxId=$ctxId)"}""")
+                Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"destroy","status":"error","error":"WSCD not enrolled (manager=${manager != null}, ctxId=$ctxId)"}""")
                 return@launch
             }
             try {
-                val outcome = signer.destroyLifecycle(
+                val outcome = manager.destroyLifecycle(
                     DestroyLifecycleRequest(
                         pluginId = activePluginId,
                         contextId = ctxId,
@@ -1109,8 +1115,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 if (selectedPlugin == "r2ps") {
                     registerR2psOnSigner(signer)
                 } else if (selectedPlugin == "fido2") {
-                    val transport = UsbCtap2Transport(activity.applicationContext)
-                    signer.registerFido2Plugin(transport)
+                    registerFido2OnSigner(signer)
                 }
                 Log.i(TAG, "WSCD keystore initialized with plugin: $selectedPlugin")
                 wscdSigner = signer
