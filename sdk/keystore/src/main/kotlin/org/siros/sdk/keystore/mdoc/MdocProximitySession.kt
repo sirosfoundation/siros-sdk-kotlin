@@ -165,6 +165,16 @@ class MdocProximitySession(
             return Result.Failed("no matching credential")
         }
         val families = CredentialUtils.groupIntoFamilies(matches)
+        if (families.isEmpty()) {
+            // matches non-empty doesn't guarantee families non-empty:
+            // groupIntoFamilies skips any batch missing an instanceId==0
+            // representative (see its doc comment). Treat that as a
+            // non-match rather than calling requestConsent with an empty
+            // list, which would violate RequestProximityConsent's "never
+            // empty" contract.
+            Timber.w("$logTag: matching credentials exist but none have a representable family (missing instanceId==0 member)")
+            return Result.Failed("no representable credential family")
+        }
         onStep("awaiting_consent")
         val consent = requestConsent(docRequest.docType, docRequest.disclosedClaims(), families)
         val family = when (consent) {
