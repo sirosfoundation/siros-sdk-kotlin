@@ -60,15 +60,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import org.siros.sdk.credentials.CredentialFamily
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.keystore.mdoc.DeviceEngagement
 import org.siros.sdk.keystore.mdoc.NfcHandoverSelect
+import org.siros.sdk.keystore.mdoc.ProximityConsentResult
+import org.siros.sdk.keystore.mdoc.RequestProximityConsent
 import org.siros.sdk.sample.proximity.ActiveEngagement
 import org.siros.sdk.sample.proximity.BleCentralClient
 import org.siros.sdk.sample.proximity.BlePeripheralServer
-import org.siros.sdk.sample.proximity.CredentialFamily
-import org.siros.sdk.sample.proximity.ProximityConsentResult
-import org.siros.sdk.sample.proximity.RequestProximityConsent
 
 /**
  * ISO 18013-5 §8.2/§9.2 device engagement, shown as a QR code (§8.2.2.3),

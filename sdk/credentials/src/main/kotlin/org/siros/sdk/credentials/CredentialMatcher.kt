@@ -171,6 +171,16 @@ object CredentialMatcher {
     }
 
     /**
+     * Match stored credentials against an ISO 18013-5 mdoc `docType`
+     * requested during a proximity (BLE/NFC) presentation - the mdoc
+     * proximity protocol has no DCQL query, just a bare docType string in
+     * the `DeviceRequest`'s `ItemsRequest`.
+     */
+    fun matchMdocDocType(credentials: List<StoredCredential>, docType: String): List<StoredCredential> {
+        return credentials.filter { it.format == "mso_mdoc" && CredentialUtils.parseMdocDocument(it)?.docType == docType }
+    }
+
+    /**
      * Parse the `credential_sets` array from a DCQL query (OID4VP §6.2).
      *
      * @return Parsed credential set queries, or null if `credential_sets` is absent

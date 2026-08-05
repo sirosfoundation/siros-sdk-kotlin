@@ -101,4 +101,49 @@ class CredentialUtilsGroupForDisplayTest {
         assertEquals(31L, result.first().credential.id)
         assertEquals(30L, result[1].credential.id)
     }
+
+    @Test
+    fun groupIntoFamilies_representativeIsTheInstanceZeroMember() {
+        val batchId = 500L
+        val credentials = listOf(
+            credential(id = 41L, batchId = batchId, instanceId = 0),
+            credential(id = 42L, batchId = batchId, instanceId = 1),
+            credential(id = 43L, batchId = batchId, instanceId = 2),
+        )
+
+        val result = CredentialUtils.groupIntoFamilies(credentials)
+
+        assertEquals(1, result.size)
+        assertEquals(41L, result.first().representative.id)
+        assertEquals(3, result.first().instances.size)
+    }
+
+    @Test
+    fun groupIntoFamilies_skipsABatchMissingItsInstanceZeroMember() {
+        // Matches groupForDisplay's convention exactly (see
+        // batchMissingItsInstanceZeroCredentialIsDroppedEntirely above) -
+        // the two grouping functions must never disagree about which
+        // batches are representable, so this must skip rather than fall
+        // back to an arbitrary member.
+        val batchId = 600L
+        val credentials = listOf(
+            credential(id = 51L, batchId = batchId, instanceId = 1),
+            credential(id = 52L, batchId = batchId, instanceId = 2),
+        )
+
+        val result = CredentialUtils.groupIntoFamilies(credentials)
+
+        assertTrue(result.isEmpty())
+    }
+
+    @Test
+    fun groupIntoFamilies_standaloneCredentialBecomesItsOwnOneInstanceFamily() {
+        val cred = credential(id = 61L)
+
+        val result = CredentialUtils.groupIntoFamilies(listOf(cred))
+
+        assertEquals(1, result.size)
+        assertEquals(cred, result.first().representative)
+        assertEquals(listOf(cred), result.first().instances)
+    }
 }
