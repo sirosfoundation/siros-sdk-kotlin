@@ -92,11 +92,15 @@
     <string name="qr_scan_button">Σάρωση Κωδικού QR</string>
     <string name="qr_scanner_paste_label">Ή επικολλήστε ένα URI προσφοράς πιστοποιητικού</string>
     <string name="qr_scanner_paste_button">Εξαργύρωση Προσφοράς</string>
+    <string name="qr_scanner_detected">Εντοπίστηκε κωδικός QR</string>
 
     <!-- Flow states -->
     <string name="flow_issuing">Έκδοση Πιστοποιητικού\u2026</string>
     <string name="flow_presenting">Παρουσίαση Πιστοποιητικού\u2026</string>
     <string name="flow_processing">Επεξεργασία\u2026</string>
+    <string name="flow_starting_issuance">Επικοινωνία με τον εκδότη\u2026</string>
+    <string name="flow_starting_presentation">Επικοινωνία με τον επαληθευτή\u2026</string>
+    <string name="flow_starting_subtitle">Αυτό μπορεί να διαρκέσει λίγο ανάλογα με τον εκδότη ή τον επαληθευτή - περιμένετε λίγο.</string>
     <string name="flow_cancel">Ακύρωση</string>
     <string name="flow_close">Κλείσιμο</string>
     <string name="flow_error_title">Η Ροή Απέτυχε</string>

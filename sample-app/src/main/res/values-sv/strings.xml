@@ -92,11 +92,15 @@
     <string name="qr_scan_button">Skanna QR-kod</string>
     <string name="qr_scanner_paste_label">Eller klistra in en URI för intygserbjudande</string>
     <string name="qr_scanner_paste_button">Lös in erbjudande</string>
+    <string name="qr_scanner_detected">QR-kod identifierad</string>
 
     <!-- Flow states -->
     <string name="flow_issuing">Utfärdar intyg\u2026</string>
     <string name="flow_presenting">Presenterar intyg\u2026</string>
     <string name="flow_processing">Bearbetar\u2026</string>
+    <string name="flow_starting_issuance">Kontaktar utfärdare\u2026</string>
+    <string name="flow_starting_presentation">Kontaktar granskare\u2026</string>
+    <string name="flow_starting_subtitle">Detta kan ta en stund beroende på utfärdaren eller granskaren - vänta lite.</string>
     <string name="flow_cancel">Avbryt</string>
     <string name="flow_close">Stäng</string>
     <string name="flow_error_title">Flödet misslyckades</string>
