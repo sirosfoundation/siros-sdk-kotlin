@@ -104,6 +104,10 @@ class BleCentralClient(
     private var client2ServerCharacteristic: BluetoothGattCharacteristic? = null
     private var stateCharacteristic: BluetoothGattCharacteristic? = null
     private var scanning = false
+    // Written from the writeAndAwait() coroutine, read from the
+    // BluetoothGattCallback binder thread's onCharacteristicWrite - @Volatile
+    // is required so the callback thread can't observe a stale value.
+    @Volatile
     private var pendingWrite: CompletableDeferred<Boolean>? = null
 
     @SuppressLint("MissingPermission")
@@ -225,7 +229,12 @@ class BleCentralClient(
                 STATE_UUID -> enableNotifications(gatt, descriptor.characteristic.service.getCharacteristic(SERVER2CLIENT_UUID))
                 SERVER2CLIENT_UUID -> {
                     val stateChar = descriptor.characteristic.service.getCharacteristic(STATE_UUID)
-                    writeNoResponse(gatt, stateChar, byteArrayOf(STATE_START))
+                    // Routed through writeAndAwait (not fired-and-forgotten) so
+                    // pendingWrite always correlates to exactly one in-flight
+                    // write - onCharacteristicWrite completes whichever write
+                    // is currently pending without checking its UUID, so two
+                    // genuinely concurrent writes could otherwise cross-complete.
+                    scope.launch { writeAndAwait(gatt, stateChar, byteArrayOf(STATE_START)) }
                 }
             }
         }
@@ -284,23 +293,17 @@ class BleCentralClient(
         gatt.writeDescriptor(cccd)
     }
 
-    /** @return false if [characteristic] is null or the write couldn't be initiated/queued. */
-    @Suppress("DEPRECATION")
-    @SuppressLint("MissingPermission")
-    private fun writeNoResponse(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic?, value: ByteArray): Boolean {
-        if (characteristic == null) return false
-        // Same API-33-vs-minSdk-28 reasoning as enableNotifications above.
-        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-        characteristic.value = value
-        return gatt.writeCharacteristic(characteristic)
-    }
-
     /**
      * Writes [value] to [characteristic] and suspends until the local BLE
      * stack signals completion via onCharacteristicWrite before returning -
      * without this pacing, firing writeCharacteristic() again before the
      * previous chunk's callback silently drops the new write on real
-     * hardware (see WRITE_TIMEOUT_MS's doc comment).
+     * hardware (see WRITE_TIMEOUT_MS's doc comment). Every write in this
+     * class goes through here (including the single-shot STATE_START) so
+     * [pendingWrite] always correlates to exactly one in-flight write -
+     * onCharacteristicWrite completes whichever write is pending without
+     * checking its characteristic, so two genuinely concurrent writes
+     * could otherwise cross-complete each other's deferred.
      * @return false if the characteristic is null, the write couldn't be
      * queued, or it timed out/failed.
      */
@@ -336,8 +339,13 @@ class BleCentralClient(
         // §11.1.3.1: signal the end of this side's transaction once the
         // response has been fully written - without this, a reader
         // following the state machine strictly may keep waiting/hold the
-        // transaction open unnecessarily.
-        writeAndAwait(currentGatt, stateCharacteristic, byteArrayOf(STATE_END))
+        // transaction open unnecessarily. The response chunks themselves
+        // (already confirmed above) are what the reader actually needs, so
+        // a failed/timed-out STATE_END doesn't fail the whole presentation -
+        // just log it rather than silently discarding the outcome.
+        if (!writeAndAwait(currentGatt, stateCharacteristic, byteArrayOf(STATE_END))) {
+            Timber.w("BleCentralClient: STATE_END write failed/timed out - reader may not promptly close the transaction")
+        }
         return true
     }
 }
