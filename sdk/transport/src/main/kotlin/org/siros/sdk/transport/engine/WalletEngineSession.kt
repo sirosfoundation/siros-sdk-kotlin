@@ -22,6 +22,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import org.siros.sdk.credentials.AuthException
 import org.siros.sdk.transport.CredentialNotifier
 import timber.log.Timber
 import java.util.concurrent.TimeUnit
@@ -43,7 +44,14 @@ class WalletEngineSession(
     private val tenantId: String = "default",
     private val client: OkHttpClient = defaultClient(),
 ) : CredentialNotifier {
-    enum class State { DISCONNECTED, CONNECTING, CONNECTED, RECONNECTING, FAILED }
+    /**
+     * [REAUTH_REQUIRED] is distinct from [FAILED]: it means a reconnect
+     * attempt's [tokenProvider] call itself failed (the access-token/session
+     * refresh mechanism was rejected), not merely that the socket couldn't
+     * connect - see [scheduleReconnect]/[forceReconnect]. [FAILED] is reserved
+     * for exhausting reconnect attempts on a transient network-level failure.
+     */
+    enum class State { DISCONNECTED, CONNECTING, CONNECTED, RECONNECTING, REAUTH_REQUIRED, FAILED }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -54,6 +62,19 @@ class WalletEngineSession(
     private var webSocket: WebSocket? = null
     private var sessionId: String? = null
     private var lastAppToken: String? = null
+    /**
+     * Mints a fresh handshake token on demand - called before every
+     * reconnect attempt (automatic backoff or [forceReconnect]) instead of
+     * replaying [lastAppToken], which is otherwise never updated after the
+     * initial [connect] and goes stale within minutes (the AS's default
+     * access-token TTL is 2 minutes) since the WS path had no refresh logic
+     * at all. Typically wraps `authTokens.ensureBackendToken()`/
+     * `ensureAnonymousToken()`, which already handles expiry-aware caching -
+     * this class only needs to call it, not duplicate that logic. Null
+     * preserves the old (non-refreshing) behavior for callers that haven't
+     * opted in.
+     */
+    private var tokenProvider: (suspend () -> String)? = null
     private var reconnectAttempts = 0
     private val maxReconnectAttempts = 5
     private val baseReconnectDelayMs = 1000L
@@ -101,12 +122,19 @@ class WalletEngineSession(
 
     /**
      * Connect to the engine WebSocket and perform the handshake.
-     * @param appToken JWT obtained from login/register
+     * @param appToken JWT obtained from login/register, used for this initial
+     *   handshake (avoids an extra round trip re-minting a token we were
+     *   just handed).
+     * @param tokenProvider mints a fresh token before each subsequent
+     *   reconnect attempt - see [tokenProvider]'s doc comment. Omit only if
+     *   the caller genuinely has no refresh mechanism to offer; every real
+     *   [SirosWallet] call site should pass one.
      */
-    fun connect(appToken: String) {
+    fun connect(appToken: String, tokenProvider: (suspend () -> String)? = null) {
         if (_state.value == State.CONNECTED) return
         _state.value = State.CONNECTING
         lastAppToken = appToken
+        this.tokenProvider = tokenProvider
         reconnectAttempts = 0
         doConnect(appToken)
     }
@@ -151,8 +179,7 @@ class WalletEngineSession(
     }
 
     private fun scheduleReconnect() {
-        val token = lastAppToken
-        if (token == null || reconnectAttempts >= maxReconnectAttempts) {
+        if (lastAppToken == null || reconnectAttempts >= maxReconnectAttempts) {
             Timber.w("WebSocket reconnection exhausted ($reconnectAttempts attempts)")
             _state.value = State.FAILED
             return
@@ -163,9 +190,32 @@ class WalletEngineSession(
         Timber.i("Reconnecting in ${delayMs}ms (attempt $reconnectAttempts/$maxReconnectAttempts)")
         scope.launch {
             kotlinx.coroutines.delay(delayMs)
+            if (_state.value != State.RECONNECTING) return@launch
+            val token = refreshTokenOrSignalReauth() ?: return@launch
             if (_state.value == State.RECONNECTING) {
                 doConnect(token)
             }
+        }
+    }
+
+    /**
+     * Mints a fresh token via [tokenProvider] (falling back to [lastAppToken]
+     * if no provider was supplied) for a reconnect attempt. A provider
+     * failure means the refresh mechanism itself was rejected - not a
+     * transient network blip like a socket-connect failure - so this
+     * short-circuits straight to [State.REAUTH_REQUIRED] rather than
+     * consuming the remaining backoff budget on a broken session.
+     * @return the token to reconnect with, or null if reconnecting should
+     *   stop (state has already been updated to reflect why).
+     */
+    private suspend fun refreshTokenOrSignalReauth(): String? {
+        val provider = tokenProvider ?: return lastAppToken
+        return try {
+            provider().also { lastAppToken = it }
+        } catch (e: Exception) {
+            Timber.w(e, "Token refresh failed before reconnect - session likely invalid")
+            _state.value = State.REAUTH_REQUIRED
+            null
         }
     }
 
@@ -391,10 +441,15 @@ class WalletEngineSession(
      */
     suspend fun awaitConnected(timeoutMs: Long = 10_000) {
         withTimeout(timeoutMs) {
-            state.first { it == State.CONNECTED || it == State.FAILED }
+            state.first { it == State.CONNECTED || it == State.FAILED || it == State.REAUTH_REQUIRED }
         }
-        if (_state.value == State.FAILED) {
-            throw IllegalStateException("Engine WebSocket connection failed")
+        when (_state.value) {
+            State.REAUTH_REQUIRED -> throw AuthException(
+                "Session expired and could not be refreshed - user must log in again",
+                errorCode = "reauth_required",
+            )
+            State.FAILED -> throw IllegalStateException("Engine WebSocket connection failed")
+            else -> {}
         }
     }
 
@@ -416,8 +471,9 @@ class WalletEngineSession(
      * time-sensitive right after the app regains foreground from such a background
      * gap, rather than trusting the existing connection is still good.
      */
-    fun forceReconnect() {
-        val token = lastAppToken ?: return
+    suspend fun forceReconnect() {
+        if (lastAppToken == null) return
+        val token = refreshTokenOrSignalReauth() ?: return
         webSocket?.cancel() // ungraceful - the connection may already be dead
         webSocket = null
         sessionId = null
@@ -429,6 +485,7 @@ class WalletEngineSession(
     /** Disconnect the WebSocket session. */
     fun disconnect() {
         lastAppToken = null  // prevent reconnection
+        tokenProvider = null
         webSocket?.close(1000, "client disconnect")
         webSocket = null
         sessionId = null

@@ -97,4 +97,15 @@ interface WalletEventListener {
         flowId: String,
         description: String?,
     ): String? = null
+
+    /**
+     * The current session could not be silently refreshed and is no longer
+     * valid - e.g. the engine WebSocket's token refresh failed before a
+     * reconnect, or repeated REST calls were rejected as unauthenticated.
+     * [SirosWallet] has already logged out by the time this fires. Unlike
+     * [onFlowError] (a specific flow's failure, session otherwise fine),
+     * this means the whole session is gone - route the user to the login
+     * screen rather than surfacing a generic error message.
+     */
+    fun onReauthenticationRequired() {}
 }

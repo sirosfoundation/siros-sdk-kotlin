@@ -798,6 +798,8 @@ class SirosWallet private constructor(
      * and clear session data.
      */
     fun logout() {
+        engineStateJob?.cancel()
+        engineStateJob = null
         engineSession?.disconnect()
         engineSession = null
         scope.launch { wmpPeer?.close() }
@@ -2088,10 +2090,24 @@ class SirosWallet private constructor(
     private var legacyAppToken: String? = null
 
     private val authTokens = AuthTokens(authServerClient, config.tenantId).apply {
-        onSessionRejected = {
-            Timber.w("Session rejected — forcing logout")
-            scope.launch { logout() }
-        }
+        onSessionRejected = { handleReauthenticationRequired() }
+    }
+
+    /**
+     * Fires whenever ANY code path determines the current session is no
+     * longer valid and can't be silently refreshed - repeated REST 401s
+     * ([AuthTokens.onSessionRejected]) or the engine WebSocket's token
+     * refresh failing before a reconnect ([WalletEngineSession.State.REAUTH_REQUIRED],
+     * observed via [engineStateJob]). Notifies the host app via
+     * [WalletEventListener.onReauthenticationRequired] - distinct from
+     * [WalletEventListener.onFlowError] - so it can route straight to a
+     * login screen instead of surfacing a generic error message, then logs
+     * out to put the SDK's own state in sync with that.
+     */
+    private fun handleReauthenticationRequired() {
+        Timber.w("Re-authentication required — session/token refresh failed")
+        eventListener?.onReauthenticationRequired()
+        scope.launch { logout() }
     }
 
     private val _presentationHistory = mutableListOf<PresentationRecord>()
@@ -2143,6 +2159,13 @@ class SirosWallet private constructor(
 
     private var apiClient: BackendApiClient? = null
     private var engineSession: WalletEngineSession? = null
+    /** Collects [engineSession]'s state to catch [WalletEngineSession.State.REAUTH_REQUIRED]
+     *  transitions from the automatic background reconnect loop, which never
+     *  goes through [WalletEngineSession.awaitConnected] - cancelled/replaced
+     *  whenever a new engine session is created (see [connectEngine]) or on
+     *  [logout], since a raw StateFlow collector doesn't complete on its own
+     *  just because the engine's internal scope was cancelled. */
+    private var engineStateJob: kotlinx.coroutines.Job? = null
     /** Transport-independent notifier for OID4VCI §10 events. */
     private var credentialNotifier: CredentialNotifier? = null
     private var eventListener: WalletEventListener? = null
@@ -2557,7 +2580,15 @@ class SirosWallet private constructor(
         val engine = createEngineSession(engineBaseUrl, config.tenantId)
         engineSession = engine
         credentialNotifier = engine
-        engine.connect(appToken)
+        engineStateJob?.cancel()
+        engineStateJob = scope.launch {
+            engine.state.collect { s ->
+                if (s == WalletEngineSession.State.REAUTH_REQUIRED) {
+                    handleReauthenticationRequired()
+                }
+            }
+        }
+        engine.connect(appToken) { legacyAppToken ?: authTokens.ensureAnonymousToken().raw }
         engine.awaitConnected()
 
         // Observe sign requests → auto-sign with keystore
