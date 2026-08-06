@@ -2301,11 +2301,16 @@ class SirosWallet private constructor(
     }
 
     /**
-     * Connect the engine using an anonymous token from the AS (new AS)
-     * or the authenticated app token (legacy AS).
+     * Connect the engine using a backend token from the AS (new AS) or the
+     * authenticated app token (legacy AS). The anonymous token is scoped to
+     * `tac="rl"` for registry-style reads only - the engine session needs
+     * `insert` for OID4VCI issuance, so it must use the fully-scoped backend
+     * token, not the anonymous one (go-wallet-backend#264 made the missing
+     * `insert` scope a hard server-side rejection for `oid4vci` flow_start,
+     * not just a documentation note).
      */
     private suspend fun connectEngineWithToken() {
-        val token = legacyAppToken ?: authTokens.ensureAnonymousToken().raw
+        val token = legacyAppToken ?: authTokens.ensureBackendToken().raw
         if (config.useWmpProtocol) {
             connectViaWmp(token)
         } else {
@@ -2588,7 +2593,7 @@ class SirosWallet private constructor(
                 }
             }
         }
-        engine.connect(appToken) { legacyAppToken ?: authTokens.ensureAnonymousToken().raw }
+        engine.connect(appToken) { legacyAppToken ?: authTokens.ensureBackendToken().raw }
         engine.awaitConnected()
 
         // Observe sign requests → auto-sign with keystore
