@@ -72,7 +72,10 @@ class AuthTokens(
     /** Convenience: ensure a backend token (authenticated, full CRUD). */
     suspend fun ensureBackendToken(): AccessToken = ensureToken(TOKEN_BACKEND)
 
-    /** Convenience: ensure an anonymous token (read-only, no auth required). */
+    /**
+     * Convenience: ensure an anonymous token (issued without a `sub` claim;
+     * still requires a real, already-authenticated session server-side).
+     */
     suspend fun ensureAnonymousToken(): AccessToken = ensureToken(TOKEN_ANONYMOUS)
 
     /**
@@ -137,7 +140,7 @@ class AuthTokens(
             ),
             TOKEN_ANONYMOUS to TokenKind(
                 name = TOKEN_ANONYMOUS,
-                aud = "wallet-backend",
+                aud = "wallet-registry",
                 tac = "rl",
                 anonymous = true,
             ),
