@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.transport.engine
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -200,11 +201,15 @@ class WalletEngineSession(
 
     /**
      * Mints a fresh token via [tokenProvider] (falling back to [lastAppToken]
-     * if no provider was supplied) for a reconnect attempt. A provider
-     * failure means the refresh mechanism itself was rejected - not a
-     * transient network blip like a socket-connect failure - so this
+     * if no provider was supplied) for a reconnect attempt. Only an explicit
+     * auth/session rejection (401/403 from the AS - see [AuthException.code])
+     * means the refresh mechanism itself was rejected, so only that
      * short-circuits straight to [State.REAUTH_REQUIRED] rather than
-     * consuming the remaining backoff budget on a broken session.
+     * consuming the remaining backoff budget on a broken session. Any other
+     * failure (network blip, AS 5xx, etc.) is transient like a socket-connect
+     * failure, so it falls back to [lastAppToken] and lets the normal
+     * reconnect/backoff loop keep retrying. Cancellation is always rethrown,
+     * never treated as a token-refresh failure.
      * @return the token to reconnect with, or null if reconnecting should
      *   stop (state has already been updated to reflect why).
      */
@@ -212,10 +217,20 @@ class WalletEngineSession(
         val provider = tokenProvider ?: return lastAppToken
         return try {
             provider().also { lastAppToken = it }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: AuthException) {
+            if (e.code == 401 || e.code == 403) {
+                Timber.w(e, "Token refresh rejected (${e.code}) before reconnect - session invalid")
+                _state.value = State.REAUTH_REQUIRED
+                null
+            } else {
+                Timber.w(e, "Token refresh failed before reconnect (AS error ${e.code}) - retrying with existing token")
+                lastAppToken
+            }
         } catch (e: Exception) {
-            Timber.w(e, "Token refresh failed before reconnect - session likely invalid")
-            _state.value = State.REAUTH_REQUIRED
-            null
+            Timber.w(e, "Token refresh failed before reconnect (transient) - retrying with existing token")
+            lastAppToken
         }
     }
 
