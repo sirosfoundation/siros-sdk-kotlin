@@ -18,6 +18,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.keystore.mdoc.BleMessageChunker
@@ -109,6 +111,10 @@ class BleCentralClient(
     // is required so the callback thread can't observe a stale value.
     @Volatile
     private var pendingWrite: CompletableDeferred<Boolean>? = null
+    // Serializes writeAndAwait() calls so pendingWrite can never be
+    // clobbered by a second concurrent write (only one deferred can be
+    // in flight at a time).
+    private val writeMutex = Mutex()
 
     @SuppressLint("MissingPermission")
     fun start() {
@@ -234,7 +240,12 @@ class BleCentralClient(
                     // write - onCharacteristicWrite completes whichever write
                     // is currently pending without checking its UUID, so two
                     // genuinely concurrent writes could otherwise cross-complete.
-                    scope.launch { writeAndAwait(gatt, stateChar, byteArrayOf(STATE_START)) }
+                    scope.launch {
+                        if (!writeAndAwait(gatt, stateChar, byteArrayOf(STATE_START))) {
+                            Timber.w("BleCentralClient: STATE_START write failed/timed out - reader will never see this mdoc's response")
+                            onComplete(false)
+                        }
+                    }
                 }
             }
         }
@@ -303,7 +314,10 @@ class BleCentralClient(
      * [pendingWrite] always correlates to exactly one in-flight write -
      * onCharacteristicWrite completes whichever write is pending without
      * checking its characteristic, so two genuinely concurrent writes
-     * could otherwise cross-complete each other's deferred.
+     * could otherwise cross-complete each other's deferred. [writeMutex]
+     * serializes callers so that can never actually happen, and the
+     * `finally` clears [pendingWrite] even if this coroutine is cancelled
+     * mid-await, so a later stray callback can't complete a stale deferred.
      * @return false if the characteristic is null, the write couldn't be
      * queued, or it timed out/failed.
      */
@@ -311,17 +325,21 @@ class BleCentralClient(
     @SuppressLint("MissingPermission")
     private suspend fun writeAndAwait(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic?, value: ByteArray): Boolean {
         if (characteristic == null) return false
-        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-        characteristic.value = value
-        val deferred = CompletableDeferred<Boolean>()
-        pendingWrite = deferred
-        if (!gatt.writeCharacteristic(characteristic)) {
-            pendingWrite = null
-            return false
+        return writeMutex.withLock {
+            characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+            characteristic.value = value
+            val deferred = CompletableDeferred<Boolean>()
+            pendingWrite = deferred
+            try {
+                if (!gatt.writeCharacteristic(characteristic)) {
+                    false
+                } else {
+                    withTimeoutOrNull(WRITE_TIMEOUT_MS) { deferred.await() } == true
+                }
+            } finally {
+                pendingWrite = null
+            }
         }
-        val result = withTimeoutOrNull(WRITE_TIMEOUT_MS) { deferred.await() }
-        pendingWrite = null
-        return result == true
     }
 
     /** @return false if any chunk's write failed/timed out - the reader will not have received a complete response. */
