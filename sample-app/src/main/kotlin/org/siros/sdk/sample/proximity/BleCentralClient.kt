@@ -14,9 +14,11 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.ParcelUuid
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.keystore.mdoc.BleMessageChunker
 import org.siros.sdk.keystore.mdoc.DeviceEngagement
@@ -42,13 +44,10 @@ import java.util.UUID
  * the reverse, regardless of which side - mdoc or reader - holds the GATT
  * client/server role for a given transaction).
  *
- * UNVERIFIED ON REAL HARDWARE beyond compiling - there is no second BLE
- * GATT-server test tool available yet (siros-verifier-cli's `siros-verify read`,
- * https://github.com/sirosfoundation/siros-verifier-cli, uses `bleak`, which is
- * central/client-only on every platform, the same role this class plays - it
- * cannot stand in as a peripheral to test against).
- * Needs testing against either a real ISO 18013-5 reader or a purpose-built
- * BlueZ-peripheral test script before relying on it.
+ * Verified end-to-end on real hardware (Pixel) against siros-verifier-cli's
+ * `siros-verify read --mode central`, which uses `bless` as a purpose-built
+ * BlueZ GATT-server test peer (bleak itself is central/client-only on every
+ * platform, the same role this class plays).
  */
 class BleCentralClient(
     private val context: Context,
@@ -78,6 +77,14 @@ class BleCentralClient(
 
         private const val DEFAULT_MTU = 23
         private const val REQUESTED_MTU = 517
+
+        // Even for WRITE_TYPE_NO_RESPONSE, Android's BLE stack still queues
+        // writes one at a time internally - firing writeCharacteristic()
+        // again before the previous write's onCharacteristicWrite callback
+        // silently drops the new write on real hardware rather than
+        // erroring. A single chunk (e.g. STATE_START) never hits this; a
+        // multi-chunk DeviceResponse always did.
+        private const val WRITE_TIMEOUT_MS = 5_000L
     }
 
     private val scope = CoroutineScope(Dispatchers.IO)
@@ -97,6 +104,7 @@ class BleCentralClient(
     private var client2ServerCharacteristic: BluetoothGattCharacteristic? = null
     private var stateCharacteristic: BluetoothGattCharacteristic? = null
     private var scanning = false
+    private var pendingWrite: CompletableDeferred<Boolean>? = null
 
     @SuppressLint("MissingPermission")
     fun start() {
@@ -222,6 +230,11 @@ class BleCentralClient(
             }
         }
 
+        @SuppressLint("MissingPermission")
+        override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+            pendingWrite?.complete(status == BluetoothGatt.GATT_SUCCESS)
+        }
+
         // Same API-33-vs-minSdk-28 reasoning as onCharacteristicRead above:
         // override the deprecated 2-arg form, not the newer 3-arg one.
         @Suppress("DEPRECATION")
@@ -260,7 +273,10 @@ class BleCentralClient(
     private fun enableNotifications(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic?) {
         if (characteristic == null) return
         gatt.setCharacteristicNotification(characteristic, true)
-        val cccd = characteristic.getDescriptor(CCCD_UUID) ?: return
+        val cccd = characteristic.getDescriptor(CCCD_UUID) ?: run {
+            Timber.w("BleCentralClient: reader's ${characteristic.uuid} characteristic has no CCCD descriptor to subscribe to")
+            return
+        }
         // The 2-arg writeDescriptor(descriptor, value) overload requires API
         // 33 - this repo's minSdk is 28, so the deprecated
         // value-then-write pattern is what's actually compatible.
@@ -279,8 +295,34 @@ class BleCentralClient(
         return gatt.writeCharacteristic(characteristic)
     }
 
-    /** @return false if any chunk's write failed to queue - the reader will not have received a complete response. */
-    private fun sendData(message: ByteArray): Boolean {
+    /**
+     * Writes [value] to [characteristic] and suspends until the local BLE
+     * stack signals completion via onCharacteristicWrite before returning -
+     * without this pacing, firing writeCharacteristic() again before the
+     * previous chunk's callback silently drops the new write on real
+     * hardware (see WRITE_TIMEOUT_MS's doc comment).
+     * @return false if the characteristic is null, the write couldn't be
+     * queued, or it timed out/failed.
+     */
+    @Suppress("DEPRECATION")
+    @SuppressLint("MissingPermission")
+    private suspend fun writeAndAwait(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic?, value: ByteArray): Boolean {
+        if (characteristic == null) return false
+        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+        characteristic.value = value
+        val deferred = CompletableDeferred<Boolean>()
+        pendingWrite = deferred
+        if (!gatt.writeCharacteristic(characteristic)) {
+            pendingWrite = null
+            return false
+        }
+        val result = withTimeoutOrNull(WRITE_TIMEOUT_MS) { deferred.await() }
+        pendingWrite = null
+        return result == true
+    }
+
+    /** @return false if any chunk's write failed/timed out - the reader will not have received a complete response. */
+    private suspend fun sendData(message: ByteArray): Boolean {
         val characteristic = client2ServerCharacteristic ?: return false
         val currentGatt = gatt ?: return false
         // Floor at the default MTU-3 (20 bytes): BleMessageChunker.chunk
@@ -289,13 +331,13 @@ class BleCentralClient(
         // value that would crash chunking outright.
         val maxChunkSize = minOf(negotiatedMtu - 3, 512).coerceAtLeast(DEFAULT_MTU - 3)
         for (chunk in BleMessageChunker.chunk(message, maxChunkSize)) {
-            if (!writeNoResponse(currentGatt, characteristic, chunk)) return false
+            if (!writeAndAwait(currentGatt, characteristic, chunk)) return false
         }
         // §11.1.3.1: signal the end of this side's transaction once the
         // response has been fully written - without this, a reader
         // following the state machine strictly may keep waiting/hold the
         // transaction open unnecessarily.
-        writeNoResponse(currentGatt, stateCharacteristic, byteArrayOf(STATE_END))
+        writeAndAwait(currentGatt, stateCharacteristic, byteArrayOf(STATE_END))
         return true
     }
 }
