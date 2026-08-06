@@ -17,6 +17,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.siros.sdk.credentials.AuthException
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class WalletEngineSessionTest {
@@ -501,5 +502,57 @@ class WalletEngineSessionTest {
                 matches = listOf(CredentialMatch(credentialId = "cred-1", format = "dc+sd-jwt")),
             )
         }
+    }
+
+    @Test
+    fun forceReconnect_signals_reauth_required_when_token_provider_rejects_with_401() = runTest {
+        val session = WalletEngineSession(
+            baseUrl = "https://wallet.example.com",
+            tenantId = "tenant-42",
+            client = client,
+        )
+        session.connect("app-token") { throw AuthException("session expired", code = 401) }
+
+        session.forceReconnect()
+
+        assertEquals(WalletEngineSession.State.REAUTH_REQUIRED, session.state.value)
+        // Only the initial connect() should have opened a socket - forceReconnect
+        // must not proceed to doConnect() once refresh is rejected as invalid.
+        verify(exactly = 1) { client.newWebSocket(any(), any()) }
+    }
+
+    @Test
+    fun forceReconnect_retries_with_last_token_on_transient_provider_failure() = runTest {
+        val session = WalletEngineSession(
+            baseUrl = "https://wallet.example.com",
+            tenantId = "tenant-42",
+            client = client,
+        )
+        session.connect("app-token") { throw java.io.IOException("network blip") }
+
+        session.forceReconnect()
+
+        // A transient failure (not an explicit 401/403 auth rejection) must not
+        // force re-authentication - it should fall back to the last good token
+        // and let the normal reconnect path proceed.
+        assertEquals(WalletEngineSession.State.CONNECTING, session.state.value)
+        verify(exactly = 2) { client.newWebSocket(any(), any()) }
+    }
+
+    @Test
+    fun forceReconnect_falls_back_to_last_token_on_non_auth_server_error() = runTest {
+        val session = WalletEngineSession(
+            baseUrl = "https://wallet.example.com",
+            tenantId = "tenant-42",
+            client = client,
+        )
+        session.connect("app-token") { throw AuthException("AS unavailable", code = 503) }
+
+        session.forceReconnect()
+
+        // A 5xx from the AS is a server-side/transient error, not proof the
+        // session itself is invalid - must not force re-authentication.
+        assertEquals(WalletEngineSession.State.CONNECTING, session.state.value)
+        verify(exactly = 2) { client.newWebSocket(any(), any()) }
     }
 }

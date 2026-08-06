@@ -75,6 +75,10 @@ class AuthTokens(
     /**
      * Convenience: ensure an anonymous token (issued without a `sub` claim;
      * still requires a real, already-authenticated session server-side).
+     * Scoped to `tac ⊆ "rl"` (read/list only), enforced server-side - intended
+     * for registry-style read calls, NOT for anything that needs to write
+     * (e.g. the engine WebSocket session, which needs `insert` for OID4VCI
+     * issuance - use [ensureBackendToken] there instead).
      */
     suspend fun ensureAnonymousToken(): AccessToken = ensureToken(TOKEN_ANONYMOUS)
 

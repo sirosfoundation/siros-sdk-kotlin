@@ -466,7 +466,7 @@ class SirosWalletTest {
                 "state-from-url",
             )
         }
-        verify(exactly = 1) { engine.connect("app-token") }
+        verify(exactly = 1) { engine.connect("app-token", any()) }
         assertEquals(
             WalletState.FlowActive(
                 userId = "user-1",
@@ -481,6 +481,51 @@ class SirosWalletTest {
     }
 
     @Test
+    fun connectEngine_reauth_required_state_notifies_listener_and_logs_out() = runTest(dispatcher) {
+        // The engineStateJob started by connectEngine() is the only currently-wired
+        // path to WalletEngineSession.State.REAUTH_REQUIRED (e.g. the background
+        // reconnect loop's token refresh being rejected) - this locks in that the
+        // host app is notified and the SDK's own session state is put back in sync.
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val accountRegistry = mockk<AccountRegistry>(relaxed = true)
+        every { accountRegistry.listLoginableAccounts() } returns emptyList()
+        val engineState = MutableStateFlow(WalletEngineSession.State.CONNECTED)
+        val engine = mockEngineConstructor()
+        every { engine.state } returns engineState
+        every { engine.disconnect() } just runs
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.Ready(userId = "user-1", displayName = "Alice")
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                tenantId = "tenant-1",
+                redirectUri = "siros://callback",
+            ),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to listener,
+            "keystore" to keystore,
+            "sessionStore" to sessionStore,
+            "accountRegistry" to accountRegistry,
+            "pendingAuthorizations" to mutableMapOf<String, Any?>(),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        engineState.value = WalletEngineSession.State.REAUTH_REQUIRED
+        advanceUntilIdle()
+
+        verify(exactly = 1) { listener.onReauthenticationRequired() }
+        verify(exactly = 1) { engine.disconnect() }
+        verify(exactly = 1) { keystore.lock() }
+        assertEquals(WalletState.Disconnected(), wallet.state.value)
+    }
+
+    @Test
     fun completeAuthorization_resumes_via_stateless_flow_start_using_saved_context() = runTest(dispatcher) {
         // The WebSocket session that started the flow is very often already gone by the
         // time the browser redirects back (Android backgrounds/throttles the app for the
@@ -492,7 +537,6 @@ class SirosWalletTest {
         val store = FakeCredentialStore(mutableListOf())
         val engine = mockEngineConstructor(progressFlow = progressFlow)
         every { engine.resumeIssuance(any(), any(), any(), any(), any()) } just runs
-        every { engine.forceReconnect() } just runs
         coEvery { engine.awaitConnected(any()) } just runs
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(
@@ -532,7 +576,7 @@ class SirosWalletTest {
         wallet.completeAuthorization(flowId = "flow-auth", code = "auth-code-xyz", state = "state-from-url")
         advanceUntilIdle()
 
-        verify(exactly = 1) { engine.forceReconnect() }
+        coVerify(exactly = 1) { engine.forceReconnect() }
         verify(exactly = 1) {
             engine.resumeIssuance(
                 offer = match { it != null && it.contains("\"credential_issuer\":\"https://issuer.example.com\"") },
@@ -573,7 +617,6 @@ class SirosWalletTest {
             val store = FakeCredentialStore(mutableListOf())
             val engine = mockEngineConstructor(progressFlow = progressFlow)
             every { engine.resumeIssuance(any(), any(), any(), any(), any(), any(), any()) } just runs
-            every { engine.forceReconnect() } just runs
             coEvery { engine.awaitConnected(any()) } just runs
 
             val sessionStore = mockk<SessionStore>(relaxed = true)
@@ -671,7 +714,7 @@ class SirosWalletTest {
         val listener = mockk<WalletEventListener>(relaxed = true)
         val store = FakeCredentialStore(mutableListOf())
         val engine = mockEngineConstructor(progressFlow = progressFlow)
-        every { engine.forceReconnect() } throws IllegalStateException("Engine WebSocket connection failed")
+        coEvery { engine.forceReconnect() } throws IllegalStateException("Engine WebSocket connection failed")
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(
                 WalletState.Ready(userId = "user-1", displayName = "Alice")
@@ -2392,8 +2435,10 @@ class SirosWalletTest {
         flowErrors: MutableSharedFlow<FlowErrorMessage> = MutableSharedFlow(),
     ): WalletEngineSession {
         val engine = mockk<WalletEngineSession>()
-        every { engine.connect(any()) } just runs
+        every { engine.connect(any(), any()) } just runs
         coEvery { engine.awaitConnected(any()) } just runs
+        coEvery { engine.forceReconnect() } just runs
+        every { engine.state } returns MutableStateFlow(WalletEngineSession.State.CONNECTED)
         every { engine.sendSignResponse(any(), any(), any(), any()) } just runs
         every { engine.sendMatchResponse(any(), any()) } just runs
         every { engine.signRequests() } returns signRequests
