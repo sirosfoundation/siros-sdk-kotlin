@@ -245,6 +245,33 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _showQrScanner = MutableStateFlow(false)
     val showQrScanner: StateFlow<Boolean> = _showQrScanner
 
+    /**
+     * Non-null while a QR-triggered flow has been handed off to the wallet/engine
+     * but no [WalletState.FlowActive]/[WalletState.Error] has arrived yet.
+     *
+     * Some issuers/verifiers (e.g. geneva2026.mdoc.online) are slow enough here
+     * that, without this, the user sees the scanner close and then... nothing,
+     * for long enough to think the scan didn't register and re-scan. The value
+     * is the flow type ("issuance"/"presentation"), used to pick the right
+     * "Contacting issuer/verifier…" copy; cleared in [observeWalletState] the
+     * moment a real subsequent state (FlowActive, Error) takes over, or from
+     * [handleQrResult]'s own catch/cancel paths.
+     */
+    private val _flowStarting = MutableStateFlow<String?>(null)
+    val flowStarting: StateFlow<String?> = _flowStarting
+
+    private var flowStartJob: Job? = null
+
+    /** Dismiss the "starting…" step (e.g. user tapped Cancel before any flow state arrived). */
+    fun cancelFlowStarting() {
+        flowStartJob?.cancel()
+        flowStartJob = null
+        _flowStarting.value = null
+        // Best-effort: if the engine actually registered a flow just as this ran,
+        // this also cancels it server-side; cancelCurrentFlow() is a no-op otherwise.
+        wallet.cancelCurrentFlow()
+    }
+
     // ── Proximity (ISO 18013-5) engagement state ────────────────────
 
     private val _showProximityEngagement = MutableStateFlow(false)
@@ -341,6 +368,10 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         walletStateJob = viewModelScope.launch {
             wallet.state.collect { newState ->
                 _walletState.value = newState
+                // A real subsequent state has arrived (FlowActive with the
+                // engine's first progress step, an Error, or a bounce back to
+                // Ready) - the transitional "starting…" step's job is done.
+                _flowStarting.value = null
                 // Keep the DC API credential-provider registry (and the
                 // session it presents against) in sync with the wallet's
                 // actual state - see WalletSessionHolder's doc comment for
@@ -1035,14 +1066,34 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     fun handleQrResult(uri: String) {
         _showQrScanner.value = false
         lastFlowRetry = { handleQrResult(uri) }
-        viewModelScope.launch {
+
+        // Classification is pure/synchronous (see DeepLinkClassifier.kt), so it's
+        // safe to resolve up front and reuse below rather than re-classifying
+        // inside the coroutine - that also lets us set the right "starting…"
+        // copy (issuance vs. presentation) immediately, in the same frame the
+        // scanner closes, instead of only after the network work below begins.
+        val link = classifyDeepLink(uri, REDIRECT_SCHEME)
+        _flowStarting.value = when (link) {
+            is DeepLinkType.CredentialOffer -> "issuance"
+            // PresentationRequest, Unknown (fallback below treats it as a
+            // presentation attempt), and AuthCallback (not reachable from a QR
+            // scan in practice) all get the same generic "verifier" copy.
+            else -> "presentation"
+        }
+
+        flowStartJob = viewModelScope.launch {
             try {
                 val jUri = try { java.net.URI(uri) } catch (_: Exception) { null }
                 Log.i(TAG, "handleQrResult: ${jUri?.scheme}://${jUri?.host}")
                 ensureAuthenticatedForTesting()
-                when (val link = classifyDeepLink(uri, REDIRECT_SCHEME)) {
+                when (link) {
                     is DeepLinkType.CredentialOffer -> {
                         Log.i(TAG, "Routing to issuance")
+                        // Everything from here through the engine actually reporting
+                        // back (resolving display metadata, VCTM, client attestation -
+                        // see SirosWallet.startIssuance) can be slow against a real
+                        // issuer; _flowStarting stays visible until observeWalletState
+                        // sees the resulting FlowActive/Error come through.
                         wallet.startIssuance(link.uri)
                     }
                     is DeepLinkType.PresentationRequest -> {
@@ -1059,6 +1110,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             } catch (e: Exception) {
                 Log.e(TAG, "QR/deep-link flow failed", e)
                 _errorMessage.value = e.message ?: "QR flow failed"
+                _flowStarting.value = null
             }
         }
     }

@@ -92,11 +92,15 @@
     <string name="qr_scan_button">Escanear Código QR</string>
     <string name="qr_scanner_paste_label">Ou cole um URI de oferta de credencial</string>
     <string name="qr_scanner_paste_button">Resgatar Oferta</string>
+    <string name="qr_scanner_detected">Código QR detectado</string>
 
     <!-- Flow states -->
     <string name="flow_issuing">Emitindo Credencial\u2026</string>
     <string name="flow_presenting">Apresentando Credencial\u2026</string>
     <string name="flow_processing">Processando\u2026</string>
+    <string name="flow_starting_issuance">Contatando emissor\u2026</string>
+    <string name="flow_starting_presentation">Contatando verificador\u2026</string>
+    <string name="flow_starting_subtitle">Isso pode levar um momento dependendo do emissor ou verificador - aguarde um instante.</string>
     <string name="flow_cancel">Cancelar</string>
     <string name="flow_close">Fechar</string>
     <string name="flow_error_title">Falha no Fluxo</string>

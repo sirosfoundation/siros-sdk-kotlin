@@ -92,11 +92,15 @@
     <string name="qr_scan_button">Skannaa QR-koodi</string>
     <string name="qr_scanner_paste_label">Tai liitä todistustarjouksen URI</string>
     <string name="qr_scanner_paste_button">Lunasta tarjous</string>
+    <string name="qr_scanner_detected">QR-koodi tunnistettu</string>
 
     <!-- Flow states -->
     <string name="flow_issuing">Myönnetään todistusta\u2026</string>
     <string name="flow_presenting">Esitetään todistusta\u2026</string>
     <string name="flow_processing">Käsitellään\u2026</string>
+    <string name="flow_starting_issuance">Otetaan yhteyttä myöntäjään\u2026</string>
+    <string name="flow_starting_presentation">Otetaan yhteyttä todentajaan\u2026</string>
+    <string name="flow_starting_subtitle">Tämä voi kestää hetken myöntäjästä tai todentajasta riippuen - odota hetki.</string>
     <string name="flow_cancel">Peruuta</string>
     <string name="flow_close">Sulje</string>
     <string name="flow_error_title">Prosessi epäonnistui</string>

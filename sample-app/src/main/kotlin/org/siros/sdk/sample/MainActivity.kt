@@ -256,6 +256,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
     val selectedCredential by viewModel.selectedCredential.collectAsState()
     val showHistory by viewModel.showHistory.collectAsState()
     val showQrScanner by viewModel.showQrScanner.collectAsState()
+    val flowStarting by viewModel.flowStarting.collectAsState()
     val showProximityEngagement by viewModel.showProximityEngagement.collectAsState()
     val pendingPresentation by viewModel.pendingPresentationRequest.collectAsState()
     val useWmpProtocol by viewModel.useWmpProtocol.collectAsState()
@@ -392,6 +393,15 @@ fun WalletScreen(viewModel: WalletViewModel) {
             showQrScanner -> QrScannerScreen(
                 onQrScanned = viewModel::handleQrResult,
                 onBack = viewModel::closeQrScanner,
+            )
+
+            // Transitional "starting…" sub-screen: shown the instant a QR-triggered
+            // flow is handed off to the wallet/engine, until a real subsequent state
+            // (FlowActive below, or an error) takes over - see flowStarting's doc
+            // comment in WalletViewModel for why this exists (slow issuers/verifiers).
+            flowStarting != null -> FlowStartingView(
+                flowType = flowStarting,
+                onCancel = viewModel::cancelFlowStarting,
             )
 
             // ISO 18013-5 proximity engagement (QR + NFC + BLE) sub-screen
@@ -1407,6 +1417,61 @@ private fun SettingsRow(label: String, value: String) {
             fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.primary,
         )
+    }
+}
+
+// ── Flow Starting View ──────────────────────────────────────────────
+
+/**
+ * Transitional feedback step shown the instant a QR-triggered flow is handed
+ * off to the wallet/engine, before the engine has reported back with the
+ * first real [WalletState.FlowActive] progress step (or an error).
+ *
+ * Without this, closing the QR scanner leaves the user staring at whatever
+ * screen was behind it with no indication anything is happening - long
+ * enough against a slow issuer/verifier that a user may conclude the scan
+ * didn't register and re-scan. This view has no progress fraction of its own
+ * (there's no flow yet to report progress on) - it exists purely to bridge
+ * that silent gap.
+ */
+@Composable
+fun FlowStartingView(
+    flowType: String?,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.fillMaxSize().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        LinearProgressIndicator(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(
+            text = when (flowType) {
+                "issuance" -> stringResource(R.string.flow_starting_issuance)
+                else -> stringResource(R.string.flow_starting_presentation)
+            },
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Medium,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = stringResource(R.string.flow_starting_subtitle),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(modifier = Modifier.height(32.dp))
+        OutlinedButton(
+            onClick = onCancel,
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            Text(stringResource(R.string.flow_cancel))
+        }
     }
 }
 
