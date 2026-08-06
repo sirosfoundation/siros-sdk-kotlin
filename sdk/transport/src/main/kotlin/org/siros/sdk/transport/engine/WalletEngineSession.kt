@@ -180,7 +180,13 @@ class WalletEngineSession(
     }
 
     private fun scheduleReconnect() {
-        if (lastAppToken == null || reconnectAttempts >= maxReconnectAttempts) {
+        if (lastAppToken == null) {
+            // disconnect() already nulled this and set State.DISCONNECTED itself -
+            // this is OkHttp delivering a stale onClosing/onFailure for the socket
+            // we just closed on purpose. Don't clobber that with FAILED.
+            return
+        }
+        if (reconnectAttempts >= maxReconnectAttempts) {
             Timber.w("WebSocket reconnection exhausted ($reconnectAttempts attempts)")
             _state.value = State.FAILED
             return
@@ -488,10 +494,14 @@ class WalletEngineSession(
      */
     suspend fun forceReconnect() {
         if (lastAppToken == null) return
-        val token = refreshTokenOrSignalReauth() ?: return
+        val token = refreshTokenOrSignalReauth()
+        // Clear the (possibly zombie) socket unconditionally, even if refresh was
+        // rejected below - otherwise isConnected stays true and send() would keep
+        // appearing usable on a session that's actually no longer valid.
         webSocket?.cancel() // ungraceful - the connection may already be dead
         webSocket = null
         sessionId = null
+        if (token == null) return // refreshTokenOrSignalReauth already set State.REAUTH_REQUIRED
         _state.value = State.CONNECTING
         reconnectAttempts = 0
         doConnect(token)

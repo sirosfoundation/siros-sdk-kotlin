@@ -2103,11 +2103,18 @@ class SirosWallet private constructor(
      * [WalletEventListener.onFlowError] - so it can route straight to a
      * login screen instead of surfacing a generic error message, then logs
      * out to put the SDK's own state in sync with that.
+     *
+     * Dispatches onto [scope] (Main) rather than calling the listener inline:
+     * [AuthTokens.onSessionRejected] can fire this from whatever thread detected
+     * the rejection (e.g. a background REST call), and [WalletEventListener]'s
+     * contract promises every callback runs on the main thread.
      */
     private fun handleReauthenticationRequired() {
         Timber.w("Re-authentication required — session/token refresh failed")
-        eventListener?.onReauthenticationRequired()
-        scope.launch { logout() }
+        scope.launch {
+            eventListener?.onReauthenticationRequired()
+            logout()
+        }
     }
 
     private val _presentationHistory = mutableListOf<PresentationRecord>()
