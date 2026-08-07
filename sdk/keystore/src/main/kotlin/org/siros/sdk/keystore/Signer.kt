@@ -114,11 +114,16 @@ data class SignerKeyInfo(
 
 /**
  * A hardware-backed key's attestation evidence, as returned by
- * [Signer.attestationChain] - the raw CTAP2 makeCredential attestation
- * object certificate chain (leaf first), plus the client data hash the
- * attestation signature was computed over. Both are needed to register
- * the attestation with the backend (see BackendApiClient.registerFido2Attestation
- * in the auth module).
+ * [Signer.attestationChain]. For the FIDO2/CTAP2 (previewSign) plugin -
+ * currently the only plugin that returns non-null here - [certificates]
+ * is a single-element list holding the *raw CBOR attestationObject* from
+ * `authenticatorMakeCredential` (fmt/authData/attStmt), not a decoded
+ * X.509 certificate chain; the backend does the CBOR decoding and x5c
+ * extraction itself (see siros-wscd-manager's `AttestationChain` and
+ * `FIDO2AttestationService.Verify` in go-wallet-backend). [clientDataHash]
+ * is the client data hash the attestation signature was computed over.
+ * Both are needed to register the attestation with the backend (see
+ * BackendApiClient.registerFido2Attestation in the auth module).
  */
 data class AttestationChain(
     val certificates: List<ByteArray>,
