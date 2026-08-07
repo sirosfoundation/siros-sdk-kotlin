@@ -118,6 +118,39 @@ internal class SessionStore(context: Context) {
         get() = getString("private_data_etag")
         set(value) = putString("private_data_etag", value)
 
+    /**
+     * TOFU (trust-on-first-use) mapping of `"issuer|credentialType"` ->
+     * chosen WSCD plugin ID, serialized as a single JSON string blob (see
+     * [SessionStoreWscdTofuStore]) - matches [privateDataJwe]'s "one opaque
+     * string" precedent rather than one property per (issuer, credentialType)
+     * pair, since that set is open-ended.
+     */
+    var wscdTofuMappingJson: String?
+        get() = getString("wscd_tofu_mapping")
+        set(value) = putString("wscd_tofu_mapping", value)
+
+    /**
+     * Explicit per-`"issuer|credentialType"` user overrides for which WSCD
+     * plugin to use - distinct from [wscdTofuMappingJson]: TOFU is an
+     * auto-remembered outcome of an ambiguous resolution, this is a
+     * deliberate "always use this plugin here" preference the user set
+     * directly (e.g. from a settings screen). Same "one opaque JSON blob"
+     * shape as [wscdTofuMappingJson] (see [SessionStoreWscdUserOverrideStore]).
+     */
+    var wscdUserOverrideMappingJson: String?
+        get() = getString("wscd_user_override_mapping")
+        set(value) = putString("wscd_user_override_mapping", value)
+
+    /**
+     * A single user-chosen WSCD plugin ID to prefer for EVERY issuer/
+     * credential type, unless a more specific [wscdUserOverrideMappingJson]
+     * entry applies instead - e.g. "always use my YubiKey, no matter what
+     * any individual issuer/credential type actually requires."
+     */
+    var wscdGlobalOverridePluginId: String?
+        get() = getString("wscd_global_override_plugin_id")
+        set(value) = putString("wscd_global_override_plugin_id", value)
+
     // ── Lifecycle ───────────────────────────────────────────────────
 
     /** True if the active account has session data. */

@@ -252,6 +252,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
     val errorMessage by viewModel.errorMessage.collectAsState()
     val infoMessage by viewModel.infoMessage.collectAsState()
     val flowErrorDialog by viewModel.flowErrorDialog.collectAsState()
+    val pendingWscdChoice by viewModel.pendingWscdChoice.collectAsState()
     val presentationHistory by viewModel.presentationHistory.collectAsState()
     val selectedCredential by viewModel.selectedCredential.collectAsState()
     val showHistory by viewModel.showHistory.collectAsState()
@@ -295,6 +296,18 @@ fun WalletScreen(viewModel: WalletViewModel) {
                 }
             },
         )
+    }
+
+    // The SDK asking which registered WSCD plugin to use for an upcoming
+    // credential-issuance key batch (see WscdSelectionPolicy's doc comment) -
+    // fires when more than one plugin meets the credential type's required
+    // tier and neither a persisted choice nor a dev-supplied default mapping
+    // resolves it. Can appear regardless of which tab/screen is showing
+    // (issuance can be triggered from a QR scan, a deep link, etc.), so -
+    // like flowErrorDialog above - it's rendered here rather than inside any
+    // one screen.
+    pendingWscdChoice?.let { pending ->
+        WscdChoiceDialog(pending, onChoose = viewModel::respondToWscdChoice)
     }
 
     // Not logged in → show login screen (no app chrome)
@@ -379,8 +392,10 @@ fun WalletScreen(viewModel: WalletViewModel) {
                     keySecurityProps = wscdKeySecurityProps,
                     selectedPluginId = selectedPluginId,
                     r2psServerUrl = r2psServerUrl,
+                    defaultWscdMappingText = viewModel.defaultWscdMappingText.collectAsState().value,
                     onSelectPlugin = viewModel::selectPlugin,
                     onR2psServerUrlChange = viewModel::updateR2psServerUrl,
+                    onDefaultWscdMappingTextChange = viewModel::updateDefaultWscdMappingText,
                     onEnroll = viewModel::enrollWscd,
                     onRotate = viewModel::rotateLifecycle,
                     onDestroy = viewModel::destroyLifecycle,
@@ -511,6 +526,15 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onUpdateShowDiagnosticMessages = viewModel::updateShowDiagnosticMessages,
                             credentialConsumptionPolicy = viewModel.credentialConsumptionPolicy.collectAsState().value,
                             onUpdateCredentialConsumptionPolicy = viewModel::updateCredentialConsumptionPolicy,
+                            wscdTofuMapping = viewModel.wscdTofuMapping.collectAsState().value,
+                            onForgetWscdTofuMapping = viewModel::forgetWscdTofuMapping,
+                            onForgetAllWscdTofuMappings = viewModel::forgetAllWscdTofuMappings,
+                            availableWscdPluginIds = viewModel.availableWscdPluginIds.collectAsState().value,
+                            wscdGlobalOverride = viewModel.wscdGlobalOverride.collectAsState().value,
+                            onSetWscdGlobalOverride = viewModel::setWscdGlobalOverride,
+                            wscdUserOverrides = viewModel.wscdUserOverrides.collectAsState().value,
+                            onSetWscdUserOverride = viewModel::setWscdUserOverride,
+                            onClearWscdUserOverride = viewModel::clearWscdUserOverride,
                         )
                         // selectedTab can transiently be 1 (the "Add" action, not a
                         // real persisted tab) right as a flow finishes and the state
@@ -1060,6 +1084,15 @@ fun SettingsTab(
     credentialConsumptionPolicy: org.siros.sdk.credentials.CredentialConsumptionPolicy =
         org.siros.sdk.credentials.CredentialConsumptionPolicy.NEVER_CONSUME,
     onUpdateCredentialConsumptionPolicy: ((org.siros.sdk.credentials.CredentialConsumptionPolicy) -> Unit)? = null,
+    wscdTofuMapping: Map<String, String> = emptyMap(),
+    onForgetWscdTofuMapping: ((issuer: String, credentialType: String) -> Unit)? = null,
+    onForgetAllWscdTofuMappings: (() -> Unit)? = null,
+    availableWscdPluginIds: List<String> = emptyList(),
+    wscdGlobalOverride: String? = null,
+    onSetWscdGlobalOverride: ((String?) -> Unit)? = null,
+    wscdUserOverrides: Map<String, String> = emptyMap(),
+    onSetWscdUserOverride: ((issuer: String, credentialType: String, pluginId: String) -> Unit)? = null,
+    onClearWscdUserOverride: ((issuer: String, credentialType: String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -1189,6 +1222,284 @@ fun SettingsTab(
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(stringResource(credentialConsumptionPolicyLabelRes(policy)), style = MaterialTheme.typography.bodyMedium)
                         }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // WSCD security-key choice (trust-on-first-use) section
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Security Key Choices",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (wscdTofuMapping.isNotEmpty() && onForgetAllWscdTofuMappings != null) {
+                        TextButton(onClick = onForgetAllWscdTofuMappings) {
+                            Text("Forget All")
+                        }
+                    }
+                }
+                Text(
+                    "Which security key you chose for each credential type, remembered so you're only " +
+                        "asked once. Forget a choice to be asked again next time.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                if (wscdTofuMapping.isEmpty()) {
+                    Text(
+                        "No security key choices remembered yet",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    wscdTofuMapping.forEach { (key, pluginId) ->
+                        // key is "issuer|credentialType" (see WscdSelectionPolicy) -
+                        // split back into its two parts for both display and the
+                        // per-row "forget" action's parameters.
+                        val (issuer, credentialType) = key.split("|", limit = 2)
+                            .let { it.getOrElse(0) { "" } to it.getOrElse(1) { "" } }
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(credentialType, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "$issuer  →  $pluginId",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (onForgetWscdTofuMapping != null) {
+                                IconButton(
+                                    onClick = { onForgetWscdTofuMapping(issuer, credentialType) },
+                                    modifier = Modifier.size(32.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Forget this choice",
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Preferred security key (single global user override) section - see
+        // WscdSelectionPolicy.setGlobalUserOverride's doc comment. Distinct
+        // from "Security Key Choices" above: this is a deliberate, explicit
+        // "always use this plugin, no matter what any issuer/credential type
+        // actually requires" preference, not an auto-remembered outcome of an
+        // ambiguous resolution.
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+                Text(
+                    "Preferred Security Key",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Always use this security key, even for credentials that don't require it. " +
+                        "Applies to every issuer unless a per-issuer override below takes precedence.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                if (availableWscdPluginIds.isEmpty()) {
+                    Text(
+                        "No security keys registered yet",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Column(Modifier.selectableGroup()) {
+                        val options = listOf<String?>(null) + availableWscdPluginIds
+                        for (pluginId in options) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .selectable(
+                                        selected = pluginId == wscdGlobalOverride,
+                                        onClick = { onSetWscdGlobalOverride?.invoke(pluginId) },
+                                        role = Role.RadioButton,
+                                        enabled = onSetWscdGlobalOverride != null,
+                                    )
+                                    .padding(vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(
+                                    selected = pluginId == wscdGlobalOverride,
+                                    onClick = { onSetWscdGlobalOverride?.invoke(pluginId) },
+                                    enabled = onSetWscdGlobalOverride != null,
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(pluginId ?: "No preference", style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Per-issuer security key overrides section - kept separate from
+        // "Security Key Choices" (TOFU) above so the user can tell "what I
+        // was asked and picked" apart from "what I've explicitly locked in".
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+                Text(
+                    "Security Key Overrides",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Always use a specific security key for a specific issuer and credential type, " +
+                        "even if it doesn't require one.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                if (wscdUserOverrides.isEmpty()) {
+                    Text(
+                        "No security key overrides set",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    wscdUserOverrides.forEach { (key, pluginId) ->
+                        // key is "issuer|credentialType", same shape as the
+                        // TOFU mapping's keys above.
+                        val (issuer, credentialType) = key.split("|", limit = 2)
+                            .let { it.getOrElse(0) { "" } to it.getOrElse(1) { "" } }
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(credentialType, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "$issuer  →  $pluginId",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (onSetWscdUserOverride != null && availableWscdPluginIds.size > 1) {
+                                // "Change the plugin" - cycle to the next
+                                // available plugin ID, a minimal affordance
+                                // that avoids pulling in a dropdown-menu
+                                // dependency for a 2-3-option picker.
+                                IconButton(
+                                    onClick = {
+                                        val idx = availableWscdPluginIds.indexOf(pluginId)
+                                        val next = availableWscdPluginIds[(idx + 1).mod(availableWscdPluginIds.size)]
+                                        onSetWscdUserOverride(issuer, credentialType, next)
+                                    },
+                                    modifier = Modifier.size(32.dp),
+                                ) {
+                                    Icon(Icons.Default.Edit, contentDescription = "Change security key", modifier = Modifier.size(16.dp))
+                                }
+                            }
+                            if (onClearWscdUserOverride != null) {
+                                IconButton(
+                                    onClick = { onClearWscdUserOverride(issuer, credentialType) },
+                                    modifier = Modifier.size(32.dp),
+                                ) {
+                                    Icon(Icons.Default.Close, contentDescription = "Clear this override", modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+                if (onSetWscdUserOverride != null && availableWscdPluginIds.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    var newIssuer by remember { mutableStateOf("") }
+                    var newCredentialType by remember { mutableStateOf("") }
+                    var newPluginId by remember(availableWscdPluginIds) { mutableStateOf(availableWscdPluginIds.first()) }
+                    Text(
+                        "Add an override",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedTextField(
+                        value = newIssuer,
+                        onValueChange = { newIssuer = it },
+                        label = { Text("Issuer URL") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        shape = RoundedCornerShape(8.dp),
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    OutlinedTextField(
+                        value = newCredentialType,
+                        onValueChange = { newCredentialType = it },
+                        label = { Text("Credential type (vct/doctype)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        shape = RoundedCornerShape(8.dp),
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f).selectableGroup()) {
+                            for (pluginId in availableWscdPluginIds) {
+                                Row(
+                                    modifier = Modifier
+                                        .selectable(
+                                            selected = pluginId == newPluginId,
+                                            onClick = { newPluginId = pluginId },
+                                            role = Role.RadioButton,
+                                        ),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    RadioButton(selected = pluginId == newPluginId, onClick = { newPluginId = pluginId })
+                                    Text(pluginId, style = MaterialTheme.typography.bodySmall)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                            }
+                        }
+                        TextButton(
+                            onClick = {
+                                if (newIssuer.isNotBlank() && newCredentialType.isNotBlank()) {
+                                    onSetWscdUserOverride(newIssuer.trim(), newCredentialType.trim(), newPluginId)
+                                    newIssuer = ""
+                                    newCredentialType = ""
+                                }
+                            },
+                            enabled = newIssuer.isNotBlank() && newCredentialType.isNotBlank(),
+                        ) { Text("Add") }
                     }
                 }
             }

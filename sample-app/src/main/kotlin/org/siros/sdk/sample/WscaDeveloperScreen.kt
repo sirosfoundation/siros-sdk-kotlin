@@ -56,8 +56,10 @@ fun WscaDeveloperScreen(
     keySecurityProps: Map<String, SignerSecurityProperties>,
     selectedPluginId: String,
     r2psServerUrl: String,
+    defaultWscdMappingText: String,
     onSelectPlugin: (String) -> Unit,
     onR2psServerUrlChange: (String) -> Unit,
+    onDefaultWscdMappingTextChange: (String) -> Unit,
     onEnroll: () -> Unit,
     onRotate: () -> Unit,
     onDestroy: (DestroyMode) -> Unit,
@@ -120,6 +122,27 @@ fun WscaDeveloperScreen(
                     shape = RoundedCornerShape(12.dp),
                 )
             }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // ── Default WSCD Mapping (WscdSelectionPolicy dev config) ──
+            SectionHeader("Default WSCD Mapping (dev)")
+            Text(
+                text = "Pre-populates WalletConfig.defaultWscdMapping: one \"issuer|credentialType=pluginId\" " +
+                    "entry per line. Lets WscdSelectionPolicy skip the choice dialog for pairs listed here. " +
+                    "Host-app/dev config, not persisted across restarts.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = defaultWscdMappingText,
+                onValueChange = onDefaultWscdMappingTextChange,
+                label = { Text("issuer|credentialType=pluginId (one per line)") },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 3,
+                shape = RoundedCornerShape(12.dp),
+            )
 
             Spacer(modifier = Modifier.height(16.dp))
 

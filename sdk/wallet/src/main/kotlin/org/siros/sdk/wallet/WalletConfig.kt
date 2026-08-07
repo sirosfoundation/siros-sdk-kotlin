@@ -43,6 +43,34 @@ import org.siros.sdk.keystore.NativeAttestationProvider
  *        app must construct it (it has the `Context`/`Activity` a provider like
  *        `PlayIntegrityProvider` needs) and inject the ready instance here. `null`
  *        (default) omits `native_attestation` entirely, matching today's behavior.
+ * @param availableKeystores Optional registry of every [KeystoreManager] the
+ *        host app has ready to use, keyed by WSCD plugin ID (e.g.
+ *        `"softkey"`, `"fido2"`, `"r2ps"` - see the sample app's plugin
+ *        chooser). Each entry's instance must already have its own platform
+ *        transport wired up (BLE/USB/etc.) - like [keystore], the SDK cannot
+ *        construct these itself. When set, [SirosWallet] can pick among
+ *        these (see [WscdSelectionPolicy]) to satisfy a credential type's
+ *        declared key-storage assurance requirement
+ *        (`Vctm.requiredKeyStorage` / `MddlSchema.requiredKeyStorage`)
+ *        before generating that batch's issuance keys, instead of using
+ *        [keystore] unconditionally. **Fully backward compatible**: `null`
+ *        (default) or an empty map disables this selection logic entirely -
+ *        [keystore] is used exactly as before, with no tier-checking or
+ *        prompting.
+ * @param defaultWscdMapping Optional pre-populated default plugin choice per
+ *        credential type, keyed by `"issuer|credentialType"` (e.g.
+ *        `"https://issuer.example.com|urn:eu.europa.ec.eudi:pid:1"` ->
+ *        `"fido2"`), consulted before asking the user (see
+ *        [WscdSelectionPolicy]'s resolution order) - lets an integrator that
+ *        already knows the right plugin for a given (issuer, credentialType)
+ *        pair skip the [requestWscdChoice] prompt entirely. Only consulted
+ *        when [availableKeystores] is non-empty.
+ * @param requestWscdChoice Optional suspending callback the SDK invokes when
+ *        [availableKeystores] contains more than one plugin capable of a
+ *        credential type's required tier and neither a persisted TOFU choice
+ *        nor [defaultWscdMapping] resolves it unambiguously - mirrors
+ *        `org.siros.sdk.keystore.mdoc.RequestProximityConsent`'s shape
+ *        exactly. See [RequestWscdChoice]'s doc comment.
  */
 data class WalletConfig(
     val backendUrl: String,
@@ -62,6 +90,9 @@ data class WalletConfig(
      * of the legacy engine protocol. Requires go-wallet-backend with WMP support.
      */
     val useWmpProtocol: Boolean = false,
+    val availableKeystores: Map<String, KeystoreManager>? = null,
+    val defaultWscdMapping: Map<String, String>? = null,
+    val requestWscdChoice: RequestWscdChoice? = null,
 ) {
     companion object {
         private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }

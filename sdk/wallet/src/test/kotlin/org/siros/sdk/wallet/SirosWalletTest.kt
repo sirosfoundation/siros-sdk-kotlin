@@ -1248,6 +1248,324 @@ class SirosWalletTest {
         }
     }
 
+    private class InMemoryWscdTofuStore : WscdTofuStore {
+        val entries = mutableMapOf<String, String>()
+        private fun key(issuer: String, credentialType: String) = "$issuer|$credentialType"
+        override fun get(issuer: String, credentialType: String): String? = entries[key(issuer, credentialType)]
+        override fun put(issuer: String, credentialType: String, pluginId: String) {
+            entries[key(issuer, credentialType)] = pluginId
+        }
+    }
+
+    /**
+     * End-to-end: an issuer with multiple registered [WalletConfig.availableKeystores]
+     * plugins, requesting a Key Attestation for a credential type that
+     * declares (via [Vctm.requiredKeyStorage]) it needs `iso_18045_high` -
+     * only the "fido2" plugin's static tier meets that per
+     * [org.siros.sdk.keystore.WscdPluginCapabilities], so
+     * [WscdSelectionPolicy] must auto-pick it (the only eligible plugin, see
+     * that class's resolution order) and `generateKeypairs` must be called
+     * on the fido2 keystore instance, never on the wallet's own default
+     * [keystore].
+     */
+    @Test
+    fun requestBackendKeyAttestation_usesEligiblePlugin_forCredentialTypeRequiringHigherTier() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val defaultKeystore = mockk<KeystoreManager>()
+        val fido2Keystore = mockk<KeystoreManager>()
+        val keypairs = listOf(KeypairInfo(keyId = "fido2-key-1", publicKeyJWK = buildJsonObject { put("kty", "EC") }))
+        coEvery { fido2Keystore.generateKeypairs(1) } returns keypairs
+        coEvery { fido2Keystore.attestationChain(any()) } returns null
+        coEvery { fido2Keystore.securityProperties("fido2-key-1") } returns null
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery {
+            apiClient.requestKeyAttestation(
+                jwks = keypairs.map { it.publicKeyJWK },
+                nonce = "nonce-1",
+                securityProperties = null,
+                credentialIssuer = "https://issuer.example.com",
+                walletInstanceId = null,
+            )
+        } returns "backend-signed-attestation-jwt"
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val config = WalletConfig(
+            backendUrl = "https://wallet.example.com",
+            availableKeystores = mapOf("softkey" to defaultKeystore, "fido2" to fido2Keystore),
+        )
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to config,
+            "keystore" to defaultKeystore,
+            "wscdSelectionPolicy" to WscdSelectionPolicy(tofuStore = InMemoryWscdTofuStore()),
+        )
+        setField(
+            wallet,
+            "activeOffer",
+            org.siros.sdk.credentials.CredentialOffer(
+                credentialConfigurationId = "pid",
+                credentialIssuerIdentifier = "https://issuer.example.com",
+                credentialName = "PID",
+                issuerName = "Issuer",
+            ),
+        )
+        setField(
+            wallet,
+            "activeVctm",
+            org.siros.sdk.credentials.Vctm(vct = "urn:eu.europa.ec.eudi:pid:1", requiredKeyStorage = "iso_18045_high"),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        setField(wallet, "apiClient", apiClient)
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sign",
+                action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "https://issuer.example.com",
+                    nonce = "nonce-1",
+                    count = 1,
+                    proofTypesSupported = buildJsonObject { putJsonObject("attestation") {} },
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { fido2Keystore.generateKeypairs(1) }
+        coVerify(exactly = 0) { defaultKeystore.generateKeypairs(any()) }
+    }
+
+    /**
+     * When zero registered plugins meet a credential type's declared
+     * requirement, [WscdSelectionPolicy] throws [NoEligibleWscdPluginException]
+     * - `requestBackendKeyAttestation` must let it propagate rather than
+     * quietly falling back to the (insufficient) default keystore, so no
+     * keys are ever generated with a plugin that can't satisfy the
+     * requirement and no sign response is sent for that request.
+     */
+    @Test
+    fun requestBackendKeyAttestation_doesNotFallBack_whenNoPluginMeetsRequirement() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val defaultKeystore = mockk<KeystoreManager>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val config = WalletConfig(
+            backendUrl = "https://wallet.example.com",
+            // Only "softkey" ("basic") registered - insufficient for "high".
+            availableKeystores = mapOf("softkey" to defaultKeystore),
+        )
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to config,
+            "keystore" to defaultKeystore,
+            "wscdSelectionPolicy" to WscdSelectionPolicy(tofuStore = InMemoryWscdTofuStore()),
+        )
+        setField(
+            wallet,
+            "activeOffer",
+            org.siros.sdk.credentials.CredentialOffer(
+                credentialConfigurationId = "pid",
+                credentialIssuerIdentifier = "https://issuer.example.com",
+                credentialName = "PID",
+                issuerName = "Issuer",
+            ),
+        )
+        setField(
+            wallet,
+            "activeVctm",
+            org.siros.sdk.credentials.Vctm(vct = "urn:eu.europa.ec.eudi:pid:1", requiredKeyStorage = "iso_18045_high"),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        setField(wallet, "apiClient", apiClient)
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sign",
+                action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "https://issuer.example.com",
+                    nonce = "nonce-1",
+                    count = 1,
+                    proofTypesSupported = buildJsonObject { putJsonObject("attestation") {} },
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { defaultKeystore.generateKeypairs(any()) }
+        coVerify(exactly = 0) { engine.sendSignResponse(any(), any(), any(), any()) }
+    }
+
+    /**
+     * Regression (PR #85 review, bug 1): `resolveEffectiveKeystoreForIssuance`
+     * must key [WscdSelectionPolicy] lookups (TOFU/defaultMapping) by the
+     * credential type's real `vct`/`doctype` identifier, NOT
+     * `CredentialOffer.credentialConfigurationId` - the two are deliberately
+     * different here (`credentialConfigurationId` is an OID4VCI-internal ID
+     * the docs/config examples never use as a key). A TOFU entry keyed by the
+     * `vct` for a plugin that's the ONLY one of two eligible plugins must be
+     * found and used without prompting - if the buggy `credentialConfigurationId`
+     * key were still used instead, this TOFU lookup would miss, both eligible
+     * plugins ("fido2"/"r2ps") would fall through to the ask-user step, and
+     * (with no `requestWscdChoice` configured) resolution would throw
+     * [AmbiguousWscdPluginException] instead of silently succeeding.
+     */
+    @Test
+    fun resolveEffectiveKeystoreForIssuance_keysWscdLookupByVct_notCredentialConfigurationId() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val fido2Keystore = mockk<KeystoreManager>()
+        val r2psKeystore = mockk<KeystoreManager>(relaxed = true)
+        val keypairs = listOf(KeypairInfo(keyId = "fido2-key-1", publicKeyJWK = buildJsonObject { put("kty", "EC") }))
+        coEvery { fido2Keystore.generateKeypairs(1) } returns keypairs
+        coEvery { fido2Keystore.attestationChain(any()) } returns null
+        coEvery { fido2Keystore.securityProperties("fido2-key-1") } returns null
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery {
+            apiClient.requestKeyAttestation(
+                jwks = keypairs.map { it.publicKeyJWK },
+                nonce = "nonce-1",
+                securityProperties = null,
+                credentialIssuer = "https://issuer.example.com",
+                walletInstanceId = null,
+            )
+        } returns "backend-signed-attestation-jwt"
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val config = WalletConfig(
+            backendUrl = "https://wallet.example.com",
+            availableKeystores = mapOf("fido2" to fido2Keystore, "r2ps" to r2psKeystore),
+        )
+        // TOFU pre-populated keyed by the real vct, not the (deliberately
+        // different) credentialConfigurationId set below.
+        val tofuStore = InMemoryWscdTofuStore().apply {
+            put("https://issuer.example.com", "urn:eu.europa.ec.eudi:pid:1", "fido2")
+        }
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to config,
+            "keystore" to fido2Keystore,
+            "wscdSelectionPolicy" to WscdSelectionPolicy(tofuStore = tofuStore),
+        )
+        setField(
+            wallet,
+            "activeOffer",
+            org.siros.sdk.credentials.CredentialOffer(
+                credentialConfigurationId = "totally-different-internal-config-id",
+                credentialIssuerIdentifier = "https://issuer.example.com",
+                credentialName = "PID",
+                issuerName = "Issuer",
+            ),
+        )
+        setField(
+            wallet,
+            "activeVctm",
+            org.siros.sdk.credentials.Vctm(vct = "urn:eu.europa.ec.eudi:pid:1", requiredKeyStorage = "iso_18045_high"),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        setField(wallet, "apiClient", apiClient)
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sign",
+                action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "https://issuer.example.com",
+                    nonce = "nonce-1",
+                    count = 1,
+                    proofTypesSupported = buildJsonObject { putJsonObject("attestation") {} },
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { fido2Keystore.generateKeypairs(1) }
+        coVerify(exactly = 0) { r2psKeystore.generateKeypairs(any()) }
+    }
+
+    /**
+     * Regression (PR #85 review, bug 2): when the backend Key Attestation
+     * call fails, the self-signed fallback
+     * ([KeystoreManager.generateKeyAttestation]) must be invoked on the SAME
+     * resolved plugin [WscdSelectionPolicy] picked for this call (here,
+     * "fido2"), never on the wallet's own unconditional default `keystore`
+     * field - otherwise a resolved higher-tier plugin is silently bypassed on
+     * fallback, downgrading to a lower-tier self-signed attestation.
+     */
+    @Test
+    fun requestBackendKeyAttestation_selfSignedFallback_usesResolvedKeystore_notWalletDefault() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val defaultKeystore = mockk<KeystoreManager>(relaxed = true)
+        val fido2Keystore = mockk<KeystoreManager>()
+        val keypairs = listOf(KeypairInfo(keyId = "fido2-key-1", publicKeyJWK = buildJsonObject { put("kty", "EC") }))
+        coEvery { fido2Keystore.generateKeypairs(1) } returns keypairs
+        coEvery { fido2Keystore.attestationChain(any()) } returns null
+        coEvery { fido2Keystore.securityProperties("fido2-key-1") } returns null
+        coEvery { fido2Keystore.generateKeyAttestation(nonce = "nonce-1", count = 1) } returns "self-signed-by-fido2"
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        // Simulate the backend attestation call failing, forcing the
+        // self-signed fallback path.
+        coEvery {
+            apiClient.requestKeyAttestation(
+                jwks = any(),
+                nonce = any(),
+                securityProperties = any(),
+                credentialIssuer = any(),
+                walletInstanceId = any(),
+            )
+        } throws RuntimeException("backend unavailable")
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val config = WalletConfig(
+            backendUrl = "https://wallet.example.com",
+            availableKeystores = mapOf("softkey" to defaultKeystore, "fido2" to fido2Keystore),
+        )
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to config,
+            "keystore" to defaultKeystore,
+            "wscdSelectionPolicy" to WscdSelectionPolicy(tofuStore = InMemoryWscdTofuStore()),
+        )
+        setField(
+            wallet,
+            "activeOffer",
+            org.siros.sdk.credentials.CredentialOffer(
+                credentialConfigurationId = "pid",
+                credentialIssuerIdentifier = "https://issuer.example.com",
+                credentialName = "PID",
+                issuerName = "Issuer",
+            ),
+        )
+        setField(
+            wallet,
+            "activeVctm",
+            org.siros.sdk.credentials.Vctm(vct = "urn:eu.europa.ec.eudi:pid:1", requiredKeyStorage = "iso_18045_high"),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        setField(wallet, "apiClient", apiClient)
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sign",
+                action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "https://issuer.example.com",
+                    nonce = "nonce-1",
+                    count = 1,
+                    proofTypesSupported = buildJsonObject { putJsonObject("attestation") {} },
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { fido2Keystore.generateKeyAttestation(nonce = "nonce-1", count = 1) }
+        coVerify(exactly = 0) { defaultKeystore.generateKeyAttestation(any(), any()) }
+    }
+
     /**
      * A native-attestation failure (device doesn't support it, Play Services
      * missing, etc.) must degrade to a plain backend-attested WIA, not abort

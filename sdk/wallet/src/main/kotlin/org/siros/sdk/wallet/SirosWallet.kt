@@ -51,6 +51,7 @@ import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.Vctm
 import org.siros.sdk.credentials.VctmFetcher
+import org.siros.sdk.credentials.MddlSchema
 import org.siros.sdk.credentials.MddlSchemaFetcher
 import org.siros.sdk.keystore.DCAPIResponseEncryption
 import org.siros.sdk.keystore.JweKeystore
@@ -2072,6 +2073,84 @@ class SirosWallet private constructor(
         if (response.isSuccessful) response.body?.string() else null
     })
 
+    /**
+     * Resolves which [config].availableKeystores entry (if any) should back
+     * a given credential-issuance key batch - see [WscdSelectionPolicy]'s
+     * doc comment for the full resolution order. Constructing this
+     * unconditionally is harmless: it's only ever consulted (in
+     * [resolveEffectiveKeystoreForIssuance]) when [config].availableKeystores
+     * is non-empty, so a caller that never sets that field never triggers
+     * any TOFU read/write or prompting.
+     */
+    private val wscdSelectionPolicy = WscdSelectionPolicy(
+        tofuStore = SessionStoreWscdTofuStore(sessionStore),
+        defaultMapping = config.defaultWscdMapping,
+        requestChoice = config.requestWscdChoice,
+        userOverrideStore = SessionStoreWscdUserOverrideStore(sessionStore),
+    )
+
+    /**
+     * The active account's persisted WSCD TOFU mapping (see
+     * [WscdSelectionPolicy]'s doc comment), keyed by
+     * `"issuer|credentialType"` -> plugin ID - exposed read-only so a
+     * host-app settings screen can display it without reaching into SDK
+     * internals ([SessionStore] is `internal`). Empty when no active
+     * account or no choices have been persisted yet.
+     */
+    fun wscdTofuMapping(): Map<String, String> = wscdSelectionPolicy.tofuMapping()
+
+    /**
+     * Forget one persisted WSCD TOFU choice - a "forget this choice"
+     * settings-screen affordance. The next credential-issuance batch for
+     * that (issuer, credentialType) pair re-resolves from scratch (see
+     * [WscdSelectionPolicy.resolve]'s doc comment).
+     */
+    fun clearWscdTofuMapping(issuer: String, credentialType: String) =
+        wscdSelectionPolicy.clearTofuMapping(issuer, credentialType)
+
+    /** Forget every persisted WSCD TOFU choice for the active account. */
+    fun clearAllWscdTofuMappings() = wscdSelectionPolicy.clearAllTofuMappings()
+
+    /**
+     * Explicitly set a per-(issuer, credentialType) user override, e.g. "for
+     * this issuer, always use my YubiKey even though a software key would
+     * suffice" - a deliberate preference, distinct from [wscdTofuMapping]'s
+     * auto-remembered ambiguous-choice outcome (see
+     * [WscdSelectionPolicy.setUserOverride]'s doc comment). Only ever
+     * RAISES the effective tier used: [WscdSelectionPolicy.resolve] still
+     * requires the overridden plugin to meet the credential type's declared
+     * requirement, falling through to the rest of its resolution order
+     * otherwise (e.g. if the requirement was later raised past what this
+     * plugin provides, or the plugin was unregistered).
+     */
+    fun setUserOverride(issuer: String, credentialType: String, pluginId: String) =
+        wscdSelectionPolicy.setUserOverride(issuer, credentialType, pluginId)
+
+    /** Forget one persisted per-(issuer, credentialType) user override. */
+    fun clearUserOverride(issuer: String, credentialType: String) =
+        wscdSelectionPolicy.clearUserOverride(issuer, credentialType)
+
+    /**
+     * Every persisted per-(issuer, credentialType) user override, keyed by
+     * `"issuer|credentialType"` -> plugin ID - for a host-app settings
+     * screen, kept separate from [wscdTofuMapping] so the UI can distinguish
+     * "what I was asked and picked" from "what I've explicitly locked in".
+     */
+    fun currentUserOverrides(): Map<String, String> = wscdSelectionPolicy.currentUserOverrides()
+
+    /**
+     * Explicitly set the single global user override - "always use this
+     * plugin for every issuer/credential type", unless a more specific
+     * [setUserOverride] entry also applies (which wins first).
+     */
+    fun setGlobalUserOverride(pluginId: String) = wscdSelectionPolicy.setGlobalUserOverride(pluginId)
+
+    /** Forget the persisted global user override, if any. */
+    fun clearGlobalUserOverride() = wscdSelectionPolicy.clearGlobalUserOverride()
+
+    /** The persisted global user override, or `null` if none set. */
+    fun currentGlobalUserOverride(): String? = wscdSelectionPolicy.currentGlobalUserOverride()
+
     // New AS-based auth
     private val authServerClient = AuthServerClient(
         context = activity,
@@ -2417,12 +2496,10 @@ class SirosWallet private constructor(
         }
         return if (chosen == "attestation") {
             val backendResult = requestBackendKeyAttestation(audience, nonce, count)
-            val attestationJwt = backendResult?.jwt
-                ?: keystore.generateKeyAttestation(nonce = nonce, count = count)
             listOf(GeneratedProofData(
                 proofType = "attestation",
-                attestation = attestationJwt,
-                attestedKeyIds = backendResult?.keyIds,
+                attestation = backendResult.jwt,
+                attestedKeyIds = backendResult.keyIds,
             ))
         } else {
             (1..count).map {
@@ -2448,20 +2525,39 @@ class SirosWallet private constructor(
      * the backend signs an attestation *over* them with its own,
      * operator-provisioned x5c-chained key.
      *
-     * Returns null (caller falls back to the self-signed path) when there's
-     * no backend session, the keystore can't produce raw keypairs (e.g. a
-     * non-WSCD backend that only overrides [KeystoreManager.generateKeyAttestation]
-     * directly), or the backend doesn't support/expose the endpoint (older
-     * backend version, or `wallet_provider` not configured there) - matching
-     * the same "degrade gracefully" behavior as the rest of this SDK's
-     * backend-optional flows.
+     * Falls back to [KeystoreManager.generateKeyAttestation] (self-signed) on
+     * [effectiveKeystore] - NEVER on [keystore], the wallet's unconditional
+     * default - when there's no backend session, the keystore can't produce
+     * raw keypairs (e.g. a non-WSCD backend that only overrides
+     * [KeystoreManager.generateKeyAttestation] directly), or the backend
+     * doesn't support/expose the endpoint (older backend version, or
+     * `wallet_provider` not configured there): [effectiveKeystore] is
+     * [resolveEffectiveKeystoreForIssuance]'s result, which may be a
+     * different, higher-tier plugin than [keystore] - falling back to
+     * [keystore] instead would silently downgrade to a lower-tier self-signed
+     * attestation despite [WscdSelectionPolicy] having already resolved a
+     * sufficient plugin for this call, defeating the entire point of that
+     * resolution. Matches the same "degrade gracefully" behavior as the rest
+     * of this SDK's backend-optional flows, just anchored to the right
+     * keystore instance.
+     *
+     * [resolveEffectiveKeystoreForIssuance] is called unconditionally, before
+     * checking for a backend session, so [NoEligibleWscdPluginException] /
+     * [AmbiguousWscdPluginException] always propagate to the caller instead
+     * of being caught below - those signal "issuance must not proceed at
+     * all", not "the backend attestation call specifically failed".
      */
-    private suspend fun requestBackendKeyAttestation(audience: String, nonce: String, count: Int): BackendAttestationResult? {
-        val client = apiClient ?: return null
+    private suspend fun requestBackendKeyAttestation(audience: String, nonce: String, count: Int): BackendAttestationResult {
+        val effectiveKeystore = resolveEffectiveKeystoreForIssuance()
+        val client = apiClient
+            ?: return BackendAttestationResult(
+                jwt = effectiveKeystore.generateKeyAttestation(nonce = nonce, count = count),
+                keyIds = null,
+            )
         return try {
-            val keypairs = keystore.generateKeypairs(count)
-            registerFido2AttestationsForBatch(keypairs, client)
-            val securityProps = keypairs.firstOrNull()?.let { keystore.securityProperties(it.keyId) }
+            val keypairs = effectiveKeystore.generateKeypairs(count)
+            registerFido2AttestationsForBatch(keypairs, client, effectiveKeystore)
+            val securityProps = keypairs.firstOrNull()?.let { effectiveKeystore.securityProperties(it.keyId) }
             val jwt = client.requestKeyAttestation(
                 jwks = keypairs.map { it.publicKeyJWK },
                 nonce = nonce,
@@ -2477,14 +2573,91 @@ class SirosWallet private constructor(
             BackendAttestationResult(jwt = jwt, keyIds = keypairs.map { it.keyId })
         } catch (e: UnsupportedOperationException) {
             Timber.d("Keystore doesn't support raw keypair generation, using self-signed key attestation")
-            null
+            BackendAttestationResult(jwt = effectiveKeystore.generateKeyAttestation(nonce = nonce, count = count), keyIds = null)
         } catch (e: Exception) {
             Timber.w(e, "Backend key attestation request failed, falling back to self-signed attestation")
-            null
+            BackendAttestationResult(jwt = effectiveKeystore.generateKeyAttestation(nonce = nonce, count = count), keyIds = null)
         }
     }
 
-    private data class BackendAttestationResult(val jwt: String, val keyIds: List<String>)
+    private data class BackendAttestationResult(val jwt: String, val keyIds: List<String>?)
+
+    /**
+     * Picks which [KeystoreManager] should back this issuance batch's key
+     * generation - one of `config.availableKeystores`'s entries, chosen by
+     * [wscdSelectionPolicy], or [keystore] (today's unconditional default)
+     * when `config.availableKeystores` is unset/empty, the credential
+     * type in scope declared no `Vctm.requiredKeyStorage` /
+     * `MddlSchema.requiredKeyStorage` requirement, or [wscdSelectionPolicy]
+     * otherwise resolves to "no change needed".
+     *
+     * The credential type in scope is read from [activeOffer] (issuer +
+     * credential configuration ID) and [activeVctm] (SD-JWT VC requirement).
+     * For mdoc credentials, [activeVctm] is always null (the VCTM endpoint's
+     * response can't parse as a [Vctm] - it's missing the required `vct`
+     * field), so the mdoc doctype's requirement is fetched here via
+     * [mddlSchemaFetcher] using the same issuer/scope [activeOffer] already
+     * carries - the wallet doesn't otherwise keep an "active MDDL schema"
+     * field the way it keeps [activeVctm], since nothing needed one before
+     * this feature.
+     *
+     * The `credentialType` identifier passed into [wscdSelectionPolicy] -
+     * and therefore used for [WalletConfig.defaultWscdMapping]/TOFU/
+     * user-override lookup keys - is the actual `Vctm.vct` / `MddlSchema.doctype`
+     * the credential type carries, NOT `offer.credentialConfigurationId`
+     * (an OID4VCI-internal configuration ID, which the public docs/config
+     * examples never use as the key): `activeVctm?.vct ?: mddlSchema?.doctype
+     * ?: offer.credentialConfigurationId` - falling back to the
+     * configuration ID only covers the edge case where the offer carries
+     * neither (empty/unavailable type metadata). Mirrors
+     * `siros-sdk-swift`'s equivalent function's identical fallback chain, so
+     * both SDKs key WSCD resolution the same way for a host app integrating
+     * either one.
+     *
+     * Throws [NoEligibleWscdPluginException] when the credential type
+     * declared a requirement but zero registered plugins meet it - this is
+     * NOT caught here, so it propagates to [requestBackendKeyAttestation]'s
+     * caller as a clear, distinct failure rather than silently falling back
+     * to an insufficient plugin.
+     */
+    private suspend fun resolveEffectiveKeystoreForIssuance(): KeystoreManager {
+        val available = config.availableKeystores
+        if (available.isNullOrEmpty()) return keystore
+        val offer = activeOffer ?: return keystore
+        val issuer = offer.credentialIssuerIdentifier
+
+        val mddlSchema: MddlSchema? = if (activeVctm == null) {
+            try {
+                mddlSchemaFetcher.fetch(issuerUrl = issuer, scope = offer.credentialConfigurationId)
+            } catch (e: Exception) {
+                Timber.w(
+                    e,
+                    "Failed to fetch MDDL schema while resolving required key-storage tier for " +
+                        "$issuer/${offer.credentialConfigurationId}",
+                )
+                null
+            }
+        } else {
+            null
+        }
+        val requiredTier = activeVctm?.requiredKeyStorage ?: mddlSchema?.requiredKeyStorage
+        val credentialType = activeVctm?.vct ?: mddlSchema?.doctype ?: offer.credentialConfigurationId
+
+        // Identify which registered plugin (if any) is already the active
+        // default, so WscdSelectionPolicy can prefer it over switching
+        // unnecessarily when it's already sufficient.
+        val currentDefaultPluginId = available.entries.firstOrNull { it.value === keystore }?.key
+
+        val pluginId = wscdSelectionPolicy.resolve(
+            issuer = issuer,
+            credentialType = credentialType,
+            requiredTier = requiredTier,
+            availablePluginIds = available.keys,
+            currentDefaultPluginId = currentDefaultPluginId,
+        ) ?: return keystore
+
+        return available[pluginId] ?: keystore
+    }
 
     /**
      * Register each freshly-generated credential key's FIDO2/CTAP2 hardware
@@ -2497,16 +2670,17 @@ class SirosWallet private constructor(
      * `attested_keys`/`security_properties` claim is really about -
      * unattested).
      *
-     * A no-op per key when [keystore]'s active plugin isn't hardware-backed
-     * ([WscdKeystoreAdapter.attestationChain] returns null for those - most
-     * commonly the whole batch, since [keystore.generateKeypairs] uses
-     * whichever single plugin is currently active for every key in one
-     * call). Best-effort per key: a registration failure for one key must
-     * never block the others, or the overall KA request that follows - it's
-     * simply retried the next time a fresh batch happens to reuse the same
-     * plugin (there's no "already registered" dedup here, unlike the old
-     * identity-key path: these keys are one-shot, used once for this batch,
-     * so there's nothing to dedupe against).
+     * A no-op per key when the effective keystore's active plugin isn't
+     * hardware-backed ([WscdKeystoreAdapter.attestationChain] returns null
+     * for those - most commonly the whole batch, since
+     * `KeystoreManager.generateKeypairs` uses whichever single plugin is
+     * currently active for every key in one call). Best-effort per key: a
+     * registration failure for one key must never block the others, or the
+     * overall KA request that follows - it's simply retried the next time a
+     * fresh batch happens to reuse the same plugin (there's no "already
+     * registered" dedup here, unlike the old identity-key path: these keys
+     * are one-shot, used once for this batch, so there's nothing to dedupe
+     * against).
      *
      * Requires a cached WIA to supply `wallet_instance_id` for the
      * registration record's auditing/scoping - peeks [cachedWia] directly
@@ -2514,8 +2688,18 @@ class SirosWallet private constructor(
      * like [currentWalletInstanceId] - that gate is specifically about the
      * KA security_properties clamp-lift, unrelated to this). No cached WIA
      * means nothing to register against, so this is a no-op entirely.
+     *
+     * @param effectiveKeystore the [KeystoreManager] the keys in [keypairs]
+     *   were actually generated with - [resolveEffectiveKeystoreForIssuance]'s
+     *   result, NOT unconditionally [keystore] (a chosen non-default WSCD
+     *   plugin's attestation chain must be queried on that plugin's own
+     *   keystore instance, not the wallet's default one).
      */
-    private suspend fun registerFido2AttestationsForBatch(keypairs: List<KeypairInfo>, client: BackendApiClient) {
+    private suspend fun registerFido2AttestationsForBatch(
+        keypairs: List<KeypairInfo>,
+        client: BackendApiClient,
+        effectiveKeystore: KeystoreManager = keystore,
+    ) {
         val now = System.currentTimeMillis() / 1000
         val wia = cachedWia?.takeIf { cachedWiaExpiresAt - now > 60 } ?: return
         val walletInstanceId = CredentialUtils.parseJwtPayload(wia)
@@ -2523,7 +2707,7 @@ class SirosWallet private constructor(
             ?: return
         for (kp in keypairs) {
             try {
-                val chain = keystore.attestationChain(kp.keyId) ?: continue
+                val chain = effectiveKeystore.attestationChain(kp.keyId) ?: continue
                 val attestationObject = chain.certificates.firstOrNull() ?: continue
                 client.registerFido2Attestation(
                     walletInstanceId = walletInstanceId,
