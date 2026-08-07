@@ -211,8 +211,8 @@ class UniFFISigner(
         Unit
     }
 
-    override suspend fun attestationChain(keyId: String): List<ByteArray>? = withContext(Dispatchers.IO) {
-        ffi.attestationChain(keyId)?.certificates
+    override suspend fun attestationChain(keyId: String): AttestationChain? = withContext(Dispatchers.IO) {
+        ffi.attestationChain(keyId)?.let { AttestationChain(it.certificates, it.clientDataHash) }
     }
 
     override suspend fun exportPublicKey(keyId: String): ByteArray = withContext(Dispatchers.IO) {

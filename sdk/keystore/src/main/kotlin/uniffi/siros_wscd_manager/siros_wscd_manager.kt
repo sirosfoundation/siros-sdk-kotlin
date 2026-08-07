@@ -2128,7 +2128,8 @@ public object FfiConverterTypeFfiActivationOutcome: FfiConverterRustBuffer<FfiAc
 
 
 data class FfiAttestationChain (
-    var `certificates`: List<kotlin.ByteArray>
+    var `certificates`: List<kotlin.ByteArray>, 
+    var `clientDataHash`: kotlin.ByteArray
 ) {
     
     companion object
@@ -2141,15 +2142,18 @@ public object FfiConverterTypeFfiAttestationChain: FfiConverterRustBuffer<FfiAtt
     override fun read(buf: ByteBuffer): FfiAttestationChain {
         return FfiAttestationChain(
             FfiConverterSequenceByteArray.read(buf),
+            FfiConverterByteArray.read(buf),
         )
     }
 
     override fun allocationSize(value: FfiAttestationChain) = (
-            FfiConverterSequenceByteArray.allocationSize(value.`certificates`)
+            FfiConverterSequenceByteArray.allocationSize(value.`certificates`) +
+            FfiConverterByteArray.allocationSize(value.`clientDataHash`)
     )
 
     override fun write(value: FfiAttestationChain, buf: ByteBuffer) {
             FfiConverterSequenceByteArray.write(value.`certificates`, buf)
+            FfiConverterByteArray.write(value.`clientDataHash`, buf)
     }
 }
 

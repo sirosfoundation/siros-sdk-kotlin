@@ -54,6 +54,7 @@ import org.siros.sdk.credentials.PresentationRecord
 import org.siros.sdk.credentials.SignerSecurityProperties
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.credentials.WalletException
+import org.siros.sdk.keystore.AttestationChain
 import org.siros.sdk.keystore.KeypairInfo
 import org.siros.sdk.keystore.KeystoreManager
 import org.siros.sdk.keystore.NativeAttestationEvidence
@@ -1058,6 +1059,115 @@ class SirosWalletTest {
             assertEquals("integrity-token-abc", nativeAttestation["token"]?.jsonPrimitive?.content)
             assertEquals("instance-key-1", nativeAttestation["key_id"]?.jsonPrimitive?.content)
             assertEquals("chal-1", nativeAttestation["challenge"]?.jsonPrimitive?.content)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    /**
+     * When [KeystoreManager.attestationChain] returns a hardware attestation
+     * for the instance key (i.e. it was created via a FIDO2/CTAP2 plugin),
+     * `ensureWalletInstanceAttestation()` must register it with the backend
+     * exactly once, deriving `wallet_instance_id` from the just-issued WIA's
+     * `cnf.jkt` claim, and record it as registered.
+     */
+    @Test
+    fun startIssuance_registersFido2Attestation_whenKeyIsHardwareBacked() = runTest(dispatcher) {
+        val server = MockWebServer()
+        server.start()
+        try {
+            server.enqueue(MockResponse().setBody(issuerMetadataJson(server, "org.iso.18013.5.1.mDL")))
+            val engine = mockk<WalletEngineSession>(relaxed = true)
+            val sessionStore = mockk<SessionStore>(relaxed = true)
+            every { sessionStore.instanceKeyId } returns "instance-key-1"
+            every { sessionStore.fido2AttestationRegisteredKeyId } returns null
+            val keystore = mockk<KeystoreManager>(relaxed = true)
+            coEvery {
+                keystore.generateKeyProof(keyId = any(), typ = any(), issuer = any(), audience = any(), extraClaims = any())
+            } returns "pop-jwt"
+            val chain = AttestationChain(
+                certificates = listOf(byteArrayOf(0x01, 0x02, 0x03)),
+                clientDataHash = ByteArray(32) { 0x09 },
+            )
+            coEvery { keystore.attestationChain("instance-key-1") } returns chain
+            val apiClient = mockk<BackendApiClient>(relaxed = true)
+            coEvery { apiClient.requestWIAChallenge() } returns buildJsonObject { put("challenge", "chal-1") }
+            val wiaJwt = fakeWiaJwt(System.currentTimeMillis() / 1000 + 3600, jkt = "test-jkt", attestationSource = null)
+            coEvery { apiClient.generateWIA(pop = any(), challenge = "chal-1", clientId = any()) } returns wiaJwt
+
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+                "engineSession" to engine,
+                "sessionStore" to sessionStore,
+                "keystore" to keystore,
+                "apiClient" to apiClient,
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+                "json" to Json { ignoreUnknownKeys = true },
+                "httpClient" to OkHttpClient(),
+            )
+            val issuerUrl = server.url("/").toString().trimEnd('/')
+            val offerJson = """{"credential_issuer":"$issuerUrl","credential_configuration_ids":["org.iso.18013.5.1.mDL"]}"""
+
+            wallet.startIssuance(offerJson)
+            advanceUntilIdle()
+
+            coVerify(exactly = 1) {
+                apiClient.registerFido2Attestation(
+                    walletInstanceId = "test-jkt",
+                    attestationObject = chain.certificates[0],
+                    clientDataHash = chain.clientDataHash,
+                )
+            }
+            verify(exactly = 1) { sessionStore.fido2AttestationRegisteredKeyId = "instance-key-1" }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    /**
+     * Once an instance key's FIDO2 attestation has already been registered
+     * (`fido2AttestationRegisteredKeyId == instanceKeyId`), a subsequent WIA
+     * issuance must not register it again.
+     */
+    @Test
+    fun startIssuance_skipsFido2Registration_whenAlreadyRegisteredForKeyId() = runTest(dispatcher) {
+        val server = MockWebServer()
+        server.start()
+        try {
+            server.enqueue(MockResponse().setBody(issuerMetadataJson(server, "org.iso.18013.5.1.mDL")))
+            val engine = mockk<WalletEngineSession>(relaxed = true)
+            val sessionStore = mockk<SessionStore>(relaxed = true)
+            every { sessionStore.instanceKeyId } returns "instance-key-1"
+            every { sessionStore.fido2AttestationRegisteredKeyId } returns "instance-key-1"
+            val keystore = mockk<KeystoreManager>(relaxed = true)
+            coEvery {
+                keystore.generateKeyProof(keyId = any(), typ = any(), issuer = any(), audience = any(), extraClaims = any())
+            } returns "pop-jwt"
+            val apiClient = mockk<BackendApiClient>(relaxed = true)
+            coEvery { apiClient.requestWIAChallenge() } returns buildJsonObject { put("challenge", "chal-1") }
+            val wiaJwt = fakeWiaJwt(System.currentTimeMillis() / 1000 + 3600, jkt = "test-jkt", attestationSource = null)
+            coEvery { apiClient.generateWIA(pop = any(), challenge = "chal-1", clientId = any()) } returns wiaJwt
+
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+                "engineSession" to engine,
+                "sessionStore" to sessionStore,
+                "keystore" to keystore,
+                "apiClient" to apiClient,
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+                "json" to Json { ignoreUnknownKeys = true },
+                "httpClient" to OkHttpClient(),
+            )
+            val issuerUrl = server.url("/").toString().trimEnd('/')
+            val offerJson = """{"credential_issuer":"$issuerUrl","credential_configuration_ids":["org.iso.18013.5.1.mDL"]}"""
+
+            wallet.startIssuance(offerJson)
+            advanceUntilIdle()
+
+            coVerify(exactly = 0) {
+                apiClient.registerFido2Attestation(any<String>(), any<ByteArray>(), any<ByteArray>())
+            }
+            coVerify(exactly = 0) { keystore.attestationChain(any<String>()) }
         } finally {
             server.shutdown()
         }

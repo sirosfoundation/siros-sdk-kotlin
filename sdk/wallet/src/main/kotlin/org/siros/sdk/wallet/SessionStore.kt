@@ -108,6 +108,19 @@ internal class SessionStore(context: Context) {
         get() = getString("instance_key_id")
         set(value) = putString("instance_key_id", value)
 
+    /**
+     * The [instanceKeyId] whose FIDO2/CTAP2 hardware attestation has
+     * already been registered with the backend (see
+     * [SirosWallet.maybeRegisterFido2Attestation]) - null until an
+     * attestation object has been submitted at least once for the current
+     * [instanceKeyId]. Compared against [instanceKeyId] directly rather
+     * than a bare boolean, so an instance-key rotation naturally requires
+     * re-registration instead of silently skipping it.
+     */
+    var fido2AttestationRegisteredKeyId: String?
+        get() = getString("fido2_attestation_registered_key_id")
+        set(value) = putString("fido2_attestation_registered_key_id", value)
+
     // ── Private data ────────────────────────────────────────────────
 
     var privateDataJwe: String?
