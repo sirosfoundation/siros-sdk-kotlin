@@ -16,6 +16,8 @@ data class MddlSchema(
     val doctype: String,
     val display: List<MddlDisplay>? = null,
     val claims: Map<String, Map<String, MddlClaimMeta>>? = null,
+    /** See [Vctm.requiredKeyStorage] - same field, same semantics, mdoc side. */
+    @kotlinx.serialization.SerialName("attestation_los") val requiredKeyStorage: String? = null,
 )
 
 /** Localized display info for an MDDL schema, mirroring `MDDLSchema.Display`. */

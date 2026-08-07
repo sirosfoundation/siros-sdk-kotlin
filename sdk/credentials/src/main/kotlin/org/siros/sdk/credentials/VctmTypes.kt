@@ -35,6 +35,20 @@ data class Vctm(
 
     /** JSON Schema URI for the credential. */
     @SerialName("schema_uri") val schemaUri: String? = null,
+
+    /**
+     * The minimum key-storage assurance tier this credential type requires
+     * of the WSCD plugin backing its credential-issuance keys, in ISO 18045
+     * vocabulary (`"iso_18045_basic"` / `"iso_18045_moderate"` /
+     * `"iso_18045_high"`, ascending order - see
+     * [org.siros.sdk.keystore.WscdPluginCapabilities]). `null` when the
+     * issuer's type metadata declares no requirement - callers must treat
+     * that as "no gate", not as an implicit minimum, so a wallet with only
+     * one (or zero) [WalletConfig.availableKeystores] entries configured
+     * never has key generation blocked or a plugin switch forced for a
+     * credential type that never asked for one.
+     */
+    @SerialName("attestation_los") val requiredKeyStorage: String? = null,
 )
 
 /**

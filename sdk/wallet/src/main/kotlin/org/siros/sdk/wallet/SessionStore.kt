@@ -118,6 +118,17 @@ internal class SessionStore(context: Context) {
         get() = getString("private_data_etag")
         set(value) = putString("private_data_etag", value)
 
+    /**
+     * TOFU (trust-on-first-use) mapping of `"issuer|credentialType"` ->
+     * chosen WSCD plugin ID, serialized as a single JSON string blob (see
+     * [SessionStoreWscdTofuStore]) - matches [privateDataJwe]'s "one opaque
+     * string" precedent rather than one property per (issuer, credentialType)
+     * pair, since that set is open-ended.
+     */
+    var wscdTofuMappingJson: String?
+        get() = getString("wscd_tofu_mapping")
+        set(value) = putString("wscd_tofu_mapping", value)
+
     // ── Lifecycle ───────────────────────────────────────────────────
 
     /** True if the active account has session data. */
