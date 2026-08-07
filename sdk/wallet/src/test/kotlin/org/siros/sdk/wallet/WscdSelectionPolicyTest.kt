@@ -22,6 +22,13 @@ class WscdSelectionPolicyTest {
         override fun put(issuer: String, credentialType: String, pluginId: String) {
             entries[key(issuer, credentialType)] = pluginId
         }
+        override fun getAll(): Map<String, String> = entries.toMap()
+        override fun remove(issuer: String, credentialType: String) {
+            entries.remove(key(issuer, credentialType))
+        }
+        override fun clearAll() {
+            entries.clear()
+        }
     }
 
     private val issuer = "https://issuer.example.com"
@@ -258,5 +265,50 @@ class WscdSelectionPolicyTest {
             assertEquals(credentialType, e.credentialType)
             assertEquals("iso_18045_high", e.requiredTier)
         }
+    }
+
+    // ── tofuMapping/clearTofuMapping/clearAllTofuMappings ─────────────
+
+    @Test
+    fun tofuMapping_reflectsPersistedChoices_forSettingsUi() = runTest {
+        val tofu = InMemoryWscdTofuStore()
+        val policy = WscdSelectionPolicy(tofuStore = tofu, defaultMapping = null, requestChoice = null)
+
+        assertTrue(policy.tofuMapping().isEmpty())
+
+        policy.resolve(
+            issuer = issuer,
+            credentialType = credentialType,
+            requiredTier = "iso_18045_high",
+            availablePluginIds = setOf("fido2"),
+        )
+
+        assertEquals(mapOf("$issuer|$credentialType" to "fido2"), policy.tofuMapping())
+    }
+
+    @Test
+    fun clearTofuMapping_removesOnlyThatEntry() = runTest {
+        val tofu = InMemoryWscdTofuStore()
+        val policy = WscdSelectionPolicy(tofuStore = tofu, defaultMapping = null, requestChoice = null)
+        val otherCredentialType = "urn:eu.europa.ec.eudi:mdl:1"
+
+        policy.resolve(issuer, credentialType, "iso_18045_high", setOf("fido2"))
+        policy.resolve(issuer, otherCredentialType, "iso_18045_high", setOf("fido2"))
+
+        policy.clearTofuMapping(issuer, credentialType)
+
+        assertNull(tofu.get(issuer, credentialType))
+        assertEquals("fido2", tofu.get(issuer, otherCredentialType))
+    }
+
+    @Test
+    fun clearAllTofuMappings_removesEveryEntry() = runTest {
+        val tofu = InMemoryWscdTofuStore()
+        val policy = WscdSelectionPolicy(tofuStore = tofu, defaultMapping = null, requestChoice = null)
+
+        policy.resolve(issuer, credentialType, "iso_18045_high", setOf("fido2"))
+        policy.clearAllTofuMappings()
+
+        assertTrue(policy.tofuMapping().isEmpty())
     }
 }

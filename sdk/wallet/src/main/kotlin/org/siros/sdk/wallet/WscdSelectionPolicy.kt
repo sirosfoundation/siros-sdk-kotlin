@@ -73,6 +73,28 @@ interface WscdTofuStore {
 
     /** Persist `pluginId` as the TOFU choice for `"$issuer|$credentialType"`. */
     fun put(issuer: String, credentialType: String, pluginId: String)
+
+    /**
+     * Every persisted mapping, keyed by `"$issuer|$credentialType"` -> plugin
+     * ID - for host-app settings UI that wants to show/clear the TOFU state
+     * (see [WscdSelectionPolicy.tofuMapping]). Defaults to empty so existing
+     * [WscdTofuStore] implementations (e.g. test fakes) don't have to
+     * implement it just to keep compiling.
+     */
+    fun getAll(): Map<String, String> = emptyMap()
+
+    /**
+     * Remove the persisted mapping for `"$issuer|$credentialType"`, if any -
+     * a "forget this choice" host-app affordance (see
+     * [WscdSelectionPolicy.clearTofuMapping]). No-op by default.
+     */
+    fun remove(issuer: String, credentialType: String) {}
+
+    /**
+     * Remove every persisted mapping (see [WscdSelectionPolicy.clearAllTofuMappings]).
+     * No-op by default.
+     */
+    fun clearAll() {}
 }
 
 /**
@@ -104,6 +126,17 @@ internal class SessionStoreWscdTofuStore(private val sessionStore: SessionStore)
     override fun put(issuer: String, credentialType: String, pluginId: String) {
         val updated = readAll() + (key(issuer, credentialType) to pluginId)
         sessionStore.wscdTofuMappingJson = json.encodeToString(mapSerializer, updated)
+    }
+
+    override fun getAll(): Map<String, String> = readAll()
+
+    override fun remove(issuer: String, credentialType: String) {
+        val updated = readAll() - key(issuer, credentialType)
+        sessionStore.wscdTofuMappingJson = if (updated.isEmpty()) null else json.encodeToString(mapSerializer, updated)
+    }
+
+    override fun clearAll() {
+        sessionStore.wscdTofuMappingJson = null
     }
 }
 
@@ -152,6 +185,23 @@ class WscdSelectionPolicy(
     private val defaultMapping: Map<String, String>? = null,
     private val requestChoice: RequestWscdChoice? = null,
 ) {
+    /**
+     * Every persisted TOFU mapping, keyed by `"issuer|credentialType"` ->
+     * plugin ID - for a host-app settings screen to display (and, via
+     * [clearTofuMapping]/[clearAllTofuMappings], let the user forget).
+     */
+    fun tofuMapping(): Map<String, String> = tofuStore.getAll()
+
+    /**
+     * Forget one persisted TOFU choice, so the next [resolve] call for that
+     * (issuer, credentialType) pair re-evaluates from scratch (falling back
+     * to [defaultMapping], auto-pick, or [requestChoice] again).
+     */
+    fun clearTofuMapping(issuer: String, credentialType: String) = tofuStore.remove(issuer, credentialType)
+
+    /** Forget every persisted TOFU choice. */
+    fun clearAllTofuMappings() = tofuStore.clearAll()
+
     suspend fun resolve(
         issuer: String,
         credentialType: String,

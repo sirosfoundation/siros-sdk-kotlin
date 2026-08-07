@@ -252,6 +252,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
     val errorMessage by viewModel.errorMessage.collectAsState()
     val infoMessage by viewModel.infoMessage.collectAsState()
     val flowErrorDialog by viewModel.flowErrorDialog.collectAsState()
+    val pendingWscdChoice by viewModel.pendingWscdChoice.collectAsState()
     val presentationHistory by viewModel.presentationHistory.collectAsState()
     val selectedCredential by viewModel.selectedCredential.collectAsState()
     val showHistory by viewModel.showHistory.collectAsState()
@@ -295,6 +296,18 @@ fun WalletScreen(viewModel: WalletViewModel) {
                 }
             },
         )
+    }
+
+    // The SDK asking which registered WSCD plugin to use for an upcoming
+    // credential-issuance key batch (see WscdSelectionPolicy's doc comment) -
+    // fires when more than one plugin meets the credential type's required
+    // tier and neither a persisted choice nor a dev-supplied default mapping
+    // resolves it. Can appear regardless of which tab/screen is showing
+    // (issuance can be triggered from a QR scan, a deep link, etc.), so -
+    // like flowErrorDialog above - it's rendered here rather than inside any
+    // one screen.
+    pendingWscdChoice?.let { pending ->
+        WscdChoiceDialog(pending, onChoose = viewModel::respondToWscdChoice)
     }
 
     // Not logged in → show login screen (no app chrome)
@@ -379,8 +392,10 @@ fun WalletScreen(viewModel: WalletViewModel) {
                     keySecurityProps = wscdKeySecurityProps,
                     selectedPluginId = selectedPluginId,
                     r2psServerUrl = r2psServerUrl,
+                    defaultWscdMappingText = viewModel.defaultWscdMappingText.collectAsState().value,
                     onSelectPlugin = viewModel::selectPlugin,
                     onR2psServerUrlChange = viewModel::updateR2psServerUrl,
+                    onDefaultWscdMappingTextChange = viewModel::updateDefaultWscdMappingText,
                     onEnroll = viewModel::enrollWscd,
                     onRotate = viewModel::rotateLifecycle,
                     onDestroy = viewModel::destroyLifecycle,
@@ -511,6 +526,9 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onUpdateShowDiagnosticMessages = viewModel::updateShowDiagnosticMessages,
                             credentialConsumptionPolicy = viewModel.credentialConsumptionPolicy.collectAsState().value,
                             onUpdateCredentialConsumptionPolicy = viewModel::updateCredentialConsumptionPolicy,
+                            wscdTofuMapping = viewModel.wscdTofuMapping.collectAsState().value,
+                            onForgetWscdTofuMapping = viewModel::forgetWscdTofuMapping,
+                            onForgetAllWscdTofuMappings = viewModel::forgetAllWscdTofuMappings,
                         )
                         // selectedTab can transiently be 1 (the "Add" action, not a
                         // real persisted tab) right as a flow finishes and the state
@@ -1060,6 +1078,9 @@ fun SettingsTab(
     credentialConsumptionPolicy: org.siros.sdk.credentials.CredentialConsumptionPolicy =
         org.siros.sdk.credentials.CredentialConsumptionPolicy.NEVER_CONSUME,
     onUpdateCredentialConsumptionPolicy: ((org.siros.sdk.credentials.CredentialConsumptionPolicy) -> Unit)? = null,
+    wscdTofuMapping: Map<String, String> = emptyMap(),
+    onForgetWscdTofuMapping: ((issuer: String, credentialType: String) -> Unit)? = null,
+    onForgetAllWscdTofuMappings: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -1188,6 +1209,83 @@ fun SettingsTab(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(stringResource(credentialConsumptionPolicyLabelRes(policy)), style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // WSCD security-key choice (trust-on-first-use) section
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Security Key Choices",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (wscdTofuMapping.isNotEmpty() && onForgetAllWscdTofuMappings != null) {
+                        TextButton(onClick = onForgetAllWscdTofuMappings) {
+                            Text("Forget All")
+                        }
+                    }
+                }
+                Text(
+                    "Which security key you chose for each credential type, remembered so you're only " +
+                        "asked once. Forget a choice to be asked again next time.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                if (wscdTofuMapping.isEmpty()) {
+                    Text(
+                        "No security key choices remembered yet",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    wscdTofuMapping.forEach { (key, pluginId) ->
+                        // key is "issuer|credentialType" (see WscdSelectionPolicy) -
+                        // split back into its two parts for both display and the
+                        // per-row "forget" action's parameters.
+                        val (issuer, credentialType) = key.split("|", limit = 2)
+                            .let { it.getOrElse(0) { "" } to it.getOrElse(1) { "" } }
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(credentialType, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "$issuer  →  $pluginId",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (onForgetWscdTofuMapping != null) {
+                                IconButton(
+                                    onClick = { onForgetWscdTofuMapping(issuer, credentialType) },
+                                    modifier = Modifier.size(32.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Forget this choice",
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+                            }
                         }
                     }
                 }

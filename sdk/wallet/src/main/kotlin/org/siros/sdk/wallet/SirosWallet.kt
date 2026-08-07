@@ -2087,6 +2087,28 @@ class SirosWallet private constructor(
         requestChoice = config.requestWscdChoice,
     )
 
+    /**
+     * The active account's persisted WSCD TOFU mapping (see
+     * [WscdSelectionPolicy]'s doc comment), keyed by
+     * `"issuer|credentialType"` -> plugin ID - exposed read-only so a
+     * host-app settings screen can display it without reaching into SDK
+     * internals ([SessionStore] is `internal`). Empty when no active
+     * account or no choices have been persisted yet.
+     */
+    fun wscdTofuMapping(): Map<String, String> = wscdSelectionPolicy.tofuMapping()
+
+    /**
+     * Forget one persisted WSCD TOFU choice - a "forget this choice"
+     * settings-screen affordance. The next credential-issuance batch for
+     * that (issuer, credentialType) pair re-resolves from scratch (see
+     * [WscdSelectionPolicy.resolve]'s doc comment).
+     */
+    fun clearWscdTofuMapping(issuer: String, credentialType: String) =
+        wscdSelectionPolicy.clearTofuMapping(issuer, credentialType)
+
+    /** Forget every persisted WSCD TOFU choice for the active account. */
+    fun clearAllWscdTofuMappings() = wscdSelectionPolicy.clearAllTofuMappings()
+
     // New AS-based auth
     private val authServerClient = AuthServerClient(
         context = activity,
