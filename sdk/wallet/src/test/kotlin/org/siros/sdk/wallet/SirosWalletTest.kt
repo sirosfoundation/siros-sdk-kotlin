@@ -972,6 +972,56 @@ class SirosWalletTest {
     }
 
     /**
+     * The registry-first VCTM/MDDL strategy queries go-wallet-backend's own
+     * credential-type registry service, so it must carry the same
+     * `X-Tenant-ID`/`Authorization` headers every other authenticated
+     * go-wallet-backend call does (see [BackendApiClient.addCommonHeaders])
+     * - the registry's `RequireAuth` gate is deployment-dependent, not always
+     * off. This is the regression test for [SirosWallet.fetchTypeMetadataUrl]
+     * only attaching those headers when the target URL is the registry
+     * service itself - NEVER for the issuer-direct/well-known fallback
+     * strategies, which hit arbitrary third-party issuer domains and would
+     * otherwise leak the wallet's own bearer token/tenant ID to them.
+     */
+    @Test
+    fun fetchTypeMetadataUrl_attachesAuthHeaders_onlyForRegistryUrl() = runTest(dispatcher) {
+        val server = MockWebServer()
+        server.start()
+        try {
+            server.enqueue(MockResponse().setBody("{}"))
+            server.enqueue(MockResponse().setBody("{}"))
+
+            val baseUrl = server.url("/").toString().trimEnd('/')
+            val wallet = newWallet(
+                "config" to WalletConfig(backendUrl = baseUrl, tenantId = "tenant-42"),
+                "httpClient" to OkHttpClient(),
+                "legacyAppToken" to "test-app-token",
+            )
+
+            val method = wallet::class.declaredMemberFunctions.first { it.name == "fetchTypeMetadataUrl" }
+            method.isAccessible = true
+
+            // Registry-service URL (derived registryUrl = "$baseUrl/registry"): expect both headers.
+            kotlinx.coroutines.runBlocking {
+                method.callSuspend(wallet, "$baseUrl/registry/type-metadata?vct=urn%3Aexample%3Adiploma")
+            }
+            val registryRequest = server.takeRequest()
+            assertEquals("tenant-42", registryRequest.getHeader("X-Tenant-ID"))
+            assertEquals("Bearer test-app-token", registryRequest.getHeader("Authorization"))
+
+            // Issuer-direct URL (same host, different path - not the registry service): expect neither header.
+            kotlinx.coroutines.runBlocking {
+                method.callSuspend(wallet, "$baseUrl/type-metadata/diploma_scope")
+            }
+            val issuerRequest = server.takeRequest()
+            assertNull(issuerRequest.getHeader("X-Tenant-ID"))
+            assertNull(issuerRequest.getHeader("Authorization"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    /**
      * `activeOffer` (used to build display metadata for a stored credential -
      * see [CredentialUtils.buildMetadata]/[CredentialUtils.buildMdocMetadata])
      * was previously only ever populated by [SirosWallet.startIssuanceByOffer].

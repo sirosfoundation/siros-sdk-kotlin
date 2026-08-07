@@ -2073,16 +2073,8 @@ class SirosWallet private constructor(
      * without depending on specific step names.
      */
     private val terminatedFlowIds = mutableSetOf<String>()
-    private val vctmFetcher = VctmFetcher(httpGet = { url ->
-        val request = Request.Builder().url(url).get().build()
-        val response = httpClient.newCall(request).execute()
-        if (response.isSuccessful) response.body?.string() else null
-    })
-    private val mddlSchemaFetcher = MddlSchemaFetcher(httpGet = { url ->
-        val request = Request.Builder().url(url).get().build()
-        val response = httpClient.newCall(request).execute()
-        if (response.isSuccessful) response.body?.string() else null
-    })
+    private val vctmFetcher = VctmFetcher(httpGet = ::fetchTypeMetadataUrl)
+    private val mddlSchemaFetcher = MddlSchemaFetcher(httpGet = ::fetchTypeMetadataUrl)
 
     /**
      * Base URL for go-wallet-backend's credential-type registry service (see
@@ -2095,6 +2087,44 @@ class SirosWallet private constructor(
      */
     private val registryUrl: String
         get() = config.registryUrl ?: "${config.backendUrl.trimEnd('/')}/registry"
+
+    /**
+     * Shared `httpGet` for [vctmFetcher]/[mddlSchemaFetcher]'s strategies.
+     *
+     * Registry-service requests (URL targeting [registryUrl]) carry the same
+     * `X-Tenant-ID`/`Authorization` headers as every other authenticated
+     * go-wallet-backend call (see [BackendApiClient.addCommonHeaders]) - the
+     * registry's `RequireAuth` gate is deployment-dependent (the test
+     * environment happens to have it off; production might not), and it
+     * should carry the same tenant-routing header every other backend call
+     * does regardless.
+     *
+     * Issuer-direct (`<issuerUrl>/type-metadata/<scope>`) and well-known
+     * (`.well-known/vct/...`) fallback requests hit arbitrary third-party
+     * issuer domains and must NEVER receive these headers - leaking the
+     * wallet's own bearer token / tenant ID to an external issuer would be a
+     * real security bug. That's why the headers are attached here, gated on
+     * the target URL actually being [registryUrl], rather than unconditionally
+     * in the shared closure both fetchers use for every strategy.
+     */
+    private suspend fun fetchTypeMetadataUrl(url: String): String? {
+        val request = Request.Builder().url(url).get()
+        val registryBase = registryUrl.trimEnd('/')
+        if (url.startsWith(registryBase)) {
+            request.header("X-Tenant-ID", config.tenantId)
+            val token = try {
+                legacyAppToken ?: authTokens.ensureBackendToken().raw
+            } catch (e: Exception) {
+                Timber.w(e, "fetchTypeMetadataUrl: no token source for registry request — sending unauthenticated")
+                null
+            }
+            if (token != null) {
+                request.header("Authorization", "Bearer $token")
+            }
+        }
+        val response = httpClient.newCall(request.build()).execute()
+        return if (response.isSuccessful) response.body?.string() else null
+    }
 
     /**
      * Resolves which [config].availableKeystores entry (if any) should back

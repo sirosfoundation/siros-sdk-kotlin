@@ -2,6 +2,8 @@
 package org.siros.sdk.credentials
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import timber.log.Timber
@@ -23,21 +25,49 @@ import java.net.URI
  *    format/`mso_mdoc` branching, so it serves whatever document shape it's
  *    given unchanged).
  *
+ * The final result of [fetch] - whichever strategy produced it - is cached
+ * in-memory per instance for [cacheTtlSeconds] (default 1800s / 30 minutes,
+ * matching the reference wallet-frontend implementation's IndexedDB-backed
+ * HTTP cache default). Only successful (non-null) results are cached; a miss
+ * across all strategies is retried fresh on every call so a transient failure
+ * or a not-yet-registered doctype never gets stuck negative for the TTL
+ * window. Since [MddlSchemaFetcher] is normally constructed once and held for
+ * the lifetime of a wallet session, this cache meaningfully cuts down repeat
+ * network calls for the same doctype.
+ *
  * @param httpGet optional HTTP GET function for custom HTTP clients.
  *        Takes a URL string, returns the response body string or null on failure.
  *        When null, uses `java.net.HttpURLConnection`.
+ * @param cacheTtlSeconds how long a successful [fetch] result stays cached, in seconds.
+ * @param nowMillis time source used for cache expiry, defaulting to the wall clock.
+ *        Overridable for deterministic tests.
  */
 class MddlSchemaFetcher(
     private val httpGet: (suspend (String) -> String?)? = null,
+    private val cacheTtlSeconds: Long = 1800,
+    private val nowMillis: () -> Long = { System.currentTimeMillis() },
 ) {
     private val json = Json { ignoreUnknownKeys = true }
+
+    private data class CacheKey(
+        val issuerUrl: String,
+        val scope: String,
+        val vct: String?,
+        val registryUrl: String?,
+    )
+
+    private data class CacheEntry(val schema: MddlSchema, val expiresAtMillis: Long)
+
+    private val cacheMutex = Mutex()
+    private val cache = mutableMapOf<CacheKey, CacheEntry>()
 
     /**
      * Fetch the MDDL schema for a credential configuration.
      *
      * Tries go-wallet-backend's registry service first (authoritative,
      * TS11-backed, cached - see [registryUrl]), then falls back to the
-     * issuer's own type-metadata endpoint.
+     * issuer's own type-metadata endpoint. Successful results are cached
+     * in-memory for [cacheTtlSeconds]; see the class docs for details.
      *
      * @param issuerUrl the credential issuer URL (e.g. "https://issuer.example.com")
      * @param scope the credential configuration ID / scope
@@ -59,17 +89,39 @@ class MddlSchemaFetcher(
         vct: String? = null,
         registryUrl: String? = null,
     ): MddlSchema? = withContext(Dispatchers.IO) {
+        val key = CacheKey(issuerUrl, scope, vct, registryUrl)
+        val now = nowMillis()
+
+        cacheMutex.withLock { cache[key] }?.let { entry ->
+            if (entry.expiresAtMillis > now) return@withContext entry.schema
+        }
+
+        val result = fetchUncached(issuerUrl, scope, vct, registryUrl)
+        if (result != null) {
+            cacheMutex.withLock {
+                cache[key] = CacheEntry(result, now + cacheTtlSeconds * 1000)
+            }
+        }
+        result
+    }
+
+    private suspend fun fetchUncached(
+        issuerUrl: String,
+        scope: String,
+        vct: String?,
+        registryUrl: String?,
+    ): MddlSchema? {
         // Strategy 1: go-wallet-backend's credential-type registry service.
         if (registryUrl != null && vct != null) {
             val encodedVct = java.net.URLEncoder.encode(vct, "UTF-8")
             val registryLookupUrl = "${registryUrl.trimEnd('/')}/type-metadata?vct=$encodedVct"
-            fetchFromUrl(registryLookupUrl)?.let { return@withContext it }
+            fetchFromUrl(registryLookupUrl)?.let { return it }
         }
 
         // Strategy 2: issuer-hosted type-metadata endpoint
         val baseUrl = issuerUrl.trimEnd('/')
         val typeMetadataUrl = "$baseUrl/type-metadata/$scope"
-        fetchFromUrl(typeMetadataUrl).also {
+        return fetchFromUrl(typeMetadataUrl).also {
             if (it == null) Timber.d("No MDDL schema found for scope=$scope vct=$vct")
         }
     }
