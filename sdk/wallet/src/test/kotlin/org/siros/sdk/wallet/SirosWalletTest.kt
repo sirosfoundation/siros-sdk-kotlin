@@ -1065,111 +1065,186 @@ class SirosWalletTest {
     }
 
     /**
-     * When [KeystoreManager.attestationChain] returns a hardware attestation
-     * for the instance key (i.e. it was created via a FIDO2/CTAP2 plugin),
-     * `ensureWalletInstanceAttestation()` must register it with the backend
-     * exactly once, deriving `wallet_instance_id` from the just-issued WIA's
-     * `cnf.jkt` claim, and record it as registered.
+     * When requesting a backend Key Attestation, each freshly generated
+     * credential-issuance key's own FIDO2/CTAP2 attestation (not the wallet's
+     * identity key) must be registered with the backend individually, so the
+     * per-key trust evidence lines up with the actual keys the KA request's
+     * `attested_keys`/`security_properties` claim is about (see
+     * `registerFido2AttestationsForBatch`'s doc comment).
      */
     @Test
-    fun startIssuance_registersFido2Attestation_whenKeyIsHardwareBacked() = runTest(dispatcher) {
-        val server = MockWebServer()
-        server.start()
-        try {
-            server.enqueue(MockResponse().setBody(issuerMetadataJson(server, "org.iso.18013.5.1.mDL")))
-            val engine = mockk<WalletEngineSession>(relaxed = true)
-            val sessionStore = mockk<SessionStore>(relaxed = true)
-            every { sessionStore.instanceKeyId } returns "instance-key-1"
-            every { sessionStore.fido2AttestationRegisteredKeyId } returns null
-            val keystore = mockk<KeystoreManager>(relaxed = true)
-            coEvery {
-                keystore.generateKeyProof(keyId = any(), typ = any(), issuer = any(), audience = any(), extraClaims = any())
-            } returns "pop-jwt"
-            val chain = AttestationChain(
-                certificates = listOf(byteArrayOf(0x01, 0x02, 0x03)),
-                clientDataHash = ByteArray(32) { 0x09 },
+    fun requestBackendKeyAttestation_registersFido2Attestation_perHardwareBackedKey() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val keystore = mockk<KeystoreManager>()
+        val keypairs = listOf(
+            KeypairInfo(keyId = "key-1", publicKeyJWK = buildJsonObject { put("kty", "EC") }),
+            KeypairInfo(keyId = "key-2", publicKeyJWK = buildJsonObject { put("kty", "EC") }),
+        )
+        coEvery { keystore.generateKeypairs(2) } returns keypairs
+        val chain1 = AttestationChain(certificates = listOf(byteArrayOf(0x01)), clientDataHash = ByteArray(32) { 0x09 })
+        val chain2 = AttestationChain(certificates = listOf(byteArrayOf(0x02)), clientDataHash = ByteArray(32) { 0x0a })
+        coEvery { keystore.attestationChain("key-1") } returns chain1
+        coEvery { keystore.attestationChain("key-2") } returns chain2
+        coEvery { keystore.securityProperties("key-1") } returns null
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery {
+            apiClient.requestKeyAttestation(
+                jwks = keypairs.map { it.publicKeyJWK },
+                nonce = "nonce-1",
+                securityProperties = null,
+                credentialIssuer = "aud-1",
+                walletInstanceId = "test-jkt",
             )
-            coEvery { keystore.attestationChain("instance-key-1") } returns chain
-            val apiClient = mockk<BackendApiClient>(relaxed = true)
-            coEvery { apiClient.requestWIAChallenge() } returns buildJsonObject { put("challenge", "chal-1") }
-            val wiaJwt = fakeWiaJwt(System.currentTimeMillis() / 1000 + 3600, jkt = "test-jkt", attestationSource = null)
-            coEvery { apiClient.generateWIA(pop = any(), challenge = "chal-1", clientId = any()) } returns wiaJwt
+        } returns "backend-signed-attestation-jwt"
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to keystore,
+        )
 
-            val wallet = newWallet(
-                "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
-                "engineSession" to engine,
-                "sessionStore" to sessionStore,
-                "keystore" to keystore,
-                "apiClient" to apiClient,
-                "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
-                "json" to Json { ignoreUnknownKeys = true },
-                "httpClient" to OkHttpClient(),
+        invokeConnectEngine(wallet, "app-token")
+        setField(wallet, "apiClient", apiClient)
+        setField(wallet, "cachedWia", fakeWiaJwt(System.currentTimeMillis() / 1000 + 3600, jkt = "test-jkt", attestationSource = "ios_app_attest"))
+        setField(wallet, "cachedWiaExpiresAt", System.currentTimeMillis() / 1000 + 3600)
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sign",
+                action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "aud-1",
+                    nonce = "nonce-1",
+                    count = 2,
+                    proofTypesSupported = buildJsonObject { putJsonObject("attestation") {} },
+                ),
             )
-            val issuerUrl = server.url("/").toString().trimEnd('/')
-            val offerJson = """{"credential_issuer":"$issuerUrl","credential_configuration_ids":["org.iso.18013.5.1.mDL"]}"""
+        )
+        advanceUntilIdle()
 
-            wallet.startIssuance(offerJson)
-            advanceUntilIdle()
-
-            coVerify(exactly = 1) {
-                apiClient.registerFido2Attestation(
-                    walletInstanceId = "test-jkt",
-                    attestationObject = chain.certificates[0],
-                    clientDataHash = chain.clientDataHash,
-                )
-            }
-            verify(exactly = 1) { sessionStore.fido2AttestationRegisteredKeyId = "instance-key-1" }
-        } finally {
-            server.shutdown()
+        coVerify(exactly = 1) {
+            apiClient.registerFido2Attestation(
+                walletInstanceId = "test-jkt",
+                attestationObject = chain1.certificates[0],
+                clientDataHash = chain1.clientDataHash,
+            )
+        }
+        coVerify(exactly = 1) {
+            apiClient.registerFido2Attestation(
+                walletInstanceId = "test-jkt",
+                attestationObject = chain2.certificates[0],
+                clientDataHash = chain2.clientDataHash,
+            )
         }
     }
 
     /**
-     * Once an instance key's FIDO2 attestation has already been registered
-     * (`fido2AttestationRegisteredKeyId == instanceKeyId`), a subsequent WIA
-     * issuance must not register it again.
+     * A key generated by a non-hardware-backed (e.g. softkey) plugin has no
+     * attestation chain - registration for that key must be skipped, not
+     * fail the whole batch or the KA request itself.
      */
     @Test
-    fun startIssuance_skipsFido2Registration_whenAlreadyRegisteredForKeyId() = runTest(dispatcher) {
-        val server = MockWebServer()
-        server.start()
-        try {
-            server.enqueue(MockResponse().setBody(issuerMetadataJson(server, "org.iso.18013.5.1.mDL")))
-            val engine = mockk<WalletEngineSession>(relaxed = true)
-            val sessionStore = mockk<SessionStore>(relaxed = true)
-            every { sessionStore.instanceKeyId } returns "instance-key-1"
-            every { sessionStore.fido2AttestationRegisteredKeyId } returns "instance-key-1"
-            val keystore = mockk<KeystoreManager>(relaxed = true)
-            coEvery {
-                keystore.generateKeyProof(keyId = any(), typ = any(), issuer = any(), audience = any(), extraClaims = any())
-            } returns "pop-jwt"
-            val apiClient = mockk<BackendApiClient>(relaxed = true)
-            coEvery { apiClient.requestWIAChallenge() } returns buildJsonObject { put("challenge", "chal-1") }
-            val wiaJwt = fakeWiaJwt(System.currentTimeMillis() / 1000 + 3600, jkt = "test-jkt", attestationSource = null)
-            coEvery { apiClient.generateWIA(pop = any(), challenge = "chal-1", clientId = any()) } returns wiaJwt
-
-            val wallet = newWallet(
-                "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
-                "engineSession" to engine,
-                "sessionStore" to sessionStore,
-                "keystore" to keystore,
-                "apiClient" to apiClient,
-                "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
-                "json" to Json { ignoreUnknownKeys = true },
-                "httpClient" to OkHttpClient(),
+    fun requestBackendKeyAttestation_skipsFido2Registration_forSoftwareBackedKeys() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val keystore = mockk<KeystoreManager>()
+        val keypairs = listOf(KeypairInfo(keyId = "key-1", publicKeyJWK = buildJsonObject { put("kty", "EC") }))
+        coEvery { keystore.generateKeypairs(1) } returns keypairs
+        coEvery { keystore.attestationChain("key-1") } returns null
+        coEvery { keystore.securityProperties("key-1") } returns null
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery {
+            apiClient.requestKeyAttestation(
+                jwks = keypairs.map { it.publicKeyJWK },
+                nonce = "nonce-1",
+                securityProperties = null,
+                credentialIssuer = "aud-1",
+                walletInstanceId = "test-jkt",
             )
-            val issuerUrl = server.url("/").toString().trimEnd('/')
-            val offerJson = """{"credential_issuer":"$issuerUrl","credential_configuration_ids":["org.iso.18013.5.1.mDL"]}"""
+        } returns "backend-signed-attestation-jwt"
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to keystore,
+        )
 
-            wallet.startIssuance(offerJson)
-            advanceUntilIdle()
+        invokeConnectEngine(wallet, "app-token")
+        setField(wallet, "apiClient", apiClient)
+        setField(wallet, "cachedWia", fakeWiaJwt(System.currentTimeMillis() / 1000 + 3600, jkt = "test-jkt", attestationSource = "ios_app_attest"))
+        setField(wallet, "cachedWiaExpiresAt", System.currentTimeMillis() / 1000 + 3600)
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sign",
+                action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "aud-1",
+                    nonce = "nonce-1",
+                    count = 1,
+                    proofTypesSupported = buildJsonObject { putJsonObject("attestation") {} },
+                ),
+            )
+        )
+        advanceUntilIdle()
 
-            coVerify(exactly = 0) {
-                apiClient.registerFido2Attestation(any<String>(), any<ByteArray>(), any<ByteArray>())
-            }
-            coVerify(exactly = 0) { keystore.attestationChain(any<String>()) }
-        } finally {
-            server.shutdown()
+        coVerify(exactly = 0) {
+            apiClient.registerFido2Attestation(any<String>(), any<ByteArray>(), any<ByteArray>())
+        }
+    }
+
+    /**
+     * With no cached WIA available, there's no `wallet_instance_id` to
+     * scope the registration record to - `registerFido2AttestationsForBatch`
+     * must skip registration entirely without touching `attestationChain`,
+     * and must not block the KA request itself.
+     */
+    @Test
+    fun requestBackendKeyAttestation_skipsFido2Registration_whenNoCachedWia() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val keystore = mockk<KeystoreManager>()
+        val keypairs = listOf(KeypairInfo(keyId = "key-1", publicKeyJWK = buildJsonObject { put("kty", "EC") }))
+        coEvery { keystore.generateKeypairs(1) } returns keypairs
+        coEvery { keystore.securityProperties("key-1") } returns null
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery {
+            apiClient.requestKeyAttestation(
+                jwks = keypairs.map { it.publicKeyJWK },
+                nonce = "nonce-1",
+                securityProperties = null,
+                credentialIssuer = "aud-1",
+                walletInstanceId = null,
+            )
+        } returns "backend-signed-attestation-jwt"
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to keystore,
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        setField(wallet, "apiClient", apiClient)
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sign",
+                action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "aud-1",
+                    nonce = "nonce-1",
+                    count = 1,
+                    proofTypesSupported = buildJsonObject { putJsonObject("attestation") {} },
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { keystore.attestationChain(any<String>()) }
+        coVerify(exactly = 0) {
+            apiClient.registerFido2Attestation(any<String>(), any<ByteArray>(), any<ByteArray>())
         }
     }
 

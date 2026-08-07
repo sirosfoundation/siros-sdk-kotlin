@@ -54,6 +54,7 @@ import org.siros.sdk.credentials.VctmFetcher
 import org.siros.sdk.credentials.MddlSchemaFetcher
 import org.siros.sdk.keystore.DCAPIResponseEncryption
 import org.siros.sdk.keystore.JweKeystore
+import org.siros.sdk.keystore.KeypairInfo
 import org.siros.sdk.keystore.KeystoreManager
 import org.siros.sdk.keystore.WscdManager
 import org.siros.sdk.wallet.dcapi.DCAPIRequest
@@ -1221,61 +1222,10 @@ class SirosWallet private constructor(
             cachedWia = wia
             cachedWiaExpiresAt = CredentialUtils.parseJwtPayload(wia)
                 ?.get("exp")?.jsonPrimitive?.longOrNull ?: (now + 300)
-            maybeRegisterFido2Attestation(keyId, wia, client)
             wia
         } catch (e: Exception) {
             Timber.w(e, "Failed to obtain Wallet Instance Attestation")
             null
-        }
-    }
-
-    /**
-     * Register this instance key's FIDO2/CTAP2 hardware attestation with the
-     * backend once, the first time a WIA is issued for it - so the backend
-     * can durably mark the wallet instance as hardware-key-attested (see
-     * `FIDO2AttestationService` in go-wallet-backend). A no-op for
-     * software-backed keys ([keystore].attestationChain returns null for
-     * those). Best-effort: any failure here must never block WIA issuance,
-     * and is simply retried on the next call (nothing is persisted as
-     * "registered" until the backend call actually succeeds).
-     *
-     * Deliberately called from [ensureWalletInstanceAttestation] rather than
-     * [ensureInstanceKeyId] - registration needs [wallet_instance_id] (the
-     * WIA's `cnf.jkt`), which doesn't exist until a WIA has actually been
-     * issued for this key.
-     */
-    private suspend fun maybeRegisterFido2Attestation(keyId: String, wia: String, client: BackendApiClient) {
-        if (sessionStore.fido2AttestationRegisteredKeyId == keyId) return
-        // Everything below is best-effort: this whole function runs after
-        // ensureWalletInstanceAttestation() has already obtained and cached
-        // a valid wia, so ANY exception here (including from attestationChain
-        // itself) must be caught right here - letting one escape would be
-        // caught by ensureWalletInstanceAttestation()'s own outer try/catch
-        // instead, which would incorrectly return null (as if WIA issuance
-        // itself had failed) even though cachedWia was already set correctly.
-        try {
-            val chain = keystore.attestationChain(keyId) ?: return
-            val attestationObject = chain.certificates.firstOrNull() ?: return
-            val walletInstanceId = CredentialUtils.parseJwtPayload(wia)
-                ?.get("cnf")?.jsonObject?.get("jkt")?.jsonPrimitive?.contentOrNull
-                ?: return
-            // Takes the caller's already-unwrapped `client` rather than
-            // re-reading `self.apiClient` - a real Copilot-review finding
-            // (also caught and fixed on the Swift SDK's PR #80):
-            // `apiClient?.registerFido2Attestation(...)` would silently
-            // no-op (not throw) if apiClient had gone null since the caller
-            // checked it, and the next line would still mark the key
-            // registered even though nothing was actually sent.
-            client.registerFido2Attestation(
-                walletInstanceId = walletInstanceId,
-                attestationObject = attestationObject,
-                clientDataHash = chain.clientDataHash,
-            )
-            sessionStore.fido2AttestationRegisteredKeyId = keyId
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Timber.w(e, "FIDO2 attestation registration failed, will retry on next WIA issuance")
         }
     }
 
@@ -2510,6 +2460,7 @@ class SirosWallet private constructor(
         val client = apiClient ?: return null
         return try {
             val keypairs = keystore.generateKeypairs(count)
+            registerFido2AttestationsForBatch(keypairs, client)
             val securityProps = keypairs.firstOrNull()?.let { keystore.securityProperties(it.keyId) }
             val jwt = client.requestKeyAttestation(
                 jwks = keypairs.map { it.publicKeyJWK },
@@ -2534,6 +2485,58 @@ class SirosWallet private constructor(
     }
 
     private data class BackendAttestationResult(val jwt: String, val keyIds: List<String>)
+
+    /**
+     * Register each freshly-generated credential key's FIDO2/CTAP2 hardware
+     * attestation with the backend, keyed by that specific key - NOT the
+     * wallet's own identity key (see go-wallet-backend's `KeyAttestationStore`
+     * doc for why this must be per-credential-key: the identity key and
+     * credential-issuance keys are separate keys, not guaranteed to share a
+     * WSCD plugin, so registering only the identity key's attestation would
+     * incorrectly leave the actual credential keys - the ones a KA request's
+     * `attested_keys`/`security_properties` claim is really about -
+     * unattested).
+     *
+     * A no-op per key when [keystore]'s active plugin isn't hardware-backed
+     * ([WscdKeystoreAdapter.attestationChain] returns null for those - most
+     * commonly the whole batch, since [keystore.generateKeypairs] uses
+     * whichever single plugin is currently active for every key in one
+     * call). Best-effort per key: a registration failure for one key must
+     * never block the others, or the overall KA request that follows - it's
+     * simply retried the next time a fresh batch happens to reuse the same
+     * plugin (there's no "already registered" dedup here, unlike the old
+     * identity-key path: these keys are one-shot, used once for this batch,
+     * so there's nothing to dedupe against).
+     *
+     * Requires a cached WIA to supply `wallet_instance_id` for the
+     * registration record's auditing/scoping - peeks [cachedWia] directly
+     * (any `attestation_source`, not gated to native platform attestation
+     * like [currentWalletInstanceId] - that gate is specifically about the
+     * KA security_properties clamp-lift, unrelated to this). No cached WIA
+     * means nothing to register against, so this is a no-op entirely.
+     */
+    private suspend fun registerFido2AttestationsForBatch(keypairs: List<KeypairInfo>, client: BackendApiClient) {
+        val now = System.currentTimeMillis() / 1000
+        val wia = cachedWia?.takeIf { cachedWiaExpiresAt - now > 60 } ?: return
+        val walletInstanceId = CredentialUtils.parseJwtPayload(wia)
+            ?.get("cnf")?.jsonObject?.get("jkt")?.jsonPrimitive?.contentOrNull
+            ?: return
+        for (kp in keypairs) {
+            try {
+                val chain = keystore.attestationChain(kp.keyId) ?: continue
+                val attestationObject = chain.certificates.firstOrNull() ?: continue
+                client.registerFido2Attestation(
+                    walletInstanceId = walletInstanceId,
+                    attestationObject = attestationObject,
+                    clientDataHash = chain.clientDataHash,
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.w(e, "FIDO2 attestation registration failed for key ${kp.keyId}, continuing")
+            }
+        }
+    }
 
     private suspend fun handleWmpSignRequest(
         flowId: String,
