@@ -241,4 +241,96 @@ class VctmFetcherTest {
         assertNotNull(vctm)
         assertEquals(false, registryQueried)
     }
+
+    // ── Caching ─────────────────────────────────────────────────────
+
+    @Test
+    fun `fetch caches successful result and does not hit network again within ttl`() = runTest {
+        var callCount = 0
+        val fetcher = VctmFetcher(httpGet = { url ->
+            callCount++
+            if (url == "https://issuer.example.com/type-metadata/diploma_scope") sampleVctmJson else null
+        })
+
+        val first = fetcher.fetch("https://issuer.example.com", "diploma_scope")
+        val second = fetcher.fetch("https://issuer.example.com", "diploma_scope")
+
+        assertNotNull(first)
+        assertNotNull(second)
+        assertEquals("urn:example:diploma", second!!.vct)
+        assertEquals(1, callCount)
+    }
+
+    @Test
+    fun `fetch does not serve a different key from another entry's cache`() = runTest {
+        var callCount = 0
+        val fetcher = VctmFetcher(httpGet = { url ->
+            callCount++
+            when (url) {
+                "https://issuer.example.com/type-metadata/diploma_scope" -> sampleVctmJson
+                "https://issuer.example.com/type-metadata/other_scope" ->
+                    """{"vct": "urn:example:other"}"""
+                "https://other-issuer.example.com/type-metadata/diploma_scope" ->
+                    """{"vct": "urn:example:from-other-issuer"}"""
+                else -> null
+            }
+        })
+
+        val diploma = fetcher.fetch("https://issuer.example.com", "diploma_scope")
+        val otherScope = fetcher.fetch("https://issuer.example.com", "other_scope")
+        val otherIssuer = fetcher.fetch("https://other-issuer.example.com", "diploma_scope")
+
+        assertEquals("urn:example:diploma", diploma!!.vct)
+        assertEquals("urn:example:other", otherScope!!.vct)
+        assertEquals("urn:example:from-other-issuer", otherIssuer!!.vct)
+        // Three distinct cache keys, none served from another's entry, so all three hit the network.
+        assertEquals(3, callCount)
+
+        // Repeating each is now served from cache: no additional network calls.
+        fetcher.fetch("https://issuer.example.com", "diploma_scope")
+        fetcher.fetch("https://issuer.example.com", "other_scope")
+        fetcher.fetch("https://other-issuer.example.com", "diploma_scope")
+        assertEquals(3, callCount)
+    }
+
+    @Test
+    fun `fetch re-fetches after the cache entry's ttl has expired`() = runTest {
+        var callCount = 0
+        var now = 0L
+        val fetcher = VctmFetcher(
+            httpGet = { url ->
+                callCount++
+                if (url == "https://issuer.example.com/type-metadata/diploma_scope") sampleVctmJson else null
+            },
+            cacheTtlSeconds = 10,
+            nowMillis = { now },
+        )
+
+        fetcher.fetch("https://issuer.example.com", "diploma_scope")
+        assertEquals(1, callCount)
+
+        // Still within the 10s TTL: served from cache.
+        now += 5_000
+        fetcher.fetch("https://issuer.example.com", "diploma_scope")
+        assertEquals(1, callCount)
+
+        // Past the TTL: must hit the network again.
+        now += 6_000
+        fetcher.fetch("https://issuer.example.com", "diploma_scope")
+        assertEquals(2, callCount)
+    }
+
+    @Test
+    fun `fetch never caches a null result`() = runTest {
+        var callCount = 0
+        val fetcher = VctmFetcher(httpGet = { callCount++; null })
+
+        val first = fetcher.fetch("https://issuer.example.com", "missing_scope")
+        val second = fetcher.fetch("https://issuer.example.com", "missing_scope")
+
+        assertNull(first)
+        assertNull(second)
+        // Both calls retried the network - a miss is never cached.
+        assertEquals(2, callCount)
+    }
 }
