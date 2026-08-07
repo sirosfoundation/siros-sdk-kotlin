@@ -1221,7 +1221,7 @@ class SirosWallet private constructor(
             cachedWia = wia
             cachedWiaExpiresAt = CredentialUtils.parseJwtPayload(wia)
                 ?.get("exp")?.jsonPrimitive?.longOrNull ?: (now + 300)
-            maybeRegisterFido2Attestation(keyId, wia)
+            maybeRegisterFido2Attestation(keyId, wia, client)
             wia
         } catch (e: Exception) {
             Timber.w(e, "Failed to obtain Wallet Instance Attestation")
@@ -1244,15 +1244,29 @@ class SirosWallet private constructor(
      * WIA's `cnf.jkt`), which doesn't exist until a WIA has actually been
      * issued for this key.
      */
-    private suspend fun maybeRegisterFido2Attestation(keyId: String, wia: String) {
+    private suspend fun maybeRegisterFido2Attestation(keyId: String, wia: String, client: BackendApiClient) {
         if (sessionStore.fido2AttestationRegisteredKeyId == keyId) return
-        val chain = keystore.attestationChain(keyId) ?: return
-        val attestationObject = chain.certificates.firstOrNull() ?: return
-        val walletInstanceId = CredentialUtils.parseJwtPayload(wia)
-            ?.get("cnf")?.jsonObject?.get("jkt")?.jsonPrimitive?.contentOrNull
-            ?: return
+        // Everything below is best-effort: this whole function runs after
+        // ensureWalletInstanceAttestation() has already obtained and cached
+        // a valid wia, so ANY exception here (including from attestationChain
+        // itself) must be caught right here - letting one escape would be
+        // caught by ensureWalletInstanceAttestation()'s own outer try/catch
+        // instead, which would incorrectly return null (as if WIA issuance
+        // itself had failed) even though cachedWia was already set correctly.
         try {
-            apiClient?.registerFido2Attestation(
+            val chain = keystore.attestationChain(keyId) ?: return
+            val attestationObject = chain.certificates.firstOrNull() ?: return
+            val walletInstanceId = CredentialUtils.parseJwtPayload(wia)
+                ?.get("cnf")?.jsonObject?.get("jkt")?.jsonPrimitive?.contentOrNull
+                ?: return
+            // Takes the caller's already-unwrapped `client` rather than
+            // re-reading `self.apiClient` - a real Copilot-review finding
+            // (also caught and fixed on the Swift SDK's PR #80):
+            // `apiClient?.registerFido2Attestation(...)` would silently
+            // no-op (not throw) if apiClient had gone null since the caller
+            // checked it, and the next line would still mark the key
+            // registered even though nothing was actually sent.
+            client.registerFido2Attestation(
                 walletInstanceId = walletInstanceId,
                 attestationObject = attestationObject,
                 clientDataHash = chain.clientDataHash,
