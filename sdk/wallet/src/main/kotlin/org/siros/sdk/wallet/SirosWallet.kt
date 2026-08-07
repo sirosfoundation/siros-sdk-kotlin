@@ -1221,10 +1221,47 @@ class SirosWallet private constructor(
             cachedWia = wia
             cachedWiaExpiresAt = CredentialUtils.parseJwtPayload(wia)
                 ?.get("exp")?.jsonPrimitive?.longOrNull ?: (now + 300)
+            maybeRegisterFido2Attestation(keyId, wia)
             wia
         } catch (e: Exception) {
             Timber.w(e, "Failed to obtain Wallet Instance Attestation")
             null
+        }
+    }
+
+    /**
+     * Register this instance key's FIDO2/CTAP2 hardware attestation with the
+     * backend once, the first time a WIA is issued for it - so the backend
+     * can durably mark the wallet instance as hardware-key-attested (see
+     * `FIDO2AttestationService` in go-wallet-backend). A no-op for
+     * software-backed keys ([keystore].attestationChain returns null for
+     * those). Best-effort: any failure here must never block WIA issuance,
+     * and is simply retried on the next call (nothing is persisted as
+     * "registered" until the backend call actually succeeds).
+     *
+     * Deliberately called from [ensureWalletInstanceAttestation] rather than
+     * [ensureInstanceKeyId] - registration needs [wallet_instance_id] (the
+     * WIA's `cnf.jkt`), which doesn't exist until a WIA has actually been
+     * issued for this key.
+     */
+    private suspend fun maybeRegisterFido2Attestation(keyId: String, wia: String) {
+        if (sessionStore.fido2AttestationRegisteredKeyId == keyId) return
+        val chain = keystore.attestationChain(keyId) ?: return
+        val attestationObject = chain.certificates.firstOrNull() ?: return
+        val walletInstanceId = CredentialUtils.parseJwtPayload(wia)
+            ?.get("cnf")?.jsonObject?.get("jkt")?.jsonPrimitive?.contentOrNull
+            ?: return
+        try {
+            apiClient?.registerFido2Attestation(
+                walletInstanceId = walletInstanceId,
+                attestationObject = attestationObject,
+                clientDataHash = chain.clientDataHash,
+            )
+            sessionStore.fido2AttestationRegisteredKeyId = keyId
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.w(e, "FIDO2 attestation registration failed, will retry on next WIA issuance")
         }
     }
 

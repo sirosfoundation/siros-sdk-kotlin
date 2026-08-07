@@ -259,6 +259,14 @@ interface KeystoreManager {
     suspend fun securityProperties(keyId: String): SignerSecurityProperties? = null
 
     /**
+     * Return the attestation certificate chain for a key, if available -
+     * see [Signer.attestationChain]. Default returns null (attestation not
+     * available); only a WSCD-backed keystore with a hardware-attesting
+     * plugin (e.g. FIDO2/CTAP2) actually has one to return.
+     */
+    suspend fun attestationChain(keyId: String): AttestationChain? = null
+
+    /**
      * Generate [count] fresh keypairs and build a single OID4VCI `attestation`
      * proof-type Key Attestation JWT (spec: "Key Attestation in JWT format",
      * proof type Appendix "attestation Proof Type") covering all of them via

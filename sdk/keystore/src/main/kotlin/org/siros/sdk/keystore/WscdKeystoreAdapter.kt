@@ -437,7 +437,7 @@ class WscdKeystoreAdapter(
      * For hardware-backed keys (FIDO2/CTAP2), this provides attestation
      * proving key provenance for OID4VCI proof of possession.
      */
-    suspend fun attestationChain(keyId: String): List<ByteArray>? {
+    override suspend fun attestationChain(keyId: String): AttestationChain? {
         return signer.attestationChain(keyId)
     }
 

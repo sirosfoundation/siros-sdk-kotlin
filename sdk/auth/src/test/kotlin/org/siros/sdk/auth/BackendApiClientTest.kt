@@ -236,6 +236,52 @@ class BackendApiClientTest {
         assertEquals(false, body.containsKey("wallet_instance_id"))
     }
 
+    @Test
+    fun registerFido2Attestation_sendsExpectedFields() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"verified": true}"""))
+
+        val client = newClient()
+        client.registerFido2Attestation(
+            walletInstanceId = "test-jkt",
+            attestationObject = byteArrayOf(0x01, 0x02, 0x03),
+            clientDataHash = ByteArray(32) { 0x09 },
+        )
+
+        val request = server.takeRequest()
+        assertEquals("/wallet-provider/fido2-attestation/register", request.path)
+        assertEquals("POST", request.method)
+        val body = kotlinx.serialization.json.Json.parseToJsonElement(request.body.readUtf8()).jsonObject
+        assertEquals("test-jkt", body["wallet_instance_id"]!!.jsonPrimitive.content)
+        assertEquals(
+            WebAuthnAuthClient.encodeBase64Url(byteArrayOf(0x01, 0x02, 0x03)),
+            body["attestation_object"]!!.jsonPrimitive.content,
+        )
+        assertEquals(
+            WebAuthnAuthClient.encodeBase64Url(ByteArray(32) { 0x09 }),
+            body["client_data_hash"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun registerFido2Attestation_throwsOnRejection() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(400).setBody("""{"error": "ATTESTATION_INVALID"}""")
+        )
+
+        val client = newClient()
+
+        try {
+            client.registerFido2Attestation(
+                walletInstanceId = "test-jkt",
+                attestationObject = byteArrayOf(0x01),
+                clientDataHash = ByteArray(32),
+            )
+            throw AssertionError("Expected BackendApiException")
+        } catch (e: BackendApiException) {
+            assertEquals(400, e.code)
+        }
+    }
+
     private fun newClient(): BackendApiClient {
         val baseUrl = server.url("/").toString().trimEnd('/')
         return BackendApiClient(baseUrl = baseUrl, tenantId = "default")
