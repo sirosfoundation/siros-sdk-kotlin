@@ -837,6 +837,141 @@ class SirosWalletTest {
     }
 
     /**
+     * go-wallet-backend's credential-type registry service (TS11-backed,
+     * carries `attestation_los`/`Vctm.requiredKeyStorage`) was never queried
+     * by this SDK at all - only issuer-direct strategies existed. Confirms
+     * [WalletConfig.registryUrl]'s zero-config default (derived from
+     * [WalletConfig.backendUrl] as `<backendUrl>/registry`) actually reaches
+     * [VctmFetcher.fetch] via [SirosWallet.startIssuanceByOffer].
+     */
+    @Test
+    fun startIssuanceByOffer_passesDerivedRegistryUrl_toVctmFetcher() = runTest(dispatcher) {
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val vctmFetcher = mockk<org.siros.sdk.credentials.VctmFetcher>(relaxed = true)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "engineSession" to engine,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "vctmFetcher" to vctmFetcher,
+        )
+
+        wallet.startIssuanceByOffer(
+            org.siros.sdk.credentials.CredentialOffer(
+                credentialConfigurationId = "pid",
+                credentialIssuerIdentifier = "https://issuer.example.com",
+                credentialName = "Personal ID",
+                issuerName = "Issuer",
+            )
+        )
+
+        coVerify(exactly = 1) {
+            vctmFetcher.fetch(
+                issuerUrl = "https://issuer.example.com",
+                scope = "pid",
+                vct = null,
+                registryUrl = "https://wallet.example.com/registry",
+            )
+        }
+    }
+
+    /**
+     * Companion to the above: an integrator whose registry is deployed
+     * separately from their main wallet backend must be able to override
+     * [WalletConfig.registryUrl] independently - mirroring wallet-frontend's
+     * `VCT_REGISTRY_URL` being a distinct, independently-settable config
+     * value in that reference implementation, not merely derived.
+     */
+    @Test
+    fun startIssuanceByOffer_passesExplicitConfigRegistryUrl_toVctmFetcher() = runTest(dispatcher) {
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val vctmFetcher = mockk<org.siros.sdk.credentials.VctmFetcher>(relaxed = true)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "engineSession" to engine,
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                registryUrl = "https://registry.other-example.com/type-metadata-service",
+            ),
+            "vctmFetcher" to vctmFetcher,
+        )
+
+        wallet.startIssuanceByOffer(
+            org.siros.sdk.credentials.CredentialOffer(
+                credentialConfigurationId = "pid",
+                credentialIssuerIdentifier = "https://issuer.example.com",
+                credentialName = "Personal ID",
+                issuerName = "Issuer",
+            )
+        )
+
+        coVerify(exactly = 1) {
+            vctmFetcher.fetch(
+                issuerUrl = "https://issuer.example.com",
+                scope = "pid",
+                vct = null,
+                registryUrl = "https://registry.other-example.com/type-metadata-service",
+            )
+        }
+    }
+
+    /**
+     * Same registryUrl wiring, mdoc side: [SirosWallet.resolveEffectiveKeystoreForIssuance]
+     * fetches the MDDL schema via [MddlSchemaFetcher] when no [Vctm] is
+     * already active, and must pass the same derived/overridable registryUrl
+     * through so the registry-first strategy can run there too.
+     */
+    @Test
+    fun resolveEffectiveKeystoreForIssuance_passesRegistryUrl_toMddlSchemaFetcher() = runTest(dispatcher) {
+        val defaultKeystore = mockk<KeystoreManager>(relaxed = true)
+        // Not relaxed: a relaxed mock would auto-generate a non-null
+        // MddlSchema with a mocked (non-blank) requiredKeyStorage/doctype,
+        // which would then send resolveEffectiveKeystoreForIssuance down the
+        // real WscdSelectionPolicy resolution path and throw
+        // NoEligibleWscdPluginException - this test only cares about the
+        // registryUrl argument reaching the fetcher, so the schema itself is
+        // stubbed to null (registry/issuer both "no data" - the common case).
+        val mddlSchemaFetcher = mockk<org.siros.sdk.credentials.MddlSchemaFetcher>()
+        coEvery {
+            mddlSchemaFetcher.fetch(issuerUrl = any(), scope = any(), vct = any(), registryUrl = any())
+        } returns null
+        val config = WalletConfig(
+            backendUrl = "https://wallet.example.com",
+            availableKeystores = mapOf("softkey" to defaultKeystore),
+        )
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to config,
+            "keystore" to defaultKeystore,
+            "mddlSchemaFetcher" to mddlSchemaFetcher,
+            "wscdSelectionPolicy" to WscdSelectionPolicy(tofuStore = InMemoryWscdTofuStore()),
+        )
+        setField(
+            wallet,
+            "activeOffer",
+            org.siros.sdk.credentials.CredentialOffer(
+                credentialConfigurationId = "mdl",
+                credentialIssuerIdentifier = "https://issuer.example.com",
+                credentialName = "mDL",
+                issuerName = "Issuer",
+            ),
+        )
+
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "resolveEffectiveKeystoreForIssuance" }
+        method.isAccessible = true
+        kotlinx.coroutines.runBlocking { method.callSuspend(wallet) }
+
+        coVerify(exactly = 1) {
+            mddlSchemaFetcher.fetch(
+                issuerUrl = "https://issuer.example.com",
+                scope = "mdl",
+                vct = null,
+                registryUrl = "https://wallet.example.com/registry",
+            )
+        }
+    }
+
+    /**
      * `activeOffer` (used to build display metadata for a stored credential -
      * see [CredentialUtils.buildMetadata]/[CredentialUtils.buildMdocMetadata])
      * was previously only ever populated by [SirosWallet.startIssuanceByOffer].

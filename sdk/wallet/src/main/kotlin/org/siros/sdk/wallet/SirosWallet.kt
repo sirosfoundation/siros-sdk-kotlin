@@ -697,7 +697,11 @@ class SirosWallet private constructor(
                     // MDDLSchema) is re-hydrated here.
                     if (issuerIdent.isNullOrBlank() || configId.isNullOrBlank()) continue
                     val mddlSchema = try {
-                        mddlSchemaFetcher.fetch(issuerUrl = issuerIdent, scope = configId)
+                        mddlSchemaFetcher.fetch(
+                            issuerUrl = issuerIdent,
+                            scope = configId,
+                            registryUrl = registryUrl,
+                        )
                     } catch (e: Exception) {
                         Timber.w(e, "Failed to re-fetch MDDL schema for reloaded credential ${cred.id}")
                         null
@@ -722,7 +726,12 @@ class SirosWallet private constructor(
                 val vct = payload["vct"]?.jsonPrimitive?.contentOrNull
                 val vctm = if (!issuerIdent.isNullOrBlank() && !configId.isNullOrBlank()) {
                     try {
-                        vctmFetcher.fetch(issuerUrl = issuerIdent, scope = configId, vct = vct)
+                        vctmFetcher.fetch(
+                            issuerUrl = issuerIdent,
+                            scope = configId,
+                            vct = vct,
+                            registryUrl = registryUrl,
+                        )
                     } catch (e: Exception) {
                         Timber.w(e, "Failed to re-fetch VCTM for reloaded credential ${cred.id}")
                         null
@@ -1450,6 +1459,7 @@ class SirosWallet private constructor(
             vctmFetcher.fetch(
                 issuerUrl = offer.credentialIssuerIdentifier,
                 scope = offer.credentialConfigurationId,
+                registryUrl = registryUrl,
             )
         } catch (e: Exception) {
             Timber.w(e, "Failed to fetch VCTM for ${offer.credentialConfigurationId}")
@@ -1504,6 +1514,7 @@ class SirosWallet private constructor(
                 vctmFetcher.fetch(
                     issuerUrl = offer.credentialIssuerIdentifier,
                     scope = offer.credentialConfigurationId,
+                    registryUrl = registryUrl,
                 )
             } catch (e: Exception) {
                 Timber.w(e, "Failed to fetch VCTM for ${offer.credentialConfigurationId}")
@@ -2074,6 +2085,18 @@ class SirosWallet private constructor(
     })
 
     /**
+     * Base URL for go-wallet-backend's credential-type registry service (see
+     * [WalletConfig.registryUrl]'s doc comment), passed to every
+     * [vctmFetcher]/[mddlSchemaFetcher] call so the registry-first resolution
+     * strategy can run. Uses [config]'s explicit override when set, otherwise
+     * derives it from [WalletConfig.backendUrl] - the common case, since the
+     * registry route is mounted under `/registry` on the same host as the
+     * rest of go-wallet-backend's public API.
+     */
+    private val registryUrl: String
+        get() = config.registryUrl ?: "${config.backendUrl.trimEnd('/')}/registry"
+
+    /**
      * Resolves which [config].availableKeystores entry (if any) should back
      * a given credential-issuance key batch - see [WscdSelectionPolicy]'s
      * doc comment for the full resolution order. Constructing this
@@ -2628,7 +2651,11 @@ class SirosWallet private constructor(
 
         val mddlSchema: MddlSchema? = if (activeVctm == null) {
             try {
-                mddlSchemaFetcher.fetch(issuerUrl = issuer, scope = offer.credentialConfigurationId)
+                mddlSchemaFetcher.fetch(
+                    issuerUrl = issuer,
+                    scope = offer.credentialConfigurationId,
+                    registryUrl = registryUrl,
+                )
             } catch (e: Exception) {
                 Timber.w(
                     e,
@@ -3190,6 +3217,11 @@ class SirosWallet private constructor(
                                 mddlSchemaFetcher.fetch(
                                     issuerUrl = offer.credentialIssuerIdentifier,
                                     scope = offer.credentialConfigurationId,
+                                    // The mdoc doctype is already known here (just
+                                    // parsed from the issued credential above), so
+                                    // the registry-first strategy can actually run.
+                                    vct = parsed.docType,
+                                    registryUrl = registryUrl,
                                 )
                             } catch (e: Exception) {
                                 Timber.w(e, "Failed to fetch MDDL schema for ${offer.credentialConfigurationId}")

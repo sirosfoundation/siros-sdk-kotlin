@@ -71,6 +71,20 @@ import org.siros.sdk.keystore.NativeAttestationProvider
  *        nor [defaultWscdMapping] resolves it unambiguously - mirrors
  *        `org.siros.sdk.keystore.mdoc.RequestProximityConsent`'s shape
  *        exactly. See [RequestWscdChoice]'s doc comment.
+ * @param registryUrl Base URL for go-wallet-backend's credential-type
+ *        registry service (TS11-backed, ingests the external canonical
+ *        credential-type registry; includes `attestation_los`/
+ *        `Vctm.requiredKeyStorage`/`MddlSchema.requiredKeyStorage` data) -
+ *        queried as `<registryUrl>/type-metadata?vct=<vct-or-doctype>`. This
+ *        is the SAME service the reference wallet-frontend implementation
+ *        always calls for VCT/mdoc type metadata lookups, via its own
+ *        distinct, independently-settable `VCT_REGISTRY_URL` config value -
+ *        set this explicitly if your registry is deployed separately from
+ *        your main wallet backend (e.g. a different host/environment). When
+ *        `null` (the common case), derived automatically as
+ *        `<backendUrl>/registry`, which covers the common case (registry
+ *        mounted on the same host as the rest of go-wallet-backend's public
+ *        API) with zero extra configuration.
  */
 data class WalletConfig(
     val backendUrl: String,
@@ -93,6 +107,7 @@ data class WalletConfig(
     val availableKeystores: Map<String, KeystoreManager>? = null,
     val defaultWscdMapping: Map<String, String>? = null,
     val requestWscdChoice: RequestWscdChoice? = null,
+    val registryUrl: String? = null,
 ) {
     companion object {
         private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }

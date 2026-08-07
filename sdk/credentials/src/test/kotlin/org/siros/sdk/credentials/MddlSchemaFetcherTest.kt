@@ -1,0 +1,174 @@
+// Copyright 2026 SIROS Foundation. BSD 2-Clause License.
+package org.siros.sdk.credentials
+
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Test
+
+class MddlSchemaFetcherTest {
+
+    private val sampleMddlSchemaJson = """
+        {
+          "format": "mso_mdoc",
+          "doctype": "org.iso.18013.5.1.mDL",
+          "display": [
+            { "locale": "en", "name": "Mobile Driving Licence" }
+          ],
+          "attestation_los": "Tier2"
+        }
+    """.trimIndent()
+
+    @Test
+    fun `fetch returns MDDL schema from type-metadata endpoint`() = runTest {
+        val fetcher = MddlSchemaFetcher(httpGet = { url ->
+            if (url == "https://issuer.example.com/type-metadata/mdl_scope") {
+                sampleMddlSchemaJson
+            } else {
+                null
+            }
+        })
+        val schema = fetcher.fetch("https://issuer.example.com", "mdl_scope")
+        assertNotNull(schema)
+        assertEquals("org.iso.18013.5.1.mDL", schema!!.doctype)
+        assertEquals("Tier2", schema.requiredKeyStorage)
+    }
+
+    @Test
+    fun `fetch returns null when strategy fails`() = runTest {
+        val fetcher = MddlSchemaFetcher(httpGet = { null })
+        val schema = fetcher.fetch("https://issuer.example.com", "missing_scope")
+        assertNull(schema)
+    }
+
+    @Test
+    fun `fetch returns null when httpGet throws`() = runTest {
+        val fetcher = MddlSchemaFetcher(httpGet = { throw java.io.IOException("network error") })
+        val schema = fetcher.fetch("https://issuer.example.com", "scope")
+        assertNull(schema)
+    }
+
+    @Test
+    fun `fetch trims trailing slash from issuer URL`() = runTest {
+        var calledUrl: String? = null
+        val fetcher = MddlSchemaFetcher(httpGet = { url ->
+            calledUrl = url
+            null
+        })
+        fetcher.fetch("https://issuer.example.com/", "scope")
+        assertEquals("https://issuer.example.com/type-metadata/scope", calledUrl)
+    }
+
+    @Test
+    fun `parseMddlSchema parses valid JSON`() {
+        val fetcher = MddlSchemaFetcher()
+        val schema = fetcher.parseMddlSchema(sampleMddlSchemaJson)
+        assertNotNull(schema)
+        assertEquals("mso_mdoc", schema!!.format)
+        assertEquals("org.iso.18013.5.1.mDL", schema.doctype)
+    }
+
+    @Test
+    fun `parseMddlSchema returns null for invalid JSON`() {
+        val fetcher = MddlSchemaFetcher()
+        assertNull(fetcher.parseMddlSchema("{not valid json"))
+    }
+
+    @Test
+    fun `fetch returns MDDL schema from registry service when registryUrl and vct are known`() = runTest {
+        var calledUrl: String? = null
+        val fetcher = MddlSchemaFetcher(httpGet = { url ->
+            calledUrl = url
+            if (url == "https://wallet.example.com/registry/type-metadata?vct=org.iso.18013.5.1.mDL") {
+                sampleMddlSchemaJson
+            } else {
+                null
+            }
+        })
+        val schema = fetcher.fetch(
+            issuerUrl = "https://issuer.example.com",
+            scope = "mdl_scope",
+            vct = "org.iso.18013.5.1.mDL",
+            registryUrl = "https://wallet.example.com/registry",
+        )
+        assertNotNull(schema)
+        assertEquals("org.iso.18013.5.1.mDL", schema!!.doctype)
+        assertEquals(
+            "https://wallet.example.com/registry/type-metadata?vct=org.iso.18013.5.1.mDL",
+            calledUrl,
+        )
+    }
+
+    @Test
+    fun `fetch trims trailing slash from registryUrl`() = runTest {
+        val calledUrls = mutableListOf<String>()
+        val fetcher = MddlSchemaFetcher(httpGet = { url ->
+            calledUrls.add(url)
+            null
+        })
+        fetcher.fetch(
+            issuerUrl = "https://issuer.example.com",
+            scope = "mdl_scope",
+            vct = "org.iso.18013.5.1.mDL",
+            registryUrl = "https://wallet.example.com/registry/",
+        )
+        assertEquals(
+            "https://wallet.example.com/registry/type-metadata?vct=org.iso.18013.5.1.mDL",
+            calledUrls.first(),
+        )
+    }
+
+    @Test
+    fun `fetch falls through to issuer-direct strategy when registry has no entry`() = runTest {
+        val fetcher = MddlSchemaFetcher(httpGet = { url ->
+            when {
+                url.contains("/registry/") -> null // registry 404 / miss
+                url == "https://issuer.example.com/type-metadata/mdl_scope" -> sampleMddlSchemaJson
+                else -> null
+            }
+        })
+        val schema = fetcher.fetch(
+            issuerUrl = "https://issuer.example.com",
+            scope = "mdl_scope",
+            vct = "org.iso.18013.5.1.mDL",
+            registryUrl = "https://wallet.example.com/registry",
+        )
+        assertNotNull(schema)
+        assertEquals("org.iso.18013.5.1.mDL", schema!!.doctype)
+    }
+
+    @Test
+    fun `fetch skips registry strategy when registryUrl is null`() = runTest {
+        var registryQueried = false
+        val fetcher = MddlSchemaFetcher(httpGet = { url ->
+            if (url.contains("/registry/")) registryQueried = true
+            if (url == "https://issuer.example.com/type-metadata/mdl_scope") sampleMddlSchemaJson else null
+        })
+        val schema = fetcher.fetch(
+            issuerUrl = "https://issuer.example.com",
+            scope = "mdl_scope",
+            vct = "org.iso.18013.5.1.mDL",
+            registryUrl = null,
+        )
+        assertNotNull(schema)
+        assertEquals(false, registryQueried)
+    }
+
+    @Test
+    fun `fetch skips registry strategy when vct is not known`() = runTest {
+        var registryQueried = false
+        val fetcher = MddlSchemaFetcher(httpGet = { url ->
+            if (url.contains("/registry/")) registryQueried = true
+            if (url == "https://issuer.example.com/type-metadata/mdl_scope") sampleMddlSchemaJson else null
+        })
+        val schema = fetcher.fetch(
+            issuerUrl = "https://issuer.example.com",
+            scope = "mdl_scope",
+            vct = null,
+            registryUrl = "https://wallet.example.com/registry",
+        )
+        assertNotNull(schema)
+        assertEquals(false, registryQueried)
+    }
+}
