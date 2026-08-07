@@ -41,6 +41,7 @@ import org.siros.sdk.keystore.RotateLifecycleRequest
 import org.siros.sdk.keystore.UniFFISigner
 import org.siros.sdk.keystore.WscdKeystoreAdapter
 import org.siros.sdk.keystore.WscdManager
+import org.siros.sdk.wallet.RememberScope
 import org.siros.sdk.wallet.RequestWscdChoice
 import org.siros.sdk.wallet.SirosWallet
 import org.siros.sdk.wallet.WalletConfig
@@ -70,8 +71,12 @@ data class PendingWscdChoice(
     val issuer: String,
     val credentialType: String,
     val eligiblePluginIds: List<String>,
-    /** Call with the chosen plugin ID to approve, or null to cancel. */
-    val respond: (String?) -> Unit,
+    /**
+     * Call with the chosen plugin ID and how long to remember it to
+     * approve, or a null plugin ID to cancel (the [RememberScope] argument
+     * is ignored on cancel).
+     */
+    val respond: (pluginId: String?, rememberScope: RememberScope) -> Unit,
 )
 
 /**
@@ -403,6 +408,20 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _flowErrorDialog.value = null
     }
 
+    /**
+     * Every registered WSCD plugin ID this session's [WalletConfig.availableKeystores]
+     * actually offers - populated once, at [buildWalletConfig] time (see that
+     * function, called below to construct [wallet]), for the Settings tab's
+     * "preferred security key" / per-issuer override pickers to offer as
+     * options. Declared here, before [wallet], since [buildWalletConfig] (run
+     * as part of constructing [wallet]) writes to it - a property used inside
+     * another property's initializer must already be initialized itself,
+     * i.e. appear earlier in the class body (see [_selectedPluginId] above
+     * for the same constraint on the plugin-selection field it reads).
+     */
+    private val _availableWscdPluginIds = MutableStateFlow<List<String>>(emptyList())
+    val availableWscdPluginIds: StateFlow<List<String>> = _availableWscdPluginIds
+
     // ── Wallet ──────────────────────────────────────────────────────
 
     private var wallet: SirosWallet = SirosWallet.create(
@@ -439,6 +458,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                         WalletSessionHolder.update(wallet)
                         DCAPIProviderRegistration.refresh(activity, newState.credentials)
                         refreshWscdTofuMapping()
+                        refreshWscdUserOverrides()
                     }
                     else -> {
                         WalletSessionHolder.update(null)
@@ -1062,12 +1082,56 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         refreshWscdTofuMapping()
     }
 
+    /**
+     * The active account's explicit user overrides (see
+     * [org.siros.sdk.wallet.WscdSelectionPolicy]'s doc comment on the
+     * distinction from TOFU): [_wscdGlobalOverride] is the single "always use
+     * this plugin, every issuer" preference,
+     * [_wscdUserOverrides] is the `"issuer|credentialType"` -> plugin ID map
+     * of per-issuer overrides. Refreshed the same way as [_wscdTofuMapping]
+     * (see [refreshWscdTofuMapping]'s doc comment) - no reactive change
+     * stream, only discrete points where the host app knows it may have
+     * changed.
+     */
+    private val _wscdGlobalOverride = MutableStateFlow<String?>(null)
+    val wscdGlobalOverride: StateFlow<String?> = _wscdGlobalOverride
+
+    private val _wscdUserOverrides = MutableStateFlow<Map<String, String>>(emptyMap())
+    val wscdUserOverrides: StateFlow<Map<String, String>> = _wscdUserOverrides
+
+    fun refreshWscdUserOverrides() {
+        _wscdGlobalOverride.value = wallet.currentGlobalUserOverride()
+        _wscdUserOverrides.value = wallet.currentUserOverrides()
+    }
+
+    /** Set (or, with `pluginId = null`, clear) the single global user override and refresh. */
+    fun setWscdGlobalOverride(pluginId: String?) {
+        if (pluginId != null) wallet.setGlobalUserOverride(pluginId) else wallet.clearGlobalUserOverride()
+        refreshWscdUserOverrides()
+    }
+
+    /** Set a per-(issuer, credentialType) user override and refresh. */
+    fun setWscdUserOverride(issuer: String, credentialType: String, pluginId: String) {
+        wallet.setUserOverride(issuer, credentialType, pluginId)
+        refreshWscdUserOverrides()
+    }
+
+    /** Clear one per-(issuer, credentialType) user override and refresh. */
+    fun clearWscdUserOverride(issuer: String, credentialType: String) {
+        wallet.clearUserOverride(issuer, credentialType)
+        refreshWscdUserOverrides()
+    }
+
     private val _pendingWscdChoice = MutableStateFlow<PendingWscdChoice?>(null)
     val pendingWscdChoice: StateFlow<PendingWscdChoice?> = _pendingWscdChoice
 
-    /** The user's answer to the current [pendingWscdChoice] dialog, or cancellation if `pluginId` is null. */
-    fun respondToWscdChoice(pluginId: String?) {
-        _pendingWscdChoice.value?.respond?.invoke(pluginId)
+    /**
+     * The user's answer to the current [pendingWscdChoice] dialog, or
+     * cancellation if `pluginId` is null (in which case `rememberScope` is
+     * ignored). See [RememberScope]'s doc comment for what each scope does.
+     */
+    fun respondToWscdChoice(pluginId: String?, rememberScope: RememberScope = RememberScope.THIS_ISSUER) {
+        _pendingWscdChoice.value?.respond?.invoke(pluginId, rememberScope)
     }
 
     /**
@@ -1086,11 +1150,15 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     issuer = issuer,
                     credentialType = credentialType,
                     eligiblePluginIds = eligiblePluginIds,
-                    respond = { pluginId ->
+                    respond = { pluginId, rememberScope ->
                         _pendingWscdChoice.value = null
                         if (continuation.isActive) {
                             continuation.resume(
-                                if (pluginId != null) WscdChoiceResult.Chosen(pluginId) else WscdChoiceResult.Cancelled,
+                                if (pluginId != null) {
+                                    WscdChoiceResult.Chosen(pluginId, rememberScope)
+                                } else {
+                                    WscdChoiceResult.Cancelled
+                                },
                                 onCancellation = null,
                             )
                         }
@@ -1337,6 +1405,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 buildWscdKeystore("softkey", trackAsDiagnosticSigner = false)?.let { put("softkey", it) }
             }
         }
+        _availableWscdPluginIds.value = availableKeystores.keys.sorted()
 
         // 0/unset = disabled (default) - a real cloud project number is tied
         // to the host app's own Play Console/Firebase project and can't be

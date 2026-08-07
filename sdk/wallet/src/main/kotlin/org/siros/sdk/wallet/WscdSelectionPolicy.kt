@@ -7,9 +7,32 @@ import kotlinx.serialization.json.Json
 import org.siros.sdk.keystore.WscdPluginCapabilities
 import timber.log.Timber
 
+/**
+ * How long a [WscdChoiceResult.Chosen] answer should be remembered, chosen by
+ * the user alongside the plugin itself (see [WscdChoiceDialog] in the
+ * sample app for the corresponding UI):
+ * - [ONCE]: use the chosen plugin for this credential-issuance batch only -
+ *   no persistence at all, the very next resolution for the same
+ *   (issuer, credentialType) starts over from [WscdSelectionPolicy.resolve]'s
+ *   top.
+ * - [THIS_ISSUER]: persist via the existing per-(issuer, credentialType) TOFU
+ *   mechanism - unchanged from this feature's original "always remember"
+ *   behavior.
+ * - [ALL_ISSUERS]: persist as the single global user override (see
+ *   [WscdSelectionPolicy.setGlobalUserOverride]), which from then on wins for
+ *   every (issuer, credentialType) pair that doesn't have a more specific
+ *   per-(issuer, credentialType) user override set.
+ */
+enum class RememberScope { ONCE, THIS_ISSUER, ALL_ISSUERS }
+
 /** The host app's answer to a [RequestWscdChoice] prompt. */
 sealed interface WscdChoiceResult {
-    data class Chosen(val pluginId: String) : WscdChoiceResult
+    /**
+     * @param rememberScope defaults to [RememberScope.THIS_ISSUER], matching
+     *   this feature's original behavior (every [Chosen] answer was persisted
+     *   as a TOFU entry) for callers/tests that predate [RememberScope].
+     */
+    data class Chosen(val pluginId: String, val rememberScope: RememberScope = RememberScope.THIS_ISSUER) : WscdChoiceResult
     data object Cancelled : WscdChoiceResult
 }
 
@@ -43,6 +66,17 @@ typealias RequestWscdChoice = suspend (
 ) -> WscdChoiceResult
 
 /**
+ * Common supertype for every hard-failure [WscdSelectionPolicy.resolve] can
+ * throw, so a caller (see `SirosWallet.requestBackendKeyAttestation`) can
+ * catch/propagate both the same way: neither "zero eligible plugins" nor
+ * "several eligible plugins but no way to pick one" may ever be treated as
+ * "fall back to the default keystore" - both mean issuance must not silently
+ * proceed against a plugin that doesn't meet the credential type's declared
+ * requirement.
+ */
+sealed class WscdSelectionException(message: String) : Exception(message)
+
+/**
  * Thrown by [WscdSelectionPolicy.resolve] when zero of the host app's
  * [WalletConfig.availableKeystores] entries have a static nominal tier
  * ([WscdPluginCapabilities]) meeting a credential type's declared
@@ -55,8 +89,30 @@ class NoEligibleWscdPluginException(
     val issuer: String,
     val credentialType: String,
     val requiredTier: String,
-) : Exception(
+) : WscdSelectionException(
     "No available WSCD plugin meets required key-storage tier '$requiredTier' for issuer=$issuer credentialType=$credentialType"
+)
+
+/**
+ * Thrown by [WscdSelectionPolicy.resolve] when two or more of the host app's
+ * registered plugins meet the credential type's declared `requiredTier`, but
+ * there was no way to have the user pick which one: either no
+ * [RequestWscdChoice] callback was configured at all, the user cancelled the
+ * prompt, or the host app's callback answered with something outside the
+ * offered [eligiblePluginIds] list. Distinct from [NoEligibleWscdPluginException]:
+ * here at least one plugin WOULD be sufficient, so this is "ambiguous,
+ * unresolved" rather than "nothing usable at all" - but the caller must treat
+ * both the same way (never silently fall back to a possibly-insufficient
+ * default keystore), since resolving the ambiguity is the entire point of
+ * asking in the first place.
+ */
+class AmbiguousWscdPluginException(
+    val issuer: String,
+    val credentialType: String,
+    val eligiblePluginIds: List<String>,
+) : WscdSelectionException(
+    "Multiple WSCD plugins ($eligiblePluginIds) meet the required key-storage tier for issuer=$issuer " +
+        "credentialType=$credentialType, but no user choice was made to pick one"
 )
 
 /**
@@ -123,21 +179,152 @@ internal class SessionStoreWscdTofuStore(private val sessionStore: SessionStore)
 
     override fun get(issuer: String, credentialType: String): String? = readAll()[key(issuer, credentialType)]
 
+    // Read-modify-write on the whole JSON blob, so concurrent resolve() calls
+    // for two different (issuer, credentialType) pairs (e.g. two credential
+    // types being issued near-simultaneously) must be serialized here -
+    // otherwise the second writer's readAll() can miss the first writer's
+    // not-yet-visible update and clobber it (last writer wins, dropping an
+    // entry). Locks on `sessionStore` itself (shared across every
+    // [SessionStoreWscdTofuStore]/[SessionStoreWscdUserOverrideStore]
+    // instance that wraps the same [SessionStore]) rather than `this`, since
+    // a fresh store instance per call site would otherwise defeat the lock.
     override fun put(issuer: String, credentialType: String, pluginId: String) {
-        val updated = readAll() + (key(issuer, credentialType) to pluginId)
-        sessionStore.wscdTofuMappingJson = json.encodeToString(mapSerializer, updated)
+        synchronized(sessionStore) {
+            val updated = readAll() + (key(issuer, credentialType) to pluginId)
+            sessionStore.wscdTofuMappingJson = json.encodeToString(mapSerializer, updated)
+        }
     }
 
     override fun getAll(): Map<String, String> = readAll()
 
     override fun remove(issuer: String, credentialType: String) {
-        val updated = readAll() - key(issuer, credentialType)
-        sessionStore.wscdTofuMappingJson = if (updated.isEmpty()) null else json.encodeToString(mapSerializer, updated)
+        synchronized(sessionStore) {
+            val updated = readAll() - key(issuer, credentialType)
+            sessionStore.wscdTofuMappingJson = if (updated.isEmpty()) null else json.encodeToString(mapSerializer, updated)
+        }
     }
 
     override fun clearAll() {
-        sessionStore.wscdTofuMappingJson = null
+        synchronized(sessionStore) {
+            sessionStore.wscdTofuMappingJson = null
+        }
     }
+}
+
+/**
+ * Persistence for [WscdSelectionPolicy]'s explicit, deliberate user
+ * overrides - distinct from [WscdTofuStore], which is an auto-remembered
+ * outcome of an *ambiguous* resolution the user (or [WscdSelectionPolicy]
+ * itself) never explicitly asked to lock in. A user override always wins
+ * over TOFU/[WalletConfig.defaultWscdMapping] (see [WscdSelectionPolicy.resolve]),
+ * since it exists specifically to let a user raise the effective tier above
+ * what a credential type actually requires - e.g. "always use my YubiKey for
+ * this issuer/every issuer, even though software-key would suffice."
+ *
+ * Two independent scopes, both abstracted here since both are simple opaque
+ * state a host-app settings UI wants to read/write:
+ * - per-(issuer, credentialType): [get]/[put]/[getAll]/[remove]/[clearAll],
+ *   same shape as [WscdTofuStore].
+ * - global (every issuer/credential type not covered by a more specific
+ *   per-(issuer, credentialType) override): [getGlobal]/[setGlobal]/[clearGlobal].
+ */
+interface WscdUserOverrideStore {
+    /** The persisted user-override plugin ID for `"$issuer|$credentialType"`, or `null` if none set. */
+    fun get(issuer: String, credentialType: String): String?
+
+    /** Persist `pluginId` as the user override for `"$issuer|$credentialType"`. */
+    fun put(issuer: String, credentialType: String, pluginId: String)
+
+    /**
+     * Every persisted per-(issuer, credentialType) user override, keyed by
+     * `"$issuer|$credentialType"` -> plugin ID - for a host-app settings
+     * screen (see [WscdSelectionPolicy.currentUserOverrides]). Defaults to
+     * empty so existing implementations don't have to implement it just to
+     * keep compiling.
+     */
+    fun getAll(): Map<String, String> = emptyMap()
+
+    /** Remove the persisted user override for `"$issuer|$credentialType"`, if any. No-op by default. */
+    fun remove(issuer: String, credentialType: String) {}
+
+    /** Remove every persisted per-(issuer, credentialType) user override. No-op by default. */
+    fun clearAll() {}
+
+    /** The persisted single global user-override plugin ID, or `null` if none set. */
+    fun getGlobal(): String?
+
+    /** Persist `pluginId` as the global user override. */
+    fun setGlobal(pluginId: String)
+
+    /** Remove the persisted global user override, if any. No-op by default. */
+    fun clearGlobal() {}
+}
+
+/**
+ * [WscdUserOverrideStore] backed by [SessionStore.wscdUserOverrideMappingJson]
+ * (per-(issuer, credentialType)) and [SessionStore.wscdGlobalOverridePluginId]
+ * (global) - mirrors [SessionStoreWscdTofuStore]'s exact "one opaque JSON
+ * blob" shape for the per-pair map, plus the same read-modify-write locking
+ * fix (see [SessionStoreWscdTofuStore.put]'s doc comment) since it's the
+ * identical class of bug.
+ */
+internal class SessionStoreWscdUserOverrideStore(private val sessionStore: SessionStore) : WscdUserOverrideStore {
+    private val json = Json { ignoreUnknownKeys = true }
+    private val mapSerializer = MapSerializer(String.serializer(), String.serializer())
+
+    private fun key(issuer: String, credentialType: String) = "$issuer|$credentialType"
+
+    private fun readAll(): Map<String, String> {
+        val raw = sessionStore.wscdUserOverrideMappingJson ?: return emptyMap()
+        return try {
+            json.decodeFromString(mapSerializer, raw)
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to decode WSCD user-override mapping, treating as empty")
+            emptyMap()
+        }
+    }
+
+    override fun get(issuer: String, credentialType: String): String? = readAll()[key(issuer, credentialType)]
+
+    override fun put(issuer: String, credentialType: String, pluginId: String) {
+        synchronized(sessionStore) {
+            val updated = readAll() + (key(issuer, credentialType) to pluginId)
+            sessionStore.wscdUserOverrideMappingJson = json.encodeToString(mapSerializer, updated)
+        }
+    }
+
+    override fun getAll(): Map<String, String> = readAll()
+
+    override fun remove(issuer: String, credentialType: String) {
+        synchronized(sessionStore) {
+            val updated = readAll() - key(issuer, credentialType)
+            sessionStore.wscdUserOverrideMappingJson = if (updated.isEmpty()) null else json.encodeToString(mapSerializer, updated)
+        }
+    }
+
+    override fun clearAll() {
+        synchronized(sessionStore) {
+            sessionStore.wscdUserOverrideMappingJson = null
+        }
+    }
+
+    override fun getGlobal(): String? = sessionStore.wscdGlobalOverridePluginId
+
+    override fun setGlobal(pluginId: String) {
+        sessionStore.wscdGlobalOverridePluginId = pluginId
+    }
+
+    override fun clearGlobal() {
+        sessionStore.wscdGlobalOverridePluginId = null
+    }
+}
+
+/** No-op [WscdUserOverrideStore] for callers that don't wire up user-override persistence at all. */
+private object NoopWscdUserOverrideStore : WscdUserOverrideStore {
+    override fun get(issuer: String, credentialType: String): String? = null
+    override fun put(issuer: String, credentialType: String, pluginId: String) {}
+    override fun getGlobal(): String? = null
+    override fun setGlobal(pluginId: String) {}
 }
 
 /**
@@ -159,24 +346,37 @@ internal class SessionStoreWscdTofuStore(private val sessionStore: SessionStore)
  * Resolution order for [resolve]:
  * 1. `requiredTier == null` (credential type declared no requirement) ->
  *    `null` (no-op: caller keeps using its existing default keystore).
- * 2. A [WscdTofuStore]-persisted choice for (issuer, credentialType) that's
+ * 2. A [WscdUserOverrideStore]-persisted per-(issuer, credentialType) user
+ *    override that's still available and still meets `requiredTier` -> use
+ *    it. Deliberate, explicit user state (set via [setUserOverride], e.g.
+ *    from a settings screen) - NOT written to TOFU, since it's already its
+ *    own stable, separately-tracked preference.
+ * 3. Else a [WscdUserOverrideStore]-persisted *global* user override (every
+ *    issuer/credential type, [setGlobalUserOverride]) that's still available
+ *    and still sufficient -> use it.
+ * 4. A [WscdTofuStore]-persisted choice for (issuer, credentialType) that's
  *    still available and still meets `requiredTier` -> reuse it.
- * 3. [defaultMapping]'s entry for (issuer, credentialType), if available and
+ * 5. [defaultMapping]'s entry for (issuer, credentialType), if available and
  *    sufficient -> persist as the new TOFU entry, return it.
- * 4. Exactly one plugin among `availablePluginIds` meets `requiredTier` ->
+ * 6. Exactly one plugin among `availablePluginIds` meets `requiredTier` ->
  *    persist as TOFU, return it. Otherwise, if [currentDefaultPluginId] (the
- *    plugin already active before this resolution) itself meets
- *    `requiredTier`, prefer it - avoids an unnecessary plugin switch when
- *    the current default is already good enough, even though other eligible
- *    plugins exist.
- * 5. More than one eligible plugin and the current default isn't one of
+ *    plugin already active before this resolution) is itself among
+ *    `availablePluginIds` and meets `requiredTier`, prefer it - avoids an
+ *    unnecessary plugin switch when the current default is already good
+ *    enough, even though other eligible plugins exist.
+ * 7. More than one eligible plugin and the current default isn't one of
  *    them (or is unknown) -> ask the host app via [requestChoice]. A
- *    `Chosen` result is persisted as TOFU and returned; `Cancelled` (or no
- *    [requestChoice] callback configured at all) returns `null` - matching
- *    this SDK's "best effort, never block issuance outright without a clear
- *    reason" convention (see `SirosWallet.requestBackendKeyAttestation`'s
- *    catch blocks) - the caller's existing fallback path takes over.
- * 6. Zero eligible plugins -> [NoEligibleWscdPluginException], a distinct
+ *    `Chosen` result is used according to its `rememberScope` (see
+ *    [RememberScope]: [RememberScope.ONCE] persists nothing,
+ *    [RememberScope.THIS_ISSUER] persists as TOFU,
+ *    [RememberScope.ALL_ISSUERS] persists as the new global user override).
+ *    `Cancelled`, no [requestChoice] callback configured at all, or a
+ *    `Chosen` answer outside the offered eligible list, all throw
+ *    [AmbiguousWscdPluginException] - unlike steps 1-6, there is no safe
+ *    "no-op" here: silently falling back to the default keystore when
+ *    several sufficient plugins exist but none was picked would defeat this
+ *    whole feature's purpose.
+ * 8. Zero eligible plugins -> [NoEligibleWscdPluginException], a distinct
  *    signal from every other branch above so the caller does NOT silently
  *    proceed with an insufficient plugin.
  */
@@ -184,6 +384,7 @@ class WscdSelectionPolicy(
     private val tofuStore: WscdTofuStore,
     private val defaultMapping: Map<String, String>? = null,
     private val requestChoice: RequestWscdChoice? = null,
+    private val userOverrideStore: WscdUserOverrideStore = NoopWscdUserOverrideStore,
 ) {
     /**
      * Every persisted TOFU mapping, keyed by `"issuer|credentialType"` ->
@@ -202,6 +403,43 @@ class WscdSelectionPolicy(
     /** Forget every persisted TOFU choice. */
     fun clearAllTofuMappings() = tofuStore.clearAll()
 
+    /**
+     * Explicitly set a per-(issuer, credentialType) user override -
+     * distinct from TOFU: this is a deliberate, "always use this plugin for
+     * this issuer/credential type" preference (typically a settings-screen
+     * affordance, or "remember for this issuer" in [WscdChoiceDialog]-style
+     * UI), not an auto-remembered outcome of an ambiguous resolution. Wins
+     * over TOFU and [defaultMapping] in [resolve] as long as it remains
+     * available and sufficient for the required tier.
+     */
+    fun setUserOverride(issuer: String, credentialType: String, pluginId: String) =
+        userOverrideStore.put(issuer, credentialType, pluginId)
+
+    /** Forget one persisted per-(issuer, credentialType) user override. */
+    fun clearUserOverride(issuer: String, credentialType: String) = userOverrideStore.remove(issuer, credentialType)
+
+    /**
+     * Every persisted per-(issuer, credentialType) user override, keyed by
+     * `"issuer|credentialType"` -> plugin ID - for a host-app settings
+     * screen to display separately from [tofuMapping] (see that function's
+     * doc comment for why the two are kept distinct).
+     */
+    fun currentUserOverrides(): Map<String, String> = userOverrideStore.getAll()
+
+    /**
+     * Explicitly set the single global user override - "always use this
+     * plugin for every issuer/credential type", unless a more specific
+     * per-(issuer, credentialType) [setUserOverride] is also set (which wins
+     * first in [resolve]'s precedence).
+     */
+    fun setGlobalUserOverride(pluginId: String) = userOverrideStore.setGlobal(pluginId)
+
+    /** Forget the persisted global user override, if any. */
+    fun clearGlobalUserOverride() = userOverrideStore.clearGlobal()
+
+    /** The persisted global user override, or `null` if none set. */
+    fun currentGlobalUserOverride(): String? = userOverrideStore.getGlobal()
+
     suspend fun resolve(
         issuer: String,
         credentialType: String,
@@ -216,10 +454,28 @@ class WscdSelectionPolicy(
             return WscdPluginCapabilities.meets(tier, requiredTier)
         }
 
+        // 2. Per-(issuer, credentialType) user override - checked exactly
+        // like TOFU/defaultMapping below (must still be registered AND still
+        // meet requiredTier, e.g. in case the requirement was raised since
+        // the override was set, or the overridden plugin was unregistered) -
+        // if either check fails, fall through to the rest of the chain
+        // rather than erroring, since a stale override is not itself a hard
+        // failure.
+        userOverrideStore.get(issuer, credentialType)?.let { override ->
+            if (override in availablePluginIds && isEligible(override)) return override
+        }
+
+        // 3. Global user override, same validity checks.
+        userOverrideStore.getGlobal()?.let { override ->
+            if (override in availablePluginIds && isEligible(override)) return override
+        }
+
+        // 4. TOFU.
         tofuStore.get(issuer, credentialType)?.let { persisted ->
             if (persisted in availablePluginIds && isEligible(persisted)) return persisted
         }
 
+        // 5. Host-app default mapping.
         val mappingKey = "$issuer|$credentialType"
         defaultMapping?.get(mappingKey)?.let { mapped ->
             if (mapped in availablePluginIds && isEligible(mapped)) {
@@ -228,6 +484,7 @@ class WscdSelectionPolicy(
             }
         }
 
+        // 6/7/8. Compute eligibility over what's actually registered.
         val eligibleIds = availablePluginIds.filter { isEligible(it) }
         return when {
             eligibleIds.isEmpty() ->
@@ -236,25 +493,31 @@ class WscdSelectionPolicy(
             eligibleIds.size == 1 ->
                 eligibleIds.first().also { tofuStore.put(issuer, credentialType, it) }
 
-            currentDefaultPluginId != null && isEligible(currentDefaultPluginId) ->
+            currentDefaultPluginId != null && currentDefaultPluginId in availablePluginIds && isEligible(currentDefaultPluginId) ->
                 currentDefaultPluginId.also { tofuStore.put(issuer, credentialType, it) }
 
             else -> when (val choice = requestChoice?.invoke(issuer, credentialType, eligibleIds) ?: WscdChoiceResult.Cancelled) {
                 is WscdChoiceResult.Chosen -> {
                     if (choice.pluginId !in eligibleIds) {
                         // Host app returned something outside the list it was
-                        // offered - treat like Cancelled rather than trusting
-                        // an answer that wasn't actually one of the options.
+                        // offered - this is exactly as unresolved as a
+                        // cancellation: an answer that wasn't actually one of
+                        // the options offered can't be trusted to be
+                        // sufficient, so it must not be silently used either.
                         Timber.w(
                             "RequestWscdChoice returned '${choice.pluginId}' which wasn't in the offered " +
                                 "eligible list $eligibleIds for issuer=$issuer credentialType=$credentialType; ignoring"
                         )
-                        null
-                    } else {
-                        choice.pluginId.also { tofuStore.put(issuer, credentialType, it) }
+                        throw AmbiguousWscdPluginException(issuer, credentialType, eligibleIds)
                     }
+                    when (choice.rememberScope) {
+                        RememberScope.ONCE -> { /* use for this call only, no persistence */ }
+                        RememberScope.THIS_ISSUER -> tofuStore.put(issuer, credentialType, choice.pluginId)
+                        RememberScope.ALL_ISSUERS -> userOverrideStore.setGlobal(choice.pluginId)
+                    }
+                    choice.pluginId
                 }
-                WscdChoiceResult.Cancelled -> null
+                WscdChoiceResult.Cancelled -> throw AmbiguousWscdPluginException(issuer, credentialType, eligibleIds)
             }
         }
     }

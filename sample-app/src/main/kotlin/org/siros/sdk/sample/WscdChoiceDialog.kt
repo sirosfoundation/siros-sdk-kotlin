@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import org.siros.sdk.wallet.RememberScope
 
 /**
  * Shown when [WalletViewModel]'s `requestWscdChoice` callback fires - the
@@ -35,15 +36,22 @@ import androidx.compose.ui.unit.dp
  * choice and the dev-supplied default mapping both came up empty. Mirrors
  * `ProximityConsentDialog`'s shape (see `ProximityEngagementScreen.kt`)
  * exactly: a plain-language explanation, a radio-button list of the
- * offered options, and Choose/Cancel actions - `onChoose(null)` on
+ * offered options, and Choose/Cancel actions - `onChoose(null, _)` on
  * dismiss/Cancel, matching [org.siros.sdk.wallet.WscdChoiceResult.Cancelled].
+ *
+ * Also lets the user pick how long to remember the choice ([RememberScope]):
+ * just this once, for this issuer only (the pre-existing TOFU behavior), or
+ * for every issuer from now on (the new global user override - see
+ * [org.siros.sdk.wallet.WscdSelectionPolicy.setGlobalUserOverride]'s doc
+ * comment).
  */
 @Composable
-fun WscdChoiceDialog(pending: PendingWscdChoice, onChoose: (String?) -> Unit) {
+fun WscdChoiceDialog(pending: PendingWscdChoice, onChoose: (String?, RememberScope) -> Unit) {
     var selected by remember(pending) { mutableStateOf(pending.eligiblePluginIds.first()) }
+    var scope by remember(pending) { mutableStateOf(RememberScope.THIS_ISSUER) }
 
     AlertDialog(
-        onDismissRequest = { onChoose(null) },
+        onDismissRequest = { onChoose(null, scope) },
         title = { Text("Choose a security key") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
@@ -72,13 +80,43 @@ fun WscdChoiceDialog(pending: PendingWscdChoice, onChoose: (String?) -> Unit) {
                         }
                     }
                 }
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    "Remember this choice:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Column(Modifier.selectableGroup()) {
+                    val scopeOptions = listOf(
+                        RememberScope.ONCE to "Just this once",
+                        RememberScope.THIS_ISSUER to "Remember for this issuer",
+                        RememberScope.ALL_ISSUERS to "Always use for every issuer",
+                    )
+                    for ((scopeOption, label) in scopeOptions) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .selectable(
+                                    selected = scopeOption == scope,
+                                    onClick = { scope = scopeOption },
+                                    role = Role.RadioButton,
+                                )
+                                .padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = scopeOption == scope, onClick = { scope = scopeOption })
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(label, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
-            TextButton(onClick = { onChoose(selected) }) { Text("Use this key") }
+            TextButton(onClick = { onChoose(selected, scope) }) { Text("Use this key") }
         },
         dismissButton = {
-            TextButton(onClick = { onChoose(null) }) { Text("Cancel") }
+            TextButton(onClick = { onChoose(null, scope) }) { Text("Cancel") }
         },
     )
 }

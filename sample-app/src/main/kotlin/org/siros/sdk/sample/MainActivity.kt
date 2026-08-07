@@ -529,6 +529,12 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             wscdTofuMapping = viewModel.wscdTofuMapping.collectAsState().value,
                             onForgetWscdTofuMapping = viewModel::forgetWscdTofuMapping,
                             onForgetAllWscdTofuMappings = viewModel::forgetAllWscdTofuMappings,
+                            availableWscdPluginIds = viewModel.availableWscdPluginIds.collectAsState().value,
+                            wscdGlobalOverride = viewModel.wscdGlobalOverride.collectAsState().value,
+                            onSetWscdGlobalOverride = viewModel::setWscdGlobalOverride,
+                            wscdUserOverrides = viewModel.wscdUserOverrides.collectAsState().value,
+                            onSetWscdUserOverride = viewModel::setWscdUserOverride,
+                            onClearWscdUserOverride = viewModel::clearWscdUserOverride,
                         )
                         // selectedTab can transiently be 1 (the "Add" action, not a
                         // real persisted tab) right as a flow finishes and the state
@@ -1081,6 +1087,12 @@ fun SettingsTab(
     wscdTofuMapping: Map<String, String> = emptyMap(),
     onForgetWscdTofuMapping: ((issuer: String, credentialType: String) -> Unit)? = null,
     onForgetAllWscdTofuMappings: (() -> Unit)? = null,
+    availableWscdPluginIds: List<String> = emptyList(),
+    wscdGlobalOverride: String? = null,
+    onSetWscdGlobalOverride: ((String?) -> Unit)? = null,
+    wscdUserOverrides: Map<String, String> = emptyMap(),
+    onSetWscdUserOverride: ((issuer: String, credentialType: String, pluginId: String) -> Unit)? = null,
+    onClearWscdUserOverride: ((issuer: String, credentialType: String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -1287,6 +1299,207 @@ fun SettingsTab(
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Preferred security key (single global user override) section - see
+        // WscdSelectionPolicy.setGlobalUserOverride's doc comment. Distinct
+        // from "Security Key Choices" above: this is a deliberate, explicit
+        // "always use this plugin, no matter what any issuer/credential type
+        // actually requires" preference, not an auto-remembered outcome of an
+        // ambiguous resolution.
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+                Text(
+                    "Preferred Security Key",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Always use this security key, even for credentials that don't require it. " +
+                        "Applies to every issuer unless a per-issuer override below takes precedence.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                if (availableWscdPluginIds.isEmpty()) {
+                    Text(
+                        "No security keys registered yet",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Column(Modifier.selectableGroup()) {
+                        val options = listOf<String?>(null) + availableWscdPluginIds
+                        for (pluginId in options) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .selectable(
+                                        selected = pluginId == wscdGlobalOverride,
+                                        onClick = { onSetWscdGlobalOverride?.invoke(pluginId) },
+                                        role = Role.RadioButton,
+                                        enabled = onSetWscdGlobalOverride != null,
+                                    )
+                                    .padding(vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(
+                                    selected = pluginId == wscdGlobalOverride,
+                                    onClick = { onSetWscdGlobalOverride?.invoke(pluginId) },
+                                    enabled = onSetWscdGlobalOverride != null,
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(pluginId ?: "No preference", style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Per-issuer security key overrides section - kept separate from
+        // "Security Key Choices" (TOFU) above so the user can tell "what I
+        // was asked and picked" apart from "what I've explicitly locked in".
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+                Text(
+                    "Security Key Overrides",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Always use a specific security key for a specific issuer and credential type, " +
+                        "even if it doesn't require one.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                if (wscdUserOverrides.isEmpty()) {
+                    Text(
+                        "No security key overrides set",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    wscdUserOverrides.forEach { (key, pluginId) ->
+                        // key is "issuer|credentialType", same shape as the
+                        // TOFU mapping's keys above.
+                        val (issuer, credentialType) = key.split("|", limit = 2)
+                            .let { it.getOrElse(0) { "" } to it.getOrElse(1) { "" } }
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(credentialType, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "$issuer  →  $pluginId",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (onSetWscdUserOverride != null && availableWscdPluginIds.size > 1) {
+                                // "Change the plugin" - cycle to the next
+                                // available plugin ID, a minimal affordance
+                                // that avoids pulling in a dropdown-menu
+                                // dependency for a 2-3-option picker.
+                                IconButton(
+                                    onClick = {
+                                        val idx = availableWscdPluginIds.indexOf(pluginId)
+                                        val next = availableWscdPluginIds[(idx + 1).mod(availableWscdPluginIds.size)]
+                                        onSetWscdUserOverride(issuer, credentialType, next)
+                                    },
+                                    modifier = Modifier.size(32.dp),
+                                ) {
+                                    Icon(Icons.Default.Edit, contentDescription = "Change security key", modifier = Modifier.size(16.dp))
+                                }
+                            }
+                            if (onClearWscdUserOverride != null) {
+                                IconButton(
+                                    onClick = { onClearWscdUserOverride(issuer, credentialType) },
+                                    modifier = Modifier.size(32.dp),
+                                ) {
+                                    Icon(Icons.Default.Close, contentDescription = "Clear this override", modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+                if (onSetWscdUserOverride != null && availableWscdPluginIds.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    var newIssuer by remember { mutableStateOf("") }
+                    var newCredentialType by remember { mutableStateOf("") }
+                    var newPluginId by remember(availableWscdPluginIds) { mutableStateOf(availableWscdPluginIds.first()) }
+                    Text(
+                        "Add an override",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedTextField(
+                        value = newIssuer,
+                        onValueChange = { newIssuer = it },
+                        label = { Text("Issuer URL") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        shape = RoundedCornerShape(8.dp),
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    OutlinedTextField(
+                        value = newCredentialType,
+                        onValueChange = { newCredentialType = it },
+                        label = { Text("Credential type (vct/doctype)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        shape = RoundedCornerShape(8.dp),
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f).selectableGroup()) {
+                            for (pluginId in availableWscdPluginIds) {
+                                Row(
+                                    modifier = Modifier
+                                        .selectable(
+                                            selected = pluginId == newPluginId,
+                                            onClick = { newPluginId = pluginId },
+                                            role = Role.RadioButton,
+                                        ),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    RadioButton(selected = pluginId == newPluginId, onClick = { newPluginId = pluginId })
+                                    Text(pluginId, style = MaterialTheme.typography.bodySmall)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                            }
+                        }
+                        TextButton(
+                            onClick = {
+                                if (newIssuer.isNotBlank() && newCredentialType.isNotBlank()) {
+                                    onSetWscdUserOverride(newIssuer.trim(), newCredentialType.trim(), newPluginId)
+                                    newIssuer = ""
+                                    newCredentialType = ""
+                                }
+                            },
+                            enabled = newIssuer.isNotBlank() && newCredentialType.isNotBlank(),
+                        ) { Text("Add") }
                     }
                 }
             }
