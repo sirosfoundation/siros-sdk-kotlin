@@ -144,4 +144,101 @@ class VctmFetcherTest {
         val vctm = fetcher.fetch("https://issuer.example.com", "scope", vct = "not-a-url")
         assertNull(vctm)
     }
+
+    @Test
+    fun `fetch returns VCTM from registry service when registryUrl and vct are known`() = runTest {
+        var calledUrl: String? = null
+        val fetcher = VctmFetcher(httpGet = { url ->
+            calledUrl = url
+            if (url == "https://wallet.example.com/registry/type-metadata?vct=urn%3Aexample%3Adiploma") {
+                sampleVctmJson
+            } else {
+                null
+            }
+        })
+        val vctm = fetcher.fetch(
+            issuerUrl = "https://issuer.example.com",
+            scope = "diploma_scope",
+            vct = "urn:example:diploma",
+            registryUrl = "https://wallet.example.com/registry",
+        )
+        assertNotNull(vctm)
+        assertEquals("urn:example:diploma", vctm!!.vct)
+        assertEquals(
+            "https://wallet.example.com/registry/type-metadata?vct=urn%3Aexample%3Adiploma",
+            calledUrl,
+        )
+    }
+
+    @Test
+    fun `fetch trims trailing slash from registryUrl`() = runTest {
+        val calledUrls = mutableListOf<String>()
+        val fetcher = VctmFetcher(httpGet = { url ->
+            calledUrls.add(url)
+            null
+        })
+        fetcher.fetch(
+            issuerUrl = "https://issuer.example.com",
+            scope = "scope",
+            vct = "urn:example:diploma",
+            registryUrl = "https://wallet.example.com/registry/",
+        )
+        assertEquals(
+            "https://wallet.example.com/registry/type-metadata?vct=urn%3Aexample%3Adiploma",
+            calledUrls.first(),
+        )
+    }
+
+    @Test
+    fun `fetch falls through to issuer-direct strategies when registry has no entry`() = runTest {
+        val fetcher = VctmFetcher(httpGet = { url ->
+            when {
+                url.contains("/registry/") -> null // registry 404 / miss
+                url == "https://issuer.example.com/type-metadata/diploma_scope" -> sampleVctmJson
+                else -> null
+            }
+        })
+        val vctm = fetcher.fetch(
+            issuerUrl = "https://issuer.example.com",
+            scope = "diploma_scope",
+            vct = "urn:example:diploma",
+            registryUrl = "https://wallet.example.com/registry",
+        )
+        assertNotNull(vctm)
+        assertEquals("urn:example:diploma", vctm!!.vct)
+    }
+
+    @Test
+    fun `fetch skips registry strategy when registryUrl is null`() = runTest {
+        var registryQueried = false
+        val fetcher = VctmFetcher(httpGet = { url ->
+            if (url.contains("/registry/")) registryQueried = true
+            if (url == "https://issuer.example.com/type-metadata/diploma_scope") sampleVctmJson else null
+        })
+        val vctm = fetcher.fetch(
+            issuerUrl = "https://issuer.example.com",
+            scope = "diploma_scope",
+            vct = "urn:example:diploma",
+            registryUrl = null,
+        )
+        assertNotNull(vctm)
+        assertEquals(false, registryQueried)
+    }
+
+    @Test
+    fun `fetch skips registry strategy when vct is not yet known`() = runTest {
+        var registryQueried = false
+        val fetcher = VctmFetcher(httpGet = { url ->
+            if (url.contains("/registry/")) registryQueried = true
+            if (url == "https://issuer.example.com/type-metadata/diploma_scope") sampleVctmJson else null
+        })
+        val vctm = fetcher.fetch(
+            issuerUrl = "https://issuer.example.com",
+            scope = "diploma_scope",
+            vct = null,
+            registryUrl = "https://wallet.example.com/registry",
+        )
+        assertNotNull(vctm)
+        assertEquals(false, registryQueried)
+    }
 }

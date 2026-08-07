@@ -10,9 +10,14 @@ import java.net.URI
 /**
  * Fetches VCTM (Verifiable Credential Type Metadata) from credential issuers.
  *
- * Supports two resolution strategies:
- * 1. Well-known path: `<issuer>/.well-known/vct/<vct-id>`
- * 2. Type metadata endpoint: `<issuer>/type-metadata/<scope>`
+ * Supports three resolution strategies, tried in order:
+ * 1. go-wallet-backend's credential-type registry service: `<registryUrl>/type-metadata?vct=<vct>`
+ *    (TS11-backed, cached - the authoritative source, and the same service
+ *    the reference wallet-frontend implementation always queries via its
+ *    `VCT_REGISTRY_URL` config value; only usable when both [WalletConfig]'s
+ *    `registryUrl` and the `vct` identifier are already known at call time)
+ * 2. Type metadata endpoint: `<issuer>/type-metadata/<scope>` (issuer-hosted, e.g. the SIROS apigw)
+ * 3. Well-known path: `<issuer>/.well-known/vct/<vct-id>`
  *
  * SDK consumers can also parse VCTM from raw JSON using [parseVctm].
  *
@@ -28,25 +33,45 @@ class VctmFetcher(
     /**
      * Fetch VCTM for a credential configuration.
      *
-     * Tries the type-metadata endpoint first (used by the SIROS apigw),
-     * then falls back to the well-known VCT resolution path.
+     * Tries go-wallet-backend's registry service first (authoritative,
+     * TS11-backed, cached - see [registryUrl]), then the issuer's own
+     * type-metadata endpoint (used by the SIROS apigw), then falls back to
+     * the well-known VCT resolution path.
      *
      * @param issuerUrl the credential issuer URL (e.g. "https://issuer.example.com")
      * @param scope the credential configuration ID / scope
-     * @param vct optional VCT identifier for well-known resolution
+     * @param vct optional VCT identifier for well-known resolution and registry lookup
+     * @param registryUrl optional base URL for go-wallet-backend's credential-type
+     *        registry service (e.g. `"https://wallet.example.com/registry"`). When
+     *        non-null and [vct] is also known, queried as
+     *        `<registryUrl>/type-metadata?vct=<vct>` before the other strategies.
+     *        When null, or when [vct] isn't known yet at this call site, this
+     *        strategy is skipped and resolution falls through to the existing
+     *        issuer-direct strategies (same behavior as the well-known strategy
+     *        when [vct] is null).
      * @return the parsed [Vctm], or null if not available
      */
     suspend fun fetch(
         issuerUrl: String,
         scope: String,
         vct: String? = null,
+        registryUrl: String? = null,
     ): Vctm? = withContext(Dispatchers.IO) {
-        // Strategy 1: type-metadata endpoint
+        // Strategy 1: go-wallet-backend's credential-type registry service
+        // (authoritative, TS11-backed, cached - matches wallet-frontend's
+        // reference behavior of always querying VCT_REGISTRY_URL first).
+        if (registryUrl != null && vct != null) {
+            val encodedVct = java.net.URLEncoder.encode(vct, "UTF-8")
+            val registryLookupUrl = "${registryUrl.trimEnd('/')}/type-metadata?vct=$encodedVct"
+            fetchFromUrl(registryLookupUrl)?.let { return@withContext it }
+        }
+
+        // Strategy 2: issuer-hosted type-metadata endpoint
         val baseUrl = issuerUrl.trimEnd('/')
         val typeMetadataUrl = "$baseUrl/type-metadata/$scope"
         fetchFromUrl(typeMetadataUrl)?.let { return@withContext it }
 
-        // Strategy 2: well-known VCT resolution
+        // Strategy 3: well-known VCT resolution
         if (vct != null) {
             val wellKnownUrl = resolveWellKnownUrl(vct)
             if (wellKnownUrl != null) {
