@@ -164,12 +164,25 @@ fun CredentialCard(
         svgState = SvgLoadState.Loading
         val preferredScheme = if (isDarkTheme) "dark" else "light"
         val template = templates.find { it.colorScheme == preferredScheme } ?: templates.first()
+        // A data: URI template can be hundreds of KB - logging it verbatim
+        // both floods logcat and gets silently truncated mid-base64 by its
+        // per-entry size limit, useless either way. Log its scheme/length
+        // instead; an http(s) URI is short and safe to log in full.
+        val uriDescription = if (template.uri.startsWith("data:")) {
+            "data: URI (${template.uri.length} chars)"
+        } else {
+            template.uri
+        }
         Timber.i(
             "CredentialCard ${credential.id} (${meta.vct ?: meta.doctype}): using SVG template " +
-                "${template.uri} (colorScheme=${template.colorScheme})",
+                "$uriDescription (colorScheme=${template.colorScheme})",
         )
-        val bytes = fetchAndSubstituteSvg(credential, template.uri, bgColor)
-        svgState = if (bytes != null) SvgLoadState.Loaded(bytes) else SvgLoadState.Failed
+        val payload = fetchAndSubstituteSvg(credential, template.uri, bgColor)
+        svgState = if (payload != null) {
+            SvgLoadState.Loaded(payload.svgBytes, payload.backgroundImageBytes)
+        } else {
+            SvgLoadState.Failed
+        }
     }
     val svgImageLoader = remember(context) {
         ImageLoader.Builder(context).components { add(SvgDecoder.Factory()) }.build()
@@ -187,8 +200,22 @@ fun CredentialCard(
         Box {
             when (val state = svgState) {
                 is SvgLoadState.Loaded -> {
+                    // The full-bleed background (if any) is decoded through Coil's
+                    // normal bitmap path, not svgImageLoader/AndroidSVG - see
+                    // extractFullBleedBackgroundImage's doc comment for why.
+                    if (state.backgroundImageBytes != null) {
+                        coil.compose.AsyncImage(
+                            model = state.backgroundImageBytes,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.FillBounds,
+                        )
+                    }
                     coil.compose.AsyncImage(
-                        model = ImageRequest.Builder(context).data(state.bytes).build(),
+                        model = ImageRequest.Builder(context)
+                            .data(state.svgBytes)
+                            .size(829, 504)
+                            .build(),
                         imageLoader = svgImageLoader,
                         contentDescription = meta?.name ?: credential.format,
                         modifier = Modifier.fillMaxSize(),
@@ -376,7 +403,19 @@ private sealed class SvgLoadState {
     data object NotApplicable : SvgLoadState()
     /** Fetch/substitute in progress - show a spinner, not the flat card. */
     data object Loading : SvgLoadState()
-    data class Loaded(val bytes: ByteArray) : SvgLoadState()
+    /**
+     * [svgBytes] is the (possibly image-stripped, see [extractFullBleedBackgroundImage])
+     * SVG markup; [backgroundImageBytes] is a full-bleed raster `<image>` pulled
+     * out of it to be decoded and drawn separately - confirmed via live
+     * hardware testing that coil-svg/AndroidSVG mis-renders a full-card
+     * embedded base64 `<image>` (a stable ~30%-down dark band that isn't
+     * present in the image's own pixel data, doesn't reproduce with inkscape
+     * on the exact same bytes, and doesn't reproduce at all on a
+     * template with no embedded `<image>`), so the raster background is
+     * decoded through Coil's normal (non-SVG) bitmap path instead and
+     * layered underneath the (now `<image>`-free) SVG's vector/text content.
+     */
+    data class Loaded(val svgBytes: ByteArray, val backgroundImageBytes: ByteArray?) : SvgLoadState()
     /** Fetch or render failed - fall back to the flat card. */
     data object Failed : SvgLoadState()
 }
@@ -397,7 +436,9 @@ private val svgHttpClient = OkHttpClient()
  * [SvgTemplateRenderer.substitute] only replaces claim-value text tokens, it
  * never touches the SVG's own styling).
  */
-private suspend fun fetchAndSubstituteSvg(credential: StoredCredential, templateUri: String, cardBackground: Color): ByteArray? {
+private data class SvgRenderPayload(val svgBytes: ByteArray, val backgroundImageBytes: ByteArray?)
+
+private suspend fun fetchAndSubstituteSvg(credential: StoredCredential, templateUri: String, cardBackground: Color): SvgRenderPayload? {
     return try {
         withContext(Dispatchers.IO) {
             val svgText = if (templateUri.startsWith("data:")) {
@@ -410,15 +451,14 @@ private suspend fun fetchAndSubstituteSvg(credential: StoredCredential, template
             }
             val claims = CredentialUtils.extractClaims(credential)
             val substituted = SvgTemplateRenderer.substitute(svgText, claims)
-            val sized = ensureSvgImageHeight(substituted)
-            if (sized != substituted) {
-                Timber.i("CredentialCard ${credential.id}: injected missing height on a percentage-width <image> in SVG template")
-            }
+            val viewBoxed = ensureSvgViewBox(substituted)
+            val sized = ensureSvgImageHeight(viewBoxed)
             val corrected = correctSvgTextContrast(sized, cardBackground)
-            if (corrected != sized) {
-                Timber.i("CredentialCard ${credential.id}: corrected low-contrast text fill(s) in SVG template")
+            val (stripped, backgroundBytes) = extractFullBleedBackgroundImage(corrected)
+            if (backgroundBytes != null) {
+                Timber.i("CredentialCard ${credential.id}: extracted a full-bleed background <image> (${backgroundBytes.size} bytes) to render outside AndroidSVG")
             }
-            corrected.toByteArray(Charsets.UTF_8)
+            SvgRenderPayload(stripped.toByteArray(Charsets.UTF_8), backgroundBytes)
         }
     } catch (e: CancellationException) {
         // The composable left composition (e.g. user navigated away) - not a
@@ -558,6 +598,74 @@ internal fun correctSvgTextContrast(svg: String, background: Color): String =
         }
     }
 
+/** Matches the outer `<svg ...>` root tag's opening portion, up to (not including) its `>`. */
+private val SVG_ROOT_TAG_OPEN = Regex("""<svg\b[^>]*""")
+
+/** True if a tag string already declares a `viewBox` attribute. */
+private val SVG_HAS_VIEWBOX_ATTR = Regex("""\bviewBox=["']""")
+
+/** True if a tag string already declares a `preserveAspectRatio` attribute. */
+private val SVG_HAS_PRESERVE_ASPECT_RATIO_ATTR = Regex("""\bpreserveAspectRatio=["']""")
+
+/** Matches a plain-number `width="NNN"`/`height="NNN"` attribute (no unit, no `%`) within an isolated tag string. */
+private val SVG_DIMENSION_ATTR = Regex("""\b(width|height)=(["'])(\d+(?:\.\d+)?)\2""")
+
+/**
+ * Injects a `viewBox` on the SVG root when it's missing entirely, derived
+ * from the root's own plain-number `width`/`height` attributes.
+ *
+ * Confirmed necessary via live testing: a real issuer's SVG credential
+ * template (wwwallet.org's demo PID) declares `<svg width="829"
+ * height="504" version="1.1">` with NO `viewBox` at all. Without one,
+ * percentage dimensions on children (e.g. [ensureSvgImageHeight]'s
+ * `width="100%"` background image) are only unambiguous if every renderer
+ * resolves them against the SAME reference size - some resolve against the
+ * root's declared width/height, others against whatever pixel canvas they
+ * actually decide to rasterize into (which won't exactly match 829x504
+ * when the surrounding UI's own aspect ratio differs, however slightly).
+ * That mismatch showed up as the whole graphic rendering visibly shifted.
+ * An explicit `viewBox="0 0 829 504"` removes the ambiguity outright: every
+ * spec-compliant renderer resolves percentages against the viewBox, and
+ * fits that fixed coordinate space into whatever final size it's asked
+ * for via its own well-defined scaling transform, not per-element guesswork.
+ *
+ * That fitting transform is where a SECOND bug surfaced, confirmed by
+ * rendering the same template through both a browser `<img>` (CSS
+ * `object-fit` overrides SVG-internal fitting, so no gap) and an `<object>`
+ * embed at a deliberately mismatched aspect ratio (SVG-internal fitting
+ * applies, and a visible gap appeared): adding a `viewBox` with no
+ * `preserveAspectRatio` activates the SVG default, `xMidYMid meet` -
+ * uniform scale-to-fit, letterboxing whichever axis doesn't exactly match.
+ * On device, this API's Card composable already stretches non-uniformly to
+ * fill (`ContentScale.FillBounds`) - the on-device Android SVG decoder
+ * apparently rasterizes at a size whose aspect ratio doesn't match this
+ * template's, and `xMidYMid meet`'s letterbox gap baked directly into the
+ * decoded bitmap survives that later stretch untouched, showing as the
+ * Card's own flat background color visibly filling a fraction of the
+ * card. `preserveAspectRatio="none"` (added alongside the viewBox)
+ * disables that letterboxing, matching what `FillBounds` already wants.
+ *
+ * A no-op when a `viewBox` already exists, or when the root's `width`/
+ * `height` aren't both plain numbers (e.g. already percentages, or
+ * missing) - there's nothing safe to derive a viewBox from in that case.
+ */
+internal fun ensureSvgViewBox(svg: String): String {
+    val rootMatch = SVG_ROOT_TAG_OPEN.find(svg) ?: return svg
+    val rootTag = rootMatch.value
+    if (SVG_HAS_VIEWBOX_ATTR.containsMatchIn(rootTag)) return svg
+
+    val dimensions = SVG_DIMENSION_ATTR.findAll(rootTag).associate { it.groupValues[1] to it.groupValues[3] }
+    val width = dimensions["width"] ?: return svg
+    val height = dimensions["height"] ?: return svg
+
+    val preserveAspectRatio = if (SVG_HAS_PRESERVE_ASPECT_RATIO_ATTR.containsMatchIn(rootTag)) {
+        ""
+    } else {
+        " preserveAspectRatio=\"none\""
+    }
+    return svg.replaceRange(rootMatch.range, "$rootTag viewBox=\"0 0 $width $height\"$preserveAspectRatio")
+}
+
 /** Matches a `<image ...>` opening tag (self-closing or not), whose `width`/`height` [ensureSvgImageHeight] inspects. */
 private val SVG_IMAGE_TAG = Regex("""<image\b[^>]*>""")
 
@@ -607,6 +715,65 @@ internal fun ensureSvgImageHeight(svg: String): String =
             "$body height=\"$percentage\"$closer"
         }
     }
+
+/** Matches an `x="0"`/`y="0"` attribute (any whitespace-equivalent zero), within an already-isolated tag string. */
+private val SVG_IMAGE_ZERO_ATTR = mapOf(
+    "x" to Regex("""\bx=(["'])0(?:\.0+)?\1"""),
+    "y" to Regex("""\by=(["'])0(?:\.0+)?\1"""),
+)
+
+/** Matches a `height="NN%"`/`height='NN%'` attribute within an already-isolated tag string. */
+private val SVG_IMAGE_HEIGHT_PERCENT_ATTR = Regex("""height=(["'])(\d+%)\1""")
+
+/** Captures an embedded raster `xlink:href="data:image/<mime>;base64,<data>"` (or bare `href=`) value. */
+private val SVG_IMAGE_DATA_HREF = Regex("""(?:xlink:href|href)=(["'])data:image/(png|jpeg|jpg|webp);base64,([^"']*)\1""")
+
+/**
+ * Pulls a full-card raster `<image>` (x=0, y=0, width=100%, height=100%,
+ * embedded as a base64 data URI) out of [svg] entirely, returning the
+ * decoded image bytes alongside the SVG with that element removed.
+ *
+ * Confirmed via live hardware testing (real YubiKey-issued PID credential,
+ * 2026-08-10): the exact SVG bytes handed to Coil render perfectly via
+ * `inkscape` on a desktop, and the extracted PNG's own pixel data is a
+ * uniform light-blue field with no dark region anywhere in it - yet the
+ * on-device render (coil-svg / AndroidSVG) consistently shows a dark band
+ * roughly 30% down the card. A sibling template with no embedded `<image>`
+ * at all (a diploma credential, otherwise passing through the exact same
+ * [ensureSvgViewBox]/[ensureSvgImageHeight]/[correctSvgTextContrast]
+ * pipeline) renders correctly. That isolates the bug to AndroidSVG's
+ * handling of a large embedded base64 `<image>` specifically, not the SVG
+ * markup or this app's own substitution logic - so instead of asking
+ * AndroidSVG to composite the raster background, it's decoded and drawn as
+ * a plain bitmap layer underneath the (now image-free) SVG, which only has
+ * to render vector/text content - the same kind of content the working
+ * diploma template consists of.
+ *
+ * Deliberately narrow: only a `<image>` that is unambiguously "cover the
+ * whole card" (x=0, y=0, width=100%, height=100%) is extracted. A smaller,
+ * absolute-positioned `<image>` (e.g. this same template's placeholder
+ * photo) is left in place for AndroidSVG to render as before - there's no
+ * evidence that case is affected, and it isn't large enough to be a likely
+ * source of the same bug.
+ */
+internal fun extractFullBleedBackgroundImage(svg: String): Pair<String, ByteArray?> {
+    val match = SVG_IMAGE_TAG.findAll(svg).firstOrNull { tagMatch ->
+        val tag = tagMatch.value
+        SVG_IMAGE_ZERO_ATTR.getValue("x").containsMatchIn(tag) &&
+            SVG_IMAGE_ZERO_ATTR.getValue("y").containsMatchIn(tag) &&
+            SVG_IMAGE_WIDTH_PERCENT_ATTR.find(tag)?.groupValues?.get(2) == "100%" &&
+            SVG_IMAGE_HEIGHT_PERCENT_ATTR.find(tag)?.groupValues?.get(2) == "100%"
+    } ?: return svg to null
+
+    val hrefMatch = SVG_IMAGE_DATA_HREF.find(match.value) ?: return svg to null
+    val bytes = try {
+        java.util.Base64.getDecoder().decode(hrefMatch.groupValues[3])
+    } catch (e: IllegalArgumentException) {
+        Timber.w(e, "Failed to decode embedded background <image> data URI")
+        return svg to null
+    }
+    return svg.replaceRange(match.range, "") to bytes
+}
 
 /**
  * Coil's default components handle raw byte arrays (via `ByteArrayMapper` ->

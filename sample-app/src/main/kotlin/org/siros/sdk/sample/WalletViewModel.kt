@@ -1856,25 +1856,22 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             val signer = UniFFISigner(
                 wscdConfig,
                 authProvider = object : AuthProvider {
-                    override fun requestPin(): ByteArray {
-                        // Deliberately reads the LIVE activePluginId, not the
-                        // `pluginId` this signer was constructed with: this
-                        // same AuthProvider/manager instance goes on to have
-                        // OTHER plugins (fido2, r2ps) registered onto it later
-                        // (see registerFido2OnSigner/registerR2psOnSigner,
-                        // called from enrollWscd against `wallet.wscdManager`
-                        // - the same long-lived manager regardless of which
-                        // dev-screen plugin chip is selected) - using the
-                        // captured construction-time `pluginId` here meant
-                        // every FIDO2 PIN request silently used the wrong
-                        // (R2PS test) branch for an entire session, a real
-                        // bug found via live hardware testing.
-                        //
-                        // FIDO2 CTAP2 ClientPin prompts the user for the authenticator's
-                        // real PIN via a dialog (see requestFido2Pin). R2PS OPAQUE
-                        // registration still uses a fixed debug-only test PIN - not a
-                        // hardware secret, so there's nothing for the user to enter.
-                        return when (activePluginId) {
+                    override fun requestPin(pluginId: String): ByteArray {
+                        // Dispatches on the FFI-supplied `pluginId` - the
+                        // authoritative signal for which plugin this
+                        // particular call is actually for. Previously this
+                        // guessed from `activePluginId` (the dev-screen's
+                        // currently-selected tab), which has nothing to do
+                        // with which plugin a real credential-issuance
+                        // operation is using: confirmed via live hardware
+                        // testing, real FIDO2 issuance silently sent the
+                        // fixed R2PS test PIN ("test-pin-1234", 13 bytes) to
+                        // the authenticator because the dev-screen tab
+                        // happened to be on something else - the
+                        // authenticator correctly rejected it as
+                        // PIN_INVALID every time, with nothing indicating
+                        // why the wrong PIN kept getting sent.
+                        return when (pluginId) {
                             "fido2" -> requestFido2Pin()
                             else -> "test-pin-1234".toByteArray()
                         }

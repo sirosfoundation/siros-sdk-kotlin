@@ -13,12 +13,22 @@ package org.siros.sdk.keystore
  */
 interface AuthProvider {
     /**
-     * Request the user's PIN (e.g. for OPAQUE authentication).
+     * Request the user's PIN (e.g. for OPAQUE authentication, or a CTAP2
+     * authenticator's ClientPin).
      *
+     * @param pluginId Which registered WSCD plugin (e.g. "fido2", "r2ps")
+     *   is asking - a single [AuthProvider] can back multiple plugins with
+     *   very different PIN semantics (a real hardware secret vs. a fixed
+     *   debug-only test value), so implementations MUST dispatch on this
+     *   rather than guessing from ambient UI/app state. Confirmed via live
+     *   hardware testing: guessing from a "currently selected dev-screen
+     *   tab" signal silently sent the wrong plugin's PIN to a real YubiKey
+     *   for an entire session, which the authenticator correctly rejected
+     *   every time with no indication of the real cause.
      * @return The PIN as raw bytes (UTF-8 encoded).
      * @throws Exception if the user cancels.
      */
-    fun requestPin(): ByteArray
+    fun requestPin(pluginId: String): ByteArray
 
     /**
      * Request a WebAuthn assertion for the given parameters.

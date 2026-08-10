@@ -2078,6 +2078,35 @@ class SirosWallet private constructor(
      * without depending on specific step names.
      */
     private val terminatedFlowIds = mutableSetOf<String>()
+
+    /**
+     * Report a flow-terminating failure immediately (e.g. a keystore/WSCD
+     * exception raised while handling a sign request) instead of leaving
+     * the flow to die silently until the engine's own reply timeout fires.
+     *
+     * Confirmed necessary via live hardware testing: a real FIDO2
+     * `CTAP2_ERR_PIN_INVALID` thrown from [generateProofsForRequest] was
+     * only ever logged (`Timber.e`) by the sign-request collector's catch
+     * block - nothing told the engine or [eventListener] the operation had
+     * failed, so the UI stayed on "Access token received" for the ~20
+     * seconds it took the engine's own timeout to notice no response ever
+     * arrived and report a generic "Signing failed" itself. This reports
+     * the real error the moment it's caught instead.
+     */
+    private suspend fun reportSignFailure(flowId: String, message: String) {
+        terminatedFlowIds.add(flowId)
+        eventListener?.onFlowError(flowId, message)
+        val current = _state.value
+        val userId = (current as? WalletState.FlowActive)?.userId
+            ?: (current as? WalletState.Ready)?.userId ?: ""
+        val displayName = (current as? WalletState.FlowActive)?.displayName
+            ?: (current as? WalletState.Ready)?.displayName
+        _state.value = WalletState.Ready(
+            userId = userId,
+            displayName = displayName,
+            credentials = credentialStore.getAll(),
+        )
+    }
     private val vctmFetcher = VctmFetcher(httpGet = ::fetchTypeMetadataUrl)
     private val mddlSchemaFetcher = MddlSchemaFetcher(httpGet = ::fetchTypeMetadataUrl)
 
@@ -3105,8 +3134,10 @@ class SirosWallet private constructor(
                     }
                 } catch (e: KeystoreException) {
                     Timber.e(e, "Error handling sign request: keystore error")
+                    reportSignFailure(msg.flowId, e.message ?: "Signing failed")
                 } catch (e: Exception) {
                     Timber.e(e, "Error handling sign request")
+                    reportSignFailure(msg.flowId, e.message ?: "Signing failed")
                 }
             }
         }

@@ -2,8 +2,13 @@
 package org.siros.sdk.sample
 
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -17,6 +22,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 
 /**
  * Shown when [WalletViewModel]'s `requestFido2Pin` bridge fires - the
@@ -33,6 +39,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 @Composable
 fun PinEntryDialog(pending: PendingPinEntry, onSubmit: (String?) -> Unit) {
     var pin by remember(pending) { mutableStateOf("") }
+    var pinVisible by remember(pending) { mutableStateOf(false) }
     val focusRequester = remember(pending) { FocusRequester() }
 
     LaunchedEffect(pending) { focusRequester.requestFocus() }
@@ -46,8 +53,16 @@ fun PinEntryDialog(pending: PendingPinEntry, onSubmit: (String?) -> Unit) {
                 onValueChange = { pin = it },
                 label = { Text("PIN") },
                 singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
+                visualTransformation = if (pinVisible) VisualTransformation.None else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    IconButton(onClick = { pinVisible = !pinVisible }) {
+                        Icon(
+                            imageVector = if (pinVisible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                            contentDescription = if (pinVisible) "Hide PIN" else "Show PIN",
+                        )
+                    }
+                },
                 modifier = androidx.compose.ui.Modifier.focusRequester(focusRequester),
             )
         },

@@ -349,10 +349,10 @@ class UniFFISigner(
     // ─── Auth callback bridge ────────────────────────────────────────────────
 
     private fun authCallbackBridge(): FfiAuthCallback = object : FfiAuthCallback {
-        override fun requestPin(): ByteArray {
+        override fun requestPin(pluginId: String): ByteArray {
             val provider = authProvider
                 ?: throw FfiWscdException.AuthCancelled("No AuthProvider configured")
-            return provider.requestPin()
+            return provider.requestPin(pluginId)
         }
 
         override fun requestWebauthnAssertion(

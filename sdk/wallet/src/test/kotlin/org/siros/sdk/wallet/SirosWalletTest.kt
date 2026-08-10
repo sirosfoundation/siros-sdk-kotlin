@@ -1612,6 +1612,7 @@ class SirosWalletTest {
             "config" to config,
             "keystore" to defaultKeystore,
             "wscdSelectionPolicy" to WscdSelectionPolicy(tofuStore = InMemoryWscdTofuStore()),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
         )
         setField(
             wallet,

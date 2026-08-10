@@ -156,6 +156,67 @@ class CredentialCardTest {
         assertTrue("fill=\"#3D66A7\"" in correctSvgTextContrast(svg, background))
     }
 
+    // ── ensureSvgViewBox ─────────────────────────────────────────────────
+    //
+    // Confirmed necessary via live testing: a real issuer's SVG credential
+    // template (wwwallet.org's demo PID) has its root <svg width="829"
+    // height="504" version="1.1"> declare NO viewBox at all - without one,
+    // percentage dimensions on children only resolve consistently if every
+    // renderer picks the same reference size, which isn't guaranteed. The
+    // symptom was the whole graphic rendering visibly shifted/distorted.
+
+    @Test
+    fun `injects a viewBox and preserveAspectRatio=none derived from width and height when both are plain numbers`() {
+        val svg = """<svg xmlns="http://www.w3.org/2000/svg" width="829"
+	height="504" version="1.1">
+	<image width="100%" xlink:href="data:image/png;base64,AAA=" />
+</svg>"""
+
+        val result = ensureSvgViewBox(svg)
+
+        assertTrue("viewBox=\"0 0 829 504\"" in result)
+        // Confirmed necessary via rendering the same template through a
+        // browser <object> embed at a deliberately mismatched aspect ratio:
+        // a viewBox with no preserveAspectRatio activates the SVG default
+        // (xMidYMid meet), which letterboxes - the gap is baked into the
+        // decoded bitmap and survives Compose's own FillBounds stretch
+        // untouched, showing as the Card's flat background color filling
+        // part of the card.
+        assertTrue("preserveAspectRatio=\"none\"" in result)
+    }
+
+    @Test
+    fun `leaves an svg that already has a viewBox unchanged`() {
+        val svg = """<svg width="829" height="504" viewBox="0 0 829 504"><image width="100%" /></svg>"""
+
+        assertEquals(svg, ensureSvgViewBox(svg))
+    }
+
+    @Test
+    fun `does not override an already-declared preserveAspectRatio`() {
+        val svg = """<svg width="829" height="504" preserveAspectRatio="xMidYMid slice"><image width="100%" /></svg>"""
+
+        val result = ensureSvgViewBox(svg)
+
+        assertTrue("viewBox=\"0 0 829 504\"" in result)
+        assertTrue("preserveAspectRatio=\"xMidYMid slice\"" in result)
+        assertTrue("preserveAspectRatio=\"none\"" !in result)
+    }
+
+    @Test
+    fun `leaves an svg with a percentage width or height unchanged`() {
+        val svg = """<svg width="100%" height="504"><image width="100%" /></svg>"""
+
+        assertEquals(svg, ensureSvgViewBox(svg))
+    }
+
+    @Test
+    fun `leaves an svg missing width or height unchanged`() {
+        val svg = """<svg height="504"><image width="100%" /></svg>"""
+
+        assertEquals(svg, ensureSvgViewBox(svg))
+    }
+
     // ── ensureSvgImageHeight ────────────────────────────────────────────
     //
     // Confirmed necessary via live testing: a real issuer's SVG credential
@@ -233,6 +294,55 @@ class CredentialCardTest {
         assertTrue("""width="100%" xlink:href="data:image/png;base64,AAA=" height="100%" />""" in result)
         assertTrue("""width="220" href="{{picture}}"""" in result)
         assertEquals("only the background image's tag should have gained a height", 1, Regex("""height="100%"""").findAll(result).count())
+    }
+
+    // ── extractFullBleedBackgroundImage ────────────────────────────────
+    //
+    // Confirmed necessary via live testing: a real PID credential's SVG
+    // template's exact final bytes render perfectly outside the app
+    // (inkscape) and its embedded PNG is pixel-uniform with no dark region,
+    // yet coil-svg/AndroidSVG still rendered a ~30%-down dark band on
+    // device - while a sibling template with no embedded <image> at all
+    // (a diploma credential, same pipeline otherwise) rendered correctly.
+    // That isolates AndroidSVG's handling of a large embedded base64
+    // <image> as the bug, so it's pulled out and decoded via Coil's normal
+    // bitmap path instead.
+
+    private val TINY_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+
+    @Test
+    fun `extracts a full-bleed background image and strips it from the svg`() {
+        val svg = """<svg viewBox="0 0 829 504">
+            |<image x="0" y="0" width="100%" height="100%" xlink:href="data:image/png;base64,$TINY_PNG_BASE64" />
+            |<text fill="#000000">Hello</text>
+            |</svg>
+        """.trimMargin()
+
+        val (stripped, bytes) = extractFullBleedBackgroundImage(svg)
+
+        assertTrue("background bytes should be decoded", bytes != null && bytes.isNotEmpty())
+        assertTrue("stripped svg must not contain the extracted <image>", "<image" !in stripped)
+        assertTrue("stripped svg must keep unrelated content", "<text" in stripped)
+    }
+
+    @Test
+    fun `leaves a smaller absolute-positioned placeholder image in place`() {
+        val svg = """<svg><image x="45" y="100" width="220" height="150" href="{{picture}}" /></svg>"""
+
+        val (stripped, bytes) = extractFullBleedBackgroundImage(svg)
+
+        assertEquals(svg, stripped)
+        assertEquals(null, bytes)
+    }
+
+    @Test
+    fun `leaves an svg with no image element unchanged`() {
+        val svg = """<svg><rect width="100%" height="100%" fill="#fff" /></svg>"""
+
+        val (stripped, bytes) = extractFullBleedBackgroundImage(svg)
+
+        assertEquals(svg, stripped)
+        assertEquals(null, bytes)
     }
 
     // ── decodeSvgDataUri ──────────────────────────────────────────────
