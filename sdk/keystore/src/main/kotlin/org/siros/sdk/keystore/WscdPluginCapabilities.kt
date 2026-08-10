@@ -54,6 +54,20 @@ object WscdPluginCapabilities {
     fun tierOf(pluginId: String): String? = NOMINAL_TIER[pluginId]
 
     /**
+     * [tier]'s position in [TIER_ORDER] (higher = stronger assurance), or -1
+     * for an unrecognized tier string. Lets a caller rank multiple plugins
+     * by assurance - e.g. to pick the cheapest plugin that still satisfies a
+     * credential's required tier, rather than defaulting to whichever
+     * plugin happens to be otherwise selected (a real bug found in the
+     * sample app's TS11 discovery flow: filtering by "does the currently
+     * open tab's plugin meet this tier" trivially matched every credential
+     * whenever that tab's own nominal tier was already the highest one,
+     * silently routing everything - including basic-tier credentials that
+     * softkey would satisfy just fine - to that one plugin).
+     */
+    fun rankOf(tier: String): Int = TIER_ORDER.indexOf(tier)
+
+    /**
      * True if [actual] is at least as strong an assurance tier as
      * [required] (per [TIER_ORDER]). Unknown tier strings (typos, a future
      * tier this table hasn't been updated for) never satisfy anything -

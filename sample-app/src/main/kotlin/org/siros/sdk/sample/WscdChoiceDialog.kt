@@ -52,11 +52,11 @@ fun WscdChoiceDialog(pending: PendingWscdChoice, onChoose: (String?, RememberSco
 
     AlertDialog(
         onDismissRequest = { onChoose(null, scope) },
-        title = { Text("Choose a security key") },
+        title = { Text("Choose a WSCD") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(
-                    "This credential requires a hardware-backed key. Choose which security key " +
+                    "This credential requires a hardware-backed key. Choose which WSCD " +
                         "to use for \"${pending.credentialType}\" from ${pending.issuer}:",
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -113,7 +113,7 @@ fun WscdChoiceDialog(pending: PendingWscdChoice, onChoose: (String?, RememberSco
             }
         },
         confirmButton = {
-            TextButton(onClick = { onChoose(selected, scope) }) { Text("Use this key") }
+            TextButton(onClick = { onChoose(selected, scope) }) { Text("Use this WSCD") }
         },
         dismissButton = {
             TextButton(onClick = { onChoose(null, scope) }) { Text("Cancel") }

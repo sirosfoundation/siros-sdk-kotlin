@@ -2,13 +2,17 @@
 package org.siros.sdk.credentials
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.siros.sdk.credentials.mdoc.DocumentMdoc
 import org.siros.sdk.credentials.mdoc.MdocCbor
 import timber.log.Timber
+import java.security.MessageDigest
 import java.util.Base64
 
 /**
@@ -85,7 +89,18 @@ object CredentialUtils {
      */
     fun extractClaims(credential: StoredCredential): List<DisplayClaim> {
         if (credential.format == "mso_mdoc") return extractMdocClaims(credential)
-        val payload = parseJwtPayload(credential.raw) ?: return emptyList()
+        val rawPayload = parseJwtPayload(credential.raw) ?: return emptyList()
+        // The JWT payload alone only ever carries whatever the issuer chose
+        // NOT to selectively disclose (typically just iss/vct/exp/_sd/cnf) -
+        // every real user-facing claim in a properly-issued SD-JWT VC (the
+        // entire point of "selective disclosure") lives in the `~`-separated
+        // disclosure segments instead, keyed into the payload only by SHA-256
+        // digest under `_sd`. Without merging those back in, VCTM path
+        // resolution below silently finds nothing for any disclosed claim -
+        // confirmed via live testing: an mdoc (whose claims live directly in
+        // CBOR namespaces, no disclosure indirection) rendered fine while an
+        // SD-JWT PID showed claim labels with no values at all.
+        val payload = mergeSdJwtDisclosures(credential.raw, rawPayload)
         val vctmClaims = credential.metadata?.claims.orEmpty()
 
         // VCTM claim paths can be arbitrarily nested (e.g. diploma's ELM schema
@@ -237,6 +252,69 @@ object CredentialUtils {
             current = (current as? JsonObject)?.get(segment) ?: return null
         }
         return current
+    }
+
+    /**
+     * Splices an SD-JWT VC's `~`-separated disclosures back into its JWT
+     * [payload], so [resolveClaimPath]/the top-level "uncovered claims" dump
+     * in [extractClaims] can actually find them - per the SD-JWT spec, a
+     * disclosed claim is NOT present in the payload directly; only a
+     * SHA-256 digest of its disclosure is, listed under an `_sd` array
+     * (which can appear at any nesting level, not just the top). Returns
+     * [payload] unchanged if there are no disclosures, none decode, or
+     * `_sd_alg` declares an algorithm other than the default `sha-256`
+     * (not attempted - logged and left as-is rather than guessing).
+     *
+     * Deliberately does NOT re-verify each disclosure's digest against the
+     * issuer's signature the way a verifier would - this credential was
+     * already accepted and stored, so for display purposes matching digests
+     * to disclosures is just reassembling the claim tree, not re-trusting
+     * it. Array-element disclosures (`[salt, value]`, no claim name) are
+     * skipped - there's no key to splice them in under for a flat claims
+     * list; only object-property disclosures (`[salt, claimName, value]`)
+     * are useful here.
+     */
+    private fun mergeSdJwtDisclosures(raw: String, payload: JsonObject): JsonObject {
+        val disclosureSegments = raw.split("~").drop(1).filter { it.isNotBlank() }
+        if (disclosureSegments.isEmpty()) return payload
+
+        val sdAlg = (payload["_sd_alg"] as? JsonPrimitive)?.contentOrNull ?: "sha-256"
+        if (sdAlg != "sha-256") {
+            Timber.w("Unsupported _sd_alg '$sdAlg' - selectively disclosed claims will not be shown")
+            return payload
+        }
+
+        val sha256 = MessageDigest.getInstance("SHA-256")
+        val byDigest = mutableMapOf<String, Pair<String, JsonElement>>()
+        for (segment in disclosureSegments) {
+            val array = decodeJsonSegment(segment) as? JsonArray ?: continue
+            if (array.size != 3) continue // not an object-property disclosure
+            val claimName = (array[1] as? JsonPrimitive)?.contentOrNull ?: continue
+            // Digest is over the disclosure's own compact (base64url) string,
+            // exactly as it appears in `raw` - never a re-serialization of
+            // the decoded JSON, which could byte-for-byte differ from what
+            // the issuer originally hashed.
+            val digest = Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(sha256.digest(segment.toByteArray(Charsets.UTF_8)))
+            byDigest[digest] = claimName to array[2]
+        }
+        if (byDigest.isEmpty()) return payload
+
+        fun mergeObject(obj: JsonObject): JsonObject {
+            val result = LinkedHashMap<String, JsonElement>()
+            for ((key, value) in obj) {
+                if (key == "_sd") continue // replaced by the spliced-in claims below
+                result[key] = if (value is JsonObject) mergeObject(value) else value
+            }
+            val digests = (obj["_sd"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+            for (digest in digests) {
+                val (claimName, claimValue) = byDigest[digest] ?: continue
+                result[claimName] = if (claimValue is JsonObject) mergeObject(claimValue) else claimValue
+            }
+            return JsonObject(result)
+        }
+
+        return mergeObject(payload)
     }
 
     /**

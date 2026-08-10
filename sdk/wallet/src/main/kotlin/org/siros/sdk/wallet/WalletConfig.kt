@@ -108,6 +108,32 @@ data class WalletConfig(
     val defaultWscdMapping: Map<String, String>? = null,
     val requestWscdChoice: RequestWscdChoice? = null,
     val registryUrl: String? = null,
+    /**
+     * Called right before [SirosWallet] is about to invoke a WSCD signing
+     * operation (`generateProof`/`generateKeyAttestation`/`generateKeypairs`)
+     * on [resolveEffectiveKeystoreForIssuance]'s resolved plugin, with that
+     * plugin's ID - lets a host app prefetch a PIN and/or show a "present
+     * your key" guide up front, mirroring the sample app's existing
+     * enroll/rotate dev-screen pattern (collect the PIN BEFORE any transport
+     * work starts, since a hardware-backed key's physical presentation and
+     * PIN entry both need the user's hands, and forcing a mid-ceremony PIN
+     * prompt can drop a live NFC session). Found necessary via live hardware
+     * testing: without this hook, real credential issuance's only PIN
+     * surface was a blocking dialog popped lazily mid-CTAP2-ceremony, with
+     * zero "you can present the key now" feedback for the transport-connect
+     * wait that happens first - the user had no way to know when to actually
+     * tap/plug in the authenticator. Always paired with [onWscdOperationEnd]
+     * (success or failure). `null` (default) preserves today's lazy-PIN
+     * behavior with no guide shown.
+     */
+    val onWscdOperationStart: (suspend (pluginId: String) -> Unit)? = null,
+    /**
+     * Called once the WSCD operation [onWscdOperationStart] announced has
+     * concluded (success or failure) - lets a host app dismiss any "present
+     * your key" guide and clear a prefetched PIN. Always called exactly
+     * once for every [onWscdOperationStart] call.
+     */
+    val onWscdOperationEnd: (suspend () -> Unit)? = null,
 ) {
     companion object {
         private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }

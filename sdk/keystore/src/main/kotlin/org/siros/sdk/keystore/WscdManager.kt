@@ -20,6 +20,25 @@ interface WscdManager : SignerLifecycleManager {
      */
     fun registerFido2Plugin(transport: Ctap2TransportProvider)
 
+    /**
+     * Register the FIDO2 plugin restored from a previously
+     * [exportFido2State]-exported blob (credential handles + public keys,
+     * no private material) - use instead of [registerFido2Plugin] when
+     * restoring a wallet whose keys were enrolled in an earlier process,
+     * so those keys stay addressable. Without this, an enrolled key's
+     * `kid` still exists in credential/session metadata after an app
+     * restart, but the plugin has no record of the credential handle
+     * needed to sign with it again.
+     */
+    fun registerFido2PluginWithState(transport: Ctap2TransportProvider, state: ByteArray)
+
+    /**
+     * Export the FIDO2 plugin's current key state, to persist and later
+     * restore via [registerFido2PluginWithState]. Throws if the fido2
+     * plugin isn't registered.
+     */
+    fun exportFido2State(): ByteArray
+
     /** Register the R2PS remote HSM plugin. */
     fun registerR2psPlugin(config: R2psConfig, transport: R2psTransportProvider)
 }

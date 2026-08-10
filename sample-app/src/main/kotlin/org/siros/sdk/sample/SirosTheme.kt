@@ -35,6 +35,20 @@ private val SirosLightColorScheme = lightColorScheme(
     onError = SirosOnPrimary,
     outline = Color(0xFFE5E7EB),
     outlineVariant = Color(0xFFD1D5DB),
+    // Left at lightColorScheme()'s baseline (unthemed purple) default until
+    // now, which several Material3 components quietly depend on -
+    // Switch's unchecked track is surfaceContainerHighest, so an unchecked
+    // Switch on this brand palette rendered as a barely-visible mismatched
+    // tint against our white/near-white surfaces (a real contrast bug found
+    // via live testing). Tuned to a visible ascending-elevation gray scale
+    // consistent with the outline colors above (surfaceContainerHighest
+    // reuses outlineVariant's gray, which is already proven legible against
+    // white/onSurfaceVariant text elsewhere on this screen).
+    surfaceContainerLowest = Color.White,
+    surfaceContainerLow = Color(0xFFF3F4F6),
+    surfaceContainer = Color(0xFFEEF0F3),
+    surfaceContainerHigh = Color(0xFFE5E7EB),
+    surfaceContainerHighest = Color(0xFFD1D5DB),
 )
 
 // Dark mode — navy-derived from SIROS brand palette
@@ -57,6 +71,13 @@ private val SirosDarkColorScheme = darkColorScheme(
     onError = Color.White,
     outline = Color(0xFF333A48),
     outlineVariant = Color(0xFF2A3244),
+    // See the light scheme's matching fields above for why these are
+    // explicitly tuned rather than left at the default baseline palette.
+    surfaceContainerLowest = Color(0xFF131B29),
+    surfaceContainerLow = Color(0xFF1C2433),
+    surfaceContainer = Color(0xFF222B3B),
+    surfaceContainerHigh = Color(0xFF2A3244),
+    surfaceContainerHighest = Color(0xFF333A48),
 )
 
 @Composable

@@ -57,6 +57,16 @@ class UniFFISigner(
 
     private val ffi: FfiWscdManager = FfiWscdManager(config)
 
+    /**
+     * Which plugin this instance was constructed to back by default (e.g.
+     * "softkey", "fido2", "r2ps"). Every instance also self-registers a
+     * softkey plugin in [init] regardless of this value (see there), but
+     * the softkey private-key export/import round-trip (below) must only
+     * ever run for the instance that IS actually the softkey plugin - see
+     * [exportPrivateKeypairs]'s doc comment for why.
+     */
+    private val defaultPluginId: String = config.defaultPlugin
+
     /** Map of key ID → JWK JSON bytes, populated during generateKey. */
     private val publicKeyCache = mutableMapOf<String, ByteArray>()
 
@@ -82,6 +92,12 @@ class UniFFISigner(
     override fun registerFido2Plugin(transport: Ctap2TransportProvider) {
         ffi.registerFido2Plugin(Ctap2TransportBridge(transport))
     }
+
+    override fun registerFido2PluginWithState(transport: Ctap2TransportProvider, state: ByteArray) {
+        ffi.registerFido2PluginWithState(Ctap2TransportBridge(transport), state)
+    }
+
+    override fun exportFido2State(): ByteArray = ffi.exportFido2State()
 
     override suspend fun generateKey(algorithm: String): String = withContext(Dispatchers.IO) {
         val ffiAlgorithm = algorithm.toFfiAlgorithm()
@@ -126,8 +142,17 @@ class UniFFISigner(
      * this signer knows about got there via [generateKey] or
      * [importPrivateKeypairs], both of which populate the cache) is skipped
      * rather than failing the whole export.
+     *
+     * No-op (matches [Signer.exportPrivateKeypairs]'s documented default)
+     * unless [defaultPluginId] is "softkey" - found via live hardware
+     * testing: every instance also registers its own internal softkey
+     * plugin regardless of [defaultPluginId] (see [init]), so without this
+     * guard a fido2- or r2ps-default instance would export/import THAT
+     * internal softkey copy too, even though it isn't the one actually
+     * meant to carry the wallet's persisted softkey material.
      */
     override suspend fun exportPrivateKeypairs(): List<ExportedPrivateKeypair> = withContext(Dispatchers.IO) {
+        if (defaultPluginId != "softkey") return@withContext emptyList()
         val rawKeys = Json.parseToJsonElement(
             String(ffi.exportSoftkeyContainer(), Charsets.UTF_8)
         ) as? JsonArray ?: return@withContext emptyList()
@@ -164,9 +189,20 @@ class UniFFISigner(
      * JWK's own public parameters) so a later [exportPrivateKeypairs] call
      * in this same session can still find it - it didn't go through
      * [generateKey], which is the only other path that populates the cache.
+     *
+     * No-op unless [defaultPluginId] is "softkey" - see
+     * [exportPrivateKeypairs]'s doc comment for why. Found via live
+     * hardware testing: without this guard, unlocking a fido2-default
+     * instance imported the wallet's softkey key(s) into that instance's
+     * own internal softkey plugin, which then got wrongly picked up by
+     * [WscdKeystoreAdapter.generateProof]'s "reuse any existing key" logic
+     * instead of a real fido2 key, and failed to sign at all (the imported
+     * copy was reachable via [listKeys] but not by the underlying signing
+     * call - "Signing failed" with no PIN prompt, since the wrong key/plugin
+     * combination never got that far).
      */
     override suspend fun importPrivateKeypairs(keypairs: List<ExportedPrivateKeypair>) = withContext(Dispatchers.IO) {
-        if (keypairs.isEmpty()) return@withContext
+        if (defaultPluginId != "softkey" || keypairs.isEmpty()) return@withContext
 
         val rawKeys = buildJsonArray {
             keypairs.forEach { kp ->
@@ -200,7 +236,9 @@ class UniFFISigner(
                 keyId = keyInfo.kid,
                 algorithm = keyInfo.algorithm.toSdkAlgorithm(),
                 pluginId = keyInfo.pluginId,
-                createdAt = keyInfo.createdAt,
+                // Rust's created_at is Unix seconds, not millis - see
+                // toSdkLifecycleStatus's identical conversion for why.
+                createdAt = keyInfo.createdAt * 1000,
             )
         }
     }
@@ -216,10 +254,23 @@ class UniFFISigner(
     }
 
     override suspend fun exportPublicKey(keyId: String): ByteArray = withContext(Dispatchers.IO) {
-        publicKeyCache[keyId]
-            ?: throw IllegalStateException(
-                "Public key not cached for $keyId. Key was generated before this session or on another device."
+        publicKeyCache[keyId]?.let { return@withContext it }
+        // Cache miss: the key may have been created via a path other than
+        // this Signer's own generateKey() (e.g. the WSCD lifecycle
+        // register/activate calls used for enrollment), which never
+        // populates publicKeyCache. Fall back to asking the manager
+        // directly - it can look up any key it currently holds regardless
+        // of which call created it - and cache the result for next time.
+        val jwkBytes = try {
+            ffi.exportPublicKey(keyId).toByteArray(Charsets.UTF_8)
+        } catch (e: FfiWscdException) {
+            throw IllegalStateException(
+                "Public key not cached for $keyId. Key was generated before this session or on another device.",
+                e,
             )
+        }
+        publicKeyCache[keyId] = jwkBytes
+        jwkBytes
     }
 
     override suspend fun migrateKey(keyId: String, targetPlugin: String): MigrationResult =
@@ -404,7 +455,14 @@ class UniFFISigner(
         pluginId = pluginId,
         factorKind = factorKind.toSdkFactorKind(),
         state = state.toSdkLifecycleState(),
-        updatedAt = updatedAt,
+        // Rust's `updated_at` (siros-wscd-manager's `timeutil::now_unix()`) is
+        // Unix seconds, not millis - found via live testing (the Developer
+        // screen showed "1970-01-21" for a fresh enrollment). [LifecycleStatus.updatedAt]
+        // is epoch-millis everywhere else in this SDK (matches
+        // WscdScreen.kt's formatTimestamp(epochMs: Long) using Date(Long)),
+        // so convert at this FFI boundary rather than push the unit
+        // mismatch onto every caller.
+        updatedAt = updatedAt * 1000,
     )
 
     private fun FfiRegistrationOutcome.toSdkRegistrationOutcome(): RegistrationOutcome = RegistrationOutcome(
@@ -436,7 +494,17 @@ class UniFFISigner(
  * thread pool, never the Android main thread.
  *
  * Lazily connects on first use and stays connected, matching this
- * codebase's other WSCD callback bridges' lifecycle.
+ * codebase's other WSCD callback bridges' lifecycle - EXCEPT that a
+ * ceremony now sends several commands per attempt (ClientPin's
+ * getInfo/getKeyAgreement/getPinUvAuthToken round trips ahead of the
+ * actual command, see `preview_sign_protocol::make_credential`), so a
+ * connection that died between UI interactions (the physical
+ * authenticator was unplugged/replugged, e.g. to clear a transient
+ * `CTAP2_ERR_PIN_AUTH_BLOCKED` lockout) previously wedged every
+ * subsequent attempt with `DeviceDisconnected` until the whole app was
+ * restarted - `connected` never got reset, so [ctap2SendCommand] never
+ * called [Ctap2TransportProvider.connect] again. On any [send] failure,
+ * drop the stale connection and reconnect once before giving up.
  */
 private class Ctap2TransportBridge(private val provider: Ctap2TransportProvider) : FfiCtap2Transport {
     private var connected = false
@@ -446,7 +514,15 @@ private class Ctap2TransportBridge(private val provider: Ctap2TransportProvider)
             provider.connect()
             connected = true
         }
-        provider.send(command)
+        try {
+            provider.send(command)
+        } catch (e: Exception) {
+            connected = false
+            runCatching { provider.disconnect() }
+            provider.connect()
+            connected = true
+            provider.send(command)
+        }
     }
 }
 

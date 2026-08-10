@@ -170,6 +170,87 @@ class CredentialUtilsTest {
         assertTrue("credentialSubject" !in claims.map { it.key })
     }
 
+    private fun sdJwtDisclosure(salt: String, claimName: String, claimValueJson: String): String {
+        val json = """["$salt","$claimName",$claimValueJson]"""
+        return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(json.toByteArray())
+    }
+
+    private fun sha256Base64Url(s: String): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(s.toByteArray())
+        return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(digest)
+    }
+
+    @Test
+    fun `extractClaims resolves a top-level claim disclosed via SD-JWT disclosure, not embedded in the payload`() {
+        // Reproduces the real bug found via live testing: a properly-issued
+        // SD-JWT VC (e.g. a PID) selectively discloses its actual claims -
+        // they are NEVER present in the JWT payload itself, only a SHA-256
+        // digest of each disclosure under `_sd`. An mdoc has no such
+        // indirection (claims live directly in CBOR namespaces), which is
+        // why only SD-JWT credentials showed labels with no values.
+        val disclosure = sdJwtDisclosure("2GLC42sKQveCfGfryNRN9w", "given_name", "\"Alice\"")
+        val digest = sha256Base64Url(disclosure)
+        val header = b64url("""{"alg":"ES256","typ":"vc+sd-jwt"}""")
+        val payload = b64url(
+            """{
+                "iss": "https://issuer.example.com",
+                "vct": "urn:example:pid",
+                "_sd": ["$digest"],
+                "_sd_alg": "sha-256"
+            }""",
+        )
+        val sdJwt = "$header.$payload.fakesig~$disclosure~"
+
+        val cred = StoredCredential(id = 1L, batchId = 1L, instanceId = 0, format = "vc+sd-jwt", raw = sdJwt)
+        val claims = CredentialUtils.extractClaims(cred)
+
+        val givenName = claims.find { it.key == "given_name" }
+        assertNotNull("a disclosed claim absent from the raw payload must still be resolved", givenName)
+        assertEquals("Alice", givenName!!.value)
+    }
+
+    @Test
+    fun `extractClaims resolves a nested claim disclosed inside a nested object's own _sd array`() {
+        // SD-JWT allows `_sd` at any nesting level, not just the top - an
+        // issuer that groups claims under e.g. "address" can selectively
+        // disclose individual address fields too.
+        val disclosure = sdJwtDisclosure("eluV5Og3gSNII8EYnsxA_A", "street_address", "\"Schulstr. 12\"")
+        val digest = sha256Base64Url(disclosure)
+        val header = b64url("""{"alg":"ES256","typ":"vc+sd-jwt"}""")
+        val payload = b64url(
+            """{
+                "iss": "https://issuer.example.com",
+                "vct": "urn:example:pid",
+                "address": {"_sd": ["$digest"], "locality": "Berlin"},
+                "_sd_alg": "sha-256"
+            }""",
+        )
+        val sdJwt = "$header.$payload.fakesig~$disclosure~"
+
+        val cred = StoredCredential(
+            id = 1L,
+            batchId = 1L,
+            instanceId = 0,
+            format = "vc+sd-jwt",
+            raw = sdJwt,
+            metadata = CredentialMetadata(
+                claims = listOf(
+                    ClaimMeta(path = listOf("address", "street_address"), label = "Street"),
+                    ClaimMeta(path = listOf("address", "locality"), label = "City"),
+                ),
+            ),
+        )
+        val claims = CredentialUtils.extractClaims(cred)
+
+        val street = claims.find { it.label == "Street" }
+        assertNotNull("a claim disclosed inside a nested object's own _sd array must still resolve", street)
+        assertEquals("Schulstr. 12", street!!.value)
+
+        val city = claims.find { it.label == "City" }
+        assertNotNull(city)
+        assertEquals("Berlin", city!!.value)
+    }
+
     @Test
     fun `extractClaims formats keys when no VCTM`() {
         val cred = StoredCredential(

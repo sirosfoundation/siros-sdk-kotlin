@@ -1522,6 +1522,72 @@ class SirosWalletTest {
     }
 
     /**
+     * Reproduces a real bug found via live testing: the `jwt` proof branch
+     * (preferred over `attestation` whenever an issuer supports it - the
+     * common case) used to sign directly on the wallet's own default
+     * [KeystoreManager], never consulting [WscdSelectionPolicy] at all. A
+     * credential type requiring `iso_18045_high` with only "fido2"
+     * registered as eligible must still route signing to the fido2
+     * keystore even when the issuer only advertises `jwt` support - not
+     * just when it advertises `attestation` (see the sibling
+     * `requestBackendKeyAttestation_usesEligiblePlugin_forCredentialTypeRequiringHigherTier`
+     * test for that half).
+     */
+    @Test
+    fun generateProofsForRequest_usesEligiblePlugin_forJwtProofType_notJustAttestation() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val defaultKeystore = mockk<KeystoreManager>(relaxed = true)
+        val fido2Keystore = mockk<KeystoreManager>()
+        coEvery { fido2Keystore.generateProof(audience = any(), nonce = any(), freshKey = any()) } returns "fido2-signed-proof-jwt"
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val config = WalletConfig(
+            backendUrl = "https://wallet.example.com",
+            availableKeystores = mapOf("softkey" to defaultKeystore, "fido2" to fido2Keystore),
+        )
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to config,
+            "keystore" to defaultKeystore,
+            "wscdSelectionPolicy" to WscdSelectionPolicy(tofuStore = InMemoryWscdTofuStore()),
+        )
+        setField(
+            wallet,
+            "activeOffer",
+            org.siros.sdk.credentials.CredentialOffer(
+                credentialConfigurationId = "pid",
+                credentialIssuerIdentifier = "https://issuer.example.com",
+                credentialName = "PID",
+                issuerName = "Issuer",
+            ),
+        )
+        setField(
+            wallet,
+            "activeVctm",
+            org.siros.sdk.credentials.Vctm(vct = "urn:eu.europa.ec.eudi:pid:1", requiredKeyStorage = "iso_18045_high"),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sign",
+                action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "https://issuer.example.com",
+                    nonce = "nonce-1",
+                    count = 1,
+                    proofTypesSupported = buildJsonObject { putJsonObject("jwt") {} },
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { fido2Keystore.generateProof(audience = "https://issuer.example.com", nonce = "nonce-1", freshKey = false) }
+        coVerify(exactly = 0) { defaultKeystore.generateProof(any(), any(), any()) }
+    }
+
+    /**
      * When zero registered plugins meet a credential type's declared
      * requirement, [WscdSelectionPolicy] throws [NoEligibleWscdPluginException]
      * - `requestBackendKeyAttestation` must let it propagate rather than

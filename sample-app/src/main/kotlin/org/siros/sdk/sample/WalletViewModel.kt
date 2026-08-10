@@ -19,6 +19,8 @@ import kotlinx.coroutines.withContext
 import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialOffer
 import org.siros.sdk.credentials.CredentialUtils
+import org.siros.sdk.credentials.Ts11CredentialDiscovery
+import org.siros.sdk.credentials.Ts11DiscoveredCredential
 import org.siros.sdk.sample.dcapi.DCAPIProviderRegistration
 import org.siros.sdk.sample.dcapi.WalletSessionHolder
 import org.siros.sdk.credentials.PresentationRecord
@@ -78,6 +80,35 @@ data class PendingWscdChoice(
      */
     val respond: (pluginId: String?, rememberScope: RememberScope) -> Unit,
 )
+
+/**
+ * One in-flight FIDO2 CTAP2 ClientPin prompt - `PreviewSignPlugin`'s
+ * `generate_key`/`sign` call `AuthCallback.request_pin()` to obtain a
+ * `pinUvAuthToken` (see `preview_sign_protocol::make_credential`/
+ * `get_assertion` in siros-wscd-manager). [AuthProvider.requestPin] is
+ * synchronous, not suspend (it's invoked off the Android main thread from
+ * Rust's own FFI thread pool - see [Ctap2TransportBridge]'s doc comment
+ * for the same pattern), so the bridge wraps this same
+ * suspend-callback-to-dialog shape in `runBlocking` itself rather than
+ * exposing it as a suspend function here.
+ */
+data class PendingPinEntry(
+    val pluginId: String,
+    /** Call with the entered PIN to submit, or null to cancel. */
+    val respond: (pin: String?) -> Unit,
+)
+
+/**
+ * Physical transport [registerFido2OnSigner] wires the fido2 plugin to.
+ * [AUTO] (the default) watches USB and NFC in parallel via
+ * [CompositeCtap2Transport] and uses whichever the user actually presents -
+ * [USB]/[NFC] are dev-only overrides to force a specific transport for
+ * testing.
+ */
+enum class Fido2TransportMode { AUTO, USB, NFC }
+
+/** Bridges [CompositeCtap2Transport]'s ambiguous-choice callback to a Compose dialog. */
+data class PendingTransportChoice(val respond: (Fido2TransportMode?) -> Unit)
 
 /**
  * Sample app ViewModel.
@@ -218,11 +249,30 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     // ── Plugin / R2PS configuration ──────────────────────────────────
 
-    /** Active plugin ID: "softkey", "r2ps", or "fido2". */
+    /**
+     * Which plugin tab is currently open in [WscdScreen] (also the plugin
+     * lifecycle actions there - Enroll/Rotate/Destroy/Refresh - operate on;
+     * see [activePluginId]). Purely an internal "which tab" UI detail now,
+     * NOT a second source of truth for the user's actual WSCD preference -
+     * that's [wscdGlobalOverride] (persisted, feeds
+     * [org.siros.sdk.wallet.WscdSelectionPolicy]), which this used to
+     * duplicate via an separate in-memory-only chip picker. [selectPlugin]
+     * only changes which tab is shown/diagnosed; it does NOT persist
+     * anything - persisting a preference is now only ever done through
+     * [setWscdGlobalOverride] (the tab's own "Preferred WSCD" toggle), and
+     * the very first time this session learns the persisted override (see
+     * [refreshWscdUserOverrides]) it seeds this StateFlow from it, so the
+     * tab shown after login/reconnect matches the user's saved preference
+     * rather than always defaulting to the same BuildConfig-based guess
+     * below.
+     */
     private val _selectedPluginId = MutableStateFlow(
         if (BuildConfig.R2PS_ENABLED) "r2ps" else "softkey",
     )
     val selectedPluginId: StateFlow<String> = _selectedPluginId
+
+    /** Set once [refreshWscdUserOverrides] has seeded [_selectedPluginId] from the persisted override - see that function. */
+    private var initialPluginTabSeeded = false
 
     private val _r2psEnabled = MutableStateFlow(BuildConfig.R2PS_ENABLED)
     val r2psEnabled: StateFlow<Boolean> = _r2psEnabled
@@ -230,9 +280,44 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _r2psServerUrl = MutableStateFlow(DEFAULT_R2PS_URL)
     val r2psServerUrl: StateFlow<String> = _r2psServerUrl
 
+    /**
+     * Which physical transport [registerFido2OnSigner] wires up - dev-screen
+     * toggle. Declared here, before [wallet], since [buildWalletConfig] (run
+     * as part of constructing [wallet]) reads it via [buildWscdKeystore] ->
+     * [registerFido2OnSigner] - a property read inside another property's
+     * initializer must already be initialized itself, i.e. appear earlier in
+     * the class body (see [_selectedPluginId] above for the same
+     * constraint). Reading it before this declaration existed threw a NPE
+     * from [MutableStateFlow.getValue] at construction time - a real bug,
+     * not just a theoretical ordering concern.
+     */
+    private val _fido2TransportMode = MutableStateFlow(Fido2TransportMode.AUTO)
+    val fido2TransportMode: StateFlow<Fido2TransportMode> = _fido2TransportMode
+    fun setFido2TransportMode(mode: Fido2TransportMode) { _fido2TransportMode.value = mode }
+
+    /**
+     * Switch [WscdScreen]'s active plugin tab - also registers/restores
+     * that plugin on the live diagnostic manager ([wallet]'s
+     * [SirosWallet.wscdManager]) if it isn't already, so a previously
+     * enrolled key (restored from privatedata - see [registerFido2OnSigner])
+     * shows up in the Stored Keys list immediately, without the user
+     * needing to tap Enroll again (which would create a brand NEW key
+     * rather than just reveal the existing one).
+     *
+     * Deliberately does NOT persist anything - this is tab navigation, not
+     * a preference change (see [_selectedPluginId]'s doc comment). To make
+     * a plugin the persisted preference, use [setWscdGlobalOverride]
+     * instead (the tab's "Preferred WSCD" toggle).
+     */
     fun selectPlugin(pluginId: String) {
         _selectedPluginId.value = pluginId
         _r2psEnabled.value = pluginId == "r2ps"
+        val manager = wallet.wscdManager ?: return
+        when (pluginId) {
+            "fido2" -> registerFido2OnSigner(manager)
+            "r2ps" -> registerR2psOnSigner(manager)
+        }
+        refreshWscdInfo()
     }
     fun updateR2psEnabled(enabled: Boolean) {
         _r2psEnabled.value = enabled
@@ -247,10 +332,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
      * (issuer, credentialType) pair skip [pendingWscdChoice] entirely (see
      * [org.siros.sdk.wallet.WscdSelectionPolicy]'s resolution order). This is
      * host-app/dev config, not an end-user preference, so it's edited from
-     * the WSCA Developer screen rather than Settings, and - like
-     * [selectedPluginId]/[r2psServerUrl] - is in-memory only (not persisted
-     * across app restarts): a real integrator would supply this as a
-     * genuine compile-time config value, not a runtime user setting.
+     * [WscdScreen]'s collapsible Developer section rather than its always-
+     * visible one, and - like [selectedPluginId]/[r2psServerUrl] - is in-
+     * memory only (not persisted across app restarts): a real integrator
+     * would supply this as a genuine compile-time config value, not a
+     * runtime user setting.
      */
     private val _defaultWscdMappingText = MutableStateFlow("")
     val defaultWscdMappingText: StateFlow<String> = _defaultWscdMappingText
@@ -272,6 +358,44 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 val (key, pluginId) = line.split('=', limit = 2)
                 key.trim() to pluginId.trim()
             }
+    }
+
+    // ── TS11 registry discovery (best-effort, see WscdScreen.Ts11DiscoveryCard) ──
+
+    /**
+     * Result of the last [discoverTs11Schemas] call, for [WscdScreen]'s
+     * common (not per-plugin) "Discover from TS11 Registry" action -
+     * queries the real `registry.siros.org` directly (see
+     * [org.siros.sdk.credentials.Ts11RegistryClient]'s doc comment for why
+     * this is preferable to go-wallet-backend's `/type-metadata`
+     * cache/proxy for this purpose), and resolves each entry's real display
+     * identity (`vct`/`doctype` + name/description) via
+     * [Ts11CredentialDiscovery] - a raw registry entry only carries an
+     * opaque UUID, not a human name, at the list level (see that class's
+     * doc comment). Deliberately minimal: this only fetches and displays
+     * candidates filtered by nominal tier match; it does not itself write
+     * anything into [defaultWscdMappingText] (see [Ts11DiscoveryCard]'s
+     * "Add"/"Add all" actions in WscdScreen.kt for that, and its doc
+     * comment for the known issuer-less-schema limitation).
+     */
+    private val _ts11DiscoveredCredentials = MutableStateFlow<List<Ts11DiscoveredCredential>>(emptyList())
+    val ts11DiscoveredCredentials: StateFlow<List<Ts11DiscoveredCredential>> = _ts11DiscoveredCredentials
+
+    private val _ts11DiscoveryInProgress = MutableStateFlow(false)
+    val ts11DiscoveryInProgress: StateFlow<Boolean> = _ts11DiscoveryInProgress
+
+    fun discoverTs11Schemas() {
+        if (_ts11DiscoveryInProgress.value) return
+        _ts11DiscoveryInProgress.value = true
+        viewModelScope.launch {
+            try {
+                _ts11DiscoveredCredentials.value = Ts11CredentialDiscovery().discover()
+            } catch (e: Exception) {
+                Log.w(TAG, "TS11 registry discovery failed", e)
+            } finally {
+                _ts11DiscoveryInProgress.value = false
+            }
+        }
     }
 
     // ── Add-credential state ────────────────────────────────────────
@@ -410,14 +534,18 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     /**
      * Every registered WSCD plugin ID this session's [WalletConfig.availableKeystores]
-     * actually offers - populated once, at [buildWalletConfig] time (see that
+     * actually offers - populated at [buildWalletConfig] time (see that
      * function, called below to construct [wallet]), for the Settings tab's
-     * "preferred security key" / per-issuer override pickers to offer as
-     * options. Declared here, before [wallet], since [buildWalletConfig] (run
-     * as part of constructing [wallet]) writes to it - a property used inside
-     * another property's initializer must already be initialized itself,
-     * i.e. appear earlier in the class body (see [_selectedPluginId] above
-     * for the same constraint on the plugin-selection field it reads).
+     * "preferred WSCD" / per-issuer override pickers to offer as options.
+     * [buildWalletConfig] builds every known plugin ID unconditionally (not
+     * only the one currently selected), so this always includes fido2/r2ps
+     * even before the user has separately enrolled either through the WSCA
+     * Developer screen. Declared here, before [wallet], since
+     * [buildWalletConfig] (run as part of constructing [wallet]) writes to
+     * it - a property used inside another property's initializer must
+     * already be initialized itself, i.e. appear earlier in the class body
+     * (see [_selectedPluginId] above for the same constraint on the
+     * plugin-selection field it reads).
      */
     private val _availableWscdPluginIds = MutableStateFlow<List<String>>(emptyList())
     val availableWscdPluginIds: StateFlow<List<String>> = _availableWscdPluginIds
@@ -459,6 +587,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                         DCAPIProviderRegistration.refresh(activity, newState.credentials)
                         refreshWscdTofuMapping()
                         refreshWscdUserOverrides()
+                        maybeOfferWscdAutoEnroll()
                     }
                     else -> {
                         WalletSessionHolder.update(null)
@@ -886,6 +1015,105 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     val enrollmentInProgress: StateFlow<Boolean> = _enrollmentInProgress
 
     /**
+     * True while [enrollWscd]/[rotateLifecycle]/[destroyLifecycle] is in
+     * flight - lets the WSCA Developer screen disable all three buttons
+     * while any one of them is running. Without this, rapid re-tapping
+     * (e.g. a user impatiently tapping Enroll again while a slow real CTAP2
+     * ceremony is still awaiting a touch) launches overlapping coroutines
+     * that interleave unpredictably - confirmed on real hardware producing
+     * a burst of concurrent register/activate/destroy calls within the
+     * same ~100ms window.
+     */
+    private val _wscdLifecycleBusy = MutableStateFlow(false)
+    val wscdLifecycleBusy: StateFlow<Boolean> = _wscdLifecycleBusy
+
+    /**
+     * True once the user has entered their FIDO2 PIN (see
+     * [awaitFido2PinEntry]) and the app is now waiting for them to actually
+     * present the physical authenticator - i.e. hold a YubiKey against the
+     * phone's NFC antenna, or plug/keep it plugged in over USB. Drives
+     * [Fido2PresentKeyGuide]'s visual instructions.
+     *
+     * This split exists because holding an NFC key against the back of the
+     * phone and typing a PIN on the touchscreen at the same time is not
+     * physically possible with one hand free - the PIN must be collected
+     * BEFORE the tap-and-hold begins, not mid-ceremony while the key is
+     * already in place (see [awaitFido2PinEntry]'s doc comment for the full
+     * rationale, confirmed against real hardware testing).
+     */
+    private val _fido2AwaitingPresentation = MutableStateFlow(false)
+    val fido2AwaitingPresentation: StateFlow<Boolean> = _fido2AwaitingPresentation
+
+    /** The currently in-flight enroll/rotate coroutine, if any - lets [cancelWscdLifecycleOp] abort it. */
+    private var wscdLifecycleJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Abort the in-flight [enrollWscd]/[rotateLifecycle] operation, e.g. the
+     * user backing out of [Fido2PresentKeyGuide] instead of presenting the
+     * key. Cancelling the job still runs its `finally` block (resetting
+     * [wscdLifecycleBusy]/[fido2AwaitingPresentation] and clearing
+     * [prefetchedFido2Pin]), so this can't leave the screen stuck the way an
+     * unbounded hang used to.
+     */
+    fun cancelWscdLifecycleOp() {
+        wscdLifecycleJob?.cancel()
+    }
+
+    // ── WSCD auto-enroll offer ────────────────────────────────────────
+
+    /** Which plugin ID (if any) is currently offering to auto-enroll - see [maybeOfferWscdAutoEnroll]. */
+    private val _pendingAutoEnrollOffer = MutableStateFlow<String?>(null)
+    val pendingAutoEnrollOffer: StateFlow<String?> = _pendingAutoEnrollOffer
+
+    /**
+     * Offered at most once per process - a user who dismisses it isn't
+     * re-nagged every time [WalletState.Ready] re-emits (e.g. after a
+     * token refresh), and one who accepts obviously doesn't need it again
+     * once [enrollWscd] runs.
+     */
+    private var autoEnrollOffered = false
+
+    /**
+     * Checked every time the wallet becomes [WalletState.Ready] (i.e. right
+     * after a successful login, and on later re-connects). If the login
+     * credential's [org.siros.sdk.auth.WscdAutoEnrollHint] (see that
+     * interface's doc comment) suggests this might be a WSCD-capable
+     * device, that plugin is available in this session, and nothing is
+     * enrolled for it yet, offers the user a one-tap prompt to enroll it -
+     * see [respondToAutoEnrollOffer] for what accepting actually does.
+     */
+    private fun maybeOfferWscdAutoEnroll() {
+        if (autoEnrollOffered) return
+        viewModelScope.launch {
+            val hint = wallet.wscdAutoEnrollHint() ?: return@launch
+            if (!hint.suggestsWscdCapableDevice()) return@launch
+            val pluginId = hint.hintedWscdPluginId
+            if (pluginId !in _availableWscdPluginIds.value) return@launch
+            if (wallet.wscdCredentials(pluginId) != null) return@launch
+            autoEnrollOffered = true
+            _pendingAutoEnrollOffer.value = pluginId
+        }
+    }
+
+    /**
+     * The user's answer to [pendingAutoEnrollOffer]. Accepting switches to
+     * that plugin's tab (so [activePluginId]/[enrollWscd] resolve to it,
+     * exactly as if the user had opened [WscdScreen] and picked it
+     * themselves) and starts the normal enroll flow - same PIN-first +
+     * present-key sequence as the manual Enroll button, since accepting
+     * this offer is still only a HINT that the device supports signing;
+     * the enrollment attempt itself is what actually confirms it.
+     */
+    fun respondToAutoEnrollOffer(accept: Boolean) {
+        val pluginId = _pendingAutoEnrollOffer.value ?: return
+        _pendingAutoEnrollOffer.value = null
+        if (accept) {
+            selectPlugin(pluginId)
+            enrollWscd()
+        }
+    }
+
+    /**
      * Stored reference to the UniFFISigner for diagnostic-only calls
      * ([UniFFISigner.listKeysDetailed]/[UniFFISigner.securityProperties])
      * that aren't part of the [WscdManager]/[org.siros.sdk.keystore.KeystoreManager]
@@ -893,11 +1121,19 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
      * goes through [wallet]'s own [SirosWallet.wscdManager].
      */
     private var wscdSigner: UniFFISigner? = null
-    private var r2psRegistered = false
 
-    /** Register the R2PS plugin on the given manager (idempotent). */
+    // buildWalletConfig() now builds a separate manager instance per plugin
+    // ID (see availableKeystores) in addition to whichever one backs the
+    // active `wscdSigner`/`wallet.wscdManager` - a single shared Boolean
+    // here would make the FIRST manager instance's registration silently
+    // suppress every later instance's, including the live one enrollWscd()
+    // actually cares about. Tracked per manager INSTANCE (identity, not
+    // equals) instead.
+    private val r2psRegisteredManagers = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<WscdManager, Boolean>())
+
+    /** Register the R2PS plugin on the given manager (idempotent per instance). */
     private fun registerR2psOnSigner(manager: WscdManager) {
-        if (r2psRegistered) return
+        if (!r2psRegisteredManagers.add(manager)) return
         // Generate ephemeral P-256 key pair for the R2PS message envelope
         // (JWS/JWE identity) - required regardless of auth mode.
         val kpg = java.security.KeyPairGenerator.getInstance("EC")
@@ -920,19 +1156,88 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             authMode = R2psAuthMode.Opaque,
         )
         manager.registerR2psPlugin(r2psConfig, OkHttpR2psTransport(serverUrl = _r2psServerUrl.value))
-        r2psRegistered = true
         Log.i(TAG, "R2PS plugin registered at ${_r2psServerUrl.value}")
     }
 
-    private var fido2Registered = false
+    // Keyed by manager instance -> the transport mode it was last registered
+    // with. A plain "registered once, ever" guard (as R2PS still uses above)
+    // is wrong here: buildWalletConfig() eagerly registers fido2 with
+    // whatever _fido2TransportMode happened to be at WALLET-CONSTRUCTION
+    // time (before the user can touch the dev screen's transport toggle) -
+    // a one-shot guard would then permanently lock that manager to the
+    // wrong transport, ignoring every later switch. Re-registering on the
+    // SAME manager is safe (Rust's register_plugin is a plain HashMap
+    // insert, no destructive side effect), so re-register whenever the
+    // desired mode differs from what's currently registered, rather than
+    // only ever once.
+    private val fido2RegisteredTransport = java.util.Collections.synchronizedMap(
+        java.util.IdentityHashMap<WscdManager, Fido2TransportMode>(),
+    )
 
-    /** Register the FIDO2 previewSign plugin on the given manager (idempotent). */
+    /**
+     * Register the FIDO2 previewSign plugin on the given manager with
+     * whichever transport [_fido2TransportMode] currently selects -
+     * re-registering if that differs from what's currently registered (see
+     * [fido2RegisteredTransport]'s doc comment). Restores previously-
+     * enrolled keys from [SirosWallet.wscdCredentials] if any exist (see
+     * that method's doc comment - synced via privatedata, not device-local,
+     * since a FIDO2 key may have been enrolled on a different device
+     * sharing this account), so a FIDO2 key enrolled in an earlier process
+     * (or a different device) stays addressable. Callers that generate a
+     * NEW key (e.g. [enrollWscd]) must re-save via [saveFido2PluginState]
+     * afterward - this function only restores, it doesn't keep the saved
+     * state in sync going forward.
+     *
+     * Called both from a coroutine ([enrollWscd]) and synchronously from
+     * [buildWalletConfig]'s eager keystore construction (itself part of
+     * [wallet]'s own property initializer, before [wallet] exists) - the
+     * `runBlocking` covers the former; the latter self-reference is caught
+     * by [buildWscdKeystore]'s existing try/catch and degrades to a plain
+     * [WscdManager.registerFido2Plugin] call, matching that fallback's
+     * pre-existing documented behavior.
+     */
     private fun registerFido2OnSigner(manager: WscdManager) {
-        if (fido2Registered) return
-        val transport = UsbCtap2Transport(activity.applicationContext)
-        manager.registerFido2Plugin(transport)
-        fido2Registered = true
-        Log.i(TAG, "FIDO2 previewSign plugin registered")
+        val mode = _fido2TransportMode.value
+        if (fido2RegisteredTransport[manager] == mode) return
+        val transport = when (mode) {
+            Fido2TransportMode.AUTO -> CompositeCtap2Transport(
+                UsbCtap2Transport(activity.applicationContext),
+                NfcCtap2Transport(activity),
+                ::requestTransportChoice,
+            )
+            Fido2TransportMode.USB -> UsbCtap2Transport(activity.applicationContext)
+            Fido2TransportMode.NFC -> NfcCtap2Transport(activity)
+        }
+        val savedState = kotlinx.coroutines.runBlocking { wallet.wscdCredentials("fido2") }
+        if (savedState != null) {
+            manager.registerFido2PluginWithState(transport, savedState.toByteArray(Charsets.UTF_8))
+            Log.i(TAG, "FIDO2 previewSign plugin restored from saved state (transport=$mode)")
+        } else {
+            manager.registerFido2Plugin(transport)
+            Log.i(TAG, "FIDO2 previewSign plugin registered (transport=$mode)")
+        }
+        fido2RegisteredTransport[manager] = mode
+    }
+
+    /**
+     * Re-export the FIDO2 plugin's current key state and persist it via
+     * privatedata (see [SirosWallet.saveWscdCredentials]), so keys
+     * enrolled/generated in this process are addressable from any device
+     * sharing this account. Must be called after any operation that could
+     * have added a FIDO2 key - currently only [enrollWscd] does; real
+     * credential issuance's own key generation
+     * (`resolveEffectiveKeystoreForIssuance`/`generateKeypairs` in the SDK)
+     * does NOT yet call this, so a FIDO2 key generated via that path - as
+     * opposed to this dev screen's Enroll button - will NOT currently
+     * survive a restart either. Fixing that needs an equivalent hook at
+     * the SDK level, not here.
+     */
+    private suspend fun saveFido2PluginState(manager: WscdManager) {
+        try {
+            wallet.saveWscdCredentials("fido2", String(manager.exportFido2State(), Charsets.UTF_8))
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to save FIDO2 plugin state", e)
+        }
     }
 
     /**
@@ -941,13 +1246,39 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
      * (deferred flow + key attestation), not at this layer.
      */
     fun enrollWscd() {
+        if (_wscdLifecycleBusy.value) return
+        _wscdLifecycleBusy.value = true
         _enrollmentInProgress.value = true
-        viewModelScope.launch {
+        wscdLifecycleJob = viewModelScope.launch {
             try {
+                // Collect the FIDO2 PIN BEFORE touching the transport at all
+                // - see _fido2AwaitingPresentation's doc comment for why
+                // this can't happen mid-ceremony (the old behavior) without
+                // forcing the user to set an NFC key down to type.
+                if (activePluginId == "fido2") {
+                    val pin = awaitFido2PinEntry()
+                    if (pin == null) {
+                        _errorMessage.value = "Enrollment cancelled"
+                        return@launch
+                    }
+                    prefetchedFido2Pin = pin.toByteArray()
+                    _fido2AwaitingPresentation.value = true
+                }
+                // A hard ceiling on the WHOLE operation, not just its
+                // individual sub-steps: CompositeCtap2Transport's USB/NFC
+                // race (and each transport's own internal waits) already
+                // time out on their own, but a bug in any of that racing
+                // logic could still hang indefinitely - confirmed on real
+                // hardware (an NFC reconnect cascade left this coroutine
+                // stuck, silently blocking every later Enroll/Rotate/Destroy
+                // tap since wscdLifecycleBusy never got a chance to reset).
+                // Without an outer bound here, that kind of hang is
+                // unrecoverable without restarting the app.
+                kotlinx.coroutines.withTimeout(WSCD_LIFECYCLE_OP_TIMEOUT_MS) {
                 val manager = wallet.wscdManager
                 if (manager == null) {
                     _errorMessage.value = "WSCD signer not initialized"
-                    return@launch
+                    return@withTimeout
                 }
                 val pluginId = activePluginId
                 // Lazily register R2PS plugin if switching at runtime
@@ -956,7 +1287,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 } else if (pluginId == "fido2") {
                     registerFido2OnSigner(manager)
                 }
-                val contextId = "ctx-${System.currentTimeMillis()}"
+                val contextId = lifecycleContextId
                 val factorKind = when (pluginId) {
                     "r2ps" -> FactorKind.Opaque
                     else -> FactorKind.RawSign
@@ -979,15 +1310,23 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     ),
                 )
                 _lifecycleState.value = actOutcome.state
-                lifecycleContextId = contextId
                 Log.i(TAG, "Lifecycle activated: context=$contextId state=${actOutcome.state}")
+                if (pluginId == "fido2") saveFido2PluginState(manager)
                 Log.i(MainActivity.WSCA_TEST_TAG, """{"action":"enroll","status":"ok","state":"${actOutcome.state}","context_id":"$contextId"}""")
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "WSCD enrollment failed", e)
                 Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"enroll","status":"error","error":"${e.message?.replace("\"", "'")}"}""")
-                _errorMessage.value = "Enrollment failed: ${e.message}"
+                _errorMessage.value = if (e is kotlinx.coroutines.TimeoutCancellationException) {
+                    "Enrollment timed out - no security key detected in time"
+                } else {
+                    "Enrollment failed: ${e.message}"
+                }
             } finally {
                 _enrollmentInProgress.value = false
+                _wscdLifecycleBusy.value = false
+                _fido2AwaitingPresentation.value = false
+                prefetchedFido2Pin = null
             }
         }
     }
@@ -1006,8 +1345,20 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _wscdLifecycleStatus = MutableStateFlow<LifecycleStatus?>(null)
     val wscdLifecycleStatus: StateFlow<LifecycleStatus?> = _wscdLifecycleStatus
 
-    /** The context ID used for the current lifecycle session. */
-    private var lifecycleContextId: String? = null
+    /**
+     * The context ID used for this plugin's lifecycle session - fixed and
+     * deterministic per plugin (not a fresh timestamp-based ID per enroll,
+     * as this used to generate), so it never needs its own persistence:
+     * any process, on any device sharing this account, can recompute the
+     * exact same context ID a restored key was registered under.
+     * `register_lifecycle`'s Rust implementation overwrites this context's
+     * entry on every call, so re-enrolling under the same ID (e.g.
+     * destroy -> enroll again) is exactly the intended "one active
+     * enrollment per plugin" flow this dev screen models - it does not
+     * accumulate multiple simultaneous enrollments per plugin.
+     */
+    private val lifecycleContextId: String
+        get() = "ctx-$activePluginId"
 
     /** The plugin ID used for the current lifecycle session. */
     private val activePluginId: String
@@ -1043,9 +1394,14 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 }
             }
             val manager = wallet.wscdManager ?: return@launch
-            val ctxId = lifecycleContextId ?: return@launch
+            // lifecycleContextId is now deterministic per plugin (see its
+            // own doc comment) and PreviewSignPlugin::from_state restores
+            // the plugin's lifecycle map, not just its keys - so this call
+            // correctly reflects "not enrolled" for a plugin with no
+            // lifecycle context yet, and "Active" for a restored one,
+            // without needing to derive anything from listKeys() here.
             try {
-                _wscdLifecycleStatus.value = manager.lifecycleStatus(activePluginId, ctxId)
+                _wscdLifecycleStatus.value = manager.lifecycleStatus(activePluginId, lifecycleContextId)
                 _lifecycleState.value = _wscdLifecycleStatus.value?.state
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to get lifecycle status", e)
@@ -1102,6 +1458,16 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     fun refreshWscdUserOverrides() {
         _wscdGlobalOverride.value = wallet.currentGlobalUserOverride()
         _wscdUserOverrides.value = wallet.currentUserOverrides()
+        // Seed the initially-shown WSCD tab from the user's persisted
+        // preference - but only the first time this session learns it, so
+        // later refreshes (e.g. a reconnect) don't yank the user back to
+        // their preferred tab while they're deliberately looking at another
+        // one. See _selectedPluginId's doc comment for why this can't
+        // happen any earlier (no wallet/account exists yet at that point).
+        if (!initialPluginTabSeeded) {
+            initialPluginTabSeeded = true
+            _wscdGlobalOverride.value?.let { _selectedPluginId.value = it }
+        }
     }
 
     /** Set (or, with `pluginId = null`, clear) the single global user override and refresh. */
@@ -1172,6 +1538,107 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         }
     }
 
+    private val _pendingTransportChoice = MutableStateFlow<PendingTransportChoice?>(null)
+    val pendingTransportChoice: StateFlow<PendingTransportChoice?> = _pendingTransportChoice
+
+    /** The user's answer to the current [pendingTransportChoice] dialog, or cancellation if `mode` is null. */
+    fun respondToTransportChoice(mode: Fido2TransportMode?) {
+        _pendingTransportChoice.value?.respond?.invoke(mode)
+    }
+
+    /**
+     * Bridges [CompositeCtap2Transport]'s "ask which transport to use"
+     * callback to a Compose dialog - same suspend/publish/resume shape as
+     * [requestWscdChoice]/[PendingPinEntry].
+     */
+    private suspend fun requestTransportChoice(): Fido2TransportMode? =
+        withContext(Dispatchers.Main.immediate) {
+            suspendCancellableCoroutine { continuation ->
+                val pending = PendingTransportChoice { mode ->
+                    _pendingTransportChoice.value = null
+                    if (continuation.isActive) continuation.resume(mode, onCancellation = null)
+                }
+                _pendingTransportChoice.value = pending
+                continuation.invokeOnCancellation {
+                    if (_pendingTransportChoice.value === pending) _pendingTransportChoice.value = null
+                }
+            }
+        }
+
+    private val _pendingPinEntry = MutableStateFlow<PendingPinEntry?>(null)
+    val pendingPinEntry: StateFlow<PendingPinEntry?> = _pendingPinEntry
+
+    /** The user's answer to the current [pendingPinEntry] dialog, or cancellation if `pin` is null. */
+    fun respondToPinEntry(pin: String?) {
+        _pendingPinEntry.value?.respond?.invoke(pin)
+    }
+
+    /**
+     * Show the PIN dialog and suspend until the user submits or cancels -
+     * the real suspend-native version of this bridge, usable directly from
+     * a coroutine (unlike [requestFido2Pin], which must block a non-Main
+     * thread since it's called synchronously from Rust's FFI callback).
+     *
+     * Called from [enrollWscd]/[rotateLifecycle] BEFORE any transport work
+     * starts, so the PIN is already known by the time the user needs to
+     * present the physical authenticator - see [_fido2AwaitingPresentation]'s
+     * doc comment for why this ordering matters: entering a PIN needs the
+     * touchscreen, but holding an NFC key against the phone needs both
+     * hands, and the CTAP2 ceremony needs one continuous physical session
+     * once it starts. Asking for the PIN mid-ceremony (the old behavior)
+     * forced the user to set the key down to type, which could drop the
+     * NFC session entirely.
+     */
+    private suspend fun awaitFido2PinEntry(): String? = withContext(Dispatchers.Main.immediate) {
+        suspendCancellableCoroutine { continuation ->
+            val pending = PendingPinEntry(
+                pluginId = "fido2",
+                respond = { pin ->
+                    _pendingPinEntry.value = null
+                    if (continuation.isActive) {
+                        continuation.resume(pin, onCancellation = null)
+                    }
+                },
+            )
+            _pendingPinEntry.value = pending
+            continuation.invokeOnCancellation {
+                if (_pendingPinEntry.value === pending) _pendingPinEntry.value = null
+            }
+        }
+    }
+
+    /**
+     * Cached by [enrollWscd]/[rotateLifecycle] right after
+     * [awaitFido2PinEntry] resolves, so [requestFido2Pin] - called from
+     * Rust's FFI thread mid-ceremony - can return it immediately instead of
+     * popping the dialog again while the user is physically holding the key
+     * in place. Cleared in the `finally` block of whichever operation set
+     * it, so a PIN never outlives the one operation it was collected for.
+     */
+    @Volatile
+    private var prefetchedFido2Pin: ByteArray? = null
+
+    /**
+     * Bridges [org.siros.sdk.keystore.AuthProvider.requestPin] (synchronous,
+     * called off the main thread - see [PendingPinEntry]'s doc comment) to
+     * a Compose dialog, via [_pendingPinEntry]. `runBlocking` here is safe
+     * for the same reason it's safe in [Ctap2TransportBridge].
+     *
+     * Prefers [prefetchedFido2Pin] when set (the normal case for
+     * [enrollWscd]/[rotateLifecycle], which prefetch it up front - see that
+     * field's doc comment) so this returns instantly without ever showing a
+     * dialog mid-ceremony. Falls back to the blocking dialog for any call
+     * path that didn't prefetch (e.g. a FIDO2 signature requested during
+     * real credential presentation, outside the dev-screen flows).
+     */
+    private fun requestFido2Pin(): ByteArray {
+        prefetchedFido2Pin?.let { return it }
+        return kotlinx.coroutines.runBlocking(Dispatchers.Main.immediate) {
+            val pin = awaitFido2PinEntry()
+            pin ?: throw RuntimeException("PIN entry cancelled")
+        }.toByteArray()
+    }
+
     /**
      * Emit WSCA status as structured JSON to logcat for test automation.
      * The test harness parses lines with tag [MainActivity.WSCA_TEST_TAG].
@@ -1180,7 +1647,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         viewModelScope.launch {
             val signer = wscdSigner
             val state = _lifecycleState.value?.name ?: "null"
-            val ctxId = lifecycleContextId ?: "null"
+            val ctxId = lifecycleContextId
             val plugin = activePluginId
             val keys = try {
                 signer?.listKeysDetailed()?.joinToString(",") { k ->
@@ -1193,15 +1660,29 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     }
 
     fun rotateLifecycle() {
-        viewModelScope.launch {
-            val manager = wallet.wscdManager
-            val ctxId = lifecycleContextId
-            if (manager == null || ctxId == null) {
-                _errorMessage.value = "WSCD not enrolled"
-                Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"rotate","status":"error","error":"WSCD not enrolled (manager=${manager != null}, ctxId=$ctxId)"}""")
-                return@launch
-            }
+        if (_wscdLifecycleBusy.value) return
+        _wscdLifecycleBusy.value = true
+        wscdLifecycleJob = viewModelScope.launch {
             try {
+                // See enrollWscd's identical prefetch step for why the PIN
+                // must be collected before any transport work starts.
+                if (activePluginId == "fido2") {
+                    val pin = awaitFido2PinEntry()
+                    if (pin == null) {
+                        _errorMessage.value = "Rotation cancelled"
+                        return@launch
+                    }
+                    prefetchedFido2Pin = pin.toByteArray()
+                    _fido2AwaitingPresentation.value = true
+                }
+                kotlinx.coroutines.withTimeout(WSCD_LIFECYCLE_OP_TIMEOUT_MS) {
+                val manager = wallet.wscdManager
+                val ctxId = lifecycleContextId
+                if (manager == null) {
+                    _errorMessage.value = "WSCD not enrolled"
+                    Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"rotate","status":"error","error":"WSCD not enrolled (manager=false)"}""")
+                    return@withTimeout
+                }
                 val outcome = manager.rotateLifecycle(
                     RotateLifecycleRequest(
                         pluginId = activePluginId,
@@ -1212,40 +1693,67 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 Log.i(TAG, "Lifecycle rotated: context=$ctxId state=${outcome.state}")
                 Log.i(MainActivity.WSCA_TEST_TAG, """{"action":"rotate","status":"ok","state":"${outcome.state}","context_id":"$ctxId"}""")
                 refreshWscdInfo()
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Lifecycle rotation failed", e)
                 Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"rotate","status":"error","error":"${e.message?.replace("\"", "'")}"}""")
-                _errorMessage.value = "Rotation failed: ${e.message}"
+                _errorMessage.value = if (e is kotlinx.coroutines.TimeoutCancellationException) {
+                    "Rotation timed out - no security key detected in time"
+                } else {
+                    "Rotation failed: ${e.message}"
+                }
+            } finally {
+                _wscdLifecycleBusy.value = false
+                _fido2AwaitingPresentation.value = false
+                prefetchedFido2Pin = null
             }
         }
     }
 
-    fun destroyLifecycle(mode: DestroyMode) {
+    // There's deliberately only one Destroy action exposed to callers. The
+    // old LocalOnly/RemoteRevokeIfSupported split as two separate UI buttons
+    // was confusing (for the fido2 plugin they currently behave identically
+    // - see preview_sign.rs's destroy_lifecycle, which never reads
+    // request.mode) and put a decision on the user that's really the
+    // plugin's to make. Always requesting RemoteRevokeIfSupported lets each
+    // plugin's own destroy_lifecycle hook decide whether there's any remote
+    // side effect to attempt (r2ps.rs does; preview_sign.rs is a local-only
+    // no-op) without the caller needing to know which.
+    fun destroyLifecycle() {
+        if (_wscdLifecycleBusy.value) return
+        _wscdLifecycleBusy.value = true
         viewModelScope.launch {
-            val manager = wallet.wscdManager
-            val ctxId = lifecycleContextId
-            if (manager == null || ctxId == null) {
-                _errorMessage.value = "WSCD not enrolled"
-                Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"destroy","status":"error","error":"WSCD not enrolled (manager=${manager != null}, ctxId=$ctxId)"}""")
-                return@launch
-            }
             try {
+                kotlinx.coroutines.withTimeout(WSCD_LIFECYCLE_OP_TIMEOUT_MS) {
+                val manager = wallet.wscdManager
+                val ctxId = lifecycleContextId
+                if (manager == null) {
+                    _errorMessage.value = "WSCD not enrolled"
+                    Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"destroy","status":"error","error":"WSCD not enrolled (manager=false)"}""")
+                    return@withTimeout
+                }
                 val outcome = manager.destroyLifecycle(
                     DestroyLifecycleRequest(
                         pluginId = activePluginId,
                         contextId = ctxId,
-                        mode = mode,
+                        mode = DestroyMode.RemoteRevokeIfSupported,
                     ),
                 )
                 _lifecycleState.value = outcome.state
-                lifecycleContextId = null
-                Log.i(TAG, "Lifecycle destroyed: mode=$mode state=${outcome.state}")
-                Log.i(MainActivity.WSCA_TEST_TAG, """{"action":"destroy","status":"ok","state":"${outcome.state}","mode":"$mode"}""")
+                Log.i(TAG, "Lifecycle destroyed: state=${outcome.state} remotePerformed=${outcome.remotePerformed}")
+                Log.i(MainActivity.WSCA_TEST_TAG, """{"action":"destroy","status":"ok","state":"${outcome.state}","remote_performed":"${outcome.remotePerformed}"}""")
                 refreshWscdInfo()
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Lifecycle destruction failed", e)
                 Log.e(MainActivity.WSCA_TEST_TAG, """{"action":"destroy","status":"error","error":"${e.message?.replace("\"", "'")}"}""")
-                _errorMessage.value = "Destruction failed: ${e.message}"
+                _errorMessage.value = if (e is kotlinx.coroutines.TimeoutCancellationException) {
+                    "Destruction timed out"
+                } else {
+                    "Destruction failed: ${e.message}"
+                }
+            } finally {
+                _wscdLifecycleBusy.value = false
             }
         }
     }
@@ -1349,8 +1857,27 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 wscdConfig,
                 authProvider = object : AuthProvider {
                     override fun requestPin(): ByteArray {
-                        // Debug builds use a fixed test PIN for R2PS OPAQUE registration
-                        return "test-pin-1234".toByteArray()
+                        // Deliberately reads the LIVE activePluginId, not the
+                        // `pluginId` this signer was constructed with: this
+                        // same AuthProvider/manager instance goes on to have
+                        // OTHER plugins (fido2, r2ps) registered onto it later
+                        // (see registerFido2OnSigner/registerR2psOnSigner,
+                        // called from enrollWscd against `wallet.wscdManager`
+                        // - the same long-lived manager regardless of which
+                        // dev-screen plugin chip is selected) - using the
+                        // captured construction-time `pluginId` here meant
+                        // every FIDO2 PIN request silently used the wrong
+                        // (R2PS test) branch for an entire session, a real
+                        // bug found via live hardware testing.
+                        //
+                        // FIDO2 CTAP2 ClientPin prompts the user for the authenticator's
+                        // real PIN via a dialog (see requestFido2Pin). R2PS OPAQUE
+                        // registration still uses a fixed debug-only test PIN - not a
+                        // hardware secret, so there's nothing for the user to enter.
+                        return when (activePluginId) {
+                            "fido2" -> requestFido2Pin()
+                            else -> "test-pin-1234".toByteArray()
+                        }
                     }
                     override fun requestWebauthnAssertion(
                         challenge: ByteArray,
@@ -1392,18 +1919,24 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         // Every known plugin this session can actually back, keyed by plugin
         // ID, for WalletConfig.availableKeystores - lets WscdSelectionPolicy
         // pick among them by required tier instead of always using the
-        // single `keystore` above. "softkey" needs no external transport and
-        // every UniFFISigner registers it unconditionally (see
-        // UniFFISigner's init block), so it's always safe to offer - the
-        // currently selected plugin (if it initialized successfully) reuses
-        // the EXACT SAME instance as `keystore` above (not a second copy),
-        // both so it isn't built/registered twice and so SirosWallet's
+        // single `keystore` above. Each is unconditionally offered here, not
+        // only once the user has separately "enrolled" it via the WSCA
+        // Developer screen: registering a plugin (UsbCtap2Transport,
+        // OkHttpR2psTransport) is side-effect-free until it's actually asked
+        // to sign, so there's no reason to withhold it from
+        // WscdSelectionPolicy's auto-pick logic - only fido2/r2ps hardware
+        // itself needs to be present at actual signing time. The currently
+        // selected plugin (if it initialized successfully) reuses the EXACT
+        // SAME instance as `keystore` above (not a second copy), both so it
+        // isn't built/registered twice and so SirosWallet's
         // `currentDefaultPluginId` lookup (`=== keystore`) still recognizes it.
         val availableKeystores = buildMap {
             if (keystore != null) put(selectedPlugin, keystore)
-            if (selectedPlugin != "softkey") {
-                buildWscdKeystore("softkey", trackAsDiagnosticSigner = false)?.let { put("softkey", it) }
-            }
+            listOfNotNull("softkey", "fido2", if (_r2psEnabled.value) "r2ps" else null)
+                .filter { it != selectedPlugin }
+                .forEach { pluginId ->
+                    buildWscdKeystore(pluginId, trackAsDiagnosticSigner = false)?.let { put(pluginId, it) }
+                }
         }
         _availableWscdPluginIds.value = availableKeystores.keys.sorted()
 
@@ -1438,12 +1971,32 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     .replace("http://vc-proxy:8443", proxyUrl)
             } else null,
             availableKeystores = availableKeystores,
-            // Developer-supplied via the WSCA Developer screen (see
-            // WscaDeveloperScreen's "Default WSCD Mapping" section) - dev/
-            // host-app config, not an end-user setting, so it lives there
-            // rather than in the user-facing Settings tab.
+            // Developer-supplied via WscdScreen's collapsible Developer
+            // section ("Default WSCD Mapping" text box) - dev/host-app
+            // config, not an end-user setting, so it lives there rather
+            // than in that screen's always-visible user-facing section.
             defaultWscdMapping = _defaultWscdMapping.value.takeIf { it.isNotEmpty() },
             requestWscdChoice = requestWscdChoice,
+            // Mirrors enrollWscd/rotateLifecycle's own prefetch-PIN-before-
+            // transport pattern (see awaitFido2PinEntry's doc comment) for
+            // real credential issuance too - found necessary via live
+            // hardware testing: without this, a real sign request's only
+            // PIN surface was a blocking dialog popped mid-CTAP2-ceremony,
+            // with no "present your key now" cue for the transport-connect
+            // wait that happens first.
+            onWscdOperationStart = { pluginId ->
+                if (pluginId == "fido2") {
+                    val pin = awaitFido2PinEntry()
+                    if (pin != null) {
+                        prefetchedFido2Pin = pin.toByteArray()
+                        _fido2AwaitingPresentation.value = true
+                    }
+                }
+            },
+            onWscdOperationEnd = {
+                _fido2AwaitingPresentation.value = false
+                prefetchedFido2Pin = null
+            },
         )
     }
 
@@ -1454,6 +2007,14 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         private const val DEFAULT_R2PS_URL = "http://192.168.240.1:9443"
         private const val REDIRECT_URI = "siros-sample://callback"
         private const val REDIRECT_SCHEME = "siros-sample"
+
+        /**
+         * Hard ceiling for enroll/rotate/destroy so a hang anywhere in the
+         * underlying transport (confirmed possible on real hardware, e.g. an
+         * NFC reconnect cascade) can't permanently strand
+         * [wscdLifecycleBusy] at true and lock the WSCA screen's actions.
+         */
+        private const val WSCD_LIFECYCLE_OP_TIMEOUT_MS = 60_000L
 
         /** Map SDK error codes to Android string resource IDs. */
         private val ERROR_CODE_RESOURCES = mapOf(

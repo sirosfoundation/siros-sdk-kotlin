@@ -386,6 +386,22 @@ class WscdSelectionPolicy(
     private val requestChoice: RequestWscdChoice? = null,
     private val userOverrideStore: WscdUserOverrideStore = NoopWscdUserOverrideStore,
 ) {
+    companion object {
+        /**
+         * Issuer placeholder meaning "any issuer" in [setUserOverride] and
+         * `defaultMapping` entries (`"$WILDCARD_ISSUER|credentialType"`) -
+         * lets a caller express "always use plugin X for credential type Y"
+         * without enumerating every issuer that offers it. Checked in
+         * [resolve] as a fallback when no issuer-specific entry matches.
+         * Real-world need: TS11 registry discovery (see the sample app's
+         * `Ts11CredentialDiscovery`) knows a credential *type* but has no
+         * issuer of its own to key an entry by - this constant is what
+         * makes those discovered mappings actually resolve, rather than
+         * silently never matching any real issuance.
+         */
+        const val WILDCARD_ISSUER = "*"
+    }
+
     /**
      * Every persisted TOFU mapping, keyed by `"issuer|credentialType"` ->
      * plugin ID - for a host-app settings screen to display (and, via
@@ -447,9 +463,14 @@ class WscdSelectionPolicy(
         availablePluginIds: Set<String>,
         currentDefaultPluginId: String? = null,
     ): String? {
-        if (requiredTier == null) return null
-
+        // A null requiredTier (the credential's own VCTM/MDDL declares no
+        // key-storage requirement at all - confirmed to happen with a real
+        // demo issuer, wwwallet.org's PID) means there is nothing to
+        // eligibility-gate a plugin against, so a plugin is trivially
+        // "eligible" - it's up to steps 2/3 below (an explicit user choice)
+        // whether to actually use one.
         fun isEligible(pluginId: String): Boolean {
+            if (requiredTier == null) return true
             val tier = WscdPluginCapabilities.tierOf(pluginId) ?: return false
             return WscdPluginCapabilities.meets(tier, requiredTier)
         }
@@ -460,24 +481,42 @@ class WscdSelectionPolicy(
         // the override was set, or the overridden plugin was unregistered) -
         // if either check fails, fall through to the rest of the chain
         // rather than erroring, since a stale override is not itself a hard
-        // failure.
-        userOverrideStore.get(issuer, credentialType)?.let { override ->
+        // failure. Falls back to a WILDCARD_ISSUER entry (any issuer, this
+        // credentialType) when no issuer-specific one matches. Deliberately
+        // evaluated BEFORE the requiredTier==null short-circuit below: an
+        // explicit user override ("always use this plugin", per
+        // PreferredWscdCard's own UI copy) must apply "even for credentials
+        // that don't require" a specific tier - a real bug found via live
+        // testing, where a global override set for exactly this reason was
+        // silently ignored because the null-tier check used to return early
+        // before either user-override step ever ran.
+        (userOverrideStore.get(issuer, credentialType) ?: userOverrideStore.get(WILDCARD_ISSUER, credentialType))?.let { override ->
             if (override in availablePluginIds && isEligible(override)) return override
         }
 
-        // 3. Global user override, same validity checks.
+        // 3. Global user override, same validity checks and same rationale
+        // for running before the requiredTier==null short-circuit.
         userOverrideStore.getGlobal()?.let { override ->
             if (override in availablePluginIds && isEligible(override)) return override
         }
+
+        // No override matched, and there's no declared requirement to
+        // satisfy - TOFU/default-mapping/auto-pick below all exist to
+        // resolve an actual requirement (or its resulting ambiguity), which
+        // doesn't apply here. Unlike the two override steps above, none of
+        // these represent an explicit "use this regardless" user choice.
+        if (requiredTier == null) return null
 
         // 4. TOFU.
         tofuStore.get(issuer, credentialType)?.let { persisted ->
             if (persisted in availablePluginIds && isEligible(persisted)) return persisted
         }
 
-        // 5. Host-app default mapping.
+        // 5. Host-app default mapping. Falls back to a WILDCARD_ISSUER entry
+        // the same way step 2 does, for the same reason.
         val mappingKey = "$issuer|$credentialType"
-        defaultMapping?.get(mappingKey)?.let { mapped ->
+        val wildcardMappingKey = "$WILDCARD_ISSUER|$credentialType"
+        (defaultMapping?.get(mappingKey) ?: defaultMapping?.get(wildcardMappingKey))?.let { mapped ->
             if (mapped in availablePluginIds && isEligible(mapped)) {
                 tofuStore.put(issuer, credentialType, mapped)
                 return mapped

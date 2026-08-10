@@ -32,6 +32,7 @@ import org.siros.sdk.auth.CredentialManagerAuthProvider
 import org.siros.sdk.auth.LocalAuthProvider
 import org.siros.sdk.auth.PrfOutput
 import org.siros.sdk.auth.WebAuthnAuthClient
+import org.siros.sdk.auth.WscdAutoEnrollHint
 import org.siros.sdk.credentials.AuthException
 import org.siros.sdk.credentials.BackendApiException
 import org.siros.sdk.credentials.KeystoreException
@@ -57,6 +58,7 @@ import org.siros.sdk.keystore.DCAPIResponseEncryption
 import org.siros.sdk.keystore.JweKeystore
 import org.siros.sdk.keystore.KeypairInfo
 import org.siros.sdk.keystore.KeystoreManager
+import org.siros.sdk.keystore.WscdKeystoreAdapter
 import org.siros.sdk.keystore.WscdManager
 import org.siros.sdk.wallet.dcapi.DCAPIRequest
 import org.siros.sdk.wallet.dcapi.DCAPIRequestParser
@@ -393,6 +395,7 @@ class SirosWallet private constructor(
     ) {
         // Derive key and initialise empty keystore
         keystore.unlock(prfOutput.first, ByteArray(0), hkdfSalt, hkdfInfo)
+        unlockAvailableKeystores(prfOutput.first, ByteArray(0), hkdfSalt, hkdfInfo)
         keystore.setCredentialId(credId)
         val encryptedContainer = try {
             keystore.exportEncryptedContainer()
@@ -636,6 +639,7 @@ class SirosWallet private constructor(
             ?: ByteArray(32).also { SecureRandom().nextBytes(it) }
 
         keystore.unlock(prfOutput.first, privateData, hkdfSalt, hkdfInfo)
+        unlockAvailableKeystores(prfOutput.first, privateData, hkdfSalt, hkdfInfo)
 
         // Scope session store to this account
         val accountId = "${config.tenantId}:${userId}"
@@ -998,6 +1002,7 @@ class SirosWallet private constructor(
 
             val privateData = storedJwe?.toByteArray(Charsets.UTF_8) ?: ByteArray(0)
             keystore.unlock(prfOutput.first, privateData, hkdfSalt, hkdfInfo)
+            unlockAvailableKeystores(prfOutput.first, privateData, hkdfSalt, hkdfInfo)
 
             _state.value = WalletState.Ready(
                 userId = current.userId,
@@ -2204,6 +2209,45 @@ class SirosWallet private constructor(
     /** The persisted global user override, or `null` if none set. */
     fun currentGlobalUserOverride(): String? = wscdSelectionPolicy.currentGlobalUserOverride()
 
+    /**
+     * A hardware-backed WSCD plugin's persisted key metadata, synced via
+     * privatedata (see [WscdKeystoreAdapter.exportWscdCredentialsState]'s
+     * doc comment) - `null` before any key has ever been exported for this
+     * plugin. The host app should pass this to
+     * [WscdManager.registerFido2PluginWithState] instead of
+     * [WscdManager.registerFido2Plugin] whenever it's non-null, so a key
+     * enrolled on ANY device sharing this account - not just the one that
+     * originally enrolled it - stays addressable. Deliberately NOT backed by
+     * device-local storage: CTAP2 roaming authenticators (e.g. a YubiKey)
+     * are enrolled once but usable from any device.
+     */
+    suspend fun wscdCredentials(pluginId: String): String? =
+        (keystore as? WscdKeystoreAdapter)?.exportWscdCredentialsState()?.get(pluginId)
+
+    /**
+     * Record a WSCD plugin's freshly-exported key metadata (see
+     * [WscdManager.exportFido2State]) and sync it to the backend, so it
+     * survives to the next [wscdCredentials] call on any device sharing
+     * this account. Call after every enrollment/key-generation that could
+     * have changed the plugin's state.
+     */
+    suspend fun saveWscdCredentials(pluginId: String, state: String) {
+        (keystore as? WscdKeystoreAdapter)?.setWscdCredentialsState(pluginId, state)
+        persistAndSyncKeystore()
+    }
+
+    /**
+     * Exposes [authProvider] as a [WscdAutoEnrollHint] when it implements
+     * one - `null` otherwise (e.g. a host-supplied [AuthProvider] that
+     * doesn't). Intended use: right after a successful [login], the host
+     * app checks `wscdAutoEnrollHint()?.suggestsWscdCapableDevice()` to
+     * decide whether to offer enrolling the just-used login credential as a
+     * WSCD signing device - see that interface's doc comment for why this
+     * is a hint requiring a real (offered, not automatic) enrollment
+     * attempt to confirm, not a guarantee.
+     */
+    fun wscdAutoEnrollHint(): WscdAutoEnrollHint? = authProvider as? WscdAutoEnrollHint
+
     // New AS-based auth
     private val authServerClient = AuthServerClient(
         context = activity,
@@ -2532,6 +2576,18 @@ class SirosWallet private constructor(
      * [proofTypesSupported] (from the issuer's metadata, relayed by the
      * backend) takes precedence when present; [proofTypeHint] is a fallback
      * for a transport that only forwards a single pre-decided type.
+     *
+     * Both branches resolve [resolveEffectiveKeystoreForIssuance] before
+     * signing - a real bug found via live testing: the `jwt` branch used to
+     * sign directly on [keystore] (the wallet's single unconditional
+     * default), never consulting [WscdSelectionPolicy] at all. Since `jwt`
+     * is the PREFERRED branch whenever an issuer supports it, this meant
+     * every WSCD override (per-issuer, global, TOFU, host-app default
+     * mapping) was silently unreachable for any such issuer - only an
+     * issuer that specifically required `attestation` ever exercised
+     * plugin selection. `jwt`'s simplicity (no backend session, no
+     * attestation semantics) doesn't change which physical key/plugin
+     * should sign it, so it must resolve the same way `attestation` does.
      */
     private suspend fun generateProofsForRequest(
         audience: String,
@@ -2555,13 +2611,18 @@ class SirosWallet private constructor(
                 attestedKeyIds = backendResult.keyIds,
             ))
         } else {
-            (1..count).map {
-                val proofJwt = keystore.generateProof(
-                    audience = audience,
-                    nonce = nonce,
-                    freshKey = count > 1,
-                )
-                GeneratedProofData(proofType = "jwt", jwt = proofJwt)
+            val effectiveKeystore = resolveEffectiveKeystoreForIssuance()
+            try {
+                (1..count).map {
+                    val proofJwt = effectiveKeystore.generateProof(
+                        audience = audience,
+                        nonce = nonce,
+                        freshKey = count > 1,
+                    )
+                    GeneratedProofData(proofType = "jwt", jwt = proofJwt)
+                }
+            } finally {
+                config.onWscdOperationEnd?.invoke()
             }
         }
     }
@@ -2602,34 +2663,38 @@ class SirosWallet private constructor(
      */
     private suspend fun requestBackendKeyAttestation(audience: String, nonce: String, count: Int): BackendAttestationResult {
         val effectiveKeystore = resolveEffectiveKeystoreForIssuance()
-        val client = apiClient
-            ?: return BackendAttestationResult(
-                jwt = effectiveKeystore.generateKeyAttestation(nonce = nonce, count = count),
-                keyIds = null,
-            )
-        return try {
-            val keypairs = effectiveKeystore.generateKeypairs(count)
-            registerFido2AttestationsForBatch(keypairs, client, effectiveKeystore)
-            val securityProps = keypairs.firstOrNull()?.let { effectiveKeystore.securityProperties(it.keyId) }
-            val jwt = client.requestKeyAttestation(
-                jwks = keypairs.map { it.publicKeyJWK },
-                nonce = nonce,
-                securityProperties = securityProps,
-                credentialIssuer = audience,
-                walletInstanceId = currentWalletInstanceId(),
-            )
-            // keypairs[i]'s key is exactly attested_keys[i] in the JWT just
-            // built (jwks preserves list order) - the issuer is expected to
-            // mint credential i in the eventual batch response bound to
-            // attested_keys[i], so this ordering IS the instanceId -> kid
-            // mapping the credential-storage handler needs later.
-            BackendAttestationResult(jwt = jwt, keyIds = keypairs.map { it.keyId })
-        } catch (e: UnsupportedOperationException) {
-            Timber.d("Keystore doesn't support raw keypair generation, using self-signed key attestation")
-            BackendAttestationResult(jwt = effectiveKeystore.generateKeyAttestation(nonce = nonce, count = count), keyIds = null)
-        } catch (e: Exception) {
-            Timber.w(e, "Backend key attestation request failed, falling back to self-signed attestation")
-            BackendAttestationResult(jwt = effectiveKeystore.generateKeyAttestation(nonce = nonce, count = count), keyIds = null)
+        try {
+            val client = apiClient
+                ?: return BackendAttestationResult(
+                    jwt = effectiveKeystore.generateKeyAttestation(nonce = nonce, count = count),
+                    keyIds = null,
+                )
+            return try {
+                val keypairs = effectiveKeystore.generateKeypairs(count)
+                registerFido2AttestationsForBatch(keypairs, client, effectiveKeystore)
+                val securityProps = keypairs.firstOrNull()?.let { effectiveKeystore.securityProperties(it.keyId) }
+                val jwt = client.requestKeyAttestation(
+                    jwks = keypairs.map { it.publicKeyJWK },
+                    nonce = nonce,
+                    securityProperties = securityProps,
+                    credentialIssuer = audience,
+                    walletInstanceId = currentWalletInstanceId(),
+                )
+                // keypairs[i]'s key is exactly attested_keys[i] in the JWT just
+                // built (jwks preserves list order) - the issuer is expected to
+                // mint credential i in the eventual batch response bound to
+                // attested_keys[i], so this ordering IS the instanceId -> kid
+                // mapping the credential-storage handler needs later.
+                BackendAttestationResult(jwt = jwt, keyIds = keypairs.map { it.keyId })
+            } catch (e: UnsupportedOperationException) {
+                Timber.d("Keystore doesn't support raw keypair generation, using self-signed key attestation")
+                BackendAttestationResult(jwt = effectiveKeystore.generateKeyAttestation(nonce = nonce, count = count), keyIds = null)
+            } catch (e: Exception) {
+                Timber.w(e, "Backend key attestation request failed, falling back to self-signed attestation")
+                BackendAttestationResult(jwt = effectiveKeystore.generateKeyAttestation(nonce = nonce, count = count), keyIds = null)
+            }
+        } finally {
+            config.onWscdOperationEnd?.invoke()
         }
     }
 
@@ -2673,10 +2738,49 @@ class SirosWallet private constructor(
      * caller as a clear, distinct failure rather than silently falling back
      * to an insufficient plugin.
      */
+    /**
+     * Propagates unlock to every distinct [KeystoreManager] in
+     * [WalletConfig.availableKeystores], not just [keystore].
+     *
+     * Found via live hardware testing: [resolveEffectiveKeystoreForIssuance]
+     * can hand back an `availableKeystores` entry (e.g. "fido2") that is a
+     * SEPARATE [KeystoreManager] instance from [keystore] - only [keystore]
+     * itself was ever unlocked (at each of this class's `keystore.unlock(...)`
+     * call sites), so the first real signing attempt through a resolved
+     * non-default plugin threw `IllegalStateException("Keystore is locked")`
+     * before ever reaching a PIN prompt. A plugin whose unlock fails here is
+     * logged and skipped rather than failing the whole login/registration -
+     * it simply won't be eligible for [WscdSelectionPolicy] resolution until
+     * it can be unlocked (e.g. on a later retry).
+     */
+    private suspend fun unlockAvailableKeystores(
+        prfOutput: ByteArray,
+        encryptedContainer: ByteArray,
+        hkdfSalt: ByteArray,
+        hkdfInfo: ByteArray,
+    ) {
+        val seen = mutableSetOf<KeystoreManager>(keystore)
+        config.availableKeystores?.values?.forEach { manager ->
+            if (seen.add(manager)) {
+                try {
+                    manager.unlock(prfOutput, encryptedContainer, hkdfSalt, hkdfInfo)
+                } catch (e: Exception) {
+                    Timber.w(e, "unlockAvailableKeystores: failed to unlock an availableKeystores entry")
+                }
+            }
+        }
+    }
+
     private suspend fun resolveEffectiveKeystoreForIssuance(): KeystoreManager {
         val available = config.availableKeystores
-        if (available.isNullOrEmpty()) return keystore
-        val offer = activeOffer ?: return keystore
+        if (available.isNullOrEmpty()) {
+            Timber.i("resolveEffectiveKeystoreForIssuance: no availableKeystores configured, using default keystore")
+            return keystore
+        }
+        val offer = activeOffer ?: run {
+            Timber.i("resolveEffectiveKeystoreForIssuance: no activeOffer, using default keystore")
+            return keystore
+        }
         val issuer = offer.credentialIssuerIdentifier
 
         val mddlSchema: MddlSchema? = if (activeVctm == null) {
@@ -2705,15 +2809,25 @@ class SirosWallet private constructor(
         // unnecessarily when it's already sufficient.
         val currentDefaultPluginId = available.entries.firstOrNull { it.value === keystore }?.key
 
+        Timber.i(
+            "resolveEffectiveKeystoreForIssuance: issuer=$issuer credentialType=$credentialType " +
+                "requiredTier=$requiredTier available=${available.keys} currentDefault=$currentDefaultPluginId " +
+                "globalOverride=${wscdSelectionPolicy.currentGlobalUserOverride()} " +
+                "userOverrides=${wscdSelectionPolicy.currentUserOverrides()}",
+        )
         val pluginId = wscdSelectionPolicy.resolve(
             issuer = issuer,
             credentialType = credentialType,
             requiredTier = requiredTier,
             availablePluginIds = available.keys,
             currentDefaultPluginId = currentDefaultPluginId,
-        ) ?: return keystore
+        )
+        Timber.i("resolveEffectiveKeystoreForIssuance: resolve() returned pluginId=$pluginId")
+        if (pluginId == null) return keystore
 
-        return available[pluginId] ?: keystore
+        val resolved = available[pluginId] ?: keystore
+        config.onWscdOperationStart?.invoke(pluginId)
+        return resolved
     }
 
     /**

@@ -77,6 +77,86 @@ class WscdSelectionPolicyTest {
         assertTrue("no requirement must never write a TOFU entry", tofu.entries.isEmpty())
     }
 
+    @Test
+    fun resolve_usesGlobalUserOverride_evenWhenRequiredTierIsNull() = runTest {
+        // Reproduces a real bug found via live testing: PreferredWscdCard's
+        // own UI copy promises "always use this WSCD, even for credentials
+        // that don't require it" (a real demo PID issuer's credential
+        // declared no requiredTier at all), but resolve() used to return
+        // null before the global-override check ever ran whenever
+        // requiredTier was null - silently ignoring an explicit user choice.
+        val tofu = InMemoryWscdTofuStore()
+        val overrides = InMemoryWscdUserOverrideStore().apply { globalOverride = "fido2" }
+        val policy = WscdSelectionPolicy(
+            tofuStore = tofu,
+            defaultMapping = null,
+            requestChoice = null,
+            userOverrideStore = overrides,
+        )
+
+        val result = policy.resolve(
+            issuer = issuer,
+            credentialType = credentialType,
+            requiredTier = null,
+            availablePluginIds = setOf("softkey", "fido2"),
+        )
+
+        assertEquals(
+            "an explicit global override must apply even when the credential declares no required tier",
+            "fido2",
+            result,
+        )
+    }
+
+    @Test
+    fun resolve_usesPerIssuerUserOverride_evenWhenRequiredTierIsNull() = runTest {
+        val tofu = InMemoryWscdTofuStore()
+        val overrides = InMemoryWscdUserOverrideStore().apply { put(issuer, credentialType, "fido2") }
+        val policy = WscdSelectionPolicy(
+            tofuStore = tofu,
+            defaultMapping = null,
+            requestChoice = null,
+            userOverrideStore = overrides,
+        )
+
+        val result = policy.resolve(
+            issuer = issuer,
+            credentialType = credentialType,
+            requiredTier = null,
+            availablePluginIds = setOf("softkey", "fido2"),
+        )
+
+        assertEquals(
+            "an explicit per-issuer override must apply even when the credential declares no required tier",
+            "fido2",
+            result,
+        )
+    }
+
+    @Test
+    fun resolve_returnsNull_whenRequiredTierIsNull_andOverridePluginIsUnregistered() = runTest {
+        // An override still must not be trusted blindly when its plugin
+        // isn't actually registered - the null-tier bypass only skips the
+        // TIER check, not the availability check.
+        val tofu = InMemoryWscdTofuStore()
+        val overrides = InMemoryWscdUserOverrideStore().apply { globalOverride = "fido2" }
+        val policy = WscdSelectionPolicy(
+            tofuStore = tofu,
+            defaultMapping = null,
+            requestChoice = null,
+            userOverrideStore = overrides,
+        )
+
+        val result = policy.resolve(
+            issuer = issuer,
+            credentialType = credentialType,
+            requiredTier = null,
+            availablePluginIds = setOf("softkey"), // fido2 not registered
+        )
+
+        assertNull(result)
+    }
+
     // ── 2. TOFU hit ──────────────────────────────────────────────────
 
     @Test
@@ -141,6 +221,52 @@ class WscdSelectionPolicyTest {
 
         assertEquals("fido2", result)
         assertEquals("a default-mapping hit must be persisted as the new TOFU entry", "fido2", tofu.get(issuer, credentialType))
+    }
+
+    @Test
+    fun resolve_usesWildcardIssuerDefaultMapping_whenNoIssuerSpecificEntry() = runTest {
+        val tofu = InMemoryWscdTofuStore()
+        val policy = WscdSelectionPolicy(
+            tofuStore = tofu,
+            defaultMapping = mapOf("${WscdSelectionPolicy.WILDCARD_ISSUER}|$credentialType" to "fido2"),
+            requestChoice = null,
+        )
+
+        val result = policy.resolve(
+            issuer = issuer,
+            credentialType = credentialType,
+            requiredTier = "iso_18045_high",
+            availablePluginIds = setOf("softkey", "fido2", "r2ps"),
+        )
+
+        assertEquals(
+            "a wildcard-issuer default-mapping entry must resolve for any concrete issuer",
+            "fido2",
+            result,
+        )
+        assertEquals("a wildcard-mapping hit must still be persisted as a concrete TOFU entry", "fido2", tofu.get(issuer, credentialType))
+    }
+
+    @Test
+    fun resolve_prefersIssuerSpecificDefaultMapping_overWildcardIssuer() = runTest {
+        val tofu = InMemoryWscdTofuStore()
+        val policy = WscdSelectionPolicy(
+            tofuStore = tofu,
+            defaultMapping = mapOf(
+                "$issuer|$credentialType" to "fido2",
+                "${WscdSelectionPolicy.WILDCARD_ISSUER}|$credentialType" to "r2ps",
+            ),
+            requestChoice = null,
+        )
+
+        val result = policy.resolve(
+            issuer = issuer,
+            credentialType = credentialType,
+            requiredTier = "iso_18045_high",
+            availablePluginIds = setOf("softkey", "fido2", "r2ps"),
+        )
+
+        assertEquals("an issuer-specific entry must win over a wildcard-issuer one", "fido2", result)
     }
 
     // ── 4. Auto single-match / prefer current default ───────────────
@@ -454,6 +580,33 @@ class WscdSelectionPolicyTest {
     }
 
     // ── User-override precedence (new feature) ────────────────────────
+
+    @Test
+    fun resolve_usesWildcardIssuerUserOverride_whenNoIssuerSpecificEntry() = runTest {
+        val tofu = InMemoryWscdTofuStore()
+        val overrides = InMemoryWscdUserOverrideStore().apply {
+            put(WscdSelectionPolicy.WILDCARD_ISSUER, credentialType, "fido2")
+        }
+        val policy = WscdSelectionPolicy(
+            tofuStore = tofu,
+            defaultMapping = null,
+            requestChoice = null,
+            userOverrideStore = overrides,
+        )
+
+        val result = policy.resolve(
+            issuer = issuer,
+            credentialType = credentialType,
+            requiredTier = "iso_18045_high",
+            availablePluginIds = setOf("softkey", "fido2", "r2ps"),
+        )
+
+        assertEquals(
+            "a wildcard-issuer user override must resolve for any concrete issuer",
+            "fido2",
+            result,
+        )
+    }
 
     @Test
     fun resolve_usesPerIssuerUserOverride_beforeGlobalOverrideOrTofu() = runTest {

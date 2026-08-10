@@ -11,7 +11,11 @@ import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
+import android.os.Build
 import android.util.Log
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 import org.siros.sdk.keystore.Ctap2TransportException
 import org.siros.sdk.keystore.Ctap2TransportProvider
 import java.io.ByteArrayOutputStream
@@ -63,6 +67,10 @@ class UsbCtap2Transport(private val context: Context) : Ctap2TransportProvider {
 
         // Timeout for USB operations (ms)
         private const val USB_TIMEOUT_MS = 30_000
+
+        // How long connect() waits for a matching device to be plugged in
+        // when none is already attached (see waitForAttachAndOpen).
+        private const val USB_ATTACH_WAIT_TIMEOUT_MS = 30_000L
 
         private const val ACTION_USB_PERMISSION = "org.siros.sdk.sample.USB_PERMISSION"
     }
@@ -398,8 +406,19 @@ class UsbCtap2Transport(private val context: Context) : Ctap2TransportProvider {
         return usbManager.deviceList.values.any { it.vendorId == YUBICO_VENDOR_ID && hasFidoInterface(it) }
     }
 
+    /**
+     * Opens an already-attached FIDO device if one exists, otherwise waits
+     * for [UsbManager.ACTION_USB_DEVICE_ATTACHED] up to
+     * [USB_ATTACH_WAIT_TIMEOUT_MS] - lets this transport be raced against
+     * [NfcCtap2Transport] (see `CompositeCtap2Transport`) without requiring
+     * the key to already be plugged in before the race starts.
+     */
     override suspend fun connect() {
-        val newSession = openFidoDevice()
+        val newSession = try {
+            openFidoDevice()
+        } catch (e: Ctap2TransportException.NotAvailable) {
+            waitForAttachAndOpen()
+        }
         try {
             cid = ctaphidInit(newSession)
         } catch (e: Exception) {
@@ -407,6 +426,29 @@ class UsbCtap2Transport(private val context: Context) : Ctap2TransportProvider {
             throw e
         }
         session = newSession
+    }
+
+    private suspend fun waitForAttachAndOpen(): UsbSession {
+        val deviceDeferred = CompletableDeferred<UsbDevice>()
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) {
+                if (intent.action != UsbManager.ACTION_USB_DEVICE_ATTACHED) return
+                val device = intent.getParcelableExtraCompat<UsbDevice>(UsbManager.EXTRA_DEVICE) ?: return
+                if (device.vendorId == YUBICO_VENDOR_ID && hasFidoInterface(device)) {
+                    deviceDeferred.complete(device)
+                }
+            }
+        }
+        context.registerReceiver(receiver, IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED), Context.RECEIVER_NOT_EXPORTED)
+        try {
+            Log.i(TAG, "Waiting for USB attach - plug in the security key")
+            withTimeout(USB_ATTACH_WAIT_TIMEOUT_MS) { deviceDeferred.await() }
+        } catch (e: TimeoutCancellationException) {
+            throw Ctap2TransportException.NotAvailable()
+        } finally {
+            context.unregisterReceiver(receiver)
+        }
+        return openFidoDevice()
     }
 
     override suspend fun disconnect() {
@@ -425,9 +467,20 @@ class UsbCtap2Transport(private val context: Context) : Ctap2TransportProvider {
     override suspend fun send(command: ByteArray): ByteArray {
         val activeSession = session ?: throw Ctap2TransportException.DeviceDisconnected()
         val activeCid = cid ?: throw Ctap2TransportException.DeviceDisconnected()
-        return ctaphidCbor(activeSession, activeCid, command)
+        Log.i(TAG, "CTAP2 command (${command.size}B): ${command.toHex()}")
+        val response = ctaphidCbor(activeSession, activeCid, command)
+        Log.i(TAG, "CTAP2 response (${response.size}B): ${response.toHex()}")
+        return response
     }
 
     private fun ByteArray.toHex(): String =
         joinToString("") { "%02x".format(it) }
+
+    private inline fun <reified T> Intent.getParcelableExtraCompat(name: String): T? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getParcelableExtra(name, T::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            getParcelableExtra(name) as? T
+        }
 }

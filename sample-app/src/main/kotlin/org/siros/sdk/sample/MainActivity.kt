@@ -83,8 +83,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import org.siros.sdk.credentials.PresentationRecord
-import org.siros.sdk.keystore.DestroyMode
-import org.siros.sdk.keystore.LifecycleState
 import org.siros.sdk.wallet.WalletState
 import android.util.Log
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -205,15 +203,7 @@ class MainActivity : ComponentActivity() {
         when (action) {
             "enroll" -> viewModel.enrollWscd()
             "rotate" -> viewModel.rotateLifecycle()
-            "destroy" -> {
-                val modeStr = intent.getStringExtra("mode") ?: "local"
-                val mode = when (modeStr) {
-                    "revoke" -> DestroyMode.RemoteRevokeIfSupported
-                    "strict" -> DestroyMode.Strict
-                    else -> DestroyMode.LocalOnly
-                }
-                viewModel.destroyLifecycle(mode)
-            }
+            "destroy" -> viewModel.destroyLifecycle()
             "status" -> viewModel.emitWscaTestStatus()
             "config" -> {
                 intent.getStringExtra("plugin_id")?.let {
@@ -253,6 +243,11 @@ fun WalletScreen(viewModel: WalletViewModel) {
     val infoMessage by viewModel.infoMessage.collectAsState()
     val flowErrorDialog by viewModel.flowErrorDialog.collectAsState()
     val pendingWscdChoice by viewModel.pendingWscdChoice.collectAsState()
+    val pendingPinEntry by viewModel.pendingPinEntry.collectAsState()
+    val pendingTransportChoice by viewModel.pendingTransportChoice.collectAsState()
+    val fido2AwaitingPresentation by viewModel.fido2AwaitingPresentation.collectAsState()
+    val fido2TransportMode by viewModel.fido2TransportMode.collectAsState()
+    val pendingAutoEnrollOffer by viewModel.pendingAutoEnrollOffer.collectAsState()
     val presentationHistory by viewModel.presentationHistory.collectAsState()
     val selectedCredential by viewModel.selectedCredential.collectAsState()
     val showHistory by viewModel.showHistory.collectAsState()
@@ -308,6 +303,40 @@ fun WalletScreen(viewModel: WalletViewModel) {
     // one screen.
     pendingWscdChoice?.let { pending ->
         WscdChoiceDialog(pending, onChoose = viewModel::respondToWscdChoice)
+    }
+
+    // FIDO2 CTAP2 ClientPin asking for the authenticator's real PIN (see
+    // PendingPinEntry's doc comment) - same rationale as pendingWscdChoice
+    // above for rendering it here rather than inside one specific screen.
+    pendingPinEntry?.let { pending ->
+        PinEntryDialog(pending, onSubmit = viewModel::respondToPinEntry)
+    }
+
+    // CompositeCtap2Transport found both USB and NFC available around the
+    // same time (see that class's AMBIGUITY_GRACE_MS doc comment) - same
+    // rationale as pendingPinEntry above for rendering it here.
+    pendingTransportChoice?.let {
+        TransportChoiceDialog(respond = viewModel::respondToTransportChoice)
+    }
+
+    // PIN accepted, now waiting for the user to physically present the key
+    // (see WalletViewModel.fido2AwaitingPresentation's doc comment for why
+    // this is a separate step from PIN entry above, not shown at the same
+    // time).
+    if (fido2AwaitingPresentation) {
+        Fido2PresentKeyGuide(
+            mode = fido2TransportMode,
+            onCancel = viewModel::cancelWscdLifecycleOp,
+        )
+    }
+
+    // Offered once per process right after a successful login - see
+    // WalletViewModel.maybeOfferWscdAutoEnroll's doc comment. Rendered here
+    // (not inside one specific screen) for the same reason as the other
+    // pending-* dialogs above: it can fire regardless of which screen is
+    // currently showing.
+    pendingAutoEnrollOffer?.let { pluginId ->
+        AutoEnrollOfferDialog(pluginId = pluginId, onRespond = viewModel::respondToAutoEnrollOffer)
     }
 
     // Not logged in → show login screen (no app chrome)
@@ -379,13 +408,16 @@ fun WalletScreen(viewModel: WalletViewModel) {
                 onBack = viewModel::closeHistory,
             )
 
-            // WSCA developer sub-screen
+            // Consolidated WSCD settings sub-screen (one tab per plugin -
+            // see WscdScreen.kt's doc comment; replaces the old standalone
+            // "WSCA Developer" screen plus the WSCD cards that used to live
+            // in the Settings tab below).
             showWscaDeveloper -> {
                 val wscdKeys by viewModel.wscdKeys.collectAsState()
                 val wscdLifecycleStatus by viewModel.wscdLifecycleStatus.collectAsState()
                 val wscdKeySecurityProps by viewModel.wscdKeySecurityProps.collectAsState()
                 val selectedPluginId by viewModel.selectedPluginId.collectAsState()
-                WscaDeveloperScreen(
+                WscdScreen(
                     lifecycleState = viewModel.lifecycleState.collectAsState().value,
                     lifecycleStatus = wscdLifecycleStatus,
                     keys = wscdKeys,
@@ -393,13 +425,27 @@ fun WalletScreen(viewModel: WalletViewModel) {
                     selectedPluginId = selectedPluginId,
                     r2psServerUrl = r2psServerUrl,
                     defaultWscdMappingText = viewModel.defaultWscdMappingText.collectAsState().value,
+                    fido2TransportMode = viewModel.fido2TransportMode.collectAsState().value,
+                    wscdLifecycleBusy = viewModel.wscdLifecycleBusy.collectAsState().value,
+                    wscdGlobalOverride = viewModel.wscdGlobalOverride.collectAsState().value,
+                    wscdUserOverrides = viewModel.wscdUserOverrides.collectAsState().value,
+                    wscdTofuMapping = viewModel.wscdTofuMapping.collectAsState().value,
+                    ts11DiscoveredCredentials = viewModel.ts11DiscoveredCredentials.collectAsState().value,
+                    ts11DiscoveryInProgress = viewModel.ts11DiscoveryInProgress.collectAsState().value,
                     onSelectPlugin = viewModel::selectPlugin,
+                    onSelectFido2TransportMode = viewModel::setFido2TransportMode,
                     onR2psServerUrlChange = viewModel::updateR2psServerUrl,
                     onDefaultWscdMappingTextChange = viewModel::updateDefaultWscdMappingText,
                     onEnroll = viewModel::enrollWscd,
                     onRotate = viewModel::rotateLifecycle,
                     onDestroy = viewModel::destroyLifecycle,
                     onRefresh = viewModel::refreshWscdInfo,
+                    onSetWscdGlobalOverride = viewModel::setWscdGlobalOverride,
+                    onSetWscdUserOverride = viewModel::setWscdUserOverride,
+                    onClearWscdUserOverride = viewModel::clearWscdUserOverride,
+                    onForgetWscdTofuMapping = viewModel::forgetWscdTofuMapping,
+                    onForgetAllWscdTofuMapping = viewModel::forgetAllWscdTofuMappings,
+                    onDiscoverTs11Schemas = viewModel::discoverTs11Schemas,
                     onBack = viewModel::closeWscaDeveloper,
                 )
             }
@@ -510,13 +556,10 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             tenantId = viewModel.tenantId.collectAsState().value,
                             useWmpProtocol = useWmpProtocol,
                             presentationCount = presentationHistory.size,
-                            lifecycleState = viewModel.lifecycleState.collectAsState().value,
-                            enrollmentInProgress = viewModel.enrollmentInProgress.collectAsState().value,
                             onDisconnect = viewModel::disconnect,
                             onDeleteAccount = viewModel::deleteAccount,
                             onShowHistory = viewModel::openHistory,
-                            onEnrollWscd = viewModel::enrollWscd,
-                            onShowWscaDeveloper = viewModel::openWscaDeveloper,
+                            onShowWscdSettings = viewModel::openWscaDeveloper,
                             onForgetAccount = viewModel::forgetAccount,
                             passkeys = viewModel.listPasskeys(),
                             onRenamePasskey = viewModel::renamePasskey,
@@ -526,15 +569,6 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onUpdateShowDiagnosticMessages = viewModel::updateShowDiagnosticMessages,
                             credentialConsumptionPolicy = viewModel.credentialConsumptionPolicy.collectAsState().value,
                             onUpdateCredentialConsumptionPolicy = viewModel::updateCredentialConsumptionPolicy,
-                            wscdTofuMapping = viewModel.wscdTofuMapping.collectAsState().value,
-                            onForgetWscdTofuMapping = viewModel::forgetWscdTofuMapping,
-                            onForgetAllWscdTofuMappings = viewModel::forgetAllWscdTofuMappings,
-                            availableWscdPluginIds = viewModel.availableWscdPluginIds.collectAsState().value,
-                            wscdGlobalOverride = viewModel.wscdGlobalOverride.collectAsState().value,
-                            onSetWscdGlobalOverride = viewModel::setWscdGlobalOverride,
-                            wscdUserOverrides = viewModel.wscdUserOverrides.collectAsState().value,
-                            onSetWscdUserOverride = viewModel::setWscdUserOverride,
-                            onClearWscdUserOverride = viewModel::clearWscdUserOverride,
                         )
                         // selectedTab can transiently be 1 (the "Add" action, not a
                         // real persisted tab) right as a flow finishes and the state
@@ -1066,13 +1100,10 @@ fun SettingsTab(
     tenantId: String,
     useWmpProtocol: Boolean,
     presentationCount: Int,
-    lifecycleState: LifecycleState?,
-    enrollmentInProgress: Boolean,
     onDisconnect: () -> Unit,
     onDeleteAccount: () -> Unit,
     onShowHistory: () -> Unit,
-    onEnrollWscd: () -> Unit,
-    onShowWscaDeveloper: () -> Unit,
+    onShowWscdSettings: () -> Unit,
     onForgetAccount: ((String) -> Unit)? = null,
     passkeys: List<org.siros.sdk.wallet.CachedPasskey> = emptyList(),
     onRenamePasskey: ((String, String) -> Unit)? = null,
@@ -1084,15 +1115,6 @@ fun SettingsTab(
     credentialConsumptionPolicy: org.siros.sdk.credentials.CredentialConsumptionPolicy =
         org.siros.sdk.credentials.CredentialConsumptionPolicy.NEVER_CONSUME,
     onUpdateCredentialConsumptionPolicy: ((org.siros.sdk.credentials.CredentialConsumptionPolicy) -> Unit)? = null,
-    wscdTofuMapping: Map<String, String> = emptyMap(),
-    onForgetWscdTofuMapping: ((issuer: String, credentialType: String) -> Unit)? = null,
-    onForgetAllWscdTofuMappings: (() -> Unit)? = null,
-    availableWscdPluginIds: List<String> = emptyList(),
-    wscdGlobalOverride: String? = null,
-    onSetWscdGlobalOverride: ((String?) -> Unit)? = null,
-    wscdUserOverrides: Map<String, String> = emptyMap(),
-    onSetWscdUserOverride: ((issuer: String, credentialType: String, pluginId: String) -> Unit)? = null,
-    onClearWscdUserOverride: ((issuer: String, credentialType: String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -1229,7 +1251,16 @@ fun SettingsTab(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // WSCD security-key choice (trust-on-first-use) section
+        // WSCD settings - a single entry point into the consolidated,
+        // tabbed WscdScreen (one tab per plugin: softkey/r2ps/fido2), which
+        // now owns everything that used to be spread across four separate
+        // cards here (WSCD Choices/TOFU, Preferred WSCD, WSCD Overrides,
+        // WSCD Lifecycle/Enroll) plus the old standalone "WSCA Developer"
+        // screen - see WscdScreen.kt's doc comment for the full
+        // consolidation. Enroll/Rotate/Destroy/Refresh live in that
+        // screen's collapsible Developer section, since they're
+        // diagnostic/test actions, not something an end user taps
+        // routinely.
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
@@ -1237,270 +1268,25 @@ fun SettingsTab(
             elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
         ) {
             Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
+                Text(
+                    "Security Key (WSCD)",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "Which secure key storage (software, R2PS remote HSM, or a FIDO2 security " +
+                        "key) backs each credential, plus enrollment and developer diagnostics.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = onShowWscdSettings,
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    shape = RoundedCornerShape(12.dp),
                 ) {
-                    Text(
-                        "Security Key Choices",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    if (wscdTofuMapping.isNotEmpty() && onForgetAllWscdTofuMappings != null) {
-                        TextButton(onClick = onForgetAllWscdTofuMappings) {
-                            Text("Forget All")
-                        }
-                    }
-                }
-                Text(
-                    "Which security key you chose for each credential type, remembered so you're only " +
-                        "asked once. Forget a choice to be asked again next time.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                if (wscdTofuMapping.isEmpty()) {
-                    Text(
-                        "No security key choices remembered yet",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    wscdTofuMapping.forEach { (key, pluginId) ->
-                        // key is "issuer|credentialType" (see WscdSelectionPolicy) -
-                        // split back into its two parts for both display and the
-                        // per-row "forget" action's parameters.
-                        val (issuer, credentialType) = key.split("|", limit = 2)
-                            .let { it.getOrElse(0) { "" } to it.getOrElse(1) { "" } }
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(credentialType, style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    "$issuer  →  $pluginId",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            if (onForgetWscdTofuMapping != null) {
-                                IconButton(
-                                    onClick = { onForgetWscdTofuMapping(issuer, credentialType) },
-                                    modifier = Modifier.size(32.dp),
-                                ) {
-                                    Icon(
-                                        Icons.Default.Close,
-                                        contentDescription = "Forget this choice",
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Preferred security key (single global user override) section - see
-        // WscdSelectionPolicy.setGlobalUserOverride's doc comment. Distinct
-        // from "Security Key Choices" above: this is a deliberate, explicit
-        // "always use this plugin, no matter what any issuer/credential type
-        // actually requires" preference, not an auto-remembered outcome of an
-        // ambiguous resolution.
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        ) {
-            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
-                Text(
-                    "Preferred Security Key",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    "Always use this security key, even for credentials that don't require it. " +
-                        "Applies to every issuer unless a per-issuer override below takes precedence.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                if (availableWscdPluginIds.isEmpty()) {
-                    Text(
-                        "No security keys registered yet",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    Column(Modifier.selectableGroup()) {
-                        val options = listOf<String?>(null) + availableWscdPluginIds
-                        for (pluginId in options) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .selectable(
-                                        selected = pluginId == wscdGlobalOverride,
-                                        onClick = { onSetWscdGlobalOverride?.invoke(pluginId) },
-                                        role = Role.RadioButton,
-                                        enabled = onSetWscdGlobalOverride != null,
-                                    )
-                                    .padding(vertical = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                RadioButton(
-                                    selected = pluginId == wscdGlobalOverride,
-                                    onClick = { onSetWscdGlobalOverride?.invoke(pluginId) },
-                                    enabled = onSetWscdGlobalOverride != null,
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(pluginId ?: "No preference", style = MaterialTheme.typography.bodyMedium)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Per-issuer security key overrides section - kept separate from
-        // "Security Key Choices" (TOFU) above so the user can tell "what I
-        // was asked and picked" apart from "what I've explicitly locked in".
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        ) {
-            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
-                Text(
-                    "Security Key Overrides",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    "Always use a specific security key for a specific issuer and credential type, " +
-                        "even if it doesn't require one.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                if (wscdUserOverrides.isEmpty()) {
-                    Text(
-                        "No security key overrides set",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    wscdUserOverrides.forEach { (key, pluginId) ->
-                        // key is "issuer|credentialType", same shape as the
-                        // TOFU mapping's keys above.
-                        val (issuer, credentialType) = key.split("|", limit = 2)
-                            .let { it.getOrElse(0) { "" } to it.getOrElse(1) { "" } }
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(credentialType, style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    "$issuer  →  $pluginId",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            if (onSetWscdUserOverride != null && availableWscdPluginIds.size > 1) {
-                                // "Change the plugin" - cycle to the next
-                                // available plugin ID, a minimal affordance
-                                // that avoids pulling in a dropdown-menu
-                                // dependency for a 2-3-option picker.
-                                IconButton(
-                                    onClick = {
-                                        val idx = availableWscdPluginIds.indexOf(pluginId)
-                                        val next = availableWscdPluginIds[(idx + 1).mod(availableWscdPluginIds.size)]
-                                        onSetWscdUserOverride(issuer, credentialType, next)
-                                    },
-                                    modifier = Modifier.size(32.dp),
-                                ) {
-                                    Icon(Icons.Default.Edit, contentDescription = "Change security key", modifier = Modifier.size(16.dp))
-                                }
-                            }
-                            if (onClearWscdUserOverride != null) {
-                                IconButton(
-                                    onClick = { onClearWscdUserOverride(issuer, credentialType) },
-                                    modifier = Modifier.size(32.dp),
-                                ) {
-                                    Icon(Icons.Default.Close, contentDescription = "Clear this override", modifier = Modifier.size(16.dp))
-                                }
-                            }
-                        }
-                    }
-                }
-                if (onSetWscdUserOverride != null && availableWscdPluginIds.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    var newIssuer by remember { mutableStateOf("") }
-                    var newCredentialType by remember { mutableStateOf("") }
-                    var newPluginId by remember(availableWscdPluginIds) { mutableStateOf(availableWscdPluginIds.first()) }
-                    Text(
-                        "Add an override",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    OutlinedTextField(
-                        value = newIssuer,
-                        onValueChange = { newIssuer = it },
-                        label = { Text("Issuer URL") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        shape = RoundedCornerShape(8.dp),
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    OutlinedTextField(
-                        value = newCredentialType,
-                        onValueChange = { newCredentialType = it },
-                        label = { Text("Credential type (vct/doctype)") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        shape = RoundedCornerShape(8.dp),
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f).selectableGroup()) {
-                            for (pluginId in availableWscdPluginIds) {
-                                Row(
-                                    modifier = Modifier
-                                        .selectable(
-                                            selected = pluginId == newPluginId,
-                                            onClick = { newPluginId = pluginId },
-                                            role = Role.RadioButton,
-                                        ),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    RadioButton(selected = pluginId == newPluginId, onClick = { newPluginId = pluginId })
-                                    Text(pluginId, style = MaterialTheme.typography.bodySmall)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                }
-                            }
-                        }
-                        TextButton(
-                            onClick = {
-                                if (newIssuer.isNotBlank() && newCredentialType.isNotBlank()) {
-                                    onSetWscdUserOverride(newIssuer.trim(), newCredentialType.trim(), newPluginId)
-                                    newIssuer = ""
-                                    newCredentialType = ""
-                                }
-                            },
-                            enabled = newIssuer.isNotBlank() && newCredentialType.isNotBlank(),
-                        ) { Text("Add") }
-                    }
+                    Text("WSCD Settings")
                 }
             }
         }
@@ -1617,51 +1403,6 @@ fun SettingsTab(
             shape = RoundedCornerShape(12.dp),
         ) {
             Text(stringResource(R.string.settings_presentation_history) + " ($presentationCount)")
-        }
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        // WSCD Lifecycle
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = "WSCD Lifecycle",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                SettingsRow(
-                    label = "State",
-                    value = lifecycleState?.name ?: "Not enrolled",
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Button(
-                    onClick = onEnrollWscd,
-                    enabled = !enrollmentInProgress && lifecycleState == null,
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    if (enrollmentInProgress) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
-                        )
-                    } else {
-                        Text("Enroll WSCD")
-                    }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedButton(
-                    onClick = onShowWscaDeveloper,
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Text("WSCA Developer")
-                }
-            }
         }
 
         Spacer(modifier = Modifier.height(32.dp))

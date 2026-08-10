@@ -57,6 +57,14 @@ class JweKeystore(
     @Volatile private var containerMetadata: ContainerData? = null
     // Preserve full WalletStateContainer for round-trip fidelity
     private var preservedWalletState: kotlinx.serialization.json.JsonObject? = null
+    // Hardware-backed WSCD plugins' exported key metadata (kid ->
+    // credential_handle/pubkey mappings, never private key material), keyed
+    // by plugin ID - see privatedata-spec SPEC.md §6.1 "S.wscdCredentials".
+    // This is what makes a FIDO2 (or future R2PS) hardware key addressable
+    // again from ANY device sharing this account, not just the one that
+    // enrolled it - a roaming CTAP2 authenticator can be tapped/plugged into
+    // a different device entirely, and every device needs the same mapping.
+    private var wscdCredentials: MutableMap<String, String> = mutableMapOf()
 
     override val isUnlocked: Boolean get() = mainKey != null
 
@@ -267,12 +275,25 @@ class JweKeystore(
                 presentationRecords[presId] = recordJson.toString()
             }
         }
+
+        // Parse wscdCredentials: { [pluginId]: "<opaque exported state>" } -
+        // privatedata-spec §6.1, a native-SDK-only extension (see
+        // wscdCredentials field's own doc comment above).
+        val wscdCredsObj = state["wscdCredentials"] as? kotlinx.serialization.json.JsonObject
+        if (wscdCredsObj != null) {
+            for ((pluginId, value) in wscdCredsObj) {
+                (value as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.let {
+                    wscdCredentials[pluginId] = it
+                }
+            }
+        }
     }
 
     override fun lock() {
         keys.clear()
         credentials.clear()
         presentationRecords.clear()
+        wscdCredentials.clear()
         mainKey = null
         containerMetadata = null
         preservedWalletState = null
@@ -299,6 +320,26 @@ class JweKeystore(
      */
     suspend fun exportKeypairJwks(): Map<String, String> = mutex.withLock {
         keys.mapValues { it.value.toJSONString() }
+    }
+
+    /**
+     * Every hardware-backed WSCD plugin's persisted key metadata, keyed by
+     * plugin ID (see [wscdCredentials]'s doc comment) - read after [unlock]
+     * to restore a previously-enrolled key (e.g. via
+     * `WscdManager.registerFido2PluginWithState`).
+     */
+    suspend fun exportWscdCredentials(): Map<String, String> = mutex.withLock {
+        wscdCredentials.toMap()
+    }
+
+    /**
+     * Record a WSCD plugin's freshly-exported key metadata so the next
+     * [exportEncryptedContainer] call folds it into `S.wscdCredentials` and
+     * it survives to the next [unlock] (on this device or any other sharing
+     * this account).
+     */
+    suspend fun setWscdCredentials(pluginId: String, state: String) = mutex.withLock {
+        wscdCredentials[pluginId] = state
     }
 
     /**
@@ -663,6 +704,18 @@ class JweKeystore(
                         ?: kotlinx.serialization.json.JsonArray(emptyList())
                 } ?: kotlinx.serialization.json.JsonArray(emptyList())
                 put("credentialIssuanceSessions", credIssuanceSessions)
+
+                // wscdCredentials (privatedata-spec §6.1, native-SDK-only
+                // extension) - wscdCredentials the in-memory map IS the
+                // source of truth once loaded (see loadFromWalletStateV3),
+                // no need to merge against existingState separately.
+                if (wscdCredentials.isNotEmpty()) {
+                    put("wscdCredentials", kotlinx.serialization.json.buildJsonObject {
+                        for ((pluginId, state) in wscdCredentials) {
+                            put(pluginId, kotlinx.serialization.json.JsonPrimitive(state))
+                        }
+                    })
+                }
             })
         }
     }

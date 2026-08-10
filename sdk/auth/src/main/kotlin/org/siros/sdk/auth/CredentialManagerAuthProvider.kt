@@ -13,6 +13,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -30,7 +31,7 @@ import timber.log.Timber
  */
 class CredentialManagerAuthProvider(
     private val context: Context,
-) : AuthProvider {
+) : AuthProvider, WscdAutoEnrollHint {
 
     private val credentialManager = CredentialManager.create(context)
     private val json = Json { ignoreUnknownKeys = true }
@@ -48,6 +49,31 @@ class CredentialManagerAuthProvider(
      */
     var lastPrfOutput: PrfOutput? = null
         private set
+
+    /**
+     * The top-level WebAuthn `PublicKeyCredential.authenticatorAttachment`
+     * (`"platform"` or `"cross-platform"`) from the most recent
+     * [authenticate] call, or null if the response didn't include it (older
+     * OS/API versions, or the platform simply doesn't report it - this is
+     * parsed defensively, absence is not an error). See
+     * [WscdAutoEnrollHint]'s doc comment for why this is only ever a
+     * heuristic signal, never a real capability check.
+     */
+    var lastAuthenticatorAttachment: String? = null
+        private set
+
+    override val hintedWscdPluginId: String = "fido2"
+
+    /**
+     * `"cross-platform"` means a roaming authenticator (e.g. a YubiKey) was
+     * used to log in, rather than the device's own platform biometric -
+     * exactly the kind of physical authenticator the fido2 previewSign
+     * plugin needs. See [WscdAutoEnrollHint]'s doc comment for why this is
+     * a heuristic, not confirmation that this specific key supports
+     * previewSign.
+     */
+    override fun suggestsWscdCapableDevice(): Boolean =
+        lastAuthenticatorAttachment == "cross-platform"
 
     override suspend fun register(options: RegisterOptions): RegisterResult {
         val requestJson = buildCreationOptionsJson(options)
@@ -82,6 +108,8 @@ class CredentialManagerAuthProvider(
         return parseAuthenticationResponse(credential.authenticationResponseJson).also {
             lastCredentialId = it.credentialId
             lastPrfOutput = it.prfOutput
+            lastAuthenticatorAttachment = json.parseToJsonElement(credential.authenticationResponseJson)
+                .jsonObject["authenticatorAttachment"]?.jsonPrimitive?.contentOrNull
         }
     }
 
