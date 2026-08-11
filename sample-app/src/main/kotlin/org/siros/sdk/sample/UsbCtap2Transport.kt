@@ -396,6 +396,16 @@ class UsbCtap2Transport(private val context: Context) : Ctap2TransportProvider {
         if (received < 0) {
             throw Ctap2TransportException.DeviceDisconnected()
         }
+        // A short read is silently treated as a full HID_PACKET_SIZE report
+        // otherwise, with the untouched tail zero-filled from this fresh
+        // allocation (not stale data, so no cross-request leak - just a
+        // framing-field correctness risk: cmd/length/CID could be misread).
+        // HID interrupt endpoints normally deliver fixed-size reports, so a
+        // short transfer indicates something went wrong with the device -
+        // treat it the same as a disconnect rather than silently proceeding.
+        if (received != HID_PACKET_SIZE) {
+            throw Ctap2TransportException.DeviceDisconnected()
+        }
         return buffer
     }
 

@@ -1196,9 +1196,15 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
      * [WscdManager.registerFido2Plugin] call, matching that fallback's
      * pre-existing documented behavior.
      */
-    private fun registerFido2OnSigner(manager: WscdManager) {
+    private fun registerFido2OnSigner(manager: WscdManager) = synchronized(fido2RegisteredTransport) {
+        // The check-and-write on fido2RegisteredTransport must be atomic as
+        // a whole, not just each individual map op (synchronizedMap already
+        // makes those thread-safe on their own) - a genuine concurrent call
+        // for the same manager could otherwise both see a stale "not yet
+        // registered for this mode" result and both proceed to
+        // re-register/create a fresh transport instance.
         val mode = _fido2TransportMode.value
-        if (fido2RegisteredTransport[manager] == mode) return
+        if (fido2RegisteredTransport[manager] == mode) return@synchronized
         val transport = when (mode) {
             Fido2TransportMode.AUTO -> CompositeCtap2Transport(
                 UsbCtap2Transport(activity.applicationContext),
