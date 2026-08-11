@@ -1949,6 +1949,18 @@ class SirosWallet private constructor(
      *
      * If there is an active flow, sends a decline message to the backend.
      * If no flow is active, simply resets to Ready state.
+     *
+     * [resetIssuanceGuards] is called unconditionally, not just inside the
+     * [WalletState.FlowActive] branch - a slow/unresponsive issuer (real
+     * case: an interop test issuer that timed out) leaves the wallet in
+     * [WalletState.Ready] the whole time [startIssuance]/[startIssuanceByOffer]
+     * is awaiting the engine's first progress message, since the engine
+     * doesn't assign (and report) a flow ID until then. The old
+     * FlowActive-only guard meant cancelling during exactly that window did
+     * nothing at all - not even a local reset - permanently stranding
+     * [issuanceInFlight] at `true` and blocking every subsequent issuance
+     * attempt until the app process was killed. This call is a no-op if no
+     * issuance was ever in flight, so it's always safe to call from here.
      */
     fun cancelCurrentFlow() {
         val current = _state.value
@@ -1960,6 +1972,7 @@ class SirosWallet private constructor(
             }
             _state.value = readyState(current.userId, current.displayName, current.credentials)
         }
+        resetIssuanceGuards()
     }
 
     /**
@@ -2138,10 +2151,7 @@ class SirosWallet private constructor(
         // every future issuance attempt would be permanently blocked. A
         // no-op for a presentation sign-request failure, which never sets
         // these fields.
-        activeOffer = null
-        activeVctm = null
-        activeAttestedKeyIds = null
-        issuanceInFlight = false
+        resetIssuanceGuards()
         val current = _state.value
         val userId = (current as? WalletState.FlowActive)?.userId
             ?: (current as? WalletState.Ready)?.userId ?: ""
@@ -2461,6 +2471,27 @@ class SirosWallet private constructor(
      * one (see [WscdKeystoreAdapter.selectSigningKey]'s doc comment).
      */
     private var activeAttestedKeyIds: List<String>? = null
+
+    /**
+     * Clear the ambient issuance-in-progress guard fields, unconditionally.
+     *
+     * Every terminal path for an issuance attempt must call this - a
+     * flow_complete/flow_error from the engine, a client-side termination
+     * (e.g. [reportSignFailure]), a synchronous start failure, or the user
+     * cancelling before the engine ever assigned a flow ID at all (see
+     * [cancelCurrentFlow]'s doc comment for why that last case is real and
+     * not just defensive: without it, cancelling a slow/unresponsive
+     * issuer - before any [WalletState.FlowActive] state is ever reached -
+     * left [issuanceInFlight] stuck `true` forever, since nothing else was
+     * left running to clear it, permanently blocking every future issuance
+     * attempt until the app process was killed).
+     */
+    private fun resetIssuanceGuards() {
+        activeOffer = null
+        activeVctm = null
+        activeAttestedKeyIds = null
+        issuanceInFlight = false
+    }
 
     /**
      * Extract the last credential ID from the auth provider, regardless of type.
@@ -3562,10 +3593,7 @@ class SirosWallet private constructor(
                         )
                     }
                 }
-                activeOffer = null
-                activeVctm = null
-                activeAttestedKeyIds = null
-                issuanceInFlight = false
+                resetIssuanceGuards()
 
                 // Persist locally + sync to backend immediately
                 persistAndSyncKeystore()
@@ -3612,10 +3640,7 @@ class SirosWallet private constructor(
                 // (rather than completing or failing client-side through
                 // reportSignFailure) would leave issuanceInFlight stuck,
                 // permanently blocking every future issuance attempt.
-                activeOffer = null
-                activeVctm = null
-                activeAttestedKeyIds = null
-                issuanceInFlight = false
+                resetIssuanceGuards()
 
                 val current = _state.value
                 val userId = (current as? WalletState.FlowActive)?.userId

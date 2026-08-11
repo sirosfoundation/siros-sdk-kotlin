@@ -1113,6 +1113,50 @@ class SirosWalletTest {
         verify(exactly = 1) { engine.startIssuance(offer = offerJson, credentialOfferUri = null, redirectUri = "siros-sample://callback") }
     }
 
+    /**
+     * Regression (real bug, live Geneva interop testing): a slow/unresponsive
+     * issuer leaves the wallet in [WalletState.Ready] the whole time it's
+     * awaiting the engine's first progress message, since the engine doesn't
+     * assign (and report) a flow ID until then - [WalletState.FlowActive] is
+     * never reached. `cancelCurrentFlow()` used to reset the issuance-guard
+     * fields only inside its `is WalletState.FlowActive` branch, so cancelling
+     * during exactly that window did nothing at all - not even a local reset -
+     * permanently stranding `issuanceInFlight` at `true` and rejecting every
+     * subsequent issuance attempt with "Another issuance is already in
+     * progress" until the app process was killed. Verifies
+     * [SirosWallet.cancelCurrentFlow] now clears the guard unconditionally.
+     */
+    @Test
+    fun cancelCurrentFlow_clearsIssuanceGuard_whenIssuerNeverReachedFlowActive() = runTest(dispatcher) {
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "engineSession" to engine,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+            "json" to Json { ignoreUnknownKeys = true },
+            "httpClient" to OkHttpClient(),
+        )
+        val offerJson = """{"credential_issuer":"https://issuer.invalid","credential_configuration_ids":["pid"]}"""
+
+        // First attempt: the (slow/unresponsive) issuer never progresses the
+        // wallet past Ready, so no FlowActive is ever reached.
+        wallet.startIssuance(offerJson)
+        advanceUntilIdle()
+        assertTrue(getField(wallet, "issuanceInFlight") as Boolean)
+
+        wallet.cancelCurrentFlow()
+        assertTrue(
+            "cancelCurrentFlow() must clear issuanceInFlight even when no FlowActive state was ever reached",
+            (getField(wallet, "issuanceInFlight") as Boolean).not(),
+        )
+
+        // Retrying must succeed - not throw "Another issuance is already in progress".
+        wallet.startIssuance(offerJson)
+        advanceUntilIdle()
+
+        verify(exactly = 2) { engine.startIssuance(offer = offerJson, credentialOfferUri = null, redirectUri = "siros-sample://callback") }
+    }
+
     /** header.{"exp": exp}.sig - just enough for CredentialUtils.parseJwtPayload to read `exp`. */
     private fun fakeJwtWithExp(exp: Long): String {
         val payload = java.util.Base64.getUrlEncoder().withoutPadding()
