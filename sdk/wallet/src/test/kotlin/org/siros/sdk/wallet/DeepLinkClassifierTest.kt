@@ -36,6 +36,20 @@ class DeepLinkClassifierTest {
     }
 
     @Test
+    fun `presentation request via haip-vp scheme`() {
+        // HAIP 1.0 final replaced the earlier drafts' single "haip" scheme
+        // with separate haip-vp (presentation) / haip-vci (issuance) schemes.
+        val result = classifyDeepLink("haip-vp://?request_uri=https://verifier.example.com/req", redirectScheme)
+        assertTrue(result is DeepLinkType.PresentationRequest)
+    }
+
+    @Test
+    fun `credential offer via haip-vci scheme`() {
+        val result = classifyDeepLink("haip-vci://?credential_offer=%7B%7D", redirectScheme)
+        assertTrue(result is DeepLinkType.CredentialOffer)
+    }
+
+    @Test
     fun `presentation request via request_uri query param`() {
         val result = classifyDeepLink(
             "https://wallet.example.com/present?request_uri=https://verifier.example.com/req",

@@ -79,9 +79,16 @@ fun classifyDeepLink(uriString: String, redirectScheme: String): DeepLinkType {
         return DeepLinkType.PresentationRequest(uri = uriString)
     }
 
-    // 4. HAIP: haip://...
-    if (scheme == "haip") {
+    // 4. HAIP presentation: haip://... (early draft scheme) or haip-vp://...
+    // (HAIP 1.0 final's replacement - see the manifest's intent-filter comment
+    // for why both are still recognized).
+    if (scheme == "haip" || scheme == "haip-vp") {
         return DeepLinkType.PresentationRequest(uri = uriString)
+    }
+
+    // 5. HAIP issuance: haip-vci://... (HAIP 1.0 final).
+    if (scheme == "haip-vci") {
+        return DeepLinkType.CredentialOffer(uri = uriString)
     }
 
     // 5. HTTPS with OID4VCI/OID4VP query parameters
