@@ -33,6 +33,9 @@ interface AuthProvider {
     /**
      * Request a WebAuthn assertion for the given parameters.
      *
+     * @param pluginId Which registered WSCD plugin is asking - see
+     *   [requestPin]'s doc comment for why implementations must dispatch on
+     *   this rather than guessing.
      * @param challenge The authentication challenge bytes.
      * @param rpId The Relying Party ID.
      * @param allowedCredentials List of allowed credential IDs.
@@ -40,6 +43,7 @@ interface AuthProvider {
      * @throws Exception if the user cancels or no credential is available.
      */
     fun requestWebauthnAssertion(
+        pluginId: String,
         challenge: ByteArray,
         rpId: String,
         allowedCredentials: List<ByteArray>,

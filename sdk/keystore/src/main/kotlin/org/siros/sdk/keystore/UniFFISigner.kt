@@ -356,13 +356,14 @@ class UniFFISigner(
         }
 
         override fun requestWebauthnAssertion(
+            pluginId: String,
             challenge: ByteArray,
             rpId: String,
             allowedCredentials: List<ByteArray>,
         ): ByteArray {
             val provider = authProvider
                 ?: throw FfiWscdException.AuthCancelled("No AuthProvider configured")
-            return provider.requestWebauthnAssertion(challenge, rpId, allowedCredentials)
+            return provider.requestWebauthnAssertion(pluginId, challenge, rpId, allowedCredentials)
         }
     }
 

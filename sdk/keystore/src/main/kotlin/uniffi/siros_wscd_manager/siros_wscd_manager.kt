@@ -658,7 +658,7 @@ internal interface UniffiCallbackInterfaceFfiAuthCallbackMethod0 : com.sun.jna.C
     fun callback(`uniffiHandle`: Long,`pluginId`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
 }
 internal interface UniffiCallbackInterfaceFfiAuthCallbackMethod1 : com.sun.jna.Callback {
-    fun callback(`uniffiHandle`: Long,`challenge`: RustBuffer.ByValue,`rpId`: RustBuffer.ByValue,`allowedCredentials`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+    fun callback(`uniffiHandle`: Long,`pluginId`: RustBuffer.ByValue,`challenge`: RustBuffer.ByValue,`rpId`: RustBuffer.ByValue,`allowedCredentials`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
 }
 internal interface UniffiCallbackInterfaceFfiCtap2TransportMethod0 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`command`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
@@ -1198,7 +1198,7 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_siros_wscd_manager_checksum_method_ffiauthcallback_request_pin() != 17826.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_siros_wscd_manager_checksum_method_ffiauthcallback_request_webauthn_assertion() != 26796.toShort()) {
+    if (lib.uniffi_siros_wscd_manager_checksum_method_ffiauthcallback_request_webauthn_assertion() != 63746.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_siros_wscd_manager_checksum_method_ffictap2transport_ctap2_send_command() != 64354.toShort()) {
@@ -3466,7 +3466,7 @@ public interface FfiAuthCallback {
     
     fun `requestPin`(`pluginId`: kotlin.String): kotlin.ByteArray
     
-    fun `requestWebauthnAssertion`(`challenge`: kotlin.ByteArray, `rpId`: kotlin.String, `allowedCredentials`: List<kotlin.ByteArray>): kotlin.ByteArray
+    fun `requestWebauthnAssertion`(`pluginId`: kotlin.String, `challenge`: kotlin.ByteArray, `rpId`: kotlin.String, `allowedCredentials`: List<kotlin.ByteArray>): kotlin.ByteArray
     
     companion object
 }
@@ -3524,10 +3524,11 @@ internal object uniffiCallbackInterfaceFfiAuthCallback {
         }
     }
     internal object `requestWebauthnAssertion`: UniffiCallbackInterfaceFfiAuthCallbackMethod1 {
-        override fun callback(`uniffiHandle`: Long,`challenge`: RustBuffer.ByValue,`rpId`: RustBuffer.ByValue,`allowedCredentials`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+        override fun callback(`uniffiHandle`: Long,`pluginId`: RustBuffer.ByValue,`challenge`: RustBuffer.ByValue,`rpId`: RustBuffer.ByValue,`allowedCredentials`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
             val uniffiObj = FfiConverterTypeFfiAuthCallback.handleMap.get(uniffiHandle)
             val makeCall = { ->
                 uniffiObj.`requestWebauthnAssertion`(
+                    FfiConverterString.lift(`pluginId`),
                     FfiConverterByteArray.lift(`challenge`),
                     FfiConverterString.lift(`rpId`),
                     FfiConverterSequenceByteArray.lift(`allowedCredentials`),

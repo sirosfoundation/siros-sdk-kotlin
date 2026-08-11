@@ -60,8 +60,16 @@ class WalletEngineSession(
     private val _state = MutableStateFlow(State.DISCONNECTED)
     val state: StateFlow<State> = _state
 
+    // @Volatile: these are written from the caller's thread (connect/disconnect),
+    // OkHttp's own WebSocketListener callback thread, and this class's own
+    // scope.launch coroutines (which can run on different Dispatchers.IO
+    // threads) - without this, a write on one thread isn't guaranteed to be
+    // visible to a read on another.
+    @Volatile
     private var webSocket: WebSocket? = null
+    @Volatile
     private var sessionId: String? = null
+    @Volatile
     private var lastAppToken: String? = null
     /**
      * Mints a fresh handshake token on demand - called before every
@@ -75,10 +83,34 @@ class WalletEngineSession(
      * preserves the old (non-refreshing) behavior for callers that haven't
      * opted in.
      */
+    @Volatile
     private var tokenProvider: (suspend () -> String)? = null
+    @Volatile
     private var reconnectAttempts = 0
     private val maxReconnectAttempts = 5
     private val baseReconnectDelayMs = 1000L
+
+    /**
+     * Raw incoming WS text frames, processed strictly one at a time by a
+     * single consumer coroutine (started in [init]) - `onMessage` previously
+     * did `scope.launch { handleMessage(text) }` per frame, an unstructured
+     * launch onto the shared [scope] (backed by [Dispatchers.IO], a real
+     * thread pool). Two frames arriving close together (e.g. a flow_progress
+     * immediately followed by flow_complete) could then have their
+     * [handleMessage] bodies run concurrently on different threads while
+     * both read/write [sessionId] and friends. Routing through this channel
+     * preserves OkHttp's own delivery order while guaranteeing at most one
+     * [handleMessage] call is ever in flight at a time.
+     */
+    private val rawMessageChannel = Channel<String>(Channel.UNLIMITED)
+
+    init {
+        scope.launch {
+            for (text in rawMessageChannel) {
+                handleMessage(text)
+            }
+        }
+    }
 
     private val incomingMessages = Channel<EngineMessage>(Channel.BUFFERED)
     private val flowProgressChannel = Channel<FlowProgressMessage>(Channel.BUFFERED)
@@ -163,7 +195,7 @@ class WalletEngineSession(
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
-                scope.launch { handleMessage(text) }
+                rawMessageChannel.trySend(text)
             }
 
             override fun onClosing(ws: WebSocket, code: Int, reason: String) {

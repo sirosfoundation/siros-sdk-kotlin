@@ -1459,61 +1459,11 @@ class SirosWallet private constructor(
     suspend fun startIssuanceByOffer(offer: CredentialOffer) {
         val engine = engineSession ?: throw WalletException("Not connected")
         ensureEngineConnected(engine)
-        activeOffer = offer
-        activeVctm = try {
-            vctmFetcher.fetch(
-                issuerUrl = offer.credentialIssuerIdentifier,
-                scope = offer.credentialConfigurationId,
-                registryUrl = registryUrl,
-            )
-        } catch (e: Exception) {
-            Timber.w(e, "Failed to fetch VCTM for ${offer.credentialConfigurationId}")
-            null
+        if (issuanceInFlight) {
+            throw WalletException("Another issuance is already in progress")
         }
-        val credentialOffer = kotlinx.serialization.json.buildJsonObject {
-            put("credential_issuer", kotlinx.serialization.json.JsonPrimitive(
-                offer.credentialIssuerIdentifier
-            ))
-            put("credential_configuration_ids", kotlinx.serialization.json.buildJsonArray {
-                add(kotlinx.serialization.json.JsonPrimitive(offer.credentialConfigurationId))
-            })
-            put("grants", kotlinx.serialization.json.buildJsonObject {
-                if (offer.preAuthorizedCode != null) {
-                    put("urn:ietf:params:oauth:grant-type:pre-authorized_code",
-                        kotlinx.serialization.json.buildJsonObject {
-                            put("pre-authorized_code", kotlinx.serialization.json.JsonPrimitive(
-                                offer.preAuthorizedCode
-                            ))
-                            if (offer.txCode != null) {
-                                put("tx_code", kotlinx.serialization.json.buildJsonObject {
-                                    put("input_mode", kotlinx.serialization.json.JsonPrimitive("text"))
-                                })
-                            }
-                        })
-                } else {
-                    put("authorization_code", kotlinx.serialization.json.buildJsonObject {})
-                }
-            })
-        }
-        val clientAttestation = resolveClientAttestation(offer.credentialIssuerIdentifier)
-        engine.startIssuance(
-            offer = credentialOffer.toString(),
-            redirectUri = config.redirectUri.ifBlank { null },
-            clientAttestation = clientAttestation?.first,
-            clientAttestationPoP = clientAttestation?.second,
-        )
-    }
-
-    /**
-     * Start a credential issuance flow with a raw offer or URI.
-     *
-     * @param offerUri a credential_offer_uri or raw JSON credential_offer string.
-     */
-    suspend fun startIssuance(offerUri: String) {
-        val engine = engineSession ?: throw WalletException("Not connected")
-        ensureEngineConnected(engine)
-        val redirectUri = config.redirectUri.ifBlank { null }
-        resolveOfferForDisplay(offerUri)?.let { offer ->
+        issuanceInFlight = true
+        try {
             activeOffer = offer
             activeVctm = try {
                 vctmFetcher.fetch(
@@ -1525,69 +1475,154 @@ class SirosWallet private constructor(
                 Timber.w(e, "Failed to fetch VCTM for ${offer.credentialConfigurationId}")
                 null
             }
-        }
-        // Resolve OAuth Client Attestation once, independent of whether the
-        // display-metadata resolution above succeeded - a client that can't
-        // be shown a name/logo should still get an attestation attached.
-        val clientAttestation = try {
-            extractOfferJson(offerUri)?.get("credential_issuer")?.jsonPrimitive?.contentOrNull
-                ?.let { resolveClientAttestation(it) }
-        } catch (e: Exception) {
-            Timber.w(e, "Failed to resolve client attestation for offer")
-            null
-        }
-        val attestation = clientAttestation?.first
-        val attestationPoP = clientAttestation?.second
-        if (offerUri.startsWith("openid-credential-offer://")) {
-            // Deep-link URI with inline offer — send as "offer" so the engine
-            // extracts the credential_offer query parameter instead of HTTP-fetching.
+            val credentialOffer = kotlinx.serialization.json.buildJsonObject {
+                put("credential_issuer", kotlinx.serialization.json.JsonPrimitive(
+                    offer.credentialIssuerIdentifier
+                ))
+                put("credential_configuration_ids", kotlinx.serialization.json.buildJsonArray {
+                    add(kotlinx.serialization.json.JsonPrimitive(offer.credentialConfigurationId))
+                })
+                put("grants", kotlinx.serialization.json.buildJsonObject {
+                    if (offer.preAuthorizedCode != null) {
+                        put("urn:ietf:params:oauth:grant-type:pre-authorized_code",
+                            kotlinx.serialization.json.buildJsonObject {
+                                put("pre-authorized_code", kotlinx.serialization.json.JsonPrimitive(
+                                    offer.preAuthorizedCode
+                                ))
+                                if (offer.txCode != null) {
+                                    put("tx_code", kotlinx.serialization.json.buildJsonObject {
+                                        put("input_mode", kotlinx.serialization.json.JsonPrimitive("text"))
+                                    })
+                                }
+                            })
+                    } else {
+                        put("authorization_code", kotlinx.serialization.json.buildJsonObject {})
+                    }
+                })
+            }
+            val clientAttestation = resolveClientAttestation(offer.credentialIssuerIdentifier)
             engine.startIssuance(
-                offer = offerUri,
-                redirectUri = redirectUri,
-                clientAttestation = attestation,
-                clientAttestationPoP = attestationPoP,
+                offer = credentialOffer.toString(),
+                redirectUri = config.redirectUri.ifBlank { null },
+                clientAttestation = clientAttestation?.first,
+                clientAttestationPoP = clientAttestation?.second,
             )
-        } else if (offerUri.startsWith("http")) {
-            // Universal-link-style offer: the credential_offer/credential_offer_uri
-            // live in the URI's own query string (e.g. an issuer's wallet-redirect
-            // page), so the URI itself is not fetchable as the offer JSON - unlike
-            // the engine's openid-credential-offer:// handling, it only strips
-            // that query param for that exact scheme, so it must be extracted here.
-            val query = try { java.net.URI(offerUri).rawQuery } catch (_: Exception) { null }
-            val params = parseQueryParams(query)
-            when {
-                params.containsKey("credential_offer") -> {
-                    engine.startIssuance(
-                        offer = params.getValue("credential_offer"),
-                        redirectUri = redirectUri,
-                        clientAttestation = attestation,
-                        clientAttestationPoP = attestationPoP,
+        } catch (e: Exception) {
+            // The flow was never registered server-side (no flow ID was ever
+            // assigned), so nothing will ever arrive to clear
+            // issuanceInFlight via the normal flow_complete/flow_error path -
+            // clear it here instead, or a failed start would permanently
+            // lock out every future issuance attempt for the rest of the
+            // session.
+            issuanceInFlight = false
+            activeOffer = null
+            activeVctm = null
+            throw e
+        }
+    }
+
+    /**
+     * Start a credential issuance flow with a raw offer or URI.
+     *
+     * @param offerUri a credential_offer_uri or raw JSON credential_offer string.
+     */
+    suspend fun startIssuance(offerUri: String) {
+        val engine = engineSession ?: throw WalletException("Not connected")
+        ensureEngineConnected(engine)
+        if (issuanceInFlight) {
+            throw WalletException("Another issuance is already in progress")
+        }
+        // Set unconditionally, before display-metadata resolution: every
+        // branch below calls engine.startIssuance() regardless of whether
+        // resolveOfferForDisplay() succeeds, so gating this on that result
+        // would leave some real issuance flows unguarded.
+        issuanceInFlight = true
+        try {
+            val redirectUri = config.redirectUri.ifBlank { null }
+            resolveOfferForDisplay(offerUri)?.let { offer ->
+                activeOffer = offer
+                activeVctm = try {
+                    vctmFetcher.fetch(
+                        issuerUrl = offer.credentialIssuerIdentifier,
+                        scope = offer.credentialConfigurationId,
+                        registryUrl = registryUrl,
                     )
-                }
-                params.containsKey("credential_offer_uri") -> {
-                    engine.startIssuance(
-                        credentialOfferUri = params.getValue("credential_offer_uri"),
-                        redirectUri = redirectUri,
-                        clientAttestation = attestation,
-                        clientAttestationPoP = attestationPoP,
-                    )
-                }
-                else -> {
-                    engine.startIssuance(
-                        credentialOfferUri = offerUri,
-                        redirectUri = redirectUri,
-                        clientAttestation = attestation,
-                        clientAttestationPoP = attestationPoP,
-                    )
+                } catch (e: Exception) {
+                    Timber.w(e, "Failed to fetch VCTM for ${offer.credentialConfigurationId}")
+                    null
                 }
             }
-        } else {
-            engine.startIssuance(
-                offer = offerUri,
-                redirectUri = redirectUri,
-                clientAttestation = attestation,
-                clientAttestationPoP = attestationPoP,
-            )
+            // Resolve OAuth Client Attestation once, independent of whether the
+            // display-metadata resolution above succeeded - a client that can't
+            // be shown a name/logo should still get an attestation attached.
+            val clientAttestation = try {
+                extractOfferJson(offerUri)?.get("credential_issuer")?.jsonPrimitive?.contentOrNull
+                    ?.let { resolveClientAttestation(it) }
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to resolve client attestation for offer")
+                null
+            }
+            val attestation = clientAttestation?.first
+            val attestationPoP = clientAttestation?.second
+            if (offerUri.startsWith("openid-credential-offer://")) {
+                // Deep-link URI with inline offer — send as "offer" so the engine
+                // extracts the credential_offer query parameter instead of HTTP-fetching.
+                engine.startIssuance(
+                    offer = offerUri,
+                    redirectUri = redirectUri,
+                    clientAttestation = attestation,
+                    clientAttestationPoP = attestationPoP,
+                )
+            } else if (offerUri.startsWith("http")) {
+                // Universal-link-style offer: the credential_offer/credential_offer_uri
+                // live in the URI's own query string (e.g. an issuer's wallet-redirect
+                // page), so the URI itself is not fetchable as the offer JSON - unlike
+                // the engine's openid-credential-offer:// handling, it only strips
+                // that query param for that exact scheme, so it must be extracted here.
+                val query = try { java.net.URI(offerUri).rawQuery } catch (_: Exception) { null }
+                val params = parseQueryParams(query)
+                when {
+                    params.containsKey("credential_offer") -> {
+                        engine.startIssuance(
+                            offer = params.getValue("credential_offer"),
+                            redirectUri = redirectUri,
+                            clientAttestation = attestation,
+                            clientAttestationPoP = attestationPoP,
+                        )
+                    }
+                    params.containsKey("credential_offer_uri") -> {
+                        engine.startIssuance(
+                            credentialOfferUri = params.getValue("credential_offer_uri"),
+                            redirectUri = redirectUri,
+                            clientAttestation = attestation,
+                            clientAttestationPoP = attestationPoP,
+                        )
+                    }
+                    else -> {
+                        engine.startIssuance(
+                            credentialOfferUri = offerUri,
+                            redirectUri = redirectUri,
+                            clientAttestation = attestation,
+                            clientAttestationPoP = attestationPoP,
+                        )
+                    }
+                }
+            } else {
+                engine.startIssuance(
+                    offer = offerUri,
+                    redirectUri = redirectUri,
+                    clientAttestation = attestation,
+                    clientAttestationPoP = attestationPoP,
+                )
+            }
+        } catch (e: Exception) {
+            // See startIssuanceByOffer's matching catch block: the flow was
+            // never registered server-side, so nothing will ever clear
+            // issuanceInFlight via the normal flow_complete/flow_error path.
+            issuanceInFlight = false
+            activeOffer = null
+            activeVctm = null
+            throw e
         }
     }
 
@@ -2096,6 +2131,17 @@ class SirosWallet private constructor(
     private suspend fun reportSignFailure(flowId: String, message: String) {
         terminatedFlowIds.add(flowId)
         eventListener?.onFlowError(flowId, message)
+        // A sign-request failure during issuance (e.g. the FIDO2 PIN_INVALID
+        // this was written for) is a client-side termination of that
+        // issuance flow - the engine's own flow_complete/flow_error will
+        // never arrive for it, so this must clear issuanceInFlight itself or
+        // every future issuance attempt would be permanently blocked. A
+        // no-op for a presentation sign-request failure, which never sets
+        // these fields.
+        activeOffer = null
+        activeVctm = null
+        activeAttestedKeyIds = null
+        issuanceInFlight = false
         val current = _state.value
         val userId = (current as? WalletState.FlowActive)?.userId
             ?: (current as? WalletState.Ready)?.userId ?: ""
@@ -2385,6 +2431,24 @@ class SirosWallet private constructor(
     private var activeOffer: CredentialOffer? = null
     private var activeVctm: Vctm? = null
     /**
+     * True while an issuance flow is in flight (from [startIssuanceByOffer]/
+     * [startIssuance] until its flow_complete/flow_error arrives).
+     *
+     * [activeOffer]/[activeVctm]/[activeAttestedKeyIds] are ambient fields,
+     * not keyed by flow ID - the engine's [WalletEngineSession.startIssuance]
+     * doesn't return a flow ID synchronously (the server only assigns one,
+     * reported back asynchronously in the flow's first progress message), so
+     * there's no ID available at the moment these fields are written to key
+     * them by. Starting a second issuance before the first one's
+     * flow_complete/flow_error arrives would silently read/write the wrong
+     * flow's offer/VCTM/attested-key-IDs (real bug found via code review:
+     * this data ends up in [StoredCredential.kid], so a race here binds the
+     * wrong signing key to the wrong credential type). Guarding against a
+     * second concurrent issuance turns that into a loud, catchable error
+     * instead of silent cross-contamination.
+     */
+    private var issuanceInFlight = false
+    /**
      * Key IDs generated for the current batch's Key Attestation proof, in the
      * SAME order they were submitted as `attested_keys` - an OID4VCI issuer
      * mints credential N in the response bound to `attested_keys[N]`'s public
@@ -2440,9 +2504,26 @@ class SirosWallet private constructor(
         }
     }
 
+    /**
+     * Fetch this account's encrypted private-data container from the
+     * backend. An empty result means the backend explicitly reported no
+     * `privateData` field - a genuinely new account with nothing stored yet
+     * - and callers (see [finishLogin]) treat that as license to initialize
+     * a brand-new, empty keystore.
+     *
+     * A transient failure (network blip, backend 5xx) must NOT be folded
+     * into that same empty-result case: a returning user hitting a
+     * momentary outage would otherwise look identical to a new user, get
+     * unlocked against a freshly-generated empty container, and then have
+     * that empty container synced BACK to the backend on the very next
+     * mutation - silently overwriting their real data with nothing.
+     * Confirmed as a real gap via code review, not yet an observed
+     * incident. Network/API errors are re-thrown instead so login fails
+     * loudly and the user can retry once the backend is reachable again.
+     */
     private suspend fun fetchPrivateData(): ByteArray {
         val client = apiClient ?: throw WalletException("Not authenticated")
-        return try {
+        try {
             val response = client.getPrivateData()
             val pdElement = response["privateData"]
             if (pdElement != null) {
@@ -2466,19 +2547,13 @@ class SirosWallet private constructor(
                 if (containerBytes.isNotEmpty()) {
                     sessionStore.privateDataJwe = String(containerBytes, Charsets.UTF_8)
                 }
-                containerBytes
-            } else {
-                ByteArray(0)
+                return containerBytes
             }
+            return ByteArray(0)
         } catch (e: NetworkException) {
-            Timber.w(e, "Could not fetch privateData (network), starting with empty keystore")
-            ByteArray(0)
+            throw WalletException("Could not fetch private data (network): ${e.message}", e)
         } catch (e: BackendApiException) {
-            Timber.w(e, "Could not fetch privateData (HTTP ${e.code}), starting with empty keystore")
-            ByteArray(0)
-        } catch (e: Exception) {
-            Timber.w(e, "Could not fetch privateData, starting with empty keystore")
-            ByteArray(0)
+            throw WalletException("Could not fetch private data (HTTP ${e.code}): ${e.message}", e)
         }
     }
 
@@ -2509,7 +2584,13 @@ class SirosWallet private constructor(
             sessionStore.privateDataJwe = String(container, Charsets.UTF_8)
             syncPrivateDataToBackend()
         } catch (e: Exception) {
+            // Unlike syncPrivateDataToBackend's own catch, this previously
+            // only logged - a credential saved just before this failed would
+            // silently never reach local storage or the backend, vanishing
+            // on the next app restart/lock with no signal anywhere that it
+            // happened.
             Timber.e(e, "Failed to persist keystore")
+            eventListener?.onFlowError("sync", "Failed to persist keystore: ${e.message}")
         }
     }
 
@@ -3484,6 +3565,7 @@ class SirosWallet private constructor(
                 activeOffer = null
                 activeVctm = null
                 activeAttestedKeyIds = null
+                issuanceInFlight = false
 
                 // Persist locally + sync to backend immediately
                 persistAndSyncKeystore()
@@ -3525,6 +3607,15 @@ class SirosWallet private constructor(
                 val fid = msg.flowId ?: "unknown"
                 terminatedFlowIds.add(fid)
                 eventListener?.onFlowError(fid, msg.error.message)
+                // See the flow_complete handler's matching reset: without
+                // this, an issuance that fails via an engine-reported error
+                // (rather than completing or failing client-side through
+                // reportSignFailure) would leave issuanceInFlight stuck,
+                // permanently blocking every future issuance attempt.
+                activeOffer = null
+                activeVctm = null
+                activeAttestedKeyIds = null
+                issuanceInFlight = false
 
                 val current = _state.value
                 val userId = (current as? WalletState.FlowActive)?.userId
@@ -3543,10 +3634,15 @@ class SirosWallet private constructor(
     /**
      * Validates that the audience for VP signing matches the trusted verifier identity.
      *
-     * This is a defense-in-depth check: if a MITM between the backend engine and
-     * the signing step tries to redirect the presentation to a different verifier,
-     * this will log a warning. We don't throw (to avoid breaking existing flows
-     * where the trust evaluation step may not have run), but the mismatch is logged.
+     * This is a defense-in-depth check: if a MITM between the backend engine
+     * and the signing step tries to redirect the presentation to a different
+     * verifier, this throws rather than merely logging - confirmed via code
+     * review that a log-only mismatch meant handleSignRequest's caller
+     * proceeded to sign and send the VP token regardless, defeating the
+     * audience-binding protection this function's name implies it provides.
+     * Only reachable once trust evaluation has actually run and produced an
+     * identifier for this flow (the early returns above), so this can't
+     * spuriously break a flow where trust evaluation hasn't happened yet.
      */
     private fun validateAudience(flowId: String, audience: String) {
         val trustResult = lastTrustResults[flowId] ?: return
@@ -3554,7 +3650,7 @@ class SirosWallet private constructor(
 
         // The audience should contain or match the trusted identifier
         if (audience.isNotBlank() && expectedId.isNotBlank() && audience != expectedId) {
-            Timber.w(
+            throw WalletException(
                 "Audience mismatch for flow $flowId: " +
                     "sign_request audience='$audience' != trusted identifier='$expectedId'"
             )

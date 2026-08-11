@@ -1877,6 +1877,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                         }
                     }
                     override fun requestWebauthnAssertion(
+                        pluginId: String,
                         challenge: ByteArray,
                         rpId: String,
                         allowedCredentials: List<ByteArray>,
