@@ -62,13 +62,13 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.siros.sdk.credentials.CredentialFamily
 import org.siros.sdk.credentials.StoredCredential
+import org.siros.sdk.keystore.mdoc.BleCentralClient
+import org.siros.sdk.keystore.mdoc.BlePeripheralServer
 import org.siros.sdk.keystore.mdoc.DeviceEngagement
 import org.siros.sdk.keystore.mdoc.NfcHandoverSelect
 import org.siros.sdk.keystore.mdoc.ProximityConsentResult
 import org.siros.sdk.keystore.mdoc.RequestProximityConsent
 import org.siros.sdk.sample.proximity.ActiveEngagement
-import org.siros.sdk.sample.proximity.BleCentralClient
-import org.siros.sdk.sample.proximity.BlePeripheralServer
 
 /**
  * ISO 18013-5 §8.2/§9.2 device engagement, shown as a QR code (§8.2.2.3),
@@ -192,6 +192,7 @@ fun ProximityEngagementScreen(
             peripheralServer = BlePeripheralServer(
                 context = context,
                 engagement = engagement,
+                getHandoverSelectBytes = { ActiveEngagement.handoverSelectBytes },
                 getCredentials = getCredentials,
                 signPresentation = signPresentation,
                 requestConsent = requestConsent,
@@ -219,6 +220,7 @@ fun ProximityEngagementScreen(
             centralClient = BleCentralClient(
                 context = context,
                 engagement = engagement,
+                getHandoverSelectBytes = { ActiveEngagement.handoverSelectBytes },
                 getCredentials = getCredentials,
                 signPresentation = signPresentation,
                 requestConsent = requestConsent,

@@ -1,5 +1,5 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
-package org.siros.sdk.sample.proximity
+package org.siros.sdk.keystore.mdoc
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
@@ -15,14 +15,12 @@ import android.bluetooth.le.AdvertiseData
 import android.bluetooth.le.AdvertiseSettings
 import android.content.Context
 import android.os.ParcelUuid
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.siros.sdk.credentials.StoredCredential
-import org.siros.sdk.keystore.mdoc.BleMessageChunker
-import org.siros.sdk.keystore.mdoc.DeviceEngagement
-import org.siros.sdk.keystore.mdoc.MdocProximitySession
-import org.siros.sdk.keystore.mdoc.RequestProximityConsent
 import timber.log.Timber
 import java.util.UUID
 
@@ -50,6 +48,11 @@ import java.util.UUID
 class BlePeripheralServer(
     private val context: Context,
     private val engagement: DeviceEngagement.Engagement,
+    /**
+     * NFC static-handover bytes for the currently-active engagement, if any -
+     * see [BleCentralClient]'s matching parameter doc comment.
+     */
+    getHandoverSelectBytes: () -> ByteArray?,
     /** Mirrors `SirosWallet.getCredentials` - injected rather than taking a `SirosWallet` directly, keeping this BLE/GATT glue class independent of the wallet facade. */
     getCredentials: suspend () -> List<StoredCredential>,
     /** Mirrors `SirosWallet.signMdocPresentationForProximity`. */
@@ -79,13 +82,21 @@ class BlePeripheralServer(
 
         /** Default BLE ATT MTU before negotiation (23 bytes, per the Bluetooth Core Spec) - yields a 20-byte max chunk payload (MTU-3). */
         private const val DEFAULT_MTU = 23
+
+        // Android's GATT stack only allows one in-flight notification per
+        // connection - notifyCharacteristicChanged() for a LATER chunk can
+        // silently fail/queue-drop if issued before onNotificationSent fires
+        // for the PRIOR one. This bounds how long a single chunk's ack is
+        // awaited before giving up (e.g. the reader dropped the connection
+        // mid-transfer) rather than hanging forever.
+        private const val NOTIFY_ACK_TIMEOUT_MS = 5000L
     }
 
     private val scope = CoroutineScope(Dispatchers.IO)
     private val reassembler = BleMessageChunker.Reassembler()
     private val session = MdocProximitySession(
         engagement = engagement,
-        getHandoverSelectBytes = { ActiveEngagement.handoverSelectBytes },
+        getHandoverSelectBytes = getHandoverSelectBytes,
         getCredentials = getCredentials,
         signPresentation = signPresentation,
         requestConsent = requestConsent,
@@ -105,6 +116,11 @@ class BlePeripheralServer(
     // would already be true and incorrectly report success. Only set once
     // sendNotification actually runs.
     private var responseSent = false
+    // Set immediately before each notifyCharacteristicChanged() call and
+    // completed from onNotificationSent - see NOTIFY_ACK_TIMEOUT_MS's doc
+    // comment on why notifications must be paced rather than issued
+    // back-to-back.
+    private var pendingNotifyAck: CompletableDeferred<Boolean>? = null
 
     /** Reports the presentation's outcome exactly once - a signed response being sent and the reader's STATE_END write both resolve to "complete" and would otherwise double-report. */
     private fun completeOnce(success: Boolean) {
@@ -257,6 +273,12 @@ class BlePeripheralServer(
                 gattServer?.sendResponse(device, requestId, android.bluetooth.BluetoothGatt.GATT_SUCCESS, offset, null)
             }
         }
+
+        // Completes the notify paced by sendNotification below - see
+        // NOTIFY_ACK_TIMEOUT_MS's doc comment for why this pacing exists.
+        override fun onNotificationSent(device: BluetoothDevice, status: Int) {
+            pendingNotifyAck?.complete(status == android.bluetooth.BluetoothGatt.GATT_SUCCESS)
+        }
     }
 
     private fun handleStateWrite(value: ByteArray) {
@@ -307,9 +329,12 @@ class BlePeripheralServer(
         }
     }
 
-    /** @return false if any chunk's notify failed to queue - the reader will not have received a complete response. */
+    /**
+     * @return false if any chunk's notify failed to queue/ack - the reader
+     *   will not have received a complete response.
+     */
     @SuppressLint("MissingPermission")
-    private fun sendNotification(message: ByteArray): Boolean {
+    private suspend fun sendNotification(message: ByteArray): Boolean {
         val characteristic = server2ClientCharacteristic ?: return false
         val device = connectedDevice ?: return false
         val server = gattServer ?: return false
@@ -328,9 +353,15 @@ class BlePeripheralServer(
         val maxChunkSize = minOf(negotiatedMtu - 3, 512).coerceAtLeast(DEFAULT_MTU - 3)
         for (chunk in BleMessageChunker.chunk(message, maxChunkSize)) {
             characteristic.value = chunk
+            val ack = CompletableDeferred<Boolean>()
+            pendingNotifyAck = ack
             if (!server.notifyCharacteristicChanged(device, characteristic, false)) {
+                pendingNotifyAck = null
                 return false
             }
+            val result = withTimeoutOrNull(NOTIFY_ACK_TIMEOUT_MS) { ack.await() }
+            pendingNotifyAck = null
+            if (result != true) return false
         }
         return true
     }

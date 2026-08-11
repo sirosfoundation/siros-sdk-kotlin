@@ -1,5 +1,5 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
-package org.siros.sdk.sample.proximity
+package org.siros.sdk.keystore.mdoc
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
@@ -14,15 +14,12 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.ParcelUuid
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.siros.sdk.credentials.StoredCredential
-import org.siros.sdk.keystore.mdoc.BleMessageChunker
-import org.siros.sdk.keystore.mdoc.DeviceEngagement
-import org.siros.sdk.keystore.mdoc.MdocProximitySession
-import org.siros.sdk.keystore.mdoc.ProximitySessionCrypto
-import org.siros.sdk.keystore.mdoc.RequestProximityConsent
 import timber.log.Timber
 import java.util.UUID
 
@@ -53,6 +50,15 @@ import java.util.UUID
 class BleCentralClient(
     private val context: Context,
     private val engagement: DeviceEngagement.Engagement,
+    /**
+     * NFC static-handover bytes for the currently-active engagement, if any -
+     * the host app owns wiring this to whatever bridges its Handover Select
+     * NFC service (e.g. an Android `HostApduService`) to the active
+     * engagement session, since that plumbing is inherently app/platform-
+     * lifecycle-specific (an HCE service is OS-instantiated with no
+     * constructor injection).
+     */
+    getHandoverSelectBytes: () -> ByteArray?,
     /** Mirrors `SirosWallet.getCredentials` - see [BlePeripheralServer]'s matching parameter doc comment. */
     getCredentials: suspend () -> List<StoredCredential>,
     /** Mirrors `SirosWallet.signMdocPresentationForProximity`. */
@@ -78,13 +84,21 @@ class BleCentralClient(
 
         private const val DEFAULT_MTU = 23
         private const val REQUESTED_MTU = 517
+
+        // Android's GATT stack only allows one in-flight write per connection
+        // regardless of write type - writeCharacteristic() for a LATER chunk
+        // can silently fail/queue-drop if issued before onCharacteristicWrite
+        // fires for the PRIOR one. This bounds how long a single chunk's ack
+        // is awaited before giving up (e.g. the reader dropped the
+        // connection mid-transfer) rather than hanging forever.
+        private const val WRITE_ACK_TIMEOUT_MS = 5000L
     }
 
     private val scope = CoroutineScope(Dispatchers.IO)
     private val reassembler = BleMessageChunker.Reassembler()
     private val session = MdocProximitySession(
         engagement = engagement,
-        getHandoverSelectBytes = { ActiveEngagement.handoverSelectBytes },
+        getHandoverSelectBytes = getHandoverSelectBytes,
         getCredentials = getCredentials,
         signPresentation = signPresentation,
         requestConsent = requestConsent,
@@ -97,6 +111,10 @@ class BleCentralClient(
     private var client2ServerCharacteristic: BluetoothGattCharacteristic? = null
     private var stateCharacteristic: BluetoothGattCharacteristic? = null
     private var scanning = false
+    // Set immediately before each writeCharacteristic() call and completed
+    // from onCharacteristicWrite - see WRITE_ACK_TIMEOUT_MS's doc comment on
+    // why writes must be paced rather than issued back-to-back.
+    private var pendingWriteAck: CompletableDeferred<Boolean>? = null
 
     @SuppressLint("MissingPermission")
     fun start() {
@@ -217,9 +235,15 @@ class BleCentralClient(
                 STATE_UUID -> enableNotifications(gatt, descriptor.characteristic.service.getCharacteristic(SERVER2CLIENT_UUID))
                 SERVER2CLIENT_UUID -> {
                     val stateChar = descriptor.characteristic.service.getCharacteristic(STATE_UUID)
-                    writeNoResponse(gatt, stateChar, byteArrayOf(STATE_START))
+                    scope.launch { writeNoResponse(gatt, stateChar, byteArrayOf(STATE_START)) }
                 }
             }
+        }
+
+        // Completes the write paced by writeNoResponse below - see
+        // WRITE_ACK_TIMEOUT_MS's doc comment for why this pacing exists.
+        override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+            pendingWriteAck?.complete(status == BluetoothGatt.GATT_SUCCESS)
         }
 
         // Same API-33-vs-minSdk-28 reasoning as onCharacteristicRead above:
@@ -278,19 +302,31 @@ class BleCentralClient(
         gatt.writeDescriptor(cccd)
     }
 
-    /** @return false if [characteristic] is null or the write couldn't be initiated/queued. */
+    /**
+     * @return false if [characteristic] is null, the write couldn't be
+     *   initiated/queued, or its ack didn't arrive within
+     *   [WRITE_ACK_TIMEOUT_MS] (or arrived with a non-success status).
+     */
     @Suppress("DEPRECATION")
     @SuppressLint("MissingPermission")
-    private fun writeNoResponse(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic?, value: ByteArray): Boolean {
+    private suspend fun writeNoResponse(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic?, value: ByteArray): Boolean {
         if (characteristic == null) return false
+        val ack = CompletableDeferred<Boolean>()
+        pendingWriteAck = ack
         // Same API-33-vs-minSdk-28 reasoning as enableNotifications above.
         characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
         characteristic.value = value
-        return gatt.writeCharacteristic(characteristic)
+        if (!gatt.writeCharacteristic(characteristic)) {
+            pendingWriteAck = null
+            return false
+        }
+        val result = withTimeoutOrNull(WRITE_ACK_TIMEOUT_MS) { ack.await() }
+        pendingWriteAck = null
+        return result == true
     }
 
-    /** @return false if any chunk's write failed to queue - the reader will not have received a complete response. */
-    private fun sendData(message: ByteArray): Boolean {
+    /** @return false if any chunk's write failed to queue/ack - the reader will not have received a complete response. */
+    private suspend fun sendData(message: ByteArray): Boolean {
         val characteristic = client2ServerCharacteristic ?: return false
         val currentGatt = gatt ?: return false
         // Floor at the default MTU-3 (20 bytes): BleMessageChunker.chunk
