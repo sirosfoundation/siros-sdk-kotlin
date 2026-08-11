@@ -285,4 +285,30 @@ class MdocDeviceResponseBuilderTest {
         val handover = deviceAuth[1][2]
         assertEquals("OpenID4VPDCAPIHandover", handover[0].AsString())
     }
+
+    @Test
+    fun build_unsupportedAlgorithm_throwsInsteadOfSilentlyDefaultingToEs256() = runTest {
+        // `algorithm` here comes from a real signing key's own reported
+        // algorithm (WscdKeystoreAdapter's `key.algorithm`) - silently
+        // defaulting an unrecognized value to ES256 would put the wrong COSE
+        // alg identifier in the protected header while the signature itself
+        // was produced with a different algorithm.
+        val credentialBytes = buildStoredCredential()
+        val builder = MdocDeviceResponseBuilder(credentialBytes, algorithm = "RS256")
+
+        var thrown: Throwable? = null
+        try {
+            builder.build(
+                nonce = "n",
+                audience = "https://verifier.example.com",
+                responseUri = "https://verifier.example.com/response",
+                verifierJwkThumbprint = null,
+                disclosedClaims = null,
+                signer = { ByteArray(64) },
+            )
+        } catch (e: Throwable) {
+            thrown = e
+        }
+        assertTrue(thrown is IllegalArgumentException)
+    }
 }
