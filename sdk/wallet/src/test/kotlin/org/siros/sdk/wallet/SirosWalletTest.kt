@@ -801,6 +801,16 @@ class SirosWalletTest {
         }
         assertTrue(thrown is WalletException)
         verify(exactly = 0) { engine.resumeIssuance(any(), any(), any(), any(), any()) }
+
+        // The mismatched attempt above must not have consumed the saved
+        // resume context - a subsequent call with the real state (e.g. a
+        // legitimate retry, or the attacker's forged callback firing before
+        // the real one) must still be checked against it, not silently fall
+        // through to the no-context branch which sends the flow action with
+        // no CSRF validation at all.
+        wallet.completeAuthorization(flowId = "flow-auth", code = "auth-code-xyz", state = "state-from-url")
+        advanceUntilIdle()
+        verify(exactly = 1) { engine.resumeIssuance(any(), any(), any(), any(), any()) }
     }
 
     @Test

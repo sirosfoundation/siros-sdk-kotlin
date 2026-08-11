@@ -2056,7 +2056,13 @@ class SirosWallet private constructor(
      */
     fun completeAuthorization(flowId: String, code: String, state: String) {
         val engine = engineSession ?: throw WalletException("Not connected")
-        val pending = pendingAuthorizations.remove(flowId)
+        // Peek, don't remove yet - removing before the CSRF check below meant
+        // a mismatched (attacker-supplied) state consumed the real, still-
+        // pending context, so any later, legitimate completion attempt for
+        // the same flowId would fall through to the no-context branch below,
+        // which sends the flow action straight through with no CSRF check
+        // at all. Only remove once the check actually passes.
+        val pending = pendingAuthorizations[flowId]
         if (pending == null) {
             Timber.w("No saved resume context for flow $flowId; falling back to same-session completion")
             val payload = buildJsonObject {
@@ -2069,6 +2075,7 @@ class SirosWallet private constructor(
         if (pending.state != state) {
             throw WalletException("Authorization state mismatch for flow $flowId (possible CSRF)")
         }
+        pendingAuthorizations.remove(flowId)
         scope.launch {
             try {
                 engine.forceReconnect()
