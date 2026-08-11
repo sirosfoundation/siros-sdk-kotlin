@@ -2930,6 +2930,110 @@ class SirosWalletTest {
     }
 
     @Test
+    fun handleDCAPIRequest_untrustedVerifier_throwsAndNeverSigns() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject {
+            put("decision", false)
+            putJsonObject("context") { put("reason", "not on the whitelist") }
+        }
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        val store = FakeCredentialStore(mutableListOf(
+            StoredCredential(
+                id = 1L,
+                format = "dc+sd-jwt",
+                raw = "issuer.payload.sig~disclosure~",
+                metadata = CredentialMetadata(name = "Diploma", vct = "urn:example:vct"),
+                batchId = 1L,
+                instanceId = 0,
+            ),
+        ))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "apiClient" to apiClient,
+            "keystore" to keystore,
+            "credentialStore" to store,
+            "trustCache" to TrustCache(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+
+        val requestJson = wrapDCAPIRequest("openid4vp-v1-unsigned", buildJsonObject {
+            put("nonce", "dc-nonce-untrusted")
+            put("response_mode", "dc_api")
+            putJsonObject("dcql_query") {
+                putJsonArray("credentials") {
+                    add(buildJsonObject { put("id", "query1"); put("format", "dc+sd-jwt") })
+                }
+            }
+        })
+
+        var thrown: Throwable? = null
+        try {
+            wallet.handleDCAPIRequest(requestJson, origin = "https://untrusted-relying-party.example")
+        } catch (e: Throwable) {
+            thrown = e
+        }
+        assertTrue(thrown is WalletException)
+        coVerify(exactly = 0) { keystore.signVpToken(any(), any(), any(), any()) }
+        assertEquals(0, wallet.presentationHistory.size)
+    }
+
+    @Test
+    fun handleDCAPIRequest_unsignedRequest_ignoresBodyClientIdAndEvaluatesTrustAgainstOrigin() = runTest(dispatcher) {
+        // The unsigned DC API protocol variant's client_id is just a field in
+        // the untrusted request body - unlike the signed variant, it is not
+        // bound to anything the platform verified. Trust must be evaluated
+        // against the platform-attested origin, not a spoofable body field.
+        val apiClient = mockk<BackendApiClient>()
+        val subjectIds = mutableListOf<String>()
+        coEvery { apiClient.evaluateTrust(any()) } answers {
+            val req = firstArg<JsonObject>()
+            subjectIds.add(req["subject"]!!.jsonObject["id"]!!.jsonPrimitive.content)
+            buildJsonObject { put("decision", true) }
+        }
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        coEvery { keystore.signVpToken(any(), any(), any(), any()) } returns "signed-vp-token"
+        val store = FakeCredentialStore(mutableListOf(
+            StoredCredential(
+                id = 1L,
+                format = "dc+sd-jwt",
+                raw = "issuer.payload.sig~disclosure~",
+                metadata = CredentialMetadata(name = "Diploma", vct = "urn:example:vct"),
+                batchId = 1L,
+                instanceId = 0,
+            ),
+        ))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "apiClient" to apiClient,
+            "keystore" to keystore,
+            "credentialStore" to store,
+            "trustCache" to TrustCache(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+
+        val requestJson = wrapDCAPIRequest("openid4vp-v1-unsigned", buildJsonObject {
+            put("nonce", "dc-nonce-spoof")
+            put("response_mode", "dc_api")
+            // Attacker-controlled: this is an ordinary field in the unsigned
+            // request body, not attested by anything.
+            put("client_id", "some-other-trusted-verifier.example")
+            putJsonObject("dcql_query") {
+                putJsonArray("credentials") {
+                    add(buildJsonObject { put("id", "query1"); put("format", "dc+sd-jwt") })
+                }
+            }
+        })
+
+        wallet.handleDCAPIRequest(requestJson, origin = "https://real-caller-origin.example")
+
+        assertEquals(listOf("https://real-caller-origin.example"), subjectIds)
+    }
+
+    @Test
     fun handleDCAPIRequest_mdocCredential_usesSignMdocPresentationForDCAPI() = runTest(dispatcher) {
         // Production code decodes cred.raw via android.util.Base64 before
         // calling the keystore - the Android SDK stub jar throws on any real

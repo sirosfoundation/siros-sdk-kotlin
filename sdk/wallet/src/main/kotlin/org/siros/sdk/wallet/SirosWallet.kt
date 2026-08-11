@@ -1731,7 +1731,15 @@ class SirosWallet private constructor(
     suspend fun handleDCAPIRequest(rawRequestJson: String, origin: String): DCAPIPresentationResult {
         val request = DCAPIRequestParser.parse(rawRequestJson)
 
-        val subjectId = request.clientId ?: origin
+        // request.clientId is only cryptographically bound to anything when
+        // the request is signed (keyMaterial != null, verified against the
+        // JWS header's own key in DCAPIRequestParser) - for the unsigned
+        // variant it's just a caller-supplied field in the untrusted request
+        // body. Using it there let a malicious page set client_id to some
+        // other, possibly-whitelisted verifier's identity and have trust
+        // evaluated (and this presentation's history recorded) against that
+        // spoofed identity instead of the platform-attested origin.
+        val subjectId = if (request.keyMaterial != null) (request.clientId ?: origin) else origin
         val trustResult = try {
             evaluateTrustDirect(
                 subjectId = subjectId,
@@ -1752,6 +1760,15 @@ class SirosWallet private constructor(
         } catch (e: Exception) {
             Timber.w(e, "DC API trust evaluation failed for $subjectId")
             trustCache.get(subjectId) ?: TrustResult(trusted = false, identifier = subjectId, reason = e.message)
+        }
+
+        // Unlike the QR/redirect flow, there is no engine round-trip here to
+        // gate on (trust is evaluated and enforced entirely wallet-side) - a
+        // request from an untrusted or trust-eval-failed verifier must be
+        // rejected before any credential is matched or signed, not merely
+        // have its trust result computed and ignored.
+        if (!trustResult.trusted) {
+            throw WalletException("Verifier '$subjectId' is not trusted: ${trustResult.reason ?: "no reason given"}")
         }
 
         val allCreds = credentialStore.getAll()
@@ -3075,6 +3092,11 @@ class SirosWallet private constructor(
                 org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult(proofs = proofs)
             }
             "sign_presentation" -> {
+                // Same defense-in-depth audience check as the legacy engine
+                // transport's handleSignRequest - this transport previously
+                // skipped it entirely, so a WMP-relayed sign_presentation was
+                // never checked against the trust result computed for this flow.
+                validateAudience(flowId, params.audience)
                 val vpToken = keystore.signPresentation(
                     nonce = params.nonce,
                     audience = params.audience,
@@ -3120,6 +3142,15 @@ class SirosWallet private constructor(
         return try {
             val request = payload?.get("request")?.jsonObject
             val keyMaterial = request?.get("key_material")?.jsonObject
+            // WMP carries both issuance (generate_proof) and presentation
+            // (sign_presentation) sign requests over the same profile - the
+            // action name must follow subject_type like the legacy engine
+            // path does, not be hardcoded to "credential-issuer" for every
+            // subject (a real bug: a verifier evaluated over WMP was being
+            // checked against the issuer trust policy instead of the
+            // verifier one).
+            val subjectType = request?.get("subject_type")?.jsonPrimitive?.contentOrNull
+            val actionName = if (subjectType == "credential_verifier") "credential-verifier" else "credential-issuer"
             val evaluationRequest = kotlinx.serialization.json.buildJsonObject {
                 putJsonObject("subject") {
                     put("type", kotlinx.serialization.json.JsonPrimitive("key"))
@@ -3135,12 +3166,28 @@ class SirosWallet private constructor(
                     else if (jwk != null) put("key", kotlinx.serialization.json.buildJsonArray { add(jwk) })
                 }
                 putJsonObject("action") {
-                    put("name", kotlinx.serialization.json.JsonPrimitive("credential-issuer"))
+                    put("name", kotlinx.serialization.json.JsonPrimitive(actionName))
                 }
                 request?.get("context")?.let { put("context", it) }
             }
             val response = apiClient!!.evaluateTrust(evaluationRequest)
             val decision = response["decision"]?.jsonPrimitive?.boolean ?: false
+            val context = response["context"]?.jsonObject
+
+            // Store for the later sign_presentation step's validateAudience
+            // check, mirroring the legacy engine path's trust-evaluation
+            // handler - without this, WMP presentations had no
+            // audience-binding defense-in-depth at all.
+            lastTrustResults[flowId] = TrustResult(
+                trusted = decision,
+                framework = context?.get("framework")?.jsonPrimitive?.contentOrNull,
+                reason = context?.get("reason")?.jsonPrimitive?.contentOrNull
+                    ?: context?.get("message")?.jsonPrimitive?.contentOrNull,
+                entityName = context?.get("entity_name")?.jsonPrimitive?.contentOrNull,
+                entityLogo = context?.get("logo_uri")?.jsonPrimitive?.contentOrNull,
+                identifier = subjectId,
+            )
+
             org.siros.sdk.transport.wmp.openid4x.TrustResult(trusted = decision)
         } catch (e: Exception) {
             Timber.e(e, "WMP trust evaluation failed")
@@ -3688,7 +3735,10 @@ class SirosWallet private constructor(
      * spuriously break a flow where trust evaluation hasn't happened yet.
      */
     private fun validateAudience(flowId: String, audience: String) {
-        val trustResult = lastTrustResults[flowId] ?: return
+        // Consume (remove) the entry here, at actual point of use, instead
+        // of at credential-selection time - see handleCredentialSelection's
+        // comment for why removing it earlier defeated this check entirely.
+        val trustResult = lastTrustResults.remove(flowId) ?: return
         val expectedId = trustResult.identifier ?: return
 
         // The audience should contain or match the trusted identifier
@@ -3890,7 +3940,16 @@ class SirosWallet private constructor(
                     listener.onCredentialSelectionRequired(
                         PresentationRequest(
                             verifierName = verifierName,
-                            trustResult = lastTrustResults.remove(flowId),
+                            // Read only - do NOT remove. The later
+                            // sign_presentation step (handleSignRequest ->
+                            // validateAudience) still needs this entry;
+                            // removing it here silently defeated
+                            // validateAudience's defense-in-depth check for
+                            // every presentation - it always saw a null
+                            // trust result and no-op'd. validateAudience
+                            // itself removes the entry once it's actually
+                            // consumed.
+                            trustResult = lastTrustResults[flowId],
                             matchResults = matchResults,
                             candidates = candidates,
                         )
