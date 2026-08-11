@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import org.siros.sdk.keystore.Fido2TransportMode
 
 /**
  * Shown when [CompositeCtap2Transport] finds BOTH USB and NFC available

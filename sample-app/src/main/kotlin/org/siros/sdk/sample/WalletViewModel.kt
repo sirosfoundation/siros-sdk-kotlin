@@ -29,18 +29,22 @@ import org.siros.sdk.credentials.SignerSecurityProperties
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.keystore.ActivateLifecycleRequest
 import org.siros.sdk.keystore.AuthProvider
+import org.siros.sdk.keystore.CompositeCtap2Transport
 import org.siros.sdk.keystore.DestroyLifecycleRequest
 import org.siros.sdk.keystore.DestroyMode
 import org.siros.sdk.keystore.DetailedKeyInfo
 import org.siros.sdk.keystore.FactorKind
+import org.siros.sdk.keystore.Fido2TransportMode
 import org.siros.sdk.keystore.LifecycleState
 import org.siros.sdk.keystore.LifecycleStatus
+import org.siros.sdk.keystore.NfcCtap2Transport
 import org.siros.sdk.keystore.PlayIntegrityProvider
 import org.siros.sdk.keystore.R2psAuthMode
 import org.siros.sdk.keystore.R2psConfig
 import org.siros.sdk.keystore.RegisterLifecycleRequest
 import org.siros.sdk.keystore.RotateLifecycleRequest
 import org.siros.sdk.keystore.UniFFISigner
+import org.siros.sdk.keystore.UsbCtap2Transport
 import org.siros.sdk.keystore.WscdKeystoreAdapter
 import org.siros.sdk.keystore.WscdManager
 import org.siros.sdk.wallet.RememberScope
@@ -97,15 +101,6 @@ data class PendingPinEntry(
     /** Call with the entered PIN to submit, or null to cancel. */
     val respond: (pin: String?) -> Unit,
 )
-
-/**
- * Physical transport [registerFido2OnSigner] wires the fido2 plugin to.
- * [AUTO] (the default) watches USB and NFC in parallel via
- * [CompositeCtap2Transport] and uses whichever the user actually presents -
- * [USB]/[NFC] are dev-only overrides to force a specific transport for
- * testing.
- */
-enum class Fido2TransportMode { AUTO, USB, NFC }
 
 /** Bridges [CompositeCtap2Transport]'s ambiguous-choice callback to a Compose dialog. */
 data class PendingTransportChoice(val respond: (Fido2TransportMode?) -> Unit)

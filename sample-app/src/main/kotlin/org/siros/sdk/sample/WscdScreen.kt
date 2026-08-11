@@ -54,6 +54,7 @@ import org.siros.sdk.credentials.CertificationInfo
 import org.siros.sdk.credentials.SignerSecurityProperties
 import org.siros.sdk.credentials.Ts11DiscoveredCredential
 import org.siros.sdk.keystore.DetailedKeyInfo
+import org.siros.sdk.keystore.Fido2TransportMode
 import org.siros.sdk.keystore.LifecycleState
 import org.siros.sdk.keystore.LifecycleStatus
 import org.siros.sdk.keystore.WscdPluginCapabilities

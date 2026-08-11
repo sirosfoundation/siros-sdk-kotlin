@@ -1,4 +1,4 @@
-package org.siros.sdk.sample
+package org.siros.sdk.keystore
 
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
@@ -16,8 +16,6 @@ import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
-import org.siros.sdk.keystore.Ctap2TransportException
-import org.siros.sdk.keystore.Ctap2TransportProvider
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -72,7 +70,7 @@ class UsbCtap2Transport(private val context: Context) : Ctap2TransportProvider {
         // when none is already attached (see waitForAttachAndOpen).
         private const val USB_ATTACH_WAIT_TIMEOUT_MS = 30_000L
 
-        private const val ACTION_USB_PERMISSION = "org.siros.sdk.sample.USB_PERMISSION"
+        private const val ACTION_USB_PERMISSION = "org.siros.sdk.keystore.USB_PERMISSION"
     }
 
     /**
