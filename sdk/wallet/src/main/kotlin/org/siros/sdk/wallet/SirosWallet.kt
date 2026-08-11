@@ -1887,7 +1887,21 @@ class SirosWallet private constructor(
         }.toString()
 
         val responseData = if (request.responseMode == "dc_api.jwt") {
-            val jwe = DCAPIResponseEncryption.encryptResponse(responseBody, encryptionJwk!!)
+            // The verifier's declared alg/enc preference MUST be honored, not
+            // silently overridden by our own defaults (OpenID4VP 1.0 #8.3) -
+            // mirrors wallet-frontend's DCAPISession#encryptResponse
+            // priority: the encryption key's own "alg" JWK member first,
+            // then client_metadata's authorization_encrypted_response_alg/
+            // _enc, falling back to ECDH-ES/A128GCM only if the verifier
+            // declared neither.
+            val alg = encryptionJwk!!.algorithm?.let { com.nimbusds.jose.JWEAlgorithm.parse(it.name) }
+                ?: request.clientMetadata?.get("authorization_encrypted_response_alg")
+                    ?.jsonPrimitive?.contentOrNull?.let { com.nimbusds.jose.JWEAlgorithm.parse(it) }
+                ?: com.nimbusds.jose.JWEAlgorithm.ECDH_ES
+            val enc = request.clientMetadata?.get("authorization_encrypted_response_enc")
+                ?.jsonPrimitive?.contentOrNull?.let { com.nimbusds.jose.EncryptionMethod.parse(it) }
+                ?: com.nimbusds.jose.EncryptionMethod.A128GCM
+            val jwe = DCAPIResponseEncryption.encryptResponse(responseBody, encryptionJwk, alg, enc)
             kotlinx.serialization.json.buildJsonObject {
                 put("response", kotlinx.serialization.json.JsonPrimitive(jwe))
             }

@@ -508,6 +508,11 @@ class UniFFISigner(
  * drop the stale connection and reconnect once before giving up.
  */
 private class Ctap2TransportBridge(private val provider: Ctap2TransportProvider) : FfiCtap2Transport {
+    // Read and written from Rust's own background FFI thread pool (per this
+    // class's own doc comment) - @Volatile so a genuinely concurrent
+    // invocation can't observe a stale value cached in another thread's
+    // register/cache.
+    @Volatile
     private var connected = false
 
     override fun ctap2SendCommand(command: ByteArray): ByteArray = runBlocking {
