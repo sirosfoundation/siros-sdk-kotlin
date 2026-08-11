@@ -189,7 +189,14 @@ class MdocDeviceResponseBuilder(
         handoverInfo.Add(CBORObject.FromObject(clientId))
         handoverInfo.Add(CBORObject.FromObject(nonce))
         handoverInfo.Add(
-            if (verifierJwkThumbprint != null) CBORObject.FromObject(verifierJwkThumbprint) else CBORObject.Null
+            // Per OpenID4VP's mdoc profile, this element MUST be a CBOR Byte
+            // String of the raw thumbprint digest, not a text string of its
+            // base64url form - see buildDCAPISessionTranscript's matching fix.
+            if (verifierJwkThumbprint != null) {
+                CBORObject.FromObject(java.util.Base64.getUrlDecoder().decode(verifierJwkThumbprint))
+            } else {
+                CBORObject.Null
+            }
         )
         handoverInfo.Add(CBORObject.FromObject(responseUri))
         val handoverHash = sha256(handoverInfo.EncodeToBytes())
@@ -233,7 +240,17 @@ class MdocDeviceResponseBuilder(
         handoverInfo.Add(CBORObject.FromObject(nonce))
         handoverInfo.Add(
             if (encryptionPublicJwkThumbprint != null) {
-                CBORObject.FromObject(encryptionPublicJwkThumbprint)
+                // OpenID4VP 1.0 (#dc_api) requires this element to be the
+                // thumbprint encoded as a CBOR Byte String - the raw SHA-256
+                // digest bytes, not a text string of the base64url form the
+                // JOSE side (JWK.computeThumbprint().toString()) hands us.
+                // Encoding it as a CBOR text string here (a real bug, found
+                // via a verifier rejecting every mso_mdoc DC API response
+                // with no error) means the wallet's OpenID4VPDCAPIHandover
+                // hash never matches what a spec-conformant verifier
+                // reconstructs, so it silently disagrees with our
+                // DeviceAuthentication signature and rejects the response.
+                CBORObject.FromObject(java.util.Base64.getUrlDecoder().decode(encryptionPublicJwkThumbprint))
             } else {
                 CBORObject.Null
             }

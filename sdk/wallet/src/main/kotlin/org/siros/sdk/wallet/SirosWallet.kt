@@ -1804,38 +1804,56 @@ class SirosWallet private constructor(
         }
         val encryptionThumbprint = encryptionJwk?.computeThumbprint()?.toString()
 
-        val vpTokenObj = kotlinx.serialization.json.buildJsonObject {
-            for (id in selectedIds) {
-                val cred = allCreds.find { it.id == id } ?: continue
-                val matchResult = matchResults.firstOrNull { r -> r.candidates.any { it.id == id } }
-                val queryId = matchResult?.queryId ?: "_default"
-                val disclosedClaims = matchResult?.requestedClaims?.mapNotNull { it.lastOrNull() }
+        // Per OpenID4VP 1.0 (#response_parameters), vp_token's value for each
+        // DCQL query id MUST be a JSON array of one or more Presentations -
+        // even when `multiple` is omitted/false, the array MUST still
+        // contain exactly one Presentation, never a bare string. A real bug,
+        // confirmed via Multipaz's own server source
+        // (multipaz-verifier-server's handleDcGetDataOpenID4VP does
+        // `value.jsonArray.map{...}` for the openid4vp-v1-signed/-unsigned
+        // protocol versions): putting a bare JsonPrimitive here threw inside
+        // their server and surfaced as an opaque HTTP 500, with our own
+        // wallet-side exchange having completed successfully - nothing on
+        // our side ever saw an error.
+        val tokensByQueryId = linkedMapOf<String, MutableList<String>>()
+        for (id in selectedIds) {
+            val cred = allCreds.find { it.id == id } ?: continue
+            val matchResult = matchResults.firstOrNull { r -> r.candidates.any { it.id == id } }
+            val queryId = matchResult?.queryId ?: "_default"
+            val disclosedClaims = matchResult?.requestedClaims?.mapNotNull { it.lastOrNull() }
 
-                val token = if (cred.format == "mso_mdoc") {
-                    val credBytes = android.util.Base64.decode(
-                        cred.raw, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
-                    )
-                    val deviceResponse = keystore.signMdocPresentationForDCAPI(
-                        credentialBytes = credBytes,
-                        disclosedClaims = disclosedClaims,
-                        nonce = request.nonce,
-                        origin = origin,
-                        encryptionPublicJwkThumbprint = encryptionThumbprint,
-                        kid = cred.kid,
-                    )
-                    android.util.Base64.encodeToString(
-                        deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
-                    )
-                } else {
-                    keystore.signVpToken(
-                        credential = cred.raw,
-                        disclosedClaims = disclosedClaims,
-                        nonce = request.nonce,
-                        audience = audience,
-                        kid = cred.kid,
-                    )
-                }
-                put(queryId, kotlinx.serialization.json.JsonPrimitive(token))
+            val token = if (cred.format == "mso_mdoc") {
+                val credBytes = android.util.Base64.decode(
+                    cred.raw, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+                )
+                val deviceResponse = keystore.signMdocPresentationForDCAPI(
+                    credentialBytes = credBytes,
+                    disclosedClaims = disclosedClaims,
+                    nonce = request.nonce,
+                    origin = origin,
+                    encryptionPublicJwkThumbprint = encryptionThumbprint,
+                    kid = cred.kid,
+                )
+                android.util.Base64.encodeToString(
+                    deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+                )
+            } else {
+                keystore.signVpToken(
+                    credential = cred.raw,
+                    disclosedClaims = disclosedClaims,
+                    nonce = request.nonce,
+                    audience = audience,
+                    kid = cred.kid,
+                )
+            }
+            tokensByQueryId.getOrPut(queryId) { mutableListOf() }.add(token)
+        }
+
+        val vpTokenObj = kotlinx.serialization.json.buildJsonObject {
+            for ((queryId, tokens) in tokensByQueryId) {
+                put(queryId, kotlinx.serialization.json.buildJsonArray {
+                    tokens.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) }
+                })
             }
         }
 

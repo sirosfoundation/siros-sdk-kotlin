@@ -34,6 +34,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -2919,7 +2920,12 @@ class SirosWalletTest {
         val parsed = Json.parseToJsonElement(result.responseJson).jsonObject
         assertEquals("openid4vp-v1-unsigned", parsed["protocol"]?.jsonPrimitive?.content)
         val data = parsed["data"]?.jsonObject
-        assertEquals("signed-vp-token", data?.get("vp_token")?.jsonObject?.get("query1")?.jsonPrimitive?.content)
+        // OpenID4VP 1.0 (#response_parameters): each vp_token entry MUST be a
+        // JSON array of Presentations, even for a single match.
+        assertEquals(
+            "signed-vp-token",
+            data?.get("vp_token")?.jsonObject?.get("query1")?.jsonArray?.single()?.jsonPrimitive?.content,
+        )
         assertEquals(1, wallet.presentationHistory.size)
     }
 
@@ -3066,7 +3072,10 @@ class SirosWalletTest {
         assertEquals("enc-1", jweObject.header.keyID)
         jweObject.decrypt(ECDHDecrypter(verifierEncKey))
         val decrypted = Json.parseToJsonElement(jweObject.payload.toString()).jsonObject
-        assertEquals("signed-vp-token", decrypted["vp_token"]?.jsonObject?.get("_default")?.jsonPrimitive?.contentOrNull)
+        assertEquals(
+            "signed-vp-token",
+            decrypted["vp_token"]?.jsonObject?.get("_default")?.jsonArray?.single()?.jsonPrimitive?.contentOrNull,
+        )
         // The verifier's ONLY means of correlating this response to a
         // session - omitting it was a real bug ("state: missing or empty").
         assertEquals("verifier-session-state", decrypted["state"]?.jsonPrimitive?.contentOrNull)

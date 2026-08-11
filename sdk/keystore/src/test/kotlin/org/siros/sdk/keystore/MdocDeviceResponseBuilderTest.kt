@@ -217,12 +217,19 @@ class MdocDeviceResponseBuilderTest {
         // "OpenID4VPHandover"/clientId/responseUri shape.
         val origin = "https://relying-party.example"
         val nonce = "dc-api-nonce"
-        val thumbprint = "enc-thumbprint"
+        // A realistic JWK.computeThumbprint().toString() value: base64url,
+        // no padding, decoding to a 32-byte SHA-256 digest.
+        val thumbprintBytes = ByteArray(32) { it.toByte() }
+        val thumbprint = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(thumbprintBytes)
 
         val handoverInfo = CBORObject.NewArray()
         handoverInfo.Add(CBORObject.FromObject(origin))
         handoverInfo.Add(CBORObject.FromObject(nonce))
-        handoverInfo.Add(CBORObject.FromObject(thumbprint))
+        // Per OpenID4VP 1.0 (#dc_api), this element MUST be a CBOR Byte
+        // String of the raw thumbprint digest - not a text string of its
+        // base64url form (a real bug: encoding it as text made the wallet's
+        // handover hash disagree with any spec-conformant verifier's).
+        handoverInfo.Add(CBORObject.FromObject(thumbprintBytes))
         val expectedHash = java.security.MessageDigest.getInstance("SHA-256")
             .digest(handoverInfo.EncodeToBytes())
 
