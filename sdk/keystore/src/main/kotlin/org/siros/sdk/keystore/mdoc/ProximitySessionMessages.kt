@@ -101,11 +101,30 @@ object BleMessageChunker {
                 "chunk prefix must be 0x00 (last) or 0x01 (more coming), was ${chunk[0]}"
             }
             val isLast = chunk[0] == 0x00.toByte()
+            // Any BLE peer that connects during an active presentation window
+            // can send an endless stream of 0x01 ("more coming") chunks
+            // without ever sending the terminal 0x00 chunk - Ident/session-key
+            // checks only happen *after* a full message is reassembled, so
+            // nothing upstream of this class authenticates the sender first.
+            // Without a cap this is an unbounded-memory-growth DoS reachable
+            // by anyone in BLE range. MAX_MESSAGE_SIZE is a generous multiple
+            // of the largest plausible real DeviceRequest/DeviceResponse
+            // (portrait images included), not a spec-derived limit.
+            if (buffer.size() + (chunk.size - 1) > MAX_MESSAGE_SIZE) {
+                buffer.reset()
+                throw IllegalStateException(
+                    "Reassembled BLE message would exceed $MAX_MESSAGE_SIZE bytes - aborting"
+                )
+            }
             buffer.write(chunk, 1, chunk.size - 1)
             if (!isLast) return null
             val result = buffer.toByteArray()
             buffer.reset()
             return result
+        }
+
+        private companion object {
+            const val MAX_MESSAGE_SIZE = 16 * 1024 * 1024
         }
     }
 }

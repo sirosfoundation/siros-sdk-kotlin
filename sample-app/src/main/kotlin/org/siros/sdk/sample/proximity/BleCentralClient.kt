@@ -228,7 +228,17 @@ class BleCentralClient(
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             if (characteristic.uuid != SERVER2CLIENT_UUID) return
             val value = characteristic.value ?: return
-            val message = reassembler.feed(value) ?: return
+            // This callback runs on the system's Binder thread, not inside
+            // the scope.launch below - an uncaught exception here (e.g. the
+            // reassembler's max-size guard tripping) would crash the whole
+            // process instead of just this presentation attempt.
+            val message = try {
+                reassembler.feed(value) ?: return
+            } catch (e: IllegalStateException) {
+                Timber.w(e, "BleCentralClient: reassembly aborted")
+                onComplete(false)
+                return
+            }
             scope.launch {
                 try {
                     if (session.established) {

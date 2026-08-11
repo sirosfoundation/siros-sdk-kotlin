@@ -270,7 +270,17 @@ class BlePeripheralServer(
     }
 
     private fun handleDataWrite(chunk: ByteArray) {
-        val message = reassembler.feed(chunk) ?: return
+        // This is invoked directly from the system's GattServerCallback, not
+        // inside the scope.launch below - an uncaught exception here (e.g.
+        // the reassembler's max-size guard tripping) would crash the whole
+        // process instead of just this presentation attempt.
+        val message = try {
+            reassembler.feed(chunk) ?: return
+        } catch (e: IllegalStateException) {
+            Timber.w(e, "BlePeripheralServer: reassembly aborted")
+            completeOnce(false)
+            return
+        }
         scope.launch {
             try {
                 if (session.established) {
