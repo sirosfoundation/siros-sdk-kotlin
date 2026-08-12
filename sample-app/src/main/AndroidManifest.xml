@@ -69,12 +69,25 @@
                 <data android:scheme="openid4vp" />
             </intent-filter>
 
-            <!-- HAIP (High Assurance Interoperability Profile) presentation request deep links -->
+            <!-- HAIP (High Assurance Interoperability Profile) presentation request deep links.
+                 "haip" is the scheme from early HAIP drafts (1-3), which mandated a single
+                 scheme; HAIP 1.0 final replaced it with separate haip-vp (presentation) and
+                 haip-vci (issuance) schemes, both MAY-level. Kept "haip" too since it's cheap
+                 to keep supporting and some ecosystems may still emit it. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="haip" />
+                <data android:scheme="haip-vp" />
+            </intent-filter>
+
+            <!-- HAIP 1.0 final credential-issuance deep links (see haip-vp comment above). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="haip-vci" />
             </intent-filter>
 
             <!-- USB FIDO2 authenticator (YubiKey) auto-permission -->

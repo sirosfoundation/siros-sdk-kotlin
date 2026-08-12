@@ -1,4 +1,4 @@
-package org.siros.sdk.sample
+package org.siros.sdk.keystore
 
 import android.app.Activity
 import android.nfc.NfcAdapter
@@ -9,8 +9,6 @@ import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
-import org.siros.sdk.keystore.Ctap2TransportException
-import org.siros.sdk.keystore.Ctap2TransportProvider
 import java.io.IOException
 
 /**
@@ -35,6 +33,11 @@ import java.io.IOException
  * tap - lifting it early surfaces as [Ctap2TransportException.DeviceDisconnected]
  * via [TagLostException], which [Ctap2TransportBridge] already retries
  * once by reconnecting.
+ *
+ * Takes an [Activity] rather than a plain [android.content.Context] -
+ * `NfcAdapter.enableReaderMode` requires one; this is a real Android API
+ * constraint, not a design choice, so a host app must supply its current
+ * foreground Activity when constructing this transport.
  */
 class NfcCtap2Transport(private val activity: Activity) : Ctap2TransportProvider {
 

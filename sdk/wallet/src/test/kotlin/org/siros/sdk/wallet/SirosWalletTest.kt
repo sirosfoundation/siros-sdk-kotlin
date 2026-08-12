@@ -34,6 +34,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -800,6 +801,16 @@ class SirosWalletTest {
         }
         assertTrue(thrown is WalletException)
         verify(exactly = 0) { engine.resumeIssuance(any(), any(), any(), any(), any()) }
+
+        // The mismatched attempt above must not have consumed the saved
+        // resume context - a subsequent call with the real state (e.g. a
+        // legitimate retry, or the attacker's forged callback firing before
+        // the real one) must still be checked against it, not silently fall
+        // through to the no-context branch which sends the flow action with
+        // no CSRF validation at all.
+        wallet.completeAuthorization(flowId = "flow-auth", code = "auth-code-xyz", state = "state-from-url")
+        advanceUntilIdle()
+        verify(exactly = 1) { engine.resumeIssuance(any(), any(), any(), any(), any()) }
     }
 
     @Test
@@ -1111,6 +1122,50 @@ class SirosWalletTest {
 
         assertEquals(null, getField(wallet, "activeOffer"))
         verify(exactly = 1) { engine.startIssuance(offer = offerJson, credentialOfferUri = null, redirectUri = "siros-sample://callback") }
+    }
+
+    /**
+     * Regression (real bug, live Geneva interop testing): a slow/unresponsive
+     * issuer leaves the wallet in [WalletState.Ready] the whole time it's
+     * awaiting the engine's first progress message, since the engine doesn't
+     * assign (and report) a flow ID until then - [WalletState.FlowActive] is
+     * never reached. `cancelCurrentFlow()` used to reset the issuance-guard
+     * fields only inside its `is WalletState.FlowActive` branch, so cancelling
+     * during exactly that window did nothing at all - not even a local reset -
+     * permanently stranding `issuanceInFlight` at `true` and rejecting every
+     * subsequent issuance attempt with "Another issuance is already in
+     * progress" until the app process was killed. Verifies
+     * [SirosWallet.cancelCurrentFlow] now clears the guard unconditionally.
+     */
+    @Test
+    fun cancelCurrentFlow_clearsIssuanceGuard_whenIssuerNeverReachedFlowActive() = runTest(dispatcher) {
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "engineSession" to engine,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+            "json" to Json { ignoreUnknownKeys = true },
+            "httpClient" to OkHttpClient(),
+        )
+        val offerJson = """{"credential_issuer":"https://issuer.invalid","credential_configuration_ids":["pid"]}"""
+
+        // First attempt: the (slow/unresponsive) issuer never progresses the
+        // wallet past Ready, so no FlowActive is ever reached.
+        wallet.startIssuance(offerJson)
+        advanceUntilIdle()
+        assertTrue(getField(wallet, "issuanceInFlight") as Boolean)
+
+        wallet.cancelCurrentFlow()
+        assertTrue(
+            "cancelCurrentFlow() must clear issuanceInFlight even when no FlowActive state was ever reached",
+            (getField(wallet, "issuanceInFlight") as Boolean).not(),
+        )
+
+        // Retrying must succeed - not throw "Another issuance is already in progress".
+        wallet.startIssuance(offerJson)
+        advanceUntilIdle()
+
+        verify(exactly = 2) { engine.startIssuance(offer = offerJson, credentialOfferUri = null, redirectUri = "siros-sample://callback") }
     }
 
     /** header.{"exp": exp}.sig - just enough for CredentialUtils.parseJwtPayload to read `exp`. */
@@ -2875,8 +2930,117 @@ class SirosWalletTest {
         val parsed = Json.parseToJsonElement(result.responseJson).jsonObject
         assertEquals("openid4vp-v1-unsigned", parsed["protocol"]?.jsonPrimitive?.content)
         val data = parsed["data"]?.jsonObject
-        assertEquals("signed-vp-token", data?.get("vp_token")?.jsonObject?.get("query1")?.jsonPrimitive?.content)
+        // OpenID4VP 1.0 (#response_parameters): each vp_token entry MUST be a
+        // JSON array of Presentations, even for a single match.
+        assertEquals(
+            "signed-vp-token",
+            data?.get("vp_token")?.jsonObject?.get("query1")?.jsonArray?.single()?.jsonPrimitive?.content,
+        )
         assertEquals(1, wallet.presentationHistory.size)
+    }
+
+    @Test
+    fun handleDCAPIRequest_untrustedVerifier_throwsAndNeverSigns() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject {
+            put("decision", false)
+            putJsonObject("context") { put("reason", "not on the whitelist") }
+        }
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        val store = FakeCredentialStore(mutableListOf(
+            StoredCredential(
+                id = 1L,
+                format = "dc+sd-jwt",
+                raw = "issuer.payload.sig~disclosure~",
+                metadata = CredentialMetadata(name = "Diploma", vct = "urn:example:vct"),
+                batchId = 1L,
+                instanceId = 0,
+            ),
+        ))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "apiClient" to apiClient,
+            "keystore" to keystore,
+            "credentialStore" to store,
+            "trustCache" to TrustCache(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+
+        val requestJson = wrapDCAPIRequest("openid4vp-v1-unsigned", buildJsonObject {
+            put("nonce", "dc-nonce-untrusted")
+            put("response_mode", "dc_api")
+            putJsonObject("dcql_query") {
+                putJsonArray("credentials") {
+                    add(buildJsonObject { put("id", "query1"); put("format", "dc+sd-jwt") })
+                }
+            }
+        })
+
+        var thrown: Throwable? = null
+        try {
+            wallet.handleDCAPIRequest(requestJson, origin = "https://untrusted-relying-party.example")
+        } catch (e: Throwable) {
+            thrown = e
+        }
+        assertTrue(thrown is WalletException)
+        coVerify(exactly = 0) { keystore.signVpToken(any(), any(), any(), any()) }
+        assertEquals(0, wallet.presentationHistory.size)
+    }
+
+    @Test
+    fun handleDCAPIRequest_unsignedRequest_ignoresBodyClientIdAndEvaluatesTrustAgainstOrigin() = runTest(dispatcher) {
+        // The unsigned DC API protocol variant's client_id is just a field in
+        // the untrusted request body - unlike the signed variant, it is not
+        // bound to anything the platform verified. Trust must be evaluated
+        // against the platform-attested origin, not a spoofable body field.
+        val apiClient = mockk<BackendApiClient>()
+        val subjectIds = mutableListOf<String>()
+        coEvery { apiClient.evaluateTrust(any()) } answers {
+            val req = firstArg<JsonObject>()
+            subjectIds.add(req["subject"]!!.jsonObject["id"]!!.jsonPrimitive.content)
+            buildJsonObject { put("decision", true) }
+        }
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        coEvery { keystore.signVpToken(any(), any(), any(), any()) } returns "signed-vp-token"
+        val store = FakeCredentialStore(mutableListOf(
+            StoredCredential(
+                id = 1L,
+                format = "dc+sd-jwt",
+                raw = "issuer.payload.sig~disclosure~",
+                metadata = CredentialMetadata(name = "Diploma", vct = "urn:example:vct"),
+                batchId = 1L,
+                instanceId = 0,
+            ),
+        ))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "apiClient" to apiClient,
+            "keystore" to keystore,
+            "credentialStore" to store,
+            "trustCache" to TrustCache(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+
+        val requestJson = wrapDCAPIRequest("openid4vp-v1-unsigned", buildJsonObject {
+            put("nonce", "dc-nonce-spoof")
+            put("response_mode", "dc_api")
+            // Attacker-controlled: this is an ordinary field in the unsigned
+            // request body, not attested by anything.
+            put("client_id", "some-other-trusted-verifier.example")
+            putJsonObject("dcql_query") {
+                putJsonArray("credentials") {
+                    add(buildJsonObject { put("id", "query1"); put("format", "dc+sd-jwt") })
+                }
+            }
+        })
+
+        wallet.handleDCAPIRequest(requestJson, origin = "https://real-caller-origin.example")
+
+        assertEquals(listOf("https://real-caller-origin.example"), subjectIds)
     }
 
     @Test
@@ -3022,7 +3186,10 @@ class SirosWalletTest {
         assertEquals("enc-1", jweObject.header.keyID)
         jweObject.decrypt(ECDHDecrypter(verifierEncKey))
         val decrypted = Json.parseToJsonElement(jweObject.payload.toString()).jsonObject
-        assertEquals("signed-vp-token", decrypted["vp_token"]?.jsonObject?.get("_default")?.jsonPrimitive?.contentOrNull)
+        assertEquals(
+            "signed-vp-token",
+            decrypted["vp_token"]?.jsonObject?.get("_default")?.jsonArray?.single()?.jsonPrimitive?.contentOrNull,
+        )
         // The verifier's ONLY means of correlating this response to a
         // session - omitting it was a real bug ("state: missing or empty").
         assertEquals("verifier-session-state", decrypted["state"]?.jsonPrimitive?.contentOrNull)

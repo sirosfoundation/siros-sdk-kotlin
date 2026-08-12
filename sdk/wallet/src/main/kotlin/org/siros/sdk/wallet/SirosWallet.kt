@@ -1731,7 +1731,15 @@ class SirosWallet private constructor(
     suspend fun handleDCAPIRequest(rawRequestJson: String, origin: String): DCAPIPresentationResult {
         val request = DCAPIRequestParser.parse(rawRequestJson)
 
-        val subjectId = request.clientId ?: origin
+        // request.clientId is only cryptographically bound to anything when
+        // the request is signed (keyMaterial != null, verified against the
+        // JWS header's own key in DCAPIRequestParser) - for the unsigned
+        // variant it's just a caller-supplied field in the untrusted request
+        // body. Using it there let a malicious page set client_id to some
+        // other, possibly-whitelisted verifier's identity and have trust
+        // evaluated (and this presentation's history recorded) against that
+        // spoofed identity instead of the platform-attested origin.
+        val subjectId = if (request.keyMaterial != null) (request.clientId ?: origin) else origin
         val trustResult = try {
             evaluateTrustDirect(
                 subjectId = subjectId,
@@ -1752,6 +1760,15 @@ class SirosWallet private constructor(
         } catch (e: Exception) {
             Timber.w(e, "DC API trust evaluation failed for $subjectId")
             trustCache.get(subjectId) ?: TrustResult(trusted = false, identifier = subjectId, reason = e.message)
+        }
+
+        // Unlike the QR/redirect flow, there is no engine round-trip here to
+        // gate on (trust is evaluated and enforced entirely wallet-side) - a
+        // request from an untrusted or trust-eval-failed verifier must be
+        // rejected before any credential is matched or signed, not merely
+        // have its trust result computed and ignored.
+        if (!trustResult.trusted) {
+            throw WalletException("Verifier '$subjectId' is not trusted: ${trustResult.reason ?: "no reason given"}")
         }
 
         val allCreds = credentialStore.getAll()
@@ -1804,38 +1821,56 @@ class SirosWallet private constructor(
         }
         val encryptionThumbprint = encryptionJwk?.computeThumbprint()?.toString()
 
-        val vpTokenObj = kotlinx.serialization.json.buildJsonObject {
-            for (id in selectedIds) {
-                val cred = allCreds.find { it.id == id } ?: continue
-                val matchResult = matchResults.firstOrNull { r -> r.candidates.any { it.id == id } }
-                val queryId = matchResult?.queryId ?: "_default"
-                val disclosedClaims = matchResult?.requestedClaims?.mapNotNull { it.lastOrNull() }
+        // Per OpenID4VP 1.0 (#response_parameters), vp_token's value for each
+        // DCQL query id MUST be a JSON array of one or more Presentations -
+        // even when `multiple` is omitted/false, the array MUST still
+        // contain exactly one Presentation, never a bare string. A real bug,
+        // confirmed via Multipaz's own server source
+        // (multipaz-verifier-server's handleDcGetDataOpenID4VP does
+        // `value.jsonArray.map{...}` for the openid4vp-v1-signed/-unsigned
+        // protocol versions): putting a bare JsonPrimitive here threw inside
+        // their server and surfaced as an opaque HTTP 500, with our own
+        // wallet-side exchange having completed successfully - nothing on
+        // our side ever saw an error.
+        val tokensByQueryId = linkedMapOf<String, MutableList<String>>()
+        for (id in selectedIds) {
+            val cred = allCreds.find { it.id == id } ?: continue
+            val matchResult = matchResults.firstOrNull { r -> r.candidates.any { it.id == id } }
+            val queryId = matchResult?.queryId ?: "_default"
+            val disclosedClaims = matchResult?.requestedClaims?.mapNotNull { it.lastOrNull() }
 
-                val token = if (cred.format == "mso_mdoc") {
-                    val credBytes = android.util.Base64.decode(
-                        cred.raw, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
-                    )
-                    val deviceResponse = keystore.signMdocPresentationForDCAPI(
-                        credentialBytes = credBytes,
-                        disclosedClaims = disclosedClaims,
-                        nonce = request.nonce,
-                        origin = origin,
-                        encryptionPublicJwkThumbprint = encryptionThumbprint,
-                        kid = cred.kid,
-                    )
-                    android.util.Base64.encodeToString(
-                        deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
-                    )
-                } else {
-                    keystore.signVpToken(
-                        credential = cred.raw,
-                        disclosedClaims = disclosedClaims,
-                        nonce = request.nonce,
-                        audience = audience,
-                        kid = cred.kid,
-                    )
-                }
-                put(queryId, kotlinx.serialization.json.JsonPrimitive(token))
+            val token = if (cred.format == "mso_mdoc") {
+                val credBytes = android.util.Base64.decode(
+                    cred.raw, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+                )
+                val deviceResponse = keystore.signMdocPresentationForDCAPI(
+                    credentialBytes = credBytes,
+                    disclosedClaims = disclosedClaims,
+                    nonce = request.nonce,
+                    origin = origin,
+                    encryptionPublicJwkThumbprint = encryptionThumbprint,
+                    kid = cred.kid,
+                )
+                android.util.Base64.encodeToString(
+                    deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+                )
+            } else {
+                keystore.signVpToken(
+                    credential = cred.raw,
+                    disclosedClaims = disclosedClaims,
+                    nonce = request.nonce,
+                    audience = audience,
+                    kid = cred.kid,
+                )
+            }
+            tokensByQueryId.getOrPut(queryId) { mutableListOf() }.add(token)
+        }
+
+        val vpTokenObj = kotlinx.serialization.json.buildJsonObject {
+            for ((queryId, tokens) in tokensByQueryId) {
+                put(queryId, kotlinx.serialization.json.buildJsonArray {
+                    tokens.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) }
+                })
             }
         }
 
@@ -1852,7 +1887,21 @@ class SirosWallet private constructor(
         }.toString()
 
         val responseData = if (request.responseMode == "dc_api.jwt") {
-            val jwe = DCAPIResponseEncryption.encryptResponse(responseBody, encryptionJwk!!)
+            // The verifier's declared alg/enc preference MUST be honored, not
+            // silently overridden by our own defaults (OpenID4VP 1.0 #8.3) -
+            // mirrors wallet-frontend's DCAPISession#encryptResponse
+            // priority: the encryption key's own "alg" JWK member first,
+            // then client_metadata's authorization_encrypted_response_alg/
+            // _enc, falling back to ECDH-ES/A128GCM only if the verifier
+            // declared neither.
+            val alg = encryptionJwk!!.algorithm?.let { com.nimbusds.jose.JWEAlgorithm.parse(it.name) }
+                ?: request.clientMetadata?.get("authorization_encrypted_response_alg")
+                    ?.jsonPrimitive?.contentOrNull?.let { com.nimbusds.jose.JWEAlgorithm.parse(it) }
+                ?: com.nimbusds.jose.JWEAlgorithm.ECDH_ES
+            val enc = request.clientMetadata?.get("authorization_encrypted_response_enc")
+                ?.jsonPrimitive?.contentOrNull?.let { com.nimbusds.jose.EncryptionMethod.parse(it) }
+                ?: com.nimbusds.jose.EncryptionMethod.A128GCM
+            val jwe = DCAPIResponseEncryption.encryptResponse(responseBody, encryptionJwk, alg, enc)
             kotlinx.serialization.json.buildJsonObject {
                 put("response", kotlinx.serialization.json.JsonPrimitive(jwe))
             }
@@ -1949,6 +1998,18 @@ class SirosWallet private constructor(
      *
      * If there is an active flow, sends a decline message to the backend.
      * If no flow is active, simply resets to Ready state.
+     *
+     * [resetIssuanceGuards] is called unconditionally, not just inside the
+     * [WalletState.FlowActive] branch - a slow/unresponsive issuer (real
+     * case: an interop test issuer that timed out) leaves the wallet in
+     * [WalletState.Ready] the whole time [startIssuance]/[startIssuanceByOffer]
+     * is awaiting the engine's first progress message, since the engine
+     * doesn't assign (and report) a flow ID until then. The old
+     * FlowActive-only guard meant cancelling during exactly that window did
+     * nothing at all - not even a local reset - permanently stranding
+     * [issuanceInFlight] at `true` and blocking every subsequent issuance
+     * attempt until the app process was killed. This call is a no-op if no
+     * issuance was ever in flight, so it's always safe to call from here.
      */
     fun cancelCurrentFlow() {
         val current = _state.value
@@ -1960,6 +2021,7 @@ class SirosWallet private constructor(
             }
             _state.value = readyState(current.userId, current.displayName, current.credentials)
         }
+        resetIssuanceGuards()
     }
 
     /**
@@ -1994,7 +2056,13 @@ class SirosWallet private constructor(
      */
     fun completeAuthorization(flowId: String, code: String, state: String) {
         val engine = engineSession ?: throw WalletException("Not connected")
-        val pending = pendingAuthorizations.remove(flowId)
+        // Peek, don't remove yet - removing before the CSRF check below meant
+        // a mismatched (attacker-supplied) state consumed the real, still-
+        // pending context, so any later, legitimate completion attempt for
+        // the same flowId would fall through to the no-context branch below,
+        // which sends the flow action straight through with no CSRF check
+        // at all. Only remove once the check actually passes.
+        val pending = pendingAuthorizations[flowId]
         if (pending == null) {
             Timber.w("No saved resume context for flow $flowId; falling back to same-session completion")
             val payload = buildJsonObject {
@@ -2007,6 +2075,7 @@ class SirosWallet private constructor(
         if (pending.state != state) {
             throw WalletException("Authorization state mismatch for flow $flowId (possible CSRF)")
         }
+        pendingAuthorizations.remove(flowId)
         scope.launch {
             try {
                 engine.forceReconnect()
@@ -2138,10 +2207,7 @@ class SirosWallet private constructor(
         // every future issuance attempt would be permanently blocked. A
         // no-op for a presentation sign-request failure, which never sets
         // these fields.
-        activeOffer = null
-        activeVctm = null
-        activeAttestedKeyIds = null
-        issuanceInFlight = false
+        resetIssuanceGuards()
         val current = _state.value
         val userId = (current as? WalletState.FlowActive)?.userId
             ?: (current as? WalletState.Ready)?.userId ?: ""
@@ -2461,6 +2527,27 @@ class SirosWallet private constructor(
      * one (see [WscdKeystoreAdapter.selectSigningKey]'s doc comment).
      */
     private var activeAttestedKeyIds: List<String>? = null
+
+    /**
+     * Clear the ambient issuance-in-progress guard fields, unconditionally.
+     *
+     * Every terminal path for an issuance attempt must call this - a
+     * flow_complete/flow_error from the engine, a client-side termination
+     * (e.g. [reportSignFailure]), a synchronous start failure, or the user
+     * cancelling before the engine ever assigned a flow ID at all (see
+     * [cancelCurrentFlow]'s doc comment for why that last case is real and
+     * not just defensive: without it, cancelling a slow/unresponsive
+     * issuer - before any [WalletState.FlowActive] state is ever reached -
+     * left [issuanceInFlight] stuck `true` forever, since nothing else was
+     * left running to clear it, permanently blocking every future issuance
+     * attempt until the app process was killed).
+     */
+    private fun resetIssuanceGuards() {
+        activeOffer = null
+        activeVctm = null
+        activeAttestedKeyIds = null
+        issuanceInFlight = false
+    }
 
     /**
      * Extract the last credential ID from the auth provider, regardless of type.
@@ -3026,6 +3113,11 @@ class SirosWallet private constructor(
                 org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult(proofs = proofs)
             }
             "sign_presentation" -> {
+                // Same defense-in-depth audience check as the legacy engine
+                // transport's handleSignRequest - this transport previously
+                // skipped it entirely, so a WMP-relayed sign_presentation was
+                // never checked against the trust result computed for this flow.
+                validateAudience(flowId, params.audience)
                 val vpToken = keystore.signPresentation(
                     nonce = params.nonce,
                     audience = params.audience,
@@ -3071,6 +3163,15 @@ class SirosWallet private constructor(
         return try {
             val request = payload?.get("request")?.jsonObject
             val keyMaterial = request?.get("key_material")?.jsonObject
+            // WMP carries both issuance (generate_proof) and presentation
+            // (sign_presentation) sign requests over the same profile - the
+            // action name must follow subject_type like the legacy engine
+            // path does, not be hardcoded to "credential-issuer" for every
+            // subject (a real bug: a verifier evaluated over WMP was being
+            // checked against the issuer trust policy instead of the
+            // verifier one).
+            val subjectType = request?.get("subject_type")?.jsonPrimitive?.contentOrNull
+            val actionName = if (subjectType == "credential_verifier") "credential-verifier" else "credential-issuer"
             val evaluationRequest = kotlinx.serialization.json.buildJsonObject {
                 putJsonObject("subject") {
                     put("type", kotlinx.serialization.json.JsonPrimitive("key"))
@@ -3086,12 +3187,28 @@ class SirosWallet private constructor(
                     else if (jwk != null) put("key", kotlinx.serialization.json.buildJsonArray { add(jwk) })
                 }
                 putJsonObject("action") {
-                    put("name", kotlinx.serialization.json.JsonPrimitive("credential-issuer"))
+                    put("name", kotlinx.serialization.json.JsonPrimitive(actionName))
                 }
                 request?.get("context")?.let { put("context", it) }
             }
             val response = apiClient!!.evaluateTrust(evaluationRequest)
             val decision = response["decision"]?.jsonPrimitive?.boolean ?: false
+            val context = response["context"]?.jsonObject
+
+            // Store for the later sign_presentation step's validateAudience
+            // check, mirroring the legacy engine path's trust-evaluation
+            // handler - without this, WMP presentations had no
+            // audience-binding defense-in-depth at all.
+            lastTrustResults[flowId] = TrustResult(
+                trusted = decision,
+                framework = context?.get("framework")?.jsonPrimitive?.contentOrNull,
+                reason = context?.get("reason")?.jsonPrimitive?.contentOrNull
+                    ?: context?.get("message")?.jsonPrimitive?.contentOrNull,
+                entityName = context?.get("entity_name")?.jsonPrimitive?.contentOrNull,
+                entityLogo = context?.get("logo_uri")?.jsonPrimitive?.contentOrNull,
+                identifier = subjectId,
+            )
+
             org.siros.sdk.transport.wmp.openid4x.TrustResult(trusted = decision)
         } catch (e: Exception) {
             Timber.e(e, "WMP trust evaluation failed")
@@ -3562,10 +3679,7 @@ class SirosWallet private constructor(
                         )
                     }
                 }
-                activeOffer = null
-                activeVctm = null
-                activeAttestedKeyIds = null
-                issuanceInFlight = false
+                resetIssuanceGuards()
 
                 // Persist locally + sync to backend immediately
                 persistAndSyncKeystore()
@@ -3612,10 +3726,7 @@ class SirosWallet private constructor(
                 // (rather than completing or failing client-side through
                 // reportSignFailure) would leave issuanceInFlight stuck,
                 // permanently blocking every future issuance attempt.
-                activeOffer = null
-                activeVctm = null
-                activeAttestedKeyIds = null
-                issuanceInFlight = false
+                resetIssuanceGuards()
 
                 val current = _state.value
                 val userId = (current as? WalletState.FlowActive)?.userId
@@ -3645,7 +3756,10 @@ class SirosWallet private constructor(
      * spuriously break a flow where trust evaluation hasn't happened yet.
      */
     private fun validateAudience(flowId: String, audience: String) {
-        val trustResult = lastTrustResults[flowId] ?: return
+        // Consume (remove) the entry here, at actual point of use, instead
+        // of at credential-selection time - see handleCredentialSelection's
+        // comment for why removing it earlier defeated this check entirely.
+        val trustResult = lastTrustResults.remove(flowId) ?: return
         val expectedId = trustResult.identifier ?: return
 
         // The audience should contain or match the trusted identifier
@@ -3847,7 +3961,16 @@ class SirosWallet private constructor(
                     listener.onCredentialSelectionRequired(
                         PresentationRequest(
                             verifierName = verifierName,
-                            trustResult = lastTrustResults.remove(flowId),
+                            // Read only - do NOT remove. The later
+                            // sign_presentation step (handleSignRequest ->
+                            // validateAudience) still needs this entry;
+                            // removing it here silently defeated
+                            // validateAudience's defense-in-depth check for
+                            // every presentation - it always saw a null
+                            // trust result and no-op'd. validateAudience
+                            // itself removes the entry once it's actually
+                            // consumed.
+                            trustResult = lastTrustResults[flowId],
                             matchResults = matchResults,
                             candidates = candidates,
                         )

@@ -94,9 +94,12 @@ class DCAPIGetCredentialActivity : ComponentActivity() {
             return
         }
 
+        Timber.d("DCAPI raw request (origin=$origin): ${digitalOption.requestJson}")
+
         lifecycleScope.launch {
             try {
                 val result = wallet.handleDCAPIRequest(digitalOption.requestJson, origin)
+                Timber.d("DCAPI final response: ${result.responseJson}")
                 val responseIntent = Intent()
                 PendingIntentHandler.setGetCredentialResponse(
                     responseIntent,

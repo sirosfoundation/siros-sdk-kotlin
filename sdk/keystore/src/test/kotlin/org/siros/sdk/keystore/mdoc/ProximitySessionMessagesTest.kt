@@ -6,6 +6,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class ProximitySessionMessagesTest {
@@ -143,5 +144,32 @@ class BleMessageChunkerTest {
         for (chunk in BleMessageChunker.chunk(second, maxChunkSize = 3)) secondResult = reassembler.feed(chunk) ?: secondResult
 
         assertArrayEquals(second, secondResult)
+    }
+
+    @Test
+    fun reassembler_rejectsMessageExceedingMaxSize_insteadOfGrowingUnbounded() {
+        // A BLE peer that never sends the terminal 0x00 chunk must not be
+        // able to grow the reassembly buffer without limit (OOM DoS) - see
+        // Reassembler.feed's MAX_MESSAGE_SIZE comment. 16 MiB matches
+        // production; a single oversized continuation chunk exercises the
+        // guard without allocating thousands of small chunks.
+        val reassembler = BleMessageChunker.Reassembler()
+        val oversizedContinuationChunk = byteArrayOf(0x01) + ByteArray(16 * 1024 * 1024 + 1)
+
+        try {
+            reassembler.feed(oversizedContinuationChunk)
+            fail("expected an IllegalStateException once the size cap is exceeded")
+        } catch (e: IllegalStateException) {
+            // expected
+        }
+
+        // The reassembler must recover for the next (well-behaved) message
+        // rather than staying poisoned with partial data from the aborted one.
+        val message = "recovered".toByteArray()
+        var result: ByteArray? = null
+        for (chunk in BleMessageChunker.chunk(message, maxChunkSize = 4)) {
+            result = reassembler.feed(chunk) ?: result
+        }
+        assertArrayEquals(message, result)
     }
 }

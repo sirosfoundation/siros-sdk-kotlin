@@ -1,11 +1,17 @@
-package org.siros.sdk.sample
+package org.siros.sdk.keystore
 
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeoutOrNull
-import org.siros.sdk.keystore.Ctap2TransportException
-import org.siros.sdk.keystore.Ctap2TransportProvider
+
+/**
+ * Physical transport [CompositeCtap2Transport] races [UsbCtap2Transport]
+ * against [NfcCtap2Transport] on. [AUTO] (the typical default) watches USB
+ * and NFC in parallel and uses whichever the user actually presents;
+ * [USB]/[NFC] force a specific transport (e.g. for a dev-only override).
+ */
+enum class Fido2TransportMode { AUTO, USB, NFC }
 
 /**
  * Watches USB and NFC for a FIDO2 authenticator in parallel, so the user

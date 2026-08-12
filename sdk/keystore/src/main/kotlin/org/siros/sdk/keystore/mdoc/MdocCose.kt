@@ -31,7 +31,14 @@ object MdocCose {
         "ES384" -> ALG_ES384
         "ES512" -> ALG_ES512
         "EDDSA", "ED25519" -> ALG_EDDSA
-        else -> ALG_ES256
+        // `algorithm` here is a signing key's own reported algorithm (e.g.
+        // WscdKeystoreAdapter's `key.algorithm`), not a fixed compile-time
+        // enum - silently defaulting an unrecognized value to ES256 would
+        // put the WRONG COSE alg identifier in the protected header while
+        // the signature itself was produced with a different algorithm,
+        // breaking verification in a way that looks like a signature
+        // mismatch rather than the actual root cause.
+        else -> throw IllegalArgumentException("Unsupported mdoc COSE signing algorithm: $algorithm")
     }
 
     /**
