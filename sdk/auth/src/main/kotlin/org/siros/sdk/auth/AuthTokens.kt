@@ -44,8 +44,15 @@ class AuthTokens(
     var onSessionRejected: (() -> Unit)? = null
 
     private val mutex = Mutex()
-    private val tokens = mutableMapOf<String, AccessToken>()
-    private val rejections = mutableMapOf<String, MutableList<Long>>()
+    private val tokens = java.util.concurrent.ConcurrentHashMap<String, AccessToken>()
+    // ConcurrentHashMap/CopyOnWriteArrayList (rather than plain mutableMapOf/
+    // mutableListOf) because registerTokenRejection is a plain (non-suspend)
+    // function called directly from request-handling threads (e.g.
+    // BackendApiClient.executeRaw on Dispatchers.IO, potentially from several
+    // concurrent requests) - it can't take the coroutine `mutex` above without
+    // becoming suspend itself, so its own map/list mutations need to be safe
+    // under concurrent access independent of that mutex.
+    private val rejections = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CopyOnWriteArrayList<Long>>()
 
     /**
      * Ensure a valid token of the given kind is available.
@@ -106,7 +113,7 @@ class AuthTokens(
      */
     fun registerTokenRejection(name: String) {
         val now = System.currentTimeMillis()
-        val list = rejections.getOrPut(name) { mutableListOf() }
+        val list = rejections.computeIfAbsent(name) { java.util.concurrent.CopyOnWriteArrayList() }
         list.add(now)
 
         // Clear the rejected token from cache so it won't be re-served

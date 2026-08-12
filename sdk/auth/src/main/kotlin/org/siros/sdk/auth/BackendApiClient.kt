@@ -300,6 +300,16 @@ class BackendApiClient(
 
         if (!response.isSuccessful) {
             Timber.e("API request failed: ${request.method} ${request.url} -> ${response.code}")
+            if (response.code == 401) {
+                // Every request in this class authenticates via the backend
+                // token (see addCommonHeaders/ensureBackendToken) - feed a 401
+                // into AuthTokens' rejection counter so REJECTION_THRESHOLD
+                // rejections within REJECTION_WINDOW_MS actually trigger
+                // onSessionRejected/logout, instead of silently doing nothing
+                // (registerTokenRejection was previously dead code - nothing
+                // called it despite AuthTokens already tracking rejections).
+                authTokens?.registerTokenRejection(AuthTokens.TOKEN_BACKEND)
+            }
             throw BackendApiException(
                 code = response.code,
                 message = "API request failed: ${response.code}",

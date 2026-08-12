@@ -2746,13 +2746,35 @@ class SirosWallet private constructor(
         val attestation: String? = null,
         /**
          * Key IDs backing `attestation`'s `attested_keys`, in submission
-         * order - null when unavailable (the self-signed-fallback path
-         * doesn't currently expose the keys it generated internally). See
-         * [SirosWallet.activeAttestedKeyIds]'s doc comment for why this
-         * ordering matters for per-credential key selection at signing time.
+         * order - null when unavailable. See [SirosWallet.activeAttestedKeyIds]'s
+         * doc comment for why this ordering matters for per-credential key
+         * selection at signing time.
          */
         val attestedKeyIds: List<String>? = null,
     )
+
+    /**
+     * Recover the signing key's `kid` from a `jwt`-proof-type proof-of-possession
+     * JWT's embedded `jwk` header claim, since [KeystoreManager.generateProof]
+     * doesn't return it directly. Without this, [activeAttestedKeyIds] stayed
+     * null for every credential issued via the (preferred, common) `jwt` proof
+     * path - a real bug found via live proximity-presentation testing: with
+     * `credential.kid` null, [WscdKeystoreAdapter.selectSigningKey] falls back
+     * to "first available key" among ALL WSCD keys, which is only correct by
+     * chance whenever more than one key exists - `deviceSignature` verification
+     * then fails unpredictably depending on `signer.listKeys()`'s ordering.
+     */
+    private fun extractProofKeyId(jwt: String): String? {
+        return try {
+            val headerPart = jwt.substringBefore(".")
+            val padded = headerPart + "=".repeat((4 - headerPart.length % 4) % 4)
+            val headerJson = String(java.util.Base64.getUrlDecoder().decode(padded), Charsets.UTF_8)
+            Json.parseToJsonElement(headerJson).jsonObject["jwk"]?.jsonObject?.get("kid")?.jsonPrimitive?.contentOrNull
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to extract kid from proof JWT header")
+            null
+        }
+    }
 
     /**
      * Decide which OID4VCI proof type to produce and generate it - shared by
@@ -2816,7 +2838,8 @@ class SirosWallet private constructor(
                         nonce = nonce,
                         freshKey = count > 1,
                     )
-                    GeneratedProofData(proofType = "jwt", jwt = proofJwt)
+                    val keyId = extractProofKeyId(proofJwt)
+                    GeneratedProofData(proofType = "jwt", jwt = proofJwt, attestedKeyIds = keyId?.let { listOf(it) })
                 }
             } finally {
                 config.onWscdOperationEnd?.invoke()
@@ -3104,7 +3127,14 @@ class SirosWallet private constructor(
                     proofTypesSupported = params.proofTypesSupported?.keys,
                     proofTypeHint = params.proofType,
                 )
-                activeAttestedKeyIds = generated.firstOrNull { it.attestedKeyIds != null }?.attestedKeyIds
+                // The "attestation" proof type returns a single GeneratedProofData
+                // whose attestedKeyIds already covers the whole batch in order; the
+                // "jwt" proof type returns one GeneratedProofData PER credential,
+                // each carrying its own single-element attestedKeyIds - flatMap
+                // concatenates either shape into one batch-order list. Taking only
+                // the first entry's list (as this used to) silently dropped every
+                // index past 0 for a "jwt" batch of more than one credential.
+                activeAttestedKeyIds = generated.flatMap { it.attestedKeyIds.orEmpty() }.ifEmpty { null }
                 val proofs = generated.map {
                     org.siros.sdk.transport.wmp.openid4x.ProofObject(
                         proofType = it.proofType, jwt = it.jwt, attestation = it.attestation,
@@ -3236,7 +3266,16 @@ class SirosWallet private constructor(
                 }
             }
         }
-        engine.connect(appToken) { legacyAppToken ?: authTokens.ensureBackendToken().raw }
+        engine.connect(
+            appToken,
+            tokenProvider = { legacyAppToken ?: authTokens.ensureBackendToken().raw },
+            // The engine WS always authenticates with the backend token (see
+            // the tokenProvider above) - an explicit 401/403 here is a real
+            // auth rejection just like a REST 401, so feed it into the same
+            // AuthTokens rejection counter rather than only flipping this
+            // session's own State.REAUTH_REQUIRED.
+            onAuthRejected = { authTokens.registerTokenRejection(AuthTokens.TOKEN_BACKEND) },
+        )
         engine.awaitConnected()
 
         // Observe sign requests → auto-sign with keystore
@@ -3255,7 +3294,14 @@ class SirosWallet private constructor(
                                 proofTypesSupported = params?.proofTypesSupported?.keys,
                                 proofTypeHint = params?.proofType,
                             )
-                            activeAttestedKeyIds = generated.firstOrNull { it.attestedKeyIds != null }?.attestedKeyIds
+                            // The "attestation" proof type returns a single GeneratedProofData
+                // whose attestedKeyIds already covers the whole batch in order; the
+                // "jwt" proof type returns one GeneratedProofData PER credential,
+                // each carrying its own single-element attestedKeyIds - flatMap
+                // concatenates either shape into one batch-order list. Taking only
+                // the first entry's list (as this used to) silently dropped every
+                // index past 0 for a "jwt" batch of more than one credential.
+                activeAttestedKeyIds = generated.flatMap { it.attestedKeyIds.orEmpty() }.ifEmpty { null }
                             val proofs = generated.map {
                                 ProofObject(proofType = it.proofType, jwt = it.jwt, attestation = it.attestation)
                             }

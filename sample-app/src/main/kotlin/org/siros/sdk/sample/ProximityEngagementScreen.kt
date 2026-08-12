@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -32,6 +33,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -273,6 +275,7 @@ fun ProximityEngagementScreen(
             )
             currentStep != "waiting_for_reader" -> ProximityProgressView(
                 step = currentStep,
+                onCancel = onBack,
                 modifier = Modifier.fillMaxSize().padding(padding),
             )
             else -> Column(
@@ -326,9 +329,18 @@ fun ProximityEngagementScreen(
  * Progress bar + step label for an in-flight proximity presentation, once a
  * reader has connected - mirrors [FlowActiveView]'s look for the
  * issuance/redirect-presentation flows, using the "proximity" step list.
+ *
+ * Includes an explicit, labeled Cancel action (mirroring [FlowActiveView]'s
+ * own Cancel button) for every in-flight step, including
+ * `"submitting_response"` right before the mdoc response is signed/sent -
+ * previously the only escape hatch here was the generic TopAppBar back
+ * arrow, which happened to abort the BLE session as a side effect
+ * ([ProximityEngagementScreen]'s `onDispose`) but wasn't a visible, labeled
+ * affordance. [onCancel] reuses that exact same abort path (it's the
+ * screen's `onBack`) rather than inventing a second mechanism.
  */
 @Composable
-private fun ProximityProgressView(step: String, modifier: Modifier = Modifier) {
+private fun ProximityProgressView(step: String, onCancel: () -> Unit, modifier: Modifier = Modifier) {
     val stepProgress = flowStepProgress("proximity", step)
 
     // Same monotonic guard as FlowActiveView: real execution order can
@@ -368,6 +380,13 @@ private fun ProximityProgressView(step: String, modifier: Modifier = Modifier) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Spacer(modifier = Modifier.height(32.dp))
+        OutlinedButton(
+            onClick = onCancel,
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            Text(stringResource(R.string.flow_cancel))
+        }
     }
 }
 
