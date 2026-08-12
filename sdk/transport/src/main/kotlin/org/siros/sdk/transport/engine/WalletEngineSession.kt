@@ -85,6 +85,17 @@ class WalletEngineSession(
      */
     @Volatile
     private var tokenProvider: (suspend () -> String)? = null
+    /**
+     * Invoked whenever [refreshTokenOrSignalReauth] sees an explicit 401/403
+     * auth rejection from the AS before a reconnect - lets the caller (e.g.
+     * [org.siros.sdk.wallet.SirosWallet], which owns the `AuthTokens`
+     * instance this class has no dependency on) feed the rejection into its
+     * own rejection-counting/auto-logout mechanism, the same way a REST 401
+     * does via `AuthTokens.registerTokenRejection`. This class only reports
+     * the rejection; it doesn't decide what "too many" means.
+     */
+    @Volatile
+    private var onAuthRejected: (() -> Unit)? = null
     @Volatile
     private var reconnectAttempts = 0
     private val maxReconnectAttempts = 5
@@ -162,12 +173,19 @@ class WalletEngineSession(
      *   reconnect attempt - see [tokenProvider]'s doc comment. Omit only if
      *   the caller genuinely has no refresh mechanism to offer; every real
      *   [SirosWallet] call site should pass one.
+     * @param onAuthRejected called on an explicit 401/403 auth rejection
+     *   before a reconnect - see [onAuthRejected]'s doc comment.
      */
-    fun connect(appToken: String, tokenProvider: (suspend () -> String)? = null) {
+    fun connect(
+        appToken: String,
+        tokenProvider: (suspend () -> String)? = null,
+        onAuthRejected: (() -> Unit)? = null,
+    ) {
         if (_state.value == State.CONNECTED) return
         _state.value = State.CONNECTING
         lastAppToken = appToken
         this.tokenProvider = tokenProvider
+        this.onAuthRejected = onAuthRejected
         reconnectAttempts = 0
         doConnect(appToken)
     }
@@ -260,6 +278,7 @@ class WalletEngineSession(
         } catch (e: AuthException) {
             if (e.code == 401 || e.code == 403) {
                 Timber.w(e, "Token refresh rejected (${e.code}) before reconnect - session invalid")
+                onAuthRejected?.invoke()
                 _state.value = State.REAUTH_REQUIRED
                 null
             } else {
@@ -543,6 +562,7 @@ class WalletEngineSession(
     fun disconnect() {
         lastAppToken = null  // prevent reconnection
         tokenProvider = null
+        onAuthRejected = null
         webSocket?.close(1000, "client disconnect")
         webSocket = null
         sessionId = null

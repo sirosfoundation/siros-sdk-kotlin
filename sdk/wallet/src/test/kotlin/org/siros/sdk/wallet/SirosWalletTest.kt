@@ -468,7 +468,7 @@ class SirosWalletTest {
                 "state-from-url",
             )
         }
-        verify(exactly = 1) { engine.connect("app-token", any()) }
+        verify(exactly = 1) { engine.connect("app-token", any(), any()) }
         assertEquals(
             WalletState.FlowActive(
                 userId = "user-1",
@@ -3435,7 +3435,7 @@ class SirosWalletTest {
         flowErrors: MutableSharedFlow<FlowErrorMessage> = MutableSharedFlow(),
     ): WalletEngineSession {
         val engine = mockk<WalletEngineSession>()
-        every { engine.connect(any(), any()) } just runs
+        every { engine.connect(any(), any(), any()) } just runs
         coEvery { engine.awaitConnected(any()) } just runs
         coEvery { engine.forceReconnect() } just runs
         every { engine.state } returns MutableStateFlow(WalletEngineSession.State.CONNECTED)

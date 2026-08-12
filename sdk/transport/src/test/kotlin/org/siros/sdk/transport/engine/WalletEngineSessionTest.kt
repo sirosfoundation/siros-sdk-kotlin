@@ -511,7 +511,7 @@ class WalletEngineSessionTest {
             tenantId = "tenant-42",
             client = client,
         )
-        session.connect("app-token") { throw AuthException("session expired", code = 401) }
+        session.connect("app-token", tokenProvider = { throw AuthException("session expired", code = 401) })
 
         session.forceReconnect()
 
@@ -522,13 +522,55 @@ class WalletEngineSessionTest {
     }
 
     @Test
+    fun forceReconnect_invokes_onAuthRejected_when_token_provider_rejects_with_401() = runTest {
+        val session = WalletEngineSession(
+            baseUrl = "https://wallet.example.com",
+            tenantId = "tenant-42",
+            client = client,
+        )
+        var authRejectedCalls = 0
+        session.connect(
+            "app-token",
+            tokenProvider = { throw AuthException("session expired", code = 401) },
+            onAuthRejected = { authRejectedCalls++ },
+        )
+
+        session.forceReconnect()
+
+        // Same call site AuthTokens.registerTokenRejection is wired to in
+        // SirosWallet.connectEngine - this only checks the callback fires,
+        // not AuthTokens' own counting logic (covered by AuthTokensTest).
+        assertEquals(1, authRejectedCalls)
+        assertEquals(WalletEngineSession.State.REAUTH_REQUIRED, session.state.value)
+    }
+
+    @Test
+    fun forceReconnect_does_not_invoke_onAuthRejected_on_transient_failure() = runTest {
+        val session = WalletEngineSession(
+            baseUrl = "https://wallet.example.com",
+            tenantId = "tenant-42",
+            client = client,
+        )
+        var authRejectedCalls = 0
+        session.connect(
+            "app-token",
+            tokenProvider = { throw java.io.IOException("network blip") },
+            onAuthRejected = { authRejectedCalls++ },
+        )
+
+        session.forceReconnect()
+
+        assertEquals(0, authRejectedCalls)
+    }
+
+    @Test
     fun forceReconnect_retries_with_last_token_on_transient_provider_failure() = runTest {
         val session = WalletEngineSession(
             baseUrl = "https://wallet.example.com",
             tenantId = "tenant-42",
             client = client,
         )
-        session.connect("app-token") { throw java.io.IOException("network blip") }
+        session.connect("app-token", tokenProvider = { throw java.io.IOException("network blip") })
 
         session.forceReconnect()
 
@@ -546,7 +588,7 @@ class WalletEngineSessionTest {
             tenantId = "tenant-42",
             client = client,
         )
-        session.connect("app-token") { throw AuthException("AS unavailable", code = 503) }
+        session.connect("app-token", tokenProvider = { throw AuthException("AS unavailable", code = 503) })
 
         session.forceReconnect()
 

@@ -3266,7 +3266,16 @@ class SirosWallet private constructor(
                 }
             }
         }
-        engine.connect(appToken) { legacyAppToken ?: authTokens.ensureBackendToken().raw }
+        engine.connect(
+            appToken,
+            tokenProvider = { legacyAppToken ?: authTokens.ensureBackendToken().raw },
+            // The engine WS always authenticates with the backend token (see
+            // the tokenProvider above) - an explicit 401/403 here is a real
+            // auth rejection just like a REST 401, so feed it into the same
+            // AuthTokens rejection counter rather than only flipping this
+            // session's own State.REAUTH_REQUIRED.
+            onAuthRejected = { authTokens.registerTokenRejection(AuthTokens.TOKEN_BACKEND) },
+        )
         engine.awaitConnected()
 
         // Observe sign requests → auto-sign with keystore

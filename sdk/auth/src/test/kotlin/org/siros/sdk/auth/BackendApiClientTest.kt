@@ -1,6 +1,9 @@
 package org.siros.sdk.auth
 
 import org.siros.sdk.credentials.BackendApiException
+import io.mockk.coEvery
+import io.mockk.mockk
+import io.mockk.verify
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -16,6 +19,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.util.Base64
 
 class BackendApiClientTest {
 
@@ -280,6 +284,59 @@ class BackendApiClientTest {
         } catch (e: BackendApiException) {
             assertEquals(400, e.code)
         }
+    }
+
+    @Test
+    fun non_success_401_response_registers_token_rejection() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":"unauthorized"}"""))
+
+        val authTokens = mockk<AuthTokens>(relaxed = true)
+        coEvery { authTokens.ensureBackendToken() } returns fakeBackendToken()
+
+        val client = newClient()
+        client.setAuthTokens(authTokens)
+
+        try {
+            client.healthCheck()
+            throw AssertionError("Expected BackendApiException")
+        } catch (e: BackendApiException) {
+            assertEquals(401, e.code)
+        }
+
+        verify(exactly = 1) { authTokens.registerTokenRejection(AuthTokens.TOKEN_BACKEND) }
+    }
+
+    @Test
+    fun non_401_failure_does_not_register_token_rejection() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(500).setBody("boom"))
+
+        val authTokens = mockk<AuthTokens>(relaxed = true)
+        coEvery { authTokens.ensureBackendToken() } returns fakeBackendToken()
+
+        val client = newClient()
+        client.setAuthTokens(authTokens)
+
+        try {
+            client.healthCheck()
+            throw AssertionError("Expected BackendApiException")
+        } catch (e: BackendApiException) {
+            assertEquals(500, e.code)
+        }
+
+        verify(exactly = 0) { authTokens.registerTokenRejection(any()) }
+    }
+
+    /** A syntactically valid, unexpired access token JWT for stubbing [AuthTokens.ensureBackendToken]. */
+    private fun fakeBackendToken(): AccessToken {
+        val exp = (System.currentTimeMillis() / 1000) + 3600
+        val header = Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("""{"alg":"RS256","typ":"JWT"}""".toByteArray())
+        val body = Base64.getUrlEncoder().withoutPadding().encodeToString(
+            ("""{"sub":"user-1","aud":"wallet-backend","tenant_id":"default",""" +
+                """"tac":"rwlid","acr":"urn:siros:acr:passkey","exp":$exp}""").toByteArray()
+        )
+        val signature = Base64.getUrlEncoder().withoutPadding().encodeToString("sig".toByteArray())
+        return AccessToken("$header.$body.$signature")
     }
 
     private fun newClient(): BackendApiClient {
