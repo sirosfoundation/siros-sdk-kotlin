@@ -2516,6 +2516,84 @@ class SirosWalletTest {
         }
     }
 
+    /** A `jwt`-proof-type proof-of-possession JWT with the given `kid` embedded in its `jwk` header, matching what [KeystoreManager.generateProof] actually produces. */
+    private fun fakeProofJwt(kid: String): String {
+        val encoder = java.util.Base64.getUrlEncoder().withoutPadding()
+        val header = """{"typ":"openid4vci-proof+jwt","alg":"ES256","jwk":{"kty":"EC","crv":"P-256","kid":"$kid","x":"eA","y":"eQ"}}"""
+        val payload = """{"aud":"aud-1","nonce":"nonce-1"}"""
+        return "${encoder.encodeToString(header.toByteArray())}.${encoder.encodeToString(payload.toByteArray())}.sig"
+    }
+
+    /**
+     * Real bug found via live proximity-presentation testing: [KeystoreManager.generateProof]
+     * never returned which key it used, so [SirosWallet.activeAttestedKeyIds] stayed null for
+     * every credential issued via the `jwt` proof type (the preferred, common path) - leaving
+     * `StoredCredential.kid` null and making device-signature verification depend on
+     * `signer.listKeys()`'s incidental ordering instead of the credential's actual bound key.
+     * The fix recovers the `kid` from the proof JWT's own embedded `jwk` header.
+     */
+    @Test
+    fun connectEngine_signRequest_singleProof_recordsAttestedKeyIdFromJwtHeader() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.generateProof(audience = "aud-1", nonce = "nonce-1") } returns fakeProofJwt("sw-0")
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to keystore,
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sign",
+                action = "generate_proof",
+                params = SignRequestParams(audience = "aud-1", nonce = "nonce-1"),
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals(listOf("sw-0"), getField(wallet, "activeAttestedKeyIds"))
+    }
+
+    /**
+     * A batch of more than one `jwt`-proof-type proof each carries its OWN single-element
+     * key-id list (from its own JWT header) - the aggregation must concatenate them in
+     * submission order, not just keep the first one's list (which would silently leave
+     * every batch index past 0 unbound to any key, same failure mode as the bug above).
+     */
+    @Test
+    fun connectEngine_signRequest_batchProofs_recordsAllAttestedKeyIdsInOrder() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val keystore = mockk<KeystoreManager>()
+        coEvery {
+            keystore.generateProof(audience = "aud-1", nonce = "nonce-1", freshKey = true)
+        } returnsMany listOf(fakeProofJwt("sw-0"), fakeProofJwt("sw-1"), fakeProofJwt("sw-2"))
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to keystore,
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sign",
+                action = "generate_proof",
+                params = SignRequestParams(audience = "aud-1", nonce = "nonce-1", count = 3),
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals(listOf("sw-0", "sw-1", "sw-2"), getField(wallet, "activeAttestedKeyIds"))
+    }
+
     @Test
     fun connectEngine_signRequest_generates_attestation_proof_when_jwt_not_supported() = runTest(dispatcher) {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
