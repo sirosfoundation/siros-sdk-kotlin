@@ -3,18 +3,13 @@ package org.siros.sdk.sample
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Spacer
@@ -958,7 +953,6 @@ fun PreLoginSettingsSheet(
 
 // ── Credentials Tab ─────────────────────────────────────────────────
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CredentialsTab(
     state: WalletState.Ready,
@@ -997,51 +991,23 @@ fun CredentialsTab(
 
         if (grouped.isEmpty()) {
             EmptyCredentialsCard(onClick = onAddCredential)
-        } else if (grouped.size == 1) {
-            val entry = grouped.first()
-            CredentialCard(
-                credential = entry.credential,
-                instances = entry.instances,
-                onClick = { onCredentialClick(entry.credential) },
-                onRenewClick = { onRenewCredential(entry.credential) },
-            )
         } else {
-            // Horizontal pager for swiping between credential cards
-            val pagerState = rememberPagerState(pageCount = { grouped.size })
-            HorizontalPager(
-                state = pagerState,
-                contentPadding = PaddingValues(end = 32.dp),
-                pageSpacing = 12.dp,
-            ) { page ->
-                val entry = grouped[page]
-                CredentialCard(
-                    credential = entry.credential,
-                    instances = entry.instances,
-                    onClick = { onCredentialClick(entry.credential) },
-                    onRenewClick = { onRenewCredential(entry.credential) },
-                )
-            }
-            // Page indicator dots
-            if (grouped.size > 1) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center,
-                ) {
-                    repeat(grouped.size) { index ->
-                        Box(
-                            modifier = Modifier
-                                .padding(horizontal = 4.dp)
-                                .size(if (pagerState.currentPage == index) 8.dp else 6.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    if (pagerState.currentPage == index)
-                                        MaterialTheme.colorScheme.primary
-                                    else
-                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
-                                ),
-                        )
-                    }
+            // Vertically-scrolling list of credential cards. The phone screen
+            // has far more vertical than horizontal real estate, so a
+            // one-at-a-time horizontal pager wasted the available space -
+            // a scrollable column lets multiple cards be visible/scrollable
+            // at once instead.
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                items(grouped, key = { it.credential.batchId }) { entry ->
+                    CredentialCard(
+                        credential = entry.credential,
+                        instances = entry.instances,
+                        onClick = { onCredentialClick(entry.credential) },
+                        onRenewClick = { onRenewCredential(entry.credential) },
+                    )
                 }
             }
         }
