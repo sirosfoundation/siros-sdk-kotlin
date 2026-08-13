@@ -666,7 +666,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 receivedCredentialCount++
             }
 
-            override fun onFlowComplete(flowId: String) {
+            override fun onFlowComplete(flowId: String, redirectUri: String?) {
                 if (receivedCredentialCount > 0) {
                     _infoMessage.value = activity.getString(
                         R.string.flow_credentials_received,
@@ -681,6 +681,18 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     // confirmation is the equivalent "something happened" signal for a
                     // flow whose whole point is watching this screen after a QR scan.
                     _infoMessage.value = activity.getString(R.string.flow_presentation_sent)
+                }
+
+                // Some verifiers (e.g. verifier.multipaz.org) return a
+                // redirect_uri with their direct_post.jwt response so the
+                // user's browser can be sent back to the verifier's own
+                // result page. Without this, the flow just silently ends
+                // on the wallet side with no way back to the verifier.
+                if (redirectUri != null) {
+                    Log.d(TAG, "Opening verifier redirect: $redirectUri")
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(redirectUri))
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    activity.startActivity(intent)
                 }
             }
         })

@@ -3744,7 +3744,7 @@ class SirosWallet private constructor(
                     Timber.e("Flow ${msg.flowId} completed but no credentials were stored: $reason")
                     eventListener?.onFlowError(msg.flowId, reason)
                 } else {
-                    eventListener?.onFlowComplete(msg.flowId)
+                    eventListener?.onFlowComplete(msg.flowId, msg.redirectUri)
                 }
 
                 val current = _state.value
