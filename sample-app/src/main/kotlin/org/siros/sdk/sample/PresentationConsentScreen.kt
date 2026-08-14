@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -51,7 +50,6 @@ import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialMatcher
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.PresentationRecord
-import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.wallet.PresentationRequest
 
 /**
@@ -137,15 +135,16 @@ fun PresentationConsentScreen(
             // Content area
             Box(modifier = Modifier.weight(1f)) {
                 when {
-                    currentStep == 0 -> PreviewStep(request, exhaustedQueryIds)
+                    currentStep == 0 -> PreviewStep(request, exhaustedQueryIds, presentationHistory)
                     currentStep <= request.matchResults.size -> {
                         val matchResult = request.matchResults[currentStep - 1]
                         ClaimSelectionStep(
                             matchResult = matchResult,
                             claimSelections = claimSelections,
+                            presentationHistory = presentationHistory,
                         )
                     }
-                    else -> SummaryStep(request, claimSelections)
+                    else -> SummaryStep(request, claimSelections, presentationHistory)
                 }
             }
 
@@ -230,7 +229,11 @@ private fun StepBar(currentStep: Int, totalSteps: Int) {
 // ── Step 1: Preview ─────────────────────────────────────────────────
 
 @Composable
-private fun PreviewStep(request: PresentationRequest, exhaustedQueryIds: Set<String> = emptySet()) {
+private fun PreviewStep(
+    request: PresentationRequest,
+    exhaustedQueryIds: Set<String> = emptySet(),
+    presentationHistory: List<PresentationRecord> = emptyList(),
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -266,45 +269,39 @@ private fun PreviewStep(request: PresentationRequest, exhaustedQueryIds: Set<Str
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Overview of matched credentials
+        // Overview of matched credentials - reuses the exact same
+        // CredentialCard as the main credential list (including its batch
+        // "remaining copies" ribbon) rather than a separate, simpler-looking
+        // representation that risked reading as a different credential.
         request.matchResults.forEach { matchResult ->
             val isExhausted = matchResult.queryId in exhaustedQueryIds
-            Card(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isExhausted) {
-                        MaterialTheme.colorScheme.errorContainer
-                    } else {
-                        MaterialTheme.colorScheme.surfaceVariant
-                    },
-                ),
-                shape = RoundedCornerShape(12.dp),
-            ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    // One row representing the credential type this query
-                    // matched, not one per raw instance - a batch-issued
-                    // credential can have many interchangeable copies
-                    // eligible for the same query (see
-                    // CredentialUtils.eligibleInstances), and the SDK - not
-                    // the user - picks which physical copy is actually used
-                    // at share time.
-                    matchResult.candidates.firstOrNull()?.let { CredentialRow(it) }
-                    val claimCount = matchResult.requestedClaims.flatten().distinct().size
+            // One card representing the credential type this query matched,
+            // not one per raw instance - a batch-issued credential can have
+            // many interchangeable copies eligible for the same query (see
+            // CredentialUtils.eligibleInstances), and the SDK - not the
+            // user - picks which physical copy is actually used at share time.
+            val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory).firstOrNull()
+            if (grouped != null) {
+                CredentialCard(
+                    credential = grouped.credential,
+                    instances = grouped.instances,
+                    modifier = Modifier.padding(vertical = 4.dp),
+                )
+                val claimCount = matchResult.requestedClaims.flatten().distinct().size
+                Text(
+                    text = "$claimCount data fields requested",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
+                )
+                if (isExhausted) {
                     Text(
-                        text = "$claimCount data fields requested",
+                        text = "No eligible copies remain - renew this credential in Settings",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 8.dp),
+                        color = MaterialTheme.colorScheme.error,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(bottom = 8.dp),
                     )
-                    if (isExhausted) {
-                        Text(
-                            text = "No eligible copies remain - renew this credential in Settings",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(top = 4.dp),
-                        )
-                    }
                 }
             }
         }
@@ -317,8 +314,10 @@ private fun PreviewStep(request: PresentationRequest, exhaustedQueryIds: Set<Str
 private fun ClaimSelectionStep(
     matchResult: CredentialMatcher.MatchResult,
     claimSelections: MutableMap<String, Boolean>,
+    presentationHistory: List<PresentationRecord> = emptyList(),
 ) {
-    val cred = matchResult.candidates.firstOrNull()
+    val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory).firstOrNull()
+    val cred = grouped?.credential
     val claimMetaMap = cred?.metadata?.claims
         ?.associateBy { it.path.joinToString(".") } ?: emptyMap()
     val claims = matchResult.requestedClaims.flatten().distinct()
@@ -329,9 +328,12 @@ private fun ClaimSelectionStep(
             .verticalScroll(rememberScrollState()),
     ) {
         // Credential header
-        if (cred != null) {
-            CredentialRow(cred)
-            Spacer(modifier = Modifier.height(12.dp))
+        if (grouped != null) {
+            CredentialCard(
+                credential = grouped.credential,
+                instances = grouped.instances,
+                modifier = Modifier.padding(bottom = 12.dp),
+            )
         }
 
         Text(
@@ -403,6 +405,7 @@ private fun ClaimSelectionStep(
 private fun SummaryStep(
     request: PresentationRequest,
     claimSelections: Map<String, Boolean>,
+    presentationHistory: List<PresentationRecord> = emptyList(),
 ) {
     Column(
         modifier = Modifier
@@ -434,21 +437,26 @@ private fun SummaryStep(
         Spacer(modifier = Modifier.height(16.dp))
 
         request.matchResults.forEach { matchResult ->
-            val cred = matchResult.candidates.firstOrNull() ?: return@forEach
+            val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory).firstOrNull()
+                ?: return@forEach
+            val cred = grouped.credential
             val claimMetaMap = cred.metadata?.claims
                 ?.associateBy { it.path.joinToString(".") } ?: emptyMap()
             val disclosedClaims = matchResult.requestedClaims.flatten().distinct()
                 .filter { claimSelections["${matchResult.queryId}:$it"] == true }
 
-            Card(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    CredentialRow(cred)
-                    if (disclosedClaims.isNotEmpty()) {
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            CredentialCard(
+                credential = cred,
+                instances = grouped.instances,
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+            if (disclosedClaims.isNotEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
                         disclosedClaims.forEach { claim ->
                             val meta = claimMetaMap[claim]
                             Text(
@@ -459,48 +467,6 @@ private fun SummaryStep(
                         }
                     }
                 }
-            }
-        }
-    }
-}
-
-// ── Shared Components ───────────────────────────────────────────────
-
-@Composable
-private fun CredentialRow(credential: StoredCredential) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        val initial = credential.metadata?.name?.firstOrNull()?.uppercase() ?: "?"
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primary),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = initial,
-                color = MaterialTheme.colorScheme.onPrimary,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-            )
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        Column {
-            Text(
-                text = credential.metadata?.name ?: credential.format,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-            )
-            val issuerName = credential.metadata?.issuer?.name
-            if (issuerName != null) {
-                Text(
-                    text = issuerName,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
         }
     }
