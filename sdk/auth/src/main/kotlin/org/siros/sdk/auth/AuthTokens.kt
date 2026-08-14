@@ -67,10 +67,15 @@ class AuthTokens(
             tokens.remove(name)
         }
 
-        val token = if (kind.anonymous) {
-            authServerClient.requestAnonymousToken(kind.aud, kind.tac)
-        } else {
-            authServerClient.requestAccessToken(kind.aud, kind.tac)
+        val token = try {
+            if (kind.anonymous) {
+                authServerClient.requestAnonymousToken(kind.aud, kind.tac)
+            } else {
+                authServerClient.requestAccessToken(kind.aud, kind.tac)
+            }
+        } catch (e: AuthException) {
+            handleAsTokenFailure(e)
+            throw e
         }
         tokens[name] = token
         token
@@ -97,13 +102,40 @@ class AuthTokens(
         val kind = MANIFEST[name]
             ?: throw AuthException("Unknown token kind: $name")
 
-        val token = if (kind.anonymous) {
-            authServerClient.requestAnonymousToken(kind.aud, kind.tac)
-        } else {
-            authServerClient.requestAccessToken(kind.aud, kind.tac)
+        val token = try {
+            if (kind.anonymous) {
+                authServerClient.requestAnonymousToken(kind.aud, kind.tac)
+            } else {
+                authServerClient.requestAccessToken(kind.aud, kind.tac)
+            }
+        } catch (e: AuthException) {
+            handleAsTokenFailure(e)
+            throw e
         }
         tokens[name] = token
         token
+    }
+
+    /**
+     * A 401 straight from the AS's own `/auth/token` endpoint (i.e. minting a
+     * *new* token failed, not just a previously-issued one being rejected
+     * later by a backend API call) means the AS itself has already declared
+     * the session dead - unlike [registerTokenRejection]'s REST-401 case,
+     * there's no ambiguity to wait out via [REJECTION_THRESHOLD]/
+     * [REJECTION_WINDOW_MS], so this fires [onSessionRejected] immediately.
+     *
+     * Without this, a call like "add credential" made with an AS session
+     * that's expired (but whose locally-cached access token hadn't yet hit
+     * its own claimed expiry, or had none cached at all) would throw a raw
+     * [AuthException] straight out of [ensureToken]/[forceRefreshToken] with
+     * no logout/re-login ever triggered — confirmed via a live "AS request
+     * failed 401 - /auth/token" report with no reauth flow firing.
+     */
+    private fun handleAsTokenFailure(e: AuthException) {
+        if (e.code == 401) {
+            Timber.w("AS token request rejected (401) — session invalid")
+            onSessionRejected?.invoke()
+        }
     }
 
     /**
