@@ -57,13 +57,26 @@ interface WalletEventListener {
 
     /**
      * Called when a flow completes (issuance or presentation).
+     *
+     * @param redirectUri For an OID4VP `direct_post.jwt` presentation, some
+     *   verifiers (e.g. verifier.multipaz.org) return a `redirect_uri` in
+     *   their response so the user's browser/session can be returned to the
+     *   verifier's own page to see the result. When present, the app should
+     *   open it (Custom Tab or browser), matching [onAuthorizationRequired]'s
+     *   pattern. Null when the verifier didn't return one (also true for
+     *   every OID4VCI issuance completion).
      */
-    fun onFlowComplete(flowId: String) {}
+    fun onFlowComplete(flowId: String, redirectUri: String? = null) {}
 
     /**
      * Called when a flow fails.
+     *
+     * @param redirectUri Some verifiers return a `redirect_uri` even from
+     *   their error-response endpoint (e.g. when the user declines an OID4VP
+     *   presentation) - see [onFlowComplete]'s equivalent param. Null unless
+     *   the verifier provided one.
      */
-    fun onFlowError(flowId: String, errorMessage: String) {}
+    fun onFlowError(flowId: String, errorMessage: String, redirectUri: String? = null) {}
 
     /**
      * An issuer requires user authorization (OAuth consent).

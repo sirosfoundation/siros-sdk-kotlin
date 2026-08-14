@@ -33,6 +33,9 @@
     <string name="add_credential_retry">Δοκιμάστε Ξανά</string>
     <string name="nav_back">Πίσω</string>
 
+    <!-- Presentation consent screen -->
+    <string name="presentation_consent_title">Αίτημα Πιστοποιητικού</string>
+
     <!-- Credential detail screen -->
     <string name="credential_detail_title">Λεπτομέρειες Πιστοποιητικού</string>
     <string name="credential_detail_tab_info">Πληροφορίες</string>

@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -25,11 +24,15 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -39,6 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.siros.sdk.credentials.ClaimMeta
@@ -46,7 +50,6 @@ import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialMatcher
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.PresentationRecord
-import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.wallet.PresentationRequest
 
 /**
@@ -57,6 +60,7 @@ import org.siros.sdk.wallet.PresentationRequest
  * 2. Per-credential: select which claims to disclose (for each matched credential)
  * 3. Summary: confirm final selection before sharing
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PresentationConsentScreen(
     request: PresentationRequest,
@@ -100,78 +104,98 @@ fun PresentationConsentScreen(
         true
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
-    ) {
-        // Step indicator
-        StepBar(currentStep = currentStep, totalSteps = totalSteps)
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Content area
-        Box(modifier = Modifier.weight(1f)) {
-            when {
-                currentStep == 0 -> PreviewStep(request, exhaustedQueryIds)
-                currentStep <= request.matchResults.size -> {
-                    val matchResult = request.matchResults[currentStep - 1]
-                    ClaimSelectionStep(
-                        matchResult = matchResult,
-                        claimSelections = claimSelections,
-                    )
-                }
-                else -> SummaryStep(request, claimSelections)
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Navigation buttons
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+    // Scaffold with the same TopAppBar treatment as every other sub-screen
+    // (CredentialDetailScreen, QrScannerScreen, etc.) so this reads as part
+    // of the wallet rather than a bare, unchromed overlay. No navigationIcon:
+    // the Decline/Back buttons below already cover "leave this screen", and
+    // a back arrow that did something different would be confusing.
+    Scaffold(
+        modifier = modifier,
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.presentation_consent_title)) },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                ),
+            )
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(16.dp),
         ) {
-            if (currentStep == 0) {
-                OutlinedButton(
-                    onClick = onDecline,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Icon(Icons.Filled.Close, null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Decline")
-                }
-            } else {
-                OutlinedButton(
-                    onClick = { currentStep-- },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Text("Back")
+            // Step indicator
+            StepBar(currentStep = currentStep, totalSteps = totalSteps)
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Content area
+            Box(modifier = Modifier.weight(1f)) {
+                when {
+                    currentStep == 0 -> PreviewStep(request, exhaustedQueryIds, presentationHistory)
+                    currentStep <= request.matchResults.size -> {
+                        val matchResult = request.matchResults[currentStep - 1]
+                        ClaimSelectionStep(
+                            matchResult = matchResult,
+                            claimSelections = claimSelections,
+                            presentationHistory = presentationHistory,
+                        )
+                    }
+                    else -> SummaryStep(request, claimSelections, presentationHistory)
                 }
             }
 
-            if (currentStep < totalSteps - 1) {
-                Button(
-                    onClick = { currentStep++ },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Text("Next")
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Navigation buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (currentStep == 0) {
+                    OutlinedButton(
+                        onClick = onDecline,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Icon(Icons.Filled.Close, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Decline")
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = { currentStep-- },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text("Back")
+                    }
                 }
-            } else {
-                Button(
-                    onClick = {
-                        onAccept(CredentialUtils.eligibleInstances(request.candidates, consumptionPolicy, presentationHistory).map { it.id })
-                    },
-                    enabled = exhaustedQueryIds.isEmpty(),
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Icon(Icons.Filled.Check, null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Share")
+
+                if (currentStep < totalSteps - 1) {
+                    Button(
+                        onClick = { currentStep++ },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text("Next")
+                    }
+                } else {
+                    Button(
+                        onClick = {
+                            onAccept(CredentialUtils.eligibleInstances(request.candidates, consumptionPolicy, presentationHistory).map { it.id })
+                        },
+                        enabled = exhaustedQueryIds.isEmpty(),
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Icon(Icons.Filled.Check, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Share")
+                    }
                 }
             }
         }
@@ -205,39 +229,37 @@ private fun StepBar(currentStep: Int, totalSteps: Int) {
 // ── Step 1: Preview ─────────────────────────────────────────────────
 
 @Composable
-private fun PreviewStep(request: PresentationRequest, exhaustedQueryIds: Set<String> = emptySet()) {
+private fun PreviewStep(
+    request: PresentationRequest,
+    exhaustedQueryIds: Set<String> = emptySet(),
+    presentationHistory: List<PresentationRecord> = emptyList(),
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState()),
     ) {
-        // Verifier identity
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                imageVector = Icons.Filled.Info,
-                contentDescription = null,
-                modifier = Modifier.size(32.dp),
-                tint = MaterialTheme.colorScheme.primary,
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column {
-                Text(
-                    text = "Credential Request",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
+        // Verifier identity - the screen title itself now lives in the
+        // TopAppBar, so this just surfaces who's asking.
+        val vName = request.verifierName
+        if (vName != null) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Filled.Info,
+                    contentDescription = null,
+                    modifier = Modifier.size(32.dp),
+                    tint = MaterialTheme.colorScheme.primary,
                 )
-                val vName = request.verifierName
-                if (vName != null) {
-                    Text(
-                        text = vName,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = vName,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
             }
-        }
 
-        Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(16.dp))
+        }
 
         val verifier = request.verifierName ?: "A verifier"
         Text(
@@ -247,45 +269,39 @@ private fun PreviewStep(request: PresentationRequest, exhaustedQueryIds: Set<Str
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Overview of matched credentials
+        // Overview of matched credentials - reuses the exact same
+        // CredentialCard as the main credential list (including its batch
+        // "remaining copies" ribbon) rather than a separate, simpler-looking
+        // representation that risked reading as a different credential.
         request.matchResults.forEach { matchResult ->
             val isExhausted = matchResult.queryId in exhaustedQueryIds
-            Card(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isExhausted) {
-                        MaterialTheme.colorScheme.errorContainer
-                    } else {
-                        MaterialTheme.colorScheme.surfaceVariant
-                    },
-                ),
-                shape = RoundedCornerShape(12.dp),
-            ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    // One row representing the credential type this query
-                    // matched, not one per raw instance - a batch-issued
-                    // credential can have many interchangeable copies
-                    // eligible for the same query (see
-                    // CredentialUtils.eligibleInstances), and the SDK - not
-                    // the user - picks which physical copy is actually used
-                    // at share time.
-                    matchResult.candidates.firstOrNull()?.let { CredentialRow(it) }
-                    val claimCount = matchResult.requestedClaims.flatten().distinct().size
+            // One card representing the credential type this query matched,
+            // not one per raw instance - a batch-issued credential can have
+            // many interchangeable copies eligible for the same query (see
+            // CredentialUtils.eligibleInstances), and the SDK - not the
+            // user - picks which physical copy is actually used at share time.
+            val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory).firstOrNull()
+            if (grouped != null) {
+                CredentialCard(
+                    credential = grouped.credential,
+                    instances = grouped.instances,
+                    modifier = Modifier.padding(vertical = 4.dp),
+                )
+                val claimCount = matchResult.requestedClaims.flatten().distinct().size
+                Text(
+                    text = "$claimCount data fields requested",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
+                )
+                if (isExhausted) {
                     Text(
-                        text = "$claimCount data fields requested",
+                        text = "No eligible copies remain - renew this credential in Settings",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 8.dp),
+                        color = MaterialTheme.colorScheme.error,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(bottom = 8.dp),
                     )
-                    if (isExhausted) {
-                        Text(
-                            text = "No eligible copies remain - renew this credential in Settings",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(top = 4.dp),
-                        )
-                    }
                 }
             }
         }
@@ -298,8 +314,10 @@ private fun PreviewStep(request: PresentationRequest, exhaustedQueryIds: Set<Str
 private fun ClaimSelectionStep(
     matchResult: CredentialMatcher.MatchResult,
     claimSelections: MutableMap<String, Boolean>,
+    presentationHistory: List<PresentationRecord> = emptyList(),
 ) {
-    val cred = matchResult.candidates.firstOrNull()
+    val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory).firstOrNull()
+    val cred = grouped?.credential
     val claimMetaMap = cred?.metadata?.claims
         ?.associateBy { it.path.joinToString(".") } ?: emptyMap()
     val claims = matchResult.requestedClaims.flatten().distinct()
@@ -310,9 +328,12 @@ private fun ClaimSelectionStep(
             .verticalScroll(rememberScrollState()),
     ) {
         // Credential header
-        if (cred != null) {
-            CredentialRow(cred)
-            Spacer(modifier = Modifier.height(12.dp))
+        if (grouped != null) {
+            CredentialCard(
+                credential = grouped.credential,
+                instances = grouped.instances,
+                modifier = Modifier.padding(bottom = 12.dp),
+            )
         }
 
         Text(
@@ -384,6 +405,7 @@ private fun ClaimSelectionStep(
 private fun SummaryStep(
     request: PresentationRequest,
     claimSelections: Map<String, Boolean>,
+    presentationHistory: List<PresentationRecord> = emptyList(),
 ) {
     Column(
         modifier = Modifier
@@ -415,21 +437,26 @@ private fun SummaryStep(
         Spacer(modifier = Modifier.height(16.dp))
 
         request.matchResults.forEach { matchResult ->
-            val cred = matchResult.candidates.firstOrNull() ?: return@forEach
+            val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory).firstOrNull()
+                ?: return@forEach
+            val cred = grouped.credential
             val claimMetaMap = cred.metadata?.claims
                 ?.associateBy { it.path.joinToString(".") } ?: emptyMap()
             val disclosedClaims = matchResult.requestedClaims.flatten().distinct()
                 .filter { claimSelections["${matchResult.queryId}:$it"] == true }
 
-            Card(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    CredentialRow(cred)
-                    if (disclosedClaims.isNotEmpty()) {
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            CredentialCard(
+                credential = cred,
+                instances = grouped.instances,
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+            if (disclosedClaims.isNotEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
                         disclosedClaims.forEach { claim ->
                             val meta = claimMetaMap[claim]
                             Text(
@@ -440,48 +467,6 @@ private fun SummaryStep(
                         }
                     }
                 }
-            }
-        }
-    }
-}
-
-// ── Shared Components ───────────────────────────────────────────────
-
-@Composable
-private fun CredentialRow(credential: StoredCredential) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        val initial = credential.metadata?.name?.firstOrNull()?.uppercase() ?: "?"
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primary),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = initial,
-                color = MaterialTheme.colorScheme.onPrimary,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-            )
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        Column {
-            Text(
-                text = credential.metadata?.name ?: credential.format,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-            )
-            val issuerName = credential.metadata?.issuer?.name
-            if (issuerName != null) {
-                Text(
-                    text = issuerName,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
         }
     }
