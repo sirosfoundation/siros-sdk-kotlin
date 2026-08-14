@@ -262,9 +262,14 @@ private fun PreviewStep(request: PresentationRequest, exhaustedQueryIds: Set<Str
                 shape = RoundedCornerShape(12.dp),
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
-                    for (cred in matchResult.candidates) {
-                        CredentialRow(cred)
-                    }
+                    // One row representing the credential type this query
+                    // matched, not one per raw instance - a batch-issued
+                    // credential can have many interchangeable copies
+                    // eligible for the same query (see
+                    // CredentialUtils.eligibleInstances), and the SDK - not
+                    // the user - picks which physical copy is actually used
+                    // at share time.
+                    matchResult.candidates.firstOrNull()?.let { CredentialRow(it) }
                     val claimCount = matchResult.requestedClaims.flatten().distinct().size
                     Text(
                         text = "$claimCount data fields requested",
