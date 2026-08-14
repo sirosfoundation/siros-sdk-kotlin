@@ -490,11 +490,30 @@ object CredentialUtils {
     }
 
     /**
-     * Below this many eligible (unused) instances remaining, the UI should
-     * offer to renew/re-issue the credential rather than let it silently run
-     * out. Not user-configurable in this pass - just the stated default.
+     * Default fallback for [isBelowRenewThreshold] when no per-credential-
+     * type override is configured (see `SirosWallet.renewThresholds` in
+     * `sdk:wallet`) - below this many eligible (unused) instances
+     * remaining, the wallet should proactively offer to renew rather than
+     * let it silently run out (EUDI ARF ISSU_50/54; OID4VCI itself has no
+     * wire slot for the issuer to communicate this, so v1 is
+     * wallet-local-threshold-only - see the credential re-issuance/renewal
+     * plan §6 item 1).
      */
     const val RENEW_THRESHOLD = 0
+
+    /**
+     * True when [instances]' eligible (unused) count under [policy]/
+     * [presentationHistory] has dropped to or below [threshold] - the
+     * proactive-renewal trigger (plan §4.3). Note [CredentialConsumptionPolicy.NEVER_CONSUME]
+     * (this SDK's default policy) makes [eligibleInstances] always return
+     * every instance, so this only ever fires under a consuming policy.
+     */
+    fun isBelowRenewThreshold(
+        instances: List<StoredCredential>,
+        policy: CredentialConsumptionPolicy,
+        presentationHistory: List<PresentationRecord>,
+        threshold: Int = RENEW_THRESHOLD,
+    ): Boolean = eligibleInstances(instances, policy, presentationHistory).size <= threshold
 
     /**
      * Group stored credentials into one [CredentialFamily] per
@@ -516,6 +535,50 @@ object CredentialUtils {
             CredentialFamily(representative = representative, instances = members)
         }
     }
+
+    /**
+     * Compares two claim sets (typically [extractClaims]'s output for a
+     * credential batch before and after a renewal) - the credential
+     * re-issuance/renewal plan's `AttributeDiffService`-equivalent
+     * (wallet-frontend #68 parity, ISSU_59's mandatory attribute-diff
+     * notification). Compares by claim [DisplayClaim.key], not by list
+     * position, since claim ordering isn't a stability guarantee of any
+     * issuer.
+     */
+    fun computeAttributeDiff(before: List<DisplayClaim>, after: List<DisplayClaim>): CredentialAttributeDiff {
+        val beforeByKey = before.associateBy { it.key }
+        val afterByKey = after.associateBy { it.key }
+        val changed = afterByKey.keys.intersect(beforeByKey.keys)
+            .mapNotNull { key ->
+                val old = beforeByKey.getValue(key)
+                val new = afterByKey.getValue(key)
+                if (old.value != new.value) AttributeChange(key = key, label = new.label, oldValue = old.value, newValue = new.value) else null
+            }
+        val added = afterByKey.keys.minus(beforeByKey.keys).map { afterByKey.getValue(it) }
+        val removed = beforeByKey.keys.minus(afterByKey.keys).map { beforeByKey.getValue(it) }
+        return CredentialAttributeDiff(changed = changed, added = added, removed = removed)
+    }
+}
+
+/** One claim whose value changed between two versions of the same credential. */
+data class AttributeChange(
+    val key: String,
+    val label: String,
+    val oldValue: String,
+    val newValue: String,
+)
+
+/**
+ * The result of [CredentialUtils.computeAttributeDiff]. [hasChanges] is
+ * false (the fully-silent-renewal case per plan §4.4) only when all three
+ * lists are empty.
+ */
+data class CredentialAttributeDiff(
+    val changed: List<AttributeChange>,
+    val added: List<DisplayClaim>,
+    val removed: List<DisplayClaim>,
+) {
+    val hasChanges: Boolean get() = changed.isNotEmpty() || added.isNotEmpty() || removed.isNotEmpty()
 }
 
 /**

@@ -921,28 +921,50 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     }
 
     /**
-     * Re-request a fresh batch of [credential] directly from its own
-     * issuer/config (already stored on it - see
-     * [StoredCredential.credentialIssuerIdentifier]/[StoredCredential.credentialConfigurationId]),
-     * skipping the generic issuer-browsing screen entirely - for
-     * [CredentialCard]'s "Renew" action once every batch instance has been
-     * used up (see [CredentialUtils.eligibleInstances]).
+     * Renew [credential]'s batch (credential re-issuance/renewal plan,
+     * Phase 2, §4.4's silent-vs-user-facing design): try the silent
+     * OID4VCI `refresh_token` grant first (no user interaction) via
+     * [SirosWallet.renewCredential] - if a refresh_token was ever captured
+     * for this batch and the issuer accepts it, this replaces the batch in
+     * place with no visible flow at all. Only if that's unavailable (no
+     * stored refresh_token) or fails does this fall back to the existing
+     * full `authorization_code` re-issuance path (the issuer-browsing-free
+     * flow this method used to always take), per ISSU_60's
+     * graceful-retry requirement.
+     *
+     * The UI never distinguishes "silent refresh available" from "full
+     * re-issuance only" up front - every renew affordance (detail-screen
+     * icon, long-press menu, exhausted-credential overlay) is always shown
+     * and always calls this same method, since the user has no way to know
+     * in advance which path applies and showing two different actions would
+     * only confuse them. [R.string.credential_renew_not_possible] is the
+     * one remaining user-visible outcome, for the residual case where even
+     * full re-issuance isn't possible (no known issuer/credential
+     * configuration on file for this credential at all).
      */
     fun renewCredential(credential: StoredCredential) {
-        val issuerId = credential.credentialIssuerIdentifier
-        val configId = credential.credentialConfigurationId
-        if (issuerId == null || configId == null) {
-            _errorMessage.value = "Cannot renew this credential - issuer information is missing"
-            return
+        viewModelScope.launch {
+            try {
+                wallet.renewCredential(credential.batchId)
+                return@launch
+            } catch (e: Exception) {
+                Log.i(TAG, "Silent renewal unavailable/failed for batch ${credential.batchId}, falling back to full re-issuance", e)
+            }
+            val issuerId = credential.credentialIssuerIdentifier
+            val configId = credential.credentialConfigurationId
+            if (issuerId == null || configId == null) {
+                _errorMessage.value = activity.getString(R.string.credential_renew_not_possible)
+                return@launch
+            }
+            startIssuanceByOffer(
+                CredentialOffer(
+                    credentialConfigurationId = configId,
+                    credentialIssuerIdentifier = issuerId,
+                    credentialName = credential.metadata?.name ?: credential.format,
+                    issuerName = credential.metadata?.issuer?.name ?: issuerId,
+                ),
+            )
         }
-        startIssuanceByOffer(
-            CredentialOffer(
-                credentialConfigurationId = configId,
-                credentialIssuerIdentifier = issuerId,
-                credentialName = credential.metadata?.name ?: credential.format,
-                issuerName = credential.metadata?.issuer?.name ?: issuerId,
-            ),
-        )
     }
 
     private fun startIssuanceByOffer(offer: CredentialOffer) {

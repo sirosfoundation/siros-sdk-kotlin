@@ -21,6 +21,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -73,6 +74,7 @@ fun CredentialDetailScreen(
     credential: StoredCredential,
     onBack: () -> Unit,
     onDelete: () -> Unit,
+    onRenew: () -> Unit,
 ) {
     var showDeleteDialog by remember { mutableStateOf(false) }
 
@@ -119,6 +121,12 @@ fun CredentialDetailScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onRenew) {
+                        Icon(
+                            Icons.Filled.Refresh,
+                            stringResource(R.string.credential_renew),
+                        )
+                    }
                     IconButton(onClick = { showDeleteDialog = true }) {
                         Icon(
                             Icons.Filled.Delete,

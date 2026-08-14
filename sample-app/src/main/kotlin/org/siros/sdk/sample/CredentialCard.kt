@@ -1,8 +1,9 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.sample
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -63,10 +64,17 @@ import timber.log.Timber
  * otherwise falls back to Material theme surface colors.
  * Aspect ratio 1.6:1 matches the web frontend's card proportions.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CredentialCard(
     credential: StoredCredential,
     onClick: (() -> Unit)? = null,
+    /**
+     * Long-press action - shows a Renew/Delete action menu (see
+     * [CredentialsTab]'s `pendingActionMenuFor` state). Ignored (no gesture
+     * registered) if null, same as [onClick].
+     */
+    onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     /**
      * Every copy in this credential's batch (see [StoredCredential.batchId]),
@@ -192,7 +200,13 @@ fun CredentialCard(
         modifier = modifier
             .fillMaxWidth()
             .aspectRatio(1.6f)
-            .then(if (onClick != null && !isExhausted) Modifier.clickable(onClick = onClick) else Modifier),
+            .then(
+                if (!isExhausted && (onClick != null || onLongClick != null)) {
+                    Modifier.combinedClickable(onClick = onClick ?: {}, onLongClick = onLongClick)
+                } else {
+                    Modifier
+                },
+            ),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = bgColor),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),

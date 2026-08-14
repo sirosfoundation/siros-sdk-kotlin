@@ -19,6 +19,8 @@ import com.nimbusds.jwt.SignedJWT
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.sync.Mutex
@@ -31,6 +33,20 @@ import java.util.Date
 import java.util.UUID
 import javax.crypto.SecretKey
 import javax.crypto.spec.SecretKeySpec
+
+/**
+ * A durable OID4VCI renewal candidate for one credential batch - see
+ * privatedata-spec SPEC.md §6.2 "S.credentialRefreshTokens". [dpopJwk] MUST
+ * be presented back unchanged on every renewal of the same [batchId] (RFC
+ * 9449/ARF ISSU_65 key-binding), never regenerated client-side.
+ */
+@Serializable
+data class CredentialRefreshTokenEntry(
+    val refreshToken: String,
+    val dpopJwk: String? = null,
+    val credentialIssuerIdentifier: String,
+    val credentialConfigurationId: String,
+)
 
 /**
  * JWE-based keystore implementation fully compatible with the wallet-frontend
@@ -65,6 +81,16 @@ class JweKeystore(
     // enrolled it - a roaming CTAP2 authenticator can be tapped/plugged into
     // a different device entirely, and every device needs the same mapping.
     private var wscdCredentials: MutableMap<String, String> = mutableMapOf()
+    // OID4VCI renewal (credential re-issuance/renewal plan, Phase 2) -
+    // refresh_token + the DPoP key it's bound to, keyed by the credential
+    // batch's batchId - see privatedata-spec SPEC.md §6.2
+    // "S.credentialRefreshTokens". The issuer binds refresh_token to the
+    // exact DPoP key used at initial issuance (RFC 9449/ARF ISSU_65), so
+    // dpopJwk must be presented back unchanged on every renewal of the same
+    // batch, never regenerated - the backend never persists this key
+    // itself (see feedback_backend_key_persistence_principle), only the
+    // client does, via this field.
+    private var credentialRefreshTokens: MutableMap<Long, CredentialRefreshTokenEntry> = mutableMapOf()
 
     override val isUnlocked: Boolean get() = mainKey != null
 
@@ -287,6 +313,27 @@ class JweKeystore(
                 }
             }
         }
+
+        // Parse credentialRefreshTokens: { [batchId]: {refreshToken, dpopJwk,
+        // credentialIssuerIdentifier, credentialConfigurationId} } -
+        // privatedata-spec §6.2, a native-SDK-only extension (see
+        // credentialRefreshTokens field's own doc comment above).
+        val refreshTokensObj = state["credentialRefreshTokens"] as? kotlinx.serialization.json.JsonObject
+        if (refreshTokensObj != null) {
+            for ((batchIdStr, value) in refreshTokensObj) {
+                val batchId = batchIdStr.toLongOrNull() ?: continue
+                (value as? kotlinx.serialization.json.JsonObject)?.let { entryObj ->
+                    try {
+                        credentialRefreshTokens[batchId] = json.decodeFromJsonElement(
+                            CredentialRefreshTokenEntry.serializer(),
+                            entryObj,
+                        )
+                    } catch (e: Exception) {
+                        Timber.w(e, "Failed to parse credentialRefreshTokens entry for batch $batchId")
+                    }
+                }
+            }
+        }
     }
 
     override fun lock() {
@@ -294,6 +341,7 @@ class JweKeystore(
         credentials.clear()
         presentationRecords.clear()
         wscdCredentials.clear()
+        credentialRefreshTokens.clear()
         mainKey = null
         containerMetadata = null
         preservedWalletState = null
@@ -340,6 +388,36 @@ class JweKeystore(
      */
     suspend fun setWscdCredentials(pluginId: String, state: String) = mutex.withLock {
         wscdCredentials[pluginId] = state
+    }
+
+    /**
+     * Every credential batch's durable renewal candidate, keyed by batchId
+     * (see [CredentialRefreshTokenEntry]'s doc comment) - read after
+     * [unlock] to look up the refresh_token/DPoP key for a renewal request
+     * without depending on in-memory state surviving a restart.
+     */
+    suspend fun exportCredentialRefreshTokens(): Map<Long, CredentialRefreshTokenEntry> = mutex.withLock {
+        credentialRefreshTokens.toMap()
+    }
+
+    /**
+     * Record (or overwrite) a credential batch's renewal candidate so the
+     * next [exportEncryptedContainer] call folds it into
+     * `S.credentialRefreshTokens` and it survives to the next [unlock].
+     */
+    suspend fun setCredentialRefreshToken(batchId: Long, entry: CredentialRefreshTokenEntry) = mutex.withLock {
+        credentialRefreshTokens[batchId] = entry
+    }
+
+    /**
+     * Remove a batch's renewal candidate - MUST be called whenever that
+     * batch's credentials are deleted (e.g. superseded by a successful
+     * renewal, or the user removes the credential), per
+     * privatedata-spec §6.2's requirement that a stale entry pointing at a
+     * no-longer-existing batch never lingers.
+     */
+    suspend fun removeCredentialRefreshToken(batchId: Long) = mutex.withLock {
+        credentialRefreshTokens.remove(batchId)
     }
 
     /**
@@ -713,6 +791,18 @@ class JweKeystore(
                     put("wscdCredentials", kotlinx.serialization.json.buildJsonObject {
                         for ((pluginId, state) in wscdCredentials) {
                             put(pluginId, kotlinx.serialization.json.JsonPrimitive(state))
+                        }
+                    })
+                }
+
+                // credentialRefreshTokens (privatedata-spec §6.2,
+                // native-SDK-only extension) - same "in-memory map IS the
+                // source of truth once loaded" rationale as wscdCredentials
+                // above.
+                if (credentialRefreshTokens.isNotEmpty()) {
+                    put("credentialRefreshTokens", kotlinx.serialization.json.buildJsonObject {
+                        for ((batchId, entry) in credentialRefreshTokens) {
+                            put(batchId.toString(), json.encodeToJsonElement(CredentialRefreshTokenEntry.serializer(), entry))
                         }
                     })
                 }

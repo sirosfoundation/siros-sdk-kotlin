@@ -56,6 +56,7 @@
     <string name="copy_to_clipboard">Copy to clipboard</string>
     <string name="copied_to_clipboard">Copied to clipboard</string>
     <string name="credential_renew">Renew</string>
+    <string name="credential_renew_not_possible">No refresh possible</string>
     <string name="credential_detail_delete">Delete Credential</string>
     <string name="credential_detail_delete_confirm_title">Delete Credential</string>
     <string name="credential_detail_delete_confirm_message">Are you sure you want to delete \"%1$s\"? This action cannot be undone.</string>

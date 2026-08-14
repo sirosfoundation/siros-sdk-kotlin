@@ -26,12 +26,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Contactless
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -395,6 +398,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                 credential = selectedCredential!!,
                 onBack = viewModel::closeCredentialDetail,
                 onDelete = { viewModel.deleteCredential(selectedCredential!!.id) },
+                onRenew = { viewModel.renewCredential(selectedCredential!!) },
             )
 
             // Presentation history sub-screen
@@ -574,6 +578,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             presentationHistory = presentationHistory,
                             onCredentialClick = viewModel::openCredentialDetail,
                             onRenewCredential = viewModel::renewCredential,
+                            onDeleteCredential = { viewModel.deleteCredential(it.id) },
                             onAddCredential = viewModel::openAddCredential,
                         )
                     }
@@ -953,12 +958,14 @@ fun PreLoginSettingsSheet(
 
 // ── Credentials Tab ─────────────────────────────────────────────────
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CredentialsTab(
     state: WalletState.Ready,
     presentationHistory: List<org.siros.sdk.credentials.PresentationRecord>,
     onCredentialClick: (org.siros.sdk.credentials.StoredCredential) -> Unit,
     onRenewCredential: (org.siros.sdk.credentials.StoredCredential) -> Unit,
+    onDeleteCredential: (org.siros.sdk.credentials.StoredCredential) -> Unit,
     onAddCredential: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -968,6 +975,89 @@ fun CredentialsTab(
     // ribbon, not five swipeable duplicates.
     val grouped = remember(state.credentials, presentationHistory) {
         org.siros.sdk.credentials.CredentialUtils.groupForDisplay(state.credentials, presentationHistory)
+    }
+
+    // Long-press action menu (Renew/Delete) - a quicker path to the same two
+    // actions already reachable via the detail screen's icons/the exhausted-
+    // credential overlay, for a credential the user hasn't tapped into yet.
+    var actionMenuFor by remember { mutableStateOf<org.siros.sdk.credentials.StoredCredential?>(null) }
+    var pendingDeleteFor by remember { mutableStateOf<org.siros.sdk.credentials.StoredCredential?>(null) }
+
+    actionMenuFor?.let { credential ->
+        ModalBottomSheet(onDismissRequest = { actionMenuFor = null }) {
+            Column(modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+                Text(
+                    credential.metadata?.name ?: credential.format,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+                )
+                TextButton(
+                    onClick = {
+                        actionMenuFor = null
+                        onRenewCredential(credential)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.padding(end = 16.dp))
+                        Text(stringResource(R.string.credential_renew))
+                    }
+                }
+                TextButton(
+                    onClick = {
+                        actionMenuFor = null
+                        pendingDeleteFor = credential
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Filled.Delete,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(end = 16.dp),
+                        )
+                        Text(stringResource(R.string.credential_detail_delete), color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+        }
+    }
+
+    pendingDeleteFor?.let { credential ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteFor = null },
+            title = { Text(stringResource(R.string.credential_detail_delete_confirm_title)) },
+            text = {
+                Text(stringResource(
+                    R.string.credential_detail_delete_confirm_message,
+                    credential.metadata?.name ?: credential.format,
+                ))
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingDeleteFor = null
+                    onDeleteCredential(credential)
+                }) {
+                    Text(
+                        stringResource(R.string.credential_detail_delete_confirm),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteFor = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
     }
 
     Column(
@@ -1006,6 +1096,7 @@ fun CredentialsTab(
                         credential = entry.credential,
                         instances = entry.instances,
                         onClick = { onCredentialClick(entry.credential) },
+                        onLongClick = { actionMenuFor = entry.credential },
                         onRenewClick = { onRenewCredential(entry.credential) },
                     )
                 }

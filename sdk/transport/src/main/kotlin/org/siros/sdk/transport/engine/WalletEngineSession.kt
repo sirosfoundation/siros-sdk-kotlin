@@ -413,6 +413,37 @@ class WalletEngineSession(
         ))
     }
 
+    /**
+     * Start a credential renewal flow (credential re-issuance/renewal plan,
+     * Phase 1 Slice 2 - go-wallet-backend's `Execute` synthesizes a
+     * single-config offer from [credentialIssuer]/[selectedCredentialConfigurationId]
+     * rather than parsing a fresh one). [reissuanceKid], if provided, asks
+     * the server to request the client sign the renewal's holder-binding
+     * proof with that existing key instead of a fresh one - see
+     * [FlowStartMessage.reissuanceKid].
+     *
+     * Debug/test-only entry point for now - no SDK-level API wraps this yet
+     * (Phase 2, not built), and callers are responsible for having captured
+     * [refreshToken] from a prior [FlowCompleteMessage.refreshToken]
+     * themselves.
+     */
+    fun startRenewal(
+        refreshToken: String,
+        credentialIssuer: String,
+        selectedCredentialConfigurationId: String,
+        reissuanceKid: String? = null,
+        dpopJwk: String? = null,
+    ) {
+        send(FlowStartMessage.serializer(), FlowStartMessage(
+            protocol = "oid4vci",
+            refreshToken = refreshToken,
+            credentialIssuer = credentialIssuer,
+            selectedCredentialConfigurationId = selectedCredentialConfigurationId,
+            reissuanceKid = reissuanceKid,
+            dpopJwk = dpopJwk,
+        ))
+    }
+
     /** Start an OID4VP credential presentation flow. */
     fun startPresentation(
         requestUri: String? = null,
