@@ -1,10 +1,13 @@
 package org.siros.sdk.auth
 
+import io.mockk.coEvery
 import io.mockk.mockk
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.siros.sdk.credentials.AuthException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -89,6 +92,68 @@ class AuthTokensTest {
 
         // Two rejections of "backend" and one of "anonymous" - neither name
         // has reached the threshold of 3 on its own.
+        assertFalse(rejected)
+    }
+
+    /**
+     * Covers the gap found live in task #245: a raw "AS request failed 401 -
+     * /auth/token" surfaced with no re-auth flow firing when a user tapped
+     * "add credential" with an expired AS session. Unlike
+     * [AuthTokens.registerTokenRejection]'s 3-strikes REST-401 case, a 401
+     * straight from the AS's own token endpoint is unambiguous and must fire
+     * [AuthTokens.onSessionRejected] on the very first occurrence.
+     */
+    @Test
+    fun `401 from the AS token endpoint triggers session-rejected immediately`() = runTest {
+        val client = mockk<AuthServerClient>(relaxed = true)
+        coEvery { client.requestAccessToken(any(), any()) } throws
+            AuthException("AS request failed: 401 — /auth/token", code = 401)
+        val tokens = AuthTokens(authServerClient = client, tenantId = "default")
+        var rejected = false
+        tokens.onSessionRejected = { rejected = true }
+
+        try {
+            tokens.ensureBackendToken()
+        } catch (e: AuthException) {
+            // Expected - the original failure still propagates to the caller.
+        }
+
+        assertTrue(rejected)
+    }
+
+    @Test
+    fun `401 from the AS token endpoint during forceRefreshToken also triggers session-rejected`() = runTest {
+        val client = mockk<AuthServerClient>(relaxed = true)
+        coEvery { client.requestAccessToken(any(), any()) } throws
+            AuthException("AS request failed: 401 — /auth/token", code = 401)
+        val tokens = AuthTokens(authServerClient = client, tenantId = "default")
+        var rejected = false
+        tokens.onSessionRejected = { rejected = true }
+
+        try {
+            tokens.forceRefreshToken(AuthTokens.TOKEN_BACKEND)
+        } catch (e: AuthException) {
+            // Expected.
+        }
+
+        assertTrue(rejected)
+    }
+
+    @Test
+    fun `non-401 AS token failure does not trigger session-rejected`() = runTest {
+        val client = mockk<AuthServerClient>(relaxed = true)
+        coEvery { client.requestAccessToken(any(), any()) } throws
+            AuthException("AS request failed: 500 — /auth/token", code = 500)
+        val tokens = AuthTokens(authServerClient = client, tenantId = "default")
+        var rejected = false
+        tokens.onSessionRejected = { rejected = true }
+
+        try {
+            tokens.ensureBackendToken()
+        } catch (e: AuthException) {
+            // Expected.
+        }
+
         assertFalse(rejected)
     }
 }
