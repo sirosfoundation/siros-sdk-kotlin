@@ -53,6 +53,7 @@
     <string name="copy_to_clipboard">Copiar para a área de transferência</string>
     <string name="copied_to_clipboard">Copiado para a área de transferência</string>
     <string name="credential_renew">Renovar</string>
+    <string name="credential_renew_not_possible">Não é possível renovar</string>
     <string name="credential_detail_delete">Excluir Credencial</string>
     <string name="credential_detail_delete_confirm_title">Excluir Credencial</string>
     <string name="credential_detail_delete_confirm_message">Tem certeza de que deseja excluir \"%1$s\"? Esta ação não pode ser desfeita.</string>

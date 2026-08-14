@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.wallet
 
+import org.siros.sdk.credentials.CredentialAttributeDiff
 import org.siros.sdk.credentials.CredentialMatcher
 import org.siros.sdk.credentials.StoredCredential
 
@@ -54,6 +55,33 @@ interface WalletEventListener {
      * showing a confirmation / toast.
      */
     fun onCredentialReceived(credential: StoredCredential) {}
+
+    /**
+     * A credential batch was renewed (credential re-issuance/renewal plan,
+     * Phase 2, `AttributeDiffService`-equivalent, ISSU_59) and at least one
+     * claim differs from the batch it replaced. The renewal's own network
+     * round-trip was silent (no user interaction), but ISSU_59 mandates
+     * notifying the user of any claim change - the app should surface this
+     * (e.g. wallet-frontend #73's consent/notification popup) even though
+     * [onCredentialReceived] already fired for the new credential.
+     *
+     * Not called when a renewal completes with identical claims (the fully
+     * silent case per plan §4.4) - only when [CredentialAttributeDiff.hasChanges]
+     * is true.
+     */
+    fun onCredentialRenewedWithAttributeDiff(credential: StoredCredential, diff: CredentialAttributeDiff) {}
+
+    /**
+     * A credential batch's eligible (unused) instance count has dropped to
+     * or below its renew threshold (credential re-issuance/renewal plan
+     * §4.3/wallet-frontend #72 parity - EUDI ARF ISSU_50/54's proactive
+     * renewal trigger). The app should surface this as a near-expiry
+     * banner/nudge (Phase 3 UX, not yet built here) rather than waiting for
+     * the reactive fully-exhausted case. Fires at most once per drop below
+     * threshold per [SirosWallet.recordPresentation] call - not repeated on
+     * every recomposition.
+     */
+    fun onCredentialNearExpiry(credential: StoredCredential, eligibleRemaining: Int, threshold: Int) {}
 
     /**
      * Called when a flow completes (issuance or presentation).

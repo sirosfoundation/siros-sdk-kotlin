@@ -98,6 +98,22 @@ class WscdKeystoreAdapter(
     suspend fun setWscdCredentialsState(pluginId: String, state: String) =
         credentialsKeystore.setWscdCredentials(pluginId, state)
 
+    /**
+     * The persisted (privatedata-synced) renewal candidates for every
+     * credential batch - see [JweKeystore.exportCredentialRefreshTokens]'s
+     * doc comment.
+     */
+    suspend fun exportCredentialRefreshTokens(): Map<Long, CredentialRefreshTokenEntry> =
+        credentialsKeystore.exportCredentialRefreshTokens()
+
+    /** See [JweKeystore.setCredentialRefreshToken]. */
+    suspend fun setCredentialRefreshToken(batchId: Long, entry: CredentialRefreshTokenEntry) =
+        credentialsKeystore.setCredentialRefreshToken(batchId, entry)
+
+    /** See [JweKeystore.removeCredentialRefreshToken]. */
+    suspend fun removeCredentialRefreshToken(batchId: Long) =
+        credentialsKeystore.removeCredentialRefreshToken(batchId)
+
     override fun registerR2psPlugin(config: R2psConfig, transport: R2psTransportProvider) =
         requireWscdManager().registerR2psPlugin(config, transport)
 

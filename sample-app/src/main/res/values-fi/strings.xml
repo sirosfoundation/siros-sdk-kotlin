@@ -53,6 +53,7 @@
     <string name="copy_to_clipboard">Kopioi leikepöydälle</string>
     <string name="copied_to_clipboard">Kopioitu leikepöydälle</string>
     <string name="credential_renew">Uusi</string>
+    <string name="credential_renew_not_possible">Uusiminen ei ole mahdollista</string>
     <string name="credential_detail_delete">Poista todistus</string>
     <string name="credential_detail_delete_confirm_title">Poista todistus</string>
     <string name="credential_detail_delete_confirm_message">Haluatko varmasti poistaa \"%1$s\"? Tätä toimintoa ei voi peruuttaa.</string>

@@ -55,6 +55,7 @@ import org.siros.sdk.credentials.ZkCircuitClient
 import org.siros.sdk.credentials.VctmFetcher
 import org.siros.sdk.credentials.MddlSchema
 import org.siros.sdk.credentials.MddlSchemaFetcher
+import org.siros.sdk.keystore.CredentialRefreshTokenEntry
 import org.siros.sdk.keystore.DCAPIResponseEncryption
 import org.siros.sdk.keystore.JweKeystore
 import org.siros.sdk.keystore.KeypairInfo
@@ -1523,6 +1524,55 @@ class SirosWallet private constructor(
     }
 
     /**
+     * Renew a credential batch via OID4VCI's `refresh_token` grant
+     * (credential re-issuance/renewal plan, Phase 2), using the
+     * refresh_token/DPoP key durably captured for it in `privatedata`
+     * (`S.credentialRefreshTokens` - see [exportCredentialRefreshTokens])
+     * at the time it (or its most recent prior renewal) was issued.
+     *
+     * Throws [WalletException] if no renewal candidate is stored for
+     * [batchId] - either it was never captured (the issuer didn't return a
+     * refresh_token), or it's already been consumed/superseded.
+     * `reissuanceKid` is left unset for now - the server-side
+     * same-wallet-unit continuity mechanism (re-signing `generate_proof`
+     * with the original credential's key) is tracked separately and not yet
+     * wired into this call site.
+     *
+     * A renewal's flow_complete is handled by the exact same code path as a
+     * fresh issuance's, which reads display metadata (logo/issuer
+     * name/friendly credential name) off [activeOffer] - but a renewal
+     * never parses a fresh credential_offer, so activeOffer would otherwise
+     * be left null/stale from whatever the *previous* flow reset it to.
+     * Re-fetch and rebuild it here from the stored issuer/config id so the
+     * renewed card displays correctly rather than falling back to raw wire
+     * values (e.g. the bare "mso_mdoc" format string instead of "mDL").
+     */
+    suspend fun renewCredential(batchId: Long) {
+        val engine = engineSession ?: throw WalletException("Not connected")
+        ensureEngineConnected(engine)
+        val candidate = exportCredentialRefreshTokens()[batchId]
+            ?: throw WalletException("No refresh_token stored for batch $batchId - it may not be renewable, or was already renewed")
+        Timber.d("Starting renewal for batch=$batchId issuer=${candidate.credentialIssuerIdentifier}")
+        try {
+            val metadata = getIssuerMetadata(candidate.credentialIssuerIdentifier)
+            activeOffer = buildCredentialOfferFromMetadata(
+                candidate.credentialIssuerIdentifier,
+                candidate.credentialConfigurationId,
+                metadata,
+            )
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to refresh issuer metadata for renewal display; card will show raw format")
+        }
+        pendingRenewalSourceBatchId = batchId
+        engine.startRenewal(
+            refreshToken = candidate.refreshToken,
+            credentialIssuer = candidate.credentialIssuerIdentifier,
+            selectedCredentialConfigurationId = candidate.credentialConfigurationId,
+            dpopJwk = candidate.dpopJwk,
+        )
+    }
+
+    /**
      * Start a credential issuance flow with a raw offer or URI.
      *
      * @param offerUri a credential_offer_uri or raw JSON credential_offer string.
@@ -2118,7 +2168,16 @@ class SirosWallet private constructor(
      * Also syncs the updated keystore to the backend.
      */
     suspend fun deleteCredential(credentialId: Long) {
+        val deletedBatchId = credentialStore.getAll().find { it.id == credentialId }?.batchId
         credentialStore.delete(credentialId)
+        // If that was the last instance of its batch, its refresh_token
+        // entry (if any) is now orphaned - privatedata-spec §6.2 requires
+        // it not linger pointing at a batch that no longer exists.
+        deletedBatchId?.let { batchId ->
+            if (credentialStore.getAll().none { it.batchId == batchId }) {
+                removeCredentialRefreshToken(batchId)
+            }
+        }
         val current = _state.value
         if (current is WalletState.Ready) {
             _state.value = current.copy(credentials = credentialStore.getAll())
@@ -2390,6 +2449,30 @@ class SirosWallet private constructor(
     }
 
     /**
+     * Every credential batch's durable OID4VCI renewal candidate
+     * (`S.credentialRefreshTokens` - privatedata-spec §6.2), unlike
+     * [wscdCredentials] this applies regardless of which concrete
+     * [KeystoreManager] backs [keystore] - both the default [JweKeystore]
+     * and [WscdKeystoreAdapter] (which internally delegates to its own
+     * [JweKeystore] for credential/privatedata storage, separately from
+     * whatever WSCD backs key signing) expose it.
+     */
+    private suspend fun exportCredentialRefreshTokens(): Map<Long, CredentialRefreshTokenEntry> =
+        (keystore as? JweKeystore)?.exportCredentialRefreshTokens()
+            ?: (keystore as? WscdKeystoreAdapter)?.exportCredentialRefreshTokens()
+            ?: emptyMap()
+
+    private suspend fun setCredentialRefreshToken(batchId: Long, entry: CredentialRefreshTokenEntry) {
+        (keystore as? JweKeystore)?.setCredentialRefreshToken(batchId, entry)
+        (keystore as? WscdKeystoreAdapter)?.setCredentialRefreshToken(batchId, entry)
+    }
+
+    private suspend fun removeCredentialRefreshToken(batchId: Long) {
+        (keystore as? JweKeystore)?.removeCredentialRefreshToken(batchId)
+        (keystore as? WscdKeystoreAdapter)?.removeCredentialRefreshToken(batchId)
+    }
+
+    /**
      * Exposes [authProvider] as a [WscdAutoEnrollHint] when it implements
      * one - `null` otherwise (e.g. a host-supplied [AuthProvider] that
      * doesn't). Intended use: right after a successful [login], the host
@@ -2477,6 +2560,42 @@ class SirosWallet private constructor(
             keystore.savePresentationRecord(record.id, json.encodeToString(PresentationRecord.serializer(), record))
             persistAndSyncKeystore()
         }
+        checkRenewThresholds(record.credentialIds)
+    }
+
+    /**
+     * Per-credential-configuration-id override for [CredentialUtils.RENEW_THRESHOLD]
+     * (plan §4.3: "near-expiry threshold is a per-credential user
+     * preference," not a global constant). Not durably persisted in this
+     * pass - callers wanting persistence across restarts should re-set this
+     * on wallet construction from their own settings store, matching how
+     * [credentialConsumptionPolicy] itself is currently handled.
+     */
+    var renewThresholds: MutableMap<String, Int> = mutableMapOf()
+
+    private fun renewThresholdFor(credentialConfigurationId: String?): Int =
+        credentialConfigurationId?.let { renewThresholds[it] } ?: CredentialUtils.RENEW_THRESHOLD
+
+    /**
+     * After [consumedCredentialIds] were just presented (see
+     * [recordPresentation]), check whether any of their batches dropped to
+     * or below its renew threshold and fire [WalletEventListener.onCredentialNearExpiry]
+     * if so - the proactive-renewal trigger (plan §4.3).
+     */
+    private suspend fun checkRenewThresholds(consumedCredentialIds: List<Long>) {
+        val allCredentials = credentialStore.getAll()
+        val affectedBatchIds = consumedCredentialIds
+            .mapNotNull { id -> allCredentials.find { it.id == id }?.batchId }
+            .distinct()
+        for (batchId in affectedBatchIds) {
+            val batchInstances = allCredentials.filter { it.batchId == batchId }
+            val representative = batchInstances.find { it.instanceId == 0 } ?: batchInstances.firstOrNull() ?: continue
+            val threshold = renewThresholdFor(representative.credentialConfigurationId)
+            val eligible = CredentialUtils.eligibleInstances(batchInstances, credentialConsumptionPolicy, presentationHistory)
+            if (eligible.size <= threshold) {
+                eventListener?.onCredentialNearExpiry(representative, eligible.size, threshold)
+            }
+        }
     }
 
     /** Reload presentation history from the encrypted container after unlock. */
@@ -2508,6 +2627,15 @@ class SirosWallet private constructor(
     private var eventListener: WalletEventListener? = null
     private var activeOffer: CredentialOffer? = null
     private var activeVctm: Vctm? = null
+    /**
+     * Set by [renewCredential] right before firing the renewal flow_start,
+     * so the next flow_complete knows to replace this batchId's entries
+     * instead of appending a new batch alongside them. Assumes a single
+     * in-flight renewal at a time - real per-flow lineage tracking would
+     * need to key this by flow ID for correctness under concurrent flows
+     * (see task tracking this as a known simplification).
+     */
+    private var pendingRenewalSourceBatchId: Long? = null
     /**
      * True while an issuance flow is in flight (from [startIssuanceByOffer]/
      * [startIssuance] until its flow_complete/flow_error arrives).
@@ -3621,6 +3749,33 @@ class SirosWallet private constructor(
                 // least one, there is no "no batch" sentinel on either client.
                 val batchId = System.currentTimeMillis()
 
+                // Credential re-issuance/renewal plan (Phase 2): this
+                // flow_complete is a renewal's, so the batch it's about to
+                // store supersedes the one renewCredential() was called for
+                // - delete that old batch's credential entries AND its
+                // privatedata refresh_token entry (per privatedata-spec
+                // §6.2 - a stale entry pointing at a no-longer-existing
+                // batch must not linger) instead of leaving a duplicate
+                // alongside the new one.
+                // Snapshot the old batch's claims (before deleting it) so
+                // they can be diffed against the new batch's once stored -
+                // AttributeDiffService-equivalent, see
+                // onCredentialRenewedWithAttributeDiff's doc comment.
+                val oldRenewedClaims = pendingRenewalSourceBatchId?.let { oldBatchId ->
+                    credentialStore.getAll()
+                        .find { it.batchId == oldBatchId && it.instanceId == 0 }
+                        ?.let { CredentialUtils.extractClaims(it) }
+                }
+                pendingRenewalSourceBatchId?.let { oldBatchId ->
+                    credentialStore.getAll()
+                        .filter { it.batchId == oldBatchId }
+                        .forEach { credentialStore.delete(it.id) }
+                    removeCredentialRefreshToken(oldBatchId)
+                    Timber.d("Replaced renewed credential batch $oldBatchId with $batchId")
+                }
+                val wasRenewal = pendingRenewalSourceBatchId != null
+                pendingRenewalSourceBatchId = null
+
                 // Store any new credentials from the flow result
                 msg.credentials?.forEachIndexed { index, cred ->
                     if (cred.format == "mso_mdoc") {
@@ -3737,6 +3892,44 @@ class SirosWallet private constructor(
                         )
                     }
                 }
+
+                // Credential re-issuance/renewal plan (Phase 2): durably
+                // capture this batch's refresh_token + DPoP key in
+                // privatedata (S.credentialRefreshTokens - see
+                // setCredentialRefreshToken's doc comment) so renewCredential()
+                // can use it later, including after an app restart or on a
+                // different device sharing this account.
+                msg.refreshToken?.let { token ->
+                    activeOffer?.let { offer ->
+                        setCredentialRefreshToken(
+                            batchId,
+                            CredentialRefreshTokenEntry(
+                                refreshToken = token,
+                                dpopJwk = msg.dpopJwk,
+                                credentialIssuerIdentifier = offer.credentialIssuerIdentifier,
+                                credentialConfigurationId = offer.credentialConfigurationId,
+                            ),
+                        )
+                        Timber.d("Captured refresh_token for batch=$batchId issuer=${offer.credentialIssuerIdentifier}")
+                    }
+                }
+
+                // AttributeDiffService-equivalent (ISSU_59): if this was a
+                // renewal, compare the new batch's claims against the old
+                // one's - a silent renewal only stays silent when nothing
+                // actually changed. See onCredentialRenewedWithAttributeDiff's
+                // doc comment for why this fires in addition to (not
+                // instead of) onCredentialReceived.
+                if (wasRenewal && oldRenewedClaims != null) {
+                    credentialStore.getAll().find { it.batchId == batchId && it.instanceId == 0 }?.let { newRepresentative ->
+                        val diff = CredentialUtils.computeAttributeDiff(oldRenewedClaims, CredentialUtils.extractClaims(newRepresentative))
+                        if (diff.hasChanges) {
+                            Timber.i("Renewal of batch=$batchId changed ${diff.changed.size + diff.added.size + diff.removed.size} claim(s)")
+                            eventListener?.onCredentialRenewedWithAttributeDiff(newRepresentative, diff)
+                        }
+                    }
+                }
+
                 resetIssuanceGuards()
 
                 // Persist locally + sync to backend immediately

@@ -53,6 +53,7 @@
     <string name="copy_to_clipboard">Kopiera till urklipp</string>
     <string name="copied_to_clipboard">Kopierat till urklipp</string>
     <string name="credential_renew">Förnya</string>
+    <string name="credential_renew_not_possible">Förnyelse inte möjlig</string>
     <string name="credential_detail_delete">Ta bort intyg</string>
     <string name="credential_detail_delete_confirm_title">Ta bort intyg</string>
     <string name="credential_detail_delete_confirm_message">Är du säker på att du vill ta bort \"%1$s\"? Denna åtgärd kan inte ångras.</string>
