@@ -36,6 +36,9 @@
     <string name="add_credential_retry">Try Again</string>
     <string name="nav_back">Back</string>
 
+    <!-- Presentation consent screen -->
+    <string name="presentation_consent_title">Credential Request</string>
+
     <!-- Credential detail screen -->
     <string name="credential_detail_title">Credential Details</string>
     <string name="credential_detail_tab_info">Info</string>

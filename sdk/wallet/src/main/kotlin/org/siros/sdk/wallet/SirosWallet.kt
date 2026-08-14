@@ -3766,7 +3766,8 @@ class SirosWallet private constructor(
                 Timber.e("Flow ${msg.flowId} error: ${msg.error.code} — ${msg.error.message}")
                 val fid = msg.flowId ?: "unknown"
                 terminatedFlowIds.add(fid)
-                eventListener?.onFlowError(fid, msg.error.message)
+                val redirectUri = msg.error.details?.get("redirect_uri")?.jsonPrimitive?.contentOrNull
+                eventListener?.onFlowError(fid, msg.error.message, redirectUri)
                 // See the flow_complete handler's matching reset: without
                 // this, an issuance that fails via an engine-reported error
                 // (rather than completing or failing client-side through
@@ -3986,8 +3987,17 @@ class SirosWallet private constructor(
             try {
                 val dcqlQuery = payload?.get("dcql_query")?.jsonObject
                 val verifierInfo = payload?.get("verifier")?.jsonObject
-                val verifierName = verifierInfo?.get("name")?.jsonPrimitive?.contentOrNull
+                // The backend defaults verifier.name to the raw client_id
+                // (e.g. "x509_san_dns:verifier.multipaz.org") whenever the
+                // verifier hasn't declared a real client_metadata.client_name -
+                // never show that prefixed form to the user. Running every
+                // raw name/client_id through ClientIdScheme.parse is safe for
+                // a genuine friendly name too: it only matches known scheme
+                // prefixes/URLs (falling into PreRegistered otherwise, which
+                // passes the string through unchanged).
+                val rawVerifierName = verifierInfo?.get("name")?.jsonPrimitive?.contentOrNull
                     ?: verifierInfo?.get("client_id")?.jsonPrimitive?.contentOrNull
+                val verifierName = rawVerifierName?.let { ClientIdScheme.parse(it).displayName }
 
                 val allCreds = credentialStore.getAll()
                 val matchResults = if (dcqlQuery != null) {

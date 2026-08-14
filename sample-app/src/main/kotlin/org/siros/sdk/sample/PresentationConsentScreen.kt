@@ -25,11 +25,15 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -39,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.siros.sdk.credentials.ClaimMeta
@@ -57,6 +62,7 @@ import org.siros.sdk.wallet.PresentationRequest
  * 2. Per-credential: select which claims to disclose (for each matched credential)
  * 3. Summary: confirm final selection before sharing
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PresentationConsentScreen(
     request: PresentationRequest,
@@ -100,78 +106,97 @@ fun PresentationConsentScreen(
         true
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
-    ) {
-        // Step indicator
-        StepBar(currentStep = currentStep, totalSteps = totalSteps)
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Content area
-        Box(modifier = Modifier.weight(1f)) {
-            when {
-                currentStep == 0 -> PreviewStep(request, exhaustedQueryIds)
-                currentStep <= request.matchResults.size -> {
-                    val matchResult = request.matchResults[currentStep - 1]
-                    ClaimSelectionStep(
-                        matchResult = matchResult,
-                        claimSelections = claimSelections,
-                    )
-                }
-                else -> SummaryStep(request, claimSelections)
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Navigation buttons
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+    // Scaffold with the same TopAppBar treatment as every other sub-screen
+    // (CredentialDetailScreen, QrScannerScreen, etc.) so this reads as part
+    // of the wallet rather than a bare, unchromed overlay. No navigationIcon:
+    // the Decline/Back buttons below already cover "leave this screen", and
+    // a back arrow that did something different would be confusing.
+    Scaffold(
+        modifier = modifier,
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.presentation_consent_title)) },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                ),
+            )
+        },
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(16.dp),
         ) {
-            if (currentStep == 0) {
-                OutlinedButton(
-                    onClick = onDecline,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Icon(Icons.Filled.Close, null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Decline")
-                }
-            } else {
-                OutlinedButton(
-                    onClick = { currentStep-- },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Text("Back")
+            // Step indicator
+            StepBar(currentStep = currentStep, totalSteps = totalSteps)
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Content area
+            Box(modifier = Modifier.weight(1f)) {
+                when {
+                    currentStep == 0 -> PreviewStep(request, exhaustedQueryIds)
+                    currentStep <= request.matchResults.size -> {
+                        val matchResult = request.matchResults[currentStep - 1]
+                        ClaimSelectionStep(
+                            matchResult = matchResult,
+                            claimSelections = claimSelections,
+                        )
+                    }
+                    else -> SummaryStep(request, claimSelections)
                 }
             }
 
-            if (currentStep < totalSteps - 1) {
-                Button(
-                    onClick = { currentStep++ },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Text("Next")
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Navigation buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (currentStep == 0) {
+                    OutlinedButton(
+                        onClick = onDecline,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Icon(Icons.Filled.Close, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Decline")
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = { currentStep-- },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text("Back")
+                    }
                 }
-            } else {
-                Button(
-                    onClick = {
-                        onAccept(CredentialUtils.eligibleInstances(request.candidates, consumptionPolicy, presentationHistory).map { it.id })
-                    },
-                    enabled = exhaustedQueryIds.isEmpty(),
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Icon(Icons.Filled.Check, null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Share")
+
+                if (currentStep < totalSteps - 1) {
+                    Button(
+                        onClick = { currentStep++ },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text("Next")
+                    }
+                } else {
+                    Button(
+                        onClick = {
+                            onAccept(CredentialUtils.eligibleInstances(request.candidates, consumptionPolicy, presentationHistory).map { it.id })
+                        },
+                        enabled = exhaustedQueryIds.isEmpty(),
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Icon(Icons.Filled.Check, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Share")
+                    }
                 }
             }
         }
@@ -211,33 +236,27 @@ private fun PreviewStep(request: PresentationRequest, exhaustedQueryIds: Set<Str
             .fillMaxSize()
             .verticalScroll(rememberScrollState()),
     ) {
-        // Verifier identity
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                imageVector = Icons.Filled.Info,
-                contentDescription = null,
-                modifier = Modifier.size(32.dp),
-                tint = MaterialTheme.colorScheme.primary,
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column {
-                Text(
-                    text = "Credential Request",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
+        // Verifier identity - the screen title itself now lives in the
+        // TopAppBar, so this just surfaces who's asking.
+        val vName = request.verifierName
+        if (vName != null) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Filled.Info,
+                    contentDescription = null,
+                    modifier = Modifier.size(32.dp),
+                    tint = MaterialTheme.colorScheme.primary,
                 )
-                val vName = request.verifierName
-                if (vName != null) {
-                    Text(
-                        text = vName,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = vName,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
             }
-        }
 
-        Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(16.dp))
+        }
 
         val verifier = request.verifierName ?: "A verifier"
         Text(

@@ -653,13 +653,20 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 return null
             }
 
-            override fun onFlowError(flowId: String, errorMessage: String) {
+            override fun onFlowError(flowId: String, errorMessage: String, redirectUri: String?) {
                 Log.e(TAG, "Flow $flowId failed: $errorMessage")
                 if (pendingAuthFlowId == flowId) {
                     pendingAuthFlowId = null
                 }
                 receivedCredentialCount = 0
                 _flowErrorDialog.value = FlowErrorInfo(errorMessage, canRetry = lastFlowRetry != null)
+
+                // Mirrors onFlowComplete below - a verifier can return a
+                // redirect_uri from its error-response endpoint too (e.g. on
+                // user-decline), so the user isn't left stranded in the
+                // wallet just because the flow ended in an error rather than
+                // success.
+                openVerifierRedirect(redirectUri)
             }
 
             override fun onCredentialReceived(credential: StoredCredential) {
@@ -688,14 +695,18 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 // user's browser can be sent back to the verifier's own
                 // result page. Without this, the flow just silently ends
                 // on the wallet side with no way back to the verifier.
-                if (redirectUri != null) {
-                    Log.d(TAG, "Opening verifier redirect: $redirectUri")
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(redirectUri))
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    activity.startActivity(intent)
-                }
+                openVerifierRedirect(redirectUri)
             }
         })
+    }
+
+    /** Opens a verifier-provided redirect_uri (from flow completion or decline) in the browser. */
+    private fun openVerifierRedirect(redirectUri: String?) {
+        if (redirectUri == null) return
+        Log.d(TAG, "Opening verifier redirect: $redirectUri")
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(redirectUri))
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        activity.startActivity(intent)
     }
 
     /** User consented to share selected credentials. */
