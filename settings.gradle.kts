@@ -27,6 +27,22 @@ dependencyResolutionManagement {
                 ).getOrElse("")
             }
         }
+        // zk-cred-longfellow AAR, published to its own GitHub Packages Maven -
+        // each GH Packages Maven repo is scoped per-repo, not shared org-wide,
+        // so this is a separate entry from siros-wscd-manager's above even
+        // though the credentials are the same.
+        maven {
+            name = "GitHubPackagesZkCredLongfellow"
+            url = uri("https://maven.pkg.github.com/sirosfoundation/zk-cred-longfellow")
+            credentials {
+                username = providers.gradleProperty("gpr.user").orElse(
+                    providers.environmentVariable("GITHUB_ACTOR")
+                ).getOrElse("")
+                password = providers.gradleProperty("gpr.key").orElse(
+                    providers.environmentVariable("GITHUB_TOKEN")
+                ).getOrElse("")
+            }
+        }
     }
 }
 
