@@ -43,6 +43,12 @@ dependencies {
     implementation("org.siros:siros-wscd-manager:0.7.2")
     // JNA is required by UniFFI-generated Kotlin bindings.
     implementation("net.java.dev.jna:jna:5.14.0@aar")
+    // Circuits fetched from go-zk-circuits (see ZkCircuitClient, sdk/credentials)
+    // are zstd-compressed; zk-cred-longfellow's initializeProver expects
+    // already-decompressed bytes (confirmed against wallet-frontend's
+    // feat/longfellow-zk reference implementation) - decompression is the
+    // caller's responsibility, not the native crate's.
+    implementation("com.github.luben:zstd-jni:1.5.6-6")
 
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
