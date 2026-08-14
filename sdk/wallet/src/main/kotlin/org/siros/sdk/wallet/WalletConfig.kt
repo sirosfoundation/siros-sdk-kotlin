@@ -6,6 +6,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import org.siros.sdk.credentials.CredentialStore
+import org.siros.sdk.credentials.ZkCircuitClient
 import org.siros.sdk.keystore.KeystoreManager
 import org.siros.sdk.keystore.NativeAttestationProvider
 
@@ -71,6 +72,15 @@ import org.siros.sdk.keystore.NativeAttestationProvider
  *        nor [defaultWscdMapping] resolves it unambiguously - mirrors
  *        `org.siros.sdk.keystore.mdoc.RequestProximityConsent`'s shape
  *        exactly. See [RequestWscdChoice]'s doc comment.
+ * @param zkCircuitUrls Mirror base URLs for the go-zk-circuits catalog
+ *        service (read-only REST API for discovering/downloading ZK-proof
+ *        circuit artifacts used by the Longfellow-ZKP-pseudonym feature).
+ *        Tried in order, first-success-wins (see [org.siros.sdk.credentials.ZkCircuitClient]'s
+ *        doc comment for why this is ordered fallback across mirrors of the
+ *        SAME catalog, not merging like [registryUrl]'s TS11 registry
+ *        sources). Defaults to a single entry, the pre-DNS Fly.io deployment
+ *        (`https://zk-circuits.fly.dev`) - add `https://api.circuits.siros.org`
+ *        (or another mirror) once available, without removing the default.
  * @param registryUrl Base URL for go-wallet-backend's credential-type
  *        registry service (TS11-backed, ingests the external canonical
  *        credential-type registry; includes `attestation_los`/
@@ -108,6 +118,7 @@ data class WalletConfig(
     val defaultWscdMapping: Map<String, String>? = null,
     val requestWscdChoice: RequestWscdChoice? = null,
     val registryUrl: String? = null,
+    val zkCircuitUrls: List<String> = listOf(ZkCircuitClient.DEFAULT_ZK_CIRCUIT_URL),
     /**
      * Called right before [SirosWallet] is about to invoke a WSCD signing
      * operation (`generateProof`/`generateKeyAttestation`/`generateKeypairs`)

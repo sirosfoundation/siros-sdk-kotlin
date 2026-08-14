@@ -63,6 +63,7 @@
     <string name="settings_account_section">Tili</string>
     <string name="settings_signed_in_as">Kirjautunut nimellä</string>
     <string name="settings_backend_url">Palvelin</string>
+    <string name="settings_zk_circuit_urls">ZK-piirien isännöinti</string>
     <string name="settings_tenant_id">Vuokralainen</string>
     <string name="settings_credentials_stored">Tallennetut todistukset</string>
     <string name="settings_app_version">Sovellusversio</string>

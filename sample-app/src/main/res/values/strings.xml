@@ -66,6 +66,7 @@
     <string name="settings_account_section">Account</string>
     <string name="settings_signed_in_as">Signed in as</string>
     <string name="settings_backend_url">Backend</string>
+    <string name="settings_zk_circuit_urls">ZK Circuit Hosting</string>
     <string name="settings_tenant_id">Tenant</string>
     <string name="settings_credentials_stored">Credentials stored</string>
     <string name="settings_app_version">App version</string>

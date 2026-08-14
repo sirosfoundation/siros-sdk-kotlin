@@ -340,12 +340,14 @@ fun WalletScreen(viewModel: WalletViewModel) {
         val backendUrlState by viewModel.backendUrl.collectAsState()
         val tenantIdState by viewModel.tenantId.collectAsState()
         val engineUrlOverrideState by viewModel.engineUrlOverride.collectAsState()
+        val zkCircuitUrlsState by viewModel.zkCircuitUrls.collectAsState()
         LoginScreen(
             cachedAccounts = cachedAccounts,
             backendUrl = backendUrlState,
             tenantId = tenantIdState,
             engineUrl = engineUrlOverrideState,
             useWmpProtocol = useWmpProtocol,
+            zkCircuitUrls = zkCircuitUrlsState,
             showPreLoginSettings = BuildConfig.SHOW_PRE_LOGIN_SETTINGS,
             isLoading = isLoading || walletState is WalletState.Connecting,
             snackbarHostState = snackbarHostState,
@@ -357,6 +359,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
             onUpdateTenantId = viewModel::updateTenantId,
             onUpdateEngineUrl = viewModel::updateEngineUrl,
             onUpdateUseWmpProtocol = viewModel::updateUseWmpProtocol,
+            onUpdateZkCircuitUrls = viewModel::updateZkCircuitUrls,
         )
         return
     }
@@ -550,6 +553,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             backendUrl = viewModel.backendUrl.collectAsState().value,
                             tenantId = viewModel.tenantId.collectAsState().value,
                             useWmpProtocol = useWmpProtocol,
+                            zkCircuitUrls = viewModel.zkCircuitUrls.collectAsState().value,
                             presentationCount = presentationHistory.size,
                             onDisconnect = viewModel::disconnect,
                             onDeleteAccount = viewModel::deleteAccount,
@@ -670,6 +674,7 @@ fun LoginScreen(
     tenantId: String,
     engineUrl: String,
     useWmpProtocol: Boolean,
+    zkCircuitUrls: List<String>,
     showPreLoginSettings: Boolean,
     isLoading: Boolean,
     snackbarHostState: SnackbarHostState,
@@ -681,6 +686,7 @@ fun LoginScreen(
     onUpdateTenantId: (String) -> Unit,
     onUpdateEngineUrl: (String) -> Unit,
     onUpdateUseWmpProtocol: (Boolean) -> Unit,
+    onUpdateZkCircuitUrls: (List<String>) -> Unit,
 ) {
     var showRegister by remember { mutableStateOf(false) }
     var showOtherLogin by remember { mutableStateOf(false) }
@@ -694,10 +700,12 @@ fun LoginScreen(
             tenantId = tenantId,
             engineUrl = engineUrl,
             useWmpProtocol = useWmpProtocol,
+            zkCircuitUrls = zkCircuitUrls,
             onUpdateBackendUrl = onUpdateBackendUrl,
             onUpdateTenantId = onUpdateTenantId,
             onUpdateEngineUrl = onUpdateEngineUrl,
             onUpdateUseWmpProtocol = onUpdateUseWmpProtocol,
+            onUpdateZkCircuitUrls = onUpdateZkCircuitUrls,
             onDismiss = { showSettingsSheet = false },
         )
     }
@@ -876,15 +884,21 @@ fun PreLoginSettingsSheet(
     tenantId: String,
     engineUrl: String,
     useWmpProtocol: Boolean,
+    zkCircuitUrls: List<String>,
     onUpdateBackendUrl: (String) -> Unit,
     onUpdateTenantId: (String) -> Unit,
     onUpdateEngineUrl: (String) -> Unit,
     onUpdateUseWmpProtocol: (Boolean) -> Unit,
+    onUpdateZkCircuitUrls: (List<String>) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var editBackendUrl by remember { mutableStateOf(backendUrl) }
     var editTenantId by remember { mutableStateOf(tenantId) }
     var editEngineUrl by remember { mutableStateOf(engineUrl) }
+    // One URL per line for editing - joined/split at the boundary with
+    // onUpdateZkCircuitUrls rather than storing List<String> as Compose
+    // TextField state directly.
+    var editZkCircuitUrls by remember { mutableStateOf(zkCircuitUrls.joinToString("\n")) }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -926,6 +940,17 @@ fun PreLoginSettingsSheet(
                 label = { Text("Engine URL (blank = auto)") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
+            )
+            OutlinedTextField(
+                value = editZkCircuitUrls,
+                onValueChange = { text ->
+                    editZkCircuitUrls = text
+                    val urls = text.split("\n").map { it.trim() }.filter { it.isNotBlank() }
+                    onUpdateZkCircuitUrls(urls)
+                },
+                label = { Text(stringResource(R.string.settings_zk_circuit_urls)) },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = false,
             )
 
             // Transport protocol toggle
@@ -1065,6 +1090,7 @@ fun SettingsTab(
     backendUrl: String,
     tenantId: String,
     useWmpProtocol: Boolean,
+    zkCircuitUrls: List<String> = listOf(org.siros.sdk.credentials.ZkCircuitClient.DEFAULT_ZK_CIRCUIT_URL),
     presentationCount: Int,
     onDisconnect: () -> Unit,
     onDeleteAccount: () -> Unit,
@@ -1113,6 +1139,7 @@ fun SettingsTab(
                 Spacer(modifier = Modifier.height(12.dp))
                 SettingsRow(stringResource(R.string.settings_signed_in_as), state.displayName ?: state.userId)
                 SettingsRow(stringResource(R.string.settings_backend_url), backendUrl)
+                SettingsRow(stringResource(R.string.settings_zk_circuit_urls), zkCircuitUrls.joinToString(", "))
                 SettingsRow(stringResource(R.string.settings_tenant_id), tenantId)
                 SettingsRow(stringResource(R.string.settings_credentials_stored), state.credentials.size.toString())
                 SettingsRow(stringResource(R.string.settings_app_version), BuildConfig.VERSION_NAME)
