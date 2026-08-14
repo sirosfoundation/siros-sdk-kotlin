@@ -33,6 +33,9 @@
     <string name="add_credential_retry">Försök igen</string>
     <string name="nav_back">Tillbaka</string>
 
+    <!-- Presentation consent screen -->
+    <string name="presentation_consent_title">Intygsförfrågan</string>
+
     <!-- Credential detail screen -->
     <string name="credential_detail_title">Intygsinformation</string>
     <string name="credential_detail_tab_info">Information</string>
