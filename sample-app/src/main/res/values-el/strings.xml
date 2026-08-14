@@ -63,6 +63,7 @@
     <string name="settings_account_section">Λογαριασμός</string>
     <string name="settings_signed_in_as">Συνδεδεμένος ως</string>
     <string name="settings_backend_url">Διακομιστής</string>
+    <string name="settings_zk_circuit_urls">Φιλοξενία κυκλωμάτων ZK</string>
     <string name="settings_tenant_id">Ενοικιαστής</string>
     <string name="settings_credentials_stored">Αποθηκευμένα πιστοποιητικά</string>
     <string name="settings_app_version">Έκδοση εφαρμογής</string>

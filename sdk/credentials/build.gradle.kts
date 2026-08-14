@@ -29,6 +29,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.nimbus.jose.jwt)
     implementation(libs.timber)
+    // Real HTTP client for ZkCircuitClient (mirrors sdk/auth's BackendApiClient usage).
+    implementation(libs.okhttp)
     // Real CBOR codec for ISO 18013-5 mdoc parsing (claim extraction/display).
     // `api` (not `implementation`) since sdk/keystore depends on this module
     // and re-exposes CBORObject-typed values from the mdoc parsing model.

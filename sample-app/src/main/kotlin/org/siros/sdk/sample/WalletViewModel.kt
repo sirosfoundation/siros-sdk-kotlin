@@ -16,6 +16,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
 import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialOffer
 import org.siros.sdk.credentials.CredentialUtils
@@ -25,6 +28,7 @@ import org.siros.sdk.sample.dcapi.DCAPIProviderRegistration
 import org.siros.sdk.sample.dcapi.WalletSessionHolder
 import org.siros.sdk.credentials.PresentationRecord
 import org.siros.sdk.credentials.SirosException
+import org.siros.sdk.credentials.ZkCircuitClient
 import org.siros.sdk.credentials.SignerSecurityProperties
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.keystore.ActivateLifecycleRequest
@@ -126,6 +130,16 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _backendUrl: MutableStateFlow<String>
     val backendUrl: StateFlow<String> get() = _backendUrl
 
+    /**
+     * Mirror base URLs for the go-zk-circuits catalog service (see
+     * [org.siros.sdk.wallet.WalletConfig.zkCircuitUrls]'s doc comment) -
+     * unlike [backendUrl], this persists on every update (see
+     * [updateZkCircuitUrls]), matching the boolean-toggle settings below
+     * rather than backendUrl's read-once-at-construction behavior.
+     */
+    private val _zkCircuitUrls: MutableStateFlow<List<String>>
+    val zkCircuitUrls: StateFlow<List<String>> get() = _zkCircuitUrls
+
     // Raw text of the "Engine URL (blank = auto)" field - blank means "derive
     // from the current backend URL" (see resolvedEngineUrl()), not "use the
     // BuildConfig.ENGINE_URL local-dev default" as a previous version of this
@@ -161,6 +175,17 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _backendUrl = MutableStateFlow(prefs.getString("backend_url", null) ?: DEFAULT_BACKEND_URL)
         _engineUrlOverride = MutableStateFlow(prefs.getString("engine_url", null) ?: "")
         _tenantId = MutableStateFlow(prefs.getString("tenant_id", null) ?: DEFAULT_TENANT_ID)
+        // JSON-encoded list (no existing precedent in this prefs store for a
+        // List<String> value) - falls back to the single-mirror default
+        // when absent or unparseable (e.g. a value written by a future
+        // format this build doesn't understand).
+        _zkCircuitUrls = MutableStateFlow(
+            prefs.getString("zk_circuit_urls", null)?.let { raw ->
+                runCatching {
+                    Json.decodeFromString(ListSerializer(String.serializer()), raw)
+                }.getOrNull()
+            } ?: listOf(ZkCircuitClient.DEFAULT_ZK_CIRCUIT_URL)
+        )
         _useWmpProtocol = MutableStateFlow(prefs.getBoolean("use_wmp_protocol", false))
         // Default follows build type (on for debug, off for release) - a
         // manual override either way is persisted across restarts, so e.g. a
@@ -192,6 +217,20 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     fun updateBackendUrl(url: String) { _backendUrl.value = url }
     fun updateTenantId(id: String) { _tenantId.value = id }
     fun updateEngineUrl(url: String) { _engineUrlOverride.value = url }
+
+    /**
+     * Updates and persists the configured zk-circuits mirror list
+     * immediately (unlike [updateBackendUrl], which is read once at
+     * [buildWalletConfig] time and not separately persisted here) -
+     * matches [updateUseWmpProtocol]'s persist-on-every-update pattern.
+     */
+    fun updateZkCircuitUrls(urls: List<String>) {
+        _zkCircuitUrls.value = urls
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putString("zk_circuit_urls", Json.encodeToString(ListSerializer(String.serializer()), urls))
+            .apply()
+    }
 
     /**
      * Resolves the engine URL to actually connect to: an explicit override if
@@ -1977,6 +2016,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         return WalletConfig(
             backendUrl = _backendUrl.value,
             tenantId = _tenantId.value,
+            zkCircuitUrls = _zkCircuitUrls.value,
             // Explicit override > derived from backendUrl (see resolvedEngineUrl())
             engineUrl = resolvedEngineUrl(),
             useWmpProtocol = _useWmpProtocol.value,

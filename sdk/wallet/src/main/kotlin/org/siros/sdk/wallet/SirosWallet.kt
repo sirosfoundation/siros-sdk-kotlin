@@ -51,6 +51,7 @@ import org.siros.sdk.credentials.CredentialConfiguration
 import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.Vctm
+import org.siros.sdk.credentials.ZkCircuitClient
 import org.siros.sdk.credentials.VctmFetcher
 import org.siros.sdk.credentials.MddlSchema
 import org.siros.sdk.credentials.MddlSchemaFetcher
@@ -2160,6 +2161,17 @@ class SirosWallet private constructor(
         config.credentialStore ?: KeystoreBackedCredentialStore(keystore)
     private val json = Json { ignoreUnknownKeys = true }
     private val httpClient = config.httpClient ?: OkHttpClient()
+
+    /**
+     * Client for the go-zk-circuits catalog service (see
+     * [WalletConfig.zkCircuitUrls]'s doc comment) - discovers/downloads the
+     * ZK-proof circuit artifacts the Longfellow-ZKP-pseudonym feature will
+     * consume. Exposed publicly (unlike most of this class's internal
+     * clients) so a later phase of that feature - not yet implemented - can
+     * use it without SirosWallet needing to grow ZK-proof-generation logic
+     * itself first. Not wired into any active flow yet.
+     */
+    val zkCircuitClient: ZkCircuitClient = ZkCircuitClient(sources = config.zkCircuitUrls, httpClient = httpClient)
 
     /** Stores trust evaluation results keyed by flow ID for use in credential selection UI. */
     private val lastTrustResults = mutableMapOf<String, TrustResult>()
