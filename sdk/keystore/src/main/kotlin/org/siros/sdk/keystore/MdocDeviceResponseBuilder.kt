@@ -98,7 +98,7 @@ class MdocDeviceResponseBuilder(
         signer: suspend (ByteArray) -> ByteArray,
     ): ByteArray {
         val disclosedDocument = parseAndFilter(disclosedClaims)
-        val sessionTranscript = buildDCAPISessionTranscript(
+        val sessionTranscript = Companion.buildDCAPISessionTranscript(
             origin = origin,
             nonce = nonce,
             encryptionPublicJwkThumbprint = encryptionPublicJwkThumbprint,
@@ -230,43 +230,6 @@ class MdocDeviceResponseBuilder(
      * browser-verified origin instead, since the response never travels over
      * HTTP to a responseUri.
      */
-    private fun buildDCAPISessionTranscript(
-        origin: String,
-        nonce: String,
-        encryptionPublicJwkThumbprint: String?,
-    ): ByteArray {
-        val handoverInfo = CBORObject.NewArray()
-        handoverInfo.Add(CBORObject.FromObject(origin))
-        handoverInfo.Add(CBORObject.FromObject(nonce))
-        handoverInfo.Add(
-            if (encryptionPublicJwkThumbprint != null) {
-                // OpenID4VP 1.0 (#dc_api) requires this element to be the
-                // thumbprint encoded as a CBOR Byte String - the raw SHA-256
-                // digest bytes, not a text string of the base64url form the
-                // JOSE side (JWK.computeThumbprint().toString()) hands us.
-                // Encoding it as a CBOR text string here (a real bug, found
-                // via a verifier rejecting every mso_mdoc DC API response
-                // with no error) means the wallet's OpenID4VPDCAPIHandover
-                // hash never matches what a spec-conformant verifier
-                // reconstructs, so it silently disagrees with our
-                // DeviceAuthentication signature and rejects the response.
-                CBORObject.FromObject(java.util.Base64.getUrlDecoder().decode(encryptionPublicJwkThumbprint))
-            } else {
-                CBORObject.Null
-            }
-        )
-        val handoverHash = sha256(handoverInfo.EncodeToBytes())
-
-        val handover = CBORObject.NewArray()
-        handover.Add(CBORObject.FromObject("OpenID4VPDCAPIHandover"))
-        handover.Add(CBORObject.FromObject(handoverHash))
-
-        val sessionTranscript = CBORObject.NewArray()
-        sessionTranscript.Add(CBORObject.Null)
-        sessionTranscript.Add(CBORObject.Null)
-        sessionTranscript.Add(handover)
-        return sessionTranscript.EncodeToBytes()
-    }
 
     /**
      * DeviceAuthentication = ["DeviceAuthentication", SessionTranscript,
@@ -330,6 +293,76 @@ class MdocDeviceResponseBuilder(
         return response.EncodeToBytes()
     }
 
-    private fun sha256(data: ByteArray): ByteArray =
-        MessageDigest.getInstance("SHA-256").digest(data)
+    private fun sha256(data: ByteArray): ByteArray = Companion.sha256(data)
+
+    companion object {
+        /**
+         * Builds the `OpenID4VPDCAPIHandover` session transcript (OpenID4VP
+         * 1.0 Appendix B.2.6) from just the DC API request parameters - a
+         * pure function of [origin]/[nonce]/[encryptionPublicJwkThumbprint],
+         * with no dependency on any particular credential's bytes. Exposed
+         * here (not only via [buildForDCAPI]) so callers that need this
+         * exact transcript for something OTHER than building a normal signed
+         * DeviceResponse - e.g. as the `sessionTranscript` fed to a
+         * [org.siros.sdk.credentials.ZkProofSystem.generateProof] call for a
+         * ZK-wrapped DC API presentation - can compute it without
+         * constructing an unrelated `MdocDeviceResponseBuilder` instance.
+         *
+         * SessionTranscript = [null, null, [ "OpenID4VPDCAPIHandover",
+         * Handover ]], per OpenID4VP 1.0 (#dc_api):
+         *
+         * ```
+         * OpenID4VPDCAPIHandoverInfo = [
+         *   origin,
+         *   nonce,
+         *   jwk_thumbprint / null
+         * ]
+         * ```
+         *
+         * Unlike the redirect flow's OpenID4VPHandover, there is no
+         * clientId or responseUri here - the handover binds to the
+         * browser-verified origin instead, since the response never travels
+         * over HTTP to a responseUri.
+         */
+        fun buildDCAPISessionTranscript(
+            origin: String,
+            nonce: String,
+            encryptionPublicJwkThumbprint: String?,
+        ): ByteArray {
+            val handoverInfo = CBORObject.NewArray()
+            handoverInfo.Add(CBORObject.FromObject(origin))
+            handoverInfo.Add(CBORObject.FromObject(nonce))
+            handoverInfo.Add(
+                if (encryptionPublicJwkThumbprint != null) {
+                    // OpenID4VP 1.0 (#dc_api) requires this element to be the
+                    // thumbprint encoded as a CBOR Byte String - the raw SHA-256
+                    // digest bytes, not a text string of the base64url form the
+                    // JOSE side (JWK.computeThumbprint().toString()) hands us.
+                    // Encoding it as a CBOR text string here (a real bug, found
+                    // via a verifier rejecting every mso_mdoc DC API response
+                    // with no error) means the wallet's OpenID4VPDCAPIHandover
+                    // hash never matches what a spec-conformant verifier
+                    // reconstructs, so it silently disagrees with our
+                    // DeviceAuthentication signature and rejects the response.
+                    CBORObject.FromObject(java.util.Base64.getUrlDecoder().decode(encryptionPublicJwkThumbprint))
+                } else {
+                    CBORObject.Null
+                }
+            )
+            val handoverHash = sha256(handoverInfo.EncodeToBytes())
+
+            val handover = CBORObject.NewArray()
+            handover.Add(CBORObject.FromObject("OpenID4VPDCAPIHandover"))
+            handover.Add(CBORObject.FromObject(handoverHash))
+
+            val sessionTranscript = CBORObject.NewArray()
+            sessionTranscript.Add(CBORObject.Null)
+            sessionTranscript.Add(CBORObject.Null)
+            sessionTranscript.Add(handover)
+            return sessionTranscript.EncodeToBytes()
+        }
+
+        fun sha256(data: ByteArray): ByteArray =
+            MessageDigest.getInstance("SHA-256").digest(data)
+    }
 }

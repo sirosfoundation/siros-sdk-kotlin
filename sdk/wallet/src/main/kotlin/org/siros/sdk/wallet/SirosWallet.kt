@@ -52,6 +52,9 @@ import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.Vctm
 import org.siros.sdk.credentials.ZkCircuitClient
+import org.siros.sdk.credentials.ZkProofSystemRegistry
+import org.siros.sdk.credentials.VerifierIdentity
+import org.siros.sdk.credentials.mdoc.MdocCbor
 import org.siros.sdk.credentials.VctmFetcher
 import org.siros.sdk.credentials.MddlSchema
 import org.siros.sdk.credentials.MddlSchemaFetcher
@@ -60,6 +63,8 @@ import org.siros.sdk.keystore.DCAPIResponseEncryption
 import org.siros.sdk.keystore.JweKeystore
 import org.siros.sdk.keystore.KeypairInfo
 import org.siros.sdk.keystore.KeystoreManager
+import org.siros.sdk.keystore.LongfellowZkProofSystem
+import org.siros.sdk.keystore.MdocDeviceResponseBuilder
 import org.siros.sdk.keystore.WscdKeystoreAdapter
 import org.siros.sdk.keystore.WscdManager
 import org.siros.sdk.wallet.dcapi.DCAPIRequest
@@ -1890,7 +1895,45 @@ class SirosWallet private constructor(
             val queryId = matchResult?.queryId ?: "_default"
             val disclosedClaims = matchResult?.requestedClaims?.mapNotNull { it.lastOrNull() }
 
-            val token = if (cred.format == "mso_mdoc") {
+            val token = if (matchResult?.format?.equals("mso_mdoc_zk", ignoreCase = true) == true) {
+                val credBytes = android.util.Base64.decode(
+                    cred.raw, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+                )
+                val kid = cred.kid
+                    ?: throw WalletException("Credential $id has no key id - cannot generate a ZK proof for it")
+                val docType = MdocCbor.parseStoredCredential(credBytes).docType
+                val (system, spec) = zkProofSystemRegistry.resolve(docType, matchResult.zkSystemTypes.orEmpty())
+                    ?: throw WalletException(
+                        "No registered ZK proof system satisfies the verifier's zk_system_type for $docType"
+                    )
+                // Only bind a pseudonym when the verifier actually asked for
+                // one - passing a non-null VerifierIdentity unconditionally
+                // would make generateProof auto-add and disclose
+                // "pairwise_pseudonym" even for requests that never asked
+                // for it (see ZkProofSystem.generateProof's own doc comment).
+                val wantsPseudonym = disclosedClaims?.contains(LongfellowZkProofSystem.PSEUDONYM_CLAIM) == true
+                val verifierIdentity = if (wantsPseudonym) {
+                    VerifierIdentity(clientId = subjectId, ppidContext = matchResult.ppidContext)
+                } else {
+                    null
+                }
+                val sessionTranscript = MdocDeviceResponseBuilder.buildDCAPISessionTranscript(
+                    origin = origin,
+                    nonce = request.nonce,
+                    encryptionPublicJwkThumbprint = encryptionThumbprint,
+                )
+                val result = system.generateProof(
+                    spec = spec,
+                    credentialBytes = credBytes,
+                    sessionTranscript = sessionTranscript,
+                    requestedClaims = disclosedClaims ?: emptyList(),
+                    verifierIdentity = verifierIdentity,
+                    signer = { data -> keystore.sign(kid, data) },
+                )
+                android.util.Base64.encodeToString(
+                    result.proofBytes, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+                )
+            } else if (cred.format == "mso_mdoc") {
                 val credBytes = android.util.Base64.decode(
                     cred.raw, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
                 )
@@ -2224,13 +2267,21 @@ class SirosWallet private constructor(
     /**
      * Client for the go-zk-circuits catalog service (see
      * [WalletConfig.zkCircuitUrls]'s doc comment) - discovers/downloads the
-     * ZK-proof circuit artifacts the Longfellow-ZKP-pseudonym feature will
-     * consume. Exposed publicly (unlike most of this class's internal
-     * clients) so a later phase of that feature - not yet implemented - can
-     * use it without SirosWallet needing to grow ZK-proof-generation logic
-     * itself first. Not wired into any active flow yet.
+     * ZK-proof circuit artifacts [zkProofSystemRegistry]'s systems consume.
+     * Exposed publicly (unlike most of this class's internal clients) so a
+     * consumer can inspect/prefetch circuits directly if it wants to.
      */
     val zkCircuitClient: ZkCircuitClient = ZkCircuitClient(sources = config.zkCircuitUrls, httpClient = httpClient)
+
+    /**
+     * Every ZK proof system this wallet can satisfy a verifier's
+     * `"mso_mdoc_zk"` DCQL request with - see [handleDCAPIRequest]'s
+     * `mso_mdoc_zk` branch, the only current caller. Longfellow is the only
+     * real implementation today; this registry is where a future
+     * system (e.g. Vega/BBS) would also be registered.
+     */
+    private val zkProofSystemRegistry: ZkProofSystemRegistry =
+        ZkProofSystemRegistry(listOf(LongfellowZkProofSystem(zkCircuitClient)))
 
     /** Stores trust evaluation results keyed by flow ID for use in credential selection UI. */
     private val lastTrustResults = mutableMapOf<String, TrustResult>()

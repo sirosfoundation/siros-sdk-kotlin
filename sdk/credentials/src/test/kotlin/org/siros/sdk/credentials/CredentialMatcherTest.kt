@@ -173,6 +173,117 @@ class CredentialMatcherTest {
         assertEquals(listOf(1L), matchedIds)
     }
 
+    @Test
+    fun mso_mdoc_zk_query_matches_credential_stored_as_plain_mso_mdoc() {
+        val credentials = listOf(
+            StoredCredential(
+                id = 1L,
+                format = "mso_mdoc",
+                raw = mdocRaw("org.iso.18013.5.1.mDL"),
+                batchId = 1L,
+                instanceId = 0,
+            ),
+            StoredCredential(
+                id = 2L,
+                format = "dc+sd-jwt",
+                raw = "raw-2",
+                metadata = CredentialMetadata(vct = "urn:eu:pid:1"),
+                batchId = 2L,
+                instanceId = 0,
+            ),
+        )
+
+        val query = json.parseToJsonElement(
+            """
+            {
+              "credentials": [
+                {
+                  "id": "q-zk",
+                  "format": "mso_mdoc_zk",
+                  "meta": {
+                    "doctype_value": "org.iso.18013.5.1.mDL"
+                  }
+                }
+              ]
+            }
+            """.trimIndent()
+        ).jsonObject
+
+        val results = CredentialMatcher.match(query, credentials)
+
+        assertEquals(1, results.size)
+        assertEquals(listOf(1L), results.first().candidates.map { it.id })
+    }
+
+    @Test
+    fun mso_mdoc_zk_query_parses_zk_system_type_and_ppid_context() {
+        val credentials = listOf(
+            StoredCredential(
+                id = 1L,
+                format = "mso_mdoc",
+                raw = mdocRaw("org.iso.18013.5.1.mDL"),
+                batchId = 1L,
+                instanceId = 0,
+            ),
+        )
+
+        val query = json.parseToJsonElement(
+            """
+            {
+              "credentials": [
+                {
+                  "id": "q-zk",
+                  "format": "mso_mdoc_zk",
+                  "meta": {
+                    "doctype_value": "org.iso.18013.5.1.mDL",
+                    "ppid_context": "https://verifier.example/",
+                    "zk_system_type": [
+                      { "system": "longfellow", "id": "longfellow-v8", "params": { "circuit_hash": "abc123" } }
+                    ]
+                  }
+                }
+              ]
+            }
+            """.trimIndent()
+        ).jsonObject
+
+        val result = CredentialMatcher.match(query, credentials).first()
+
+        assertEquals("https://verifier.example/", result.ppidContext)
+        assertEquals(1, result.zkSystemTypes?.size)
+        val spec = result.zkSystemTypes!!.first()
+        assertEquals("longfellow-v8", spec.id)
+        assertEquals("longfellow", spec.system)
+        assertEquals("abc123", spec.params["circuit_hash"])
+    }
+
+    @Test
+    fun mso_mdoc_zk_query_does_not_match_sd_jwt_credential() {
+        val credentials = listOf(
+            StoredCredential(
+                id = 1L,
+                format = "dc+sd-jwt",
+                raw = "raw-1",
+                metadata = CredentialMetadata(vct = "urn:eu:pid:1"),
+                batchId = 1L,
+                instanceId = 0,
+            ),
+        )
+
+        val query = json.parseToJsonElement(
+            """
+            {
+              "credentials": [
+                { "id": "q-zk", "format": "mso_mdoc_zk" }
+              ]
+            }
+            """.trimIndent()
+        ).jsonObject
+
+        val matchedIds = CredentialMatcher.matchedCredentialIds(query, credentials)
+        assertTrue(matchedIds.isEmpty())
+    }
+
     /** Build a synthetic mdoc credential's raw (base64url) bytes: a bare IssuerSigned structure with the given docType embedded in a stub MSO. */
     private fun buildMdocRaw(docType: String): String {
         val mso = com.upokecenter.cbor.CBORObject.NewMap()
