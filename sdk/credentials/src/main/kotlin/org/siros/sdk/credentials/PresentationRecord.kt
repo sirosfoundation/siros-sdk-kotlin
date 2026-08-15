@@ -38,4 +38,13 @@ data class PresentationRecord(
     val timestamp: Long,
     /** Whether the presentation completed successfully. Assumed true for a reloaded record. */
     val success: Boolean = true,
+    /**
+     * True if presenting ANY of [credentialIds] this time was a
+     * zero-knowledge proof (`"mso_mdoc_zk"`) rather than a raw claim
+     * disclosure - lets history/UX distinguish the two, and lets
+     * [CredentialConsumptionPolicy.CONSUME_NON_ZKP] be understood after the
+     * fact. Defaults to false so an older reloaded record (or a format that
+     * never involves ZK) doesn't need updating.
+     */
+    @SerialName("zk_proof") val zkProof: Boolean = false,
 )

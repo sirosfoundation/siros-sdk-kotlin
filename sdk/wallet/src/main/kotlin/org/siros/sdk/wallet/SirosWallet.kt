@@ -1842,6 +1842,18 @@ class SirosWallet private constructor(
         val matchResults = dcqlOutput.queryResults
         val candidates = matchResults.flatMap { it.candidates }.distinctBy { it.id }
 
+        // Which candidates will actually be presented as a ZK proof (vs a
+        // raw disclosure) for THIS request - a credential's stored format is
+        // always plain "mso_mdoc" even under a ZK query (see
+        // CredentialMatcher.matchesFormat), so this must come from the
+        // MATCHED query's format, not the candidate's own. Feeds
+        // eligibleInstances below so CredentialConsumptionPolicy.CONSUME_NON_ZKP
+        // actually distinguishes the two, per that policy's own doc comment.
+        val zkRequestedIds = matchResults
+            .filter { it.format?.equals("mso_mdoc_zk", ignoreCase = true) == true }
+            .flatMap { it.candidates }
+            .mapTo(HashSet()) { it.id }
+
         // Unlike the QR/redirect flow, credential selection and consent
         // already happened natively - the OS's own credential picker (see
         // DCAPIProviderRegistration/DCAPIGetCredentialActivity) showed the
@@ -1853,7 +1865,12 @@ class SirosWallet private constructor(
         // the shared wallet instance (by MainActivity's WalletViewModel, for
         // the unrelated in-app flow) and stays registered even once
         // MainActivity is backgrounded, that wait would hang forever.
-        val selectedIds = CredentialUtils.eligibleInstances(candidates, credentialConsumptionPolicy, presentationHistory).map { it.id }
+        val selectedIds = CredentialUtils.eligibleInstances(
+            candidates,
+            credentialConsumptionPolicy,
+            presentationHistory,
+            isZkPresentation = { it.id in zkRequestedIds },
+        ).map { it.id }
 
         if (selectedIds.isEmpty()) {
             throw WalletException(
@@ -2025,6 +2042,7 @@ class SirosWallet private constructor(
             credentialIds = selectedIds,
             credentialNames = selectedIds.mapNotNull { id -> allCreds.find { it.id == id }?.metadata?.name },
             requestedClaims = matchResults.flatMap { it.requestedClaims.flatten() }.distinct(),
+            zkProof = selectedIds.any { it in zkRequestedIds },
             timestamp = System.currentTimeMillis(),
         ))
 
@@ -3603,7 +3621,14 @@ class SirosWallet private constructor(
                         )
                     }
 
-                    val matchResults = dcqlOutput.queryResults
+                    // This engine-relayed flow has no ZK proof generation
+                    // (unlike SirosWallet.handleDCAPIRequest) - drop
+                    // "mso_mdoc_zk" queries' candidates rather than let them
+                    // falsely match here and later silently fall through to a
+                    // full raw disclosure at sign time (see
+                    // CredentialMatcher.dropUnsupportedZkQueries's own doc
+                    // comment).
+                    val matchResults = CredentialMatcher.dropUnsupportedZkQueries(dcqlOutput.queryResults)
                     val candidates = matchResults.flatMap { it.candidates }.distinctBy { it.id }
 
                     // Let the app filter further via user selection
@@ -4256,16 +4281,22 @@ class SirosWallet private constructor(
                 val verifierName = rawVerifierName?.let { ClientIdScheme.parse(it).displayName }
 
                 val allCreds = credentialStore.getAll()
-                val matchResults = if (dcqlQuery != null) {
-                    CredentialMatcher.match(dcqlQuery, allCreds)
-                } else {
-                    listOf(CredentialMatcher.MatchResult(
-                        queryId = "_default",
-                        format = null,
-                        candidates = allCreds,
-                        requestedClaims = emptyList(),
-                    ))
-                }
+                // Same reasoning as the WS "match request" handler above:
+                // this engine-relayed flow has no ZK proof generation, so
+                // drop "mso_mdoc_zk" queries' candidates rather than falsely
+                // match here (see CredentialMatcher.dropUnsupportedZkQueries).
+                val matchResults = CredentialMatcher.dropUnsupportedZkQueries(
+                    if (dcqlQuery != null) {
+                        CredentialMatcher.match(dcqlQuery, allCreds)
+                    } else {
+                        listOf(CredentialMatcher.MatchResult(
+                            queryId = "_default",
+                            format = null,
+                            candidates = allCreds,
+                            requestedClaims = emptyList(),
+                        ))
+                    }
+                )
                 val candidates = matchResults.flatMap { it.candidates }.distinctBy { it.id }
 
                 val listener = eventListener

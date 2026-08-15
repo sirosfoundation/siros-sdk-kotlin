@@ -60,6 +60,22 @@ class LongfellowZkProofSystem(
          * concept the circuit is unaware of.
          */
         const val PSEUDONYM_CLAIM = "pairwise_pseudonym"
+
+        /**
+         * The mdoc element identifier an issuer actually stores the raw seed
+         * under (confirmed against zk-cred-longfellow's own reference source,
+         * `mdoc::find_attributes` - it matches a *requested* id of
+         * [PSEUDONYM_CLAIM] against a credential attribute *stored* as this
+         * name: `desired_attribute_id == "pairwise_pseudonym" &&
+         * attribute_id == "pseudonym_seed"`). [PSEUDONYM_CLAIM] is the
+         * session-specific value the wallet DERIVES from this seed at
+         * presentation time (`SHA256(seed || verifier_context)`) and
+         * discloses to the verifier - it is never itself a stored issuer
+         * claim, so a direct CBOR namespace lookup for it (see
+         * [generateProof]'s own re-derivation below) must fall back to this
+         * name, mirroring the crate's own alias.
+         */
+        private const val PSEUDONYM_SEED_CLAIM = "pseudonym_seed"
     }
 
     override val systemId: String = "longfellow-libzk-v1"
@@ -165,7 +181,10 @@ class LongfellowZkProofSystem(
         // display/track it, mirroring the feat/longfellow-zk reference's own
         // separate computePPID() step.
         val seedItem = document.issuerSigned.nameSpaces[namespace]
-            ?.firstOrNull { it.item.elementIdentifier == PSEUDONYM_CLAIM }
+            ?.firstOrNull {
+                it.item.elementIdentifier == PSEUDONYM_CLAIM ||
+                    it.item.elementIdentifier == PSEUDONYM_SEED_CLAIM
+            }
         val pseudonym = seedItem?.let { sha256(it.item.elementValue.GetByteString() + verifierContext) }
 
         return ZkProofResult(

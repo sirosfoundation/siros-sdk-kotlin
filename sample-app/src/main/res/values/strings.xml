@@ -39,6 +39,10 @@
     <!-- Presentation consent screen -->
     <string name="presentation_consent_title">Credential Request</string>
 
+    <!-- DC API loading screen -->
+    <string name="dcapi_zk_proof_status">Generating zero-knowledge proof…</string>
+    <string name="dcapi_zk_proof_detail">No personal data is shared - only a cryptographic proof that you meet the request.</string>
+
     <!-- Credential detail screen -->
     <string name="credential_detail_title">Credential Details</string>
     <string name="credential_detail_tab_info">Info</string>
@@ -91,6 +95,7 @@
     <string name="history_credentials_shared">%1$d credential(s) shared</string>
     <string name="history_success">Successful</string>
     <string name="history_failed">Failed</string>
+    <string name="history_zk_proof">Zero-knowledge proof</string>
 
     <!-- QR Scanner -->
     <string name="qr_scanner_title">Scan QR Code</string>

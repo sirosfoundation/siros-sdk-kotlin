@@ -132,6 +132,45 @@ object CredentialMatcher {
     }
 
     /**
+     * True if [dcqlQuery] asks for at least one `"mso_mdoc_zk"` credential -
+     * i.e. satisfying it will require generating a zero-knowledge proof
+     * rather than disclosing raw claims. Operates directly on the raw DCQL
+     * query, before any credential matching happens, so callers that need to
+     * know this early (e.g. a DC API loading screen that wants to show a
+     * ZK-specific status message while [SirosWallet][org.siros.sdk.wallet]'s
+     * full request handling - trust evaluation, matching, proof generation -
+     * is still in flight) don't need the wallet's credential store to check.
+     */
+    fun isZkRequest(dcqlQuery: JsonObject): Boolean =
+        dcqlQuery["credentials"]?.jsonArray?.any { entry ->
+            entry.jsonObject["format"]?.jsonPrimitive?.contentOrNull
+                ?.equals("mso_mdoc_zk", ignoreCase = true) == true
+        } ?: false
+
+    /**
+     * Zeroes out candidates for any [matchResults] query requesting
+     * `"mso_mdoc_zk"` - for a transport that can't actually generate a ZK
+     * proof (today: everything except `SirosWallet.handleDCAPIRequest`,
+     * which is the only place [ZkProofSystemRegistry] is wired in).
+     *
+     * Without this, [matchesFormat]'s zk-query-matches-plain-mdoc-storage
+     * rule (correct and necessary for the DC API path) would also make the
+     * legacy WS-engine presentation flow report a false match: the user
+     * would see and consent to what looks like a privacy-preserving ZK
+     * request, but the engine's own `sign_presentation` handler has no ZK
+     * branch and would silently fall through to a full raw mdoc disclosure
+     * instead - the opposite of what was requested and consented to.
+     */
+    fun dropUnsupportedZkQueries(matchResults: List<MatchResult>): List<MatchResult> =
+        matchResults.map { r ->
+            if (r.format?.equals("mso_mdoc_zk", ignoreCase = true) == true) {
+                r.copy(candidates = emptyList())
+            } else {
+                r
+            }
+        }
+
+    /**
      * Match stored credentials against a full DCQL query, including `credential_sets`.
      *
      * Returns per-query match results, parsed credential set constraints,
