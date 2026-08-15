@@ -36,6 +36,10 @@
     <!-- Presentation consent screen -->
     <string name="presentation_consent_title">Αίτημα Πιστοποιητικού</string>
 
+    <!-- DC API loading screen -->
+    <string name="dcapi_zk_proof_status">Δημιουργία απόδειξης μηδενικής γνώσης…</string>
+    <string name="dcapi_zk_proof_detail">Δεν κοινοποιούνται προσωπικά δεδομένα - μόνο μια κρυπτογραφική απόδειξη ότι πληροίτε το αίτημα.</string>
+
     <!-- Credential detail screen -->
     <string name="credential_detail_title">Λεπτομέρειες Πιστοποιητικού</string>
     <string name="credential_detail_tab_info">Πληροφορίες</string>
@@ -88,6 +92,7 @@
     <string name="history_credentials_shared">%1$d πιστοποιητικά κοινοποιήθηκαν</string>
     <string name="history_success">Επιτυχία</string>
     <string name="history_failed">Αποτυχία</string>
+    <string name="history_zk_proof">Απόδειξη μηδενικής γνώσης</string>
 
     <!-- QR Scanner -->
     <string name="qr_scanner_title">Σάρωση Κωδικού QR</string>
