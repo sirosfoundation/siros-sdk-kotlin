@@ -91,6 +91,18 @@ class LongfellowZkProofSystem(
     override fun matchingSpec(requestedSpecs: List<ZkSystemSpec>): ZkSystemSpec? =
         requestedSpecs.firstOrNull { it.system == "longfellow" }
 
+    /**
+     * The vendored UniFFI bindings' `&[u8]` parameters need a DIRECT
+     * `ByteBuffer` - `ByteBuffer.wrap(byteArray)` produces a heap-backed
+     * buffer with no stable native address, which throws
+     * `IllegalArgumentException("UniFFI zero-copy &[u8] requires a direct
+     * ByteBuffer")` at the JNI boundary. Confirmed via a real androidTest
+     * run on a Pixel - this only surfaces on-device (JVM unit tests can't
+     * load the native library at all, so they never reach this check).
+     */
+    private fun directByteBuffer(bytes: ByteArray): ByteBuffer =
+        ByteBuffer.allocateDirect(bytes.size).put(bytes).apply { flip() }
+
     override suspend fun generateProof(
         spec: ZkSystemSpec,
         credentialBytes: ByteArray,
@@ -127,10 +139,10 @@ class LongfellowZkProofSystem(
         if (verifierIdentity == null) {
             val proofBytes = prove(
                 prover = prover,
-                deviceResponse = ByteBuffer.wrap(witnessDeviceResponse),
+                deviceResponse = directByteBuffer(witnessDeviceResponse),
                 namespace = namespace,
                 requestedClaims = effectiveClaims,
-                sessionTranscript = ByteBuffer.wrap(sessionTranscript),
+                sessionTranscript = directByteBuffer(sessionTranscript),
                 time = time,
             )
             return ZkProofResult(proofBytes = proofBytes)
@@ -139,12 +151,12 @@ class LongfellowZkProofSystem(
         val verifierContext = pseudonymDeriver.deriveVerifierContext(verifierIdentity)
         val proofBytes = proveWithPpid(
             prover = prover,
-            deviceResponse = ByteBuffer.wrap(witnessDeviceResponse),
+            deviceResponse = directByteBuffer(witnessDeviceResponse),
             namespace = namespace,
             requestedClaims = effectiveClaims,
-            sessionTranscript = ByteBuffer.wrap(sessionTranscript),
+            sessionTranscript = directByteBuffer(sessionTranscript),
             time = time,
-            verifierContext = ByteBuffer.wrap(verifierContext),
+            verifierContext = directByteBuffer(verifierContext),
         )
 
         // The native API returns only proof bytes - the pseudonym itself
@@ -176,7 +188,7 @@ class LongfellowZkProofSystem(
         val circuitVersion = circuitVersionOf(descriptor)
 
         val prover = initializeProver(
-            circuit = ByteBuffer.wrap(circuitBytes),
+            circuit = directByteBuffer(circuitBytes),
             circuitVersion = circuitVersion,
             numAttributes = numAttributes.toUByte(),
         )
@@ -193,18 +205,27 @@ class LongfellowZkProofSystem(
     }
 
     /**
-     * Decompresses [compressedBytes] to the exact size recorded in
-     * [ZkCircuitDescriptor.artifact]'s `uncompressed.size` when known (zstd
-     * needs the output buffer size up front for a single-pass decompress);
-     * falls back to a generous fixed size if that metadata is missing.
+     * Decompresses [compressedBytes] to the exact size recorded in the
+     * zstd frame's own header (`Zstd.getFrameContentSize`) when present -
+     * these circuits compress at roughly 300-400x (a 319KB real V8 2-attribute
+     * circuit decompresses to ~104MB, confirmed via `zstd -l`), so any fixed
+     * multiplier guess is fragile; falls back to
+     * [ZkCircuitDescriptor.artifact]'s `uncompressed.size` catalog metadata,
+     * and only as a last resort to a generous fixed multiplier.
      */
     private fun decompress(compressedBytes: ByteArray, descriptor: ZkCircuitDescriptor): ByteArray {
-        val uncompressedSize = descriptor.artifact?.uncompressed?.size
-        val outputSize = if (uncompressedSize != null && uncompressedSize > 0) {
-            uncompressedSize
+        val frameSize = Zstd.getFrameContentSize(compressedBytes)
+        val outputSize = if (frameSize > 0) {
+            frameSize
         } else {
-            Timber.w("Circuit '${descriptor.id}' artifact has no uncompressed size recorded; guessing buffer size")
-            compressedBytes.size.toLong() * 20
+            val uncompressedSize = descriptor.artifact?.uncompressed?.size
+            if (uncompressedSize != null && uncompressedSize > 0) {
+                Timber.w("Circuit '${descriptor.id}' zstd frame has no embedded content size; using catalog metadata")
+                uncompressedSize
+            } else {
+                Timber.w("Circuit '${descriptor.id}' has no known uncompressed size; guessing buffer size")
+                compressedBytes.size.toLong() * 400
+            }
         }
         return Zstd.decompress(compressedBytes, outputSize.toInt())
     }

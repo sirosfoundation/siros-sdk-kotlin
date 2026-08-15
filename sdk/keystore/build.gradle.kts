@@ -48,9 +48,25 @@ dependencies {
     // already-decompressed bytes (confirmed against wallet-frontend's
     // feat/longfellow-zk reference implementation) - decompression is the
     // caller's responsibility, not the native crate's.
-    implementation("com.github.luben:zstd-jni:1.5.6-6")
+    //
+    // The `@aar` classifier is required on Android: the plain jar artifact
+    // only bundles desktop/server-glibc native libraries (linux/aarch64,
+    // freebsd, aix, ...), never real Android/Bionic .so files, and silently
+    // resolves at runtime to the wrong one ("Unsupported OS/arch... cannot
+    // find /linux/aarch64/libzstd-jni-....so", a genuine dlopen failure on
+    // a real device, not just a missing-file warning) - confirmed via a
+    // real androidTest run on a Pixel. zstd-jni's own README documents this
+    // separate `zstd-jni.aar` artifact for Android 5.0+.
+    implementation("com.github.luben:zstd-jni:1.5.6-6@aar")
 
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
+
+    // Real-device instrumented tests: the native zk_cred_longfellow/
+    // siros_wscd_manager UniFFI libraries only load on an actual Android
+    // ABI (arm64-v8a/x86_64 inside the AAR), never in a plain JVM unit
+    // test - see LongfellowZkVectorTest (androidTest), which needs these.
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
 }
