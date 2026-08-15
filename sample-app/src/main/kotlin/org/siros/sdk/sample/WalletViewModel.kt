@@ -1002,15 +1002,16 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     credentialName = credential.metadata?.name ?: credential.format,
                     issuerName = credential.metadata?.issuer?.name ?: issuerId,
                 ),
+                replacesBatchId = credential.batchId,
             )
         }
     }
 
-    private fun startIssuanceByOffer(offer: CredentialOffer) {
-        lastFlowRetry = { startIssuanceByOffer(offer) }
+    private fun startIssuanceByOffer(offer: CredentialOffer, replacesBatchId: Long? = null) {
+        lastFlowRetry = { startIssuanceByOffer(offer, replacesBatchId) }
         viewModelScope.launch {
             try {
-                wallet.startIssuanceByOffer(offer)
+                wallet.startIssuanceByOffer(offer, replacesBatchId)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start issuance for ${offer.credentialConfigurationId}", e)
                 _errorMessage.value = e.message ?: "Failed to start issuance"

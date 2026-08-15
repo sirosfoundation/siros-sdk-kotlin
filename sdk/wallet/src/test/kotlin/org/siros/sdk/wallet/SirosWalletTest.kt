@@ -2442,6 +2442,84 @@ class SirosWalletTest {
         }
     }
 
+    /**
+     * Regression test for a real bug reported via live device testing:
+     * long-press "Renew" on a credential whose batch had no stored
+     * refresh_token fell back to [SirosWallet.startIssuanceByOffer] with no
+     * lineage tracking at all, so the old batch was never deleted - the user
+     * ended up with two credentials of the same type instead of one renewed
+     * one. [SirosWallet.startIssuanceByOffer]'s new `replacesBatchId`
+     * parameter wires the same `pendingRenewalSourceBatchId` batch-
+     * replacement logic [SirosWallet.renewCredential]'s silent path already
+     * used into this fallback path too.
+     */
+    @Test
+    fun startIssuanceByOffer_withReplacesBatchId_deletesOldBatch_onFlowComplete() = runTest(dispatcher) {
+        val oldCred = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJvbGQiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6OTk5OTk5OTk5OX0."
+        val newCred = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJuZXciLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6OTk5OTk5OTk5OX0."
+        val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
+        val store = FakeCredentialStore(
+            mutableListOf(
+                StoredCredential(
+                    id = 111L,
+                    format = "dc+sd-jwt",
+                    raw = oldCred,
+                    credentialIssuerIdentifier = "https://issuer.example.com",
+                    credentialConfigurationId = "pid",
+                    batchId = 555L,
+                    instanceId = 0,
+                ),
+            ),
+        )
+        val keystore = mockk<KeystoreManager>()
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        var privateDataJwe: String? = null
+        every { keystore.isUnlocked } returns true
+        every { sessionStore.privateDataJwe } answers { privateDataJwe }
+        every { sessionStore.privateDataJwe = any() } answers { privateDataJwe = firstArg() }
+        coEvery { keystore.exportEncryptedContainer() } returns """{"prfKeys":[],"jwe":"updated-jwe"}""".toByteArray()
+        coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+        val engine = mockEngineConstructor(flowComplete = completeFlow)
+        every { engine.startIssuance(any(), any(), any(), any(), any()) } just runs
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to sessionStore,
+            "apiClient" to apiClient,
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        wallet.startIssuanceByOffer(
+            org.siros.sdk.credentials.CredentialOffer(
+                credentialConfigurationId = "pid",
+                credentialIssuerIdentifier = "https://issuer.example.com",
+                credentialName = "Personal ID",
+                issuerName = "Issuer",
+            ),
+            replacesBatchId = 555L,
+        )
+        advanceUntilIdle()
+
+        completeFlow.emit(
+            FlowCompleteMessage(
+                flowId = "flow-renew-fallback",
+                credentials = listOf(CredentialResult(format = "dc+sd-jwt", credential = newCred)),
+            )
+        )
+        advanceUntilIdle()
+
+        val stored = store.getAll()
+        assertEquals(1, stored.size)
+        assertEquals(newCred, stored.single().raw)
+        assertTrue(stored.none { it.batchId == 555L })
+    }
+
     @Test
     fun connectEngine_flowError_notifies_listener_and_returns_ready() = runTest(dispatcher) {
         val errorFlow = MutableSharedFlow<FlowErrorMessage>()
