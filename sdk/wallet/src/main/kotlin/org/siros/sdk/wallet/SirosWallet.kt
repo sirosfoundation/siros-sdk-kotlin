@@ -1842,17 +1842,32 @@ class SirosWallet private constructor(
         val matchResults = dcqlOutput.queryResults
         val candidates = matchResults.flatMap { it.candidates }.distinctBy { it.id }
 
+        // Which query result actually governs each candidate - same
+        // first-match selection used below when building tokens (a
+        // credential id can appear as a candidate under more than one query,
+        // e.g. one plain and one "mso_mdoc_zk", so this must be resolved
+        // once and reused everywhere rather than re-derived with different
+        // semantics in different places).
+        val matchResultByCredentialId = candidates.associate { c ->
+            c.id to matchResults.firstOrNull { r -> r.candidates.any { it.id == c.id } }
+        }
+
         // Which candidates will actually be presented as a ZK proof (vs a
         // raw disclosure) for THIS request - a credential's stored format is
         // always plain "mso_mdoc" even under a ZK query (see
         // CredentialMatcher.matchesFormat), so this must come from the
-        // MATCHED query's format, not the candidate's own. Feeds
-        // eligibleInstances below so CredentialConsumptionPolicy.CONSUME_NON_ZKP
-        // actually distinguishes the two, per that policy's own doc comment.
-        val zkRequestedIds = matchResults
-            .filter { it.format?.equals("mso_mdoc_zk", ignoreCase = true) == true }
-            .flatMap { it.candidates }
-            .mapTo(HashSet()) { it.id }
+        // MATCHED query's format, not the candidate's own. Derived from
+        // [matchResultByCredentialId]'s first-match query per id, not from
+        // "is this id a candidate under ANY zk query" - a credential that
+        // also matches some other, non-zk query first would otherwise be
+        // wrongly marked zk here even though the token-building loop below
+        // (which also uses first-match) will actually raw-disclose it.
+        // Feeds eligibleInstances below so
+        // CredentialConsumptionPolicy.CONSUME_NON_ZKP actually distinguishes
+        // the two, per that policy's own doc comment.
+        val zkRequestedIds = matchResultByCredentialId
+            .filterValues { it?.format?.equals("mso_mdoc_zk", ignoreCase = true) == true }
+            .keys
 
         // Unlike the QR/redirect flow, credential selection and consent
         // already happened natively - the OS's own credential picker (see
@@ -1908,7 +1923,7 @@ class SirosWallet private constructor(
         val tokensByQueryId = linkedMapOf<String, MutableList<String>>()
         for (id in selectedIds) {
             val cred = allCreds.find { it.id == id } ?: continue
-            val matchResult = matchResults.firstOrNull { r -> r.candidates.any { it.id == id } }
+            val matchResult = matchResultByCredentialId[id]
             val queryId = matchResult?.queryId ?: "_default"
             val disclosedClaims = matchResult?.requestedClaims?.mapNotNull { it.lastOrNull() }
 
