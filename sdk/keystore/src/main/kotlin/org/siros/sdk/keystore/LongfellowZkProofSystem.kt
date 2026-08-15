@@ -180,11 +180,15 @@ class LongfellowZkProofSystem(
         // circuit itself asserts) is computed locally so the caller can
         // display/track it, mirroring the feat/longfellow-zk reference's own
         // separate computePPID() step.
-        val seedItem = document.issuerSigned.nameSpaces[namespace]
-            ?.firstOrNull {
-                it.item.elementIdentifier == PSEUDONYM_CLAIM ||
-                    it.item.elementIdentifier == PSEUDONYM_SEED_CLAIM
-            }
+        // PSEUDONYM_SEED_CLAIM is checked first, deliberately: it's the only
+        // one that should ever actually be present in a credential (the
+        // issuer's own stored claim - see PSEUDONYM_SEED_CLAIM's doc
+        // comment), so an explicit priority order removes any ambiguity
+        // about which wins if a namespace somehow contained both, rather
+        // than relying on whatever order nameSpaces happens to iterate in.
+        val namespaceItems = document.issuerSigned.nameSpaces[namespace]
+        val seedItem = namespaceItems?.firstOrNull { it.item.elementIdentifier == PSEUDONYM_SEED_CLAIM }
+            ?: namespaceItems?.firstOrNull { it.item.elementIdentifier == PSEUDONYM_CLAIM }
         val pseudonym = seedItem?.let { sha256(it.item.elementValue.GetByteString() + verifierContext) }
 
         return ZkProofResult(
