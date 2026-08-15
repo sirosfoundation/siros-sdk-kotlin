@@ -32,6 +32,9 @@
     <string name="add_credential_empty">Ei saatavilla olevia todistuksia</string>
     <string name="add_credential_retry">Yritä uudelleen</string>
     <string name="nav_back">Takaisin</string>
+    <string name="credential_format_mdoc">mDoc</string>
+    <string name="credential_format_sd_jwt">SD-JWT VC</string>
+    <string name="credential_format_jwt_vc">JWT VC</string>
 
     <!-- Presentation consent screen -->
     <string name="presentation_consent_title">Todistuspyyntö</string>
