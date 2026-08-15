@@ -65,6 +65,21 @@ object CredentialMatcher {
         val candidates: List<StoredCredential>,
         /** Claim paths requested by the verifier. */
         val requestedClaims: List<List<String>>,
+        /**
+         * Parsed `meta.zk_system_type` (present only when [format] is
+         * `"mso_mdoc_zk"`) - the verifier's own list of acceptable ZK proof
+         * systems, in priority order, per multipaz's wire convention
+         * (confirmed via `balfanz/multipaz`'s `ppid` branch `verifier.kt`).
+         * Feed to [ZkProofSystem.matchingSpec]/[ZkProofSystemRegistry.resolve]
+         * to pick which one (if any) this wallet can actually satisfy.
+         */
+        val zkSystemTypes: List<ZkSystemSpec>? = null,
+        /**
+         * Parsed `meta.ppid_context`, if the verifier supplied one - see
+         * [VerifierIdentity.ppidContext]'s doc comment. `null` is a normal,
+         * common case (most requests won't set this).
+         */
+        val ppidContext: String? = null,
     )
 
     /**
@@ -248,6 +263,9 @@ object CredentialMatcher {
             ?.toSet()
 
         val doctypeValue = meta?.get("doctype_value")?.jsonPrimitive?.contentOrNull
+        val zkSystemTypes = meta?.get("zk_system_type")?.jsonArray?.mapNotNull { parseZkSystemSpec(it) }
+            ?.takeIf { it.isNotEmpty() }
+        val ppidContext = meta?.get("ppid_context")?.jsonPrimitive?.contentOrNull
 
         val matched = credentials.filter { cred ->
             matchesFormat(cred, format) &&
@@ -262,11 +280,35 @@ object CredentialMatcher {
             format = format,
             candidates = matched,
             requestedClaims = claims,
+            zkSystemTypes = zkSystemTypes,
+            ppidContext = ppidContext,
         )
+    }
+
+    /**
+     * Parses one entry of a DCQL query's `meta.zk_system_type` array into a
+     * [ZkSystemSpec] - `{id, system, params}`, mirroring multipaz's own wire
+     * shape (confirmed via `balfanz/multipaz`'s `ppid` branch `verifier.kt`).
+     */
+    private fun parseZkSystemSpec(element: JsonElement): ZkSystemSpec? {
+        val obj = element as? JsonObject ?: return null
+        val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: return null
+        val system = obj["system"]?.jsonPrimitive?.contentOrNull ?: return null
+        val params = obj["params"]?.jsonObject?.mapValues { (_, v) -> v.jsonPrimitive.contentOrNull ?: "" }
+            ?: emptyMap()
+        return ZkSystemSpec(id = id, system = system, params = params)
     }
 
     private fun matchesFormat(credential: StoredCredential, format: String?): Boolean {
         if (format == null) return true
+        if (format.equals("mso_mdoc_zk", ignoreCase = true)) {
+            // A verifier requesting a ZK-wrapped presentation ("mso_mdoc_zk")
+            // still matches a credential stored in the ordinary "mso_mdoc"
+            // shape - producing a ZK proof is a presentation-time transform
+            // (see ZkProofSystem.generateProof), not a distinct storage
+            // format. There is no separate on-device "ZK credential" to store.
+            return credential.format.equals("mso_mdoc", ignoreCase = true)
+        }
         return credential.format.equals(format, ignoreCase = true)
     }
 
