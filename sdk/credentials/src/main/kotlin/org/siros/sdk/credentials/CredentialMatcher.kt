@@ -148,7 +148,7 @@ object CredentialMatcher {
         } ?: false
 
     /**
-     * Zeroes out candidates for any [matchResults] query requesting
+     * Zeroes out candidates for any query in [output] requesting
      * `"mso_mdoc_zk"` - for a transport that can't actually generate a ZK
      * proof (today: everything except `SirosWallet.handleDCAPIRequest`,
      * which is the only place [ZkProofSystemRegistry] is wired in).
@@ -160,15 +160,26 @@ object CredentialMatcher {
      * request, but the engine's own `sign_presentation` handler has no ZK
      * branch and would silently fall through to a full raw mdoc disclosure
      * instead - the opposite of what was requested and consented to.
+     *
+     * Takes/returns the full [DcqlMatchOutput], not just `queryResults` -
+     * [output]'s own `satisfiableOptions` was computed from the ORIGINAL
+     * (zk-inclusive) match results, so a `credential_sets` option depending
+     * solely on a now-emptied zk query would otherwise still be reported as
+     * satisfiable. Recomputes it via [findSatisfiableOptions] against the
+     * filtered results so both stay consistent.
      */
-    fun dropUnsupportedZkQueries(matchResults: List<MatchResult>): List<MatchResult> =
-        matchResults.map { r ->
+    fun dropUnsupportedZkQueries(output: DcqlMatchOutput): DcqlMatchOutput {
+        val filteredResults = output.queryResults.map { r ->
             if (r.format?.equals("mso_mdoc_zk", ignoreCase = true) == true) {
                 r.copy(candidates = emptyList())
             } else {
                 r
             }
         }
+        val satisfiableOptions = output.credentialSets?.let { findSatisfiableOptions(it, filteredResults) }
+            ?: output.satisfiableOptions
+        return output.copy(queryResults = filteredResults, satisfiableOptions = satisfiableOptions)
+    }
 
     /**
      * Match stored credentials against a full DCQL query, including `credential_sets`.

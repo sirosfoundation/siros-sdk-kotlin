@@ -3627,8 +3627,11 @@ class SirosWallet private constructor(
                     // falsely match here and later silently fall through to a
                     // full raw disclosure at sign time (see
                     // CredentialMatcher.dropUnsupportedZkQueries's own doc
-                    // comment).
-                    val matchResults = CredentialMatcher.dropUnsupportedZkQueries(dcqlOutput.queryResults)
+                    // comment). Filters the WHOLE output, not just
+                    // queryResults, so satisfiableOptions stays consistent
+                    // with the now-emptied zk query candidates.
+                    val filteredOutput = CredentialMatcher.dropUnsupportedZkQueries(dcqlOutput)
+                    val matchResults = filteredOutput.queryResults
                     val candidates = matchResults.flatMap { it.candidates }.distinctBy { it.id }
 
                     // Let the app filter further via user selection
@@ -3638,8 +3641,8 @@ class SirosWallet private constructor(
                                 verifierName = null,
                                 matchResults = matchResults,
                                 candidates = candidates,
-                                credentialSets = dcqlOutput.credentialSets,
-                                satisfiableOptions = dcqlOutput.satisfiableOptions,
+                                credentialSets = filteredOutput.credentialSets,
+                                satisfiableOptions = filteredOutput.satisfiableOptions,
                             )
                         )
                     } else {
@@ -4285,18 +4288,26 @@ class SirosWallet private constructor(
                 // this engine-relayed flow has no ZK proof generation, so
                 // drop "mso_mdoc_zk" queries' candidates rather than falsely
                 // match here (see CredentialMatcher.dropUnsupportedZkQueries).
+                // This call site never surfaces credentialSets/
+                // satisfiableOptions downstream (see PresentationRequest
+                // below), so a bare-queryResults wrapper is enough.
+                val rawResults = if (dcqlQuery != null) {
+                    CredentialMatcher.match(dcqlQuery, allCreds)
+                } else {
+                    listOf(CredentialMatcher.MatchResult(
+                        queryId = "_default",
+                        format = null,
+                        candidates = allCreds,
+                        requestedClaims = emptyList(),
+                    ))
+                }
                 val matchResults = CredentialMatcher.dropUnsupportedZkQueries(
-                    if (dcqlQuery != null) {
-                        CredentialMatcher.match(dcqlQuery, allCreds)
-                    } else {
-                        listOf(CredentialMatcher.MatchResult(
-                            queryId = "_default",
-                            format = null,
-                            candidates = allCreds,
-                            requestedClaims = emptyList(),
-                        ))
-                    }
-                )
+                    CredentialMatcher.DcqlMatchOutput(
+                        queryResults = rawResults,
+                        credentialSets = null,
+                        satisfiableOptions = emptyList(),
+                    )
+                ).queryResults
                 val candidates = matchResults.flatMap { it.candidates }.distinctBy { it.id }
 
                 val listener = eventListener
