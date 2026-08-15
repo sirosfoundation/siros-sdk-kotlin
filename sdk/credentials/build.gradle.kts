@@ -36,6 +36,14 @@ dependencies {
     // and re-exposes CBORObject-typed values from the mdoc parsing model.
     api(libs.upokecenter.cbor)
 
+    // zk-cred-longfellow UniFFI bindings (AAR from local maven or CI
+    // release artifact). The AAR is built by `make aar` in that crate.
+    // For local development, publish to mavenLocal:
+    //   cd zk-cred-longfellow && make aar && make publish-local
+    implementation("org.siros:zk-cred-longfellow:0.1.0")
+    // JNA is required by UniFFI-generated Kotlin bindings.
+    implementation("net.java.dev.jna:jna:5.14.0@aar")
+
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
