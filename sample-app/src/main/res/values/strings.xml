@@ -35,6 +35,11 @@
     <string name="add_credential_empty">No credentials available</string>
     <string name="add_credential_retry">Try Again</string>
     <string name="nav_back">Back</string>
+    <!-- Credential format badges shown on the Add Credential list, to tell apart
+         same-named offers (e.g. a PID issued both as mdoc and SD-JWT VC) -->
+    <string name="credential_format_mdoc">mDoc</string>
+    <string name="credential_format_sd_jwt">SD-JWT VC</string>
+    <string name="credential_format_jwt_vc">JWT VC</string>
 
     <!-- Presentation consent screen -->
     <string name="presentation_consent_title">Credential Request</string>

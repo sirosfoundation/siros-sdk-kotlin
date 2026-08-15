@@ -723,6 +723,7 @@ class SirosWallet private constructor(
                             credentialIssuerIdentifier = issuerIdent,
                             credentialName = cred.format,
                             issuerName = issuerIdent,
+                            format = cred.format,
                         ),
                         mddlSchema = mddlSchema,
                     )
@@ -757,6 +758,7 @@ class SirosWallet private constructor(
                             credentialIssuerIdentifier = issuerIdent ?: "",
                             credentialName = cred.format,
                             issuerName = issuerIdent ?: "",
+                            format = cred.format,
                         ),
                         vctm = it,
                         rawCredential = cred.raw,
@@ -1449,6 +1451,7 @@ class SirosWallet private constructor(
             credentialName = credName,
             credentialDescription = credDisplay?.description,
             issuerName = issuerName,
+            format = config.format,
             backgroundColor = credDisplay?.backgroundColor
                 ?: issuerDisplay?.backgroundColor,
             textColor = credDisplay?.textColor

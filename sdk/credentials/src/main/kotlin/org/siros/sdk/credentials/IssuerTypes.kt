@@ -90,6 +90,12 @@ data class CredentialOffer(
     val credentialName: String,
     val credentialDescription: String? = null,
     val issuerName: String,
+    /**
+     * OID4VCI credential format (e.g. `"mso_mdoc"`, `"dc+sd-jwt"`) - lets a
+     * picker UI distinguish same-named offers from the same issuer, such as
+     * an ARF PID issued as either an mdoc or an SD-JWT VC.
+     */
+    val format: String = "",
     val backgroundColor: String? = null,
     val textColor: String? = null,
     val logoUri: String? = null,

@@ -99,6 +99,10 @@ fun AddCredentialScreen(
                             color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                    formatLabel(pendingOffer.format)?.let { label ->
+                        Spacer(modifier = Modifier.height(8.dp))
+                        FormatBadge(label)
+                    }
                 }
             },
             confirmButton = {
@@ -209,7 +213,7 @@ private fun CredentialOfferRow(
                 overflow = TextOverflow.Ellipsis,
             )
             Spacer(modifier = Modifier.height(2.dp))
-            // Issuer badge
+            // Issuer badge + format
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     modifier = Modifier
@@ -231,9 +235,47 @@ private fun CredentialOfferRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
                 )
+                formatLabel(offer.format)?.let { label ->
+                    Spacer(modifier = Modifier.width(6.dp))
+                    FormatBadge(label)
+                }
             }
         }
+    }
+}
+
+/**
+ * Maps an OID4VCI `format` identifier to a short, user-facing label
+ * distinguishing same-named offers (e.g. a PID issued as both mdoc and
+ * SD-JWT VC). Returns null for an unknown/blank format rather than showing
+ * a raw wire identifier like "dc+sd-jwt" to the user.
+ */
+@Composable
+private fun formatLabel(format: String): String? = when {
+    format.equals("mso_mdoc", ignoreCase = true) ||
+        format.equals("mso_mdoc_zk", ignoreCase = true) -> stringResource(R.string.credential_format_mdoc)
+    format.equals("dc+sd-jwt", ignoreCase = true) ||
+        format.equals("vc+sd-jwt", ignoreCase = true) -> stringResource(R.string.credential_format_sd_jwt)
+    format.equals("jwt_vc_json", ignoreCase = true) -> stringResource(R.string.credential_format_jwt_vc)
+    else -> null
+}
+
+@Composable
+private fun FormatBadge(label: String) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(horizontal = 6.dp, vertical = 1.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
     }
 }
 
