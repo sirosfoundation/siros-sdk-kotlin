@@ -32,8 +32,9 @@
     <string name="add_credential_empty">Nenhuma credencial disponível</string>
     <string name="add_credential_retry">Tentar Novamente</string>
     <string name="nav_back">Voltar</string>
-    <string name="credential_capability_in_person">Funciona presencialmente</string>
-    <string name="credential_capability_online_only">Apenas online</string>
+    <string name="credential_capability_online">Pode ser apresentado online</string>
+    <string name="credential_capability_proximity">Pode ser apresentado presencialmente ao tocar com o telemóvel</string>
+    <string name="credential_capability_zkp">Pode provar a sua identidade sem revelar todos os seus dados</string>
 
     <!-- Presentation consent screen -->
     <string name="presentation_consent_title">Solicitação de Credencial</string>
