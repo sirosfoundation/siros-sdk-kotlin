@@ -32,8 +32,9 @@
     <string name="add_credential_empty">Inga intyg tillgängliga</string>
     <string name="add_credential_retry">Försök igen</string>
     <string name="nav_back">Tillbaka</string>
-    <string name="credential_capability_in_person">Fungerar personligen</string>
-    <string name="credential_capability_online_only">Endast online</string>
+    <string name="credential_capability_online">Kan visas online</string>
+    <string name="credential_capability_proximity">Kan visas personligen genom att trycka med telefonen</string>
+    <string name="credential_capability_zkp">Kan bevisa din identitet utan att avslöja alla dina uppgifter</string>
 
     <!-- Presentation consent screen -->
     <string name="presentation_consent_title">Intygsförfrågan</string>

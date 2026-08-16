@@ -35,11 +35,12 @@
     <string name="add_credential_empty">No credentials available</string>
     <string name="add_credential_retry">Try Again</string>
     <string name="nav_back">Back</string>
-    <!-- Capability chips on the Add Credential list, to tell apart same-named
-         offers (e.g. a PID issued both as mdoc and SD-JWT VC) in plain
-         language rather than raw wire-format terms -->
-    <string name="credential_capability_in_person">Works in person</string>
-    <string name="credential_capability_online_only">Online only</string>
+    <!-- Capability icon content descriptions on the Add Credential list, to
+         tell apart same-named offers (e.g. a PID issued both as mdoc and
+         SD-JWT VC) in plain language rather than raw wire-format terms -->
+    <string name="credential_capability_online">Can be presented online</string>
+    <string name="credential_capability_proximity">Can be presented in person by tapping your phone</string>
+    <string name="credential_capability_zkp">Can prove your identity without revealing your full details</string>
 
     <!-- Presentation consent screen -->
     <string name="presentation_consent_title">Credential Request</string>

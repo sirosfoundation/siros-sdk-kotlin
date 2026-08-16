@@ -32,8 +32,9 @@
     <string name="add_credential_empty">Δεν υπάρχουν διαθέσιμα πιστοποιητικά</string>
     <string name="add_credential_retry">Δοκιμάστε Ξανά</string>
     <string name="nav_back">Πίσω</string>
-    <string name="credential_capability_in_person">Λειτουργεί αυτοπροσώπως</string>
-    <string name="credential_capability_online_only">Μόνο διαδικτυακά</string>
+    <string name="credential_capability_online">Μπορεί να παρουσιαστεί διαδικτυακά</string>
+    <string name="credential_capability_proximity">Μπορεί να παρουσιαστεί αυτοπροσώπως αγγίζοντας το τηλέφωνό σας</string>
+    <string name="credential_capability_zkp">Μπορεί να αποδείξει την ταυτότητά σας χωρίς να αποκαλύψει όλα τα στοιχεία σας</string>
 
     <!-- Presentation consent screen -->
     <string name="presentation_consent_title">Αίτημα Πιστοποιητικού</string>

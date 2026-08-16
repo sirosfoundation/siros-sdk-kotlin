@@ -10,6 +10,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Contactless
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.ui.layout.ContentScale
 import coil.compose.SubcomposeAsyncImageContent
@@ -104,10 +105,8 @@ fun AddCredentialScreen(
                             color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    capabilityFor(pendingOffer.format)?.let { capability ->
-                        Spacer(modifier = Modifier.height(8.dp))
-                        CapabilityChip(capability)
-                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    CapabilityIconRow(capabilityFlagsFor(pendingOffer.format))
                 }
             },
             confirmButton = {
@@ -198,49 +197,53 @@ private fun CredentialOfferRow(
         val fgColor = offer.textColor?.let { parseColor(it) }
             ?: MaterialTheme.colorScheme.onSecondaryContainer
 
-        Box(
-            modifier = Modifier
-                .height(40.dp)
-                .aspectRatio(15.86f / 10f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(bgColor),
-            contentAlignment = Alignment.Center,
-        ) {
-            val initial = @Composable {
-                Text(
-                    text = offer.credentialName.take(1).uppercase(),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = fgColor,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-            if (offer.logoUri != null) {
-                // SubcomposeAsyncImage, not AsyncImage: a plain AsyncImage
-                // renders nothing at all while loading or on a failed fetch
-                // (a real issue found via live device testing - offers whose
-                // logo URI didn't resolve showed a blank square instead of
-                // ever falling back to the initial-letter placeholder).
-                coil.compose.SubcomposeAsyncImage(
-                    model = coilLogoModel(offer.logoUri!!),
-                    contentDescription = offer.credentialName,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                ) {
-                    if (painter.state is coil.compose.AsyncImagePainter.State.Success) {
-                        SubcomposeAsyncImageContent()
-                    } else {
-                        // SubcomposeAsyncImage's content slot doesn't inherit the
-                        // outer Box's contentAlignment - without this, the
-                        // fallback letter rendered top-left instead of centered
-                        // (confirmed via live device screenshot).
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            initial()
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(
+                modifier = Modifier
+                    .height(40.dp)
+                    .aspectRatio(15.86f / 10f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(bgColor),
+                contentAlignment = Alignment.Center,
+            ) {
+                val initial = @Composable {
+                    Text(
+                        text = offer.credentialName.take(1).uppercase(),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = fgColor,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+                if (offer.logoUri != null) {
+                    // SubcomposeAsyncImage, not AsyncImage: a plain AsyncImage
+                    // renders nothing at all while loading or on a failed fetch
+                    // (a real issue found via live device testing - offers whose
+                    // logo URI didn't resolve showed a blank square instead of
+                    // ever falling back to the initial-letter placeholder).
+                    coil.compose.SubcomposeAsyncImage(
+                        model = coilLogoModel(offer.logoUri!!),
+                        contentDescription = offer.credentialName,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    ) {
+                        if (painter.state is coil.compose.AsyncImagePainter.State.Success) {
+                            SubcomposeAsyncImageContent()
+                        } else {
+                            // SubcomposeAsyncImage's content slot doesn't inherit the
+                            // outer Box's contentAlignment - without this, the
+                            // fallback letter rendered top-left instead of centered
+                            // (confirmed via live device screenshot).
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                initial()
+                            }
                         }
                     }
+                } else {
+                    initial()
                 }
-            } else {
-                initial()
             }
+            Spacer(modifier = Modifier.height(4.dp))
+            CapabilityIconRow(capabilityFlagsFor(offer.format))
         }
 
         Spacer(modifier = Modifier.width(12.dp))
@@ -291,63 +294,52 @@ private fun CredentialOfferRow(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
-                capabilityFor(offer.format)?.let { capability ->
-                    Spacer(modifier = Modifier.width(6.dp))
-                    CapabilityChip(capability)
-                }
             }
         }
     }
 }
 
-/** A plain-language, icon-backed signal for what a credential format lets the holder DO. */
-private data class FormatCapability(val icon: ImageVector, val label: String)
-
 /**
- * Maps an OID4VCI `format` identifier to a user-meaningful capability signal,
- * not the raw wire term - a user has no reason to know what "mDoc" or
- * "SD-JWT" mean, but "works in person" vs "online only" is exactly the
- * distinction they need to pick between two same-named offers (e.g. a PID
- * issued as both an mdoc and an SD-JWT VC). mdoc formats support both this
- * wallet's BLE/NFC proximity presentation AND remote OpenID4VP/DC API use;
- * the SD-JWT/JWT-VC formats here are remote-presentation only. Returns null
- * for an unrecognized format rather than guessing.
+ * Which of a credential format's presentation capabilities apply - shown as
+ * a small icon row under the credential's mini-card badge instead of a text
+ * label, since a user has no reason to know what "mDoc" or "SD-JWT" mean.
+ * mdoc formats support this wallet's BLE/NFC proximity presentation AND
+ * remote OpenID4VP/DC API use, AND can be presented as a zero-knowledge
+ * proof via DC API (see LongfellowZkProofSystem/CredentialMatcher's
+ * mso_mdoc_zk matching - a ZK query matches a plain mso_mdoc credential,
+ * there is no separately-stored "zk format"). The SD-JWT/JWT-VC formats
+ * here are remote-presentation only, with no ZK support in this system yet.
  */
-@Composable
-private fun capabilityFor(format: String): FormatCapability? = when {
-    format.equals("mso_mdoc", ignoreCase = true) ||
-        format.equals("mso_mdoc_zk", ignoreCase = true) ->
-        FormatCapability(Icons.Filled.Contactless, stringResource(R.string.credential_capability_in_person))
-    format.equals("dc+sd-jwt", ignoreCase = true) ||
-        format.equals("vc+sd-jwt", ignoreCase = true) ||
-        format.equals("jwt_vc_json", ignoreCase = true) ->
-        FormatCapability(Icons.Filled.Public, stringResource(R.string.credential_capability_online_only))
-    else -> null
+private data class CapabilityFlags(val online: Boolean, val proximity: Boolean, val zkp: Boolean)
+
+private fun capabilityFlagsFor(format: String): CapabilityFlags {
+    val isMdoc = format.equals("mso_mdoc", ignoreCase = true) ||
+        format.equals("mso_mdoc_zk", ignoreCase = true)
+    return CapabilityFlags(online = true, proximity = isMdoc, zkp = isMdoc)
 }
 
 @Composable
-private fun CapabilityChip(capability: FormatCapability) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .clip(RoundedCornerShape(4.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(horizontal = 6.dp, vertical = 1.dp),
-    ) {
-        Icon(
-            capability.icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(12.dp),
-        )
-        Spacer(modifier = Modifier.width(3.dp))
-        Text(
-            text = capability.label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-        )
+private fun CapabilityIconRow(flags: CapabilityFlags) {
+    Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        CapabilityIcon(Icons.Filled.Public, flags.online, stringResource(R.string.credential_capability_online))
+        CapabilityIcon(Icons.Filled.Contactless, flags.proximity, stringResource(R.string.credential_capability_proximity))
+        CapabilityIcon(Icons.Filled.Shield, flags.zkp, stringResource(R.string.credential_capability_zkp))
     }
+}
+
+/** Enabled capabilities render at full tint; inapplicable ones are dimmed rather than hidden, so the icon set always lines up the same way across rows. */
+@Composable
+private fun CapabilityIcon(icon: ImageVector, enabled: Boolean, description: String) {
+    Icon(
+        icon,
+        contentDescription = if (enabled) description else null,
+        tint = if (enabled) {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
+        },
+        modifier = Modifier.size(14.dp),
+    )
 }
 
 private fun parseColor(hex: String): Color? {
