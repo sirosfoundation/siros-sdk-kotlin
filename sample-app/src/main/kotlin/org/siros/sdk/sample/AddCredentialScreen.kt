@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -187,6 +188,11 @@ private fun CredentialOfferRow(
         // Credential badge: the issuer's own logo image when published
         // (credential_metadata.display[].logo - real graphical metadata, not
         // just a color), falling back to a colored initial letter otherwise.
+        // Sized to the standard ID-1/credit-card ratio (15.86:10), not
+        // square: these issuers' "logo" is frequently the full card-body
+        // template (e.g. a ~829x504 SVG with {{given_name}}-style
+        // placeholders), not a small icon - a square Crop just showed an
+        // unrecognizable, randomly-cropped sliver of it.
         val bgColor = offer.backgroundColor?.let { parseColor(it) }
             ?: MaterialTheme.colorScheme.secondaryContainer
         val fgColor = offer.textColor?.let { parseColor(it) }
@@ -194,7 +200,8 @@ private fun CredentialOfferRow(
 
         Box(
             modifier = Modifier
-                .size(40.dp)
+                .height(40.dp)
+                .aspectRatio(15.86f / 10f)
                 .clip(RoundedCornerShape(8.dp))
                 .background(bgColor),
             contentAlignment = Alignment.Center,
@@ -216,13 +223,19 @@ private fun CredentialOfferRow(
                 coil.compose.SubcomposeAsyncImage(
                     model = coilLogoModel(offer.logoUri!!),
                     contentDescription = offer.credentialName,
-                    modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)),
+                    modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
                 ) {
                     if (painter.state is coil.compose.AsyncImagePainter.State.Success) {
                         SubcomposeAsyncImageContent()
                     } else {
-                        initial()
+                        // SubcomposeAsyncImage's content slot doesn't inherit the
+                        // outer Box's contentAlignment - without this, the
+                        // fallback letter rendered top-left instead of centered
+                        // (confirmed via live device screenshot).
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            initial()
+                        }
                     }
                 }
             } else {
