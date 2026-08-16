@@ -8,7 +8,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Contactless
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.ui.layout.ContentScale
 
 
 import androidx.compose.material3.Button
@@ -99,9 +102,9 @@ fun AddCredentialScreen(
                             color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    formatLabel(pendingOffer.format)?.let { label ->
+                    capabilityFor(pendingOffer.format)?.let { capability ->
                         Spacer(modifier = Modifier.height(8.dp))
-                        FormatBadge(label)
+                        CapabilityChip(capability)
                     }
                 }
             },
@@ -180,7 +183,9 @@ private fun CredentialOfferRow(
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Credential initial badge with background color
+        // Credential badge: the issuer's own logo image when published
+        // (credential_metadata.display[].logo - real graphical metadata, not
+        // just a color), falling back to a colored initial letter otherwise.
         val bgColor = offer.backgroundColor?.let { parseColor(it) }
             ?: MaterialTheme.colorScheme.secondaryContainer
         val fgColor = offer.textColor?.let { parseColor(it) }
@@ -193,17 +198,26 @@ private fun CredentialOfferRow(
                 .background(bgColor),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                text = offer.credentialName.take(1).uppercase(),
-                style = MaterialTheme.typography.titleMedium,
-                color = fgColor,
-                fontWeight = FontWeight.Bold,
-            )
+            if (offer.logoUri != null) {
+                coil.compose.AsyncImage(
+                    model = coilLogoModel(offer.logoUri!!),
+                    contentDescription = offer.credentialName,
+                    modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Text(
+                    text = offer.credentialName.take(1).uppercase(),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = fgColor,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
         }
 
         Spacer(modifier = Modifier.width(12.dp))
 
-        // Credential name + issuer
+        // Credential name + description + issuer
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = offer.credentialName,
@@ -212,8 +226,20 @@ private fun CredentialOfferRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            // Issuer-authored description is often the clearest signal for
+            // telling apart two same-named offers (e.g. "Physical card" vs
+            // "Digital-only ID") - shown here, not just in the confirm
+            // dialog, since that's exactly where users need it.
+            if (!offer.credentialDescription.isNullOrBlank()) {
+                Text(
+                    text = offer.credentialDescription!!,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Spacer(modifier = Modifier.height(2.dp))
-            // Issuer badge + format
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     modifier = Modifier
@@ -237,41 +263,58 @@ private fun CredentialOfferRow(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
-                formatLabel(offer.format)?.let { label ->
+                capabilityFor(offer.format)?.let { capability ->
                     Spacer(modifier = Modifier.width(6.dp))
-                    FormatBadge(label)
+                    CapabilityChip(capability)
                 }
             }
         }
     }
 }
 
+/** A plain-language, icon-backed signal for what a credential format lets the holder DO. */
+private data class FormatCapability(val icon: ImageVector, val label: String)
+
 /**
- * Maps an OID4VCI `format` identifier to a short, user-facing label
- * distinguishing same-named offers (e.g. a PID issued as both mdoc and
- * SD-JWT VC). Returns null for an unknown/blank format rather than showing
- * a raw wire identifier like "dc+sd-jwt" to the user.
+ * Maps an OID4VCI `format` identifier to a user-meaningful capability signal,
+ * not the raw wire term - a user has no reason to know what "mDoc" or
+ * "SD-JWT" mean, but "works in person" vs "online only" is exactly the
+ * distinction they need to pick between two same-named offers (e.g. a PID
+ * issued as both an mdoc and an SD-JWT VC). mdoc formats support both this
+ * wallet's BLE/NFC proximity presentation AND remote OpenID4VP/DC API use;
+ * the SD-JWT/JWT-VC formats here are remote-presentation only. Returns null
+ * for an unrecognized format rather than guessing.
  */
 @Composable
-private fun formatLabel(format: String): String? = when {
+private fun capabilityFor(format: String): FormatCapability? = when {
     format.equals("mso_mdoc", ignoreCase = true) ||
-        format.equals("mso_mdoc_zk", ignoreCase = true) -> stringResource(R.string.credential_format_mdoc)
+        format.equals("mso_mdoc_zk", ignoreCase = true) ->
+        FormatCapability(Icons.Filled.Contactless, stringResource(R.string.credential_capability_in_person))
     format.equals("dc+sd-jwt", ignoreCase = true) ||
-        format.equals("vc+sd-jwt", ignoreCase = true) -> stringResource(R.string.credential_format_sd_jwt)
-    format.equals("jwt_vc_json", ignoreCase = true) -> stringResource(R.string.credential_format_jwt_vc)
+        format.equals("vc+sd-jwt", ignoreCase = true) ||
+        format.equals("jwt_vc_json", ignoreCase = true) ->
+        FormatCapability(Icons.Filled.Public, stringResource(R.string.credential_capability_online_only))
     else -> null
 }
 
 @Composable
-private fun FormatBadge(label: String) {
-    Box(
+private fun CapabilityChip(capability: FormatCapability) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .clip(RoundedCornerShape(4.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .padding(horizontal = 6.dp, vertical = 1.dp),
     ) {
+        Icon(
+            capability.icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(12.dp),
+        )
+        Spacer(modifier = Modifier.width(3.dp))
         Text(
-            text = label,
+            text = capability.label,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,

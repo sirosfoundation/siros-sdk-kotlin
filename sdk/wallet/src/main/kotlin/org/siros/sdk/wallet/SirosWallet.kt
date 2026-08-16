@@ -1465,14 +1465,23 @@ class SirosWallet private constructor(
      * Start an issuance flow for a specific credential offer.
      *
      * Constructs the OID4VCI credential_offer and sends it to the engine.
+     *
+     * @param replacesBatchId when set, this flow's completion supersedes an
+     * existing batch (e.g. [renewCredential]'s fallback to full re-issuance
+     * when no refresh_token is available) - the same batch-replacement/
+     * attribute-diff logic in flow_complete that a silent [renewCredential]
+     * triggers via `pendingRenewalSourceBatchId` applies here too, so the
+     * old batch's credentials are deleted instead of left duplicated
+     * alongside the newly-issued one.
      */
-    suspend fun startIssuanceByOffer(offer: CredentialOffer) {
+    suspend fun startIssuanceByOffer(offer: CredentialOffer, replacesBatchId: Long? = null) {
         val engine = engineSession ?: throw WalletException("Not connected")
         ensureEngineConnected(engine)
         if (issuanceInFlight) {
             throw WalletException("Another issuance is already in progress")
         }
         issuanceInFlight = true
+        pendingRenewalSourceBatchId = replacesBatchId
         try {
             activeOffer = offer
             activeVctm = try {
@@ -2735,12 +2744,19 @@ class SirosWallet private constructor(
      * left [issuanceInFlight] stuck `true` forever, since nothing else was
      * left running to clear it, permanently blocking every future issuance
      * attempt until the app process was killed).
+     *
+     * Also clears [pendingRenewalSourceBatchId]: a renewal attempt (silent
+     * or the full-reissuance fallback) that fails or is cancelled before its
+     * own flow_complete arrives must not leave this set - otherwise the
+     * NEXT, unrelated successful issuance's flow_complete would find it
+     * still set and incorrectly delete that stale batch's credentials.
      */
     private fun resetIssuanceGuards() {
         activeOffer = null
         activeVctm = null
         activeAttestedKeyIds = null
         issuanceInFlight = false
+        pendingRenewalSourceBatchId = null
     }
 
     /**
