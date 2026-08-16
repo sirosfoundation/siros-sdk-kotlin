@@ -12,6 +12,7 @@ import androidx.compose.material.icons.filled.Contactless
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.ui.layout.ContentScale
+import coil.compose.SubcomposeAsyncImageContent
 
 
 import androidx.compose.material3.Button
@@ -198,20 +199,34 @@ private fun CredentialOfferRow(
                 .background(bgColor),
             contentAlignment = Alignment.Center,
         ) {
-            if (offer.logoUri != null) {
-                coil.compose.AsyncImage(
-                    model = coilLogoModel(offer.logoUri!!),
-                    contentDescription = offer.credentialName,
-                    modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)),
-                    contentScale = ContentScale.Crop,
-                )
-            } else {
+            val initial = @Composable {
                 Text(
                     text = offer.credentialName.take(1).uppercase(),
                     style = MaterialTheme.typography.titleMedium,
                     color = fgColor,
                     fontWeight = FontWeight.Bold,
                 )
+            }
+            if (offer.logoUri != null) {
+                // SubcomposeAsyncImage, not AsyncImage: a plain AsyncImage
+                // renders nothing at all while loading or on a failed fetch
+                // (a real issue found via live device testing - offers whose
+                // logo URI didn't resolve showed a blank square instead of
+                // ever falling back to the initial-letter placeholder).
+                coil.compose.SubcomposeAsyncImage(
+                    model = coilLogoModel(offer.logoUri!!),
+                    contentDescription = offer.credentialName,
+                    modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)),
+                    contentScale = ContentScale.Crop,
+                ) {
+                    if (painter.state is coil.compose.AsyncImagePainter.State.Success) {
+                        SubcomposeAsyncImageContent()
+                    } else {
+                        initial()
+                    }
+                }
+            } else {
+                initial()
             }
         }
 
