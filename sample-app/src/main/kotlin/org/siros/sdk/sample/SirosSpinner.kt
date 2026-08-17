@@ -10,6 +10,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.progressSemantics
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -42,6 +43,14 @@ import androidx.compose.ui.unit.dp
  * thin background progress track behind the spinning ring, so real
  * (ticker-smoothed, monotonic) completion information isn't lost even
  * though the spin itself never encodes it.
+ *
+ * Being a raw [Canvas] rather than Material3's `LinearProgressIndicator`,
+ * this composable gets none of that component's built-in accessibility
+ * semantics for free - so [Modifier.progressSemantics] is applied
+ * explicitly below (indeterminate while [progress] is null, matching
+ * `LinearProgressIndicator`'s own indeterminate-vs-determinate semantics
+ * split) to keep TalkBack/other accessibility services announcing progress
+ * the same way they did before this restyle.
  */
 @Composable
 fun SirosSpinner(
@@ -60,7 +69,13 @@ fun SirosSpinner(
     val ringColor = MaterialTheme.colorScheme.primary
     val trackColor = MaterialTheme.colorScheme.outlineVariant
 
-    Box(modifier = modifier.size(size), contentAlignment = Alignment.Center) {
+    val semanticsModifier = if (progress != null) {
+        Modifier.progressSemantics(progress.coerceIn(0f, 1f))
+    } else {
+        Modifier.progressSemantics()
+    }
+
+    Box(modifier = modifier.size(size).then(semanticsModifier), contentAlignment = Alignment.Center) {
         Canvas(modifier = Modifier.size(size)) {
             // strokeWidth = 1 in lucide's 24-unit viewBox -> ~1/24th of the diameter.
             val strokeWidth = (this.size.minDimension / 24f).coerceAtLeast(1.5.dp.toPx())
