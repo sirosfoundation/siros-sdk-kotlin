@@ -1911,10 +1911,26 @@ class SirosWallet private constructor(
                 val credBytes = android.util.Base64.decode(
                     cred.raw, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
                 )
-                val kid = cred.kid
-                    ?: throw WalletException("Credential $id has no key id - cannot generate a ZK proof for it")
+                // cred.kid is commonly null for a softkey-issued credential
+                // with no explicit per-credential key binding (the plain,
+                // non-ZK signMdocPresentation/-ForDCAPI paths tolerate this
+                // via selectSigningKey's null-kid fallback to the only
+                // available key) - keystore.sign() below needs an explicit
+                // key id, so resolve the same default here rather than
+                // treating a null kid as "no key exists".
+                val kid = cred.kid ?: keystore.listKeys().firstOrNull()?.keyId
+                    ?: throw WalletException("No signing key available for credential $id - cannot generate a ZK proof for it")
                 val docType = MdocCbor.parseStoredCredential(credBytes).docType
-                val (system, spec) = zkProofSystemRegistry.resolve(docType, matchResult.zkSystemTypes.orEmpty())
+                // A circuit is compiled for a fixed attribute count, so the
+                // verifier's zk_system_type list must be matched against how
+                // many claims are actually being disclosed here - see
+                // ZkProofSystem.matchingSpec's doc comment. disclosedClaims
+                // already includes "pairwise_pseudonym" whenever a pseudonym
+                // is being requested (see wantsPseudonym below), so this
+                // count already equals generateProof's own effectiveClaims.size.
+                val (system, spec) = zkProofSystemRegistry.resolve(
+                    docType, matchResult.zkSystemTypes.orEmpty(), disclosedClaims?.size ?: 0
+                )
                     ?: throw WalletException(
                         "No registered ZK proof system satisfies the verifier's zk_system_type for $docType"
                     )
@@ -1942,8 +1958,15 @@ class SirosWallet private constructor(
                     verifierIdentity = verifierIdentity,
                     signer = { data -> keystore.sign(kid, data) },
                 )
+                val deviceResponse = buildZkPresentationToken(
+                    credBytes = credBytes,
+                    docType = docType,
+                    spec = spec,
+                    disclosedClaimNames = disclosedClaims ?: emptyList(),
+                    result = result,
+                )
                 android.util.Base64.encodeToString(
-                    result.proofBytes, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+                    deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
                 )
             } else if (cred.format == "mso_mdoc") {
                 val credBytes = android.util.Base64.decode(
@@ -2295,8 +2318,70 @@ class SirosWallet private constructor(
     private val zkProofSystemRegistry: ZkProofSystemRegistry =
         ZkProofSystemRegistry(listOf(LongfellowZkProofSystem(zkCircuitClient)))
 
+    /**
+     * Wraps a raw ZK [result] into the full `{version, status, zkDocuments:
+     * [...]}` DeviceResponse-shaped CBOR structure multipaz's own
+     * `DeviceResponseParser` requires (confirmed via direct source read -
+     * see [MdocDeviceResponseBuilder.buildZkDeviceResponse]'s doc comment).
+     * Bare [result].proofBytes alone is not a valid `vp_token` entry - a
+     * verifier that understands this format silently shows nothing for one,
+     * since its parser never finds a `documents` or `zkDocuments` key at all.
+     * Shared by both ZK call sites ([handleDCAPIRequest] and the
+     * `sign_presentation` handler below) since the wrapping logic is
+     * identical regardless of transport.
+     */
+    private fun buildZkPresentationToken(
+        credBytes: ByteArray,
+        docType: String,
+        spec: org.siros.sdk.credentials.ZkSystemSpec,
+        disclosedClaimNames: List<String>,
+        result: org.siros.sdk.credentials.ZkProofResult,
+    ): ByteArray {
+        val document = MdocCbor.parseStoredCredential(credBytes)
+        val namespace = document.issuerSigned.nameSpaces.keys.firstOrNull()
+            ?: error("mdoc credential '$docType' has no disclosed namespaces")
+        val storedItems = document.issuerSigned.nameSpaces[namespace].orEmpty()
+
+        val disclosedClaims = linkedMapOf<String, com.upokecenter.cbor.CBORObject>()
+        disclosedClaimNames.forEach { claimName ->
+            if (claimName == LongfellowZkProofSystem.PSEUDONYM_CLAIM) {
+                result.pseudonym?.let {
+                    disclosedClaims[claimName] = com.upokecenter.cbor.CBORObject.FromObject(it)
+                }
+            } else {
+                storedItems.firstOrNull { it.item.elementIdentifier == claimName }
+                    ?.let { disclosedClaims[claimName] = it.item.elementValue }
+            }
+        }
+
+        return MdocDeviceResponseBuilder.buildZkDeviceResponse(
+            proofBytes = result.proofBytes,
+            zkSystemId = spec.id,
+            docType = docType,
+            timestamp = result.timestamp,
+            namespace = namespace,
+            disclosedClaims = disclosedClaims,
+            issuerAuth = document.issuerSigned.issuerAuth,
+        )
+    }
+
     /** Stores trust evaluation results keyed by flow ID for use in credential selection UI. */
     private val lastTrustResults = mutableMapOf<String, TrustResult>()
+
+    /**
+     * DCQL [CredentialMatcher.MatchResult]s from this flow's match_request,
+     * keyed by flow ID - populated in the `matchRequests()` collector below,
+     * consumed by the `sign_presentation` handler so it can tell whether a
+     * matched credential's originating query requested `"mso_mdoc_zk"` (and
+     * if so, which [CredentialMatcher.MatchResult.zkSystemTypes]/
+     * [CredentialMatcher.MatchResult.ppidContext] to use) - the stored
+     * credential's own format is always plain `"mso_mdoc"`, so that alone
+     * can never signal this. Mirrors [handleDCAPIRequest]'s in-scope
+     * `matchResults` local, just persisted across the match/sign round trip
+     * since the WS-engine protocol has no wire field to carry it instead.
+     * Removed once consumed or once the flow reaches a terminal state.
+     */
+    private val pendingMatchResultsByFlow = mutableMapOf<String, List<CredentialMatcher.MatchResult>>()
 
     /** Resume context for in-progress OAuth authorizations, keyed by flow ID - see [PendingAuthorization]. */
     private val pendingAuthorizations = mutableMapOf<String, PendingAuthorization>()
@@ -2333,6 +2418,7 @@ class SirosWallet private constructor(
      */
     private suspend fun reportSignFailure(flowId: String, message: String) {
         terminatedFlowIds.add(flowId)
+        pendingMatchResultsByFlow.remove(flowId)
         eventListener?.onFlowError(flowId, message)
         // A sign-request failure during issuance (e.g. the FIDO2 PIN_INVALID
         // this was written for) is a client-side termination of that
@@ -3530,6 +3616,11 @@ class SirosWallet private constructor(
 
                             val vpToken = if (!credsToInclude.isNullOrEmpty()) {
                                 val allCreds = credentialStore.getAll()
+                                val storedMatchResults = pendingMatchResultsByFlow.remove(msg.flowId)
+                                Timber.d(
+                                    "sign_presentation: flow=${msg.flowId} storedMatchResults=" +
+                                        "${storedMatchResults?.map { "${it.queryId}:${it.format}" }}"
+                                )
                                 val vpParts = credsToInclude.mapNotNull { ref ->
                                     // ref.credentialId arrives as a string over the WMP wire
                                     // protocol - see the CredentialMatch construction sites'
@@ -3539,8 +3630,81 @@ class SirosWallet private constructor(
                                         Timber.w("Credential ...${ref.credentialId.takeLast(4)} not found in store for VP signing")
                                         return@mapNotNull null
                                     }
+                                    val matchResult = storedMatchResults?.firstOrNull { r ->
+                                        r.queryId == ref.credentialQueryId || r.candidates.any { it.id == cred.id }
+                                    }
+                                    Timber.d(
+                                        "sign_presentation: credentialQueryId=${ref.credentialQueryId} " +
+                                            "credId=${cred.id} matchResult.format=${matchResult?.format} " +
+                                            "zkSystemTypes=${matchResult?.zkSystemTypes} disclosedClaims=${ref.disclosedClaims}"
+                                    )
 
-                                    if (cred.format == "mso_mdoc") {
+                                    if (matchResult?.format?.equals("mso_mdoc_zk", ignoreCase = true) == true) {
+                                        // ZK-wrapped mDoc presentation (see handleDCAPIRequest's
+                                        // identical branch, which this mirrors for the WS-engine/
+                                        // redirect-flow transport instead of DC API).
+                                        val credBytes = android.util.Base64.decode(cred.raw, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
+                                        // cred.kid is commonly null for a softkey-issued credential
+                                        // with no explicit per-credential key binding - see the
+                                        // identical fallback + comment in handleDCAPIRequest.
+                                        val kid = cred.kid ?: keystore.listKeys().firstOrNull()?.keyId
+                                            ?: throw WalletException("No signing key available for credential ${cred.id} - cannot generate a ZK proof for it")
+                                        val docType = MdocCbor.parseStoredCredential(credBytes).docType
+                                        // See handleDCAPIRequest's identical comment: a circuit is
+                                        // compiled for a fixed attribute count, so matching must
+                                        // account for how many claims are actually being disclosed.
+                                        val (system, spec) = zkProofSystemRegistry.resolve(
+                                            docType, matchResult.zkSystemTypes.orEmpty(), ref.disclosedClaims?.size ?: 0
+                                        )
+                                            ?: throw WalletException(
+                                                "No registered ZK proof system satisfies the verifier's zk_system_type for $docType"
+                                            )
+                                        // Only bind a pseudonym when actually disclosed for this
+                                        // query - see handleDCAPIRequest's identical comment.
+                                        val wantsPseudonym = ref.disclosedClaims?.contains(LongfellowZkProofSystem.PSEUDONYM_CLAIM) == true
+                                        val verifierIdentity = if (wantsPseudonym) {
+                                            // audience has already been checked against the
+                                            // trust-evaluated verifier identifier by
+                                            // validateAudience above, so it's the confirmed
+                                            // client id for this flow. sessionId (when
+                                            // present) is the real verifier_context binding
+                                            // input - see VerifierIdentity.sessionId's doc
+                                            // comment.
+                                            VerifierIdentity(
+                                                clientId = audience,
+                                                ppidContext = matchResult.ppidContext,
+                                                sessionId = params?.verifierSessionId,
+                                            )
+                                        } else {
+                                            null
+                                        }
+                                        val sessionTranscript = MdocDeviceResponseBuilder.buildOpenID4VPSessionTranscript(
+                                            clientId = audience,
+                                            nonce = nonce,
+                                            responseUri = params?.responseUri ?: "",
+                                            verifierJwkThumbprint = params?.verifierJwkThumbprint,
+                                        )
+                                        Timber.d("sign_presentation: generating ZK proof, system=${system.systemId} wantsPseudonym=$wantsPseudonym verifierIdentity=$verifierIdentity")
+                                        val result = system.generateProof(
+                                            spec = spec,
+                                            credentialBytes = credBytes,
+                                            sessionTranscript = sessionTranscript,
+                                            requestedClaims = ref.disclosedClaims ?: emptyList(),
+                                            verifierIdentity = verifierIdentity,
+                                            signer = { data -> keystore.sign(kid, data) },
+                                        )
+                                        Timber.d("sign_presentation: ZK proof generated, pseudonymOutcome=${result.pseudonymOutcome} proofBytes.size=${result.proofBytes.size}")
+                                        val zkDeviceResponse = buildZkPresentationToken(
+                                            credBytes = credBytes,
+                                            docType = docType,
+                                            spec = spec,
+                                            disclosedClaimNames = ref.disclosedClaims ?: emptyList(),
+                                            result = result,
+                                        )
+                                        android.util.Base64.encodeToString(
+                                            zkDeviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+                                        )
+                                    } else if (cred.format == "mso_mdoc") {
                                         // mDoc DeviceResponse (ISO 18013-5)
                                         val credBytes = android.util.Base64.decode(cred.raw, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
                                         val deviceResponse = keystore.signMdocPresentation(
@@ -3659,6 +3823,8 @@ class SirosWallet private constructor(
                         requestedClaims = matchResults.flatMap { it.requestedClaims.flatten() }.distinct(),
                         timestamp = System.currentTimeMillis(),
                     ))
+
+                    pendingMatchResultsByFlow[msg.flowId] = matchResults
 
                     val matches = selectedIds.mapNotNull { id ->
                         allCreds.find { it.id == id }?.let { cred ->
@@ -3803,6 +3969,7 @@ class SirosWallet private constructor(
             engine.flowComplete().collect { msg ->
                 Timber.i("Flow ${msg.flowId} complete")
                 terminatedFlowIds.add(msg.flowId)
+                pendingMatchResultsByFlow.remove(msg.flowId)
 
                 // Tracks whether any credential in this batch actually made it
                 // into the store, so a flow that "completes" per the engine
@@ -4041,6 +4208,7 @@ class SirosWallet private constructor(
                 Timber.e("Flow ${msg.flowId} error: ${msg.error.code} — ${msg.error.message}")
                 val fid = msg.flowId ?: "unknown"
                 terminatedFlowIds.add(fid)
+                pendingMatchResultsByFlow.remove(fid)
                 val redirectUri = msg.error.details?.get("redirect_uri")?.jsonPrimitive?.contentOrNull
                 eventListener?.onFlowError(fid, msg.error.message, redirectUri)
                 // See the flow_complete handler's matching reset: without
@@ -4286,6 +4454,13 @@ class SirosWallet private constructor(
                     ))
                 }
                 val candidates = matchResults.flatMap { it.candidates }.distinctBy { it.id }
+                // This (not the matchRequests() collector) is the code path
+                // actually exercised by the redirect-flow/haip-vp:// protocol
+                // this backend uses for the "credential_selection" progress
+                // step - confirmed live: matchRequests() never fires for this
+                // flow type. sign_presentation's ZK branch needs this cached
+                // so it knows the originating query's format/zkSystemTypes.
+                pendingMatchResultsByFlow[flowId] = matchResults
 
                 val listener = eventListener
                 val selectedIds = if (listener != null && candidates.isNotEmpty()) {
@@ -4358,9 +4533,23 @@ class SirosWallet private constructor(
                                 // than changing an unverified backend field type.
                                 put("credential_id", kotlinx.serialization.json.JsonPrimitive(id.toString()))
                                 // Include disclosed_claims from DCQL match so backend can
-                                // round-trip them into sign_request's credentials_to_include
+                                // round-trip them into sign_request's credentials_to_include.
+                                // Each entry in requestedClaims is a full DCQL claim PATH
+                                // (e.g. ["eu.europa.ec.eudi.pid.1", "pairwise_pseudonym"] -
+                                // [namespace, elementIdentifier]) - only the last segment is
+                                // the actual disclosable element id. flatten() (the old,
+                                // wrong code here) merged every path segment together,
+                                // including the namespace, into one flat list - harmless for
+                                // the plain (non-ZK) signing path (MdocDeviceResponseBuilder's
+                                // namespace filter just silently ignores an extra string that
+                                // never matches a real elementIdentifier), but the native
+                                // Longfellow ZK prover validates every requested claim
+                                // strictly and throws ("attribute was not found in mdoc:
+                                // eu.europa.ec.eudi.pid.1") - confirmed live. Mirrors
+                                // handleDCAPIRequest's identical, already-correct
+                                // `mapNotNull { it.lastOrNull() }`.
                                 val requestedClaims = matchResult?.requestedClaims
-                                    ?.flatten()
+                                    ?.mapNotNull { it.lastOrNull() }
                                     ?.distinct()
                                     ?: emptyList()
                                 put("disclosed_claims", kotlinx.serialization.json.buildJsonArray {

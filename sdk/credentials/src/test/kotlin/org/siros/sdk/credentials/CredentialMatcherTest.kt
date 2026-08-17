@@ -238,7 +238,7 @@ class CredentialMatcherTest {
                     "doctype_value": "org.iso.18013.5.1.mDL",
                     "ppid_context": "https://verifier.example/",
                     "zk_system_type": [
-                      { "system": "longfellow", "id": "longfellow-v8", "params": { "circuit_hash": "abc123" } }
+                      { "system": "longfellow", "id": "longfellow-v8", "circuit_hash": "abc123", "num_attributes": 2 }
                     ]
                   }
                 }
@@ -254,7 +254,10 @@ class CredentialMatcherTest {
         val spec = result.zkSystemTypes!!.first()
         assertEquals("longfellow-v8", spec.id)
         assertEquals("longfellow", spec.system)
+        // params are flat top-level keys on the wire entry (no nested
+        // "params" object) - confirmed via multipaz's own OpenID4VP.kt parsing.
         assertEquals("abc123", spec.params["circuit_hash"])
+        assertEquals("2", spec.params["num_attributes"])
     }
 
     @Test

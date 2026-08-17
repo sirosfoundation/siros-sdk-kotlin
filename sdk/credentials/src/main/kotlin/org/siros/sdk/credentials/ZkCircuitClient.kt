@@ -247,7 +247,7 @@ class ZkCircuitClient(
                 continue
             }
             val actualHash = sha256Hex(bytes)
-            if (!actualHash.equals(artifact.hash, ignoreCase = true)) {
+            if (!actualHash.equals(bareHex(artifact.hash), ignoreCase = true)) {
                 Timber.w(
                     "zk-circuit artifact hash mismatch for '${descriptor.id}' from $url: " +
                         "expected ${artifact.hash}, got $actualHash",
@@ -273,7 +273,7 @@ class ZkCircuitClient(
         if (url.startsWith("http://") || url.startsWith("https://")) {
             return listOf(url)
         }
-        val path = if (url.isNotBlank()) url.removePrefix("/") else "v1/artifacts/sha256/${artifact.hash}"
+        val path = if (url.isNotBlank()) url.removePrefix("/") else "v1/artifacts/sha256/${bareHex(artifact.hash)}"
         return sources.map { "${it.trimEnd('/')}/$path" }
     }
 
@@ -281,6 +281,18 @@ class ZkCircuitClient(
         val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
         return digest.joinToString("") { "%02x".format(it) }
     }
+
+    /**
+     * [ZkArtifact.hash]/[ZkUncompressed.hash] are wire-formatted as
+     * `"sha256:<hex>"` (matching go-zk-circuits' own hash field convention),
+     * but [sha256Hex] returns a bare hex digest with no prefix - comparing
+     * the two directly without stripping this prefix always failed, even
+     * for a byte-for-byte-correct download (confirmed live: "expected
+     * sha256:44c4b98..., got 44c4b98..." - the same digest, just one side
+     * prefixed). Strips it if present; leaves the string as-is otherwise, so
+     * a legacy unprefixed hash value would still compare correctly too.
+     */
+    private fun bareHex(hash: String): String = hash.removePrefix("sha256:")
 
     private suspend fun fetchRaw(url: String): String? {
         return try {

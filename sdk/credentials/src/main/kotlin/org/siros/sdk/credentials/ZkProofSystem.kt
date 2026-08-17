@@ -34,16 +34,30 @@ data class ZkSystemSpec(
  * there means no pseudonym was requested).
  *
  * @param clientId the verifier's OpenID4VP `client_id` (e.g.
- *   `x509_san_dns:verifier.example.com`) - fed into `verifier_id`'s
- *   derivation.
+ *   `x509_san_dns:verifier.example.com`) - used as a fallback `verifier_id`
+ *   derivation input only when [sessionId] is unavailable (see that
+ *   param's doc comment for why it's the real, preferred input).
  * @param ppidContext the DCQL credential query's `meta.ppid_context` string,
  *   if the verifier supplied one - a second, independent binding value a
  *   verifier can use to further scope pseudonyms (e.g. per-session, not just
  *   per-verifier). `null` when absent, which is a normal, common case.
+ * @param sessionId the verifier's own session id for this specific
+ *   presentation (e.g. the `sessionId` query param on the `request_uri` a
+ *   redirect-flow request was fetched from) - the REAL `verifier_id`
+ *   derivation input, confirmed 2026-08-17 via direct report from
+ *   zk-cred-longfellow's V8/PPID author: a real reference implementation
+ *   binds a pseudonym's `verifier_context` to the presentation SESSION, not
+ *   the verifier's static identity, specifically so a captured proof can't
+ *   be replayed/cached against a different session. `null` for transports
+ *   that don't carry one (e.g. DC API has no server-assigned session id at
+ *   all) - [clientId] is used as a fallback in that case, though this means
+ *   pseudonyms derived over DC API won't match a verifier that itself
+ *   expects session-id binding.
  */
 data class VerifierIdentity(
     val clientId: String,
     val ppidContext: String? = null,
+    val sessionId: String? = null,
 )
 
 /**
@@ -78,6 +92,15 @@ data class ZkProofResult(
     val pseudonym: ByteArray? = null,
     val pseudonymOutcome: PseudonymOutcome = PseudonymOutcome.NOT_SUPPORTED_BY_SYSTEM,
     val publicValues: Map<String, Any> = emptyMap(),
+    /**
+     * The exact RFC 3339 timestamp string this proof was generated against
+     * (the same value passed as the native prover's own `time` parameter).
+     * A verifier-facing wrapper (e.g.
+     * [org.siros.sdk.keystore.MdocDeviceResponseBuilder.buildZkDeviceResponse]'s
+     * `timestamp` field) must reuse this exact string rather than computing
+     * its own - the proof and the wrapper need to agree on it byte-for-byte.
+     */
+    val timestamp: String = "",
 )
 
 /**
@@ -106,11 +129,30 @@ interface ZkProofSystem {
 
     /**
      * Returns whichever of [requestedSpecs] (a verifier's own list, in
-     * priority order) this system can satisfy, or `null` if none match -
-     * the extension point [ZkProofSystemRegistry] uses to resolve "does any
-     * registered system satisfy this verifier's ZK request."
+     * priority order) this system can satisfy for a proof over exactly
+     * [numAttributes] claims, or `null` if none match - the extension point
+     * [ZkProofSystemRegistry] uses to resolve "does any registered system
+     * satisfy this verifier's ZK request."
+     *
+     * **Why [numAttributes] is required, not optional**: a real ZK circuit
+     * is compiled for a FIXED attribute count (confirmed via a real
+     * `go-zk-circuits` catalog entry - e.g.
+     * `longfellow-libzk-v1_8_1_4259_2945` has `params.num_attributes: 1`), so
+     * a verifier's `zk_system_type` array normally offers several circuit
+     * variants (one per attribute count) precisely so the wallet can pick
+     * the one matching how many claims it's about to disclose. Ignoring
+     * this and picking, say, the first entry with a matching [ZkSystemSpec.system]
+     * silently selects a circuit compiled for the wrong attribute count -
+     * proof generation still "succeeds" (the native prover doesn't reject
+     * it), but the resulting proof is structurally invalid for the circuit
+     * that was actually loaded, and a real verifier rejects it during
+     * deserialization (confirmed live: multipaz's native verifier surfaces
+     * this as `MDOC_VERIFIER_HASH_PARSING_FAILURE`, its own "hash proof
+     * could not be parsed" case - not an attribute-content or signature
+     * problem, but a wire-format mismatch from proving against a
+     * differently-shaped circuit than the one being verified against).
      */
-    fun matchingSpec(requestedSpecs: List<ZkSystemSpec>): ZkSystemSpec?
+    fun matchingSpec(requestedSpecs: List<ZkSystemSpec>, numAttributes: Int): ZkSystemSpec?
 
     /**
      * Generate a ZK proof of possession (and, if [verifierIdentity] is
@@ -176,9 +218,10 @@ interface ZkProofSystem {
  * of which proof system produced the pseudonym, so it's pluggable
  * separately from [ZkProofSystem] itself.
  *
- * **This is the real wire-format formula**, confirmed 2026-08-14 by reading
- * `balfanz/multipaz`'s `ppid` branch (`verifier.kt`) directly - NOT a naive
- * single hash of one combined value:
+ * **This is the real wire-format formula**, confirmed 2026-08-17 against a
+ * real, self-hosted multipaz verifier
+ * (`multipaz-longfellow/.../LongfellowZkSystem.kt`'s `verifyProof`) - a
+ * SINGLE hash of each input, not a double hash:
  *
  * ```
  * pairwise_pseudonym = SHA256(pseudonym_seed || SHA256(SHA256(verifier_id) || SHA256(ppid_context)))
@@ -189,9 +232,20 @@ interface ZkProofSystem {
  * to the underlying proof system as its own `verifier_context` parameter
  * (see e.g. `zk-cred-longfellow`'s `prove_with_ppid`) - that system's own
  * `SHA256(pseudonym_seed || verifier_context)` is the OUTER hash in the
- * formula above, not a separate/different formula. Getting this derivation
- * wrong produces pseudonyms that silently fail to match any real verifier's
- * expectation, even though proof generation itself succeeds.
+ * formula above, not a separate/different formula.
+ *
+ * An EARLIER version of this doc comment (and of the real verifier's own
+ * `verifyProof`) mistakenly double-hashed `verifier_id`/`ppid_context`: the
+ * verifier's wire param for each is ALREADY that value's SHA-256 (hex
+ * encoded, added once by the verifier's own request-building code), so
+ * hashing it again there produced `SHA256(SHA256(verifier_id))` instead of
+ * `SHA256(verifier_id)`. Fixed here 2026-08-17 alongside the matching fix in
+ * `LongfellowZkSystem.kt`'s `verifyProof` - not yet independently re-tested
+ * against a real device proof at the time of this comment, so treat as a
+ * strong, evidence-backed candidate fix rather than a fully closed loop
+ * until confirmed live. Getting this derivation wrong produces pseudonyms
+ * that silently fail to match any real verifier's expectation, even though
+ * proof generation itself succeeds.
  */
 interface ZkPseudonymDeriver {
     fun deriveVerifierContext(verifierIdentity: VerifierIdentity): ByteArray
@@ -205,9 +259,24 @@ interface ZkPseudonymDeriver {
 object DefaultZkPseudonymDeriver : ZkPseudonymDeriver {
     override fun deriveVerifierContext(verifierIdentity: VerifierIdentity): ByteArray {
         val digest = MessageDigest.getInstance("SHA-256")
-        val verifierIdHash = digest.digest(verifierIdentity.clientId.toByteArray(Charsets.UTF_8))
+        // The verifier_id input is the presentation SESSION's id, not the
+        // verifier's static client_id (see VerifierIdentity.sessionId's doc
+        // comment) - clientId is only a fallback for transports that never
+        // carry a session id (e.g. DC API).
+        val verifierIdSource = verifierIdentity.sessionId ?: verifierIdentity.clientId
+        val verifierIdHash = digest.digest(verifierIdSource.toByteArray(Charsets.UTF_8))
         digest.reset()
-        val ppidContextHash = digest.digest((verifierIdentity.ppidContext ?: "").toByteArray(Charsets.UTF_8))
+        // A real verifier (multipaz's own LongfellowZkSystem.verifyProof,
+        // confirmed via its actual reconstruction logic) falls back to 32
+        // ZERO bytes when no ppid_context was supplied - NOT
+        // SHA256("") - since it never adds a "ppid_context" wire param at
+        // all in that case, and its own fallback is a raw zero-filled
+        // array, never hashed. Matching that exactly here (rather than
+        // hashing an empty string) was required for a real device proof to
+        // verify when ppidContext is absent - hashing "" produces a
+        // different 32 bytes than an unhashed zero array.
+        val ppidContextHash = verifierIdentity.ppidContext?.let { digest.digest(it.toByteArray(Charsets.UTF_8)) }
+            ?: ByteArray(32)
         digest.reset()
         digest.update(verifierIdHash)
         digest.update(ppidContextHash)
@@ -226,13 +295,17 @@ object DefaultZkPseudonymDeriver : ZkPseudonymDeriver {
 class ZkProofSystemRegistry(private val systems: List<ZkProofSystem>) {
     /**
      * The first registered system (in registration order) that supports
-     * [docType] and can satisfy one of [requestedSpecs], paired with the
-     * matched spec - or `null` if none qualify.
+     * [docType] and can satisfy one of [requestedSpecs] for a proof over
+     * exactly [numAttributes] claims, paired with the matched spec - or
+     * `null` if none qualify. See [ZkProofSystem.matchingSpec]'s doc comment
+     * for why [numAttributes] must be the caller's real disclosed-claim
+     * count, not a value ignorable/defaultable to "whichever circuit is
+     * offered first".
      */
-    fun resolve(docType: String, requestedSpecs: List<ZkSystemSpec>): Pair<ZkProofSystem, ZkSystemSpec>? {
+    fun resolve(docType: String, requestedSpecs: List<ZkSystemSpec>, numAttributes: Int): Pair<ZkProofSystem, ZkSystemSpec>? {
         for (system in systems) {
             if (docType !in system.supportedDocTypes) continue
-            val matched = system.matchingSpec(requestedSpecs) ?: continue
+            val matched = system.matchingSpec(requestedSpecs, numAttributes) ?: continue
             return system to matched
         }
         return null

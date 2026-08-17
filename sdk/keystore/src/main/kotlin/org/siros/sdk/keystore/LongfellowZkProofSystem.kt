@@ -60,6 +60,18 @@ class LongfellowZkProofSystem(
          * concept the circuit is unaware of.
          */
         const val PSEUDONYM_CLAIM = "pairwise_pseudonym"
+
+        /**
+         * The actual mdoc namespace element that holds the raw seed value
+         * (`PSEUDONYM_CLAIM` is the DERIVED/requested claim name a verifier
+         * asks for in DCQL - it is never itself a stored element in the
+         * credential). Confirmed live: looking this up by [PSEUDONYM_CLAIM]
+         * instead of this constant always failed to find the item, leaving
+         * [generateProof]'s own pseudonym derivation permanently unreachable
+         * (pseudonymOutcome always NOT_SUPPORTED_BY_SYSTEM, regardless of
+         * whether the proof itself succeeded).
+         */
+        private const val PSEUDONYM_SEED_ELEMENT = "pseudonym_seed"
     }
 
     override val systemId: String = "longfellow-libzk-v1"
@@ -79,8 +91,17 @@ class LongfellowZkProofSystem(
     private val cacheMutex = Mutex()
 
     /**
-     * Matches any requested spec declaring `system == "longfellow"` -
-     * mirrors [org.siros.sdk.wallet.WscdSelectionPolicy]'s "nominal
+     * Matches any requested spec declaring `system == "longfellow-libzk-v1"`
+     * (this system's own [systemId] - confirmed live against
+     * multipaz-verifier-server's actual DCQL `zk_system_type` output, which
+     * sends `"system": "longfellow-libzk-v1"`, not the shorter `"longfellow"`
+     * this comparison incorrectly used before - a real bug, unit-tested only
+     * against our own self-consistent test fixtures, never against the real
+     * wire value, so it went unnoticed until a live device presentation)
+     * AND whose own `num_attributes` param equals [numAttributes] - see
+     * [ZkProofSystem.matchingSpec]'s doc comment for why a circuit's
+     * attribute count is fixed at compile time and can't be ignored.
+     * Mirrors [org.siros.sdk.wallet.WscdSelectionPolicy]'s "nominal
      * capability" convention (a static declaration, not a live probe):
      * whether the specific circuit [ZkSystemSpec.id] names is actually
      * fetchable is only verified lazily, in [generateProof] - `matchingSpec`
@@ -88,8 +109,10 @@ class LongfellowZkProofSystem(
      * during request-vs-capability matching before any proof generation is
      * committed to).
      */
-    override fun matchingSpec(requestedSpecs: List<ZkSystemSpec>): ZkSystemSpec? =
-        requestedSpecs.firstOrNull { it.system == "longfellow" }
+    override fun matchingSpec(requestedSpecs: List<ZkSystemSpec>, numAttributes: Int): ZkSystemSpec? =
+        requestedSpecs.firstOrNull {
+            it.system == systemId && it.getParam("num_attributes")?.toIntOrNull() == numAttributes
+        }
 
     /**
      * The vendored UniFFI bindings' `&[u8]` parameters need a DIRECT
@@ -134,7 +157,15 @@ class LongfellowZkProofSystem(
         val witnessDeviceResponse = MdocDeviceResponseBuilder(credentialBytes)
             .buildForProximity(sessionTranscript, disclosedClaims = null, signer = signer)
 
-        val time = Instant.now().toString()
+        // The native prover requires an exact 20-byte RFC 3339 timestamp
+        // ("YYYY-MM-DDTHH:MM:SSZ", no fractional seconds) - confirmed live
+        // ("current time is not correctly formatted, must be 20 bytes
+        // long"). Instant.now().toString() includes a variable-precision
+        // fractional-seconds component whenever it's non-zero, so it's
+        // rarely exactly 20 bytes. Truncating to whole seconds first makes
+        // Instant.toString() omit the fractional part entirely, always
+        // producing the fixed-width form the prover expects.
+        val time = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString()
 
         if (verifierIdentity == null) {
             val proofBytes = prove(
@@ -145,7 +176,7 @@ class LongfellowZkProofSystem(
                 sessionTranscript = directByteBuffer(sessionTranscript),
                 time = time,
             )
-            return ZkProofResult(proofBytes = proofBytes)
+            return ZkProofResult(proofBytes = proofBytes, timestamp = time)
         }
 
         val verifierContext = pseudonymDeriver.deriveVerifierContext(verifierIdentity)
@@ -165,13 +196,14 @@ class LongfellowZkProofSystem(
         // display/track it, mirroring the feat/longfellow-zk reference's own
         // separate computePPID() step.
         val seedItem = document.issuerSigned.nameSpaces[namespace]
-            ?.firstOrNull { it.item.elementIdentifier == PSEUDONYM_CLAIM }
+            ?.firstOrNull { it.item.elementIdentifier == PSEUDONYM_SEED_ELEMENT }
         val pseudonym = seedItem?.let { sha256(it.item.elementValue.GetByteString() + verifierContext) }
 
         return ZkProofResult(
             proofBytes = proofBytes,
             pseudonym = pseudonym,
             pseudonymOutcome = if (pseudonym != null) PseudonymOutcome.PROVIDED else PseudonymOutcome.NOT_SUPPORTED_BY_SYSTEM,
+            timestamp = time,
         )
     }
 
