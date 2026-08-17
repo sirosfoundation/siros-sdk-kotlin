@@ -54,6 +54,7 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -61,6 +62,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -72,6 +74,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.vectorResource
@@ -258,14 +262,21 @@ fun WalletScreen(viewModel: WalletViewModel) {
 
     LaunchedEffect(errorMessage) {
         errorMessage?.let {
-            snackbarHostState.showSnackbar(it)
+            // withDismissAction shows Material3's built-in close (X) icon on the
+            // snackbar; Long duration gives users time to read an error before it
+            // auto-dismisses, while the X still lets them dismiss immediately.
+            snackbarHostState.showSnackbar(
+                message = it,
+                withDismissAction = true,
+                duration = SnackbarDuration.Long,
+            )
             viewModel.clearError()
         }
     }
 
     LaunchedEffect(infoMessage) {
         infoMessage?.let {
-            snackbarHostState.showSnackbar(it)
+            snackbarHostState.showSnackbar(message = it, withDismissAction = true)
             viewModel.clearInfo()
         }
     }
@@ -380,6 +391,14 @@ fun WalletScreen(viewModel: WalletViewModel) {
     // WSCA developer sub-screen state (read here so it's available in the `when` below)
     val showWscaDeveloper by viewModel.showWscaDeveloper.collectAsState()
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+
+    // Measured height of the custom bottom tab bar Row below, so the shared
+    // SnackbarHost (which spans every sub-screen in the Box below - see its
+    // comment) can pad itself above the bar instead of rendering on top of it.
+    // Reset to 0 via DisposableEffect when the bar itself isn't composed (any
+    // branch other than the main tabs below), so it doesn't leave stale
+    // padding under the snackbar on those other screens.
+    var bottomNavBarHeightPx by remember { mutableIntStateOf(0) }
 
     // Everything below shares one Box so the SnackbarHost always has somewhere to
     // render, no matter which sub-screen is active - previously each sub-screen
@@ -510,6 +529,9 @@ fun WalletScreen(viewModel: WalletViewModel) {
 
             // Main app with bottom navigation
             else -> Column(modifier = Modifier.fillMaxSize()) {
+        DisposableEffect(Unit) {
+            onDispose { bottomNavBarHeightPx = 0 }
+        }
         // Top bar
         TopAppBar(
             title = {
@@ -605,6 +627,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .onGloballyPositioned { bottomNavBarHeightPx = it.size.height }
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 .padding(vertical = 8.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
@@ -662,9 +685,12 @@ fun WalletScreen(viewModel: WalletViewModel) {
     }
         }
 
+        val bottomNavBarHeightDp = with(LocalDensity.current) { bottomNavBarHeightPx.toDp() }
         SnackbarHost(
             hostState = snackbarHostState,
-            modifier = Modifier.align(Alignment.BottomCenter),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = bottomNavBarHeightDp),
         )
     }
 }
