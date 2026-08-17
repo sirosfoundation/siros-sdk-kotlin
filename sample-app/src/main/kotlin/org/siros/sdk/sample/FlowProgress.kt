@@ -1,5 +1,9 @@
 package org.siros.sdk.sample
 
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import org.siros.sdk.flow.FlowStepCatalog
 
 /**
@@ -39,3 +43,70 @@ fun flowStepLabelRes(step: String): Int = STEP_LABEL_RES[step] ?: R.string.flow_
 /** See [FlowStepCatalog.flowStepProgress]. */
 fun flowStepProgress(flowType: String, step: String): Float? =
     FlowStepCatalog.flowStepProgress(flowType, step)
+
+/**
+ * Smooths the discrete, step-completion-driven progress fraction from
+ * [FlowStepCatalog.flowStepProgress] into a continuously-animating display
+ * value, so the flow-active UI never sits visibly frozen for the full
+ * duration of a long-running step (most notably native ZK proof
+ * computation, which can take real wall-clock time with zero intermediate
+ * progress signal from the underlying Rust/Longfellow library).
+ *
+ * Real step-completion updates always win: [onRealProgress] snaps
+ * [displayProgress] up to the genuine value immediately (never regressing -
+ * see [FlowStepCatalog]'s monotonic-max guidance) and raises the ceiling
+ * [run] is allowed to creep toward. Between real updates, [run] eases
+ * [displayProgress] a little further forward on a fixed tick, capped at
+ * [creepCap] past the last genuine value, so the bar visibly keeps moving
+ * without ever claiming a step is closer to done than it actually is (the
+ * cap always leaves headroom below where the *next* real step would land).
+ *
+ * Pure Kotlin/coroutines, no Compose or Android dependency, so it's unit
+ * testable under a [kotlinx.coroutines.test.TestDispatcher] independent of
+ * any UI.
+ */
+class FlowProgressAnimator(
+    private val tickIntervalMs: Long = 150L,
+    private val creepCap: Float = 0.08f,
+    private val creepFactor: Float = 0.12f,
+) {
+    private val _displayProgress = MutableStateFlow(0f)
+    val displayProgress: StateFlow<Float> = _displayProgress.asStateFlow()
+
+    /** Last genuine (non-null) value passed to [onRealProgress]. */
+    private var realFloor = 0f
+
+    /** How far the creep in [run] is currently allowed to advance toward. */
+    private var ceiling = creepCap.coerceIn(0f, 1f)
+
+    /**
+     * Reports a genuine step-progress fraction (or null if the current step
+     * isn't recognized - see [flowStepProgress]). No-op on null or on a
+     * value that doesn't advance past what's already been reported, so a
+     * step retried after a transient error can't visibly move the bar
+     * backward.
+     */
+    fun onRealProgress(value: Float?) {
+        if (value == null || value <= realFloor) return
+        realFloor = value
+        ceiling = (realFloor + creepCap).coerceIn(0f, 1f)
+        _displayProgress.value = maxOf(_displayProgress.value, value)
+    }
+
+    /**
+     * Runs the creep ticker until its coroutine is cancelled - call from a
+     * `LaunchedEffect(flowId) { animator.run() }` (or equivalent) scoped to
+     * the lifetime of a single flow, so a fresh animator/coroutine starts
+     * per flow rather than carrying state across flows.
+     */
+    suspend fun run() {
+        while (true) {
+            delay(tickIntervalMs)
+            val current = _displayProgress.value
+            if (current < ceiling) {
+                val next = current + (ceiling - current) * creepFactor
+                _displayProgress.value = next.coerceAtMost(ceiling)
+            }
+        }
+    }
+}
