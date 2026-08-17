@@ -206,6 +206,31 @@ class ZkCircuitClientTest {
     }
 
     @Test
+    fun `downloadArtifact matches a real sha256-prefixed descriptor hash, not just a bare hex fixture`() = runTest {
+        // Real go-zk-circuits descriptors wire the hash as "sha256:<hex>" (confirmed
+        // live against zk-circuits.fly.dev) - unlike this file's other fixtures,
+        // which use a bare hex hash and would not have caught the real bug this
+        // regression-tests: the comparison used to always fail for a correct
+        // download because one side of the comparison never had the prefix
+        // stripped.
+        val bytes = "circuit-bytes".toByteArray()
+        val hash = sha256Hex(bytes)
+        val client = ZkCircuitClient(
+            httpGetBytes = { url ->
+                if (url == "https://zk-circuits.fly.dev/v1/artifacts/sha256/$hash") bytes else null
+            },
+        )
+        val circuit = json.decodeFromString(
+            ZkCircuitDescriptor.serializer(),
+            circuitJson("longfellow-mdl-v1", hash = "sha256:$hash", url = "/v1/artifacts/sha256/$hash"),
+        )
+
+        val downloaded = client.downloadArtifact(circuit)
+
+        assertTrue(bytes.contentEquals(downloaded))
+    }
+
+    @Test
     fun `downloadArtifact falls back to the second mirror when the first fails to fetch`() = runTest {
         val bytes = "circuit-bytes".toByteArray()
         val hash = sha256Hex(bytes)

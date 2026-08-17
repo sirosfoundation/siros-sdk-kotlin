@@ -40,7 +40,7 @@ dependencies {
     // release artifact). The AAR is built by `make aar` in that crate.
     // For local development, publish to mavenLocal:
     //   cd zk-cred-longfellow && make aar && make publish-local
-    implementation("org.siros:zk-cred-longfellow:0.1.0")
+    implementation("org.siros:zk-cred-longfellow:0.1.1")
     // JNA is required by UniFFI-generated Kotlin bindings.
     implementation("net.java.dev.jna:jna:5.14.0@aar")
 

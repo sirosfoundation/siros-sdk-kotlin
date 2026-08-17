@@ -287,15 +287,25 @@ object CredentialMatcher {
 
     /**
      * Parses one entry of a DCQL query's `meta.zk_system_type` array into a
-     * [ZkSystemSpec] - `{id, system, params}`, mirroring multipaz's own wire
-     * shape (confirmed via `balfanz/multipaz`'s `ppid` branch `verifier.kt`).
+     * [ZkSystemSpec] - `{id, system, ...params}`. Confirmed via multipaz's
+     * own parsing of this exact wire shape (`OpenID4VP.kt`'s
+     * `for (param in entry) { if (key == "system" || key == "id") continue;
+     * item.addParam(param.key, param.value) }`): every OTHER top-level key
+     * on the entry (e.g. `num_attributes`, `version`, `circuit_hash`,
+     * `block_enc_hash`, `block_enc_sig`) IS a param - there is no nested
+     * `"params"` object on the wire. An earlier version of this parser
+     * looked for `obj["params"]`, which never exists on a real request -
+     * `zkSystemTypes` parsed successfully (id/system were still read) but
+     * every param (including `num_attributes`) silently came back empty,
+     * masking a real circuit-selection bug until it started being checked.
      */
     private fun parseZkSystemSpec(element: JsonElement): ZkSystemSpec? {
         val obj = element as? JsonObject ?: return null
         val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: return null
         val system = obj["system"]?.jsonPrimitive?.contentOrNull ?: return null
-        val params = obj["params"]?.jsonObject?.mapValues { (_, v) -> v.jsonPrimitive.contentOrNull ?: "" }
-            ?: emptyMap()
+        val params = obj.entries
+            .filterNot { (key, _) -> key == "id" || key == "system" }
+            .associate { (key, value) -> key to (value.jsonPrimitive.contentOrNull ?: "") }
         return ZkSystemSpec(id = id, system = system, params = params)
     }
 

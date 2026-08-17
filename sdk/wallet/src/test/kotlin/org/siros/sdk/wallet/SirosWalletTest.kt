@@ -49,6 +49,7 @@ import org.junit.Before
 import org.junit.Test
 import org.siros.sdk.auth.BackendApiClient
 import org.siros.sdk.credentials.CredentialConsumptionPolicy
+import org.siros.sdk.credentials.CredentialMatcher
 import org.siros.sdk.credentials.CredentialMetadata
 import org.siros.sdk.credentials.CredentialStore
 import org.siros.sdk.credentials.PresentationRecord
@@ -3450,6 +3451,13 @@ class SirosWalletTest {
         }
         if ("terminatedFlowIds" !in values) {
             values["terminatedFlowIds"] = mutableSetOf<String>()
+        }
+        // allocateInstance bypasses property initializers entirely, so
+        // pendingMatchResultsByFlow's default (empty map) never runs unless
+        // set here explicitly - without this, any collector that touches it
+        // (match_request/sign_presentation/flow_complete/flow_errors) NPEs.
+        if ("pendingMatchResultsByFlow" !in values) {
+            values["pendingMatchResultsByFlow"] = mutableMapOf<String, List<CredentialMatcher.MatchResult>>()
         }
         // allocateInstance bypasses property initializers entirely, so
         // credentialConsumptionPolicy's default (NEVER_CONSUME) never runs

@@ -245,6 +245,13 @@ data class SignRequestParams(
     @SerialName("credentials_to_include") val credentialsToInclude: List<CredentialRef>? = null,
     @SerialName("response_uri") val responseUri: String? = null,
     @SerialName("verifier_jwk_thumbprint") val verifierJwkThumbprint: String? = null,
+    // The verifier's own session id for this presentation (from the
+    // request_uri's "sessionId" query param, forwarded by go-wallet-backend)
+    // - a real ZK/PPID pseudonym's verifier_context binds to THIS specific
+    // session, not the verifier's static identity (confirmed 2026-08-17,
+    // direct report from zk-cred-longfellow's V8/PPID author). Null for
+    // non-ZK presentations or verifiers whose request_uri never carried one.
+    @SerialName("verifier_session_id") val verifierSessionId: String? = null,
 )
 
 @Serializable
