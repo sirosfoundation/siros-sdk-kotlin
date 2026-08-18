@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -1008,6 +1009,9 @@ fun PreLoginSettingsSheet(
 
 // ── Credentials Tab ─────────────────────────────────────────────────
 
+/** Number of credential cards shown in full before the rest collapse into [CredentialStackOverflow]. */
+private const val CREDENTIAL_STACK_THRESHOLD = 3
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CredentialsTab(
@@ -1032,6 +1036,15 @@ fun CredentialsTab(
     // credential overlay, for a credential the user hasn't tapped into yet.
     var actionMenuFor by remember { mutableStateOf<org.siros.sdk.credentials.StoredCredential?>(null) }
     var pendingDeleteFor by remember { mutableStateOf<org.siros.sdk.credentials.StoredCredential?>(null) }
+
+    // Past CREDENTIAL_STACK_THRESHOLD cards, the tail is collapsed into one
+    // fanned overflow item instead of extending the scrollable list further -
+    // keeps the common case (a handful of credentials) showing several full
+    // cards at once (see the LazyColumn comment below for why that's
+    // preferred over a one-at-a-time layout), while an overview that would
+    // otherwise require a lot of scrolling gets a single glanceable summary
+    // that expands to the full list on tap.
+    var showAllCredentials by remember { mutableStateOf(false) }
 
     actionMenuFor?.let { credential ->
         ModalBottomSheet(onDismissRequest = { actionMenuFor = null }) {
@@ -1136,12 +1149,19 @@ fun CredentialsTab(
             // has far more vertical than horizontal real estate, so a
             // one-at-a-time horizontal pager wasted the available space -
             // a scrollable column lets multiple cards be visible/scrollable
-            // at once instead.
+            // at once instead. Past CREDENTIAL_STACK_THRESHOLD cards, the
+            // tail collapses into one fanned overflow item (below) rather
+            // than just extending the scroll further.
+            val visibleCount = if (showAllCredentials) {
+                grouped.size
+            } else {
+                minOf(grouped.size, CREDENTIAL_STACK_THRESHOLD)
+            }
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                items(grouped, key = { it.credential.batchId }) { entry ->
+                items(grouped.take(visibleCount), key = { it.credential.batchId }) { entry ->
                     CredentialCard(
                         credential = entry.credential,
                         instances = entry.instances,
@@ -1150,7 +1170,58 @@ fun CredentialsTab(
                         onRenewClick = { onRenewCredential(entry.credential) },
                     )
                 }
+                if (visibleCount < grouped.size) {
+                    item(key = "credential-stack-overflow") {
+                        CredentialStackOverflow(
+                            remaining = grouped.drop(visibleCount),
+                            onClick = { showAllCredentials = true },
+                        )
+                    }
+                }
             }
+        }
+    }
+}
+
+/**
+ * Compact fanned-card summary for credentials past [CREDENTIAL_STACK_THRESHOLD]
+ * - a glance at how many/which issuers are collapsed, without rendering each
+ * one's full SVG card (that's the expensive part [277] caches; this overview
+ * only needs flat background colors). Tapping it expands the full list.
+ */
+@Composable
+fun CredentialStackOverflow(
+    remaining: List<org.siros.sdk.credentials.CredentialWithInstances>,
+    onClick: () -> Unit,
+) {
+    val maxFanned = 3
+    Card(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(72.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Box(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+            remaining.take(maxFanned).forEachIndexed { index, entry ->
+                val bgColor = entry.credential.metadata?.backgroundColor?.toComposeColor()
+                    ?: MaterialTheme.colorScheme.secondaryContainer
+                Box(
+                    modifier = Modifier
+                        .offset(x = (index * 14).dp)
+                        .size(width = 40.dp, height = 26.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(bgColor)
+                        .align(Alignment.CenterStart),
+                )
+            }
+            Text(
+                text = stringResource(R.string.credentials_stack_overflow_more, remaining.size),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.align(Alignment.CenterEnd),
+            )
         }
     }
 }

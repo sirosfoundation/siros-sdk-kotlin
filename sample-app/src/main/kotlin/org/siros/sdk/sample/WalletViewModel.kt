@@ -929,7 +929,15 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _isLoadingOffers.value = true
         viewModelScope.launch {
             try {
+                // Filter out the plain "siros_id" offer: the "Scan Physical ID
+                // card" row above the list (onStartIDV/startIDV()) is the one,
+                // unified path to a SIROS ID credential - it drives real
+                // FaceTec identity verification before issuance. Leaving the
+                // no-questions-asked issuer offer alongside it would give the
+                // user two competing, confusing routes to the same
+                // credential, one of which silently skips verification.
                 _availableCredentials.value = wallet.getAvailableCredentials()
+                    .filterNot { it.credentialConfigurationId == SIROS_ID_CREDENTIAL_CONFIGURATION_ID }
                 android.util.Log.d("SIROS_VM", "Available credentials: ${_availableCredentials.value.size}")
             } catch (e: Exception) {
                 android.util.Log.e("SIROS_VM", "getAvailableCredentials failed", e)
@@ -2092,6 +2100,15 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         private const val DEFAULT_R2PS_URL = "http://192.168.240.1:9443"
         private const val REDIRECT_URI = "siros-sample://callback"
         private const val REDIRECT_SCHEME = "siros-sample"
+
+        /**
+         * OID4VCI `credential_configuration_id` for the SIROS ID credential
+         * (see vc-issuer's config: `credential_configurations.siros_id`) -
+         * used to hide the plain issuer offer from [openAddCredential]'s list
+         * in favor of the "Scan Physical ID card" / [startIDV] row, which is
+         * the one path meant to actually issue this credential.
+         */
+        private const val SIROS_ID_CREDENTIAL_CONFIGURATION_ID = "siros_id"
 
         /**
          * Hard ceiling for enroll/rotate/destroy so a hang anywhere in the
