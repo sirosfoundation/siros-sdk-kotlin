@@ -40,7 +40,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -1607,10 +1606,7 @@ fun FlowStartingView(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        LinearProgressIndicator(
-            modifier = Modifier.fillMaxWidth(),
-            color = MaterialTheme.colorScheme.primary,
-        )
+        SirosSpinner(progress = null)
         Spacer(modifier = Modifier.height(24.dp))
         Text(
             text = when (flowType) {
@@ -1648,31 +1644,25 @@ fun FlowActiveView(
 ) {
     val stepProgress = flowStepProgress(state.flowType, state.status)
 
-    // Guard against a visible backward jump: real execution order can
-    // deviate slightly from the canonical step list (e.g. a step retried
-    // after a transient error), but the bar should never un-progress.
-    var maxProgress by remember(state.flowId) { mutableStateOf(0f) }
-    LaunchedEffect(stepProgress) {
-        stepProgress?.let { maxProgress = maxOf(maxProgress, it) }
-    }
+    // The visual must never sit frozen for the full duration of a
+    // long-running step (most notably native ZK proof generation, which can
+    // take real wall-clock time with zero intermediate progress signal from
+    // the underlying Rust/Longfellow library) - so the displayed value is
+    // decoupled from raw step-completion events via FlowProgressAnimator,
+    // which eases the display value forward on its own ticker between real
+    // events and snaps to the genuine value the instant one arrives. A fresh
+    // animator per flowId keeps state from leaking across flows.
+    val progressAnimator = remember(state.flowId) { FlowProgressAnimator() }
+    val displayProgress by progressAnimator.displayProgress.collectAsState()
+    LaunchedEffect(state.flowId) { progressAnimator.run() }
+    LaunchedEffect(stepProgress) { progressAnimator.onRealProgress(stepProgress) }
 
     Column(
         modifier = modifier.fillMaxSize().padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        if (stepProgress != null) {
-            LinearProgressIndicator(
-                progress = { maxProgress },
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.primary,
-            )
-        } else {
-            LinearProgressIndicator(
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
+        SirosSpinner(progress = if (stepProgress != null) displayProgress else null)
         Spacer(modifier = Modifier.height(24.dp))
         Text(
             text = when (state.flowType) {

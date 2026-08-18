@@ -31,7 +31,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
@@ -43,6 +42,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -343,31 +343,22 @@ fun ProximityEngagementScreen(
 private fun ProximityProgressView(step: String, onCancel: () -> Unit, modifier: Modifier = Modifier) {
     val stepProgress = flowStepProgress("proximity", step)
 
-    // Same monotonic guard as FlowActiveView: real execution order can
-    // deviate slightly (e.g. both BLE modes reporting steps interleaved
-    // before one wins), but the bar should never visibly un-progress.
-    var maxProgress by remember { mutableStateOf(0f) }
-    LaunchedEffect(stepProgress) {
-        stepProgress?.let { maxProgress = maxOf(maxProgress, it) }
-    }
+    // Same decoupled-from-step-completion animator as FlowActiveView: real
+    // execution order can deviate slightly (e.g. both BLE modes reporting
+    // steps interleaved before one wins), and a long-running step (e.g. ZK
+    // proof generation ahead of `"submitting_response"`) has no intermediate
+    // progress signal of its own - see FlowProgressAnimator's doc comment.
+    val progressAnimator = remember { FlowProgressAnimator() }
+    val displayProgress by progressAnimator.displayProgress.collectAsState()
+    LaunchedEffect(Unit) { progressAnimator.run() }
+    LaunchedEffect(stepProgress) { progressAnimator.onRealProgress(stepProgress) }
 
     Column(
         modifier = modifier.padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        if (stepProgress != null) {
-            LinearProgressIndicator(
-                progress = { maxProgress },
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.primary,
-            )
-        } else {
-            LinearProgressIndicator(
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
+        SirosSpinner(progress = if (stepProgress != null) displayProgress else null)
         Spacer(modifier = Modifier.height(24.dp))
         Text(
             text = stringResource(R.string.flow_presenting),
