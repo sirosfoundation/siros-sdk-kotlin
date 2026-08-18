@@ -185,7 +185,16 @@ fun CredentialCard(
             "CredentialCard ${credential.id} (${meta.vct ?: meta.doctype}): using SVG template " +
                 "$uriDescription (colorScheme=${template.colorScheme})",
         )
-        val payload = fetchAndSubstituteSvg(credential, template.uri, bgColor)
+        val cacheKey = svgRenderCacheKey(credential, template.uri, preferredScheme, bgColor)
+        val cached = svgRenderCache.get(cacheKey)
+        val payload = if (cached != null) {
+            Timber.i("CredentialCard ${credential.id}: using cached SVG render")
+            cached
+        } else {
+            fetchAndSubstituteSvg(credential, template.uri, bgColor)?.also {
+                svgRenderCache.put(cacheKey, it)
+            }
+        }
         svgState = if (payload != null) {
             SvgLoadState.Loaded(payload.svgBytes, payload.backgroundImageBytes)
         } else {
@@ -451,6 +460,31 @@ private val svgHttpClient = OkHttpClient()
  * never touches the SVG's own styling).
  */
 private data class SvgRenderPayload(val svgBytes: ByteArray, val backgroundImageBytes: ByteArray?)
+
+/**
+ * Process-lifetime cache of rendered card SVGs, keyed by everything that
+ * can affect the output (credential, template, color scheme, background).
+ * Without this, every recomposition of [CredentialCard] - not just app
+ * launch, but every navigation back to the credential list - redid the
+ * full fetch/decode-base64 + claim-substitution + viewBox/height/contrast-
+ * correction + background-image-extraction pipeline from scratch, even
+ * though the result is fully deterministic for a given credential (whose
+ * `raw` bytes and metadata never change in place - renewal replaces the
+ * whole [StoredCredential] under a new id, per the batch-replacement
+ * pattern, rather than mutating one) plus render parameters. 64 entries is
+ * comfortably above a realistic on-screen credential count; this is a
+ * memory cache only (cleared on process death), not a disk cache - stale
+ * output from a leaked cache entry would be a worse bug than a cache miss
+ * after a process restart.
+ */
+private val svgRenderCache = android.util.LruCache<String, SvgRenderPayload>(64)
+
+private fun svgRenderCacheKey(
+    credential: StoredCredential,
+    templateUri: String,
+    colorScheme: String,
+    cardBackground: Color,
+): String = "${credential.id}|$templateUri|$colorScheme|${cardBackground.value}"
 
 private suspend fun fetchAndSubstituteSvg(credential: StoredCredential, templateUri: String, cardBackground: Color): SvgRenderPayload? {
     return try {

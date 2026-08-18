@@ -23,6 +23,7 @@
     <string name="credentials_welcome">Välkommen, %1$s</string>
     <string name="credentials_count_one">%1$d intyg</string>
     <string name="credentials_count_other">%1$d intyg</string>
+    <string name="credentials_stack_overflow_more">+%1$d till</string>
     <string name="credentials_empty_title">Inga intyg</string>
     <string name="credentials_empty_subtitle">Tryck på Lägg till nedan för att börja</string>
 
@@ -31,6 +32,8 @@
     <string name="add_credential_loading">Laddar tillgängliga intyg\u2026</string>
     <string name="add_credential_empty">Inga intyg tillgängliga</string>
     <string name="add_credential_retry">Försök igen</string>
+    <string name="add_credential_row_action_add">Lägg till</string>
+    <string name="add_credential_row_action_close">Stäng</string>
     <string name="nav_back">Tillbaka</string>
     <string name="credential_capability_online">Kan visas online</string>
     <string name="credential_capability_proximity">Kan visas personligen genom att trycka med telefonen</string>

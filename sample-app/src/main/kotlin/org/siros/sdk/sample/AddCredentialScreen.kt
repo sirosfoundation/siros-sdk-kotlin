@@ -2,7 +2,9 @@
 package org.siros.sdk.sample
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -77,6 +79,50 @@ fun AddCredentialScreen(
     onRetry: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    // Long-press detail modal — lets the user inspect an offer's full
+    // description/format before committing to the issuance-consent dialog
+    // below, without the row's own tap target already starting that flow.
+    var detailOffer by remember { mutableStateOf<CredentialOffer?>(null) }
+    if (detailOffer != null) {
+        val offer = detailOffer!!
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { detailOffer = null },
+            title = { Text(offer.credentialName) },
+            text = {
+                Column {
+                    Text(
+                        text = offer.issuerName,
+                        style = androidx.compose.material3.MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    if (offer.credentialDescription != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = offer.credentialDescription!!,
+                            style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                            color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    CapabilityIconRow(capabilityFlagsFor(offer.format))
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    detailOffer = null
+                    onOfferSelected(offer)
+                }) {
+                    Text(stringResource(R.string.add_credential_row_action_add))
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { detailOffer = null }) {
+                    Text(stringResource(R.string.add_credential_row_action_close))
+                }
+            },
+        )
+    }
+
     // Issuance consent dialog
     if (pendingOffer != null) {
         androidx.compose.material3.AlertDialog(
@@ -164,7 +210,11 @@ fun AddCredentialScreen(
                     }
                 }
                 items(offers) { offer ->
-                    CredentialOfferRow(offer = offer, onClick = { onOfferSelected(offer) })
+                    CredentialOfferRow(
+                        offer = offer,
+                        onClick = { onOfferSelected(offer) },
+                        onLongClick = { detailOffer = offer },
+                    )
                     HorizontalDivider()
                 }
             }
@@ -172,15 +222,17 @@ fun AddCredentialScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CredentialOfferRow(
     offer: CredentialOffer,
     onClick: () -> Unit,
+    onLongClick: () -> Unit = {},
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
