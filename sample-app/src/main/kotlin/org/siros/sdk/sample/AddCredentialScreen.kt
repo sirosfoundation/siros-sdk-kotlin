@@ -180,7 +180,14 @@ fun AddCredentialScreen(
                     Text(stringResource(R.string.add_credential_loading))
                 }
             }
-        } else if (offers.isEmpty()) {
+        } else if (offers.isEmpty() && onStartIDV == null) {
+            // Truly nothing to show - no generic offers AND no IDV path
+            // either. Must NOT be reached just because `offers` is empty on
+            // its own (real bug this replaced: openAddCredential filters out
+            // the plain siros_id offer - see task #275 - so a tenant whose
+            // ONLY offer is SIROS ID hit this branch and lost the one path
+            // meant to actually issue it, since ScanPhysicalIDCard below was
+            // previously only reachable when offers was non-empty).
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
@@ -202,20 +209,41 @@ fun AddCredentialScreen(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
-                // Scan Physical ID card (when IDV is available)
+                // Scan Physical ID card (when IDV is available) - always
+                // shown here regardless of whether `offers` is empty, so
+                // it's never hidden behind the empty-state branch above.
                 if (onStartIDV != null) {
                     item {
                         ScanPhysicalIDCard(onClick = onStartIDV)
                         HorizontalDivider(thickness = 2.dp)
                     }
                 }
-                items(offers) { offer ->
-                    CredentialOfferRow(
-                        offer = offer,
-                        onClick = { onOfferSelected(offer) },
-                        onLongClick = { detailOffer = offer },
-                    )
-                    HorizontalDivider()
+                if (offers.isEmpty()) {
+                    item {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text(
+                                text = stringResource(R.string.add_credential_empty),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Button(onClick = onRetry) {
+                                Text(stringResource(R.string.add_credential_retry))
+                            }
+                        }
+                    }
+                } else {
+                    items(offers) { offer ->
+                        CredentialOfferRow(
+                            offer = offer,
+                            onClick = { onOfferSelected(offer) },
+                            onLongClick = { detailOffer = offer },
+                        )
+                        HorizontalDivider()
+                    }
                 }
             }
         }
