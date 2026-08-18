@@ -2059,7 +2059,9 @@ class SirosWallet private constructor(
             verifierName = trustResult.entityName,
             credentialIds = selectedIds,
             credentialNames = selectedIds.mapNotNull { id -> allCreds.find { it.id == id }?.metadata?.name },
-            requestedClaims = matchResults.flatMap { it.requestedClaims.flatten() }.distinct(),
+            requestedClaims = matchResults.flatMap { result ->
+                result.requestedClaims.mapNotNull { path -> path.lastOrNull() }
+            }.distinct(),
             timestamp = System.currentTimeMillis(),
         ))
 
@@ -3820,7 +3822,9 @@ class SirosWallet private constructor(
                         credentialNames = selectedIds.mapNotNull { id ->
                             allCreds.find { it.id == id }?.metadata?.name
                         },
-                        requestedClaims = matchResults.flatMap { it.requestedClaims.flatten() }.distinct(),
+                        requestedClaims = matchResults.flatMap { result ->
+                            result.requestedClaims.mapNotNull { path -> path.lastOrNull() }
+                        }.distinct(),
                         timestamp = System.currentTimeMillis(),
                     ))
 
@@ -4511,7 +4515,9 @@ class SirosWallet private constructor(
                     credentialNames = selectedIds.mapNotNull { id ->
                         allCreds.find { it.id == id }?.metadata?.name
                     },
-                    requestedClaims = matchResults.flatMap { it.requestedClaims.flatten() }.distinct(),
+                    requestedClaims = matchResults.flatMap { result ->
+                        result.requestedClaims.mapNotNull { path -> path.lastOrNull() }
+                    }.distinct(),
                     timestamp = System.currentTimeMillis(),
                 ))
 
