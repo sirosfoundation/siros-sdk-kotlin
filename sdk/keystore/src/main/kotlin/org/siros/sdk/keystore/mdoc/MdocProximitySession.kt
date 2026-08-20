@@ -102,9 +102,8 @@ class MdocProximitySession(
      * Evaluates a reader's already-signature-verified x5chain (leaf first)
      * for trust - the host app wires this to a remote AuthZEN call against
      * go-trust's `mdocrical` registry, with a local X.509-path-validation
-     * fallback against a configured RICAL root, per this session's RICAL
-     * plan (`~/.claude/plans/dreamy-frolicking-chipmunk.md`). Only invoked
-     * when a `readerAuth` was present and its signature verified - see
+     * fallback against a configured RICAL root. Only invoked when a
+     * `readerAuth` was present and its signature verified - see
      * [ReaderTrustResult]'s doc comment for why an invalid signature skips
      * this entirely rather than calling it with an already-doomed chain.
      */

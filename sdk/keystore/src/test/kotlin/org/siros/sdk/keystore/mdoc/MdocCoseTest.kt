@@ -15,8 +15,18 @@ class MdocCoseTest {
 
     /** JDK ECDSA `Signature.sign()` always returns ASN.1 DER; the COSE/mdoc wire format is raw r||s. */
     private fun derToRaw(der: ByteArray, componentLength: Int): ByteArray {
-        // SEQUENCE(0x30, len) INTEGER(0x02, len, bytes) INTEGER(0x02, len, bytes)
-        var offset = 2
+        // SEQUENCE(0x30, len) INTEGER(0x02, len, bytes) INTEGER(0x02, len, bytes) -
+        // the outer SEQUENCE's own length can be long-form (P-521/ES512's
+        // body is always >= 128 bytes), so this can't assume a fixed 2-byte
+        // header the way an earlier version of this helper did.
+        require(der[0] == 0x30.toByte()) { "expected ASN.1 SEQUENCE tag" }
+        var offset = 1
+        val firstLengthByte = der[offset].toInt() and 0xFF
+        offset++
+        if (firstLengthByte and 0x80 != 0) {
+            val numLengthBytes = firstLengthByte and 0x7F
+            offset += numLengthBytes
+        }
         fun readInteger(): ByteArray {
             require(der[offset] == 0x02.toByte()) { "expected ASN.1 INTEGER tag" }
             offset++
@@ -95,5 +105,30 @@ class MdocCoseTest {
         }
 
         assertFalse(MdocCose.verify1(sign1, payload, otherKeyPair.public))
+    }
+
+    /**
+     * Regression test for a real Copilot-review finding: `rawEcdsaSignatureToDer`'s
+     * DER length encoding previously used a single length byte
+     * unconditionally, which breaks for ES512 (P-521) since its SEQUENCE
+     * body (two ~67-byte INTEGER TLVs) is always >= 128 bytes and requires
+     * ASN.1 DER long-form length encoding.
+     */
+    @Test
+    fun `verify1 accepts an ES512 signature (P-521, exercises long-form DER length encoding)`() = runTest {
+        val keyPair = KeyPairGenerator.getInstance("EC").apply {
+            initialize(ECGenParameterSpec("secp521r1"))
+        }.generateKeyPair()
+
+        val payload = "ReaderAuthentication test payload".toByteArray()
+
+        val sign1 = MdocCose.sign1Detached("ES512", payload) { toBeSigned ->
+            val signer = Signature.getInstance("SHA512withECDSA")
+            signer.initSign(keyPair.private)
+            signer.update(toBeSigned)
+            derToRaw(signer.sign(), 66)
+        }
+
+        assertTrue(MdocCose.verify1(sign1, payload, keyPair.public))
     }
 }

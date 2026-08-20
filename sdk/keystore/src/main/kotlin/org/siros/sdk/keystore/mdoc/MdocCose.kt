@@ -146,19 +146,38 @@ object MdocCose {
         val s = BigInteger(1, raw.copyOfRange(componentLength, raw.size))
 
         fun encodeInteger(value: BigInteger): ByteArray {
-            var bytes = value.toByteArray()
+            val bytes = value.toByteArray()
             // BigInteger.toByteArray() already two's-complement-encodes (and
             // left-pads with a 0x00 sign byte when the raw component's high
             // bit would otherwise read as negative) - ASN.1 INTEGER uses the
             // same encoding, so no further adjustment is needed beyond the
             // standard TLV wrapper.
-            return byteArrayOf(0x02, bytes.size.toByte()) + bytes
+            return byteArrayOf(0x02) + derLength(bytes.size) + bytes
         }
 
         val rEncoded = encodeInteger(r)
         val sEncoded = encodeInteger(s)
         val sequenceBody = rEncoded + sEncoded
-        return byteArrayOf(0x30, sequenceBody.size.toByte()) + sequenceBody
+        return byteArrayOf(0x30) + derLength(sequenceBody.size) + sequenceBody
+    }
+
+    /**
+     * ASN.1 DER length encoding (X.690 §8.1.3): short-form (a single byte,
+     * value 0-127) or long-form (0x80 | numLengthBytes, followed by the
+     * big-endian length). A single-byte-only encoder here previously broke
+     * ES512 (P-521) verification - its SEQUENCE body (two ~67-byte INTEGER
+     * TLVs) is always >= 128 bytes, requiring long-form length encoding
+     * that a bare `size.toByte()` can't produce (found via Copilot review).
+     */
+    private fun derLength(length: Int): ByteArray {
+        if (length < 0x80) return byteArrayOf(length.toByte())
+        val lengthBytes = mutableListOf<Byte>()
+        var remaining = length
+        while (remaining > 0) {
+            lengthBytes.add(0, (remaining and 0xFF).toByte())
+            remaining = remaining ushr 8
+        }
+        return byteArrayOf((0x80 or lengthBytes.size).toByte()) + lengthBytes.toByteArray()
     }
 
     /**

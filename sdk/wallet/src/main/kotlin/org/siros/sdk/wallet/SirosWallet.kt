@@ -4501,10 +4501,22 @@ class SirosWallet private constructor(
     private fun evaluateReaderTrustLocally(x5chain: List<ByteArray>): TrustResult {
         val subjectId = sha256Hex(x5chain[0])
         if (readerTrustRootCertificates.isEmpty()) {
+            // Distinguish "nothing configured" from "configured but every
+            // entry failed to parse" (a real Copilot-review finding: the
+            // original single message here masked misconfiguration, since
+            // readerTrustRootCertificates silently drops unparsable PEMs -
+            // see its own doc comment for why a warning is logged there,
+            // not here, at the point each entry actually fails to parse).
+            val reason = if (config.readerTrustRootCertificatesPem.isEmpty()) {
+                "Local reader trust evaluation is unavailable: no RICAL root certificate configured"
+            } else {
+                "Local reader trust evaluation is unavailable: ${config.readerTrustRootCertificatesPem.size} " +
+                    "RICAL root certificate(s) configured but none could be parsed - check Timber logs for the parse error"
+            }
             return TrustResult(
                 trusted = false,
                 framework = "local-rical-root",
-                reason = "Local reader trust evaluation is unavailable: no RICAL root certificate configured",
+                reason = reason,
                 identifier = subjectId,
             )
         }
@@ -4532,10 +4544,19 @@ class SirosWallet private constructor(
         }
     }
 
+    /**
+     * Parses [WalletConfig.readerTrustRootCertificatesPem] into certificates,
+     * logging (not silently dropping) any entry that fails to parse - a real
+     * Copilot-review finding: an operator who pastes a malformed PEM would
+     * otherwise get no diagnostic signal beyond "untrusted", with no way to
+     * tell a genuine trust decision apart from their own misconfiguration.
+     */
     private val readerTrustRootCertificates: List<java.security.cert.X509Certificate> by lazy {
         val certFactory = java.security.cert.CertificateFactory.getInstance("X.509")
         config.readerTrustRootCertificatesPem.mapNotNull { pem ->
-            runCatching { certFactory.generateCertificate(pem.byteInputStream()) as java.security.cert.X509Certificate }.getOrNull()
+            runCatching { certFactory.generateCertificate(pem.byteInputStream()) as java.security.cert.X509Certificate }
+                .onFailure { Timber.w(it, "Failed to parse a configured RICAL root certificate PEM") }
+                .getOrNull()
         }
     }
 
