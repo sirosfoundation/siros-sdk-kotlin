@@ -2,19 +2,31 @@
 package org.siros.sdk.keystore.mdoc
 
 import com.upokecenter.cbor.CBORObject
+import java.math.BigInteger
+import java.security.PublicKey
+import java.security.Signature
 
 /**
- * Minimal COSE_Sign1 construction (RFC 8152 §4.2), scoped to what a wallet
- * (holder) needs to produce a `DeviceAuth.deviceSignature` for an ISO
- * 18013-5 DeviceResponse - signing only, no verification (that's a
- * verifier-side concern). Mirrors `sirosfoundation/vc/pkg/mdoc/cose.go`'s
- * `Sign1Detached` for the algorithm/header/Sig_structure shape.
+ * Minimal COSE_Sign1 construction/verification (RFC 8152 §4.2/§4.4), scoped
+ * to an mdoc wallet's needs: signing a `DeviceAuth.deviceSignature` for an
+ * ISO 18013-5 DeviceResponse, and - new for RICAL reader-authentication
+ * support (Annex F) - verifying an INCOMING COSE_Sign1 (a reader's
+ * `readerAuth`). This is a deliberate, first-time departure from this SDK's
+ * prior convention of treating incoming COSE_Sign1 structures (issuerAuth)
+ * as opaque and never verifying them locally - see
+ * [org.siros.sdk.credentials.mdoc.MdocModel]'s own doc comment. Mirrors
+ * `sirosfoundation/vc/pkg/mdoc/cose.go`'s `Sign1Detached`/`Verify1` for the
+ * algorithm/header/Sig_structure shape.
  *
  * Note: unlike the Go reference, no ECDSA DER->raw signature conversion is
- * needed here - this SDK's [Signer] abstraction (WSCD/UniFFI-backed) already
- * returns raw r||s signatures, confirmed by the existing JWS signing paths
- * (`generateProof`/`signPresentation` in `WscdKeystoreAdapter`) which embed
- * the same signer output directly as a JWS signature with no conversion.
+ * needed for SIGNING - this SDK's [Signer] abstraction (WSCD/UniFFI-backed)
+ * already returns raw r||s signatures, confirmed by the existing JWS
+ * signing paths (`generateProof`/`signPresentation` in
+ * `WscdKeystoreAdapter`) which embed the same signer output directly as a
+ * JWS signature with no conversion. VERIFYING an incoming signature is the
+ * opposite direction: the JDK's [Signature] API only accepts DER-encoded
+ * ECDSA signatures, so [verify1] converts the raw r||s COSE signature to
+ * DER before calling it.
  */
 object MdocCose {
 
@@ -99,5 +111,157 @@ object MdocCose {
         coseSign1.Add(CBORObject.FromObject(signature))
 
         return coseSign1
+    }
+
+    /** Java Security algorithm names per COSE alg identifier, ECDSA subset. */
+    private fun jcaAlgorithmFor(coseAlg: Long): String = when (coseAlg) {
+        ALG_ES256 -> "SHA256withECDSA"
+        ALG_ES384 -> "SHA384withECDSA"
+        ALG_ES512 -> "SHA512withECDSA"
+        else -> throw IllegalArgumentException("Unsupported COSE algorithm for verification: $coseAlg")
+    }
+
+    /** Raw signature byte length (r and s each this many bytes) per COSE alg. */
+    private fun rawSignatureLength(coseAlg: Long): Int = when (coseAlg) {
+        ALG_ES256 -> 32
+        ALG_ES384 -> 48
+        ALG_ES512 -> 66
+        else -> throw IllegalArgumentException("Unsupported COSE algorithm for verification: $coseAlg")
+    }
+
+    /**
+     * Converts a raw fixed-length r||s ECDSA signature (the COSE/JOSE wire
+     * format, RFC 8152 §8.1) to the ASN.1 DER `SEQUENCE { INTEGER r,
+     * INTEGER s }` encoding [java.security.Signature.verify] requires -
+     * the opposite direction of `der_signature_to_raw` in
+     * `siros-wscd-manager`'s `preview_sign_protocol.rs` (confirmed there via
+     * real YubiKey hardware testing), which converts a real authenticator's
+     * DER signature back to raw for the WSCD-signing path.
+     */
+    private fun rawEcdsaSignatureToDer(raw: ByteArray, componentLength: Int): ByteArray {
+        require(raw.size == componentLength * 2) {
+            "Raw ECDSA signature length ${raw.size} does not match expected ${componentLength * 2}"
+        }
+        val r = BigInteger(1, raw.copyOfRange(0, componentLength))
+        val s = BigInteger(1, raw.copyOfRange(componentLength, raw.size))
+
+        fun encodeInteger(value: BigInteger): ByteArray {
+            val bytes = value.toByteArray()
+            // BigInteger.toByteArray() already two's-complement-encodes (and
+            // left-pads with a 0x00 sign byte when the raw component's high
+            // bit would otherwise read as negative) - ASN.1 INTEGER uses the
+            // same encoding, so no further adjustment is needed beyond the
+            // standard TLV wrapper.
+            return byteArrayOf(0x02) + derLength(bytes.size) + bytes
+        }
+
+        val rEncoded = encodeInteger(r)
+        val sEncoded = encodeInteger(s)
+        val sequenceBody = rEncoded + sEncoded
+        return byteArrayOf(0x30) + derLength(sequenceBody.size) + sequenceBody
+    }
+
+    /**
+     * ASN.1 DER length encoding (X.690 §8.1.3): short-form (a single byte,
+     * value 0-127) or long-form (0x80 | numLengthBytes, followed by the
+     * big-endian length). A single-byte-only encoder here previously broke
+     * ES512 (P-521) verification - its SEQUENCE body (two ~67-byte INTEGER
+     * TLVs) is always >= 128 bytes, requiring long-form length encoding
+     * that a bare `size.toByte()` can't produce (found via Copilot review).
+     */
+    private fun derLength(length: Int): ByteArray {
+        if (length < 0x80) return byteArrayOf(length.toByte())
+        val lengthBytes = mutableListOf<Byte>()
+        var remaining = length
+        while (remaining > 0) {
+            lengthBytes.add(0, (remaining and 0xFF).toByte())
+            remaining = remaining ushr 8
+        }
+        return byteArrayOf((0x80 or lengthBytes.size).toByte()) + lengthBytes.toByteArray()
+    }
+
+    /**
+     * Verifies an incoming COSE_Sign1's signature over [payload] (used for
+     * the detached case, e.g. a `readerAuth` whose payload is reconstructed
+     * from context rather than embedded - the same detachment convention
+     * [sign1Detached] produces) against [publicKey]. Reads the signing
+     * algorithm from [sign1]'s protected header (COSE label 1); the RICAL
+     * annex (F.3.2) restricts this to ES256/ES384/ES512/EdDSA, but EdDSA
+     * verification isn't implemented here yet since no current caller needs
+     * it - added if/when one does, rather than guessing at untested code.
+     *
+     * @param sign1 the 4-element COSE_Sign1 array: `[protected, unprotected,
+     *   payload-or-null, signature]`.
+     * @param payload the actual signed payload bytes (required even when
+     *   `sign1`'s own payload slot is CBOR null, i.e. detached).
+     */
+    fun verify1(sign1: CBORObject, payload: ByteArray, publicKey: PublicKey): Boolean {
+        require(sign1.type == com.upokecenter.cbor.CBORType.Array && sign1.size() == 4) {
+            "sign1 is not a 4-element COSE_Sign1 array"
+        }
+        val protectedBytes = sign1[0].GetByteString()
+        val signature = sign1[3].GetByteString()
+
+        val protectedHeaders = CBORObject.DecodeFromBytes(protectedBytes)
+        val algValue = protectedHeaders[CBORObject.FromObject(HEADER_ALGORITHM)]
+            ?: throw IllegalArgumentException("COSE_Sign1 protected header missing algorithm")
+        val coseAlg = algValue.AsInt64Value()
+
+        val sigStructure = CBORObject.NewArray()
+        sigStructure.Add(CBORObject.FromObject("Signature1"))
+        sigStructure.Add(CBORObject.FromObject(protectedBytes))
+        sigStructure.Add(CBORObject.FromObject(ByteArray(0)))
+        sigStructure.Add(CBORObject.FromObject(payload))
+        val toBeSigned = sigStructure.EncodeToBytes()
+
+        val derSignature = rawEcdsaSignatureToDer(signature, rawSignatureLength(coseAlg))
+
+        val verifier = Signature.getInstance(jcaAlgorithmFor(coseAlg))
+        verifier.initVerify(publicKey)
+        verifier.update(toBeSigned)
+        return verifier.verify(derSignature)
+    }
+
+    /**
+     * Extracts the x5chain (COSE header label 33) from a COSE_Sign1's
+     * unprotected header (index 1 of the 4-element array) - the standard
+     * mdoc issuerAuth/deviceAuth/readerAuth convention (confirmed against
+     * ISO 18013-5:2021's own worked readerAuth example, §9.1.4: the
+     * diagnostic-notation x5chain sits in the second, unprotected map, not
+     * the first/protected one - unlike the second-edition RICAL/VICAL
+     * trust-list documents' own signatures, which place it differently; see
+     * go-trust's `mdocrical`/`vical` registries for that distinction).
+     * Returns DER-encoded certificate bytes, leaf first.
+     */
+    fun extractX5Chain(sign1: CBORObject): List<ByteArray> {
+        if (sign1.type != com.upokecenter.cbor.CBORType.Array || sign1.size() < 2) return emptyList()
+        val unprotected = sign1[1]
+        if (unprotected.type != com.upokecenter.cbor.CBORType.Map) return emptyList()
+        val x5chain = unprotected[CBORObject.FromObject(33)] ?: return emptyList()
+        return when (x5chain.type) {
+            com.upokecenter.cbor.CBORType.ByteString -> listOf(x5chain.GetByteString())
+            com.upokecenter.cbor.CBORType.Array -> (0 until x5chain.size()).map { x5chain[it].GetByteString() }
+            else -> emptyList()
+        }
+    }
+
+    /**
+     * Builds `ReaderAuthenticationBytes` per ISO 18013-5:2021 §9.1.4 -
+     * `#6.24(bstr .cbor ["ReaderAuthentication", SessionTranscript,
+     * ItemsRequestBytes])` - the detached content a reader's `readerAuth`
+     * COSE_Sign1 actually signs (its own payload slot is CBOR null).
+     *
+     * @param sessionTranscript the bare (untagged) `SessionTranscript` array
+     *   bytes, the same shape [ProximitySessionCrypto] takes.
+     * @param itemsRequestTaggedBytes the exact tag-24-wrapped `itemsRequest`
+     *   CBOR bytes as they appeared in the `DocRequest` - the identical
+     *   bytes, not a re-encoding, per the spec's "Same as in mdoc request".
+     */
+    fun buildReaderAuthenticationBytes(sessionTranscript: ByteArray, itemsRequestTaggedBytes: ByteArray): ByteArray {
+        val readerAuthentication = CBORObject.NewArray()
+        readerAuthentication.Add(CBORObject.FromObject("ReaderAuthentication"))
+        readerAuthentication.Add(CBORObject.DecodeFromBytes(sessionTranscript))
+        readerAuthentication.Add(CBORObject.DecodeFromBytes(itemsRequestTaggedBytes))
+        return CBORObject.FromObjectAndTag(CBORObject.FromObject(readerAuthentication.EncodeToBytes()), 24).EncodeToBytes()
     }
 }

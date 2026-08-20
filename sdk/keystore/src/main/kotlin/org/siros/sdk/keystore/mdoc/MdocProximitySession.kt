@@ -6,12 +6,31 @@ import org.siros.sdk.credentials.CredentialMatcher
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.StoredCredential
 import timber.log.Timber
+import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
 
 /** The user's answer to a [RequestProximityConsent] prompt. */
 sealed interface ProximityConsentResult {
     data class Approved(val family: CredentialFamily) : ProximityConsentResult
     data object Denied : ProximityConsentResult
 }
+
+/**
+ * Outcome of evaluating a proximity reader's authenticated identity - only
+ * produced when the reader sent a `readerAuth` AND its COSE_Sign1 signature
+ * verified successfully against its own embedded x5chain (see
+ * [MdocCose.verify1]); a present-but-invalid signature is treated as
+ * [MdocProximitySession] logging a warning and passing `null` here rather
+ * than a `trusted = false` result, since an invalid signature means the
+ * reader's claimed identity itself is unproven, not merely untrusted.
+ */
+data class ReaderTrustResult(
+    val trusted: Boolean,
+    /** Human-readable reason for the decision, e.g. why a chain wasn't trusted. */
+    val reason: String? = null,
+    /** Display name of the reader/relying party, if the trust evaluator could resolve one. */
+    val entityName: String? = null,
+)
 
 /**
  * Asks the user to approve a proximity presentation before it's signed and
@@ -26,11 +45,16 @@ sealed interface ProximityConsentResult {
  *   one match exists; see [CredentialFamily] for why this is families, not
  *   raw instances), for the user to choose among if there's more than one
  *   (e.g. the same docType from two different issuers).
+ * @param readerTrust the reader's RICAL trust evaluation result - null if
+ *   the reader sent no `readerAuth` (optional per §9.1.4) or its signature
+ *   failed to verify, in which case the host UI should treat the reader as
+ *   unauthenticated (no badge), not as actively distrusted.
  */
 typealias RequestProximityConsent = suspend (
     docType: String,
     requestedClaims: List<String>,
     matchingFamilies: List<CredentialFamily>,
+    readerTrust: ReaderTrustResult?,
 ) -> ProximityConsentResult
 
 /**
@@ -74,6 +98,16 @@ class MdocProximitySession(
     private val signPresentation: suspend (credentialId: Long, disclosedClaims: List<String>?, sessionTranscriptBytes: ByteArray) -> ByteArray,
     /** See [RequestProximityConsent]'s doc comment. */
     private val requestConsent: RequestProximityConsent,
+    /**
+     * Evaluates a reader's already-signature-verified x5chain (leaf first)
+     * for trust - the host app wires this to a remote AuthZEN call against
+     * go-trust's `mdocrical` registry, with a local X.509-path-validation
+     * fallback against a configured RICAL root. Only invoked when a
+     * `readerAuth` was present and its signature verified - see
+     * [ReaderTrustResult]'s doc comment for why an invalid signature skips
+     * this entirely rather than calling it with an already-doomed chain.
+     */
+    private val evaluateReaderTrust: suspend (x5chain: List<ByteArray>) -> ReaderTrustResult,
     /**
      * Mirrors `CredentialUtils.eligibleInstances` bound to the caller's
      * current `SirosWallet.credentialConsumptionPolicy`/`presentationHistory` -
@@ -175,8 +209,10 @@ class MdocProximitySession(
             Timber.w("$logTag: matching credentials exist but none have a representable family (missing instanceId==0 member)")
             return Result.Failed("no representable credential family")
         }
+        val readerTrust = evaluateReaderAuth(docRequest, sessionTranscript)
+
         onStep("awaiting_consent")
-        val consent = requestConsent(docRequest.docType, docRequest.disclosedClaims(), families)
+        val consent = requestConsent(docRequest.docType, docRequest.disclosedClaims(), families, readerTrust)
         val family = when (consent) {
             is ProximityConsentResult.Approved -> consent.family
             ProximityConsentResult.Denied -> return Result.Denied
@@ -198,5 +234,38 @@ class MdocProximitySession(
         val encrypted = deviceCipher!!.encrypt(response)
         val sessionData = ProximitySessionMessages.buildSessionData(encryptedData = encrypted)
         return Result.Response(sessionData)
+    }
+
+    /**
+     * §9.1.4 reader authentication: verifies [docRequest]'s `readerAuth`
+     * COSE_Sign1 (if present) against its own embedded x5chain, then hands
+     * that chain to [evaluateReaderTrust] for the actual trust decision.
+     * Returns null (no badge, not "untrusted") when there's no `readerAuth`
+     * to check or its signature doesn't verify - see [ReaderTrustResult]'s
+     * doc comment.
+     */
+    private suspend fun evaluateReaderAuth(docRequest: DeviceRequestParser.DocRequest, sessionTranscript: ByteArray): ReaderTrustResult? {
+        val readerAuth = docRequest.readerAuth ?: return null
+        return try {
+            val chain = MdocCose.extractX5Chain(readerAuth)
+            if (chain.isEmpty()) {
+                Timber.w("$logTag: readerAuth present but has no x5chain")
+                return null
+            }
+            val readerCert = CertificateFactory.getInstance("X.509")
+                .generateCertificate(chain[0].inputStream()) as X509Certificate
+            val readerAuthenticationBytes = MdocCose.buildReaderAuthenticationBytes(
+                sessionTranscript = sessionTranscript,
+                itemsRequestTaggedBytes = docRequest.itemsRequestTaggedBytes,
+            )
+            if (!MdocCose.verify1(readerAuth, readerAuthenticationBytes, readerCert.publicKey)) {
+                Timber.w("$logTag: readerAuth signature verification failed")
+                return null
+            }
+            evaluateReaderTrust(chain)
+        } catch (e: Exception) {
+            Timber.w(e, "$logTag: readerAuth verification threw")
+            null
+        }
     }
 }

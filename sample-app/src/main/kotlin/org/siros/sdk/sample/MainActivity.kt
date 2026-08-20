@@ -355,6 +355,8 @@ fun WalletScreen(viewModel: WalletViewModel) {
         val tenantIdState by viewModel.tenantId.collectAsState()
         val engineUrlOverrideState by viewModel.engineUrlOverride.collectAsState()
         val zkCircuitUrlsState by viewModel.zkCircuitUrls.collectAsState()
+        val preferLocalReaderTrustEvaluationState by viewModel.preferLocalReaderTrustEvaluation.collectAsState()
+        val readerTrustRootCertificatePemState by viewModel.readerTrustRootCertificatePem.collectAsState()
         LoginScreen(
             cachedAccounts = cachedAccounts,
             backendUrl = backendUrlState,
@@ -362,6 +364,8 @@ fun WalletScreen(viewModel: WalletViewModel) {
             engineUrl = engineUrlOverrideState,
             useWmpProtocol = useWmpProtocol,
             zkCircuitUrls = zkCircuitUrlsState,
+            preferLocalReaderTrustEvaluation = preferLocalReaderTrustEvaluationState,
+            readerTrustRootCertificatePem = readerTrustRootCertificatePemState,
             showPreLoginSettings = BuildConfig.SHOW_PRE_LOGIN_SETTINGS,
             isLoading = isLoading || walletState is WalletState.Connecting,
             snackbarHostState = snackbarHostState,
@@ -374,6 +378,8 @@ fun WalletScreen(viewModel: WalletViewModel) {
             onUpdateEngineUrl = viewModel::updateEngineUrl,
             onUpdateUseWmpProtocol = viewModel::updateUseWmpProtocol,
             onUpdateZkCircuitUrls = viewModel::updateZkCircuitUrls,
+            onUpdatePreferLocalReaderTrustEvaluation = viewModel::updatePreferLocalReaderTrustEvaluation,
+            onUpdateReaderTrustRootCertificatePem = viewModel::updateReaderTrustRootCertificatePem,
         )
         return
     }
@@ -491,6 +497,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                 getCredentials = viewModel::getCredentialsForProximity,
                 signPresentation = viewModel::signMdocPresentationForProximity,
                 filterEligible = viewModel::filterEligibleForProximity,
+                evaluateReaderTrust = viewModel::evaluateReaderTrustForProximity,
                 onBack = viewModel::closeProximityEngagement,
             )
 
@@ -706,6 +713,8 @@ fun LoginScreen(
     engineUrl: String,
     useWmpProtocol: Boolean,
     zkCircuitUrls: List<String>,
+    preferLocalReaderTrustEvaluation: Boolean = false,
+    readerTrustRootCertificatePem: String = "",
     showPreLoginSettings: Boolean,
     isLoading: Boolean,
     snackbarHostState: SnackbarHostState,
@@ -718,6 +727,8 @@ fun LoginScreen(
     onUpdateEngineUrl: (String) -> Unit,
     onUpdateUseWmpProtocol: (Boolean) -> Unit,
     onUpdateZkCircuitUrls: (List<String>) -> Unit,
+    onUpdatePreferLocalReaderTrustEvaluation: (Boolean) -> Unit = {},
+    onUpdateReaderTrustRootCertificatePem: (String) -> Unit = {},
 ) {
     var showRegister by remember { mutableStateOf(false) }
     var showOtherLogin by remember { mutableStateOf(false) }
@@ -732,11 +743,15 @@ fun LoginScreen(
             engineUrl = engineUrl,
             useWmpProtocol = useWmpProtocol,
             zkCircuitUrls = zkCircuitUrls,
+            preferLocalReaderTrustEvaluation = preferLocalReaderTrustEvaluation,
+            readerTrustRootCertificatePem = readerTrustRootCertificatePem,
             onUpdateBackendUrl = onUpdateBackendUrl,
             onUpdateTenantId = onUpdateTenantId,
             onUpdateEngineUrl = onUpdateEngineUrl,
             onUpdateUseWmpProtocol = onUpdateUseWmpProtocol,
             onUpdateZkCircuitUrls = onUpdateZkCircuitUrls,
+            onUpdatePreferLocalReaderTrustEvaluation = onUpdatePreferLocalReaderTrustEvaluation,
+            onUpdateReaderTrustRootCertificatePem = onUpdateReaderTrustRootCertificatePem,
             onDismiss = { showSettingsSheet = false },
         )
     }
@@ -916,11 +931,15 @@ fun PreLoginSettingsSheet(
     engineUrl: String,
     useWmpProtocol: Boolean,
     zkCircuitUrls: List<String>,
+    preferLocalReaderTrustEvaluation: Boolean = false,
+    readerTrustRootCertificatePem: String = "",
     onUpdateBackendUrl: (String) -> Unit,
     onUpdateTenantId: (String) -> Unit,
     onUpdateEngineUrl: (String) -> Unit,
     onUpdateUseWmpProtocol: (Boolean) -> Unit,
     onUpdateZkCircuitUrls: (List<String>) -> Unit,
+    onUpdatePreferLocalReaderTrustEvaluation: (Boolean) -> Unit = {},
+    onUpdateReaderTrustRootCertificatePem: (String) -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     var editBackendUrl by remember { mutableStateOf(backendUrl) }
@@ -930,6 +949,7 @@ fun PreLoginSettingsSheet(
     // onUpdateZkCircuitUrls rather than storing List<String> as Compose
     // TextField state directly.
     var editZkCircuitUrls by remember { mutableStateOf(zkCircuitUrls.joinToString("\n")) }
+    var editReaderTrustRootCertificatePem by remember { mutableStateOf(readerTrustRootCertificatePem) }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -1003,6 +1023,40 @@ fun PreLoginSettingsSheet(
                     onCheckedChange = onUpdateUseWmpProtocol,
                 )
             }
+
+            // RICAL reader-trust local fallback (Geneva 2026 interop event) -
+            // off by default: the remote go-trust `mdocrical` AuthZEN call
+            // is preferred since only it honors RICAL's temporary/dynamic
+            // trust roots. See WalletConfig.preferLocalReaderTrustEvaluation.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Evaluate reader trust locally", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Skip the remote RICAL trust check and validate proximity readers " +
+                            "only against the root certificate below.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = preferLocalReaderTrustEvaluation,
+                    onCheckedChange = onUpdatePreferLocalReaderTrustEvaluation,
+                )
+            }
+            OutlinedTextField(
+                value = editReaderTrustRootCertificatePem,
+                onValueChange = { text ->
+                    editReaderTrustRootCertificatePem = text
+                    onUpdateReaderTrustRootCertificatePem(text)
+                },
+                label = { Text("RICAL root certificate (PEM)") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = false,
+            )
         }
     }
 }

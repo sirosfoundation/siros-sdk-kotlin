@@ -165,6 +165,19 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _credentialConsumptionPolicy: MutableStateFlow<CredentialConsumptionPolicy>
     val credentialConsumptionPolicy: StateFlow<CredentialConsumptionPolicy> get() = _credentialConsumptionPolicy
 
+    /** See [org.siros.sdk.wallet.WalletConfig.preferLocalReaderTrustEvaluation]'s doc comment. */
+    private val _preferLocalReaderTrustEvaluation: MutableStateFlow<Boolean>
+    val preferLocalReaderTrustEvaluation: StateFlow<Boolean> get() = _preferLocalReaderTrustEvaluation
+
+    /**
+     * A single PEM-encoded RICAL root certificate for local reader-trust
+     * fallback (see [org.siros.sdk.wallet.WalletConfig.readerTrustRootCertificatesPem]) -
+     * blank means none configured, matching that config field defaulting to
+     * an empty list.
+     */
+    private val _readerTrustRootCertificatePem: MutableStateFlow<String>
+    val readerTrustRootCertificatePem: StateFlow<String> get() = _readerTrustRootCertificatePem
+
     init {
         // Read test overrides - set either via the settings sheet UI, or (debug
         // builds only) via `adb shell am start ... --es backend_url ... --es
@@ -211,6 +224,12 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     prefs.getString("credential_consumption_policy", null) ?: ""
                 )
             }.getOrDefault(CredentialConsumptionPolicy.NEVER_CONSUME)
+        )
+        _preferLocalReaderTrustEvaluation = MutableStateFlow(
+            prefs.getBoolean("prefer_local_reader_trust_evaluation", false)
+        )
+        _readerTrustRootCertificatePem = MutableStateFlow(
+            prefs.getString("reader_trust_root_certificate_pem", null) ?: ""
         )
     }
 
@@ -278,6 +297,22 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
             .edit()
             .putString("credential_consumption_policy", policy.name)
+            .apply()
+    }
+
+    fun updatePreferLocalReaderTrustEvaluation(enabled: Boolean) {
+        _preferLocalReaderTrustEvaluation.value = enabled
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("prefer_local_reader_trust_evaluation", enabled)
+            .apply()
+    }
+
+    fun updateReaderTrustRootCertificatePem(pem: String) {
+        _readerTrustRootCertificatePem.value = pem
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putString("reader_trust_root_certificate_pem", pem)
             .apply()
     }
 
@@ -518,6 +553,21 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     /** For `BlePeripheralServer`/`BleCentralClient`'s injected `filterEligible` dependency. */
     fun filterEligibleForProximity(instances: List<StoredCredential>): List<StoredCredential> =
         CredentialUtils.eligibleInstances(instances, wallet.credentialConsumptionPolicy, wallet.presentationHistory)
+
+    /**
+     * For `BlePeripheralServer`/`BleCentralClient`'s injected `evaluateReaderTrust`
+     * dependency - adapts `SirosWallet.evaluateReaderTrust`'s richer
+     * `TrustResult` (shared with the verifier/issuer trust paths) down to
+     * `MdocProximitySession`'s narrower `ReaderTrustResult`.
+     */
+    suspend fun evaluateReaderTrustForProximity(x5chain: List<ByteArray>): org.siros.sdk.keystore.mdoc.ReaderTrustResult {
+        val result = wallet.evaluateReaderTrust(x5chain)
+        return org.siros.sdk.keystore.mdoc.ReaderTrustResult(
+            trusted = result.trusted,
+            reason = result.reason,
+            entityName = result.entityName,
+        )
+    }
 
     // ── Loading / error feedback ────────────────────────────────────
 
@@ -2070,6 +2120,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             // than in that screen's always-visible user-facing section.
             defaultWscdMapping = _defaultWscdMapping.value.takeIf { it.isNotEmpty() },
             requestWscdChoice = requestWscdChoice,
+            preferLocalReaderTrustEvaluation = _preferLocalReaderTrustEvaluation.value,
+            readerTrustRootCertificatesPem = _readerTrustRootCertificatePem.value.takeIf { it.isNotBlank() }
+                ?.let { listOf(it) } ?: emptyList(),
             // Mirrors enrollWscd/rotateLifecycle's own prefetch-PIN-before-
             // transport pattern (see awaitFido2PinEntry's doc comment) for
             // real credential issuance too - found necessary via live
