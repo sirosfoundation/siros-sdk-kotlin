@@ -67,6 +67,8 @@ class BlePeripheralServer(
      * instance even if [requestConsent]'s UI failed to grey it out.
      */
     filterEligible: (List<StoredCredential>) -> List<StoredCredential>,
+    /** See [MdocProximitySession]'s matching constructor parameter's doc comment. */
+    evaluateReaderTrust: suspend (x5chain: List<ByteArray>) -> ReaderTrustResult,
     /** Reports a canonical step token (see `FlowStepCatalog.proximitySteps`) for driving the same progress-bar UI the issuance/presentation flows use. */
     private val onStep: (String) -> Unit,
     private val onComplete: (success: Boolean) -> Unit,
@@ -101,6 +103,7 @@ class BlePeripheralServer(
         signPresentation = signPresentation,
         requestConsent = requestConsent,
         filterEligible = filterEligible,
+        evaluateReaderTrust = evaluateReaderTrust,
         onStep = onStep,
         logTag = "BlePeripheralServer",
     )

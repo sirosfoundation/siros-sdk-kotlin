@@ -4419,6 +4419,130 @@ class SirosWallet private constructor(
     }
 
     /**
+     * Evaluates a proximity reader's authenticated identity for trust - the
+     * `evaluateReaderTrust` dependency [org.siros.sdk.keystore.mdoc.MdocProximitySession]
+     * expects, for wiring into [org.siros.sdk.keystore.mdoc.BlePeripheralServer]/
+     * [org.siros.sdk.keystore.mdoc.BleCentralClient]. Only ever called with an
+     * x5chain whose `readerAuth` COSE_Sign1 signature has ALREADY verified
+     * locally (see [MdocCose.verify1]) - this method is purely the trust
+     * decision, mirroring [evaluateTrustDirect]'s request shape with a new
+     * `"mdoc-reader-auth"` action name against go-trust's `mdocrical`
+     * registry.
+     *
+     * Defaults to the remote AuthZEN call - this is the only path that
+     * honors RICAL's temporary/dynamic trust roots, since go-trust's own
+     * registry cache/refresh handles freshness and the wallet just calls it
+     * fresh each time. Falls back to local X.509 path validation against
+     * [WalletConfig.readerTrustRootCertificatesPem] if the remote call
+     * throws (backend unreachable), or unconditionally if
+     * [WalletConfig.preferLocalReaderTrustEvaluation] is set.
+     *
+     * @param x5chain the reader's DER-encoded certificate chain, leaf first.
+     */
+    suspend fun evaluateReaderTrust(x5chain: List<ByteArray>): TrustResult {
+        if (x5chain.isEmpty()) {
+            return TrustResult(trusted = false, reason = "readerAuth has no certificate chain")
+        }
+        if (config.preferLocalReaderTrustEvaluation) {
+            return evaluateReaderTrustLocally(x5chain)
+        }
+        return try {
+            evaluateReaderTrustRemote(x5chain)
+        } catch (e: Exception) {
+            Timber.w(e, "Remote reader trust evaluation failed, falling back to local RICAL root validation")
+            evaluateReaderTrustLocally(x5chain)
+        }
+    }
+
+    private suspend fun evaluateReaderTrustRemote(x5chain: List<ByteArray>): TrustResult {
+        val client = apiClient ?: throw WalletException("Not connected")
+        val subjectId = sha256Hex(x5chain[0])
+        val x5c = kotlinx.serialization.json.buildJsonArray {
+            x5chain.forEach { add(kotlinx.serialization.json.JsonPrimitive(java.util.Base64.getEncoder().encodeToString(it))) }
+        }
+
+        val evaluationRequest = kotlinx.serialization.json.buildJsonObject {
+            putJsonObject("subject") {
+                put("type", kotlinx.serialization.json.JsonPrimitive("key"))
+                put("id", kotlinx.serialization.json.JsonPrimitive(subjectId))
+            }
+            putJsonObject("resource") {
+                put("type", kotlinx.serialization.json.JsonPrimitive("x5c"))
+                put("id", kotlinx.serialization.json.JsonPrimitive(subjectId))
+                put("key", x5c)
+            }
+            putJsonObject("action") {
+                put("name", kotlinx.serialization.json.JsonPrimitive("mdoc-reader-auth"))
+            }
+        }
+
+        Timber.d("Calling /v1/evaluate for reader $subjectId (mdoc-reader-auth)")
+        val response = client.evaluateTrust(evaluationRequest)
+
+        val decision = response["decision"]?.jsonPrimitive?.boolean ?: false
+        val respContext = response["context"]?.jsonObject
+
+        return TrustResult(
+            trusted = decision,
+            framework = respContext?.get("framework")?.jsonPrimitive?.contentOrNull ?: "mdocrical",
+            reason = reasonText(respContext?.get("reason")) ?: reasonText(respContext?.get("message")),
+            entityName = respContext?.get("entity_name")?.jsonPrimitive?.contentOrNull,
+            identifier = subjectId,
+        )
+    }
+
+    /**
+     * Plain X.509 path validation against [WalletConfig.readerTrustRootCertificatesPem] -
+     * no RICAL CBOR parsing, no `trustConstraints` enforcement, since this
+     * path exists purely as an offline/unreachable-backend fallback for the
+     * stable, known-in-advance official root(s), not a full reimplementation
+     * of go-trust's `mdocrical` registry.
+     */
+    private fun evaluateReaderTrustLocally(x5chain: List<ByteArray>): TrustResult {
+        val subjectId = sha256Hex(x5chain[0])
+        if (readerTrustRootCertificates.isEmpty()) {
+            return TrustResult(
+                trusted = false,
+                framework = "local-rical-root",
+                reason = "Local reader trust evaluation is unavailable: no RICAL root certificate configured",
+                identifier = subjectId,
+            )
+        }
+        return try {
+            val certFactory = java.security.cert.CertificateFactory.getInstance("X.509")
+            val certPath = certFactory.generateCertPath(x5chain.map { certFactory.generateCertificate(it.inputStream()) })
+            val anchors = readerTrustRootCertificates.map { java.security.cert.TrustAnchor(it, null) }.toSet()
+            val params = java.security.cert.PKIXParameters(anchors).apply { isRevocationEnabled = false }
+            java.security.cert.CertPathValidator.getInstance("PKIX").validate(certPath, params)
+            val leaf = certPath.certificates.first() as java.security.cert.X509Certificate
+            TrustResult(
+                trusted = true,
+                framework = "local-rical-root",
+                reason = "Validated locally against a configured RICAL root certificate",
+                entityName = leaf.subjectX500Principal?.name,
+                identifier = subjectId,
+            )
+        } catch (e: Exception) {
+            TrustResult(
+                trusted = false,
+                framework = "local-rical-root",
+                reason = "Local RICAL root validation failed: ${e.message}",
+                identifier = subjectId,
+            )
+        }
+    }
+
+    private val readerTrustRootCertificates: List<java.security.cert.X509Certificate> by lazy {
+        val certFactory = java.security.cert.CertificateFactory.getInstance("X.509")
+        config.readerTrustRootCertificatesPem.mapNotNull { pem ->
+            runCatching { certFactory.generateCertificate(pem.byteInputStream()) as java.security.cert.X509Certificate }.getOrNull()
+        }
+    }
+
+    private fun sha256Hex(bytes: ByteArray): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
+    /**
      * Handle credential_selection step from the engine.
      *
      * The backend sends DCQL query + verifier info in a flow_progress message.

@@ -69,6 +69,7 @@ import org.siros.sdk.keystore.mdoc.BlePeripheralServer
 import org.siros.sdk.keystore.mdoc.DeviceEngagement
 import org.siros.sdk.keystore.mdoc.NfcHandoverSelect
 import org.siros.sdk.keystore.mdoc.ProximityConsentResult
+import org.siros.sdk.keystore.mdoc.ReaderTrustResult
 import org.siros.sdk.keystore.mdoc.RequestProximityConsent
 import org.siros.sdk.sample.proximity.ActiveEngagement
 
@@ -91,6 +92,7 @@ fun ProximityEngagementScreen(
     getCredentials: suspend () -> List<StoredCredential>,
     signPresentation: suspend (credentialId: Long, disclosedClaims: List<String>?, sessionTranscriptBytes: ByteArray) -> ByteArray,
     filterEligible: (List<StoredCredential>) -> List<StoredCredential>,
+    evaluateReaderTrust: suspend (x5chain: List<ByteArray>) -> ReaderTrustResult,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -152,13 +154,14 @@ fun ProximityEngagementScreen(
     // taps Approve or Deny. withContext(Main.immediate) hops back to the
     // main thread first - Compose state writes (pendingConsent) must
     // happen there, not on IO.
-    val requestConsent: RequestProximityConsent = { docType, requestedClaims, matchingFamilies ->
+    val requestConsent: RequestProximityConsent = { docType, requestedClaims, matchingFamilies, readerTrust ->
         withContext(Dispatchers.Main.immediate) {
             suspendCancellableCoroutine { continuation ->
                 val consent = PendingConsent(
                     docType = docType,
                     requestedClaims = requestedClaims,
                     matchingFamilies = matchingFamilies,
+                    readerTrust = readerTrust,
                     respond = { chosen ->
                         pendingConsent = null
                         if (continuation.isActive) {
@@ -199,6 +202,7 @@ fun ProximityEngagementScreen(
                 signPresentation = signPresentation,
                 requestConsent = requestConsent,
                 filterEligible = filterEligible,
+                evaluateReaderTrust = evaluateReaderTrust,
                 onStep = { step -> uiScope.launch(Dispatchers.Main.immediate) { currentStep = step } },
                 onComplete = { success ->
                     uiScope.launch(Dispatchers.Main.immediate) {
@@ -227,6 +231,7 @@ fun ProximityEngagementScreen(
                 signPresentation = signPresentation,
                 requestConsent = requestConsent,
                 filterEligible = filterEligible,
+                evaluateReaderTrust = evaluateReaderTrust,
                 onStep = { step -> uiScope.launch(Dispatchers.Main.immediate) { currentStep = step } },
                 onComplete = { success ->
                     uiScope.launch(Dispatchers.Main.immediate) {
@@ -421,9 +426,36 @@ private data class PendingConsent(
     val docType: String,
     val requestedClaims: List<String>,
     val matchingFamilies: List<CredentialFamily>,
+    /** See [RequestProximityConsent]'s `readerTrust` parameter doc comment. */
+    val readerTrust: ReaderTrustResult?,
     /** Call with the chosen family to approve, or null to deny. */
     val respond: (CredentialFamily?) -> Unit,
 )
+
+/**
+ * RICAL reader-trust indicator for the consent dialog (Geneva 2026 interop
+ * requirement: reader trust must be a visible, distinguishable signal, not
+ * enforced/blocking - see this session's RICAL plan). Three states:
+ * trusted (verified signature + trusted chain), untrusted (verified
+ * signature but an untrusted/unresolved chain), and no badge at all when
+ * [readerTrust] is null - see [ReaderTrustResult]'s doc comment for why "no
+ * `readerAuth`/invalid signature" is deliberately silent rather than shown
+ * as "untrusted".
+ */
+@Composable
+private fun ReaderTrustBadge(readerTrust: ReaderTrustResult?) {
+    if (readerTrust == null) return
+    val (icon, tint, label) = if (readerTrust.trusted) {
+        Triple(Icons.Filled.CheckCircle, MaterialTheme.colorScheme.primary, "Trusted reader" + (readerTrust.entityName?.let { ": $it" } ?: ""))
+    } else {
+        Triple(Icons.Filled.Error, MaterialTheme.colorScheme.error, "Reader identity not trusted" + (readerTrust.reason?.let { " ($it)" } ?: ""))
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.height(18.dp).width(18.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(label, style = MaterialTheme.typography.labelMedium, color = tint)
+    }
+}
 
 @Composable
 private fun ProximityConsentDialog(consent: PendingConsent, filterEligible: (List<StoredCredential>) -> List<StoredCredential>) {
@@ -450,6 +482,8 @@ private fun ProximityConsentDialog(consent: PendingConsent, filterEligible: (Lis
                 // a glance whether this is really their own mDL/etc.
                 CredentialCard(credential = selected.representative, modifier = Modifier.fillMaxWidth())
                 Spacer(modifier = Modifier.height(16.dp))
+                ReaderTrustBadge(consent.readerTrust)
+                Spacer(modifier = Modifier.height(8.dp))
                 Text("A reader is requesting the following, from this credential:", style = MaterialTheme.typography.bodyMedium)
                 Spacer(modifier = Modifier.height(8.dp))
                 for (claim in consent.requestedClaims) {
