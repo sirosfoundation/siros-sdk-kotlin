@@ -842,3 +842,75 @@ internal fun coilLogoModel(uri: String): Any {
         uri
     }
 }
+
+/**
+ * Async counterpart to [coilLogoModel] for logo/preview URIs that need
+ * fetching (remote `http(s)`) rather than just base64-decoding an already-
+ * inline `data:` URI. Applies the same [ensureSvgViewBox]/
+ * [ensureSvgImageHeight] normalization an already-stored credential's card
+ * SVG gets in [fetchAndSubstituteSvg] - without it, a logo/preview URI
+ * pointing at an SVG whose `<image>` element omits `height` (a real,
+ * confirmed-live issuer template: demo-issuer.wwwallet.org's EHIC card)
+ * renders fully blank with no error, since the plain [coilLogoModel] path
+ * (used by the Add Credentials offer list and the stored-credential detail
+ * screen, neither of which goes through [fetchAndSubstituteSvg]'s pipeline)
+ * hands Coil the untouched SVG bytes/URI.
+ *
+ * Falls back to [coilLogoModel]'s existing behavior (or the raw [uri]) on
+ * any fetch/decode failure - never worse than what callers had before this
+ * function existed.
+ */
+internal suspend fun fetchAndNormalizeLogoModel(uri: String): Any {
+    if (uri.startsWith("data:")) {
+        if (!uri.startsWith("data:image/svg+xml", ignoreCase = true)) {
+            return coilLogoModel(uri)
+        }
+        val svgText = decodeSvgDataUri(uri) ?: return coilLogoModel(uri)
+        return normalizeSvgLogoOrFallback(svgText, uri)
+    }
+    if (!uri.startsWith("http")) return uri
+    return try {
+        withContext(Dispatchers.IO) {
+            val request = Request.Builder().url(uri).build()
+            svgHttpClient.newCall(request).execute().use { response ->
+                val body = if (response.isSuccessful) response.body?.string() else null
+                if (body == null) {
+                    uri
+                } else {
+                    val contentType = response.header("Content-Type") ?: ""
+                    val looksLikeSvg = contentType.contains("svg", ignoreCase = true) ||
+                        body.trimStart().startsWith("<svg", ignoreCase = true)
+                    if (looksLikeSvg) normalizeSvgLogoOrFallback(body, uri) else uri
+                }
+            }
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Timber.w(e, "Failed to fetch/normalize remote logo: $uri")
+        uri
+    }
+}
+
+private fun normalizeSvgLogoOrFallback(svgText: String, fallback: String): Any = try {
+    ensureSvgImageHeight(ensureSvgViewBox(svgText)).toByteArray(Charsets.UTF_8)
+} catch (e: Exception) {
+    Timber.w(e, "Failed to normalize logo SVG, falling back: $fallback")
+    fallback
+}
+
+/**
+ * Remembers a Coil model for [uri] via [fetchAndNormalizeLogoModel],
+ * starting from [coilLogoModel]'s synchronous result so there's no
+ * flash-of-nothing while the async fetch/normalize is in flight - it just
+ * gets replaced once ready, identically to the synchronous behavior for any
+ * URI the normalization doesn't end up touching.
+ */
+@Composable
+internal fun rememberNormalizedLogoModel(uri: String): Any {
+    var model by remember(uri) { mutableStateOf<Any>(coilLogoModel(uri)) }
+    LaunchedEffect(uri) {
+        model = fetchAndNormalizeLogoModel(uri)
+    }
+    return model
+}

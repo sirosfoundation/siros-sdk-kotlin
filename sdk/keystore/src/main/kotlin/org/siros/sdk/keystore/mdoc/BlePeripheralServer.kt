@@ -94,7 +94,16 @@ class BlePeripheralServer(
         private const val NOTIFY_ACK_TIMEOUT_MS = 5000L
     }
 
-    private val scope = CoroutineScope(Dispatchers.IO)
+    // limitedParallelism(1), not plain Dispatchers.IO: GATT callbacks can
+    // fire back-to-back (a retried/duplicate write, or two characteristics
+    // reassembling independently), and Dispatchers.IO is a shared thread
+    // pool - two scope.launch{} bodies from separate callbacks could
+    // otherwise race on session.established's check-and-set, both passing
+    // the check before either sets it and double-processing a
+    // session-establishment message. Every callback-triggered launch below
+    // is inherently meant to run one-at-a-time for a single BLE connection
+    // anyway, so serializing costs nothing real.
+    private val scope = CoroutineScope(Dispatchers.IO.limitedParallelism(1))
     private val reassembler = BleMessageChunker.Reassembler()
     private val session = MdocProximitySession(
         engagement = engagement,

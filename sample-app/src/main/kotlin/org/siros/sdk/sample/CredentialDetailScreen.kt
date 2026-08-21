@@ -188,7 +188,7 @@ private fun InfoTab(credential: StoredCredential) {
         meta?.logo?.uri?.let { logoUri ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 AsyncImage(
-                    model = coilLogoModel(logoUri),
+                    model = rememberNormalizedLogoModel(logoUri),
                     contentDescription = meta.logo?.altText,
                     modifier = Modifier
                         .size(48.dp)
