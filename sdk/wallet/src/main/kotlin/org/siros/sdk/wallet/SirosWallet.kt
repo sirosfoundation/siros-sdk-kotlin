@@ -4469,42 +4469,8 @@ class SirosWallet private constructor(
         }
     }
 
-    private suspend fun evaluateReaderTrustRemote(x5chain: List<ByteArray>): TrustResult {
-        val client = apiClient ?: throw WalletException("Not connected")
-        val subjectId = sha256Hex(x5chain[0])
-        val x5c = kotlinx.serialization.json.buildJsonArray {
-            x5chain.forEach { add(kotlinx.serialization.json.JsonPrimitive(java.util.Base64.getEncoder().encodeToString(it))) }
-        }
-
-        val evaluationRequest = kotlinx.serialization.json.buildJsonObject {
-            putJsonObject("subject") {
-                put("type", kotlinx.serialization.json.JsonPrimitive("key"))
-                put("id", kotlinx.serialization.json.JsonPrimitive(subjectId))
-            }
-            putJsonObject("resource") {
-                put("type", kotlinx.serialization.json.JsonPrimitive("x5c"))
-                put("id", kotlinx.serialization.json.JsonPrimitive(subjectId))
-                put("key", x5c)
-            }
-            putJsonObject("action") {
-                put("name", kotlinx.serialization.json.JsonPrimitive("mdoc-reader-auth"))
-            }
-        }
-
-        Timber.d("Calling /v1/evaluate for reader $subjectId (mdoc-reader-auth)")
-        val response = client.evaluateTrust(evaluationRequest)
-
-        val decision = response["decision"]?.jsonPrimitive?.boolean ?: false
-        val respContext = response["context"]?.jsonObject
-
-        return TrustResult(
-            trusted = decision,
-            framework = respContext?.get("framework")?.jsonPrimitive?.contentOrNull ?: "mdocrical",
-            reason = reasonText(respContext?.get("reason")) ?: reasonText(respContext?.get("message")),
-            entityName = respContext?.get("entity_name")?.jsonPrimitive?.contentOrNull,
-            identifier = subjectId,
-        )
-    }
+    private suspend fun evaluateReaderTrustRemote(x5chain: List<ByteArray>): TrustResult =
+        evaluateMdocTrustRemote(x5chain, actionName = "mdoc-reader-auth", defaultFramework = "mdocrical", subjectPrefix = "reader")
 
     /**
      * Plain X.509 path validation against [WalletConfig.readerTrustRootCertificatesPem] -
@@ -4513,51 +4479,15 @@ class SirosWallet private constructor(
      * stable, known-in-advance official root(s), not a full reimplementation
      * of go-trust's `mdocrical` registry.
      */
-    private fun evaluateReaderTrustLocally(x5chain: List<ByteArray>): TrustResult {
-        val subjectId = sha256Hex(x5chain[0])
-        if (readerTrustRootCertificates.isEmpty()) {
-            // Distinguish "nothing configured" from "configured but every
-            // entry failed to parse" (a real Copilot-review finding: the
-            // original single message here masked misconfiguration, since
-            // readerTrustRootCertificates silently drops unparsable PEMs -
-            // see its own doc comment for why a warning is logged there,
-            // not here, at the point each entry actually fails to parse).
-            val reason = if (config.readerTrustRootCertificatesPem.isEmpty()) {
-                "Local reader trust evaluation is unavailable: no RICAL root certificate configured"
-            } else {
-                "Local reader trust evaluation is unavailable: ${config.readerTrustRootCertificatesPem.size} " +
-                    "RICAL root certificate(s) configured but none could be parsed - check Timber logs for the parse error"
-            }
-            return TrustResult(
-                trusted = false,
-                framework = "local-rical-root",
-                reason = reason,
-                identifier = subjectId,
-            )
-        }
-        return try {
-            val certFactory = java.security.cert.CertificateFactory.getInstance("X.509")
-            val certPath = certFactory.generateCertPath(x5chain.map { certFactory.generateCertificate(it.inputStream()) })
-            val anchors = readerTrustRootCertificates.map { java.security.cert.TrustAnchor(it, null) }.toSet()
-            val params = java.security.cert.PKIXParameters(anchors).apply { isRevocationEnabled = false }
-            java.security.cert.CertPathValidator.getInstance("PKIX").validate(certPath, params)
-            val leaf = certPath.certificates.first() as java.security.cert.X509Certificate
-            TrustResult(
-                trusted = true,
-                framework = "local-rical-root",
-                reason = "Validated locally against a configured RICAL root certificate",
-                entityName = leaf.subjectX500Principal?.name,
-                identifier = subjectId,
-            )
-        } catch (e: Exception) {
-            TrustResult(
-                trusted = false,
-                framework = "local-rical-root",
-                reason = "Local RICAL root validation failed: ${e.message}",
-                identifier = subjectId,
-            )
-        }
-    }
+    private fun evaluateReaderTrustLocally(x5chain: List<ByteArray>): TrustResult =
+        evaluateMdocTrustLocally(
+            x5chain,
+            rootCertificates = readerTrustRootCertificates,
+            rootCertificatesPemConfigSize = config.readerTrustRootCertificatesPem.size,
+            frameworkLabel = "local-rical-root",
+            entityLabel = "reader",
+            registryName = "RICAL",
+        )
 
     /**
      * Evaluates an mdoc credential's issuer authenticated identity for trust
@@ -4600,7 +4530,49 @@ class SirosWallet private constructor(
         }
     }
 
-    private suspend fun evaluateIssuerTrustRemote(x5chain: List<ByteArray>, docType: String?): TrustResult {
+    private suspend fun evaluateIssuerTrustRemote(x5chain: List<ByteArray>, docType: String?): TrustResult =
+        evaluateMdocTrustRemote(
+            x5chain,
+            actionName = "mdoc-issuer-auth",
+            defaultFramework = "vical",
+            subjectPrefix = "issuer",
+            extraContext = docType?.let { dt -> { put("doc_type", kotlinx.serialization.json.JsonPrimitive(dt)) } },
+        )
+
+    /**
+     * Plain X.509 path validation against [WalletConfig.issuerTrustRootCertificatesPem] -
+     * no VICAL CBOR parsing, no per-certificate `docType` enforcement, since
+     * this path exists purely as an offline/unreachable-backend fallback for
+     * the stable, known-in-advance official root(s), not a full
+     * reimplementation of go-trust's `vical` registry.
+     */
+    private fun evaluateIssuerTrustLocally(x5chain: List<ByteArray>): TrustResult =
+        evaluateMdocTrustLocally(
+            x5chain,
+            rootCertificates = issuerTrustRootCertificates,
+            rootCertificatesPemConfigSize = config.issuerTrustRootCertificatesPem.size,
+            frameworkLabel = "local-vical-root",
+            entityLabel = "issuer",
+            registryName = "VICAL",
+        )
+
+    /**
+     * Shared remote-AuthZEN-call implementation for [evaluateReaderTrust]
+     * (RICAL, action `mdoc-reader-auth`) and [evaluateIssuerTrust] (VICAL,
+     * action `mdoc-issuer-auth`) - both mirror [evaluateTrustDirect]'s
+     * request shape exactly, differing only in the action name, the
+     * default `framework` label (used when go-trust's response omits its
+     * own), an optional `context` block (VICAL's `doc_type` enforcement
+     * hint - omitted entirely, not sent empty, when [extraContext] is
+     * null), and the subject noun used in the debug log line.
+     */
+    private suspend fun evaluateMdocTrustRemote(
+        x5chain: List<ByteArray>,
+        actionName: String,
+        defaultFramework: String,
+        subjectPrefix: String,
+        extraContext: (kotlinx.serialization.json.JsonObjectBuilder.() -> Unit)? = null,
+    ): TrustResult {
         val client = apiClient ?: throw WalletException("Not connected")
         val subjectId = sha256Hex(x5chain[0])
         val x5c = kotlinx.serialization.json.buildJsonArray {
@@ -4618,16 +4590,12 @@ class SirosWallet private constructor(
                 put("key", x5c)
             }
             putJsonObject("action") {
-                put("name", kotlinx.serialization.json.JsonPrimitive("mdoc-issuer-auth"))
+                put("name", kotlinx.serialization.json.JsonPrimitive(actionName))
             }
-            if (docType != null) {
-                putJsonObject("context") {
-                    put("doc_type", kotlinx.serialization.json.JsonPrimitive(docType))
-                }
-            }
+            extraContext?.let { putJsonObject("context", it) }
         }
 
-        Timber.d("Calling /v1/evaluate for issuer $subjectId (mdoc-issuer-auth)")
+        Timber.d("Calling /v1/evaluate for $subjectPrefix $subjectId ($actionName)")
         val response = client.evaluateTrust(evaluationRequest)
 
         val decision = response["decision"]?.jsonPrimitive?.boolean ?: false
@@ -4635,7 +4603,7 @@ class SirosWallet private constructor(
 
         return TrustResult(
             trusted = decision,
-            framework = respContext?.get("framework")?.jsonPrimitive?.contentOrNull ?: "vical",
+            framework = respContext?.get("framework")?.jsonPrimitive?.contentOrNull ?: defaultFramework,
             reason = reasonText(respContext?.get("reason")) ?: reasonText(respContext?.get("message")),
             entityName = respContext?.get("entity_name")?.jsonPrimitive?.contentOrNull,
             identifier = subjectId,
@@ -4643,24 +4611,38 @@ class SirosWallet private constructor(
     }
 
     /**
-     * Plain X.509 path validation against [WalletConfig.issuerTrustRootCertificatesPem] -
-     * no VICAL CBOR parsing, no per-certificate `docType` enforcement, since
+     * Shared local X.509-path-validation fallback for [evaluateReaderTrust]
+     * (RICAL) and [evaluateIssuerTrust] (VICAL) - neither does any RICAL/VICAL
+     * CBOR parsing or `trustConstraints`/`docType` enforcement locally, since
      * this path exists purely as an offline/unreachable-backend fallback for
-     * the stable, known-in-advance official root(s), not a full
-     * reimplementation of go-trust's `vical` registry.
+     * the stable, known-in-advance official root(s).
+     *
+     * Distinguishes "nothing configured" from "configured but every entry
+     * failed to parse" (a real Copilot-review finding: a single message here
+     * originally masked misconfiguration, since [readerTrustRootCertificates]/
+     * [issuerTrustRootCertificates] silently drop unparsable PEMs - see their
+     * own doc comments for why a warning is logged there, not here, at the
+     * point each entry actually fails to parse).
      */
-    private fun evaluateIssuerTrustLocally(x5chain: List<ByteArray>): TrustResult {
+    private fun evaluateMdocTrustLocally(
+        x5chain: List<ByteArray>,
+        rootCertificates: List<java.security.cert.X509Certificate>,
+        rootCertificatesPemConfigSize: Int,
+        frameworkLabel: String,
+        entityLabel: String,
+        registryName: String,
+    ): TrustResult {
         val subjectId = sha256Hex(x5chain[0])
-        if (issuerTrustRootCertificates.isEmpty()) {
-            val reason = if (config.issuerTrustRootCertificatesPem.isEmpty()) {
-                "Local issuer trust evaluation is unavailable: no VICAL root certificate configured"
+        if (rootCertificates.isEmpty()) {
+            val reason = if (rootCertificatesPemConfigSize == 0) {
+                "Local $entityLabel trust evaluation is unavailable: no $registryName root certificate configured"
             } else {
-                "Local issuer trust evaluation is unavailable: ${config.issuerTrustRootCertificatesPem.size} " +
-                    "VICAL root certificate(s) configured but none could be parsed - check Timber logs for the parse error"
+                "Local $entityLabel trust evaluation is unavailable: $rootCertificatesPemConfigSize " +
+                    "$registryName root certificate(s) configured but none could be parsed - check Timber logs for the parse error"
             }
             return TrustResult(
                 trusted = false,
-                framework = "local-vical-root",
+                framework = frameworkLabel,
                 reason = reason,
                 identifier = subjectId,
             )
@@ -4668,22 +4650,22 @@ class SirosWallet private constructor(
         return try {
             val certFactory = java.security.cert.CertificateFactory.getInstance("X.509")
             val certPath = certFactory.generateCertPath(x5chain.map { certFactory.generateCertificate(it.inputStream()) })
-            val anchors = issuerTrustRootCertificates.map { java.security.cert.TrustAnchor(it, null) }.toSet()
+            val anchors = rootCertificates.map { java.security.cert.TrustAnchor(it, null) }.toSet()
             val params = java.security.cert.PKIXParameters(anchors).apply { isRevocationEnabled = false }
             java.security.cert.CertPathValidator.getInstance("PKIX").validate(certPath, params)
             val leaf = certPath.certificates.first() as java.security.cert.X509Certificate
             TrustResult(
                 trusted = true,
-                framework = "local-vical-root",
-                reason = "Validated locally against a configured VICAL root certificate",
+                framework = frameworkLabel,
+                reason = "Validated locally against a configured $registryName root certificate",
                 entityName = leaf.subjectX500Principal?.name,
                 identifier = subjectId,
             )
         } catch (e: Exception) {
             TrustResult(
                 trusted = false,
-                framework = "local-vical-root",
-                reason = "Local VICAL root validation failed: ${e.message}",
+                framework = frameworkLabel,
+                reason = "Local $registryName root validation failed: ${e.message}",
                 identifier = subjectId,
             )
         }

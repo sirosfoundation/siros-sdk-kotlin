@@ -29,7 +29,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -909,8 +908,9 @@ private fun normalizeSvgLogoOrFallback(svgText: String, fallback: String): Any =
  */
 @Composable
 internal fun rememberNormalizedLogoModel(uri: String): Any {
-    val state = produceState<Any>(initialValue = coilLogoModel(uri), key1 = uri) {
-        value = fetchAndNormalizeLogoModel(uri)
+    var model by remember(uri) { mutableStateOf<Any>(coilLogoModel(uri)) }
+    LaunchedEffect(uri) {
+        model = fetchAndNormalizeLogoModel(uri)
     }
-    return state.value
+    return model
 }
