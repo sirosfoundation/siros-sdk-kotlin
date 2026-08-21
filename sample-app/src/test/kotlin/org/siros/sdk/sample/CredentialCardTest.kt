@@ -381,4 +381,89 @@ class CredentialCardTest {
     fun `returns null for a data URI with no comma separator`() {
         assertEquals(null, decodeSvgDataUri("data:image/svg+xml;base64"))
     }
+
+    // ── fetchAndNormalizeLogoModel ──────────────────────────────────────
+    //
+    // The Add Credentials offer list and the stored-credential detail
+    // screen both previously used the plain (synchronous) coilLogoModel,
+    // which never runs a fetched remote SVG through ensureSvgImageHeight -
+    // exactly the gap that made a real issuer's EHIC card (demo-issuer.
+    // wwwallet.org, missing <image> height) render fully blank there while
+    // an already-stored credential's own card (which does go through
+    // ensureSvgImageHeight via fetchAndSubstituteSvg) rendered fine.
+
+    @Test
+    fun `normalizes a missing-height image in a data URI SVG logo`() = kotlinx.coroutines.runBlocking {
+        val svg = """<svg><image x="0" y="0" width="100%" xlink:href="data:image/png;base64,AAA=" /></svg>"""
+        val encoded = java.util.Base64.getEncoder().encodeToString(svg.toByteArray(Charsets.UTF_8))
+        val uri = "data:image/svg+xml;base64,$encoded"
+
+        val result = fetchAndNormalizeLogoModel(uri)
+
+        assertTrue(result is ByteArray)
+        val resultSvg = String(result as ByteArray, Charsets.UTF_8)
+        assertTrue("""height="100%"""" in resultSvg)
+    }
+
+    @Test
+    fun `leaves a non-SVG data URI logo exactly as coilLogoModel would`() = kotlinx.coroutines.runBlocking {
+        val uri = "data:image/png;base64,AAA="
+
+        // Both sides decode to a ByteArray - assertArrayEquals compares
+        // contents, unlike assertEquals which would compare references.
+        assertArrayEquals(coilLogoModel(uri) as ByteArray, fetchAndNormalizeLogoModel(uri) as ByteArray)
+    }
+
+    @Test
+    fun `fetches and normalizes a missing-height image in a remote SVG logo`() = kotlinx.coroutines.runBlocking {
+        val svg = """<svg><image x="0" y="0" width="100%" xlink:href="data:image/png;base64,AAA=" /></svg>"""
+        val server = okhttp3.mockwebserver.MockWebServer()
+        server.enqueue(
+            okhttp3.mockwebserver.MockResponse()
+                .setBody(svg)
+                .addHeader("Content-Type", "image/svg+xml"),
+        )
+        server.start()
+        try {
+            val result = fetchAndNormalizeLogoModel(server.url("/ehic.svg").toString())
+
+            assertTrue(result is ByteArray)
+            val resultSvg = String(result as ByteArray, Charsets.UTF_8)
+            assertTrue("""height="100%"""" in resultSvg)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `leaves a remote non-SVG logo URL untouched`() = kotlinx.coroutines.runBlocking {
+        val server = okhttp3.mockwebserver.MockWebServer()
+        server.enqueue(
+            okhttp3.mockwebserver.MockResponse()
+                .setBody("not an svg")
+                .addHeader("Content-Type", "image/png"),
+        )
+        server.start()
+        try {
+            val uri = server.url("/logo.png").toString()
+
+            assertEquals(uri, fetchAndNormalizeLogoModel(uri))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `falls back to the URI when the remote fetch fails`() = kotlinx.coroutines.runBlocking {
+        val server = okhttp3.mockwebserver.MockWebServer()
+        server.enqueue(okhttp3.mockwebserver.MockResponse().setResponseCode(500))
+        server.start()
+        try {
+            val uri = server.url("/broken.svg").toString()
+
+            assertEquals(uri, fetchAndNormalizeLogoModel(uri))
+        } finally {
+            server.shutdown()
+        }
+    }
 }

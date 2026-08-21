@@ -301,7 +301,7 @@ private fun CredentialOfferRow(
                     // logo URI didn't resolve showed a blank square instead of
                     // ever falling back to the initial-letter placeholder).
                     coil.compose.SubcomposeAsyncImage(
-                        model = coilLogoModel(offer.logoUri!!),
+                        model = rememberNormalizedLogoModel(offer.logoUri!!),
                         contentDescription = offer.credentialName,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,
