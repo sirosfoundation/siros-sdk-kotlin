@@ -3426,6 +3426,96 @@ class SirosWalletTest {
         assertTrue(thrown is org.siros.sdk.wallet.dcapi.DCAPIRequestException)
     }
 
+    @Test
+    fun evaluateIssuerTrust_remoteDecisionTrue_returnsTrustedResult() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        val evaluationRequest = slot<JsonObject>()
+        coEvery { apiClient.evaluateTrust(capture(evaluationRequest)) } returns buildJsonObject {
+            put("decision", JsonPrimitive(true))
+            putJsonObject("context") {
+                put("framework", JsonPrimitive("vical"))
+                put("entity_name", JsonPrimitive("Test Issuer CA"))
+            }
+        }
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+
+        val leafCert = ByteArray(4) { it.toByte() }
+        val result = wallet.evaluateIssuerTrust(listOf(leafCert), docType = "org.iso.18013.5.1.mDL")
+
+        assertTrue(result.trusted)
+        assertEquals("Test Issuer CA", result.entityName)
+        assertEquals("mdoc-issuer-auth", evaluationRequest.captured["action"]?.jsonObject?.get("name")?.jsonPrimitive?.content)
+        assertEquals("org.iso.18013.5.1.mDL", evaluationRequest.captured["context"]?.jsonObject?.get("doc_type")?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun evaluateIssuerTrust_remoteDecisionFalse_returnsUntrustedResult() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject {
+            put("decision", JsonPrimitive(false))
+            putJsonObject("context") {
+                put("reason", JsonPrimitive("certificate not listed in VICAL for docType"))
+            }
+        }
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+
+        val result = wallet.evaluateIssuerTrust(listOf(ByteArray(4)), docType = "org.iso.18013.5.1.mDL")
+
+        assertTrue(!result.trusted)
+        assertEquals("certificate not listed in VICAL for docType", result.reason)
+    }
+
+    @Test
+    fun evaluateIssuerTrust_remoteCallThrows_fallsBackToLocalAndReportsUnconfigured() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws java.io.IOException("network unreachable")
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+
+        val result = wallet.evaluateIssuerTrust(listOf(ByteArray(4)), docType = "org.iso.18013.5.1.mDL")
+
+        assertTrue(!result.trusted)
+        assertEquals("local-vical-root", result.framework)
+        assertTrue(result.reason?.contains("no VICAL root certificate configured") == true)
+    }
+
+    @Test
+    fun evaluateIssuerTrust_preferLocalIssuerTrustEvaluation_skipsRemoteCallEntirely() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", preferLocalIssuerTrustEvaluation = true),
+        )
+
+        val result = wallet.evaluateIssuerTrust(listOf(ByteArray(4)), docType = "org.iso.18013.5.1.mDL")
+
+        assertTrue(!result.trusted)
+        coVerify(exactly = 0) { apiClient.evaluateTrust(any()) }
+    }
+
+    @Test
+    fun evaluateIssuerTrust_emptyX5chain_returnsUntrustedWithoutCallingBackend() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+
+        val result = wallet.evaluateIssuerTrust(emptyList(), docType = "org.iso.18013.5.1.mDL")
+
+        assertTrue(!result.trusted)
+        assertEquals("issuerAuth has no certificate chain", result.reason)
+        coVerify(exactly = 0) { apiClient.evaluateTrust(any()) }
+    }
+
     /**
      * Wraps a request's `data` object in the envelope
      * [org.siros.sdk.wallet.dcapi.DCAPIRequestParser.parse] actually expects
@@ -3467,6 +3557,22 @@ class SirosWalletTest {
             values["credentialConsumptionPolicy"] = CredentialConsumptionPolicy.NEVER_CONSUME
         }
         values.forEach { (name, value) -> setField(wallet, name, value) }
+        // allocateInstance bypasses property initializers entirely, so a
+        // `by lazy { ... }` property's synthetic backing field (a Lazy<T>,
+        // not the computed value itself) is never initialized either -
+        // touching readerTrustRootCertificates/issuerTrustRootCertificates
+        // without this NPEs with "Cannot invoke Lazy.getValue() because ...
+        // is null", not a normal lazy-recompute. Force each one to its
+        // usual empty-config default here so evaluateReaderTrust/
+        // evaluateIssuerTrust's local-fallback path is actually reachable
+        // in tests; a test that needs non-empty roots overrides the
+        // delegate field directly instead.
+        if ("issuerTrustRootCertificates\$delegate" !in values) {
+            setField(wallet, "issuerTrustRootCertificates\$delegate", lazy { emptyList<java.security.cert.X509Certificate>() })
+        }
+        if ("readerTrustRootCertificates\$delegate" !in values) {
+            setField(wallet, "readerTrustRootCertificates\$delegate", lazy { emptyList<java.security.cert.X509Certificate>() })
+        }
         return wallet
     }
 
