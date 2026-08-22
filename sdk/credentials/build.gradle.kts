@@ -43,13 +43,14 @@ dependencies {
     implementation("org.siros:zk-cred-longfellow:0.1.1")
 
     // zk-cred-vega UniFFI bindings - LOCAL DEVELOPMENT ONLY, DO NOT PUSH/MERGE
-    // this line to origin/main. zk-cred-vega is a private repo with no
-    // GitHub Release/published artifact yet (per
-    // ~/.claude/plans/zk-cred-vega-sdk-handoff.md's "What's NOT ready yet"
-    // #4) - CI cannot resolve this, only a local `make aar && make
-    // publish-local` (already done for 0.1.0 as of this branch). Uncomment
-    // only once a real released version exists to depend on.
-    implementation("org.siros:zk-cred-vega:0.1.0")
+    // this line to origin/main. zk-cred-vega is now public and tagged
+    // (v0.0.1, https://github.com/sirosfoundation/zk-cred-vega) but has no
+    // GitHub Packages Maven publish workflow yet (unlike zk-cred-longfellow's
+    // release.yml above) - CI cannot resolve this, only a local `make aar &&
+    // make publish-local` (done for 0.0.1 as of this branch). Also still
+    // blocked on the circuit-artifact/expert-review gating in
+    // ~/.claude/plans/zk-cred-vega-sdk-handoff.md's "START HERE" block.
+    implementation("org.siros:zk-cred-vega:0.0.1")
 
     // JNA is required by UniFFI-generated Kotlin bindings.
     implementation("net.java.dev.jna:jna:5.14.0@aar")
