@@ -43,14 +43,14 @@ dependencies {
     implementation("org.siros:zk-cred-longfellow:0.1.1")
 
     // zk-cred-vega UniFFI bindings - LOCAL DEVELOPMENT ONLY, DO NOT PUSH/MERGE
-    // this line to origin/main. zk-cred-vega is now public and tagged
-    // (v0.0.1, https://github.com/sirosfoundation/zk-cred-vega) but has no
-    // GitHub Packages Maven publish workflow yet (unlike zk-cred-longfellow's
-    // release.yml above) - CI cannot resolve this, only a local `make aar &&
-    // make publish-local` (done for 0.0.1 as of this branch). Also still
-    // blocked on the circuit-artifact/expert-review gating in
+    // this line to origin/main. zk-cred-vega now has a real GitHub Packages
+    // Maven artifact (v0.0.2, resolved via GitHubPackagesZkCredVega in
+    // settings.gradle.kts) - built against sirosfoundation/vega-prover's
+    // fork (a 2-line #[serde(skip)] fix shrinking the FFI prep-state from
+    // ~356MB to ~100MB so it fits Android's heap ceiling). Still blocked on
+    // the circuit-artifact/expert-review gating in
     // ~/.claude/plans/zk-cred-vega-sdk-handoff.md's "START HERE" block.
-    implementation("org.siros:zk-cred-vega:0.0.1")
+    implementation("org.siros:zk-cred-vega:0.0.2")
 
     // JNA is required by UniFFI-generated Kotlin bindings.
     implementation("net.java.dev.jna:jna:5.14.0@aar")

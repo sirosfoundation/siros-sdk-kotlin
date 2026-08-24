@@ -71,6 +71,10 @@ import org.siros.sdk.keystore.KeypairInfo
 import org.siros.sdk.keystore.KeystoreManager
 import org.siros.sdk.keystore.LongfellowZkProofSystem
 import org.siros.sdk.keystore.MdocDeviceResponseBuilder
+// VegaProofSystem: LOCAL ONLY, DO NOT PUSH/MERGE this line to origin/main -
+// see VegaProofSystem.kt's own doc comment for why (zk-cred-vega only
+// resolves via mavenLocal right now).
+import org.siros.sdk.keystore.VegaProofSystem
 import org.siros.sdk.keystore.WscdKeystoreAdapter
 import org.siros.sdk.keystore.WscdManager
 import org.siros.sdk.wallet.dcapi.DCAPIRequest
@@ -2326,12 +2330,25 @@ class SirosWallet private constructor(
     /**
      * Every ZK proof system this wallet can satisfy a verifier's
      * `"mso_mdoc_zk"` DCQL request with - see [handleDCAPIRequest]'s
-     * `mso_mdoc_zk` branch, the only current caller. Longfellow is the only
-     * real implementation today; this registry is where a future
-     * system (e.g. Vega/BBS) would also be registered.
+     * `mso_mdoc_zk` branch, the only current caller. [ZkProofSystemRegistry]
+     * tries each system in order via [ZkProofSystem.matchingSpec] until one
+     * claims the request, so ordering only matters when two systems could
+     * both match the same spec (not the case today - Vega and Longfellow
+     * declare disjoint `system` ids).
+     *
+     * VegaProofSystem: LOCAL ONLY, DO NOT PUSH/MERGE this line to
+     * origin/main - see its own doc comment for current gating (crate's own
+     * expert review running in parallel with this session's testing, not a
+     * blocker to local/self-hosted use; `go-zk-circuits` catalog entries
+     * still `--unpublished`; a genuinely open on-device heap constraint).
      */
     private val zkProofSystemRegistry: ZkProofSystemRegistry =
-        ZkProofSystemRegistry(listOf(LongfellowZkProofSystem(zkCircuitClient)))
+        ZkProofSystemRegistry(
+            listOf(
+                LongfellowZkProofSystem(zkCircuitClient),
+                VegaProofSystem(zkCircuitClient),
+            ),
+        )
 
     /**
      * Wraps a raw ZK [result] into the full `{version, status, zkDocuments:

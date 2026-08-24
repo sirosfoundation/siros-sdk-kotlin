@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.keystore
 
+import com.upokecenter.cbor.CBORObject
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.siros.sdk.credentials.PseudonymOutcome
@@ -10,36 +11,45 @@ import org.siros.sdk.credentials.ZkProofResult
 import org.siros.sdk.credentials.ZkProofSystem
 import org.siros.sdk.credentials.ZkSystemSpec
 import org.siros.sdk.credentials.mdoc.MdocCbor
+import org.siros.sdk.keystore.mdoc.MdocCose
 import uniffi.zk_cred_vega.FfiClaim
 import uniffi.zk_cred_vega.FfiEcdsaWitness
 import uniffi.zk_cred_vega.FfiMsoBodyWitness
 import uniffi.zk_cred_vega.VegaProverKey
 import uniffi.zk_cred_vega.prepProve
 import uniffi.zk_cred_vega.prove
+import java.io.ByteArrayInputStream
+import java.math.BigInteger
 import java.nio.ByteBuffer
+import java.security.cert.CertificateFactory
+import java.security.interfaces.ECPublicKey
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 /**
  * [ZkProofSystem] implementation wrapping the `zk-cred-vega` native crate -
  * see `~/.claude/plans/zk-cred-vega-sdk-handoff.md` for the full
  * design/provenance history and current crate status.
  *
- * **Do not wire this into production** (i.e. into whatever constructs the
- * real [org.siros.sdk.credentials.ZkProofSystemRegistry] a wallet actually
- * uses) yet. Per that handoff doc's own explicit gating, three things need
- * to happen first: (a) the crate's `sha256_var` gadget needs an independent
- * security review (novel, soundness-critical circuit code, unreviewed as of
- * this writing); (b) the digestID-binding and ECDSA range-check findings
- * need triage; (c) `zk-cred-vega` needs at least a real version tag/release
- * to depend on (right now it's a private, unreleased repo - this class's own
- * Gradle dependency only resolves from a local `mavenLocal()` publish, which
- * is why it isn't committed to this SDK's own `main` branch). This class
- * exists to let the SDK-side interface work be sketched/tested in parallel,
- * per that doc's own explicit suggestion, not to ship a Vega-backed
- * presentation to a real relying party.
+ * **Do not present this to a real relying party yet.** `zk-cred-vega` is now
+ * public and tagged (`v0.0.1`), and its own expert security review is
+ * running in parallel with SDK-side testing rather than gating it - but that
+ * review hasn't landed, so nothing here should be trusted as a real trust
+ * anchor yet. This class exists for local/self-hosted end-to-end testing
+ * (own prover verified by own verifier), same caveat Longfellow shipped
+ * under before its own multipaz interop testing. Also still blocked on: the
+ * `go-zk-circuits` catalog entries being `--unpublished` (so
+ * [zkCircuitClient] can't fetch a real prover/verifier key pair yet - tests
+ * load one from a local `dump_setup` dump instead), and a genuinely
+ * unresolved on-device heap constraint (`prep_prove`'s ~356MB prep-state
+ * return value doesn't fit Android's `largeHeap` ceiling even in isolation -
+ * see `VegaZkVectorTest`'s own doc comment).
  *
- * **[buildWitness] is deliberately unimplemented** - see its own doc comment.
- * Everything else here (the `prep_prove`/`prove` FFI wiring, fold-and-reuse
- * state threading, pseudonym handling) is real and mirrors
+ * `buildWitness` is real (ECDSA witness from `issuerAuth`'s x5chain +
+ * signature, MSO body from `issuerAuth`'s payload, fixed 4-slot claim
+ * selection) - see its own doc comment for the slot-selection policy this
+ * session settled on. Everything else (the `prep_prove`/`prove` FFI wiring,
+ * fold-and-reuse state threading, pseudonym handling) mirrors
  * [LongfellowZkProofSystem]'s own shape.
  */
 class VegaProofSystem(
@@ -55,6 +65,22 @@ class VegaProofSystem(
          * by this system at all.
          */
         const val MAX_CLAIMS_V1 = 4
+
+        /** COSE algorithm identifier for ES256 (RFC 8152 §8.1) - the only alg [buildEcdsaWitness] accepts. */
+        private const val COSE_ALG_ES256 = -7L
+
+        /** COSE_Key EC2 type-specific parameter labels (RFC 8152 §13.1.1). */
+        private const val COSE_KEY_LABEL_X = -2L
+        private const val COSE_KEY_LABEL_Y = -3L
+
+        /** P-256 field-element/coordinate width in bytes. */
+        private const val P256_COORDINATE_BYTES = 32
+
+        /** P-256 (secp256r1) curve order `n`, per SEC 2 §2.4.2. */
+        private val P256_ORDER = BigInteger(
+            "FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551",
+            16,
+        )
     }
 
     override val systemId: String = "vega-mc-p256-v1"
@@ -116,53 +142,140 @@ class VegaProofSystem(
 
     /**
      * Builds this presentation's witness data from a real, stored mdoc
-     * credential - **deliberately unimplemented**. Three genuinely open
-     * questions need real answers (not guesses) before this can be written
-     * correctly, none of which this class should paper over:
+     * credential.
      *
-     * 1. **ECDSA witness extraction**: `FfiEcdsaWitness.r`/`s` come from
-     *    `issuerAuth`'s COSE_Sign1 signature bytes (first/second half), but
-     *    `sInv` (the modular inverse of `s` mod the P-256 curve order `n`)
-     *    needs a real `BigInteger.modInverse` computation this class
-     *    doesn't have yet - get this wrong and proofs fail to verify with
-     *    no clear error (same class of mistake `zk-cred-vega`'s own
-     *    ecdsa.rs module doc warns about for the *circuit* side of this same
-     *    computation). `qx`/`qy` (the issuer's public key) come from
-     *    `issuerAuth`'s x5chain - see [org.siros.sdk.wallet.SirosWallet]'s
-     *    own VICAL/RICAL work for the established x5chain-extraction
-     *    pattern this should reuse, not reinvent.
-     * 2. **MSO body witness extraction**: `FfiMsoBodyWitness` needs the
-     *    MSO's `deviceKeyInfo.deviceKey.{x,y}` and
-     *    `validityInfo.{signed,validFrom,validUntil}` (each a 20-byte ASCII
-     *    RFC 3339 timestamp, `mso::TIMESTAMP_LEN`) - [MdocCbor] deliberately
-     *    doesn't parse the MSO at all today (see its own file doc: "not MSO
-     *    digest verification... those live in the issuer/verifier"), since
-     *    no wallet-side use case needed it before this one.
-     * 3. **Fixed-slot-count claim selection**: the circuit has EXACTLY
-     *    [MAX_CLAIMS_V1] claim slots, each checked against the MSO's real
-     *    `valueDigests` (i.e. every slot must be a genuine credential
-     *    element, not padding) - what happens when a credential has fewer
-     *    than [MAX_CLAIMS_V1] elements in its disclosed namespace, or more
-     *    than [MAX_CLAIMS_V1] and the caller wants to disclose a subset
-     *    that doesn't fill all the remaining slots from the *same*
-     *    elements every time (which would affect [ZkProofResult.nextState]
-     *    reuse across presentations disclosing different claim subsets),
-     *    is genuinely unresolved in the handoff doc and needs a real answer
-     *    before this can be written, not a guess baked into this SDK.
+     * **ECDSA witness**: `qx`/`qy` (the issuer's public key) come from the
+     * leaf certificate in `issuerAuth`'s x5chain (COSE header label 33),
+     * reusing [MdocCose.extractX5Chain] rather than reinventing it. `r`/`s`
+     * are `issuerAuth`'s own COSE_Sign1 signature bytes (first/second
+     * 32-byte half - this class only supports ES256/P-256, matching
+     * [supportedDocTypes]' single circuit). `sInv` is a real
+     * `BigInteger.modInverse` against the P-256 curve order - get this wrong
+     * and proofs fail to verify with no clear error, same class of mistake
+     * `zk-cred-vega`'s own `ecdsa.rs` module doc warns about for the
+     * *circuit* side of this same computation.
      *
-     * @throws NotImplementedError always - see this function's doc comment.
+     * **MSO body witness**: [MdocCbor.decodeMso] (added alongside this
+     * class - no earlier wallet-side use case needed real MSO field access)
+     * gives `deviceKeyInfo.deviceKey.{x,y}` and
+     * `validityInfo.{signed,validFrom,validUntil}`, each reformatted to the
+     * exact 20-byte ASCII RFC 3339 form `mso::TIMESTAMP_LEN` requires -
+     * mirrors [LongfellowZkProofSystem.generateProof]'s own `time` handling
+     * (`Instant...truncatedTo(SECONDS)`), since an MSO's own timestamp
+     * string isn't guaranteed to already be exactly 20 bytes.
+     *
+     * **Fixed-slot-count claim selection** (this session's own resolution
+     * of what the handoff doc had left open): the circuit has EXACTLY
+     * [MAX_CLAIMS_V1] claim slots, each bound to a genuine credential
+     * element - no blank/padding slots. This requires the credential's
+     * single disclosed namespace to have EXACTLY [MAX_CLAIMS_V1] elements
+     * (a real v1 scope limit, not a bug - VEGA's circuit is sized for
+     * small, fixed-shape credentials like the real 4-claim mDL test vector,
+     * not arbitrarily large ones). Slot assignment is the namespace's own
+     * document order (stable per credential, independent of which claims a
+     * given presentation discloses) - `disclose` only varies per slot based
+     * on membership in [requestedClaims]. This keeps [ZkProofResult.nextState]
+     * reuse valid across repeat presentations of the SAME disclosed-claim
+     * set; a later presentation disclosing a DIFFERENT subset still reuses
+     * the same slot/witness identity (only the `disclose` flags change), so
+     * reuse stays sound regardless - this is the same claims list `prove()`
+     * takes each time regardless of `priorState`.
      */
-    @Suppress("UNUSED_PARAMETER")
     private fun buildWitness(
         document: org.siros.sdk.credentials.mdoc.DocumentMdoc,
         requestedClaims: List<String>,
     ): Triple<List<FfiClaim>, FfiEcdsaWitness, FfiMsoBodyWitness> {
-        throw NotImplementedError(
-            "VegaProofSystem.buildWitness: real witness extraction from a live mdoc credential " +
-                "is not implemented yet - see this function's doc comment for the three open " +
-                "questions that need resolving first (ECDSA witness extraction, MSO body parsing, " +
-                "fixed-slot-count claim selection policy).",
+        val issuerAuth = document.issuerSigned.issuerAuth
+        val namespaceItems = document.issuerSigned.nameSpaces.values.firstOrNull()
+            ?: error("VegaProofSystem: mdoc credential '${document.docType}' has no disclosed namespaces")
+        require(namespaceItems.size == MAX_CLAIMS_V1) {
+            "VegaProofSystem requires the credential's namespace to have exactly $MAX_CLAIMS_V1 " +
+                "elements (VEGA v1's circuit is fixed-shape, no padding slots) - found ${namespaceItems.size}"
+        }
+
+        val claims = namespaceItems.map { entry ->
+            FfiClaim(
+                issuerSignedItemBytes = entry.original.EncodeToBytes(),
+                disclose = entry.item.elementIdentifier in requestedClaims,
+                digestId = entry.item.digestId.toUInt(),
+            )
+        }
+
+        val ecdsaWitness = buildEcdsaWitness(issuerAuth)
+        val msoBody = buildMsoBodyWitness(issuerAuth)
+
+        return Triple(claims, ecdsaWitness, msoBody)
+    }
+
+    /** See [buildWitness]'s "ECDSA witness" section for the reasoning here. */
+    private fun buildEcdsaWitness(issuerAuth: CBORObject): FfiEcdsaWitness {
+        val protectedHeaders = CBORObject.DecodeFromBytes(issuerAuth[0].GetByteString())
+        val alg = protectedHeaders[CBORObject.FromObject(1L)]?.AsInt64Value()
+        require(alg == COSE_ALG_ES256) {
+            "VegaProofSystem only supports ES256/P-256 issuerAuth signatures, got COSE alg $alg"
+        }
+
+        val leafCertBytes = MdocCose.extractX5Chain(issuerAuth).firstOrNull()
+            ?: error("VegaProofSystem: issuerAuth has no x5chain to extract the issuer's public key from")
+        val cert = CertificateFactory.getInstance("X.509")
+            .generateCertificate(ByteArrayInputStream(leafCertBytes))
+        val publicKey = cert.publicKey as? ECPublicKey
+            ?: error("VegaProofSystem: issuerAuth's leaf certificate is not an EC public key")
+
+        val signature = issuerAuth[3].GetByteString()
+        require(signature.size == P256_COORDINATE_BYTES * 2) {
+            "VegaProofSystem: expected a ${P256_COORDINATE_BYTES * 2}-byte raw ECDSA signature, got ${signature.size}"
+        }
+        val r = BigInteger(1, signature.copyOfRange(0, P256_COORDINATE_BYTES))
+        val s = BigInteger(1, signature.copyOfRange(P256_COORDINATE_BYTES, signature.size))
+        val sInv = s.modInverse(P256_ORDER)
+
+        return FfiEcdsaWitness(
+            qx = pad32(publicKey.w.affineX),
+            qy = pad32(publicKey.w.affineY),
+            r = pad32(r),
+            s = pad32(s),
+            sInv = pad32(sInv),
         )
+    }
+
+    /** See [buildWitness]'s "MSO body witness" section for the reasoning here. */
+    private fun buildMsoBodyWitness(issuerAuth: CBORObject): FfiMsoBodyWitness {
+        val mso = MdocCbor.decodeMso(issuerAuth)
+        val deviceKey = mso["deviceKeyInfo"]["deviceKey"]
+        val deviceX = deviceKey[CBORObject.FromObject(COSE_KEY_LABEL_X)].GetByteString()
+        val deviceY = deviceKey[CBORObject.FromObject(COSE_KEY_LABEL_Y)].GetByteString()
+
+        val validity = mso["validityInfo"]
+        fun timestamp(field: String): ByteArray {
+            val raw = validity[field]
+            val iso = if (raw.HasOneTag(0)) raw.UntagOne().AsString() else raw.AsString()
+            return Instant.parse(iso).truncatedTo(ChronoUnit.SECONDS).toString().toByteArray(Charsets.US_ASCII)
+        }
+
+        return FfiMsoBodyWitness(
+            deviceX = deviceX,
+            deviceY = deviceY,
+            signedTs = timestamp("signed"),
+            validFromTs = timestamp("validFrom"),
+            validUntilTs = timestamp("validUntil"),
+        )
+    }
+
+    /** Unsigned big-endian, left-padded/truncated to exactly [P256_COORDINATE_BYTES]. */
+    private fun pad32(value: BigInteger): ByteArray {
+        val unpadded = value.toByteArray().let {
+            // BigInteger.toByteArray() may carry a leading 0x00 sign byte for
+            // an otherwise-32-byte unsigned value - strip it so padding below
+            // doesn't overflow past P256_COORDINATE_BYTES.
+            if (it.size > P256_COORDINATE_BYTES && it[0] == 0.toByte()) it.copyOfRange(1, it.size) else it
+        }
+        require(unpadded.size <= P256_COORDINATE_BYTES) {
+            "value does not fit in $P256_COORDINATE_BYTES bytes"
+        }
+        val padded = ByteArray(P256_COORDINATE_BYTES)
+        System.arraycopy(unpadded, 0, padded, P256_COORDINATE_BYTES - unpadded.size, unpadded.size)
+        return padded
     }
 
     private suspend fun getOrInitProverKey(spec: ZkSystemSpec): VegaProverKey {
