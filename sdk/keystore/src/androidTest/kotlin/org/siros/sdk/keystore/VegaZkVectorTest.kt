@@ -199,6 +199,28 @@ class VegaZkVectorTest {
     }
 
     /**
+     * Runs `prove` once and returns only its `nextState` bytes - its own
+     * function frame so the ~105MB `prepState` input and the `FfiProveResult`
+     * wrapper (holding both `proofBytes` and `nextState` live together)
+     * become unreachable the instant this returns, mirroring
+     * [loadProverKey]/[loadVerifierKey]'s own reasoning. Without this split,
+     * [prove_reusingPriorState_stillVerifies] held `prepState` (~105MB) AND
+     * `firstProve.nextState` (~105MB) live at once going into the second
+     * `prove` call - confirmed via a real `OutOfMemoryError` on-device
+     * ("109893015 byte allocation with 109763376 free bytes") right at the
+     * edge of the ~105MB prep-state's own now-much-smaller footprint (see
+     * this file's own doc comment on the crate-side fix that got it there
+     * from ~356MB) rather than a reemergence of the original problem.
+     */
+    private fun firstProveNextState(
+        proverKey: uniffi.zk_cred_vega.VegaProverKey,
+        vector: TestVector,
+    ): ByteArray {
+        val prepState = prepProve(proverKey, vector.claims, vector.ecdsaWitness, vector.msoBody)
+        return prove(proverKey, vector.claims, vector.ecdsaWitness, vector.msoBody, prepState).nextState
+    }
+
+    /**
      * Confirms fold-and-reuse works: a second `prove` call using the first
      * call's own `nextState` (skipping `prep_prove`) still produces a
      * verifiable proof - exactly the reuse path
@@ -211,9 +233,8 @@ class VegaZkVectorTest {
         val vector = loadTestVector()
 
         val secondProve = loadProverKey().let { proverKey ->
-            val prepState = prepProve(proverKey, vector.claims, vector.ecdsaWitness, vector.msoBody)
-            val firstProve = prove(proverKey, vector.claims, vector.ecdsaWitness, vector.msoBody, prepState)
-            prove(proverKey, vector.claims, vector.ecdsaWitness, vector.msoBody, firstProve.nextState)
+            val nextState = firstProveNextState(proverKey, vector)
+            prove(proverKey, vector.claims, vector.ecdsaWitness, vector.msoBody, nextState)
         }
 
         val verifyResult = verify(loadVerifierKey(), secondProve.proofBytes)
