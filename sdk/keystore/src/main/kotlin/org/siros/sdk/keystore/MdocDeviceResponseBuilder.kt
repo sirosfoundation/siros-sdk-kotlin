@@ -431,6 +431,18 @@ class MdocDeviceResponseBuilder(
          *   for every claim actually being revealed - including the derived
          *   pseudonym under its own DCQL-facing name (e.g.
          *   `"pairwise_pseudonym"`), never the raw seed value.
+         * @param digestIds element identifier -> the credential's own
+         *   `digestID` for that element (from the real, issuer-signed
+         *   `IssuerSignedItem` - not something the wallet invents). Optional
+         *   per identifier (a missing entry simply omits `digestId` from
+         *   that item); harmless/unused by a Longfellow presentation
+         *   (matched by position, not digestID - see
+         *   `ZkPresentationContext.RequestedClaimIDs`'s doc comment in
+         *   `vc`'s `zk_verifier.go`), but REQUIRED for a Vega presentation's
+         *   verifier-side claim matching, since Vega's fixed claim slots are
+         *   ordered by the credential's own document order rather than the
+         *   request's order - see `VegaProofSystem.buildWitness`'s doc
+         *   comment.
          * @param issuerAuth the credential's own COSE_Sign1 `issuerAuth`
          *   structure, to extract its x5chain (COSE header label 33) from.
          * @return CBOR-encoded `{version, status, zkDocuments}` bytes, ready
@@ -444,6 +456,7 @@ class MdocDeviceResponseBuilder(
             namespace: String,
             disclosedClaims: Map<String, CBORObject>,
             issuerAuth: CBORObject,
+            digestIds: Map<String, UInt> = emptyMap(),
         ): ByteArray {
             val documentData = CBORObject.NewMap()
             documentData["zkSystemId"] = CBORObject.FromObject(zkSystemId)
@@ -455,6 +468,7 @@ class MdocDeviceResponseBuilder(
                 val item = CBORObject.NewMap()
                 item["elementIdentifier"] = CBORObject.FromObject(elementId)
                 item["elementValue"] = elementValue
+                digestIds[elementId]?.let { item["digestId"] = CBORObject.FromObject(it.toLong()) }
                 issuerSignedItems.Add(item)
             }
             val issuerSignedMap = CBORObject.NewMap()

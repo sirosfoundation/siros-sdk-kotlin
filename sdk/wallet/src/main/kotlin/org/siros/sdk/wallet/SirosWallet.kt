@@ -2375,14 +2375,17 @@ class SirosWallet private constructor(
         val storedItems = document.issuerSigned.nameSpaces[namespace].orEmpty()
 
         val disclosedClaims = linkedMapOf<String, com.upokecenter.cbor.CBORObject>()
+        val digestIds = linkedMapOf<String, UInt>()
         disclosedClaimNames.forEach { claimName ->
             if (claimName == LongfellowZkProofSystem.PSEUDONYM_CLAIM) {
                 result.pseudonym?.let {
                     disclosedClaims[claimName] = com.upokecenter.cbor.CBORObject.FromObject(it)
                 }
             } else {
-                storedItems.firstOrNull { it.item.elementIdentifier == claimName }
-                    ?.let { disclosedClaims[claimName] = it.item.elementValue }
+                storedItems.firstOrNull { it.item.elementIdentifier == claimName }?.let {
+                    disclosedClaims[claimName] = it.item.elementValue
+                    digestIds[claimName] = it.item.digestId.toUInt()
+                }
             }
         }
 
@@ -2394,6 +2397,7 @@ class SirosWallet private constructor(
             namespace = namespace,
             disclosedClaims = disclosedClaims,
             issuerAuth = document.issuerSigned.issuerAuth,
+            digestIds = digestIds,
         )
     }
 

@@ -311,4 +311,49 @@ class MdocDeviceResponseBuilderTest {
         }
         assertTrue(thrown is IllegalArgumentException)
     }
+
+    @Test
+    fun buildZkDeviceResponse_includesDigestIdOnlyWhenProvided() {
+        val disclosedClaims = linkedMapOf(
+            "family_name" to CBORObject.FromObject("Doe"),
+            "given_name" to CBORObject.FromObject("Jane"),
+        )
+        // Only family_name has a known digestId - given_name's is
+        // deliberately omitted, mirroring a claim buildZkPresentationToken
+        // couldn't resolve one for (e.g. the derived pseudonym claim,
+        // which has no real IssuerSignedItem.digestID of its own).
+        val digestIds = mapOf("family_name" to 26u)
+
+        val issuerAuth = CBORObject.NewArray()
+        issuerAuth.Add(CBORObject.FromObject(ByteArray(0)))
+        issuerAuth.Add(CBORObject.NewMap())
+        issuerAuth.Add(CBORObject.FromObject(ByteArray(0)))
+        issuerAuth.Add(CBORObject.FromObject(ByteArray(0)))
+
+        val response = MdocDeviceResponseBuilder.buildZkDeviceResponse(
+            proofBytes = ByteArray(4) { it.toByte() },
+            zkSystemId = "vega-mc-p256-v1-prover-key-r7",
+            docType = docType,
+            timestamp = "2026-08-25T00:00:00Z",
+            namespace = namespace,
+            disclosedClaims = disclosedClaims,
+            issuerAuth = issuerAuth,
+            digestIds = digestIds,
+        )
+
+        val decoded = CBORObject.DecodeFromBytes(response)
+        val zkDocuments = decoded["zkDocuments"]
+        assertEquals(1, zkDocuments.size())
+        val documentData = CBORObject.DecodeFromBytes(zkDocuments[0]["documentData"].UntagOne().GetByteString())
+        val items = documentData["issuerSigned"][CBORObject.FromObject(namespace)]
+        assertEquals(2, items.size())
+
+        val familyNameItem = (0 until items.size()).map { items[it] }
+            .first { it["elementIdentifier"].AsString() == "family_name" }
+        assertEquals(26L, familyNameItem["digestId"].AsInt64Value())
+
+        val givenNameItem = (0 until items.size()).map { items[it] }
+            .first { it["elementIdentifier"].AsString() == "given_name" }
+        assertTrue(givenNameItem["digestId"] == null || givenNameItem["digestId"].isNull)
+    }
 }
