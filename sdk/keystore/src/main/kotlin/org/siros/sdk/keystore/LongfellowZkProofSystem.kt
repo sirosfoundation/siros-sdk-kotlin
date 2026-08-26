@@ -4,6 +4,10 @@ package org.siros.sdk.keystore
 import com.github.luben.zstd.Zstd
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.siros.sdk.credentials.COSE_ALG_ES256
+import org.siros.sdk.credentials.CredentialDocument
+import org.siros.sdk.credentials.CredentialFormat
+import org.siros.sdk.credentials.CredentialTypeRef
 import org.siros.sdk.credentials.DefaultZkPseudonymDeriver
 import org.siros.sdk.credentials.VerifierIdentity
 import org.siros.sdk.credentials.ZkCircuitClient
@@ -12,6 +16,7 @@ import org.siros.sdk.credentials.ZkProofResult
 import org.siros.sdk.credentials.ZkProofSystem
 import org.siros.sdk.credentials.ZkPseudonymDeriver
 import org.siros.sdk.credentials.ZkSystemSpec
+import org.siros.sdk.credentials.ZkWitnessSigner
 import org.siros.sdk.credentials.PseudonymOutcome
 import org.siros.sdk.credentials.mdoc.MdocCbor
 import timber.log.Timber
@@ -76,9 +81,12 @@ class LongfellowZkProofSystem(
 
     override val systemId: String = "longfellow-libzk-v1"
 
-    override val supportedDocTypes: Set<String> = setOf(
-        "org.iso.18013.5.1.mDL",
-        "eu.europa.ec.eudi.pid.1",
+    // mdoc only: this system proves over a DeviceResponse, and its native
+    // prover parses CBOR. Declaring the format explicitly is what keeps an
+    // SD-JWT VC or JWP credential of the same type from being routed here.
+    override val supportedCredentialTypes: Set<CredentialTypeRef> = setOf(
+        CredentialTypeRef(CredentialFormat.MSO_MDOC, "org.iso.18013.5.1.mDL"),
+        CredentialTypeRef(CredentialFormat.MSO_MDOC, "eu.europa.ec.eudi.pid.1"),
     )
 
     /**
@@ -128,11 +136,11 @@ class LongfellowZkProofSystem(
 
     override suspend fun generateProof(
         spec: ZkSystemSpec,
-        credentialBytes: ByteArray,
+        document: CredentialDocument,
         sessionTranscript: ByteArray,
         requestedClaims: List<String>,
         verifierIdentity: VerifierIdentity?,
-        signer: suspend (ByteArray) -> ByteArray,
+        signer: ZkWitnessSigner,
         priorState: ByteArray?,
     ): ZkProofResult {
         val effectiveClaims = if (verifierIdentity != null && PSEUDONYM_CLAIM !in requestedClaims) {
@@ -141,9 +149,16 @@ class LongfellowZkProofSystem(
             requestedClaims
         }
 
-        val document = MdocCbor.parseStoredCredential(credentialBytes)
-        val namespace = document.issuerSigned.nameSpaces.keys.firstOrNull()
-            ?: error("mdoc credential '${document.docType}' has no disclosed namespaces")
+        // Reject rather than assume: a caller bypassing the registry could
+        // hand us a format whose bytes are not a DeviceResponse at all, and
+        // the native prover's failure would say nothing useful.
+        val credentialBytes = (document as? CredentialDocument.Mdoc)?.bytes
+            ?: throw IllegalArgumentException(
+                "$systemId proves over mdoc only, got ${document::class.simpleName}"
+            )
+        val mdoc = MdocCbor.parseStoredCredential(credentialBytes)
+        val namespace = mdoc.issuerSigned.nameSpaces.keys.firstOrNull()
+            ?: error("mdoc credential '${mdoc.docType}' has no disclosed namespaces")
 
         val prover = getOrInitProver(spec, effectiveClaims.size)
 
@@ -155,7 +170,11 @@ class LongfellowZkProofSystem(
         // what's needed here regardless of which real transport the caller
         // is presenting over.
         val witnessDeviceResponse = MdocDeviceResponseBuilder(credentialBytes)
-            .buildForProximity(sessionTranscript, disclosedClaims = null, signer = signer)
+            .buildForProximity(
+                sessionTranscript,
+                disclosedClaims = null,
+                signer = { data -> signer.sign(COSE_ALG_ES256, data) },
+            )
 
         // The native prover requires an exact 20-byte RFC 3339 timestamp
         // ("YYYY-MM-DDTHH:MM:SSZ", no fractional seconds) - confirmed live
@@ -195,7 +214,7 @@ class LongfellowZkProofSystem(
         // circuit itself asserts) is computed locally so the caller can
         // display/track it, mirroring the feat/longfellow-zk reference's own
         // separate computePPID() step.
-        val seedItem = document.issuerSigned.nameSpaces[namespace]
+        val seedItem = mdoc.issuerSigned.nameSpaces[namespace]
             ?.firstOrNull { it.item.elementIdentifier == PSEUDONYM_SEED_ELEMENT }
         val pseudonym = seedItem?.let { sha256(it.item.elementValue.GetByteString() + verifierContext) }
 

@@ -104,6 +104,90 @@ data class ZkProofResult(
 )
 
 /**
+ * What a credential *is*: a format plus the type identifier that format
+ * uses - an mdoc's doctype, an SD-JWT VC's `vct`.
+ *
+ * Reuses [CredentialFormat], the enum the credential store already keys
+ * on, rather than introducing a second notion of "format" alongside it.
+ *
+ * Replaces the bare doctype string this interface used to match on. That
+ * only worked while every proof system was mdoc-only: a doctype alone
+ * cannot distinguish an mdoc mDL from an SD-JWT VC one, so a request for
+ * the latter would have been silently routed to an mdoc-only
+ * implementation and failed somewhere deep inside a native prover.
+ */
+data class CredentialTypeRef(
+    val format: CredentialFormat,
+    val typeId: String,
+)
+
+/**
+ * A credential's stored bytes, tagged with how to read them.
+ *
+ * Deliberately still bytes rather than a parsed model. The bytes are a
+ * private witness fed to a local prover and never sent to the verifier
+ * (see [ZkProofSystem.generateProof]), and each proof system's native
+ * crate parses them itself - so a shared parsed representation here would
+ * be a translation layer that every implementation immediately undoes.
+ */
+sealed class CredentialDocument {
+    abstract val bytes: ByteArray
+
+    // Only the formats something actually stores today. A JWP variant for
+    // blind BBS is deliberately absent until a proof system consumes one -
+    // the sealed hierarchy is the extension point, so adding it later is
+    // additive and every `when` over it is checked by the compiler.
+
+    /**
+     * A DeviceResponse-shaped CBOR envelope, matching
+     * `MdocDeviceResponseBuilder`'s own constructor input.
+     */
+    data class Mdoc(override val bytes: ByteArray) : CredentialDocument() {
+        override fun equals(other: Any?): Boolean =
+            this === other || (other is Mdoc && bytes.contentEquals(other.bytes))
+
+        override fun hashCode(): Int = bytes.contentHashCode()
+    }
+
+    /** A `~`-delimited SD-JWT VC, as issued. */
+    data class SdJwtVc(override val bytes: ByteArray) : CredentialDocument() {
+        override fun equals(other: Any?): Boolean =
+            this === other || (other is SdJwtVc && bytes.contentEquals(other.bytes))
+
+        override fun hashCode(): Int = bytes.contentHashCode()
+    }
+
+}
+
+/**
+ * Signs raw bytes with a credential's device key, mid-proof-generation.
+ *
+ * Replaces the bare `suspend (ByteArray) -> ByteArray` this interface used
+ * to take. The reason is [algorithm]: Longfellow needs an ES256 signature
+ * over a witness DeviceResponse, while a BBS key binding key signs with
+ * Schnorr over BLS12-381 G1 - a different key, on a different curve, that
+ * only some authenticators can produce at all. A bare lambda cannot say
+ * which it wants, so the wallet had to guess, and guessing wrong yields a
+ * signature that fails verification with nothing to point at.
+ *
+ * Implementations must return a raw (not DER) signature - the same
+ * contract `MdocDeviceResponseBuilder`'s own `signer` parameter has.
+ */
+fun interface ZkWitnessSigner {
+    /**
+     * @param algorithm the signature algorithm required, as a COSE
+     *   identifier (e.g. `-7` for ES256). A signer that cannot produce it
+     *   must throw rather than substitute another - a wallet that quietly
+     *   signs with the wrong key produces a credential that cannot be
+     *   presented.
+     */
+    suspend fun sign(algorithm: Long, data: ByteArray): ByteArray
+}
+
+/** COSE algorithm identifier for ES256 (RFC 8152 §8.1). */
+const val COSE_ALG_ES256: Long = -7
+
+/**
  * One pluggable zero-knowledge proof system, backing a specific credential
  * presentation mode (selective disclosure + optional pseudonym, today;
  * whatever a future BBS/Vega implementation supports). Mirrors this org's
@@ -124,8 +208,16 @@ interface ZkProofSystem {
     /** This system's identifier, e.g. `"longfellow-libzk-v1_8_2_4307_2945"`. */
     val systemId: String
 
-    /** mdoc doctypes this system can generate a ZK proof over, e.g. `{"org.iso.18013.5.1.mDL"}`. */
-    val supportedDocTypes: Set<String>
+    /**
+     * The credential types this system can prove over, e.g.
+     * `{CredentialTypeRef(MDOC, "org.iso.18013.5.1.mDL")}`.
+     *
+     * Was `supportedDocTypes: Set<String>`. Carrying the format means a
+     * request for an SD-JWT VC or JWP credential finds no match today
+     * rather than being routed to an mdoc-only implementation on a
+     * doctype-string collision.
+     */
+    val supportedCredentialTypes: Set<CredentialTypeRef>
 
     /**
      * Returns whichever of [requestedSpecs] (a verifier's own list, in
@@ -180,9 +272,11 @@ interface ZkProofSystem {
      *
      * @param spec the specific [ZkSystemSpec] to prove against - normally
      *   whatever [matchingSpec] just returned for this same request.
-     * @param credentialBytes the credential's raw stored bytes (a full
-     *   DeviceResponse-shaped envelope, matching
-     *   `MdocDeviceResponseBuilder`'s own constructor input in `sdk/keystore`).
+     * @param document the credential's raw stored bytes, tagged with its
+     *   format. A system must reject a [CredentialDocument] variant it does
+     *   not handle rather than assuming one - [supportedCredentialTypes]
+     *   makes mis-routing unlikely, but not impossible for a caller that
+     *   bypasses the registry.
      * @param sessionTranscript the OpenID4VP/DC-API/proximity session
      *   transcript this proof must be bound to (mirrors every non-ZK mdoc
      *   presentation's own session-transcript binding) - already computed by
@@ -194,20 +288,20 @@ interface ZkProofSystem {
      *   pseudonym bound to this verifier; `null` for a plain proof of
      *   possession with no pseudonym.
      * @param signer signs raw bytes with the device key for the (private,
-     *   never-transmitted) witness DeviceResponse's own device signature;
-     *   must return a raw (not DER) signature - same contract as
-     *   `MdocDeviceResponseBuilder`'s own `signer` parameter.
+     *   never-transmitted) witness DeviceResponse's own device signature.
+     *   See [ZkWitnessSigner] for why this carries an algorithm rather than
+     *   being a bare lambda.
      * @param priorState opaque prover-side cache from a previous call to
      *   this same credential+system (see [ZkProofResult.nextState]) -
      *   systems without a reuse path (Longfellow) ignore it.
      */
     suspend fun generateProof(
         spec: ZkSystemSpec,
-        credentialBytes: ByteArray,
+        document: CredentialDocument,
         sessionTranscript: ByteArray,
         requestedClaims: List<String>,
         verifierIdentity: VerifierIdentity?,
-        signer: suspend (ByteArray) -> ByteArray,
+        signer: ZkWitnessSigner,
         priorState: ByteArray? = null,
     ): ZkProofResult
 }
@@ -295,16 +389,20 @@ object DefaultZkPseudonymDeriver : ZkPseudonymDeriver {
 class ZkProofSystemRegistry(private val systems: List<ZkProofSystem>) {
     /**
      * The first registered system (in registration order) that supports
-     * [docType] and can satisfy one of [requestedSpecs] for a proof over
+     * [credentialType] and can satisfy one of [requestedSpecs] for a proof over
      * exactly [numAttributes] claims, paired with the matched spec - or
      * `null` if none qualify. See [ZkProofSystem.matchingSpec]'s doc comment
      * for why [numAttributes] must be the caller's real disclosed-claim
      * count, not a value ignorable/defaultable to "whichever circuit is
      * offered first".
      */
-    fun resolve(docType: String, requestedSpecs: List<ZkSystemSpec>, numAttributes: Int): Pair<ZkProofSystem, ZkSystemSpec>? {
+    fun resolve(
+        credentialType: CredentialTypeRef,
+        requestedSpecs: List<ZkSystemSpec>,
+        numAttributes: Int,
+    ): Pair<ZkProofSystem, ZkSystemSpec>? {
         for (system in systems) {
-            if (docType !in system.supportedDocTypes) continue
+            if (credentialType !in system.supportedCredentialTypes) continue
             val matched = system.matchingSpec(requestedSpecs, numAttributes) ?: continue
             return system to matched
         }
