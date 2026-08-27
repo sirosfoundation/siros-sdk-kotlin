@@ -11,6 +11,19 @@ enum class CredentialFormat(val value: String) {
     DC_SD_JWT("dc+sd-jwt"),
     MSO_MDOC("mso_mdoc"),
     JWT_VC_JSON("jwt_vc_json"),
+
+    /**
+     * A JSON Web Proof carrying a BBS credential
+     * (`draft-bormann-jwp-modular-bbs`).
+     *
+     * Not a variant of SD-JWT despite both using the SD-JWT VC data model.
+     * The container is different - JWP has its own issued and presented
+     * forms, and selective disclosure is BBS itself rather than `_sd`
+     * digests - so none of the `~`-delimited parsing applies. What is
+     * shared is everything above the container: `vct`, the VCTM metadata
+     * path, claim display.
+     */
+    JWP("jwp"),
 }
 
 /** A stored verifiable credential with parsed metadata. */
