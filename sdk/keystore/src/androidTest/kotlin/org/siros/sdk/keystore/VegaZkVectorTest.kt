@@ -46,12 +46,13 @@ import java.nio.ByteBuffer
  *
  * Resources: `vega-mc-p256-v1-{prover,verifier}-key.bin.zst` are the exact
  * `zk_cred_vega::setup()` output (bincode-serialized `ProverKey`/`VerifierKey`),
- * zstd-compressed, generated via `cargo run --release --bin dump_setup` in
- * the `zk-cred-vega` crate at commit `c4e6a35` (the P0-1-fixed, r7-catalog
- * HEAD as of this test) - NOT yet published to `go-zk-circuits`'s live
- * manifest (see the handoff doc's "What's NOT ready yet" #2), so this test
- * bundles its own copy rather than fetching one. `mdl_4claims_mixed_disclosure.json`
- * is the crate's own `test-vectors/` fixture, copied verbatim.
+ * zstd-compressed - fetched directly from `go-zk-circuits`'s
+ * `vega-mc-p256-v1-{prover,verifier}-key-r11` catalog entries (published for
+ * early testing at commit `sirosfoundation/zk-cred-vega@0592680`, v0.0.3),
+ * so this test bundles a static copy of exactly what [VegaProofSystem]'s
+ * own `zkCircuitClient` would fetch at runtime rather than re-fetching one
+ * per test run. `mdl_4claims_mixed_disclosure.json` is the crate's own
+ * `test-vectors/` fixture, copied verbatim.
  */
 @RunWith(AndroidJUnit4::class)
 class VegaZkVectorTest {

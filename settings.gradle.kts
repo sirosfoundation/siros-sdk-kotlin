@@ -45,9 +45,9 @@ dependencyResolutionManagement {
         }
         // zk-cred-vega AAR, published to its own GitHub Packages Maven as of
         // v0.0.2 - same per-repo-scoped reasoning as zk-cred-longfellow above.
-        // LOCAL ONLY, DO NOT PUSH/MERGE this entry to origin/main - see
-        // VegaProofSystem.kt's own doc comment for why (circuit artifacts
-        // still unpublished, expert review still pending).
+        // See VegaProofSystem.kt's own doc comment for the crate's current
+        // status (expert review still pending - not for real relying-party
+        // use yet, but the circuit is published for early testing).
         maven {
             name = "GitHubPackagesZkCredVega"
             url = uri("https://maven.pkg.github.com/sirosfoundation/zk-cred-vega")

@@ -40,19 +40,17 @@ import java.time.temporal.ChronoUnit
  * see `~/.claude/plans/zk-cred-vega-sdk-handoff.md` for the full
  * design/provenance history and current crate status.
  *
- * **Do not present this to a real relying party yet.** `zk-cred-vega` is now
- * public and tagged (`v0.0.1`), and its own expert security review is
- * running in parallel with SDK-side testing rather than gating it - but that
- * review hasn't landed, so nothing here should be trusted as a real trust
- * anchor yet. This class exists for local/self-hosted end-to-end testing
- * (own prover verified by own verifier), same caveat Longfellow shipped
- * under before its own multipaz interop testing. Also still blocked on: the
- * `go-zk-circuits` catalog entries being `--unpublished` (so
- * [zkCircuitClient] can't fetch a real prover/verifier key pair yet - tests
- * load one from a local `dump_setup` dump instead), and a genuinely
- * unresolved on-device heap constraint (`prep_prove`'s ~356MB prep-state
- * return value doesn't fit Android's `largeHeap` ceiling even in isolation -
- * see `VegaZkVectorTest`'s own doc comment).
+ * **Do not present this to a real relying party yet.** `zk-cred-vega` is
+ * public and tagged (`v0.0.3` as of the digest-concealment privacy fix), and
+ * its own expert security review is running in parallel with SDK-side
+ * testing rather than gating it - but that review hasn't landed, so nothing
+ * here should be trusted as a real trust anchor yet. This class is for
+ * early-testing end-to-end use (own prover verified by own verifier, plus
+ * real wallet <-> verifier interop against `sirosfoundation/vc`), same
+ * caveat Longfellow shipped under before its own multipaz interop testing.
+ * The `go-zk-circuits` catalog's `vega-mc-p256-v1-{prover,verifier}-key-r11`
+ * entries are published for early testing ([zkCircuitClient] can fetch them
+ * directly), carrying the same "PUBLISHED FOR EARLY TESTING ONLY" notice.
  *
  * `buildWitness` is real (ECDSA witness from `issuerAuth`'s x5chain +
  * signature, MSO body from `issuerAuth`'s payload, fixed 4-slot claim
