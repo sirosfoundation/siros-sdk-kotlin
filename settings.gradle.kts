@@ -43,6 +43,23 @@ dependencyResolutionManagement {
                 ).getOrElse("")
             }
         }
+        // zk-cred-vega AAR, published to its own GitHub Packages Maven as of
+        // v0.0.2 - same per-repo-scoped reasoning as zk-cred-longfellow above.
+        // See VegaProofSystem.kt's own doc comment for the crate's current
+        // status (expert review still pending - not for real relying-party
+        // use yet, but the circuit is published for early testing).
+        maven {
+            name = "GitHubPackagesZkCredVega"
+            url = uri("https://maven.pkg.github.com/sirosfoundation/zk-cred-vega")
+            credentials {
+                username = providers.gradleProperty("gpr.user").orElse(
+                    providers.environmentVariable("GITHUB_ACTOR")
+                ).getOrElse("")
+                password = providers.gradleProperty("gpr.key").orElse(
+                    providers.environmentVariable("GITHUB_TOKEN")
+                ).getOrElse("")
+            }
+        }
     }
 }
 

@@ -41,6 +41,16 @@ dependencies {
     // For local development, publish to mavenLocal:
     //   cd zk-cred-longfellow && make aar && make publish-local
     implementation("org.siros:zk-cred-longfellow:0.1.1")
+
+    // zk-cred-vega UniFFI bindings - real GitHub Packages Maven artifact
+    // (resolved via GitHubPackagesZkCredVega in settings.gradle.kts), built
+    // against sirosfoundation/vega-prover's fork (a 2-line #[serde(skip)]
+    // fix shrinking the FFI prep-state from ~356MB to ~100MB so it fits
+    // Android's heap ceiling). v0.0.3 carries a real, independently-flagged
+    // privacy fix (undisclosed-claim digest concealment) - see
+    // VegaProofSystem.kt's own doc comment for the crate's current status.
+    implementation("org.siros:zk-cred-vega:0.0.3")
+
     // JNA is required by UniFFI-generated Kotlin bindings.
     implementation("net.java.dev.jna:jna:5.14.0@aar")
 

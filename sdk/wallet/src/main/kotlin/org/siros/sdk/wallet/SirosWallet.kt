@@ -71,6 +71,10 @@ import org.siros.sdk.keystore.KeypairInfo
 import org.siros.sdk.keystore.KeystoreManager
 import org.siros.sdk.keystore.LongfellowZkProofSystem
 import org.siros.sdk.keystore.MdocDeviceResponseBuilder
+// VegaProofSystem: LOCAL ONLY, DO NOT PUSH/MERGE this line to origin/main -
+// see VegaProofSystem.kt's own doc comment for why (zk-cred-vega only
+// resolves via mavenLocal right now).
+import org.siros.sdk.keystore.VegaProofSystem
 import org.siros.sdk.keystore.WscdKeystoreAdapter
 import org.siros.sdk.keystore.WscdManager
 import org.siros.sdk.wallet.dcapi.DCAPIRequest
@@ -1923,9 +1927,15 @@ class SirosWallet private constructor(
                 // via selectSigningKey's null-kid fallback to the only
                 // available key) - keystore.sign() below needs an explicit
                 // key id, so resolve the same default here rather than
-                // treating a null kid as "no key exists".
+                // treating a null kid as "no key exists". Resolved lazily
+                // (checked only inside the signer lambda, not eagerly here):
+                // a ZK system without a device-binding concept (Vega, unlike
+                // Longfellow's real-witness-DeviceResponse construction)
+                // never calls signer at all, so requiring a key up front
+                // would spuriously fail a Vega presentation whenever no
+                // signing key happens to be resolvable, even though nothing
+                // in that flow ever needs one.
                 val kid = cred.kid ?: keystore.listKeys().firstOrNull()?.keyId
-                    ?: throw WalletException("No signing key available for credential $id - cannot generate a ZK proof for it")
                 val docType = MdocCbor.parseStoredCredential(credBytes).docType
                 // A circuit is compiled for a fixed attribute count, so the
                 // verifier's zk_system_type list must be matched against how
@@ -1968,7 +1978,10 @@ class SirosWallet private constructor(
                         require(algorithm == COSE_ALG_ES256) {
                             "This keystore signs ES256 only, proof system asked for COSE alg $algorithm"
                         }
-                        keystore.sign(kid, data)
+                        keystore.sign(
+                            requireNotNull(kid) { "No signing key available for credential $id - cannot generate a ZK proof for it" },
+                            data,
+                        )
                     },
                 )
                 val deviceResponse = buildZkPresentationToken(
@@ -2326,12 +2339,25 @@ class SirosWallet private constructor(
     /**
      * Every ZK proof system this wallet can satisfy a verifier's
      * `"mso_mdoc_zk"` DCQL request with - see [handleDCAPIRequest]'s
-     * `mso_mdoc_zk` branch, the only current caller. Longfellow is the only
-     * real implementation today; this registry is where a future
-     * system (e.g. Vega/BBS) would also be registered.
+     * `mso_mdoc_zk` branch, the only current caller. [ZkProofSystemRegistry]
+     * tries each system in order via [ZkProofSystem.matchingSpec] until one
+     * claims the request, so ordering only matters when two systems could
+     * both match the same spec (not the case today - Vega and Longfellow
+     * declare disjoint `system` ids).
+     *
+     * VegaProofSystem: LOCAL ONLY, DO NOT PUSH/MERGE this line to
+     * origin/main - see its own doc comment for current gating (crate's own
+     * expert review running in parallel with this session's testing, not a
+     * blocker to local/self-hosted use; `go-zk-circuits` catalog entries
+     * still `--unpublished`; a genuinely open on-device heap constraint).
      */
     private val zkProofSystemRegistry: ZkProofSystemRegistry =
-        ZkProofSystemRegistry(listOf(LongfellowZkProofSystem(zkCircuitClient)))
+        ZkProofSystemRegistry(
+            listOf(
+                LongfellowZkProofSystem(zkCircuitClient),
+                VegaProofSystem(zkCircuitClient),
+            ),
+        )
 
     /**
      * Wraps a raw ZK [result] into the full `{version, status, zkDocuments:
@@ -2358,14 +2384,17 @@ class SirosWallet private constructor(
         val storedItems = document.issuerSigned.nameSpaces[namespace].orEmpty()
 
         val disclosedClaims = linkedMapOf<String, com.upokecenter.cbor.CBORObject>()
+        val digestIds = linkedMapOf<String, UInt>()
         disclosedClaimNames.forEach { claimName ->
             if (claimName == LongfellowZkProofSystem.PSEUDONYM_CLAIM) {
                 result.pseudonym?.let {
                     disclosedClaims[claimName] = com.upokecenter.cbor.CBORObject.FromObject(it)
                 }
             } else {
-                storedItems.firstOrNull { it.item.elementIdentifier == claimName }
-                    ?.let { disclosedClaims[claimName] = it.item.elementValue }
+                storedItems.firstOrNull { it.item.elementIdentifier == claimName }?.let {
+                    disclosedClaims[claimName] = it.item.elementValue
+                    digestIds[claimName] = it.item.digestId.toUInt()
+                }
             }
         }
 
@@ -2377,6 +2406,7 @@ class SirosWallet private constructor(
             namespace = namespace,
             disclosedClaims = disclosedClaims,
             issuerAuth = document.issuerSigned.issuerAuth,
+            digestIds = digestIds,
         )
     }
 
@@ -3662,8 +3692,9 @@ class SirosWallet private constructor(
                                         // cred.kid is commonly null for a softkey-issued credential
                                         // with no explicit per-credential key binding - see the
                                         // identical fallback + comment in handleDCAPIRequest.
+                                        // Resolved lazily (checked only inside the signer lambda) -
+                                        // see handleDCAPIRequest's identical comment for why.
                                         val kid = cred.kid ?: keystore.listKeys().firstOrNull()?.keyId
-                                            ?: throw WalletException("No signing key available for credential ${cred.id} - cannot generate a ZK proof for it")
                                         val docType = MdocCbor.parseStoredCredential(credBytes).docType
                                         // See handleDCAPIRequest's identical comment: a circuit is
                                         // compiled for a fixed attribute count, so matching must
@@ -3709,11 +3740,14 @@ class SirosWallet private constructor(
                                             requestedClaims = ref.disclosedClaims ?: emptyList(),
                                             verifierIdentity = verifierIdentity,
                                             signer = { algorithm, data ->
-                        require(algorithm == COSE_ALG_ES256) {
-                            "This keystore signs ES256 only, proof system asked for COSE alg $algorithm"
-                        }
-                        keystore.sign(kid, data)
-                    },
+                                                require(algorithm == COSE_ALG_ES256) {
+                                                    "This keystore signs ES256 only, proof system asked for COSE alg $algorithm"
+                                                }
+                                                keystore.sign(
+                                                    requireNotNull(kid) { "No signing key available for credential ${cred.id} - cannot generate a ZK proof for it" },
+                                                    data,
+                                                )
+                                            },
                                         )
                                         Timber.d("sign_presentation: ZK proof generated, pseudonymOutcome=${result.pseudonymOutcome} proofBytes.size=${result.proofBytes.size}")
                                         val zkDeviceResponse = buildZkPresentationToken(
