@@ -325,8 +325,8 @@ class VegaProofSystem(
                     "'What's NOT ready yet' #2)",
             )
         val compressedBytes = zkCircuitClient.downloadArtifact(descriptor)
-        val keyBytes = decompress(compressedBytes, descriptor)
-        val proverKey = uniffi.zk_cred_vega.deserializeProverKey(directByteBuffer(keyBytes))
+        val keyBuffer = decompress(compressedBytes, descriptor)
+        val proverKey = uniffi.zk_cred_vega.deserializeProverKey(keyBuffer)
 
         cacheMutex.withLock {
             val existing = proverKeyCache[spec.id]
@@ -335,14 +335,6 @@ class VegaProofSystem(
             return proverKey
         }
     }
-
-    /**
-     * The vendored UniFFI bindings' `&[u8]` parameters need a DIRECT
-     * `ByteBuffer` - same requirement as [LongfellowZkProofSystem]'s own
-     * `directByteBuffer` (see its doc comment for why).
-     */
-    private fun directByteBuffer(bytes: ByteArray): ByteBuffer =
-        ByteBuffer.allocateDirect(bytes.size).put(bytes).apply { flip() }
 
     /**
      * Every zk-circuits catalog artifact (Vega's prover/verifier keys
@@ -357,8 +349,25 @@ class VegaProofSystem(
      * `deserializeProverKey` failed with "deserialized bytes don't encode a
      * valid field element" (bincode reading a zstd frame header as if it
      * were serialized key data).
+     *
+     * Decompresses straight into a direct destination [ByteBuffer] instead
+     * of returning a heap `ByteArray` for a caller to separately wrap via
+     * `ByteBuffer.allocateDirect(...).put(...)` - zstd-jni's
+     * `Zstd.decompress(ByteBuffer, Int)` requires BOTH its source and
+     * destination buffers to already be direct (confirmed via
+     * `ZstdDecompressCtx.decompressDirectByteBuffer`'s own
+     * `IllegalArgumentException` checks), so [compressedBytes] is first
+     * copied into a small direct buffer - cheap, this is the compressed
+     * size, a few MB at most for these circuits - and the native call
+     * writes its result straight into a destination buffer of exactly
+     * [outputSize] bytes. That destination buffer IS the final result: no
+     * second, same-size copy. The old two-step
+     * decompress-to-heap-array-then-copy-to-direct-buffer path held two
+     * full copies of a circuit key in memory simultaneously at the peak -
+     * confirmed to OOM-crash a real device with the r11 Vega verifier key
+     * (~157MB uncompressed, so ~314MB at the old peak).
      */
-    private fun decompress(compressedBytes: ByteArray, descriptor: ZkCircuitDescriptor): ByteArray {
+    private fun decompress(compressedBytes: ByteArray, descriptor: ZkCircuitDescriptor): ByteBuffer {
         val frameSize = Zstd.getFrameContentSize(compressedBytes)
         val outputSize = if (frameSize > 0) {
             frameSize
@@ -372,6 +381,7 @@ class VegaProofSystem(
                 compressedBytes.size.toLong() * 400
             }
         }
-        return Zstd.decompress(compressedBytes, outputSize.toInt())
+        val directCompressed = ByteBuffer.allocateDirect(compressedBytes.size).put(compressedBytes).apply { flip() }
+        return Zstd.decompress(directCompressed, outputSize.toInt())
     }
 }

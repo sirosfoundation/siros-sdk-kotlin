@@ -247,11 +247,11 @@ class LongfellowZkProofSystem(
         val descriptor = zkCircuitClient.fetchCircuit(spec.id)
             ?: error("Longfellow circuit '${spec.id}' not found in any configured zk-circuits source")
         val compressedBytes = zkCircuitClient.downloadArtifact(descriptor)
-        val circuitBytes = decompress(compressedBytes, descriptor)
+        val circuitBuffer = decompress(compressedBytes, descriptor)
         val circuitVersion = circuitVersionOf(descriptor)
 
         val prover = initializeProver(
-            circuit = directByteBuffer(circuitBytes),
+            circuit = circuitBuffer,
             circuitVersion = circuitVersion,
             numAttributes = numAttributes.toUByte(),
         )
@@ -275,8 +275,18 @@ class LongfellowZkProofSystem(
      * multiplier guess is fragile; falls back to
      * [ZkCircuitDescriptor.artifact]'s `uncompressed.size` catalog metadata,
      * and only as a last resort to a generous fixed multiplier.
+     *
+     * Decompresses straight into a direct destination [ByteBuffer] - see
+     * [VegaProofSystem]'s identically-named helper for why (zstd-jni
+     * requires both source and destination buffers to already be direct,
+     * so [compressedBytes] is wrapped in a small one first, and the native
+     * call's own destination buffer becomes the final result with no
+     * second, full-size copy via [directByteBuffer]). Confirmed real:
+     * these circuits are multi-hundred-MB, and the old
+     * decompress-to-heap-array-then-copy-to-direct-buffer path held two
+     * full copies in memory simultaneously at the peak.
      */
-    private fun decompress(compressedBytes: ByteArray, descriptor: ZkCircuitDescriptor): ByteArray {
+    private fun decompress(compressedBytes: ByteArray, descriptor: ZkCircuitDescriptor): ByteBuffer {
         val frameSize = Zstd.getFrameContentSize(compressedBytes)
         val outputSize = if (frameSize > 0) {
             frameSize
@@ -290,7 +300,8 @@ class LongfellowZkProofSystem(
                 compressedBytes.size.toLong() * 400
             }
         }
-        return Zstd.decompress(compressedBytes, outputSize.toInt())
+        val directCompressed = ByteBuffer.allocateDirect(compressedBytes.size).put(compressedBytes).apply { flip() }
+        return Zstd.decompress(directCompressed, outputSize.toInt())
     }
 
     private fun circuitVersionOf(descriptor: ZkCircuitDescriptor): CircuitVersion =
