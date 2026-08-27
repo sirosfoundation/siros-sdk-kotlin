@@ -118,8 +118,17 @@ class BbsIssuanceParticipant(
  * for every presentation for the life of the credential. Losing it makes
  * the credential unusable; leaking it undoes the blinding. It must reach
  * client-side encrypted storage and never a backend.
+ *
+ * The constructor is public because it has to be. Issuance is a round trip:
+ * the wallet commits, sends a credential request, and may not be running
+ * when the response arrives - an app can be backgrounded or killed in
+ * between. Everything here is exactly what must survive that gap, and
+ * without a public constructor a consumer could persist those fields and
+ * still have no way back to a preparation that can [accept] the credential.
+ *
+ * Raised in review on siros-sdk-swift#114, which had the same defect.
  */
-class BbsIssuancePreparation internal constructor(
+class BbsIssuancePreparation(
     private val suiteId: BbsSuiteId,
     /** The `commitment_with_proof` blob the issuer verifies and signs. */
     val commitmentWithProof: ByteArray,
