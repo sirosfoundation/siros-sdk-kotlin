@@ -1,7 +1,6 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.keystore
 
-import com.github.luben.zstd.Zstd
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -21,7 +20,6 @@ import org.siros.sdk.credentials.ZkSystemSpec
 import org.siros.sdk.credentials.ZkWitnessSigner
 import org.siros.sdk.credentials.PseudonymOutcome
 import org.siros.sdk.credentials.mdoc.MdocCbor
-import timber.log.Timber
 import uniffi.zk_cred_longfellow.CircuitVersion
 import uniffi.zk_cred_longfellow.MdocZkProver
 import uniffi.zk_cred_longfellow.initializeProver
@@ -247,7 +245,7 @@ class LongfellowZkProofSystem(
         val descriptor = zkCircuitClient.fetchCircuit(spec.id)
             ?: error("Longfellow circuit '${spec.id}' not found in any configured zk-circuits source")
         val compressedBytes = zkCircuitClient.downloadArtifact(descriptor)
-        val circuitBuffer = decompress(compressedBytes, descriptor)
+        val circuitBuffer = decompressZkCircuitArtifact(compressedBytes, descriptor)
         val circuitVersion = circuitVersionOf(descriptor)
 
         val prover = initializeProver(
@@ -265,43 +263,6 @@ class LongfellowZkProofSystem(
             proverCache[cacheKey] = prover
             return prover
         }
-    }
-
-    /**
-     * Decompresses [compressedBytes] to the exact size recorded in the
-     * zstd frame's own header (`Zstd.getFrameContentSize`) when present -
-     * these circuits compress at roughly 300-400x (a 319KB real V8 2-attribute
-     * circuit decompresses to ~104MB, confirmed via `zstd -l`), so any fixed
-     * multiplier guess is fragile; falls back to
-     * [ZkCircuitDescriptor.artifact]'s `uncompressed.size` catalog metadata,
-     * and only as a last resort to a generous fixed multiplier.
-     *
-     * Decompresses straight into a direct destination [ByteBuffer] - see
-     * [VegaProofSystem]'s identically-named helper for why (zstd-jni
-     * requires both source and destination buffers to already be direct,
-     * so [compressedBytes] is wrapped in a small one first, and the native
-     * call's own destination buffer becomes the final result with no
-     * second, full-size copy via [directByteBuffer]). Confirmed real:
-     * these circuits are multi-hundred-MB, and the old
-     * decompress-to-heap-array-then-copy-to-direct-buffer path held two
-     * full copies in memory simultaneously at the peak.
-     */
-    private fun decompress(compressedBytes: ByteArray, descriptor: ZkCircuitDescriptor): ByteBuffer {
-        val frameSize = Zstd.getFrameContentSize(compressedBytes)
-        val outputSize = if (frameSize > 0) {
-            frameSize
-        } else {
-            val uncompressedSize = descriptor.artifact?.uncompressed?.size
-            if (uncompressedSize != null && uncompressedSize > 0) {
-                Timber.w("Circuit '${descriptor.id}' zstd frame has no embedded content size; using catalog metadata")
-                uncompressedSize
-            } else {
-                Timber.w("Circuit '${descriptor.id}' has no known uncompressed size; guessing buffer size")
-                compressedBytes.size.toLong() * 400
-            }
-        }
-        val directCompressed = ByteBuffer.allocateDirect(compressedBytes.size).put(compressedBytes).apply { flip() }
-        return Zstd.decompress(directCompressed, outputSize.toInt())
     }
 
     private fun circuitVersionOf(descriptor: ZkCircuitDescriptor): CircuitVersion =

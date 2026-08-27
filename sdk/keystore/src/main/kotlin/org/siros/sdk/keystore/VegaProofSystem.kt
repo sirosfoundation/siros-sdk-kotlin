@@ -1,7 +1,6 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.keystore
 
-import com.github.luben.zstd.Zstd
 import com.upokecenter.cbor.CBORObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -325,7 +324,7 @@ class VegaProofSystem(
                     "'What's NOT ready yet' #2)",
             )
         val compressedBytes = zkCircuitClient.downloadArtifact(descriptor)
-        val keyBuffer = decompress(compressedBytes, descriptor)
+        val keyBuffer = decompressZkCircuitArtifact(compressedBytes, descriptor)
         val proverKey = uniffi.zk_cred_vega.deserializeProverKey(keyBuffer)
 
         cacheMutex.withLock {
@@ -336,52 +335,4 @@ class VegaProofSystem(
         }
     }
 
-    /**
-     * Every zk-circuits catalog artifact (Vega's prover/verifier keys
-     * included) is zstd-compressed on the wire - [ZkCircuitClient.downloadArtifact]
-     * returns the bytes AS SERVED, compressed, by design (its hash check is
-     * against the compressed form). Mirrors [LongfellowZkProofSystem]'s
-     * identically-named helper exactly (see its doc comment for the
-     * frame-size-vs-catalog-metadata-vs-guess fallback chain) - this system
-     * never had its own copy because until now it was only ever exercised
-     * against local test-vector bytes that were never actually compressed,
-     * so a real network-fetched artifact silently skipped decompression and
-     * `deserializeProverKey` failed with "deserialized bytes don't encode a
-     * valid field element" (bincode reading a zstd frame header as if it
-     * were serialized key data).
-     *
-     * Decompresses straight into a direct destination [ByteBuffer] instead
-     * of returning a heap `ByteArray` for a caller to separately wrap via
-     * `ByteBuffer.allocateDirect(...).put(...)` - zstd-jni's
-     * `Zstd.decompress(ByteBuffer, Int)` requires BOTH its source and
-     * destination buffers to already be direct (confirmed via
-     * `ZstdDecompressCtx.decompressDirectByteBuffer`'s own
-     * `IllegalArgumentException` checks), so [compressedBytes] is first
-     * copied into a small direct buffer - cheap, this is the compressed
-     * size, a few MB at most for these circuits - and the native call
-     * writes its result straight into a destination buffer of exactly
-     * [outputSize] bytes. That destination buffer IS the final result: no
-     * second, same-size copy. The old two-step
-     * decompress-to-heap-array-then-copy-to-direct-buffer path held two
-     * full copies of a circuit key in memory simultaneously at the peak -
-     * confirmed to OOM-crash a real device with the r11 Vega verifier key
-     * (~157MB uncompressed, so ~314MB at the old peak).
-     */
-    private fun decompress(compressedBytes: ByteArray, descriptor: ZkCircuitDescriptor): ByteBuffer {
-        val frameSize = Zstd.getFrameContentSize(compressedBytes)
-        val outputSize = if (frameSize > 0) {
-            frameSize
-        } else {
-            val uncompressedSize = descriptor.artifact?.uncompressed?.size
-            if (uncompressedSize != null && uncompressedSize > 0) {
-                Timber.w("Circuit '${descriptor.id}' zstd frame has no embedded content size; using catalog metadata")
-                uncompressedSize
-            } else {
-                Timber.w("Circuit '${descriptor.id}' has no known uncompressed size; guessing buffer size")
-                compressedBytes.size.toLong() * 400
-            }
-        }
-        val directCompressed = ByteBuffer.allocateDirect(compressedBytes.size).put(compressedBytes).apply { flip() }
-        return Zstd.decompress(directCompressed, outputSize.toInt())
-    }
 }
