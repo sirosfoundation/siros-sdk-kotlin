@@ -49,7 +49,10 @@ dependencies {
     // Android's heap ceiling). v0.0.3 carries a real, independently-flagged
     // privacy fix (undisclosed-claim digest concealment) - see
     // VegaProofSystem.kt's own doc comment for the crate's current status.
-    implementation("org.siros:zk-cred-vega:0.0.3")
+    // v0.0.4 bumps vega-prover to sirosfoundation/vega-prover@2a7dcb3, a
+    // real measured ~35-40% prove() speedup on x86_64 (chunk-overhead fix
+    // in bind_and_prepare_poly_ABC_inner) - not yet confirmed on-device.
+    implementation("org.siros:zk-cred-vega:0.0.4")
 
     // JNA is required by UniFFI-generated Kotlin bindings.
     implementation("net.java.dev.jna:jna:5.14.0@aar")
