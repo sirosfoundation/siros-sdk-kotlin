@@ -58,7 +58,7 @@ dependencies {
     // Same shape as above: AAR from GitHub Packages (or mavenLocal via
     // `cd zk-cred-bbs && make publish-local`), Kotlin bindings vendored
     // under src/main/kotlin/uniffi/zk_cred_bbs/.
-    implementation("org.siros:zk-cred-bbs:0.0.3")
+    implementation("org.siros:zk-cred-bbs:0.0.6")
 
     // JNA is required by UniFFI-generated Kotlin bindings.
     implementation("net.java.dev.jna:jna:5.14.0@aar")

@@ -155,6 +155,16 @@ class BbsProofSystem(
     override fun matchingSpec(requestedSpecs: List<ZkSystemSpec>, numAttributes: Int): ZkSystemSpec? =
         requestedSpecs.firstOrNull { it.system == SYSTEM_ID }
 
+    /**
+     * BBS is the one system here that needs the wallet at issuance.
+     *
+     * Longfellow and Vega prove things about a credential someone else
+     * already signed; a blind BBS credential does not exist unless the
+     * wallet committed first. See [BbsIssuanceParticipant].
+     */
+    override val issuanceParticipant: ZkIssuanceParticipant =
+        BbsIssuanceParticipant(systemId = SYSTEM_ID, suiteId = suiteId)
+
     override suspend fun generateProof(
         spec: ZkSystemSpec,
         document: CredentialDocument,
