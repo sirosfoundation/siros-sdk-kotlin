@@ -145,6 +145,7 @@
     <string name="flow_step_awaiting_consent">Waiting for your consent\u2026</string>
     <string name="flow_step_credential_selection">Selecting credentials\u2026</string>
     <string name="flow_step_submitting_response">Sending response to verifier\u2026</string>
+    <string name="flow_step_computing_proof">Computing proof\u2026</string>
     <string name="flow_step_unknown">Processing\u2026</string>
     <string name="flow_diagnostic_label">Diagnostic: %1$s</string>
     <string name="flow_credentials_received">Received %1$d credential(s)</string>
