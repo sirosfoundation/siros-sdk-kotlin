@@ -75,6 +75,14 @@ class VegaProofSystem(
          */
         const val MAX_CLAIMS_V1 = 4
 
+        /**
+         * This system's [ZkSystemSpec.system] value - exposed so callers
+         * outside this class (e.g. [MdocDeviceResponseBuilder]'s Vega-only
+         * `claimSlotDigestIds` wire field) can identify a Vega presentation
+         * without hardcoding the string a second time.
+         */
+        const val SYSTEM_ID = "vega-mc-p256-v1"
+
         /** COSE algorithm identifier for ES256 (RFC 8152 §8.1) - the only alg [buildEcdsaWitness] accepts. */
         private const val COSE_ALG_ES256 = -7L
 
@@ -92,7 +100,7 @@ class VegaProofSystem(
         )
     }
 
-    override val systemId: String = "vega-mc-p256-v1"
+    override val systemId: String = SYSTEM_ID
 
     /**
      * The circuit itself is docType-agnostic (buildWitness just walks
