@@ -54,8 +54,21 @@ dependencies {
     // in bind_and_prepare_poly_ABC_inner) - not yet confirmed on-device.
     implementation("org.siros:zk-cred-vega:0.0.4")
 
+    // zk-cred-bbs UniFFI bindings - blind BBS with Schnorr key binding.
+    // Same shape as above: AAR from GitHub Packages (or mavenLocal via
+    // `cd zk-cred-bbs && make publish-local`), Kotlin bindings vendored
+    // under src/main/kotlin/uniffi/zk_cred_bbs/.
+    implementation("org.siros:zk-cred-bbs:0.0.3")
+
     // JNA is required by UniFFI-generated Kotlin bindings.
     implementation("net.java.dev.jna:jna:5.14.0@aar")
+
+    // Instrumented tests: the zk-cred-bbs native library ships as .so files
+    // inside its AAR, so anything exercising the UniFFI surface has to run
+    // on a device or emulator - a JVM unit test cannot load them.
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation(libs.kotlinx.coroutines.test)
 
     testImplementation(libs.junit)
     testImplementation(libs.mockk)

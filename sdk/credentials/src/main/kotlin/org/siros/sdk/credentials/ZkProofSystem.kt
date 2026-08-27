@@ -133,11 +133,6 @@ data class CredentialTypeRef(
 sealed class CredentialDocument {
     abstract val bytes: ByteArray
 
-    // Only the formats something actually stores today. A JWP variant for
-    // blind BBS is deliberately absent until a proof system consumes one -
-    // the sealed hierarchy is the extension point, so adding it later is
-    // additive and every `when` over it is checked by the compiler.
-
     /**
      * A DeviceResponse-shaped CBOR envelope, matching
      * `MdocDeviceResponseBuilder`'s own constructor input.
@@ -157,6 +152,24 @@ sealed class CredentialDocument {
         override fun hashCode(): Int = bytes.contentHashCode()
     }
 
+    /**
+     * A JWP in Compact Serialization, issued form - the UTF-8 bytes of the
+     * three dot-separated parts.
+     *
+     * Kept as bytes for consistency with the other variants even though
+     * this one is always ASCII; [compact] is the form the native crate
+     * actually takes.
+     */
+    data class Jwp(override val bytes: ByteArray) : CredentialDocument() {
+        constructor(compact: String) : this(compact.toByteArray(Charsets.UTF_8))
+
+        val compact: String get() = bytes.toString(Charsets.UTF_8)
+
+        override fun equals(other: Any?): Boolean =
+            this === other || (other is Jwp && bytes.contentEquals(other.bytes))
+
+        override fun hashCode(): Int = bytes.contentHashCode()
+    }
 }
 
 /**
