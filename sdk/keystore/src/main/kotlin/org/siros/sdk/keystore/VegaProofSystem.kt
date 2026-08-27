@@ -1,7 +1,6 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.keystore
 
-import com.github.luben.zstd.Zstd
 import com.upokecenter.cbor.CBORObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -325,8 +324,8 @@ class VegaProofSystem(
                     "'What's NOT ready yet' #2)",
             )
         val compressedBytes = zkCircuitClient.downloadArtifact(descriptor)
-        val keyBytes = decompress(compressedBytes, descriptor)
-        val proverKey = uniffi.zk_cred_vega.deserializeProverKey(directByteBuffer(keyBytes))
+        val keyBuffer = decompressZkCircuitArtifact(compressedBytes, descriptor)
+        val proverKey = uniffi.zk_cred_vega.deserializeProverKey(keyBuffer)
 
         cacheMutex.withLock {
             val existing = proverKeyCache[spec.id]
@@ -336,42 +335,4 @@ class VegaProofSystem(
         }
     }
 
-    /**
-     * The vendored UniFFI bindings' `&[u8]` parameters need a DIRECT
-     * `ByteBuffer` - same requirement as [LongfellowZkProofSystem]'s own
-     * `directByteBuffer` (see its doc comment for why).
-     */
-    private fun directByteBuffer(bytes: ByteArray): ByteBuffer =
-        ByteBuffer.allocateDirect(bytes.size).put(bytes).apply { flip() }
-
-    /**
-     * Every zk-circuits catalog artifact (Vega's prover/verifier keys
-     * included) is zstd-compressed on the wire - [ZkCircuitClient.downloadArtifact]
-     * returns the bytes AS SERVED, compressed, by design (its hash check is
-     * against the compressed form). Mirrors [LongfellowZkProofSystem]'s
-     * identically-named helper exactly (see its doc comment for the
-     * frame-size-vs-catalog-metadata-vs-guess fallback chain) - this system
-     * never had its own copy because until now it was only ever exercised
-     * against local test-vector bytes that were never actually compressed,
-     * so a real network-fetched artifact silently skipped decompression and
-     * `deserializeProverKey` failed with "deserialized bytes don't encode a
-     * valid field element" (bincode reading a zstd frame header as if it
-     * were serialized key data).
-     */
-    private fun decompress(compressedBytes: ByteArray, descriptor: ZkCircuitDescriptor): ByteArray {
-        val frameSize = Zstd.getFrameContentSize(compressedBytes)
-        val outputSize = if (frameSize > 0) {
-            frameSize
-        } else {
-            val uncompressedSize = descriptor.artifact?.uncompressed?.size
-            if (uncompressedSize != null && uncompressedSize > 0) {
-                Timber.w("Circuit '${descriptor.id}' zstd frame has no embedded content size; using catalog metadata")
-                uncompressedSize
-            } else {
-                Timber.w("Circuit '${descriptor.id}' has no known uncompressed size; guessing buffer size")
-                compressedBytes.size.toLong() * 400
-            }
-        }
-        return Zstd.decompress(compressedBytes, outputSize.toInt())
-    }
 }
