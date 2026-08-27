@@ -134,6 +134,7 @@
     <string name="flow_step_awaiting_consent">Αναμονή της συγκατάθεσής σας…</string>
     <string name="flow_step_credential_selection">Επιλογή πιστοποιητικών…</string>
     <string name="flow_step_submitting_response">Αποστολή απάντησης στον επαληθευτή…</string>
+    <string name="flow_step_computing_proof">Υπολογισμός απόδειξης…</string>
     <string name="flow_step_unknown">Επεξεργασία…</string>
     <string name="flow_diagnostic_label">Διαγνωστικό: %1$s</string>
     <string name="flow_credentials_received">Ελήφθησαν %1$d πιστοποιητικά</string>

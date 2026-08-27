@@ -738,7 +738,7 @@ class SirosWallet private constructor(
                         mddlSchema = mddlSchema,
                     )
                     credentialStore.save(cred.copy(metadata = metadata))
-                    changed = true
+                    changed = true // NOSONAR kotlin:S6615 - false positive, read after the loop at "if (changed)" below
                     continue
                 }
 
@@ -3733,6 +3733,20 @@ class SirosWallet private constructor(
                                             verifierJwkThumbprint = params?.verifierJwkThumbprint,
                                         )
                                         Timber.d("sign_presentation: generating ZK proof, system=${system.systemId} wantsPseudonym=$wantsPseudonym verifierIdentity=$verifierIdentity")
+                                        // ZK proof generation is a multi-second native compute
+                                        // with no intermediate progress signal from the engine (the
+                                        // last real server step was "credential_selection", and the
+                                        // next one - "submitting_response" - only arrives after this
+                                        // call returns) - without this, the UI shows a stale
+                                        // "Selecting credential" label the whole time. "computing_proof"
+                                        // is a CLIENT-ONLY status token, never sent by the server and
+                                        // deliberately absent from FlowStepCatalog (which mirrors
+                                        // go-wallet-backend's real FlowStep vocabulary 1:1) - it's
+                                        // overwritten by the next genuine engine.flowProgress() update
+                                        // as soon as one arrives.
+                                        (_state.value as? WalletState.FlowActive)
+                                            ?.takeIf { it.flowId == msg.flowId }
+                                            ?.let { _state.value = it.copy(status = "computing_proof") }
                                         val result = system.generateProof(
                                             spec = spec,
                                             document = CredentialDocument.Mdoc(credBytes),
