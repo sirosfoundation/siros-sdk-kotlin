@@ -154,8 +154,14 @@ class VegaProofSystem(
             // Fold-and-reuse: prep_prove only runs once per credential, ever -
             // every subsequent presentation reuses the previous prove() call's
             // own nextState instead. See ZkProofResult.nextState's doc comment.
+            val prepStart = System.nanoTime()
             val state = priorState ?: prepProve(proverKey, claims, ecdsaWitness, msoBody)
-            prove(proverKey, claims, ecdsaWitness, msoBody, state)
+            val prepMs = (System.nanoTime() - prepStart) / 1_000_000
+            val proveStart = System.nanoTime()
+            val proveResult = prove(proverKey, claims, ecdsaWitness, msoBody, state)
+            val proveMs = (System.nanoTime() - proveStart) / 1_000_000
+            Timber.i("Vega prepProve took ${prepMs}ms, prove took ${proveMs}ms")
+            proveResult
         }
 
         return ZkProofResult(
