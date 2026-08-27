@@ -27,6 +27,21 @@ dependencyResolutionManagement {
                 ).getOrElse("")
             }
         }
+        // zk-cred-bbs AAR — blind BBS with hardware key binding. Separate
+        // entry for the same reason as zk-cred-longfellow below: GH Packages
+        // Maven repos are scoped per-repo, not org-wide.
+        maven {
+            name = "GitHubPackagesZkCredBbs"
+            url = uri("https://maven.pkg.github.com/sirosfoundation/zk-cred-bbs")
+            credentials {
+                username = providers.gradleProperty("gpr.user").orElse(
+                    providers.environmentVariable("GITHUB_ACTOR")
+                ).getOrElse("")
+                password = providers.gradleProperty("gpr.key").orElse(
+                    providers.environmentVariable("GITHUB_TOKEN")
+                ).getOrElse("")
+            }
+        }
         // zk-cred-longfellow AAR, published to its own GitHub Packages Maven -
         // each GH Packages Maven repo is scoped per-repo, not shared org-wide,
         // so this is a separate entry from siros-wscd-manager's above even
