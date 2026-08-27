@@ -738,7 +738,7 @@ class SirosWallet private constructor(
                         mddlSchema = mddlSchema,
                     )
                     credentialStore.save(cred.copy(metadata = metadata))
-                    changed = true
+                    changed = true // NOSONAR kotlin:S6615 - false positive, read after the loop at "if (changed)" below
                     continue
                 }
 
