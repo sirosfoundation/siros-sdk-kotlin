@@ -443,6 +443,28 @@ class MdocDeviceResponseBuilder(
          *   ordered by the credential's own document order rather than the
          *   request's order - see `VegaProofSystem.buildWitness`'s doc
          *   comment.
+         * @param issuerSignedItemBytes element identifier -> that element's
+         *   exact original `IssuerSignedItem` bytes
+         *   (`NamespaceItem.original.EncodeToBytes()` - the same bytes
+         *   [VegaProofSystem.buildWitness] feeds into `FfiClaim
+         *   .issuerSignedItemBytes` when proving). Vega-only, as of the r12
+         *   circuit revision: `zk_cred_vega::verify()` no longer returns a
+         *   disclosed claim's plaintext as part of the proof - the caller
+         *   must supply it, and the verifier re-derives its blinded digest
+         *   to check the binding. See
+         *   `docs/ZK_VEGA_DIGESTID_WIRE_EXTENSION.md` in `vc` (this field is
+         *   documented there as an extension of that same wire format).
+         *   Omitted (no `issuerSignedItemBytes` key) for a Longfellow
+         *   presentation, which never needs it.
+         * @param claimSlotDigestIds Vega-only: the credential's FULL,
+         *   fixed-shape claim-slot list (`VegaProofSystem.MAX_CLAIMS_V1`
+         *   entries, in the credential's own document order - the same
+         *   order `VegaProofSystem.buildWitness` assigns to `FfiClaim`
+         *   slots), each entry being that slot's `digestID` regardless of
+         *   whether this presentation discloses it. A Vega verifier has no
+         *   independent way to learn which proof slot corresponds to which
+         *   digestID otherwise - see the doc referenced above. `null` for a
+         *   Longfellow presentation (positional matching, no slot concept).
          * @param issuerAuth the credential's own COSE_Sign1 `issuerAuth`
          *   structure, to extract its x5chain (COSE header label 33) from.
          * @return CBOR-encoded `{version, status, zkDocuments}` bytes, ready
@@ -457,6 +479,8 @@ class MdocDeviceResponseBuilder(
             disclosedClaims: Map<String, CBORObject>,
             issuerAuth: CBORObject,
             digestIds: Map<String, UInt> = emptyMap(),
+            issuerSignedItemBytes: Map<String, ByteArray> = emptyMap(),
+            claimSlotDigestIds: List<UInt>? = null,
         ): ByteArray {
             val documentData = CBORObject.NewMap()
             documentData["zkSystemId"] = CBORObject.FromObject(zkSystemId)
@@ -469,11 +493,18 @@ class MdocDeviceResponseBuilder(
                 item["elementIdentifier"] = CBORObject.FromObject(elementId)
                 item["elementValue"] = elementValue
                 digestIds[elementId]?.let { item["digestId"] = CBORObject.FromObject(it.toLong()) }
+                issuerSignedItemBytes[elementId]?.let { item["issuerSignedItemBytes"] = CBORObject.FromObject(it) }
                 issuerSignedItems.Add(item)
             }
             val issuerSignedMap = CBORObject.NewMap()
             issuerSignedMap[namespace] = issuerSignedItems
             documentData["issuerSigned"] = issuerSignedMap
+
+            claimSlotDigestIds?.let { slots ->
+                val slotsArray = CBORObject.NewArray()
+                slots.forEach { slotsArray.Add(CBORObject.FromObject(it.toLong())) }
+                documentData["claimSlotDigestIds"] = slotsArray
+            }
 
             // We never disclose deviceSigned claims (everything comes from
             // issuerSigned) - matches assembleFinalResponse's identical

@@ -2385,6 +2385,7 @@ class SirosWallet private constructor(
 
         val disclosedClaims = linkedMapOf<String, com.upokecenter.cbor.CBORObject>()
         val digestIds = linkedMapOf<String, UInt>()
+        val issuerSignedItemBytes = linkedMapOf<String, ByteArray>()
         disclosedClaimNames.forEach { claimName ->
             if (claimName == LongfellowZkProofSystem.PSEUDONYM_CLAIM) {
                 result.pseudonym?.let {
@@ -2394,8 +2395,20 @@ class SirosWallet private constructor(
                 storedItems.firstOrNull { it.item.elementIdentifier == claimName }?.let {
                     disclosedClaims[claimName] = it.item.elementValue
                     digestIds[claimName] = it.item.digestId.toUInt()
+                    issuerSignedItemBytes[claimName] = it.original.EncodeToBytes()
                 }
             }
+        }
+
+        // Vega-only (see MdocDeviceResponseBuilder.buildZkDeviceResponse's
+        // doc comment on claimSlotDigestIds): storedItems is already in the
+        // credential's own document order - the same order
+        // VegaProofSystem.buildWitness assigns to FfiClaim slots - so its
+        // digestIds, in this order, ARE the verifier-facing slot list.
+        val claimSlotDigestIds = if (spec.system == org.siros.sdk.keystore.VegaProofSystem.SYSTEM_ID) {
+            storedItems.map { it.item.digestId.toUInt() }
+        } else {
+            null
         }
 
         return MdocDeviceResponseBuilder.buildZkDeviceResponse(
@@ -2407,6 +2420,8 @@ class SirosWallet private constructor(
             disclosedClaims = disclosedClaims,
             issuerAuth = document.issuerSigned.issuerAuth,
             digestIds = digestIds,
+            issuerSignedItemBytes = issuerSignedItemBytes,
+            claimSlotDigestIds = claimSlotDigestIds,
         )
     }
 

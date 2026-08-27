@@ -40,16 +40,19 @@ import java.time.temporal.ChronoUnit
  * design/provenance history and current crate status.
  *
  * **Do not present this to a real relying party yet.** `zk-cred-vega` is
- * public and tagged (`v0.0.3` as of the digest-concealment privacy fix), and
+ * public and tagged (`v0.0.5` as of the nonce/public-IO circuit revision), and
  * its own expert security review is running in parallel with SDK-side
  * testing rather than gating it - but that review hasn't landed, so nothing
  * here should be trusted as a real trust anchor yet. This class is for
  * early-testing end-to-end use (own prover verified by own verifier, plus
  * real wallet <-> verifier interop against `sirosfoundation/vc`), same
  * caveat Longfellow shipped under before its own multipaz interop testing.
- * The `go-zk-circuits` catalog's `vega-mc-p256-v1-{prover,verifier}-key-r11`
+ * The `go-zk-circuits` catalog's `vega-mc-p256-v1-{prover,verifier}-key-r12`
  * entries are published for early testing ([zkCircuitClient] can fetch them
  * directly), carrying the same "PUBLISHED FOR EARLY TESTING ONLY" notice.
+ * Every earlier revision (r2 through r11) has since been unpublished or
+ * revoked - see the go-zk-circuits catalog's own notes for why each one
+ * was retired.
  *
  * `buildWitness` is real (ECDSA witness from `issuerAuth`'s x5chain +
  * signature, MSO body from `issuerAuth`'s payload, fixed 4-slot claim
@@ -72,6 +75,14 @@ class VegaProofSystem(
          */
         const val MAX_CLAIMS_V1 = 4
 
+        /**
+         * This system's [ZkSystemSpec.system] value - exposed so callers
+         * outside this class (e.g. [MdocDeviceResponseBuilder]'s Vega-only
+         * `claimSlotDigestIds` wire field) can identify a Vega presentation
+         * without hardcoding the string a second time.
+         */
+        const val SYSTEM_ID = "vega-mc-p256-v1"
+
         /** COSE algorithm identifier for ES256 (RFC 8152 §8.1) - the only alg [buildEcdsaWitness] accepts. */
         private const val COSE_ALG_ES256 = -7L
 
@@ -89,7 +100,7 @@ class VegaProofSystem(
         )
     }
 
-    override val systemId: String = "vega-mc-p256-v1"
+    override val systemId: String = SYSTEM_ID
 
     /**
      * The circuit itself is docType-agnostic (buildWitness just walks
