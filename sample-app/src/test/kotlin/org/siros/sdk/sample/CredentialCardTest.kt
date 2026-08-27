@@ -394,14 +394,17 @@ class CredentialCardTest {
 
     @Test
     fun `normalizes a missing-height image in a data URI SVG logo`() = kotlinx.coroutines.runBlocking {
-        val svg = """<svg><image x="0" y="0" width="100%" xlink:href="data:image/png;base64,AAA=" /></svg>"""
+        // x="10" (not "0"), unlike extractFullBleedBackgroundImage's own full-
+        // bleed fixture below - keeps this test isolated to ensureSvgImageHeight
+        // and out of the full-bleed-background extraction path.
+        val svg = """<svg><image x="10" y="0" width="100%" xlink:href="data:image/png;base64,AAA=" /></svg>"""
         val encoded = java.util.Base64.getEncoder().encodeToString(svg.toByteArray(Charsets.UTF_8))
         val uri = "data:image/svg+xml;base64,$encoded"
 
         val result = fetchAndNormalizeLogoModel(uri)
 
-        assertTrue(result is ByteArray)
-        val resultSvg = String(result as ByteArray, Charsets.UTF_8)
+        assertTrue(result.model is ByteArray)
+        val resultSvg = String(result.model as ByteArray, Charsets.UTF_8)
         assertTrue("""height="100%"""" in resultSvg)
     }
 
@@ -411,12 +414,13 @@ class CredentialCardTest {
 
         // Both sides decode to a ByteArray - assertArrayEquals compares
         // contents, unlike assertEquals which would compare references.
-        assertArrayEquals(coilLogoModel(uri) as ByteArray, fetchAndNormalizeLogoModel(uri) as ByteArray)
+        assertArrayEquals(coilLogoModel(uri) as ByteArray, fetchAndNormalizeLogoModel(uri).model as ByteArray)
     }
 
     @Test
     fun `fetches and normalizes a missing-height image in a remote SVG logo`() = kotlinx.coroutines.runBlocking {
-        val svg = """<svg><image x="0" y="0" width="100%" xlink:href="data:image/png;base64,AAA=" /></svg>"""
+        // x="10" (not "0") - see the data-URI variant's test above for why.
+        val svg = """<svg><image x="10" y="0" width="100%" xlink:href="data:image/png;base64,AAA=" /></svg>"""
         val server = okhttp3.mockwebserver.MockWebServer()
         server.enqueue(
             okhttp3.mockwebserver.MockResponse()
@@ -427,8 +431,8 @@ class CredentialCardTest {
         try {
             val result = fetchAndNormalizeLogoModel(server.url("/ehic.svg").toString())
 
-            assertTrue(result is ByteArray)
-            val resultSvg = String(result as ByteArray, Charsets.UTF_8)
+            assertTrue(result.model is ByteArray)
+            val resultSvg = String(result.model as ByteArray, Charsets.UTF_8)
             assertTrue("""height="100%"""" in resultSvg)
         } finally {
             server.shutdown()
@@ -447,7 +451,7 @@ class CredentialCardTest {
         try {
             val uri = server.url("/logo.png").toString()
 
-            assertEquals(uri, fetchAndNormalizeLogoModel(uri))
+            assertEquals(uri, fetchAndNormalizeLogoModel(uri).model)
         } finally {
             server.shutdown()
         }
@@ -461,9 +465,31 @@ class CredentialCardTest {
         try {
             val uri = server.url("/broken.svg").toString()
 
-            assertEquals(uri, fetchAndNormalizeLogoModel(uri))
+            assertEquals(uri, fetchAndNormalizeLogoModel(uri).model)
         } finally {
             server.shutdown()
         }
+    }
+
+    @Test
+    fun `extracts a full-bleed embedded raster background from a logo SVG`() = kotlinx.coroutines.runBlocking {
+        // Same shape as extractFullBleedBackgroundImage's own test fixture -
+        // confirms the Add Credentials/detail-screen logo path now gets the
+        // same background extraction the full-size card pipeline already
+        // had, fixing the ~30%-down dark-band mis-render for offers whose
+        // logo happens to be a full-card template with an embedded raster.
+        val pngBytes = byteArrayOf(1, 2, 3, 4)
+        val encodedPng = java.util.Base64.getEncoder().encodeToString(pngBytes)
+        val svg = """<svg width="829" height="504"><image x="0" y="0" width="100%" height="100%" """ +
+            """xlink:href="data:image/png;base64,$encodedPng" /><text>Name</text></svg>"""
+        val encoded = java.util.Base64.getEncoder().encodeToString(svg.toByteArray(Charsets.UTF_8))
+        val uri = "data:image/svg+xml;base64,$encoded"
+
+        val result = fetchAndNormalizeLogoModel(uri)
+
+        assertArrayEquals(pngBytes, result.backgroundImageBytes)
+        val resultSvg = String(result.model as ByteArray, Charsets.UTF_8)
+        assertTrue("<image" !in resultSvg)
+        assertTrue("<text>Name</text>" in resultSvg)
     }
 }

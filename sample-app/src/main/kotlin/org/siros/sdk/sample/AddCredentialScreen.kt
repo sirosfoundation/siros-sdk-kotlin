@@ -295,13 +295,28 @@ private fun CredentialOfferRow(
                     )
                 }
                 if (offer.logoUri != null) {
+                    val logo = rememberNormalizedLogoModel(offer.logoUri!!)
+                    // Full-bleed raster background (if any) drawn underneath the
+                    // (now `<image>`-free) SVG - see NormalizedLogo's doc comment;
+                    // without this, an offer whose logo SVG has an embedded
+                    // full-card raster <image> mis-renders via AndroidSVG with a
+                    // dark band roughly 30% down (the same bug already fixed for
+                    // full-size stored-credential cards).
+                    logo.backgroundImageBytes?.let { backgroundBytes ->
+                        coil.compose.AsyncImage(
+                            model = backgroundBytes,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                        )
+                    }
                     // SubcomposeAsyncImage, not AsyncImage: a plain AsyncImage
                     // renders nothing at all while loading or on a failed fetch
                     // (a real issue found via live device testing - offers whose
                     // logo URI didn't resolve showed a blank square instead of
                     // ever falling back to the initial-letter placeholder).
                     coil.compose.SubcomposeAsyncImage(
-                        model = rememberNormalizedLogoModel(offer.logoUri!!),
+                        model = logo.model,
                         contentDescription = offer.credentialName,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,
