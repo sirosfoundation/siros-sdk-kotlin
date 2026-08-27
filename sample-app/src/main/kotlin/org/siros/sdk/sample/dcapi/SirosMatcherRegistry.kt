@@ -84,7 +84,7 @@ class SirosMatcherRegistry(
             return JSONObject().apply {
                 put("version", 0)
                 put("credentials", entries)
-            }.toString().toByteArray()
+            }.toString().toByteArray(Charsets.UTF_8)
         }
     }
 }

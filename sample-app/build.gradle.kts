@@ -17,6 +17,17 @@ android {
         versionName = "0.6.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Register our own DC API matcher instead of the one AndroidX ships.
+        // Off by default so ordinary builds keep stock behaviour; build with
+        // -PcustomDcMatcher=true to exercise it. Declared once here rather
+        // than per build type: the value does not vary by build type, and two
+        // copies of one rule only differ eventually.
+        buildConfigField(
+            "boolean",
+            "CUSTOM_DC_MATCHER",
+            (project.findProperty("customDcMatcher") == "true").toString(),
+        )
     }
 
     buildTypes {
@@ -35,14 +46,6 @@ android {
             // Play Console/Firebase cloud project number is supplied (can't
             // be hardcoded into the SDK/sample app).
             buildConfigField("long", "PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER", "0L")
-            // Register our own DC API matcher instead of the one AndroidX
-            // ships. Off by default so ordinary builds keep stock behaviour;
-            // build with -PcustomDcMatcher=true to exercise it.
-            buildConfigField(
-                "boolean",
-                "CUSTOM_DC_MATCHER",
-                (project.findProperty("customDcMatcher") == "true").toString(),
-            )
         }
         debug {
             // Allow connecting to local backend over cleartext for development
@@ -56,14 +59,6 @@ android {
             buildConfigField("boolean", "R2PS_ENABLED", "false")
             buildConfigField("boolean", "SHOW_PRE_LOGIN_SETTINGS", "true")
             buildConfigField("long", "PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER", "0L")
-            // Register our own DC API matcher instead of the one AndroidX
-            // ships. Off by default so ordinary builds keep stock behaviour;
-            // build with -PcustomDcMatcher=true to exercise it.
-            buildConfigField(
-                "boolean",
-                "CUSTOM_DC_MATCHER",
-                (project.findProperty("customDcMatcher") == "true").toString(),
-            )
         }
     }
 

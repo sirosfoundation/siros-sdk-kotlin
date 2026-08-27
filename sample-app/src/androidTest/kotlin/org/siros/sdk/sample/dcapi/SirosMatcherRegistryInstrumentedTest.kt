@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.sample.dcapi
 
+import androidx.credentials.registry.provider.ClearCredentialRegistryRequest
 import androidx.credentials.registry.provider.RegistryManager
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -51,7 +52,7 @@ class SirosMatcherRegistryInstrumentedTest {
     @Test
     fun credential_blob_is_well_formed() {
         val blob = SirosMatcherRegistry.credentialBlob(emptyList())
-        val parsed = JSONObject(String(blob))
+        val parsed = JSONObject(String(blob, Charsets.UTF_8))
         assertEquals(0, parsed.getInt("version"))
         assertEquals(0, parsed.getJSONArray("credentials").length())
     }
@@ -71,7 +72,15 @@ class SirosMatcherRegistryInstrumentedTest {
 
         assertTrue("matcher bytes did not reach the registry", registry.matcher.size > 1024)
 
-        // Throws on rejection; there is no success value to inspect.
-        RegistryManager.create(context).registerCredentials(registry)
+        try {
+            // Throws on rejection; there is no success value to inspect.
+            RegistryManager.create(context).registerCredentials(registry)
+        } finally {
+            // The registry is device-global and outlives the test process, so
+            // leaving one behind would change what a later run - or another
+            // suite, or the app itself - starts from.
+            RegistryManager.create(context)
+                .clearCredentialRegistry(ClearCredentialRegistryRequest(true))
+        }
     }
 }
