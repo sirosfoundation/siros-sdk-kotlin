@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.credentials.registry.digitalcredentials.openid4vp.OpenId4VpRegistry
 import androidx.credentials.registry.provider.ClearCredentialRegistryRequest
 import androidx.credentials.registry.provider.RegistryManager
+import org.siros.sdk.sample.BuildConfig
 import org.siros.sdk.credentials.StoredCredential
 import timber.log.Timber
 
@@ -28,6 +29,18 @@ object DCAPIProviderRegistration {
             return
         }
         try {
+            // Before the stock entry building, not after. buildEntries() only
+            // knows the formats the stock matcher knows, and an empty result
+            // clears the registry - so running it first would let a credential
+            // the stock builder cannot parse wipe the registration and never
+            // reach our matcher, which is precisely the case this flag exists
+            // to serve.
+            if (BuildConfig.CUSTOM_DC_MATCHER) {
+                RegistryManager.create(context)
+                    .registerCredentials(SirosMatcherRegistry.create(context, credentials))
+                Timber.d("DC API registry updated via siros-dc-matcher (${credentials.size} credentials)")
+                return
+            }
             val entries = DCAPICredentialEntryBuilder.buildEntries(credentials)
             if (entries.isEmpty()) {
                 clear(context)
