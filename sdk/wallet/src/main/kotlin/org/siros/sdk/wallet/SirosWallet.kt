@@ -52,6 +52,10 @@ import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.Vctm
 import org.siros.sdk.credentials.ZkCircuitClient
+import org.siros.sdk.credentials.COSE_ALG_ES256
+import org.siros.sdk.credentials.CredentialDocument
+import org.siros.sdk.credentials.CredentialFormat
+import org.siros.sdk.credentials.CredentialTypeRef
 import org.siros.sdk.credentials.ZkProofSystemRegistry
 import org.siros.sdk.credentials.VerifierIdentity
 import com.upokecenter.cbor.CBORObject
@@ -1931,7 +1935,9 @@ class SirosWallet private constructor(
                 // is being requested (see wantsPseudonym below), so this
                 // count already equals generateProof's own effectiveClaims.size.
                 val (system, spec) = zkProofSystemRegistry.resolve(
-                    docType, matchResult.zkSystemTypes.orEmpty(), disclosedClaims?.size ?: 0
+                    CredentialTypeRef(CredentialFormat.MSO_MDOC, docType),
+                    matchResult.zkSystemTypes.orEmpty(),
+                    disclosedClaims?.size ?: 0,
                 )
                     ?: throw WalletException(
                         "No registered ZK proof system satisfies the verifier's zk_system_type for $docType"
@@ -1954,11 +1960,16 @@ class SirosWallet private constructor(
                 )
                 val result = system.generateProof(
                     spec = spec,
-                    credentialBytes = credBytes,
+                    document = CredentialDocument.Mdoc(credBytes),
                     sessionTranscript = sessionTranscript,
                     requestedClaims = disclosedClaims ?: emptyList(),
                     verifierIdentity = verifierIdentity,
-                    signer = { data -> keystore.sign(kid, data) },
+                    signer = { algorithm, data ->
+                        require(algorithm == COSE_ALG_ES256) {
+                            "This keystore signs ES256 only, proof system asked for COSE alg $algorithm"
+                        }
+                        keystore.sign(kid, data)
+                    },
                 )
                 val deviceResponse = buildZkPresentationToken(
                     credBytes = credBytes,
@@ -3658,7 +3669,9 @@ class SirosWallet private constructor(
                                         // compiled for a fixed attribute count, so matching must
                                         // account for how many claims are actually being disclosed.
                                         val (system, spec) = zkProofSystemRegistry.resolve(
-                                            docType, matchResult.zkSystemTypes.orEmpty(), ref.disclosedClaims?.size ?: 0
+                                            CredentialTypeRef(CredentialFormat.MSO_MDOC, docType),
+                                            matchResult.zkSystemTypes.orEmpty(),
+                                            ref.disclosedClaims?.size ?: 0,
                                         )
                                             ?: throw WalletException(
                                                 "No registered ZK proof system satisfies the verifier's zk_system_type for $docType"
@@ -3691,11 +3704,16 @@ class SirosWallet private constructor(
                                         Timber.d("sign_presentation: generating ZK proof, system=${system.systemId} wantsPseudonym=$wantsPseudonym verifierIdentity=$verifierIdentity")
                                         val result = system.generateProof(
                                             spec = spec,
-                                            credentialBytes = credBytes,
+                                            document = CredentialDocument.Mdoc(credBytes),
                                             sessionTranscript = sessionTranscript,
                                             requestedClaims = ref.disclosedClaims ?: emptyList(),
                                             verifierIdentity = verifierIdentity,
-                                            signer = { data -> keystore.sign(kid, data) },
+                                            signer = { algorithm, data ->
+                        require(algorithm == COSE_ALG_ES256) {
+                            "This keystore signs ES256 only, proof system asked for COSE alg $algorithm"
+                        }
+                        keystore.sign(kid, data)
+                    },
                                         )
                                         Timber.d("sign_presentation: ZK proof generated, pseudonymOutcome=${result.pseudonymOutcome} proofBytes.size=${result.proofBytes.size}")
                                         val zkDeviceResponse = buildZkPresentationToken(
