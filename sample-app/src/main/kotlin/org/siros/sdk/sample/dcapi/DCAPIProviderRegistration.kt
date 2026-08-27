@@ -29,18 +29,21 @@ object DCAPIProviderRegistration {
             return
         }
         try {
-            val entries = DCAPICredentialEntryBuilder.buildEntries(credentials)
-            if (entries.isEmpty()) {
-                clear(context)
-                return
-            }
+            // Before the stock entry building, not after. buildEntries() only
+            // knows the formats the stock matcher knows, and an empty result
+            // clears the registry - so running it first would let a credential
+            // the stock builder cannot parse wipe the registration and never
+            // reach our matcher, which is precisely the case this flag exists
+            // to serve.
             if (BuildConfig.CUSTOM_DC_MATCHER) {
-                // Our own matcher, so formats the stock one refuses - notably
-                // mso_mdoc_zk - can produce a picker entry at all. See
-                // SirosMatcherRegistry.
                 RegistryManager.create(context)
                     .registerCredentials(SirosMatcherRegistry.create(context, credentials))
                 Timber.d("DC API registry updated via siros-dc-matcher (${credentials.size} credentials)")
+                return
+            }
+            val entries = DCAPICredentialEntryBuilder.buildEntries(credentials)
+            if (entries.isEmpty()) {
+                clear(context)
                 return
             }
             val registry = OpenId4VpRegistry(

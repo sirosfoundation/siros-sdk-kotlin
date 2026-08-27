@@ -66,6 +66,16 @@ class SirosMatcherRegistry(
             credentials.forEach { cred ->
                 entries.put(
                     JSONObject().apply {
+                        // Deliberately a string, though StoredCredential.id is
+                        // a Long. Its "genuine JSON number on the wire"
+                        // requirement is about the privatedata container
+                        // shared with wallet-frontend (privatedata-spec §6),
+                        // which this is not - this blob is read only by our
+                        // own matcher. The id also has to be a string at the
+                        // platform boundary, since the registry API types
+                        // entry ids as String, so keeping it a string here
+                        // means one representation the whole way through
+                        // rather than converting twice.
                         put("id", cred.id.toString())
                         put("format", cred.format)
                     },
