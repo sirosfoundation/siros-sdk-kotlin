@@ -1,17 +1,26 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.keystore
 
+import com.github.luben.zstd.Zstd
 import com.upokecenter.cbor.CBORObject
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import org.siros.sdk.credentials.CredentialDocument
+import org.siros.sdk.credentials.CredentialFormat
+import org.siros.sdk.credentials.CredentialTypeRef
 import org.siros.sdk.credentials.PseudonymOutcome
 import org.siros.sdk.credentials.VerifierIdentity
 import org.siros.sdk.credentials.ZkCircuitClient
+import org.siros.sdk.credentials.ZkCircuitDescriptor
 import org.siros.sdk.credentials.ZkProofResult
 import org.siros.sdk.credentials.ZkProofSystem
 import org.siros.sdk.credentials.ZkSystemSpec
+import org.siros.sdk.credentials.ZkWitnessSigner
 import org.siros.sdk.credentials.mdoc.MdocCbor
 import org.siros.sdk.keystore.mdoc.MdocCose
+import timber.log.Timber
 import uniffi.zk_cred_vega.FfiClaim
 import uniffi.zk_cred_vega.FfiEcdsaWitness
 import uniffi.zk_cred_vega.FfiMsoBodyWitness
@@ -86,11 +95,22 @@ class VegaProofSystem(
     override val systemId: String = "vega-mc-p256-v1"
 
     /**
-     * VEGA's v1 circuit only handles one docType/namespace pair (see the
-     * handoff doc's "Known scope limits" section) - unlike
-     * [LongfellowZkProofSystem], which already supports two.
+     * The circuit itself is docType-agnostic (buildWitness just walks
+     * whatever single namespace the mdoc has, with no docType-specific
+     * logic) - the real constraint is [MAX_CLAIMS_V1]'s exact-4-elements
+     * requirement, not docType. `eu.europa.ec.eudi.pid.1` is included
+     * alongside the real mDL doctype because this stack's `pid_mdoc` scope
+     * (fixtures/vc-config.yaml) already issues an exactly-4-claim mdoc
+     * (family_name, given_name, age_over_18, pseudonym_seed) - a real,
+     * already-issuable credential to test Vega end-to-end against, unlike
+     * the full ISO 18013-5 mDL scope's 11+ mandatory claims. Mdoc-only, same
+     * as Longfellow - VEGA's broader circuit ambitions (e.g. SD-JWT VC) are
+     * a planned future circuit, not this one.
      */
-    override val supportedDocTypes: Set<String> = setOf("org.iso.18013.5.1.mDL")
+    override val supportedCredentialTypes: Set<CredentialTypeRef> = setOf(
+        CredentialTypeRef(CredentialFormat.MSO_MDOC, "org.iso.18013.5.1.mDL"),
+        CredentialTypeRef(CredentialFormat.MSO_MDOC, "eu.europa.ec.eudi.pid.1"),
+    )
 
     /** Cache key: circuit/spec id - a single prover key handle is reusable across presentations. */
     private val proverKeyCache = mutableMapOf<String, VegaProverKey>()
@@ -112,22 +132,33 @@ class VegaProofSystem(
 
     override suspend fun generateProof(
         spec: ZkSystemSpec,
-        credentialBytes: ByteArray,
+        document: CredentialDocument,
         sessionTranscript: ByteArray,
         requestedClaims: List<String>,
         verifierIdentity: VerifierIdentity?,
-        signer: suspend (ByteArray) -> ByteArray,
+        signer: ZkWitnessSigner,
         priorState: ByteArray?,
     ): ZkProofResult {
-        val document = MdocCbor.parseStoredCredential(credentialBytes)
+        val credentialBytes = (document as? CredentialDocument.Mdoc)?.bytes
+            ?: throw IllegalArgumentException("$systemId proves over mdoc only, got ${document::class.simpleName}")
+        val mdoc = MdocCbor.parseStoredCredential(credentialBytes)
         val proverKey = getOrInitProverKey(spec)
-        val (claims, ecdsaWitness, msoBody) = buildWitness(document, requestedClaims)
+        val (claims, ecdsaWitness, msoBody) = buildWitness(mdoc, requestedClaims)
 
-        // Fold-and-reuse: prep_prove only runs once per credential, ever -
-        // every subsequent presentation reuses the previous prove() call's
-        // own nextState instead. See ZkProofResult.nextState's doc comment.
-        val state = priorState ?: prepProve(proverKey, claims, ecdsaWitness, msoBody)
-        val result = prove(proverKey, claims, ecdsaWitness, msoBody, state)
+        // prep_prove/prove are synchronous, CPU-bound native calls (~5s for
+        // this circuit) - running them on whatever dispatcher the caller
+        // happens to be on (often Dispatchers.Main for a UI-triggered
+        // presentation flow) blocks the UI thread for their full duration,
+        // freezing any in-progress animation (e.g. a spinner). Dispatchers.Default
+        // moves the blocking work off the calling thread so the coroutine
+        // genuinely suspends here instead.
+        val result = withContext(Dispatchers.Default) {
+            // Fold-and-reuse: prep_prove only runs once per credential, ever -
+            // every subsequent presentation reuses the previous prove() call's
+            // own nextState instead. See ZkProofResult.nextState's doc comment.
+            val state = priorState ?: prepProve(proverKey, claims, ecdsaWitness, msoBody)
+            prove(proverKey, claims, ecdsaWitness, msoBody, state)
+        }
 
         return ZkProofResult(
             proofBytes = result.proofBytes,
@@ -149,7 +180,7 @@ class VegaProofSystem(
      * reusing [MdocCose.extractX5Chain] rather than reinventing it. `r`/`s`
      * are `issuerAuth`'s own COSE_Sign1 signature bytes (first/second
      * 32-byte half - this class only supports ES256/P-256, matching
-     * [supportedDocTypes]' single circuit). `sInv` is a real
+     * [supportedCredentialTypes]' single circuit). `sInv` is a real
      * `BigInteger.modInverse` against the P-256 curve order - get this wrong
      * and proofs fail to verify with no clear error, same class of mistake
      * `zk-cred-vega`'s own `ecdsa.rs` module doc warns about for the
@@ -289,7 +320,8 @@ class VegaProofSystem(
                     "expected until the vega-mc catalog entries are published (see handoff doc " +
                     "'What's NOT ready yet' #2)",
             )
-        val keyBytes = zkCircuitClient.downloadArtifact(descriptor)
+        val compressedBytes = zkCircuitClient.downloadArtifact(descriptor)
+        val keyBytes = decompress(compressedBytes, descriptor)
         val proverKey = uniffi.zk_cred_vega.deserializeProverKey(directByteBuffer(keyBytes))
 
         cacheMutex.withLock {
@@ -307,4 +339,35 @@ class VegaProofSystem(
      */
     private fun directByteBuffer(bytes: ByteArray): ByteBuffer =
         ByteBuffer.allocateDirect(bytes.size).put(bytes).apply { flip() }
+
+    /**
+     * Every zk-circuits catalog artifact (Vega's prover/verifier keys
+     * included) is zstd-compressed on the wire - [ZkCircuitClient.downloadArtifact]
+     * returns the bytes AS SERVED, compressed, by design (its hash check is
+     * against the compressed form). Mirrors [LongfellowZkProofSystem]'s
+     * identically-named helper exactly (see its doc comment for the
+     * frame-size-vs-catalog-metadata-vs-guess fallback chain) - this system
+     * never had its own copy because until now it was only ever exercised
+     * against local test-vector bytes that were never actually compressed,
+     * so a real network-fetched artifact silently skipped decompression and
+     * `deserializeProverKey` failed with "deserialized bytes don't encode a
+     * valid field element" (bincode reading a zstd frame header as if it
+     * were serialized key data).
+     */
+    private fun decompress(compressedBytes: ByteArray, descriptor: ZkCircuitDescriptor): ByteArray {
+        val frameSize = Zstd.getFrameContentSize(compressedBytes)
+        val outputSize = if (frameSize > 0) {
+            frameSize
+        } else {
+            val uncompressedSize = descriptor.artifact?.uncompressed?.size
+            if (uncompressedSize != null && uncompressedSize > 0) {
+                Timber.w("Circuit '${descriptor.id}' zstd frame has no embedded content size; using catalog metadata")
+                uncompressedSize
+            } else {
+                Timber.w("Circuit '${descriptor.id}' has no known uncompressed size; guessing buffer size")
+                compressedBytes.size.toLong() * 400
+            }
+        }
+        return Zstd.decompress(compressedBytes, outputSize.toInt())
+    }
 }

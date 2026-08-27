@@ -2,8 +2,10 @@
 package org.siros.sdk.keystore
 
 import com.github.luben.zstd.Zstd
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import org.siros.sdk.credentials.COSE_ALG_ES256
 import org.siros.sdk.credentials.CredentialDocument
 import org.siros.sdk.credentials.CredentialFormat
@@ -186,28 +188,38 @@ class LongfellowZkProofSystem(
         // producing the fixed-width form the prover expects.
         val time = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString()
 
+        // prove/proveWithPpid are synchronous, CPU-bound native calls -
+        // running them on whatever dispatcher the caller happens to be on
+        // (often Dispatchers.Main for a UI-triggered presentation flow)
+        // blocks the UI thread for their full duration, freezing any
+        // in-progress animation (e.g. a spinner). See VegaProofSystem's
+        // identical fix/comment for the same reasoning.
         if (verifierIdentity == null) {
-            val proofBytes = prove(
+            val proofBytes = withContext(Dispatchers.Default) {
+                prove(
+                    prover = prover,
+                    deviceResponse = directByteBuffer(witnessDeviceResponse),
+                    namespace = namespace,
+                    requestedClaims = effectiveClaims,
+                    sessionTranscript = directByteBuffer(sessionTranscript),
+                    time = time,
+                )
+            }
+            return ZkProofResult(proofBytes = proofBytes, timestamp = time)
+        }
+
+        val verifierContext = pseudonymDeriver.deriveVerifierContext(verifierIdentity)
+        val proofBytes = withContext(Dispatchers.Default) {
+            proveWithPpid(
                 prover = prover,
                 deviceResponse = directByteBuffer(witnessDeviceResponse),
                 namespace = namespace,
                 requestedClaims = effectiveClaims,
                 sessionTranscript = directByteBuffer(sessionTranscript),
                 time = time,
+                verifierContext = directByteBuffer(verifierContext),
             )
-            return ZkProofResult(proofBytes = proofBytes, timestamp = time)
         }
-
-        val verifierContext = pseudonymDeriver.deriveVerifierContext(verifierIdentity)
-        val proofBytes = proveWithPpid(
-            prover = prover,
-            deviceResponse = directByteBuffer(witnessDeviceResponse),
-            namespace = namespace,
-            requestedClaims = effectiveClaims,
-            sessionTranscript = directByteBuffer(sessionTranscript),
-            time = time,
-            verifierContext = directByteBuffer(verifierContext),
-        )
 
         // The native API returns only proof bytes - the pseudonym itself
         // (SHA256(pseudonym_seed || verifier_context), the same formula the

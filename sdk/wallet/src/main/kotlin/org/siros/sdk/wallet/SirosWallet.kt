@@ -1927,9 +1927,15 @@ class SirosWallet private constructor(
                 // via selectSigningKey's null-kid fallback to the only
                 // available key) - keystore.sign() below needs an explicit
                 // key id, so resolve the same default here rather than
-                // treating a null kid as "no key exists".
+                // treating a null kid as "no key exists". Resolved lazily
+                // (checked only inside the signer lambda, not eagerly here):
+                // a ZK system without a device-binding concept (Vega, unlike
+                // Longfellow's real-witness-DeviceResponse construction)
+                // never calls signer at all, so requiring a key up front
+                // would spuriously fail a Vega presentation whenever no
+                // signing key happens to be resolvable, even though nothing
+                // in that flow ever needs one.
                 val kid = cred.kid ?: keystore.listKeys().firstOrNull()?.keyId
-                    ?: throw WalletException("No signing key available for credential $id - cannot generate a ZK proof for it")
                 val docType = MdocCbor.parseStoredCredential(credBytes).docType
                 // A circuit is compiled for a fixed attribute count, so the
                 // verifier's zk_system_type list must be matched against how
@@ -1972,7 +1978,10 @@ class SirosWallet private constructor(
                         require(algorithm == COSE_ALG_ES256) {
                             "This keystore signs ES256 only, proof system asked for COSE alg $algorithm"
                         }
-                        keystore.sign(kid, data)
+                        keystore.sign(
+                            requireNotNull(kid) { "No signing key available for credential $id - cannot generate a ZK proof for it" },
+                            data,
+                        )
                     },
                 )
                 val deviceResponse = buildZkPresentationToken(
@@ -3683,8 +3692,9 @@ class SirosWallet private constructor(
                                         // cred.kid is commonly null for a softkey-issued credential
                                         // with no explicit per-credential key binding - see the
                                         // identical fallback + comment in handleDCAPIRequest.
+                                        // Resolved lazily (checked only inside the signer lambda) -
+                                        // see handleDCAPIRequest's identical comment for why.
                                         val kid = cred.kid ?: keystore.listKeys().firstOrNull()?.keyId
-                                            ?: throw WalletException("No signing key available for credential ${cred.id} - cannot generate a ZK proof for it")
                                         val docType = MdocCbor.parseStoredCredential(credBytes).docType
                                         // See handleDCAPIRequest's identical comment: a circuit is
                                         // compiled for a fixed attribute count, so matching must
@@ -3730,11 +3740,14 @@ class SirosWallet private constructor(
                                             requestedClaims = ref.disclosedClaims ?: emptyList(),
                                             verifierIdentity = verifierIdentity,
                                             signer = { algorithm, data ->
-                        require(algorithm == COSE_ALG_ES256) {
-                            "This keystore signs ES256 only, proof system asked for COSE alg $algorithm"
-                        }
-                        keystore.sign(kid, data)
-                    },
+                                                require(algorithm == COSE_ALG_ES256) {
+                                                    "This keystore signs ES256 only, proof system asked for COSE alg $algorithm"
+                                                }
+                                                keystore.sign(
+                                                    requireNotNull(kid) { "No signing key available for credential ${cred.id} - cannot generate a ZK proof for it" },
+                                                    data,
+                                                )
+                                            },
                                         )
                                         Timber.d("sign_presentation: ZK proof generated, pseudonymOutcome=${result.pseudonymOutcome} proofBytes.size=${result.proofBytes.size}")
                                         val zkDeviceResponse = buildZkPresentationToken(
