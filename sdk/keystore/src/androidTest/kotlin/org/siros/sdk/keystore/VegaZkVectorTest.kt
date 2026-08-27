@@ -46,13 +46,15 @@ import java.nio.ByteBuffer
  *
  * Resources: `vega-mc-p256-v1-{prover,verifier}-key.bin.zst` are the exact
  * `zk_cred_vega::setup()` output (bincode-serialized `ProverKey`/`VerifierKey`),
- * zstd-compressed - fetched directly from `go-zk-circuits`'s
- * `vega-mc-p256-v1-{prover,verifier}-key-r11` catalog entries (published for
- * early testing at commit `sirosfoundation/zk-cred-vega@0592680`, v0.0.3),
- * so this test bundles a static copy of exactly what [VegaProofSystem]'s
- * own `zkCircuitClient` would fetch at runtime rather than re-fetching one
- * per test run. `mdl_4claims_mixed_disclosure.json` is the crate's own
- * `test-vectors/` fixture, copied verbatim.
+ * zstd-compressed - matching `go-zk-circuits`'s
+ * `vega-mc-p256-v1-{prover,verifier}-key-r12` catalog entries byte-for-byte
+ * (confirmed via sha256, `zk-cred-vega@v0.0.5`'s `dump_setup`), so this test
+ * bundles a static copy of exactly what [VegaProofSystem]'s own
+ * `zkCircuitClient` would fetch at runtime rather than re-fetching one per
+ * test run. `mdl_4claims_mixed_disclosure.json` is the crate's own
+ * `test-vectors/` fixture, copied verbatim - regenerated alongside r12, so
+ * its ECDSA witness/salts differ from earlier revisions' copies of this
+ * same file.
  */
 @RunWith(AndroidJUnit4::class)
 class VegaZkVectorTest {
@@ -156,6 +158,16 @@ class VegaZkVectorTest {
     }
 
     /**
+     * One entry per claim slot, in the same order as [TestVector.claims]:
+     * the real `issuerSignedItemBytes` for a disclosed slot, empty for an
+     * undisclosed one - the exact shape `verify()` now requires (see
+     * `zk-cred-vega`'s `ffi_api::verify` doc: these travel beside the proof
+     * rather than inside its public IO as of r12).
+     */
+    private fun disclosedBytesFor(vector: TestVector): List<ByteArray> =
+        vector.claims.map { if (it.disclose) it.issuerSignedItemBytes else ByteArray(0) }
+
+    /**
      * Full round trip against the real crate: `prep_prove` -> `prove` ->
      * `verify`, confirming the proof verifies and that disclosed/undisclosed
      * claims come back exactly as the test vector declared them (real
@@ -176,7 +188,7 @@ class VegaZkVectorTest {
         assertTrue("proof must be non-empty", proveResult.proofBytes.isNotEmpty())
         assertTrue("nextState must be non-empty", proveResult.nextState.isNotEmpty())
 
-        val verifyResult = verify(loadVerifierKey(), proveResult.proofBytes)
+        val verifyResult = verify(loadVerifierKey(), proveResult.proofBytes, disclosedBytesFor(vector))
 
         assertArrayEquals(vector.ecdsaWitness.qx, verifyResult.qx)
         assertArrayEquals(vector.ecdsaWitness.qy, verifyResult.qy)
@@ -238,7 +250,7 @@ class VegaZkVectorTest {
             prove(proverKey, vector.claims, vector.ecdsaWitness, vector.msoBody, nextState)
         }
 
-        val verifyResult = verify(loadVerifierKey(), secondProve.proofBytes)
+        val verifyResult = verify(loadVerifierKey(), secondProve.proofBytes, disclosedBytesFor(vector))
         assertArrayEquals(vector.ecdsaWitness.qx, verifyResult.qx)
     }
 }

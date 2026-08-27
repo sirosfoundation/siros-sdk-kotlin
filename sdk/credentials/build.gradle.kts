@@ -52,7 +52,7 @@ dependencies {
     // v0.0.4 bumps vega-prover to sirosfoundation/vega-prover@2a7dcb3, a
     // real measured ~35-40% prove() speedup on x86_64 (chunk-overhead fix
     // in bind_and_prepare_poly_ABC_inner) - not yet confirmed on-device.
-    implementation("org.siros:zk-cred-vega:0.0.4")
+    implementation("org.siros:zk-cred-vega:0.0.5")
 
     // zk-cred-bbs UniFFI bindings - blind BBS with Schnorr key binding.
     // Same shape as above: AAR from GitHub Packages (or mavenLocal via

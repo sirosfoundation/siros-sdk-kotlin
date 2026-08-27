@@ -40,16 +40,19 @@ import java.time.temporal.ChronoUnit
  * design/provenance history and current crate status.
  *
  * **Do not present this to a real relying party yet.** `zk-cred-vega` is
- * public and tagged (`v0.0.3` as of the digest-concealment privacy fix), and
+ * public and tagged (`v0.0.5` as of the nonce/public-IO circuit revision), and
  * its own expert security review is running in parallel with SDK-side
  * testing rather than gating it - but that review hasn't landed, so nothing
  * here should be trusted as a real trust anchor yet. This class is for
  * early-testing end-to-end use (own prover verified by own verifier, plus
  * real wallet <-> verifier interop against `sirosfoundation/vc`), same
  * caveat Longfellow shipped under before its own multipaz interop testing.
- * The `go-zk-circuits` catalog's `vega-mc-p256-v1-{prover,verifier}-key-r11`
+ * The `go-zk-circuits` catalog's `vega-mc-p256-v1-{prover,verifier}-key-r12`
  * entries are published for early testing ([zkCircuitClient] can fetch them
  * directly), carrying the same "PUBLISHED FOR EARLY TESTING ONLY" notice.
+ * Every earlier revision (r2 through r11) has since been unpublished or
+ * revoked - see the go-zk-circuits catalog's own notes for why each one
+ * was retired.
  *
  * `buildWitness` is real (ECDSA witness from `issuerAuth`'s x5chain +
  * signature, MSO body from `issuerAuth`'s payload, fixed 4-slot claim

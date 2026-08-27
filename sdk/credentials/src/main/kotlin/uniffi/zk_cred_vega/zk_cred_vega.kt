@@ -725,7 +725,7 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_zk_cred_vega_fn_func_prove(`pk`: Long,`claims`: RustBuffer.ByValue,`ecdsaWitness`: RustBuffer.ByValue,`msoBody`: RustBuffer.ByValue,`priorState`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    external fun uniffi_zk_cred_vega_fn_func_verify(`vk`: Long,`proofBytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_zk_cred_vega_fn_func_verify(`vk`: Long,`proofBytes`: RustBuffer.ByValue,`disclosedBytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun ffi_zk_cred_vega_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -852,13 +852,13 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_zk_cred_vega_checksum_func_deserialize_verifier_key() != 53893) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_zk_cred_vega_checksum_func_prep_prove() != 7598) {
+    if (lib.uniffi_zk_cred_vega_checksum_func_prep_prove() != 63573) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_zk_cred_vega_checksum_func_prove() != 51374) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_zk_cred_vega_checksum_func_verify() != 54518) {
+    if (lib.uniffi_zk_cred_vega_checksum_func_verify() != 2233) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -2238,6 +2238,34 @@ public object FfiConverterTypeFfiVerifyResult: FfiConverterRustBuffer<FfiVerifyR
 /**
  * @suppress
  */
+public object FfiConverterSequenceByteArray: FfiConverterRustBuffer<List<kotlin.ByteArray>> {
+    override fun read(buf: ByteBuffer): List<kotlin.ByteArray> {
+        val len = buf.getInt()
+        return List<kotlin.ByteArray>(len) {
+            FfiConverterByteArray.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.ByteArray>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterByteArray.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.ByteArray>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterByteArray.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeFfiClaim: FfiConverterRustBuffer<List<FfiClaim>> {
     override fun read(buf: ByteBuffer): List<FfiClaim> {
         val len = buf.getInt()
@@ -2322,7 +2350,8 @@ public object FfiConverterSequenceTypeFfiDisclosedClaim: FfiConverterRustBuffer<
         /**
          * Runs `prep_prove` once for a credential, returning the (serialized)
          * prep-state cache — see this module's doc for why this crosses the FFI
-         * boundary as bytes rather than a long-lived handle.
+         * boundary as bytes rather than a long-lived handle, and `encode_prep_state`'s
+         * doc for the nonce carried alongside it.
          */
     @Throws(VegaFfiException::class) fun `prepProve`(`pk`: VegaProverKey, `claims`: List<FfiClaim>, `ecdsaWitness`: FfiEcdsaWitness, `msoBody`: FfiMsoBodyWitness): kotlin.ByteArray {
             return FfiConverterByteArray.lift(
@@ -2364,14 +2393,15 @@ public object FfiConverterSequenceTypeFfiDisclosedClaim: FfiConverterRustBuffer<
          * Verifies a proof and checks the step↔core binding (see this module's
          * doc) in one call — a caller never sees an unbound "valid" proof.
          */
-    @Throws(VegaFfiException::class) fun `verify`(`vk`: VegaVerifierKey, `proofBytes`: kotlin.ByteArray): FfiVerifyResult {
+    @Throws(VegaFfiException::class) fun `verify`(`vk`: VegaVerifierKey, `proofBytes`: kotlin.ByteArray, `disclosedBytes`: List<kotlin.ByteArray>): FfiVerifyResult {
             return FfiConverterTypeFfiVerifyResult.lift(
     uniffiRustCallWithError(VegaFfiException) { _status ->
     UniffiLib.uniffi_zk_cred_vega_fn_func_verify(
     
         
         FfiConverterTypeVegaVerifierKey.lower(`vk`),
-        FfiConverterByteArray.lower(`proofBytes`),_status)
+        FfiConverterByteArray.lower(`proofBytes`),
+        FfiConverterSequenceByteArray.lower(`disclosedBytes`),_status)
 }
     )
     }
