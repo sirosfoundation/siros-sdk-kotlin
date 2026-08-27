@@ -134,6 +134,7 @@
     <string name="flow_step_awaiting_consent">Odotetaan suostumustasi…</string>
     <string name="flow_step_credential_selection">Valitaan todistuksia…</string>
     <string name="flow_step_submitting_response">Lähetetään vastausta todentajalle…</string>
+    <string name="flow_step_computing_proof">Lasketaan todistetta…</string>
     <string name="flow_step_unknown">Käsitellään…</string>
     <string name="flow_diagnostic_label">Diagnostiikka: %1$s</string>
     <string name="flow_credentials_received">Vastaanotettu %1$d todistusta</string>

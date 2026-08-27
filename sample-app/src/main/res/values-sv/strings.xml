@@ -134,6 +134,7 @@
     <string name="flow_step_awaiting_consent">Väntar på ditt samtycke…</string>
     <string name="flow_step_credential_selection">Väljer intyg…</string>
     <string name="flow_step_submitting_response">Skickar svar till kontrollant…</string>
+    <string name="flow_step_computing_proof">Beräknar bevis…</string>
     <string name="flow_step_unknown">Bearbetar…</string>
     <string name="flow_diagnostic_label">Diagnostik: %1$s</string>
     <string name="flow_credentials_received">Mottog %1$d intyg</string>

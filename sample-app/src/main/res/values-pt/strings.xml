@@ -134,6 +134,7 @@
     <string name="flow_step_awaiting_consent">Aguardando seu consentimento…</string>
     <string name="flow_step_credential_selection">Selecionando credenciais…</string>
     <string name="flow_step_submitting_response">Enviando resposta ao verificador…</string>
+    <string name="flow_step_computing_proof">Calculando prova…</string>
     <string name="flow_step_unknown">Processando…</string>
     <string name="flow_diagnostic_label">Diagnóstico: %1$s</string>
     <string name="flow_credentials_received">Recebida(s) %1$d credencial(is)</string>
