@@ -142,16 +142,17 @@ fun PresentationConsentScreen(
             // Content area
             Box(modifier = Modifier.weight(1f)) {
                 when {
-                    currentStep == 0 -> PreviewStep(request, exhaustedQueryIds, presentationHistory)
+                    currentStep == 0 -> PreviewStep(request, exhaustedQueryIds, presentationHistory, availableKeyIds)
                     currentStep <= request.matchResults.size -> {
                         val matchResult = request.matchResults[currentStep - 1]
                         ClaimSelectionStep(
                             matchResult = matchResult,
                             claimSelections = claimSelections,
                             presentationHistory = presentationHistory,
+                            availableKeyIds = availableKeyIds,
                         )
                     }
-                    else -> SummaryStep(request, claimSelections, presentationHistory)
+                    else -> SummaryStep(request, claimSelections, presentationHistory, availableKeyIds)
                 }
             }
 
@@ -240,6 +241,7 @@ private fun PreviewStep(
     request: PresentationRequest,
     exhaustedQueryIds: Set<String> = emptySet(),
     presentationHistory: List<PresentationRecord> = emptyList(),
+    availableKeyIds: Set<String> = emptySet(),
 ) {
     Column(
         modifier = Modifier
@@ -287,7 +289,7 @@ private fun PreviewStep(
             // many interchangeable copies eligible for the same query (see
             // CredentialUtils.eligibleInstances), and the SDK - not the
             // user - picks which physical copy is actually used at share time.
-            val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory).firstOrNull()
+            val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory, availableKeyIds).firstOrNull()
             if (grouped != null) {
                 CredentialCard(
                     credential = grouped.credential,
@@ -322,8 +324,9 @@ private fun ClaimSelectionStep(
     matchResult: CredentialMatcher.MatchResult,
     claimSelections: MutableMap<String, Boolean>,
     presentationHistory: List<PresentationRecord> = emptyList(),
+    availableKeyIds: Set<String> = emptySet(),
 ) {
-    val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory).firstOrNull()
+    val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory, availableKeyIds).firstOrNull()
     val cred = grouped?.credential
     val claimMetaMap = cred?.metadata?.claims
         ?.associateBy { it.path.joinToString(".") } ?: emptyMap()
@@ -413,6 +416,7 @@ private fun SummaryStep(
     request: PresentationRequest,
     claimSelections: Map<String, Boolean>,
     presentationHistory: List<PresentationRecord> = emptyList(),
+    availableKeyIds: Set<String> = emptySet(),
 ) {
     Column(
         modifier = Modifier
@@ -444,7 +448,7 @@ private fun SummaryStep(
         Spacer(modifier = Modifier.height(16.dp))
 
         request.matchResults.forEach { matchResult ->
-            val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory).firstOrNull()
+            val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory, availableKeyIds).firstOrNull()
                 ?: return@forEach
             val cred = grouped.credential
             val claimMetaMap = cred.metadata?.claims
