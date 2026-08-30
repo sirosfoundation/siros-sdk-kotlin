@@ -8,6 +8,10 @@
 *.aab
 *.jks
 *.keystore
+# The SDK aggregate project has a build dir of its own, and it is not
+# covered by the per-module glob below - `dokkaGenerate` and kover both
+# write into it.
+/sdk/build/
 /sdk/*/build/
 /sample-app/build/
 /tools/.venv/
