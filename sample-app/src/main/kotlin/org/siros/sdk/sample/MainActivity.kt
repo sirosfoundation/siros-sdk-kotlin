@@ -413,13 +413,23 @@ fun WalletScreen(viewModel: WalletViewModel) {
     Box(modifier = Modifier.fillMaxSize()) {
         when {
             // Presentation consent dialog — shown as a full-screen overlay
-            pendingPresentation != null -> PresentationConsentScreen(
-                request = pendingPresentation!!,
-                onAccept = viewModel::acceptPresentation,
-                onDecline = viewModel::declinePresentation,
-                presentationHistory = presentationHistory,
-                consumptionPolicy = viewModel.credentialConsumptionPolicy.collectAsState().value,
-            )
+            pendingPresentation != null -> {
+                // Recomputed per new presentation request, not cached: a key
+                // lost since the last check must be reflected immediately -
+                // see SirosWallet.availableKeyIds's doc comment.
+                var availableKeyIds by remember(pendingPresentation) { mutableStateOf(emptySet<String>()) }
+                LaunchedEffect(pendingPresentation) {
+                    availableKeyIds = viewModel.currentAvailableKeyIds()
+                }
+                PresentationConsentScreen(
+                    request = pendingPresentation!!,
+                    onAccept = viewModel::acceptPresentation,
+                    onDecline = viewModel::declinePresentation,
+                    presentationHistory = presentationHistory,
+                    consumptionPolicy = viewModel.credentialConsumptionPolicy.collectAsState().value,
+                    availableKeyIds = availableKeyIds,
+                )
+            }
 
             // Credential detail sub-screen
             selectedCredential != null -> CredentialDetailScreen(

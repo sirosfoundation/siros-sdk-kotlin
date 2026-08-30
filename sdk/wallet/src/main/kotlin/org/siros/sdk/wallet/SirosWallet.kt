@@ -1100,7 +1100,7 @@ class SirosWallet private constructor(
         val credential = credentialStore.getById(credentialId)
             ?: throw WalletException("Credential not found: $credentialId")
         val allInstances = credentialStore.getAll().filter { it.batchId == credential.batchId }
-        if (CredentialUtils.eligibleInstances(allInstances, credentialConsumptionPolicy, presentationHistory).none { it.id == credentialId }) {
+        if (eligibleInstances(allInstances).none { it.id == credentialId }) {
             throw WalletException("No eligible copies of this credential remain - renew it to get more")
         }
         val response = keystore.signMdocPresentationForProximity(
@@ -1875,7 +1875,7 @@ class SirosWallet private constructor(
         // the shared wallet instance (by MainActivity's WalletViewModel, for
         // the unrelated in-app flow) and stays registered even once
         // MainActivity is backgrounded, that wait would hang forever.
-        val selectedIds = CredentialUtils.eligibleInstances(candidates, credentialConsumptionPolicy, presentationHistory).map { it.id }
+        val selectedIds = eligibleInstances(candidates).map { it.id }
 
         if (selectedIds.isEmpty()) {
             throw WalletException(
@@ -2758,13 +2758,39 @@ class SirosWallet private constructor(
     /**
      * Filters [instances] down to the ones this wallet's own
      * [credentialConsumptionPolicy] and [presentationHistory] currently
-     * consider eligible (i.e. not yet consumed) - the same computation
-     * this class performs internally before every presentation, exposed as
-     * a convenience so consent/selection UI doesn't need to thread both
-     * properties through [CredentialUtils.eligibleInstances] itself.
+     * consider eligible (i.e. not yet consumed), AND whose bound signing
+     * key still actually exists in [keystore] - the same computation this
+     * class performs internally before every presentation, exposed as a
+     * convenience so consent/selection UI doesn't need to thread policy,
+     * history, and live key availability through
+     * [CredentialUtils.eligibleInstances] itself.
+     *
+     * The key-availability half of this check exists because a real,
+     * recurring bug (found via live proximity-presentation testing) let a
+     * credential whose signing key was silently lost (e.g. a sync that
+     * never folded a software key into the persisted container - see
+     * privatedata-spec#1/siros-wscd-manager#68 for the deeper architectural
+     * fix) keep reporting "available" under
+     * [CredentialConsumptionPolicy.NEVER_CONSUME] forever, right up until a
+     * live presentation attempt failed deep inside key selection with no
+     * user-facing signal at all.
      */
-    fun eligibleInstances(instances: List<StoredCredential>): List<StoredCredential> =
-        CredentialUtils.eligibleInstances(instances, credentialConsumptionPolicy, presentationHistory)
+    suspend fun eligibleInstances(instances: List<StoredCredential>): List<StoredCredential> =
+        CredentialUtils.eligibleInstances(
+            instances,
+            credentialConsumptionPolicy,
+            presentationHistory,
+            availableKeyIds(),
+        )
+
+    /**
+     * The `kid`s this wallet's keystore can currently sign with - exposed so
+     * consent/selection UI (e.g. `PresentationConsentScreen`'s exhausted-
+     * query precheck) can compute eligibility ahead of time, in a
+     * `LaunchedEffect`/`produceState`, without needing a full
+     * [eligibleInstances] round trip per candidate list.
+     */
+    suspend fun availableKeyIds(): Set<String> = keystore.listKeys().map { it.keyId }.toSet()
 
     /**
      * Record a new presentation: adds it to the in-memory history and
@@ -2811,7 +2837,7 @@ class SirosWallet private constructor(
             val batchInstances = allCredentials.filter { it.batchId == batchId }
             val representative = batchInstances.find { it.instanceId == 0 } ?: batchInstances.firstOrNull() ?: continue
             val threshold = renewThresholdFor(representative.credentialConfigurationId)
-            val eligible = CredentialUtils.eligibleInstances(batchInstances, credentialConsumptionPolicy, presentationHistory)
+            val eligible = eligibleInstances(batchInstances)
             if (eligible.size <= threshold) {
                 eventListener?.onCredentialNearExpiry(representative, eligible.size, threshold)
             }
@@ -3897,13 +3923,13 @@ class SirosWallet private constructor(
                             )
                         )
                     } else {
-                        CredentialUtils.eligibleInstances(candidates, credentialConsumptionPolicy, presentationHistory).map { it.id }
+                        eligibleInstances(candidates).map { it.id }
                     }
 
                     // The app is trusted to only return IDs it was offered,
                     // but shouldn't be the only thing enforcing consumption -
                     // re-validate here too (defense in depth).
-                    val eligibleIds = CredentialUtils.eligibleInstances(candidates, credentialConsumptionPolicy, presentationHistory).map { it.id }.toSet()
+                    val eligibleIds = eligibleInstances(candidates).map { it.id }.toSet()
                     if (selectedIds.any { it !in eligibleIds }) {
                         throw WalletException("Selected credential has no eligible copies remaining - renew it to get more")
                     }
@@ -4962,7 +4988,7 @@ class SirosWallet private constructor(
                         )
                     )
                 } else {
-                    CredentialUtils.eligibleInstances(candidates, credentialConsumptionPolicy, presentationHistory).map { it.id }
+                    eligibleInstances(candidates).map { it.id }
                 }
 
                 if (selectedIds.isEmpty()) {
@@ -4977,7 +5003,7 @@ class SirosWallet private constructor(
                 // The app is trusted to only return IDs it was offered, but
                 // shouldn't be the only thing enforcing consumption -
                 // re-validate here too (defense in depth).
-                val eligibleIds = CredentialUtils.eligibleInstances(candidates, credentialConsumptionPolicy, presentationHistory).map { it.id }.toSet()
+                val eligibleIds = eligibleInstances(candidates).map { it.id }.toSet()
                 if (selectedIds.any { it !in eligibleIds }) {
                     throw WalletException("Selected credential has no eligible copies remaining - renew it to get more")
                 }

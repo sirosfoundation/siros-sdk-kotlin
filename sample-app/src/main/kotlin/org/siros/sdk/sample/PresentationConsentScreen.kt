@@ -68,17 +68,24 @@ fun PresentationConsentScreen(
     onDecline: () -> Unit,
     presentationHistory: List<PresentationRecord> = emptyList(),
     consumptionPolicy: CredentialConsumptionPolicy = CredentialConsumptionPolicy.NEVER_CONSUME,
+    // Which kids the keystore can currently sign with - see
+    // SirosWallet.availableKeyIds's doc comment. Without this, a credential
+    // whose signing key was silently lost (a real, recurring bug found via
+    // live testing) kept reporting "available" under NEVER_CONSUME forever,
+    // right up until "Share" failed deep inside key selection.
+    availableKeyIds: Set<String> = emptySet(),
     modifier: Modifier = Modifier,
 ) {
     // A query is unsatisfiable if every candidate that matched it has
-    // already been used up under the active consumption policy (see
-    // CredentialUtils.eligibleInstances) - the SDK itself refuses to sign
-    // with an exhausted instance regardless (defense in depth), but the user
-    // shouldn't be let all the way to "Share" only to have it silently fail.
-    val exhaustedQueryIds = remember(request, presentationHistory, consumptionPolicy) {
+    // already been used up under the active consumption policy, or has no
+    // usable signing key left (see CredentialUtils.eligibleInstances) - the
+    // SDK itself refuses to sign with an exhausted/keyless instance
+    // regardless (defense in depth), but the user shouldn't be let all the
+    // way to "Share" only to have it silently fail.
+    val exhaustedQueryIds = remember(request, presentationHistory, consumptionPolicy, availableKeyIds) {
         request.matchResults.filter { mr ->
             mr.candidates.isNotEmpty() &&
-                CredentialUtils.eligibleInstances(mr.candidates, consumptionPolicy, presentationHistory).isEmpty()
+                CredentialUtils.eligibleInstances(mr.candidates, consumptionPolicy, presentationHistory, availableKeyIds).isEmpty()
         }.map { it.queryId }.toSet()
     }
     val totalSteps = request.matchResults.size + 2 // preview + per-credential + summary
@@ -186,7 +193,7 @@ fun PresentationConsentScreen(
                 } else {
                     Button(
                         onClick = {
-                            onAccept(CredentialUtils.eligibleInstances(request.candidates, consumptionPolicy, presentationHistory).map { it.id })
+                            onAccept(CredentialUtils.eligibleInstances(request.candidates, consumptionPolicy, presentationHistory, availableKeyIds).map { it.id })
                         },
                         enabled = exhaustedQueryIds.isEmpty(),
                         modifier = Modifier.weight(1f),

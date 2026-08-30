@@ -466,26 +466,44 @@ object CredentialUtils {
      * "remaining copies" ribbon never disagree.
      *
      * [CredentialConsumptionPolicy.NEVER_CONSUME] (the default - today's
-     * actual behavior) returns every instance unconditionally. Otherwise, an
-     * instance is eligible only if it hasn't already been presented
-     * (`sigCount == 0`) - each instance is bound to its own device key
-     * specifically so a verifier can't correlate repeated presentations by a
-     * reused key/signature; reusing an already-presented instance would
-     * throw that guarantee away.
+     * actual behavior) skips the usage check, but every policy still
+     * requires the instance's bound signing key to actually exist in
+     * [availableKeyIds] - a real, recurring bug found via live testing:
+     * a software key only ever lives in the WSCD's process memory plus
+     * whatever was last folded into the persisted container, so a lost
+     * sync (or, per privatedata-spec#1/siros-wscd-manager#68, a concurrent-
+     * write merge conflict on the legacy, non-namespaced `S.keypairs` field)
+     * can silently strand a credential with no usable key. Without this
+     * check, NEVER_CONSUME made every such credential report "available"
+     * forever, right up until a live presentation attempt failed deep
+     * inside key selection with no user-facing signal at all. An instance
+     * whose [StoredCredential.kid] is null is never excluded here - that's
+     * a genuinely credential-less call shape (see
+     * `WscdKeystoreAdapter.selectSigningKey`'s doc comment), not a lost key.
+     *
+     * Otherwise, an instance is eligible only if it hasn't already been
+     * presented (`sigCount == 0`) - each instance is bound to its own device
+     * key specifically so a verifier can't correlate repeated presentations
+     * by a reused key/signature; reusing an already-presented instance
+     * would throw that guarantee away.
      */
     fun eligibleInstances(
         instances: List<StoredCredential>,
         policy: CredentialConsumptionPolicy,
         presentationHistory: List<PresentationRecord>,
+        availableKeyIds: Set<String>,
     ): List<StoredCredential> {
-        if (policy == CredentialConsumptionPolicy.NEVER_CONSUME) return instances
         // A single pass building this set, rather than rescanning all of
         // presentationHistory per instance (O(instances x history) before),
         // matters once either grows - this can run on every UI recomposition.
         val usedCredentialIds = presentationHistory.flatMapTo(HashSet()) { it.credentialIds }
         return instances.filter { instance ->
-            val consumes = policy == CredentialConsumptionPolicy.CONSUME_ALL || !isZkpFormat(instance.format)
-            !consumes || instance.id !in usedCredentialIds
+            val keyAvailable = instance.kid == null || instance.kid in availableKeyIds
+            val consumptionEligible = policy == CredentialConsumptionPolicy.NEVER_CONSUME || run {
+                val consumes = policy == CredentialConsumptionPolicy.CONSUME_ALL || !isZkpFormat(instance.format)
+                !consumes || instance.id !in usedCredentialIds
+            }
+            keyAvailable && consumptionEligible
         }
     }
 
@@ -512,8 +530,9 @@ object CredentialUtils {
         instances: List<StoredCredential>,
         policy: CredentialConsumptionPolicy,
         presentationHistory: List<PresentationRecord>,
+        availableKeyIds: Set<String>,
         threshold: Int = RENEW_THRESHOLD,
-    ): Boolean = eligibleInstances(instances, policy, presentationHistory).size <= threshold
+    ): Boolean = eligibleInstances(instances, policy, presentationHistory, availableKeyIds).size <= threshold
 
     /**
      * Group stored credentials into one [CredentialFamily] per

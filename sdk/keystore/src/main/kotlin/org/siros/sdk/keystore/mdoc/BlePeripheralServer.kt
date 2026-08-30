@@ -66,7 +66,7 @@ class BlePeripheralServer(
      * used up, so a family the user approves can't sign with an exhausted
      * instance even if [requestConsent]'s UI failed to grey it out.
      */
-    filterEligible: (List<StoredCredential>) -> List<StoredCredential>,
+    filterEligible: suspend (List<StoredCredential>) -> List<StoredCredential>,
     /** See [MdocProximitySession]'s matching constructor parameter's doc comment. */
     evaluateReaderTrust: suspend (x5chain: List<ByteArray>) -> ReaderTrustResult,
     /** Reports a canonical step token (see `FlowStepCatalog.proximitySteps`) for driving the same progress-bar UI the issuance/presentation flows use. */
