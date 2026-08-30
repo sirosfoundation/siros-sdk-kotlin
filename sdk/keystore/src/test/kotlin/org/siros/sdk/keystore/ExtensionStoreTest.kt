@@ -1,0 +1,229 @@
+package org.siros.sdk.keystore
+
+import com.nimbusds.jose.JWEObject
+import com.nimbusds.jose.crypto.AESDecrypter
+import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.siros.sdk.credentials.BbsHolderState
+
+/**
+ * `S.extensions` in the container — privatedata-spec §6.1.
+ *
+ * The property under test throughout is the one the whole extension design
+ * rests on: a client must be able to carry a namespace it does not
+ * implement. Everything else here is bookkeeping; that one is the reason
+ * the mechanism exists.
+ */
+class ExtensionStoreTest {
+
+    private val fakePrfOutput = ByteArray(32) { it.toByte() }
+    private val hkdfSalt = ByteArray(32) { (it + 0x10).toByte() }
+    private val hkdfInfo = "SIROS Wallet PRF".toByteArray(Charsets.UTF_8)
+
+    private suspend fun freshKeystore(): JweKeystore =
+        JweKeystore().also { it.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo) }
+
+    private suspend fun reopen(container: ByteArray): JweKeystore =
+        JweKeystore().also { it.unlock(fakePrfOutput, container, hkdfSalt, hkdfInfo) }
+
+    // -----------------------------------------------------------------------
+
+    @Test
+    fun entriesSurviveExportAndReopen() = runTest {
+        val keystore = freshKeystore()
+        keystore.setExtensionEntry("org.siros.bbs", "cred-1", "state-one")
+        keystore.setExtensionEntry("org.siros.bbs", "cred-2", "state-two")
+        keystore.setExtensionEntry("org.siros.wscd", "kid-a1b2", "key-metadata")
+
+        val reopened = reopen(keystore.exportEncryptedContainer())
+
+        assertEquals(
+            mapOf("cred-1" to "state-one", "cred-2" to "state-two"),
+            reopened.extensionEntries("org.siros.bbs"),
+        )
+        assertEquals(
+            mapOf("kid-a1b2" to "key-metadata"),
+            reopened.extensionEntries("org.siros.wscd"),
+        )
+    }
+
+    /**
+     * A namespace this build has never heard of must round-trip untouched.
+     *
+     * This is the invariant. A client that drops what it does not recognise
+     * does not degrade a credential, it destroys one — the state a blind BBS
+     * credential needs cannot be reconstructed after the fact. And the
+     * failure lands on whichever client is *last*, not the one that caused
+     * it.
+     */
+    @Test
+    fun anUnknownNamespaceIsCarriedVerbatim() = runTest {
+        val keystore = freshKeystore()
+        keystore.setExtensionEntry("com.example.not.implemented.here", "entity-7", "opaque-payload")
+        keystore.setExtensionEntry("org.siros.bbs", "cred-1", "state-one")
+
+        // Two round trips, so a client that reads and rewrites twice is
+        // covered rather than only the first hop.
+        val once = reopen(keystore.exportEncryptedContainer())
+        val twice = reopen(once.exportEncryptedContainer())
+
+        assertEquals(
+            mapOf("entity-7" to "opaque-payload"),
+            twice.extensionEntries("com.example.not.implemented.here"),
+        )
+        assertEquals(mapOf("cred-1" to "state-one"), twice.extensionEntries("org.siros.bbs"))
+    }
+
+    @Test
+    fun anAbsentNamespaceIsEmptyRatherThanAnError() = runTest {
+        val keystore = freshKeystore()
+        assertEquals(emptyMap<String, String>(), keystore.extensionEntries("org.siros.bbs"))
+    }
+
+    /**
+     * Deleting the entity an entry names must delete the entry
+     * (privatedata-spec §6.1.2). An entry left behind is a long-lived secret
+     * belonging to a credential that no longer exists.
+     */
+    @Test
+    fun removingAnEntryDropsItAndEmptiesTheNamespace() = runTest {
+        val keystore = freshKeystore()
+        keystore.setExtensionEntry("org.siros.bbs", "cred-1", "state-one")
+        keystore.setExtensionEntry("org.siros.bbs", "cred-2", "state-two")
+
+        keystore.removeExtensionEntry("org.siros.bbs", "cred-1")
+        assertEquals(mapOf("cred-2" to "state-two"), keystore.extensionEntries("org.siros.bbs"))
+
+        keystore.removeExtensionEntry("org.siros.bbs", "cred-2")
+        val reopened = reopen(keystore.exportEncryptedContainer())
+        assertEquals(emptyMap<String, String>(), reopened.extensionEntries("org.siros.bbs"))
+
+        // And the namespace leaves no empty object behind in the container.
+        assertNull(extensionsOf(reopened.exportEncryptedContainer())?.get("org.siros.bbs"))
+    }
+
+    /**
+     * The wire shape is what privatedata-spec §6.1 specifies: namespace ->
+     * entry key -> opaque string. Checked against the container rather than
+     * the accessors, since another client reads the container.
+     */
+    @Test
+    fun theWireShapeMatchesTheSpecification() = runTest {
+        val keystore = freshKeystore()
+        keystore.setExtensionEntry("org.siros.bbs", "cred-1", "state-one")
+
+        val extensions = extensionsOf(keystore.exportEncryptedContainer())
+        assertTrue("S.extensions must be present", extensions != null)
+        val ns = extensions!!["org.siros.bbs"]!!.jsonObject
+        assertEquals("state-one", ns["cred-1"]!!.jsonPrimitive.content)
+    }
+
+    /** Later writes to one key replace earlier ones — last-write-wins. */
+    @Test
+    fun writingTheSameKeyTwiceKeepsTheLaterValue() = runTest {
+        val keystore = freshKeystore()
+        keystore.setExtensionEntry("org.siros.bbs", "cred-1", "first")
+        keystore.setExtensionEntry("org.siros.bbs", "cred-1", "second")
+        assertEquals(mapOf("cred-1" to "second"), keystore.extensionEntries("org.siros.bbs"))
+    }
+
+    // --- BbsHolderStateVault ------------------------------------------------
+
+    @Test
+    fun holderStateRoundTripsThroughTheContainer() = runTest {
+        val keystore = freshKeystore()
+        val vault = BbsHolderStateVault(keystore)
+        val state = BbsHolderState(
+            issuerPublicKey = byteArrayOf(1, 2, 3),
+            secretProverBlind = ByteArray(32) { it.toByte() },
+            committedMessages = listOf(byteArrayOf(9), byteArrayOf(8, 7)),
+            keybindPublicKeys = listOf(byteArrayOf(4, 5)),
+        )
+
+        vault.put("cred-1", state)
+        val restored = BbsHolderStateVault(reopen(keystore.exportEncryptedContainer())).get("cred-1")
+
+        assertEquals(state, restored)
+    }
+
+    /**
+     * Two credentials' state must not overwrite each other.
+     *
+     * This is why the entry key names a credential rather than the
+     * subsystem: an aggregate `"bbs"` entry would make the second write
+     * discard the first, and resolution is last-write-wins per entry.
+     */
+    @Test
+    fun eachCredentialGetsItsOwnEntry() = runTest {
+        val keystore = freshKeystore()
+        val vault = BbsHolderStateVault(keystore)
+        val a = BbsHolderState(byteArrayOf(1), ByteArray(32), listOf(byteArrayOf(0xA)), emptyList())
+        val b = BbsHolderState(byteArrayOf(2), ByteArray(32) { 1 }, listOf(byteArrayOf(0xB)), emptyList())
+
+        vault.put("cred-a", a)
+        vault.put("cred-b", b)
+
+        assertEquals(a, vault.get("cred-a"))
+        assertEquals(b, vault.get("cred-b"))
+        assertEquals(setOf("cred-a", "cred-b"), vault.credentialIds())
+    }
+
+    /**
+     * Missing state means "cannot present", and the caller must be able to
+     * tell that apart from a successful lookup — never presented unbound.
+     */
+    @Test
+    fun absentHolderStateIsNull() = runTest {
+        val vault = BbsHolderStateVault(freshKeystore())
+        assertNull(vault.get("never-stored"))
+    }
+
+    @Test
+    fun removingHolderStateDeletesTheEntry() = runTest {
+        val keystore = freshKeystore()
+        val vault = BbsHolderStateVault(keystore)
+        vault.put("cred-1", BbsHolderState(byteArrayOf(1), ByteArray(32), emptyList(), emptyList()))
+        vault.remove("cred-1")
+        assertNull(vault.get("cred-1"))
+        assertEquals(emptySet<String>(), vault.credentialIds())
+    }
+
+    /**
+     * A corrupt entry reads as absent rather than throwing.
+     *
+     * The caller's contract is already "null means this cannot be
+     * presented"; surfacing a decode failure as an exception from a lookup
+     * would give it a second way to fail with the same meaning.
+     */
+    @Test
+    fun anUndecodableEntryReadsAsAbsent() = runTest {
+        val keystore = freshKeystore()
+        keystore.setExtensionEntry(BbsHolderStateVault.NAMESPACE, "cred-1", "not json at all")
+        assertNull(BbsHolderStateVault(keystore).get("cred-1"))
+    }
+
+    // --- helpers ------------------------------------------------------------
+
+    /**
+     * Reads `S.extensions` straight out of the container's plaintext, the
+     * way a peer client would — decrypting here rather than adding a
+     * test-only accessor to production code.
+     */
+    private fun extensionsOf(container: ByteArray): JsonObject? {
+        val parsed = EncryptedContainer.parse(container)
+        val prfKeyInfo = parsed.prfKeys.first()
+        val prfKey = EncryptedContainer.derivePrfKey(fakePrfOutput, prfKeyInfo.hkdfSalt, prfKeyInfo.hkdfInfo)
+        val mainKey = EncryptedContainer.unwrapMainKey(prfKey, prfKeyInfo, parsed.mainKey!!)
+        val jwe = JWEObject.parse(parsed.jwe)
+        jwe.decrypt(AESDecrypter(mainKey))
+        return Json.parseToJsonElement(jwe.payload.toString())
+            .jsonObject["S"]?.jsonObject?.get("extensions")?.jsonObject
+    }
+}
