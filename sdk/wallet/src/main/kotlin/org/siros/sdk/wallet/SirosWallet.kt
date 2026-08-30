@@ -2462,17 +2462,20 @@ class SirosWallet private constructor(
      * to has ended.
      *
      * A preparation holds material that must not outlive its flow - for BBS
-     * the secret prover blind behind the commitment - and a flow that ended
-     * without an accepted credential will never have it consumed by
-     * [acceptZkIssuedCredential]. Left in the map it would sit in memory
-     * for the life of the process and gain one entry per failed issuance,
-     * so every terminal path calls this the way every one of them already
-     * calls [resetIssuanceGuards].
+     * the secret prover blind behind the commitment. This is the only place
+     * one is removed: [acceptZkIssuedCredential] deliberately leaves it,
+     * because the credential loop enters that path at all only while the
+     * flow still has a preparation, and dropping it mid-batch would send
+     * every later credential down the ordinary validation branch. Left in
+     * the map past the flow, though, it would sit in memory for the life of
+     * the process and gain one entry per issuance, so every terminal path
+     * calls this the way every one of them already calls
+     * [resetIssuanceGuards].
      *
      * Not folded into [resetIssuanceGuards] itself because this is
      * flow-scoped and that is not: `flow_complete` calls the reset *before*
-     * notifying the listener, which is exactly the moment the preparation
-     * still has to be there for the listener to take.
+     * the credential loop's results are reported, and the preparation has
+     * to survive that far.
      */
     private fun discardZkIssuancePreparation(flowId: String?) {
         if (flowId == null) return
@@ -4660,11 +4663,16 @@ class SirosWallet private constructor(
                 } else {
                     eventListener?.onFlowComplete(msg.flowId, msg.redirectUri)
                 }
-                // Anything still here belongs to a credential this wallet
-                // refused: acceptZkIssuedCredential consumes the preparation
-                // on success and deliberately leaves it on failure, so the
-                // flow could report what it had committed to. The flow is
-                // over now, so it goes.
+                // The only place the preparation is consumed. It has to
+                // outlive the credential loop above, whether or not a
+                // credential was accepted: the loop enters the acceptance
+                // path at all only while this flow has a preparation, so
+                // dropping it on the first accepted credential sends every
+                // later entry in the same batch down the ordinary
+                // JWT-validation branch and stores it - the exact case
+                // acceptZkIssuedCredential's `index > 0` refusal exists to
+                // catch. Keeping it also lets a refusal say what the flow
+                // had committed to. The flow is over now, so it goes.
                 discardZkIssuancePreparation(msg.flowId)
 
                 val current = _state.value
