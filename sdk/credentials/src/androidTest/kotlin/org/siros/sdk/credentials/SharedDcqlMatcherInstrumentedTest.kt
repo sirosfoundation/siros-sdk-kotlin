@@ -36,12 +36,12 @@ class SharedDcqlMatcherInstrumentedTest {
     /** The engine loads and answers, rather than reporting itself unavailable. */
     @Test
     fun the_engine_runs_on_a_real_device() {
-        val ids = SharedDcqlMatcher.matchedCredentialIds(
+        val byQuery = SharedDcqlMatcher.candidatesByQuery(
             query("""{"credentials":[{"id":"q","format":"mso_mdoc","meta":{}}]}"""),
             emptyList(),
         )
-        assertNotNull("null means the native library did not load, not that nothing matched", ids)
-        assertTrue(ids!!.isEmpty())
+        assertNotNull("null means the native library did not load, not that nothing matched", byQuery)
+        assertTrue(byQuery!!.values.all { it.isEmpty() })
     }
 
     /**
@@ -71,19 +71,100 @@ class SharedDcqlMatcherInstrumentedTest {
      */
     @Test
     fun a_requested_claim_the_credential_lacks_prevents_a_match() {
-        val ids = SharedDcqlMatcher.matchedCredentialIds(
+        val byQuery = SharedDcqlMatcher.candidatesByQuery(
             query(
                 """{"credentials":[{"id":"q","format":"mso_mdoc","meta":{},
                      "claims":[{"path":["org.iso.18013.5.1","age_over_18"]}]}]}"""
             ),
             listOf(mdoc(1L)),
         )
-        assertEquals(emptyList<Long>(), ids)
+        assertEquals(emptyList<Long>(), byQuery.orEmpty()["q"].orEmpty())
     }
 
     /** A malformed query is "no answer", never a crash across the boundary. */
     @Test
     fun a_malformed_query_reports_no_answer_rather_than_crashing() {
-        assertEquals(null, SharedDcqlMatcher.matchedCredentialIds(query("""{"credentials":42}"""), emptyList()))
+        assertEquals(null, SharedDcqlMatcher.candidatesByQuery(query("""{"credentials":42}"""), emptyList()))
+    }
+}
+
+/**
+ * The switch itself: on a device, [CredentialMatcher] defers to the shared
+ * engine for which credentials qualify.
+ *
+ * These cannot be JVM tests. Off-device the native library does not load,
+ * `candidatesByQuery` returns null, and `matchDcql` falls back to the built-in
+ * parser — so a JVM test would pass while exercising none of this.
+ */
+@RunWith(AndroidJUnit4::class)
+class CredentialMatcherDefersToSharedEngineTest {
+
+    private fun query(json: String): JsonObject =
+        Json.parseToJsonElement(json) as JsonObject
+
+    private fun mdoc(id: Long): StoredCredential = StoredCredential(
+        id = id,
+        format = "mso_mdoc",
+        raw = "",
+        metadata = null,
+        batchId = 1L,
+        instanceId = 0,
+    )
+
+    /**
+     * The behaviour change this step exists for.
+     *
+     * The credential has no claims, so it cannot satisfy a query that asks for
+     * one. §6.4.1 says it "MUST NOT" be returned. The built-in matcher, which
+     * filters on format and type metadata only, would have offered it — and
+     * the user would have consented to a presentation that could not satisfy
+     * the verifier.
+     */
+    @Test
+    fun a_credential_lacking_a_requested_claim_is_no_longer_offered() {
+        val out = CredentialMatcher.matchDcql(
+            query(
+                """{"credentials":[{"id":"q","format":"mso_mdoc","meta":{},
+                     "claims":[{"path":["org.iso.18013.5.1","age_over_18"]}]}]}"""
+            ),
+            listOf(mdoc(1L)),
+        )
+        assertEquals(emptyList<StoredCredential>(), out.queryResults.single().candidates)
+    }
+
+    /**
+     * Everything the wallet reads at presentation time still comes from the
+     * query, not the engine: the engine decides membership, this matcher keeps
+     * parsing what a presentation needs.
+     */
+    @Test
+    fun presentation_metadata_survives_the_switch() {
+        val out = CredentialMatcher.matchDcql(
+            query(
+                """{"credentials":[{"id":"q","format":"mso_mdoc_zk",
+                     "meta":{"ppid_context":"https://rp.example/ctx",
+                              "zk_system_type":[{"id":"1","system":"longfellow-libzk-v1"}]},
+                     "claims":[{"path":["org.iso.18013.5.1","age_over_18"]}]}]}"""
+            ),
+            listOf(mdoc(1L)),
+        )
+        val result = out.queryResults.single()
+        assertEquals("mso_mdoc_zk", result.format)
+        assertEquals("https://rp.example/ctx", result.ppidContext)
+        assertEquals("longfellow-libzk-v1", result.zkSystemTypes?.single()?.system)
+        assertEquals(
+            listOf(listOf("org.iso.18013.5.1", "age_over_18")),
+            result.requestedClaims,
+        )
+    }
+
+    /** A query asking for no claims still matches, as it always did. */
+    @Test
+    fun a_query_requesting_no_claims_still_matches() {
+        val out = CredentialMatcher.matchDcql(
+            query("""{"credentials":[{"id":"q","format":"mso_mdoc","meta":{}}]}"""),
+            listOf(mdoc(1L)),
+        )
+        assertEquals(listOf(1L), out.queryResults.single().candidates.map { it.id })
     }
 }
