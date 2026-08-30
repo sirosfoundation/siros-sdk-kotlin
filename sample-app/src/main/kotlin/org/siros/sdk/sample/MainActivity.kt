@@ -68,7 +68,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -418,8 +417,9 @@ fun WalletScreen(viewModel: WalletViewModel) {
                 // Recomputed per new presentation request, not cached: a key
                 // lost since the last check must be reflected immediately -
                 // see SirosWallet.availableKeyIds's doc comment.
-                val availableKeyIds by produceState(initialValue = emptySet(), pendingPresentation) {
-                    value = viewModel.currentAvailableKeyIds()
+                var availableKeyIds by remember(pendingPresentation) { mutableStateOf(emptySet<String>()) }
+                LaunchedEffect(pendingPresentation) {
+                    availableKeyIds = viewModel.currentAvailableKeyIds()
                 }
                 PresentationConsentScreen(
                     request = pendingPresentation!!,
