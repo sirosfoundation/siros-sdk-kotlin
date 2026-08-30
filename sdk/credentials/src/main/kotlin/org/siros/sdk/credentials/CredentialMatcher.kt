@@ -179,10 +179,21 @@ object CredentialMatcher {
      * Suitable for passing to the engine's match response.
      */
     fun matchedCredentialIds(dcqlQuery: JsonObject, credentials: List<StoredCredential>): List<Long> {
-        return match(dcqlQuery, credentials)
+        val builtIn = match(dcqlQuery, credentials)
             .flatMap { it.candidates }
             .distinctBy { it.id }
             .map { it.id }
+
+        // The shared engine runs alongside and reports where the two differ.
+        // It does not decide yet: enforcing OID4VP 1.0 §6.4.1 narrows what a
+        // wallet offers, and a user whose credential stops appearing deserves
+        // that to be one deliberate change rather than a side effect of
+        // another. See SharedDcqlMatcher.
+        SharedDcqlMatcher.reportDifferences(
+            builtIn,
+            SharedDcqlMatcher.matchedCredentialIds(dcqlQuery, credentials),
+        )
+        return builtIn
     }
 
     /**
