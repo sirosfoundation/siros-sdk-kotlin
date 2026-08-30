@@ -2529,12 +2529,7 @@ class SirosWallet private constructor(
             keybindPublicKeys = input.keybindPublicKeys,
             signer = input.signer ?: NoKeybindSigner,
         )
-        zkPreparationsByFlow[flowId] = preparation
-        Timber.i(
-            "Prepared ${participant.systemId} issuance for flow $flowId " +
-                "(${input.keybindPublicKeys.size} key binding key(s))",
-        )
-        return kotlinx.serialization.json.buildJsonObject {
+        val extras = kotlinx.serialization.json.buildJsonObject {
             preparation.credentialRequestFields.forEach { (member, encodedValue) ->
                 // Already-encoded JSON, parsed rather than re-encoded: these
                 // values are covered by the commitment proof, and a
@@ -2543,6 +2538,19 @@ class SirosWallet private constructor(
                 put(member, json.parseToJsonElement(encodedValue))
             }
         }
+        // Registered only once the request members it belongs to exist. A
+        // participant returning something `parseToJsonElement` rejects
+        // means no sign response goes out and no credential ever arrives
+        // for this flow - and the throw leaves the sign request before any
+        // of the terminal paths that call [discardZkIssuancePreparation],
+        // so a preparation stored ahead of this point would hold its
+        // commitment secret with nothing left to consume or drop it.
+        zkPreparationsByFlow[flowId] = preparation
+        Timber.i(
+            "Prepared ${participant.systemId} issuance for flow $flowId " +
+                "(${input.keybindPublicKeys.size} key binding key(s))",
+        )
+        return extras
     }
 
     /**

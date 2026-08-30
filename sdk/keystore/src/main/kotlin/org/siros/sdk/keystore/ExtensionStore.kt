@@ -33,7 +33,9 @@ interface ExtensionStore {
      * One namespace's entries.
      *
      * An absent namespace reads as an empty map rather than an error: a
-     * namespace only exists once something writes to it.
+     * namespace only exists once something writes to it. A locked store
+     * reads the same way, since it holds no entries and the caller's
+     * contract for an empty answer already covers "not available".
      */
     suspend fun extensionEntries(namespace: String): Map<String, String>
 
@@ -42,6 +44,9 @@ interface ExtensionStore {
      * any other sharing this account.
      *
      * @param key MUST name a single entity (§6.1.1) — see the interface doc.
+     * @throws KeystoreException if the store is locked. The write would have
+     *   nowhere to land, and an entry whose value cannot be recomputed must
+     *   not be lost silently.
      */
     suspend fun setExtensionEntry(namespace: String, key: String, value: String)
 
@@ -50,6 +55,9 @@ interface ExtensionStore {
      *
      * §6.1.2 requires that deleting the entity an entry names deletes the
      * entry; this is how a caller honours that.
+     *
+     * @throws KeystoreException if the store is locked — a deletion that
+     *   appears to succeed would leave the entry in the container.
      */
     suspend fun removeExtensionEntry(namespace: String, key: String)
 }

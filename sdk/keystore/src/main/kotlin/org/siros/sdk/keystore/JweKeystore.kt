@@ -329,21 +329,37 @@ class JweKeystore(
         }
 
         // Parse extensions: { [namespace]: { [key]: "<opaque>" } } -
-        // privatedata-spec §6.1. Anything that is not a string value is
+        // privatedata-spec §6.1. Anything that is not a JSON string is
         // skipped rather than rejected: a namespace this build does not
         // implement may legitimately hold a shape it has never seen, and
         // failing to load the whole container over it would be worse than
         // carrying it.
+        //
+        // Skipped, specifically, rather than coerced: §6.1 makes an entry
+        // value a string, and [exportEncryptedContainer] writes every entry
+        // back as one. Taking a number or a boolean here would hand the
+        // peer that wrote it a re-typed value on the next round trip -
+        // quietly changing another client's data is worse than declining to
+        // carry a value the spec does not allow in the first place, and it
+        // treats primitives the same way objects and arrays are already
+        // treated.
+        //
+        // The map is cleared first because this is a load, not a merge: the
+        // same instance unlocked against a second container (a different
+        // account, or a re-unlock after entries were dropped) must not carry
+        // the first one's entries into it and write them back on export.
+        extensions.clear()
         val extensionsObj = state["extensions"] as? kotlinx.serialization.json.JsonObject
         if (extensionsObj != null) {
             for ((namespace, nsValue) in extensionsObj) {
                 val entries = nsValue as? kotlinx.serialization.json.JsonObject ?: continue
                 val target = extensions.getOrPut(namespace) { mutableMapOf() }
                 for ((key, value) in entries) {
-                    (value as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.let {
-                        target[key] = it
-                    }
+                    val primitive = value as? kotlinx.serialization.json.JsonPrimitive ?: continue
+                    if (!primitive.isString) continue
+                    target[key] = primitive.content
                 }
+                if (target.isEmpty()) extensions.remove(namespace)
             }
         }
 
@@ -430,6 +446,14 @@ class JweKeystore(
      * Returns an empty map for a namespace this container does not carry,
      * which is not an error: a namespace only exists once something writes
      * to it.
+     *
+     * Deliberately readable while locked, unlike [setExtensionEntry] and
+     * [removeExtensionEntry]. A locked keystore holds no entries, so the
+     * answer is the same empty map a never-written namespace gives, and the
+     * caller's contract for that answer is already "this cannot be
+     * presented" - see [BbsHolderStateVault.get]. Throwing would turn a
+     * credential that cannot be presented right now into a crash on the
+     * presentation path.
      */
     override suspend fun extensionEntries(namespace: String): Map<String, String> = mutex.withLock {
         extensions[namespace]?.toMap() ?: emptyMap()
@@ -444,8 +468,16 @@ class JweKeystore(
      *   kid, a credential id, a batch id - and MUST NOT name a subsystem or
      *   plugin (§6.1.1). See the [extensions] field comment for why that is
      *   a correctness rule.
+     * @throws KeystoreException if the keystore is locked. A write to a
+     *   locked keystore has nowhere to go: [lock] has already dropped the
+     *   in-memory map, and the next [unlock] loads the container it is
+     *   given rather than merging into what is there, so the entry would be
+     *   silently discarded. Failing loudly matters more here than for most
+     *   state, because for BBS the value being written cannot be
+     *   reconstructed after the fact.
      */
     override suspend fun setExtensionEntry(namespace: String, key: String, value: String) = mutex.withLock {
+        requireUnlocked()
         extensions.getOrPut(namespace) { mutableMapOf() }[key] = value
     }
 
@@ -456,8 +488,14 @@ class JweKeystore(
      * entry; this is how a caller honours that. An emptied namespace is
      * dropped rather than left as an empty object, so a container carries no
      * trace of a namespace nothing uses.
+     *
+     * @throws KeystoreException if the keystore is locked - same reason as
+     *   [setExtensionEntry]. A deletion that appears to succeed while locked
+     *   would leave the entry in the container it was meant to be removed
+     *   from.
      */
     override suspend fun removeExtensionEntry(namespace: String, key: String) = mutex.withLock {
+        requireUnlocked()
         val ns = extensions[namespace] ?: return@withLock
         ns.remove(key)
         if (ns.isEmpty()) extensions.remove(namespace)

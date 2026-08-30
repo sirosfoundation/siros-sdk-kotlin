@@ -1,18 +1,28 @@
 package org.siros.sdk.keystore
 
+import com.nimbusds.jose.EncryptionMethod
+import com.nimbusds.jose.JWEAlgorithm
+import com.nimbusds.jose.JWEHeader
 import com.nimbusds.jose.JWEObject
+import com.nimbusds.jose.Payload
 import com.nimbusds.jose.crypto.AESDecrypter
+import com.nimbusds.jose.crypto.AESEncrypter
 import io.mockk.mockk
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.siros.sdk.credentials.BbsHolderState
+import org.siros.sdk.credentials.KeystoreException
 
 /**
  * `S.extensions` in the container — privatedata-spec §6.1.
@@ -210,6 +220,100 @@ class ExtensionStoreTest {
         assertNull(BbsHolderStateVault(keystore).get("cred-1"))
     }
 
+    // --- what a non-conforming or second container does ----------------------
+
+    /**
+     * §6.1 makes an entry value a string, and this keystore writes every
+     * entry back as one. A peer that stored a number or a boolean must
+     * therefore not have it read in and handed back re-typed on the next
+     * round trip — quietly changing another client's data is worse than
+     * declining to carry a value the spec does not allow, and it is what
+     * objects and arrays in that position already get.
+     */
+    @Test
+    fun aNonStringEntryValueIsSkippedRatherThanRetyped() = runTest {
+        val keystore = freshKeystore()
+        keystore.setExtensionEntry("org.siros.bbs", "cred-1", "state-one")
+
+        val tampered = rewriteExtensions(keystore.exportEncryptedContainer()) {
+            put(
+                "com.example.peer",
+                buildJsonObject {
+                    put("number", JsonPrimitive(42))
+                    put("boolean", JsonPrimitive(true))
+                    put("object", buildJsonObject { put("nested", JsonPrimitive("x")) })
+                    put("text", JsonPrimitive("carried"))
+                },
+            )
+        }
+
+        val reopened = reopen(tampered)
+        assertEquals(
+            mapOf("text" to "carried"),
+            reopened.extensionEntries("com.example.peer"),
+        )
+        // And nothing re-typed reaches the container on the way back out.
+        assertEquals(
+            setOf("text"),
+            extensionsOf(reopened.exportEncryptedContainer())!!["com.example.peer"]!!.jsonObject.keys,
+        )
+        assertEquals(mapOf("cred-1" to "state-one"), reopened.extensionEntries("org.siros.bbs"))
+    }
+
+    /**
+     * Unlocking is a load, not a merge.
+     *
+     * The same instance can be unlocked against a second container — another
+     * account on a shared device, or a re-unlock after entries were dropped
+     * elsewhere. Carrying the first container's entries into the second and
+     * writing them back on export would put one account's state, including
+     * long-lived BBS secrets, into another's container.
+     */
+    @Test
+    fun unlockingASecondContainerReplacesRatherThanMergesEntries() = runTest {
+        val first = freshKeystore()
+        first.setExtensionEntry("org.siros.bbs", "cred-1", "state-one")
+
+        val second = freshKeystore()
+        second.setExtensionEntry("org.siros.bbs", "cred-2", "state-two")
+
+        val keystore = reopen(first.exportEncryptedContainer())
+        assertEquals(mapOf("cred-1" to "state-one"), keystore.extensionEntries("org.siros.bbs"))
+
+        keystore.unlock(fakePrfOutput, second.exportEncryptedContainer(), hkdfSalt, hkdfInfo)
+
+        assertEquals(mapOf("cred-2" to "state-two"), keystore.extensionEntries("org.siros.bbs"))
+        assertEquals(
+            "the first container's entry must not be written back into the second",
+            mapOf("cred-2" to "state-two"),
+            reopen(keystore.exportEncryptedContainer()).extensionEntries("org.siros.bbs"),
+        )
+    }
+
+    /**
+     * A write to a locked keystore has nowhere to go: [JweKeystore.lock] has
+     * already dropped the in-memory map and the next unlock loads rather
+     * than merges. Silently accepting it would tell a caller its state was
+     * stored when it was not — and for BBS that state cannot be recomputed.
+     */
+    @Test
+    fun mutatingWhileLockedFailsRatherThanBeingDiscarded() = runTest {
+        val keystore = freshKeystore()
+        keystore.setExtensionEntry("org.siros.bbs", "cred-1", "state-one")
+        keystore.lock()
+
+        assertThrows(KeystoreException::class.java) {
+            runBlocking { keystore.setExtensionEntry("org.siros.bbs", "cred-1", "state-one") }
+        }
+        assertThrows(KeystoreException::class.java) {
+            runBlocking { keystore.removeExtensionEntry("org.siros.bbs", "cred-1") }
+        }
+
+        // Reading, though, stays a plain "nothing available" — the answer a
+        // presentation-time lookup already has to handle.
+        assertEquals(emptyMap<String, String>(), keystore.extensionEntries("org.siros.bbs"))
+    }
+
     // --- the other container owner -------------------------------------------
 
     /**
@@ -280,5 +384,48 @@ class ExtensionStoreTest {
         jwe.decrypt(AESDecrypter(mainKey))
         return Json.parseToJsonElement(jwe.payload.toString())
             .jsonObject["S"]?.jsonObject?.get("extensions")?.jsonObject
+    }
+
+    /**
+     * Rewrites `S.extensions` inside a container and re-encrypts it, so a
+     * test can present the keystore with a shape only a *peer* client would
+     * have written. [transform] receives the existing entries and returns
+     * the replacement.
+     */
+    private fun rewriteExtensions(
+        container: ByteArray,
+        transform: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit,
+    ): ByteArray {
+        val parsed = EncryptedContainer.parse(container)
+        val prfKeyInfo = parsed.prfKeys.first()
+        val prfKey = EncryptedContainer.derivePrfKey(fakePrfOutput, prfKeyInfo.hkdfSalt, prfKeyInfo.hkdfInfo)
+        val mainKey = EncryptedContainer.unwrapMainKey(prfKey, prfKeyInfo, parsed.mainKey!!)
+        val jwe = JWEObject.parse(parsed.jwe)
+        jwe.decrypt(AESDecrypter(mainKey))
+        val plaintext = Json.parseToJsonElement(jwe.payload.toString()).jsonObject
+        val state = plaintext["S"]!!.jsonObject
+
+        val rewritten = buildJsonObject {
+            plaintext.forEach { (key, value) -> if (key != "S") put(key, value) }
+            put(
+                "S",
+                buildJsonObject {
+                    state.forEach { (key, value) -> if (key != "extensions") put(key, value) }
+                    put(
+                        "extensions",
+                        buildJsonObject {
+                            state["extensions"]?.jsonObject?.forEach { (ns, value) -> put(ns, value) }
+                            transform()
+                        },
+                    )
+                },
+            )
+        }
+
+        val reencrypted = JWEObject(
+            JWEHeader(JWEAlgorithm.A256GCMKW, EncryptionMethod.A256GCM),
+            Payload(rewritten.toString()),
+        ).also { it.encrypt(AESEncrypter(mainKey)) }
+        return EncryptedContainer.serialize(parsed.copy(jwe = reencrypted.serialize()))
     }
 }
