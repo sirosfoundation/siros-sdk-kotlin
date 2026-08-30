@@ -601,6 +601,10 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onUpdateShowDiagnosticMessages = viewModel::updateShowDiagnosticMessages,
                             credentialConsumptionPolicy = viewModel.credentialConsumptionPolicy.collectAsState().value,
                             onUpdateCredentialConsumptionPolicy = viewModel::updateCredentialConsumptionPolicy,
+                            preferLocalReaderTrustEvaluation = viewModel.preferLocalReaderTrustEvaluation.collectAsState().value,
+                            onUpdatePreferLocalReaderTrustEvaluation = viewModel::updatePreferLocalReaderTrustEvaluation,
+                            readerTrustRootCertificatePem = viewModel.readerTrustRootCertificatePem.collectAsState().value,
+                            onUpdateReaderTrustRootCertificatePem = viewModel::updateReaderTrustRootCertificatePem,
                         )
                         // selectedTab can transiently be 1 (the "Add" action, not a
                         // real persisted tab) right as a flow finishes and the state
@@ -1348,6 +1352,16 @@ fun SettingsTab(
     credentialConsumptionPolicy: org.siros.sdk.credentials.CredentialConsumptionPolicy =
         org.siros.sdk.credentials.CredentialConsumptionPolicy.NEVER_CONSUME,
     onUpdateCredentialConsumptionPolicy: ((org.siros.sdk.credentials.CredentialConsumptionPolicy) -> Unit)? = null,
+    // RICAL reader-trust local fallback - see PreLoginSettingsSheet's identical
+    // controls for why this exists. Duplicated here (not moved) because
+    // PreLoginSettingsSheet also configures backendUrl/tenantId, which must
+    // stay reachable before a session exists; reader trust is just as useful
+    // to flip mid-session (e.g. right before a proximity test), where the
+    // pre-login sheet is no longer reachable at all.
+    preferLocalReaderTrustEvaluation: Boolean = false,
+    onUpdatePreferLocalReaderTrustEvaluation: ((Boolean) -> Unit)? = null,
+    readerTrustRootCertificatePem: String = "",
+    onUpdateReaderTrustRootCertificatePem: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -1431,6 +1445,59 @@ fun SettingsTab(
                         enabled = onUpdateShowDiagnosticMessages != null,
                     )
                 }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Reader trust (RICAL) section - see PreLoginSettingsSheet's
+        // identical controls for the full rationale; kept reachable here too
+        // since flipping it mid-session (right before a proximity test) is
+        // the common case, and this tab - unlike the pre-login sheet - is
+        // still reachable once a wallet session is active.
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+                Text(
+                    "Reader Trust (RICAL)",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Evaluate reader trust locally", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "Skip the remote RICAL trust check and validate proximity readers " +
+                                "only against the root certificate below.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = preferLocalReaderTrustEvaluation,
+                        onCheckedChange = onUpdatePreferLocalReaderTrustEvaluation,
+                        enabled = onUpdatePreferLocalReaderTrustEvaluation != null,
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = readerTrustRootCertificatePem,
+                    onValueChange = { onUpdateReaderTrustRootCertificatePem?.invoke(it) },
+                    label = { Text("RICAL root certificate (PEM)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = onUpdateReaderTrustRootCertificatePem != null,
+                    singleLine = false,
+                )
             }
         }
 
