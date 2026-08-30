@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "org.siros.sdk.wallet"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 28
