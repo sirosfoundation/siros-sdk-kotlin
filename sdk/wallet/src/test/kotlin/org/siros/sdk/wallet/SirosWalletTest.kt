@@ -48,10 +48,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.siros.sdk.auth.BackendApiClient
+import org.siros.sdk.credentials.BackendApiException
 import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialMatcher
 import org.siros.sdk.credentials.CredentialMetadata
 import org.siros.sdk.credentials.CredentialStore
+import org.siros.sdk.credentials.NetworkException
 import org.siros.sdk.credentials.PresentationRecord
 import org.siros.sdk.credentials.SignerSecurityProperties
 import org.siros.sdk.credentials.StoredCredential
@@ -3427,6 +3429,26 @@ class SirosWalletTest {
     }
 
     @Test
+    fun evaluateReaderTrust_remoteCallThrowsAuthzDeny_failsClosedWithoutFallingBackToLocal() = runTest(dispatcher) {
+        // Mirrors evaluateIssuerTrust_remoteCallThrowsAuthzDeny_* below -
+        // evaluateReaderTrust shares the same isRemoteTrustEvaluationUnreachable
+        // classifier, so a 403 from /v1/evaluate must fail closed here too
+        // rather than silently falling back to local RICAL root validation.
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws BackendApiException(403, "API request failed: 403", "")
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+
+        val result = wallet.evaluateReaderTrust(listOf(ByteArray(4)))
+
+        assertTrue(!result.trusted)
+        assertEquals("mdocrical", result.framework)
+        assertTrue(result.reason?.contains("403") == true)
+    }
+
+    @Test
     fun evaluateIssuerTrust_remoteDecisionTrue_returnsTrustedResult() = runTest(dispatcher) {
         val apiClient = mockk<BackendApiClient>()
         val evaluationRequest = slot<JsonObject>()
@@ -3472,9 +3494,14 @@ class SirosWalletTest {
     }
 
     @Test
-    fun evaluateIssuerTrust_remoteCallThrows_fallsBackToLocalAndReportsUnconfigured() = runTest(dispatcher) {
+    fun evaluateIssuerTrust_remoteCallThrowsNetworkException_fallsBackToLocalAndReportsUnconfigured() = runTest(dispatcher) {
+        // A genuine network failure (timeout, DNS, connection refused) surfaces as
+        // NetworkException from BackendApiClient - the only condition that should
+        // fall back to weaker local validation. See the sibling
+        // *_remoteCallThrowsAuthzDeny_* test below for the 403 case, which must
+        // NOT fall back.
         val apiClient = mockk<BackendApiClient>()
-        coEvery { apiClient.evaluateTrust(any()) } throws java.io.IOException("network unreachable")
+        coEvery { apiClient.evaluateTrust(any()) } throws NetworkException("network unreachable")
         val wallet = newWallet(
             "apiClient" to apiClient,
             "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
@@ -3485,6 +3512,31 @@ class SirosWalletTest {
         assertTrue(!result.trusted)
         assertEquals("local-vical-root", result.framework)
         assertTrue(result.reason?.contains("no VICAL root certificate configured") == true)
+    }
+
+    @Test
+    fun evaluateIssuerTrust_remoteCallThrowsAuthzDeny_failsClosedWithoutFallingBackToLocal() = runTest(dispatcher) {
+        // GDC/SDK-6 (Geneva 2026): a 403 from /v1/evaluate is an authorization
+        // failure, not a trust decision - it must not be silently treated the
+        // same as an unreachable backend, since a locally-configured VICAL root
+        // could still declare the chain trusted even though the backend
+        // explicitly refused to even answer the question.
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws BackendApiException(403, "API request failed: 403", "")
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+
+        val result = wallet.evaluateIssuerTrust(listOf(ByteArray(4)), docType = "org.iso.18013.5.1.mDL")
+
+        assertTrue(!result.trusted)
+        // "vical" (not "local-vical-root") plus a "403"-mentioning reason proves
+        // this took the fail-closed remote-error path, not the local-fallback
+        // path (which would report "local-vical-root" / "no VICAL root
+        // certificate configured", per the sibling NetworkException test above).
+        assertEquals("vical", result.framework)
+        assertTrue(result.reason?.contains("403") == true)
     }
 
     @Test

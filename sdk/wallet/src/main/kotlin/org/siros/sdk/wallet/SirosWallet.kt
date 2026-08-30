@@ -4545,7 +4545,11 @@ class SirosWallet private constructor(
         return try {
             evaluateReaderTrustRemote(x5chain)
         } catch (e: Exception) {
-            Timber.w(e, "Remote reader trust evaluation failed, falling back to local RICAL root validation")
+            if (!isRemoteTrustEvaluationUnreachable(e)) {
+                Timber.e(e, "Remote reader trust evaluation was rejected by the backend (not unreachable) - failing closed rather than falling back to local RICAL root validation")
+                return TrustResult(trusted = false, framework = "mdocrical", reason = "Remote reader trust evaluation failed: ${e.message}")
+            }
+            Timber.w(e, "Remote reader trust evaluation unreachable, falling back to local RICAL root validation")
             evaluateReaderTrustLocally(x5chain)
         }
     }
@@ -4606,9 +4610,32 @@ class SirosWallet private constructor(
         return try {
             evaluateIssuerTrustRemote(x5chain, docType)
         } catch (e: Exception) {
-            Timber.w(e, "Remote issuer trust evaluation failed, falling back to local VICAL root validation")
+            if (!isRemoteTrustEvaluationUnreachable(e)) {
+                Timber.e(e, "Remote issuer trust evaluation was rejected by the backend (not unreachable) - failing closed rather than falling back to local VICAL root validation")
+                return TrustResult(trusted = false, framework = "vical", reason = "Remote issuer trust evaluation failed: ${e.message}")
+            }
+            Timber.w(e, "Remote issuer trust evaluation unreachable, falling back to local VICAL root validation")
             evaluateIssuerTrustLocally(x5chain)
         }
+    }
+
+    /**
+     * Whether [e] represents the remote AuthZEN backend being unreachable
+     * (network failure, backend outage) - the only condition that should
+     * fall back to LOCAL, weaker X.509-root validation for
+     * [evaluateReaderTrust]/[evaluateIssuerTrust]. An explicit HTTP 4xx from
+     * [BackendApiException] means the backend was reachable and rejected
+     * the CALLER (an authorization failure), not the trust QUESTION -
+     * falling back to a weaker local check on that specific failure would
+     * let anything that makes the proxy/backend return e.g. 403 silently
+     * downgrade what should be a security-relevant deny (confirmed live at
+     * Geneva 2026: a 403 on `/v1/evaluate` was silently treated the same as
+     * an unreachable backend).
+     */
+    private fun isRemoteTrustEvaluationUnreachable(e: Exception): Boolean = when (e) {
+        is NetworkException -> true
+        is BackendApiException -> e.code == 0 || e.code >= 500
+        else -> false
     }
 
     private suspend fun evaluateIssuerTrustRemote(x5chain: List<ByteArray>, docType: String?): TrustResult =
