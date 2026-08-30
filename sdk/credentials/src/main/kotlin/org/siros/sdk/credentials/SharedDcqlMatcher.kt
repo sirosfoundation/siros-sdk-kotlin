@@ -1,0 +1,127 @@
+// Copyright 2026 SIROS Foundation. BSD 2-Clause License.
+package org.siros.sdk.credentials
+
+import kotlinx.serialization.json.JsonObject
+import timber.log.Timber
+import uniffi.siros_dc_matcher_ffi.FfiClaim
+import uniffi.siros_dc_matcher_ffi.FfiCredential
+import uniffi.siros_dc_matcher_ffi.SirosBlobBuilder
+import uniffi.siros_dc_matcher_ffi.matchDcql as ffiMatchDcql
+
+/**
+ * DCQL matching by the shared Rust engine, the same one the OS credential
+ * picker runs.
+ *
+ * [CredentialMatcher] implements a subset of DCQL: it filters on format and
+ * type metadata, and does not check that a credential actually has the claims
+ * a verifier asked for. OpenID4VP 1.0 §6.4.1 requires that check - a
+ * credential missing a requested claim "MUST NOT" be returned - so today a
+ * user can be offered a credential, consent, and have the presentation fail to
+ * satisfy the verifier. `claim_sets` and `values` are missing too, and the
+ * Swift SDK implements a slightly different subset again.
+ *
+ * This exists to retire all three implementations in favour of one that is
+ * tested against the specification's own examples.
+ *
+ * ## Not yet trusted
+ *
+ * [CredentialMatcher] still decides the result. This runs alongside it and
+ * reports where the two disagree, because the change it brings is not
+ * cosmetic: enforcing §6.4.1 *narrows* what a wallet offers, correctly, and a
+ * user whose credential stops appearing deserves that to be one deliberate
+ * change rather than a side effect of another. Switching over is a separate
+ * step, once the disagreements on real requests are understood.
+ */
+internal object SharedDcqlMatcher {
+
+    /**
+     * Credential ids the shared engine matches, or `null` if it could not run.
+     *
+     * `null` is not "nothing matched". The native library may be missing for
+     * this ABI, or the engine may reject a request this SDK would have
+     * accepted - both mean "no answer", and a caller must not read that as an
+     * empty match.
+     */
+    fun matchedCredentialIds(
+        dcqlQuery: JsonObject,
+        credentials: List<StoredCredential>,
+    ): List<Long>? = try {
+        // `use`: the builder holds a native handle, and matching runs on every
+        // presentation.
+        val blob = SirosBlobBuilder().use { builder ->
+            credentials.forEach { builder.addCredential(toFfi(it)) }
+            builder.build()
+        }
+        ffiMatchDcql(blob, dcqlQuery.toString())
+            .combinations
+            .flatMap { it.members }
+            .mapNotNull { it.credentialId.toLongOrNull() }
+            .distinct()
+    } catch (e: Throwable) {
+        // Deliberately broad. This is the first call into a native library on
+        // the presentation path, and an UnsatisfiedLinkError from a packaging
+        // mistake is an Error rather than an Exception - catching only
+        // Exception would let it escape and take a presentation down for a
+        // comparison the caller does not depend on.
+        Timber.w(e, "Shared DCQL engine unavailable; keeping the built-in matcher's answer")
+        null
+    }
+
+    /**
+     * Report where the two implementations disagree.
+     *
+     * Logged rather than thrown: while the built-in matcher decides, a
+     * disagreement is information, not a fault. Most will be the shared engine
+     * correctly declining a credential that lacks a requested claim.
+     */
+    fun reportDifferences(builtIn: List<Long>, shared: List<Long>?) {
+        if (shared == null) return
+        val onlyBuiltIn = builtIn - shared.toSet()
+        val onlyShared = shared - builtIn.toSet()
+        if (onlyBuiltIn.isEmpty() && onlyShared.isEmpty()) return
+
+        Timber.i(
+            "DCQL engines disagree: built-in offered %s that the shared engine did not " +
+                "(most likely a requested claim the credential lacks, OID4VP 1.0 §6.4.1); " +
+                "shared offered %s that the built-in did not",
+            onlyBuiltIn,
+            onlyShared,
+        )
+    }
+
+    private fun toFfi(cred: StoredCredential) = FfiCredential(
+        id = cred.id.toString(),
+        format = cred.format,
+        // The real docType, from the credential's own MSO - not issuer
+        // metadata, which is only populated when the issuer happens to expose
+        // a SIROS-internal schema endpoint.
+        doctype = CredentialUtils.parseMdocDocument(cred)?.docType ?: cred.metadata?.doctype,
+        vct = cred.metadata?.vct,
+        title = cred.metadata?.name ?: cred.format,
+        subtitle = cred.metadata?.issuer?.name ?: "",
+        iconId = null,
+        claims = CredentialUtils.extractClaims(cred).map { claim ->
+            FfiClaim(
+                path = splitClaimKey(cred.format, claim.key),
+                value = claim.value,
+                display = claim.label,
+                displayValue = null,
+            )
+        },
+    )
+
+    /**
+     * Split a display-claim key into the path components DCQL matches against.
+     *
+     * mdoc element identifiers never contain dots while namespaces routinely
+     * do, so the split is on the last one - `org.iso.18013.5.1.family_name` is
+     * a namespace and an element, not five path components. JSON-based
+     * credentials keep the key whole; theirs are not dotted paths.
+     */
+    internal fun splitClaimKey(format: String, key: String): List<String> =
+        if (format.equals("mso_mdoc", ignoreCase = true) && key.contains('.')) {
+            listOf(key.substringBeforeLast('.'), key.substringAfterLast('.'))
+        } else {
+            listOf(key)
+        }
+}

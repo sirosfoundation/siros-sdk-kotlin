@@ -32,11 +32,6 @@ dependencies {
     api(project(":sdk:flow"))
     api(project(":sdk:credentials"))
 
-    // The DC API matcher: the CBOR encoder for the blob a wallet registers,
-    // and matcher.wasm itself as an asset. One dependency at one version, so
-    // the writer and the reader cannot drift apart.
-    implementation("org.siros:siros-dc-matcher:0.1.0")
-
     // Registry provider API — DigitalCredentialRegistry takes the matcher as
     // a plain ByteArray, which is what makes supplying our own supported
     // rather than a workaround.
@@ -47,8 +42,6 @@ dependencies {
     implementation(libs.androidx.credentials.registry.openid)
     implementation(libs.androidx.credentials.registry.sdjwtvc)
 
-    // JNA, for the UniFFI bindings' native access.
-    implementation("net.java.dev.jna:jna:5.14.0@aar")
     api(project(":sdk:idv"))
 
     implementation(libs.kotlinx.serialization.json)

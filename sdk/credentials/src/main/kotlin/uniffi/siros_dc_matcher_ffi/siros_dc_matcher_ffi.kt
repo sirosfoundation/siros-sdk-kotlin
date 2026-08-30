@@ -728,6 +728,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -763,6 +767,10 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_siros_dc_matcher_ffi_fn_method_sirosblobbuilder_set_debug(`ptr`: Pointer,`debug`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_siros_dc_matcher_ffi_fn_func_match_dc_api_request(`blob`: RustBuffer.ByValue,`requestJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_siros_dc_matcher_ffi_fn_func_match_dcql(`blob`: RustBuffer.ByValue,`dcqlJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun ffi_siros_dc_matcher_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun ffi_siros_dc_matcher_ffi_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -875,6 +883,10 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_siros_dc_matcher_ffi_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_siros_dc_matcher_ffi_checksum_func_match_dc_api_request(
+    ): Short
+    fun uniffi_siros_dc_matcher_ffi_checksum_func_match_dcql(
+    ): Short
     fun uniffi_siros_dc_matcher_ffi_checksum_method_sirosblobbuilder_add_credential(
     ): Short
     fun uniffi_siros_dc_matcher_ffi_checksum_method_sirosblobbuilder_add_icon(
@@ -904,6 +916,12 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
+    if (lib.uniffi_siros_dc_matcher_ffi_checksum_func_match_dc_api_request() != 60054.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_siros_dc_matcher_ffi_checksum_func_match_dcql() != 59469.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_siros_dc_matcher_ffi_checksum_method_sirosblobbuilder_add_credential() != 64015.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -968,6 +986,29 @@ inline fun <T : Disposable?, R> T.use(block: (T) -> R) =
  * @suppress
  * */
 object NoPointer
+
+/**
+ * @suppress
+ */
+public object FfiConverterUInt: FfiConverter<UInt, Int> {
+    override fun lift(value: Int): UInt {
+        return value.toUInt()
+    }
+
+    override fun read(buf: ByteBuffer): UInt {
+        return lift(buf.getInt())
+    }
+
+    override fun lower(value: UInt): Int {
+        return value.toInt()
+    }
+
+    override fun allocationSize(value: UInt) = 4UL
+
+    override fun write(value: UInt, buf: ByteBuffer) {
+        buf.putInt(value.toInt())
+    }
+}
 
 /**
  * @suppress
@@ -1621,6 +1662,40 @@ public object FfiConverterTypeFfiClaim: FfiConverterRustBuffer<FfiClaim> {
 
 
 /**
+ * One way to satisfy the request: every member presented together.
+ */
+data class FfiCombination (
+    /**
+     * The credentials making up this option.
+     */
+    var `members`: List<FfiMatchedCredential>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiCombination: FfiConverterRustBuffer<FfiCombination> {
+    override fun read(buf: ByteBuffer): FfiCombination {
+        return FfiCombination(
+            FfiConverterSequenceTypeFfiMatchedCredential.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiCombination) = (
+            FfiConverterSequenceTypeFfiMatchedCredential.allocationSize(value.`members`)
+    )
+
+    override fun write(value: FfiCombination, buf: ByteBuffer) {
+            FfiConverterSequenceTypeFfiMatchedCredential.write(value.`members`, buf)
+    }
+}
+
+
+
+/**
  * One credential the wallet holds.
  */
 data class FfiCredential (
@@ -1703,6 +1778,129 @@ public object FfiConverterTypeFfiCredential: FfiConverterRustBuffer<FfiCredentia
             FfiConverterString.write(value.`subtitle`, buf)
             FfiConverterOptionalString.write(value.`iconId`, buf)
             FfiConverterSequenceTypeFfiClaim.write(value.`claims`, buf)
+    }
+}
+
+
+
+/**
+ * The outcome of matching.
+ */
+data class FfiMatchOutcome (
+    /**
+     * Whether the wallet can satisfy the request at all.
+     *
+     * False means §6.4's "MUST NOT return any Credential(s)" — nothing should
+     * be offered, not even the part that matched.
+     */
+    var `satisfiable`: kotlin.Boolean, 
+    /**
+     * Ways to satisfy it. Alternatives are separate entries.
+     */
+    var `combinations`: List<FfiCombination>, 
+    /**
+     * How many further combinations existed beyond the returned ones.
+     */
+    var `dropped`: kotlin.UInt
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiMatchOutcome: FfiConverterRustBuffer<FfiMatchOutcome> {
+    override fun read(buf: ByteBuffer): FfiMatchOutcome {
+        return FfiMatchOutcome(
+            FfiConverterBoolean.read(buf),
+            FfiConverterSequenceTypeFfiCombination.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiMatchOutcome) = (
+            FfiConverterBoolean.allocationSize(value.`satisfiable`) +
+            FfiConverterSequenceTypeFfiCombination.allocationSize(value.`combinations`) +
+            FfiConverterUInt.allocationSize(value.`dropped`)
+    )
+
+    override fun write(value: FfiMatchOutcome, buf: ByteBuffer) {
+            FfiConverterBoolean.write(value.`satisfiable`, buf)
+            FfiConverterSequenceTypeFfiCombination.write(value.`combinations`, buf)
+            FfiConverterUInt.write(value.`dropped`, buf)
+    }
+}
+
+
+
+/**
+ * One credential answering one credential query.
+ */
+data class FfiMatchedCredential (
+    /**
+     * The DCQL credential query this answers.
+     */
+    var `queryId`: kotlin.String, 
+    /**
+     * The wallet-side credential identifier.
+     */
+    var `credentialId`: kotlin.String, 
+    /**
+     * Exactly the claims to disclose — and no others (§6.4).
+     *
+     * Each is a path: for ISO mdoc, `[namespace, element_identifier]`.
+     */
+    var `claims`: List<List<kotlin.String>>, 
+    /**
+     * The capability chosen to satisfy this query, if its format needed one.
+     *
+     * Returned rather than left to the caller because the engine has already
+     * decided. Working it out again means parsing the request a second time,
+     * in a second implementation, and possibly reaching a different answer.
+     */
+    var `capabilities`: List<FfiCapability>, 
+    /**
+     * `meta` entries the wallet needs at presentation time but which do not
+     * affect matching — `ppid_context` above all, which both SDKs read today.
+     *
+     * A pseudonym context changes what is produced, not which credential can
+     * produce it, so it is carried rather than matched on.
+     */
+    var `meta`: Map<kotlin.String, kotlin.String>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiMatchedCredential: FfiConverterRustBuffer<FfiMatchedCredential> {
+    override fun read(buf: ByteBuffer): FfiMatchedCredential {
+        return FfiMatchedCredential(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterSequenceSequenceString.read(buf),
+            FfiConverterSequenceTypeFfiCapability.read(buf),
+            FfiConverterMapStringString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiMatchedCredential) = (
+            FfiConverterString.allocationSize(value.`queryId`) +
+            FfiConverterString.allocationSize(value.`credentialId`) +
+            FfiConverterSequenceSequenceString.allocationSize(value.`claims`) +
+            FfiConverterSequenceTypeFfiCapability.allocationSize(value.`capabilities`) +
+            FfiConverterMapStringString.allocationSize(value.`meta`)
+    )
+
+    override fun write(value: FfiMatchedCredential, buf: ByteBuffer) {
+            FfiConverterString.write(value.`queryId`, buf)
+            FfiConverterString.write(value.`credentialId`, buf)
+            FfiConverterSequenceSequenceString.write(value.`claims`, buf)
+            FfiConverterSequenceTypeFfiCapability.write(value.`capabilities`, buf)
+            FfiConverterMapStringString.write(value.`meta`, buf)
     }
 }
 
@@ -1812,6 +2010,137 @@ public object FfiConverterTypeBlobError : FfiConverterRustBuffer<BlobException> 
 
 
 
+
+/**
+ * Why a request could not be matched.
+ */
+sealed class MatchException: kotlin.Exception() {
+    
+    /**
+     * The registered blob could not be decoded.
+     */
+    class Blob(
+        
+        /**
+         * What went wrong.
+         */
+        val `reason`: kotlin.String
+        ) : MatchException() {
+        override val message
+            get() = "reason=${ `reason` }"
+    }
+    
+    /**
+     * The request was not valid JSON, or not shaped like a request.
+     */
+    class Request(
+        
+        /**
+         * What went wrong.
+         */
+        val `reason`: kotlin.String
+        ) : MatchException() {
+        override val message
+            get() = "reason=${ `reason` }"
+    }
+    
+    /**
+     * No protocol in the request is one this wallet can read.
+     *
+     * Distinct from "nothing matched": the wallet may hold exactly what was
+     * asked for and still be unable to speak the protocol it was asked in.
+     *
+     * Carries what was offered, because a variant with no fields loses its
+     * message crossing the boundary — UniFFI renders it as the case name
+     * alone, so a host app logging the error would learn nothing about why.
+     * The protocols the verifier named are the one thing that makes this
+     * actionable.
+     */
+    class UnsupportedProtocol(
+        
+        /**
+         * The protocols the request offered, in the order given.
+         */
+        val `offered`: List<kotlin.String>
+        ) : MatchException() {
+        override val message
+            get() = "offered=${ `offered` }"
+    }
+    
+
+    companion object ErrorHandler : UniffiRustCallStatusErrorHandler<MatchException> {
+        override fun lift(error_buf: RustBuffer.ByValue): MatchException = FfiConverterTypeMatchError.lift(error_buf)
+    }
+
+    
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeMatchError : FfiConverterRustBuffer<MatchException> {
+    override fun read(buf: ByteBuffer): MatchException {
+        
+
+        return when(buf.getInt()) {
+            1 -> MatchException.Blob(
+                FfiConverterString.read(buf),
+                )
+            2 -> MatchException.Request(
+                FfiConverterString.read(buf),
+                )
+            3 -> MatchException.UnsupportedProtocol(
+                FfiConverterSequenceString.read(buf),
+                )
+            else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: MatchException): ULong {
+        return when(value) {
+            is MatchException.Blob -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+            is MatchException.Request -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`reason`)
+            )
+            is MatchException.UnsupportedProtocol -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterSequenceString.allocationSize(value.`offered`)
+            )
+        }
+    }
+
+    override fun write(value: MatchException, buf: ByteBuffer) {
+        when(value) {
+            is MatchException.Blob -> {
+                buf.putInt(1)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+            is MatchException.Request -> {
+                buf.putInt(2)
+                FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+            is MatchException.UnsupportedProtocol -> {
+                buf.putInt(3)
+                FfiConverterSequenceString.write(value.`offered`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+
+}
+
+
+
+
 /**
  * @suppress
  */
@@ -1875,6 +2204,34 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeFfiCapability: FfiConverterRustBuffer<List<FfiCapability>> {
+    override fun read(buf: ByteBuffer): List<FfiCapability> {
+        val len = buf.getInt()
+        return List<FfiCapability>(len) {
+            FfiConverterTypeFfiCapability.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiCapability>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiCapability.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiCapability>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiCapability.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeFfiClaim: FfiConverterRustBuffer<List<FfiClaim>> {
     override fun read(buf: ByteBuffer): List<FfiClaim> {
         val len = buf.getInt()
@@ -1893,6 +2250,90 @@ public object FfiConverterSequenceTypeFfiClaim: FfiConverterRustBuffer<List<FfiC
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeFfiClaim.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFfiCombination: FfiConverterRustBuffer<List<FfiCombination>> {
+    override fun read(buf: ByteBuffer): List<FfiCombination> {
+        val len = buf.getInt()
+        return List<FfiCombination>(len) {
+            FfiConverterTypeFfiCombination.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiCombination>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiCombination.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiCombination>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiCombination.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFfiMatchedCredential: FfiConverterRustBuffer<List<FfiMatchedCredential>> {
+    override fun read(buf: ByteBuffer): List<FfiMatchedCredential> {
+        val len = buf.getInt()
+        return List<FfiMatchedCredential>(len) {
+            FfiConverterTypeFfiMatchedCredential.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiMatchedCredential>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiMatchedCredential.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiMatchedCredential>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiMatchedCredential.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceSequenceString: FfiConverterRustBuffer<List<List<kotlin.String>>> {
+    override fun read(buf: ByteBuffer): List<List<kotlin.String>> {
+        val len = buf.getInt()
+        return List<List<kotlin.String>>(len) {
+            FfiConverterSequenceString.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<List<kotlin.String>>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterSequenceString.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<List<kotlin.String>>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterSequenceString.write(it, buf)
         }
     }
 }
@@ -1935,4 +2376,53 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
         }
     }
 }
+        /**
+         * Match a full Digital Credentials API request.
+         *
+         * The request is the `{"requests":[{"protocol":…,"data":…}]}` envelope, which
+         * is a list because one call can offer the same request under several
+         * protocols.
+         *
+         * The first entry wins that the profile answers *and* that yields a query —
+         * not simply the first the profile lists. ISO 18013-7 carries a CBOR
+         * DeviceRequest rather than DCQL, so an entry naming it is skipped even
+         * though the profile may name it, and a later entry the wallet can actually
+         * read is used instead. Declining rather than failing is what makes the
+         * verifier's protocol negotiation work.
+         *
+         * # Errors
+         *
+         * See [`MatchError`].
+         */
+    @Throws(MatchException::class) fun `matchDcApiRequest`(`blob`: kotlin.ByteArray, `requestJson`: kotlin.String): FfiMatchOutcome {
+            return FfiConverterTypeFfiMatchOutcome.lift(
+    uniffiRustCallWithError(MatchException) { _status ->
+    UniffiLib.INSTANCE.uniffi_siros_dc_matcher_ffi_fn_func_match_dc_api_request(
+        FfiConverterByteArray.lower(`blob`),FfiConverterString.lower(`requestJson`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Match a bare DCQL query.
+         *
+         * The wallet's own presentation flow receives a DCQL query directly rather
+         * than a DC API envelope, so it has no protocol to select and none to fail
+         * on.
+         *
+         * # Errors
+         *
+         * See [`MatchError`].
+         */
+    @Throws(MatchException::class) fun `matchDcql`(`blob`: kotlin.ByteArray, `dcqlJson`: kotlin.String): FfiMatchOutcome {
+            return FfiConverterTypeFfiMatchOutcome.lift(
+    uniffiRustCallWithError(MatchException) { _status ->
+    UniffiLib.INSTANCE.uniffi_siros_dc_matcher_ffi_fn_func_match_dcql(
+        FfiConverterByteArray.lower(`blob`),FfiConverterString.lower(`dcqlJson`),_status)
+}
+    )
+    }
+    
+
 
