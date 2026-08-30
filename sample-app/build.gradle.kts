@@ -7,12 +7,12 @@ plugins {
 
 android {
     namespace = "org.siros.sdk.sample"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "org.siros.sdk.sample"
         minSdk = 28
-        targetSdk = 35
+        targetSdk = 36
         versionCode = 8
         versionName = "0.8.0"
 
