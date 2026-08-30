@@ -3097,6 +3097,10 @@ class SirosWallet private constructor(
     private var wmpPeer: org.siros.sdk.transport.wmp.WmpPeer? = null
 
     private suspend fun connectViaWmp(appToken: String) {
+        // Same leaked-connection hazard as connectEngine's engineSession -
+        // tear down any prior live peer before replacing the reference.
+        wmpPeer?.close()
+
         // Resolve engine URL: explicit config > discovery > same as backend
         val engineBaseUrl = (config.engineUrl
             ?: WalletConfig.discoverEngineUrl(config.backendUrl)
@@ -3644,6 +3648,15 @@ class SirosWallet private constructor(
     // ── Legacy Engine Path ────────────────────────────────────────────
 
     private suspend fun connectEngine(appToken: String) {
+        // connectEngineWithToken can run more than once on the same wallet
+        // instance (initial login, session restore on startup, re-auth) -
+        // without tearing down a prior live session first, its WebSocket
+        // was leaked (never disconnected) while a brand new one took over
+        // engineSession, leaving the backend with multiple concurrent
+        // connections for the same user that kept evicting each other.
+        engineStateJob?.cancel()
+        engineSession?.disconnect()
+
         // Resolve engine URL: explicit config > discovery > same as backend
         val engineBaseUrl = config.engineUrl
             ?: WalletConfig.discoverEngineUrl(config.backendUrl)
