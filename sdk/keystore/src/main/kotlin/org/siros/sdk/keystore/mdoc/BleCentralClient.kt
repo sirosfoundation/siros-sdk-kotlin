@@ -213,6 +213,23 @@ class BleCentralClient(
                     onStep("reader_connected")
                     gatt.requestMtu(REQUESTED_MTU)
                 }
+                BluetoothGatt.STATE_DISCONNECTED -> {
+                    // Unlike BlePeripheralServer (which keeps advertising
+                    // after a dropped connection and just resets back to
+                    // "waiting_for_reader"), this class's start()/stop()
+                    // lifecycle is a single scan-and-connect attempt - once
+                    // the one reader it connected to disconnects without
+                    // completing, there's nothing left to wait on. Guarded
+                    // on session.established so a disconnect that follows a
+                    // real success (this role's own stop() call after
+                    // onComplete(true)) doesn't get double-reported as a
+                    // failure. Mirrors the Swift SDK's BleCentralClient.swift,
+                    // which already had this handling.
+                    if (!session.established) {
+                        Timber.w("BleCentralClient: reader disconnected before completing a presentation")
+                        onComplete(false)
+                    }
+                }
             }
         }
 
