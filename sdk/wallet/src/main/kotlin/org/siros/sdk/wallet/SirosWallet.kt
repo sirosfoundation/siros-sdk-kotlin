@@ -4470,6 +4470,36 @@ class SirosWallet private constructor(
         jwk: kotlinx.serialization.json.JsonElement?,
         context: kotlinx.serialization.json.JsonElement?,
     ): TrustResult {
+        // A verifier/RP or issuer presenting an x5c chain here is the same
+        // real-world trust question already answered locally for proximity
+        // mdoc readers (RICAL, evaluateReaderTrust) and mdoc issuers (VICAL,
+        // evaluateIssuerTrust) - this function is the shared remote-only
+        // counterpart for both subject types (engine-relayed trust_evaluation
+        // covers issuers too, see the caller at handleTrustEvaluation), so
+        // reuse whichever local root set/prefer-local switch matches
+        // subjectType instead of leaving it with no offline/local-anchor
+        // option. Falls through to remote-only behavior (unchanged) if x5c is
+        // absent, jwk-only, or fails to decode as standard base64 DER (e.g. a
+        // non-cert placeholder value).
+        val isVerifier = subjectType == "credential_verifier"
+        val x5chain = try {
+            (x5c as? kotlinx.serialization.json.JsonArray)?.map {
+                Base64.getDecoder().decode(it.jsonPrimitive.content)
+            }
+        } catch (_: Exception) {
+            null
+        }
+        if (x5chain != null) {
+            val preferLocal = if (isVerifier) {
+                config.preferLocalReaderTrustEvaluation
+            } else {
+                config.preferLocalIssuerTrustEvaluation
+            }
+            if (preferLocal) {
+                return if (isVerifier) evaluateReaderTrustLocally(x5chain) else evaluateIssuerTrustLocally(x5chain)
+            }
+        }
+
         val client = apiClient ?: throw WalletException("Not connected")
 
         val evaluationRequest = kotlinx.serialization.json.buildJsonObject {
@@ -4495,23 +4525,30 @@ class SirosWallet private constructor(
             context?.let { put("context", it) }
         }
 
-        Timber.d("Calling /v1/evaluate for $subjectId")
-        val response = client.evaluateTrust(evaluationRequest)
+        return try {
+            Timber.d("Calling /v1/evaluate for $subjectId")
+            val response = client.evaluateTrust(evaluationRequest)
 
-        val decision = response["decision"]?.jsonPrimitive?.boolean ?: false
-        val respContext = response["context"]?.jsonObject
+            val decision = response["decision"]?.jsonPrimitive?.boolean ?: false
+            val respContext = response["context"]?.jsonObject
 
-        return TrustResult(
-            trusted = decision,
-            framework = respContext?.get("framework")?.jsonPrimitive?.contentOrNull,
-            reason = reasonText(respContext?.get("reason"))
-                ?: reasonText(respContext?.get("message")),
-            entityName = respContext?.get("entity_name")?.jsonPrimitive?.contentOrNull,
-            entityLogo = respContext?.get("logo_uri")?.jsonPrimitive?.contentOrNull,
-            clientIdScheme = null,
-            identifier = subjectId,
-            domain = respContext?.get("domain")?.jsonPrimitive?.contentOrNull,
-        )
+            TrustResult(
+                trusted = decision,
+                framework = respContext?.get("framework")?.jsonPrimitive?.contentOrNull,
+                reason = reasonText(respContext?.get("reason"))
+                    ?: reasonText(respContext?.get("message")),
+                entityName = respContext?.get("entity_name")?.jsonPrimitive?.contentOrNull,
+                entityLogo = respContext?.get("logo_uri")?.jsonPrimitive?.contentOrNull,
+                clientIdScheme = null,
+                identifier = subjectId,
+                domain = respContext?.get("domain")?.jsonPrimitive?.contentOrNull,
+            )
+        } catch (e: Exception) {
+            if (x5chain == null) throw e
+            Timber.w(e, "Remote trust evaluation failed, falling back to local " +
+                (if (isVerifier) "RICAL" else "VICAL") + " root validation")
+            if (isVerifier) evaluateReaderTrustLocally(x5chain) else evaluateIssuerTrustLocally(x5chain)
+        }
     }
 
     /**
