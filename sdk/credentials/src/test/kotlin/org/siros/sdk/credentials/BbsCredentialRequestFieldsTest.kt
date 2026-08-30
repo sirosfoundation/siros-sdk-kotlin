@@ -2,6 +2,7 @@ package org.siros.sdk.credentials
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
@@ -28,13 +29,16 @@ class BbsCredentialRequestFieldsTest {
 
     private val json = Json
 
-    private fun preparation(pointers: List<String>) = BbsIssuancePreparation(
+    private fun preparation(
+        pointers: List<String>,
+        keybindPublicKeys: List<ByteArray> = emptyList(),
+    ) = BbsIssuancePreparation(
         suiteId = BbsSuiteId.SCHNORR,
         commitmentWithProof = ByteArray(48) { it.toByte() },
         holderPointers = pointers,
         committedMessages = pointers.map { it.toByteArray() },
         secretProverBlind = ByteArray(32) { 7 },
-        keybindPublicKeys = emptyList(),
+        keybindPublicKeys = keybindPublicKeys,
     )
 
     @Test
@@ -42,7 +46,11 @@ class BbsCredentialRequestFieldsTest {
         val fields = preparation(listOf("/device_pin_hash", "/recovery_secret")).credentialRequestFields
 
         assertEquals(
-            setOf(BbsIssuanceParticipant.COMMITMENT_FIELD, BbsIssuanceParticipant.POINTERS_FIELD),
+            setOf(
+                BbsIssuanceParticipant.COMMITMENT_FIELD,
+                BbsIssuanceParticipant.POINTERS_FIELD,
+                BbsIssuanceParticipant.KEY_BINDING_FIELD,
+            ),
             fields.keys,
         )
         fields.forEach { (member, encoded) ->
@@ -100,5 +108,31 @@ class BbsCredentialRequestFieldsTest {
 
         assertTrue(decoded is JsonArray)
         assertEquals(nasty, (decoded as JsonArray).map { it.jsonPrimitive.content })
+    }
+
+    /**
+     * The key binding flag must follow the commitment, since that is what
+     * the issuer checks it against.
+     *
+     * The issuer cannot see inside the commitment and this picks the message
+     * layout the credential is signed under. Getting it wrong does not
+     * produce a subtly different credential — it produces a failed issuance,
+     * because the signer refuses a mismatch. Which is the right outcome, and
+     * why this must not be a value the wallet guesses at.
+     */
+    @Test
+    fun theKeyBindingFlagFollowsWhetherAnyKeyWasCommitted() {
+        val unbound = preparation(listOf("/a")).credentialRequestFields
+            .getValue(BbsIssuanceParticipant.KEY_BINDING_FIELD)
+        assertEquals("false", unbound)
+
+        val bound = preparation(listOf("/a"), keybindPublicKeys = listOf(ByteArray(48)))
+            .credentialRequestFields
+            .getValue(BbsIssuanceParticipant.KEY_BINDING_FIELD)
+        assertEquals("true", bound)
+
+        // And it is a JSON boolean on the wire, not a quoted string - the
+        // issuer decodes it into a bool.
+        assertEquals(JsonPrimitive(true), json.parseToJsonElement(bound))
     }
 }

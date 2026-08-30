@@ -107,6 +107,20 @@ class BbsIssuanceParticipant(
          * rather than taking the wallet's word for it.
          */
         const val POINTERS_FIELD: String = "bbs_committed_claims"
+
+        /**
+         * Credential-request member saying whether the commitment carries
+         * key binding keys.
+         *
+         * The issuer cannot see inside the commitment, and this selects the
+         * message layout the credential is signed under - which a verifier
+         * reads back out of the header, so the two ends have to agree. It
+         * is not taken on trust: the issuer's signer checks the assertion
+         * against the commitment and refuses to sign a mismatch, so getting
+         * this wrong costs an issuance rather than producing a credential
+         * that claims a binding it does not have.
+         */
+        const val KEY_BINDING_FIELD: String = "bbs_key_binding"
     }
 }
 
@@ -150,6 +164,7 @@ class BbsIssuancePreparation(
                 postfix = "]",
                 transform = ::jsonString,
             ),
+            BbsIssuanceParticipant.KEY_BINDING_FIELD to keybindPublicKeys.isNotEmpty().toString(),
         )
 
     /**
