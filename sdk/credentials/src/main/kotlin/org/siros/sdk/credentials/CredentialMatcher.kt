@@ -173,10 +173,11 @@ object CredentialMatcher {
         // offered, consented to, and then fail to satisfy the verifier.
         val shared = SharedDcqlMatcher.candidatesByQuery(dcqlQuery, credentials)
         val queryResults = if (shared == null) {
-            // No answer, not an empty answer: the native library did not load.
-            // Falling back keeps presentations working on a device where the
-            // engine is unavailable, which is worth more than consistency.
-            Timber.w("Shared DCQL engine unavailable; falling back to the built-in matcher")
+            // No answer, not an empty answer. Falling back keeps
+            // presentations working where the engine cannot decide, which is
+            // worth more than consistency. SharedDcqlMatcher has already
+            // logged why — with the exception, when there was one — so
+            // repeating it here would only double the noise on every call.
             parsed
         } else {
             parsed.map { result ->
@@ -186,7 +187,9 @@ object CredentialMatcher {
                     result.candidates.map { it.id },
                     ids,
                 )
-                result.copy(candidates = result.candidates.filter { it.id in ids.toSet() })
+                // Built once per query, not once per candidate.
+                val qualifying = ids.toSet()
+                result.copy(candidates = result.candidates.filter { it.id in qualifying })
             }
         }
 

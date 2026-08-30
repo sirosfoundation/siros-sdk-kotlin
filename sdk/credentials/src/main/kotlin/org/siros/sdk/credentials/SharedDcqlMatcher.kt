@@ -46,28 +46,50 @@ internal object SharedDcqlMatcher {
     fun candidatesByQuery(
         dcqlQuery: JsonObject,
         credentials: List<StoredCredential>,
-    ): Map<String, List<Long>>? = try {
-        // `use`: the builder holds a native handle, and matching runs on every
-        // presentation.
-        val blob = SirosBlobBuilder().use { builder ->
-            credentials.forEach { builder.addCredential(toFfi(it)) }
-            builder.build()
-        }
-        ffiMatchDcql(blob, dcqlQuery.toString())
-            .combinations
-            .flatMap { it.members }
-            .groupBy { it.queryId }
-            .mapValues { (_, members) ->
-                members.mapNotNull { it.credentialId.toLongOrNull() }.distinct()
+    ): Map<String, List<Long>>? {
+        return try {
+            // `use`: the builder holds a native handle, and matching runs on every
+            // presentation.
+            val blob = SirosBlobBuilder().use { builder ->
+                credentials.forEach { builder.addCredential(toFfi(it)) }
+                builder.build()
             }
-    } catch (e: Throwable) {
-        // Deliberately broad. This is the first call into a native library on
-        // the presentation path, and an UnsatisfiedLinkError from a packaging
-        // mistake is an Error rather than an Exception - catching only
-        // Exception would let it escape and take a presentation down for a
-        // comparison the caller does not depend on.
-        Timber.w(e, "Shared DCQL engine unavailable; keeping the built-in matcher's answer")
-        null
+            val outcome = ffiMatchDcql(blob, dcqlQuery.toString())
+            if (outcome.dropped > 0u) {
+                // The engine bounds how many combinations it returns, because the
+                // count is a product of the per-query candidate counts. Deriving
+                // per-query candidates from a truncated list would miss
+                // credentials that do qualify, and this result is used to *filter*
+                // — so a missing one is silently dropped from what the user is
+                // offered, which is the exact failure this component is prone to.
+                //
+                // No answer rather than a partial one. The engine has the complete
+                // per-query candidates internally; exposing them directly, instead
+                // of reconstructing them from combinations, is the real fix and
+                // needs a change on the Rust side.
+                Timber.i(
+                    "Shared engine truncated %d combinations; keeping the built-in matcher's " +
+                        "answer rather than filtering on a partial one",
+                    outcome.dropped.toInt(),
+                )
+                return null
+            }
+            outcome
+                .combinations
+                .flatMap { it.members }
+                .groupBy { it.queryId }
+                .mapValues { (_, members) ->
+                    members.mapNotNull { it.credentialId.toLongOrNull() }.distinct()
+                }
+        } catch (e: Throwable) {
+            // Deliberately broad. This is the first call into a native library
+            // on the presentation path, and an UnsatisfiedLinkError from a
+            // packaging mistake is an Error rather than an Exception -
+            // catching only Exception would let it escape and take a
+            // presentation down for a decision that has a fallback.
+            Timber.w(e, "Shared DCQL engine unavailable; keeping the built-in matcher's answer")
+            null
+        }
     }
 
     /**
