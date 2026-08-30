@@ -138,11 +138,22 @@ object SirosCredentialRegistry {
     /**
      * A zero-knowledge proof system this wallet can actually produce.
      *
-     * [params] is not decoration. A ZK circuit is built for a fixed attribute
-     * count, so a request naming the right [system] with a different
-     * `num_attributes` is a proof this wallet cannot produce - and omitting the
-     * parameter turns that into a failure after the user has consented, rather
-     * than an entry that was never offered.
+     * [params] is optional, and the choice is a real one.
+     *
+     * Supply parameters only for a system whose circuits this wallet knows
+     * ahead of time. They are then enforced: a request naming the right
+     * [system] with a different `num_attributes` will not be offered, because
+     * a ZK circuit is built for a fixed attribute count and the proof could
+     * not be produced.
+     *
+     * Leave them empty for a system that supports any shape and only
+     * discovers at proof time whether a specific circuit is available - which
+     * is how [org.siros.sdk.credentials.ZkProofSystem.matchingSpec] is
+     * defined, and why this SDK's own systems register with no parameters.
+     * Declaring a count such a system cannot honour would refuse requests it
+     * can in fact satisfy.
+     *
+     * A parameter neither side names is not a constraint.
      */
     data class ZkSystem(val system: String, val params: Map<String, String>)
 
@@ -157,7 +168,18 @@ object SirosCredentialRegistry {
         credentials: List<StoredCredential>,
         zkSystems: List<ZkSystem>,
     ): ByteArray {
-        val builder = SirosBlobBuilder()
+        // `use`, not a bare call: the builder holds a native handle, and
+        // leaving it to the Cleaner means the handle survives until a GC that
+        // may never come under memory pressure. Registration runs on every
+        // credential change, so a leak here accumulates.
+        return SirosBlobBuilder().use { builder -> buildWith(builder, credentials, zkSystems) }
+    }
+
+    private fun buildWith(
+        builder: SirosBlobBuilder,
+        credentials: List<StoredCredential>,
+        zkSystems: List<ZkSystem>,
+    ): ByteArray {
         zkSystems.forEach { builder.addZkSystem(FfiCapability(it.system, it.params)) }
 
         credentials.forEach { cred ->
@@ -190,7 +212,11 @@ object SirosCredentialRegistry {
                             path = splitClaimKey(cred.format, claim.key),
                             value = claim.value,
                             display = claim.label,
-                            displayValue = claim.value,
+                            // Only when it differs. Repeating the value here
+                            // would put every claim value in the registered
+                            // blob twice, for a string the matcher would
+                            // render identically.
+                            displayValue = null,
                         )
                     },
                 ),
