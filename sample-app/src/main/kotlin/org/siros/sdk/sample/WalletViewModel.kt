@@ -552,8 +552,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     ) = wallet.signMdocPresentationForProximity(credentialId, disclosedClaims, sessionTranscriptBytes)
 
     /** For `BlePeripheralServer`/`BleCentralClient`'s injected `filterEligible` dependency. */
-    fun filterEligibleForProximity(instances: List<StoredCredential>): List<StoredCredential> =
-        CredentialUtils.eligibleInstances(instances, wallet.credentialConsumptionPolicy, wallet.presentationHistory)
+    suspend fun filterEligibleForProximity(instances: List<StoredCredential>): List<StoredCredential> =
+        wallet.eligibleInstances(instances)
+
+    /** For `PresentationConsentScreen`'s exhausted-query precheck - see [SirosWallet.availableKeyIds]. */
+    suspend fun currentAvailableKeyIds(): Set<String> = wallet.availableKeyIds()
 
     /**
      * For `BlePeripheralServer`/`BleCentralClient`'s injected `evaluateReaderTrust`

@@ -68,6 +68,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -413,13 +414,22 @@ fun WalletScreen(viewModel: WalletViewModel) {
     Box(modifier = Modifier.fillMaxSize()) {
         when {
             // Presentation consent dialog — shown as a full-screen overlay
-            pendingPresentation != null -> PresentationConsentScreen(
-                request = pendingPresentation!!,
-                onAccept = viewModel::acceptPresentation,
-                onDecline = viewModel::declinePresentation,
-                presentationHistory = presentationHistory,
-                consumptionPolicy = viewModel.credentialConsumptionPolicy.collectAsState().value,
-            )
+            pendingPresentation != null -> {
+                // Recomputed per new presentation request, not cached: a key
+                // lost since the last check must be reflected immediately -
+                // see SirosWallet.availableKeyIds's doc comment.
+                val availableKeyIds by produceState(initialValue = emptySet(), pendingPresentation) {
+                    value = viewModel.currentAvailableKeyIds()
+                }
+                PresentationConsentScreen(
+                    request = pendingPresentation!!,
+                    onAccept = viewModel::acceptPresentation,
+                    onDecline = viewModel::declinePresentation,
+                    presentationHistory = presentationHistory,
+                    consumptionPolicy = viewModel.credentialConsumptionPolicy.collectAsState().value,
+                    availableKeyIds = availableKeyIds,
+                )
+            }
 
             // Credential detail sub-screen
             selectedCredential != null -> CredentialDetailScreen(

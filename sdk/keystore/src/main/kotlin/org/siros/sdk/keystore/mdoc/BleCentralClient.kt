@@ -68,7 +68,7 @@ class BleCentralClient(
     /** See [RequestProximityConsent]'s doc comment. */
     requestConsent: RequestProximityConsent,
     /** See [BlePeripheralServer]'s matching parameter doc comment. */
-    filterEligible: (List<StoredCredential>) -> List<StoredCredential>,
+    filterEligible: suspend (List<StoredCredential>) -> List<StoredCredential>,
     /** See [MdocProximitySession]'s matching constructor parameter's doc comment. */
     evaluateReaderTrust: suspend (x5chain: List<ByteArray>) -> ReaderTrustResult,
     /** Reports a canonical step token (see `FlowStepCatalog.proximitySteps`) for driving the same progress-bar UI the issuance/presentation flows use. */
