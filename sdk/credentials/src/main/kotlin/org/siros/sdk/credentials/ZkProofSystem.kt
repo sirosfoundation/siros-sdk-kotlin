@@ -510,6 +510,23 @@ class ZkProofSystemRegistry(private val systems: List<ZkProofSystem>) {
      * being true, and more immediately, keeps working for the credential
      * types where the answer is `null` - which is most of them.
      */
+    /**
+     * The system identifiers this wallet can prove with, in registration
+     * order.
+     *
+     * Registration with the OS credential picker happens before any request
+     * exists, so it needs capabilities stated rather than answered:
+     * [resolve] can say "yes, for this request", but a wallet declaring what
+     * it can do has no request to be asked about yet.
+     *
+     * Identifiers only, no parameters. A circuit's attribute count is fixed,
+     * but whether a given circuit is fetchable is only known at proof time
+     * (see [ZkProofSystem.matchingSpec]) — so a wallet that enumerated
+     * specific circuits here would be claiming knowledge it does not have,
+     * and would refuse requests it can in fact satisfy.
+     */
+    val systemIds: List<String> get() = systems.map { it.systemId }
+
     fun issuanceParticipant(credentialType: CredentialTypeRef): ZkIssuanceParticipant? {
         for (system in systems) {
             if (credentialType !in system.supportedCredentialTypes) continue

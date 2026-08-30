@@ -27,6 +27,22 @@ dependencyResolutionManagement {
                 ).getOrElse("")
             }
         }
+        // siros-dc-matcher AAR — the DC API credential matcher and the CBOR
+        // encoder for the blob it reads, shipped together so a wallet cannot
+        // pair a writer with a reader that predates it. Its own GH Packages
+        // Maven for the same per-repo-scoping reason as the entries below.
+        maven {
+            name = "GitHubPackagesDcMatcher"
+            url = uri("https://maven.pkg.github.com/sirosfoundation/siros-dc-matcher")
+            credentials {
+                username = providers.gradleProperty("gpr.user").orElse(
+                    providers.environmentVariable("GITHUB_ACTOR")
+                ).getOrElse("")
+                password = providers.gradleProperty("gpr.key").orElse(
+                    providers.environmentVariable("GITHUB_TOKEN")
+                ).getOrElse("")
+            }
+        }
         // zk-cred-bbs AAR — blind BBS with hardware key binding. Separate
         // entry for the same reason as zk-cred-longfellow below: GH Packages
         // Maven repos are scoped per-repo, not org-wide.
