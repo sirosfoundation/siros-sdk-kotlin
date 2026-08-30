@@ -214,11 +214,25 @@ fun ProximityEngagementScreen(
                             // that will never come, so stop it.
                             centralClient?.stop()
                             result = true
-                        } else if (centralOutcome != null) {
+                        } else {
+                            // This role's own session is done regardless of
+                            // whether the other role has also finished - its
+                            // GATT server/advertising must be torn down now,
+                            // not left alive until the whole screen disposes.
+                            // Without this, a reader that already received
+                            // (or was denied) a response is left waiting on a
+                            // connection nothing will ever answer again -
+                            // confirmed live via a OneProof interop capture
+                            // where the reader sat stuck for 90+ seconds
+                            // after this role's own "no matching credential"
+                            // failure, until the user manually backed out.
+                            peripheralServer?.stop()
                             // Only report terminal failure once the OTHER
                             // role has also finished/failed - it may yet
                             // succeed on its own.
-                            result = false
+                            if (centralOutcome != null) {
+                                result = false
+                            }
                         }
                     }
                 },
@@ -239,8 +253,13 @@ fun ProximityEngagementScreen(
                         if (success) {
                             peripheralServer?.stop()
                             result = true
-                        } else if (peripheralOutcome != null) {
-                            result = false
+                        } else {
+                            // See the peripheralServer onComplete's matching
+                            // comment above - same reasoning, mirrored role.
+                            centralClient?.stop()
+                            if (peripheralOutcome != null) {
+                                result = false
+                            }
                         }
                     }
                 },
