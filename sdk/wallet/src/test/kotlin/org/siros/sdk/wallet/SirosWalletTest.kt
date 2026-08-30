@@ -59,6 +59,7 @@ import org.siros.sdk.credentials.SignerSecurityProperties
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.credentials.WalletException
 import org.siros.sdk.keystore.AttestationChain
+import org.siros.sdk.keystore.KeyInfo
 import org.siros.sdk.keystore.KeypairInfo
 import org.siros.sdk.keystore.KeystoreManager
 import org.siros.sdk.keystore.NativeAttestationEvidence
@@ -2991,7 +2992,7 @@ class SirosWalletTest {
         val engine = mockEngineConstructor(matchRequests = matchFlow)
         val keystore = mockk<KeystoreManager>()
         every { keystore.isUnlocked } returns false
-        every { keystore.listKeys() } returns emptyList()
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(
                 WalletState.Ready(userId = "user-1", displayName = "Alice", credentials = initialCredentials)
@@ -3041,7 +3042,7 @@ class SirosWalletTest {
         coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
         val keystore = mockk<KeystoreManager>()
         every { keystore.isUnlocked } returns false
-        every { keystore.listKeys() } returns emptyList()
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
         coEvery { keystore.signVpToken(any(), any(), any(), any()) } returns "signed-vp-token"
         val store = FakeCredentialStore(mutableListOf(
             StoredCredential(
@@ -3165,7 +3166,7 @@ class SirosWalletTest {
         }
         val keystore = mockk<KeystoreManager>()
         every { keystore.isUnlocked } returns false
-        every { keystore.listKeys() } returns emptyList()
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
         coEvery { keystore.signVpToken(any(), any(), any(), any()) } returns "signed-vp-token"
         val store = FakeCredentialStore(mutableListOf(
             StoredCredential(
@@ -3220,7 +3221,7 @@ class SirosWalletTest {
             coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
             val keystore = mockk<KeystoreManager>()
             every { keystore.isUnlocked } returns false
-            every { keystore.listKeys() } returns emptyList()
+            every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
             coEvery {
                 keystore.signMdocPresentationForDCAPI(any(), any(), any(), any(), any())
             } returns "device-response".toByteArray()
@@ -3304,7 +3305,7 @@ class SirosWalletTest {
         coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
         val keystore = mockk<KeystoreManager>()
         every { keystore.isUnlocked } returns false
-        every { keystore.listKeys() } returns emptyList()
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
         coEvery { keystore.signVpToken(any(), any(), any(), any()) } returns "signed-vp-token"
         val store = FakeCredentialStore(mutableListOf(
             StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw", metadata = CredentialMetadata(name = "X"), batchId = 1L, instanceId = 0),
@@ -3365,7 +3366,7 @@ class SirosWalletTest {
         coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
         val keystore = mockk<KeystoreManager>()
         every { keystore.isUnlocked } returns false
-        every { keystore.listKeys() } returns emptyList()
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
         coEvery { keystore.signVpToken(any(), any(), any(), any()) } returns "signed-vp-token"
         val store = FakeCredentialStore(mutableListOf(
             StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw", metadata = CredentialMetadata(name = "X"), batchId = 1L, instanceId = 0),

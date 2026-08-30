@@ -498,7 +498,26 @@ object CredentialUtils {
         // matters once either grows - this can run on every UI recomposition.
         val usedCredentialIds = presentationHistory.flatMapTo(HashSet()) { it.credentialIds }
         return instances.filter { instance ->
-            val keyAvailable = instance.kid == null || instance.kid in availableKeyIds
+            // A null kid should only mean "this signing call has no specific
+            // key to bind to" for a genuinely credential-less call shape
+            // (see WscdKeystoreAdapter.selectSigningKey's doc comment) - not
+            // "this credential's key binding got lost". Every credential
+            // issued through the current per-credential-key architecture
+            // gets a kid at storage time (SirosWallet's activeAttestedKeyIds
+            // wiring), so a real StoredCredential with a null kid here is a
+            // sign something already went wrong upstream, not a legitimate
+            // legacy case. Treating it as always-eligible let a credential
+            // whose key was silently dropped (e.g. an activeAttestedKeyIds
+            // race - see task #403) keep looking available forever. The
+            // best we can still check without a specific kid to match is
+            // whether the signer holds *any* key at all; if it holds none,
+            // a null-kid credential is certain to fail exactly the same way
+            // a known-but-missing kid would.
+            val keyAvailable = if (instance.kid != null) {
+                instance.kid in availableKeyIds
+            } else {
+                availableKeyIds.isNotEmpty()
+            }
             val consumptionEligible = policy == CredentialConsumptionPolicy.NEVER_CONSUME || run {
                 val consumes = policy == CredentialConsumptionPolicy.CONSUME_ALL || !isZkpFormat(instance.format)
                 !consumes || instance.id !in usedCredentialIds
