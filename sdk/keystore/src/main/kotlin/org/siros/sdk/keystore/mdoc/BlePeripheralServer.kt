@@ -239,7 +239,16 @@ class BlePeripheralServer(
                 connectedDevice = device
                 onStep("reader_connected")
             } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
-                if (device == connectedDevice) connectedDevice = null
+                if (device == connectedDevice) {
+                    connectedDevice = null
+                    // A reader that connects and drops before ever writing
+                    // STATE_END (a probe, a flaky link, a churning scanner)
+                    // never reaches completeOnce() below - without this,
+                    // the UI would stay parked on "reader connected" forever
+                    // even though this server is still advertising and
+                    // genuinely waiting for the next connection.
+                    if (!completed) onStep("waiting_for_reader")
+                }
             }
         }
 
