@@ -32,11 +32,20 @@ import org.siros.sdk.credentials.ZkWitnessSigner
  *   [keybindPublicKeys] — the device proving it holds the key the credential
  *   is about to be bound to. Required when [keybindPublicKeys] is non-empty
  *   and unused when it is empty.
+ * @param issuerPublicKey the issuer's BBS public key, needed to check what
+ *   the issuer actually signed once the credential comes back. Supplied by
+ *   the caller because there is nowhere yet to fetch it from: OpenID4VCI
+ *   issuer metadata has no member for a BBS key, and the issuer side has not
+ *   defined one either. When that publication mechanism exists this becomes
+ *   optional and the wallet resolves it; until then a caller that cannot
+ *   provide it cannot complete a BBS issuance, and finding that out here —
+ *   before anything is committed — is better than after.
  */
 class ZkIssuanceInput(
     val holderClaimsJson: String,
     val keybindPublicKeys: List<ByteArray> = emptyList(),
     val signer: ZkWitnessSigner? = null,
+    val issuerPublicKey: ByteArray? = null,
 ) {
     init {
         require(keybindPublicKeys.isEmpty() || signer != null) {

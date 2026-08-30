@@ -1175,8 +1175,8 @@ class SirosWalletTest {
      * A `ZkIssuancePreparation` carries what the holder committed to before
      * the issuer signed - for blind BBS the secret prover blind behind the
      * commitment. A cancelled issuance never produces a credential, so
-     * nothing will ever call [SirosWallet.takeZkIssuancePreparation] for it:
-     * left in the pending map it would sit in process memory indefinitely
+     * nothing will ever consume it: left in the pending map it would sit
+     * in process memory indefinitely
      * and gain one entry per cancelled attempt. Verifies
      * [SirosWallet.cancelCurrentFlow] drops the cancelled flow's preparation
      * and leaves other flows' alone.
@@ -1212,11 +1212,11 @@ class SirosWalletTest {
 
         assertNull(
             "cancelCurrentFlow() must discard the cancelled flow's holder commitment material",
-            wallet.takeZkIssuancePreparation("flow-1"),
+            preparations["flow-1"],
         )
         assertNotNull(
             "cancelling one flow must not consume another flow's preparation",
-            wallet.takeZkIssuancePreparation("flow-2"),
+            preparations["flow-2"],
         )
     }
 
