@@ -17,6 +17,8 @@ import android.os.ParcelUuid
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.siros.sdk.credentials.StoredCredential
@@ -94,6 +96,16 @@ class BleCentralClient(
         // is awaited before giving up (e.g. the reader dropped the
         // connection mid-transfer) rather than hanging forever.
         private const val WRITE_ACK_TIMEOUT_MS = 5000L
+
+        // ProximityEngagementScreen races this against BlePeripheralServer and
+        // only reports an overall failure once BOTH roles have given up - but
+        // the reader may only ever engage ONE of the two (e.g. it chose mdoc
+        // peripheral server mode, so it's never going to advertise as a GATT
+        // peripheral for THIS role to scan for). Without a bound, startScan()
+        // below runs forever in that case, and the "wait for both" logic never
+        // sees a centralOutcome, leaving the screen stuck on its terminal view
+        // forever even after the other role has already failed/succeeded.
+        private const val SCAN_TIMEOUT_MS = 20_000L
     }
 
     // limitedParallelism(1), not plain Dispatchers.IO: GATT callbacks can
@@ -127,6 +139,7 @@ class BleCentralClient(
     // from onCharacteristicWrite - see WRITE_ACK_TIMEOUT_MS's doc comment on
     // why writes must be paced rather than issued back-to-back.
     private var pendingWriteAck: CompletableDeferred<Boolean>? = null
+    private var scanTimeoutJob: Job? = null
 
     @SuppressLint("MissingPermission")
     fun start() {
@@ -151,10 +164,20 @@ class BleCentralClient(
         scanning = true
         onStep("waiting_for_reader")
         scanner.startScan(listOf(filter), settings, scanCallback)
+        scanTimeoutJob = scope.launch {
+            delay(SCAN_TIMEOUT_MS)
+            if (scanning) {
+                Timber.w("BleCentralClient: no reader found within ${SCAN_TIMEOUT_MS}ms, giving up")
+                stop()
+                onComplete(false)
+            }
+        }
     }
 
     @SuppressLint("MissingPermission")
     fun stop() {
+        scanTimeoutJob?.cancel()
+        scanTimeoutJob = null
         if (scanning) {
             val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
             bluetoothManager?.adapter?.bluetoothLeScanner?.stopScan(scanCallback)
@@ -168,6 +191,7 @@ class BleCentralClient(
     private val scanCallback = object : ScanCallback() {
         @SuppressLint("MissingPermission")
         override fun onScanResult(callbackType: Int, result: ScanResult) {
+            scanTimeoutJob?.cancel()
             val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
             bluetoothManager.adapter.bluetoothLeScanner?.stopScan(this)
             scanning = false
@@ -175,6 +199,7 @@ class BleCentralClient(
         }
 
         override fun onScanFailed(errorCode: Int) {
+            scanTimeoutJob?.cancel()
             Timber.w("BleCentralClient: BLE scan failed to start (error $errorCode)")
             onComplete(false)
         }
