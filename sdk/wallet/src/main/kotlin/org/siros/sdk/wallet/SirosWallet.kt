@@ -4520,7 +4520,25 @@ class SirosWallet private constructor(
                             // field names.
                             kid = null,
                         )
-                        credentialStore.save(stored)
+                        try {
+                            credentialStore.save(stored)
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            // The holder state went into the container before
+                            // the credential reached the store - it has to,
+                            // since the state is what names the credential's
+                            // id. A store that refuses the credential would
+                            // otherwise leave that entry behind: a long-lived
+                            // secret filed under an id nothing will ever look
+                            // up, and one nothing else deletes, because
+                            // §6.1.2's rule is "deleting the entity deletes
+                            // the entry" and the entity never existed.
+                            Timber.e(e, "Storing BBS credential $credentialId failed - rolling back its holder state")
+                            bbsHolderStateVault?.remove(credentialId.toString())
+                            storeFailureReason = "Credential could not be stored"
+                            return@forEachIndexed
+                        }
                         storedCount++
                         eventListener?.onCredentialReceived(stored)
                         cred.notificationId?.let { notificationId ->

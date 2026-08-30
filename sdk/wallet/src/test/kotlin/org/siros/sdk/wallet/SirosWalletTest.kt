@@ -2201,6 +2201,109 @@ class SirosWalletTest {
         assertEquals(testCredential, ready.credentials.single().raw)
     }
 
+    /**
+     * A BBS credential's holder state has to reach the container before the
+     * credential reaches the store — the state is what names the credential's
+     * id. So a [CredentialStore] that refuses the credential (it is
+     * host-supplied, and may) would otherwise leave that entry behind: a
+     * long-lived secret filed under an id nothing will ever look up, and one
+     * nothing else deletes either, since §6.1.2's rule is "deleting the
+     * entity deletes the entry" and here the entity never existed.
+     */
+    @Test
+    fun connectEngine_flowComplete_rollsBackHolderState_whenStoringTheBbsCredentialFails() = runTest(dispatcher) {
+        val issuedJwp = "the.jwp.here"
+        val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val store = FakeCredentialStore(mutableListOf(), saveFailure = RuntimeException("store refused"))
+        val keystore = mockk<KeystoreManager>()
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        every { keystore.isUnlocked } returns true
+        every { sessionStore.privateDataJwe } returns null
+        coEvery { keystore.exportEncryptedContainer() } returns """{"prfKeys":[],"jwe":"j"}""".toByteArray()
+        coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+
+        val extensionStore = RecordingExtensionStore()
+        val holderState = org.siros.sdk.credentials.BbsHolderState(
+            issuerPublicKey = ByteArray(96) { 1 },
+            secretProverBlind = ByteArray(32) { 2 },
+            committedMessages = listOf(byteArrayOf(3)),
+            keybindPublicKeys = emptyList(),
+        )
+        val preparation = mockk<org.siros.sdk.credentials.BbsIssuancePreparation>().also {
+            every { it.accept(issuedJwp, any()) } returns holderState
+        }
+        val preparations =
+            java.util.concurrent.ConcurrentHashMap<String, org.siros.sdk.credentials.ZkIssuancePreparation>()
+        preparations["flow-complete"] = preparation
+
+        mockEngineConstructor(flowComplete = completeFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.FlowActive(
+                    userId = "user-1",
+                    displayName = "Alice",
+                    flowId = "flow-complete",
+                    flowType = "issuance",
+                    status = "in_progress",
+                )
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to sessionStore,
+            "apiClient" to apiClient,
+            "eventListener" to listener,
+            "zkPreparationsByFlow" to preparations,
+            "bbsHolderStateVault" to org.siros.sdk.keystore.BbsHolderStateVault(extensionStore),
+            "activeZkIssuanceInput" to ZkIssuanceInput("{}", issuerPublicKey = ByteArray(96)),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        completeFlow.emit(
+            FlowCompleteMessage(
+                flowId = "flow-complete",
+                credentials = listOf(CredentialResult(format = "jwp", credential = issuedJwp)),
+            )
+        )
+        advanceUntilIdle()
+
+        assertTrue(
+            "the holder state must have been written before the store was asked",
+            extensionStore.everWritten,
+        )
+        assertEquals(
+            "a credential that could not be stored must leave no holder state behind",
+            emptyMap<String, String>(),
+            extensionStore.entries[org.siros.sdk.keystore.BbsHolderStateVault.NAMESPACE].orEmpty(),
+        )
+        assertEquals("no credential may be reported as received", 0, store.getAll().size)
+        verify(exactly = 0) { listener.onCredentialReceived(any()) }
+        verify(exactly = 1) { listener.onFlowError("flow-complete", any(), any()) }
+    }
+
+    /** An in-memory [org.siros.sdk.keystore.ExtensionStore] that remembers whether anything was ever written. */
+    private class RecordingExtensionStore : org.siros.sdk.keystore.ExtensionStore {
+        val entries = mutableMapOf<String, MutableMap<String, String>>()
+        var everWritten = false
+            private set
+
+        override suspend fun extensionEntries(namespace: String): Map<String, String> =
+            entries[namespace]?.toMap() ?: emptyMap()
+
+        override suspend fun setExtensionEntry(namespace: String, key: String, value: String) {
+            everWritten = true
+            entries.getOrPut(namespace) { mutableMapOf() }[key] = value
+        }
+
+        override suspend fun removeExtensionEntry(namespace: String, key: String) {
+            entries[namespace]?.remove(key)
+        }
+    }
+
     @Test
     fun connectEngine_flowComplete_assignsSharedBatchIdAndSequentialInstanceIds_forMultiCredentialBatch() = runTest(dispatcher) {
         // Minimal valid JWTs: {"alg":"none"}.{"sub":"test","iat":1700000000,"exp":9999999999}.
@@ -3768,12 +3871,15 @@ class SirosWalletTest {
 
     private class FakeCredentialStore(
         private val credentials: MutableList<StoredCredential>,
+        /** When set, [save] throws it instead of storing — a host store that refuses. */
+        private val saveFailure: Exception? = null,
     ) : CredentialStore {
         override suspend fun getAll(): List<StoredCredential> = credentials.toList()
 
         override suspend fun getById(id: Long): StoredCredential? = credentials.find { it.id == id }
 
         override suspend fun save(credential: StoredCredential) {
+            saveFailure?.let { throw it }
             credentials.removeAll { it.id == credential.id }
             credentials.add(credential)
         }
