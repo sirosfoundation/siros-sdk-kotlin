@@ -39,9 +39,47 @@ data class TransactionDataItem(
  * val wallet = SirosWallet.create(activity, config.copy(keystore = keystore))
  * ```
  */
-class WscdKeystoreAdapter(
+class WscdKeystoreAdapter private constructor(
     private val signer: Signer,
-) : KeystoreManager, WscdManager, ExtensionStore {
+    /**
+     * Owns the PRF-protected container (mainKey/prfKeys/jwe → V3
+     * WalletStateContainer) for this adapter's *credentials* - the
+     * WSCD manages its own signing-key protection, but SIROS ID's core tenet
+     * is that private data, including issued credentials, is always
+     * protected by the passkey's PRF-derived secret independent of whichever
+     * WSCD backs key signing. Reusing [JweKeystore] here (rather than a
+     * WSCD-adapter-local format) guarantees byte-for-byte compatibility with
+     * wallet-frontend and JweKeystore-backed native clients per
+     * privatedata-spec - the SAME passkey must unlock the SAME credentials
+     * on any client.
+     *
+     * For a hardware-backed or remote-HSM-backed [signer] (FIDO2/CTAP2,
+     * R2PS), private key material never leaves that plugin - it persists on
+     * its own (a secure element, a remote server), so this instance's own
+     * `keypairs` legitimately stays empty forever. For the software
+     * ("softkey") plugin, though, there IS real private key material that
+     * only ever lives in that plugin's own process memory (see
+     * [Signer.exportPrivateKeypairs]'s doc comment) - without folding it in
+     * here too, on [unlock]/[exportEncryptedContainer], those keys would be
+     * silently lost every time the app process restarts, even though the
+     * credentials they're bound to persist fine. [Signer.exportPrivateKeypairs]/
+     * [Signer.importPrivateKeypairs] default to a no-op for plugins that
+     * don't support this, so this round-trip is harmless for those.
+     *
+     * A constructor parameter rather than a body property only so the
+     * [ExtensionStore] half can be `by`-delegated to it in the class
+     * header; the primary constructor is private so no caller can hand this
+     * adapter a container it does not own.
+     */
+    private val credentialsKeystore: JweKeystore,
+) : KeystoreManager,
+    WscdManager,
+    // Extension state has to land in the same blob the credentials do, or
+    // it does not reach the account's other devices - and [credentialsKeystore]
+    // is the JweKeystore that owns this adapter's container.
+    ExtensionStore by credentialsKeystore {
+
+    constructor(signer: Signer) : this(signer, JweKeystore())
 
     /**
      * Non-null only when [signer] is itself WSCD-backed (i.e. a
@@ -114,51 +152,8 @@ class WscdKeystoreAdapter(
     suspend fun removeCredentialRefreshToken(batchId: Long) =
         credentialsKeystore.removeCredentialRefreshToken(batchId)
 
-    // ---- ExtensionStore ----
-    //
-    // Delegated to [credentialsKeystore] because that is the JweKeystore
-    // that owns this adapter's container: extension state has to land in
-    // the same blob the credentials do, or it does not reach the account's
-    // other devices.
-
-    override suspend fun extensionEntries(namespace: String): Map<String, String> =
-        credentialsKeystore.extensionEntries(namespace)
-
-    override suspend fun setExtensionEntry(namespace: String, key: String, value: String) =
-        credentialsKeystore.setExtensionEntry(namespace, key, value)
-
-    override suspend fun removeExtensionEntry(namespace: String, key: String) =
-        credentialsKeystore.removeExtensionEntry(namespace, key)
-
     override fun registerR2psPlugin(config: R2psConfig, transport: R2psTransportProvider) =
         requireWscdManager().registerR2psPlugin(config, transport)
-
-    /**
-     * Owns the PRF-protected container (mainKey/prfKeys/jwe → V3
-     * WalletStateContainer) for this adapter's *credentials* - the
-     * WSCD manages its own signing-key protection, but SIROS ID's core tenet
-     * is that private data, including issued credentials, is always
-     * protected by the passkey's PRF-derived secret independent of whichever
-     * WSCD backs key signing. Reusing [JweKeystore] here (rather than a
-     * WSCD-adapter-local format) guarantees byte-for-byte compatibility with
-     * wallet-frontend and JweKeystore-backed native clients per
-     * privatedata-spec - the SAME passkey must unlock the SAME credentials
-     * on any client.
-     *
-     * For a hardware-backed or remote-HSM-backed [signer] (FIDO2/CTAP2,
-     * R2PS), private key material never leaves that plugin - it persists on
-     * its own (a secure element, a remote server), so this instance's own
-     * `keypairs` legitimately stays empty forever. For the software
-     * ("softkey") plugin, though, there IS real private key material that
-     * only ever lives in that plugin's own process memory (see
-     * [Signer.exportPrivateKeypairs]'s doc comment) - without folding it in
-     * here too, on [unlock]/[exportEncryptedContainer], those keys would be
-     * silently lost every time the app process restarts, even though the
-     * credentials they're bound to persist fine. [Signer.exportPrivateKeypairs]/
-     * [Signer.importPrivateKeypairs] default to a no-op for plugins that
-     * don't support this, so this round-trip is harmless for those.
-     */
-    private val credentialsKeystore = JweKeystore()
 
     override val isUnlocked: Boolean get() = credentialsKeystore.isUnlocked
 

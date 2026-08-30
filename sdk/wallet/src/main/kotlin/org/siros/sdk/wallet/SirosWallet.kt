@@ -2191,6 +2191,9 @@ class SirosWallet private constructor(
             } catch (e: Exception) {
                 Timber.w(e, "Failed to send cancel to backend")
             }
+            // A cancelled issuance produces no credential, so anything the
+            // holder committed for it is unusable from here on.
+            discardZkIssuancePreparation(current.flowId)
             _state.value = readyState(current.userId, current.displayName, current.credentials)
         }
         resetIssuanceGuards()
@@ -2455,9 +2458,40 @@ class SirosWallet private constructor(
      * `BbsIssuancePreparation.accept(issuedJwp, issuerPublicKey)`, whose
      * result must be persisted through [bbsHolderStateVault] before the
      * credential can be presented.
+     *
+     * The window closes when the flow ends: whichever terminal path the
+     * flow takes - `flow_complete` (after [WalletEventListener.onFlowComplete]
+     * returns), `flow_error`, a client-side sign failure, or
+     * [cancelCurrentFlow] - discards whatever was not taken. Take it from
+     * inside the listener callback rather than from work scheduled to run
+     * after it.
      */
     fun takeZkIssuancePreparation(flowId: String): org.siros.sdk.credentials.ZkIssuancePreparation? =
         zkPreparationsByFlow.remove(flowId)
+
+    /**
+     * Drop [flowId]'s preparation, unconsumed, because the flow it belongs
+     * to has ended.
+     *
+     * A preparation holds material that must not outlive its flow - for BBS
+     * the secret prover blind behind the commitment - and a flow that ended
+     * without a credential will never have it taken by
+     * [takeZkIssuancePreparation]. Left in the map it would sit in memory
+     * for the life of the process and gain one entry per failed issuance,
+     * so every terminal path calls this the way every one of them already
+     * calls [resetIssuanceGuards].
+     *
+     * Not folded into [resetIssuanceGuards] itself because this is
+     * flow-scoped and that is not: `flow_complete` calls the reset *before*
+     * notifying the listener, which is exactly the moment the preparation
+     * still has to be there for the listener to take.
+     */
+    private fun discardZkIssuancePreparation(flowId: String?) {
+        if (flowId == null) return
+        if (zkPreparationsByFlow.remove(flowId) != null) {
+            Timber.d("Discarded unconsumed ZK issuance preparation for flow $flowId")
+        }
+    }
 
     /**
      * Runs the holder's half of issuance and returns what the credential
@@ -2658,6 +2692,7 @@ class SirosWallet private constructor(
         // no-op for a presentation sign-request failure, which never sets
         // these fields.
         resetIssuanceGuards()
+        discardZkIssuancePreparation(flowId)
         val current = _state.value
         val userId = (current as? WalletState.FlowActive)?.userId
             ?: (current as? WalletState.Ready)?.userId ?: ""
@@ -4470,6 +4505,11 @@ class SirosWallet private constructor(
                 } else {
                     eventListener?.onFlowComplete(msg.flowId, msg.redirectUri)
                 }
+                // After the listener, not before: onFlowComplete is the
+                // listener's one chance to takeZkIssuancePreparation() and
+                // accept() the issued credential. Anything still here once
+                // it has returned is never going to be consumed.
+                discardZkIssuancePreparation(msg.flowId)
 
                 val current = _state.value
                 val userId = (current as? WalletState.FlowActive)?.userId
@@ -4499,6 +4539,9 @@ class SirosWallet private constructor(
                 // reportSignFailure) would leave issuanceInFlight stuck,
                 // permanently blocking every future issuance attempt.
                 resetIssuanceGuards()
+                // No credential will ever arrive for this flow, so its
+                // holder-side commitment material is dead weight.
+                discardZkIssuancePreparation(msg.flowId)
 
                 val current = _state.value
                 val userId = (current as? WalletState.FlowActive)?.userId

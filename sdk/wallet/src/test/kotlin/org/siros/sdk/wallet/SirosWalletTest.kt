@@ -1171,6 +1171,60 @@ class SirosWalletTest {
         verify(exactly = 2) { engine.startIssuance(offer = offerJson, credentialOfferUri = null, redirectUri = "siros-sample://callback") }
     }
 
+    /**
+     * A `ZkIssuancePreparation` carries what the holder committed to before
+     * the issuer signed - for blind BBS the secret prover blind behind the
+     * commitment. A cancelled issuance never produces a credential, so
+     * nothing will ever call [SirosWallet.takeZkIssuancePreparation] for it:
+     * left in the pending map it would sit in process memory indefinitely
+     * and gain one entry per cancelled attempt. Verifies
+     * [SirosWallet.cancelCurrentFlow] drops the cancelled flow's preparation
+     * and leaves other flows' alone.
+     */
+    @Test
+    fun cancelCurrentFlow_discardsThatFlowsUnconsumedZkIssuancePreparation() = runTest(dispatcher) {
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val accountRegistry = mockk<AccountRegistry>(relaxed = true)
+        every { accountRegistry.listAccounts() } returns emptyList()
+        val preparations =
+            java.util.concurrent.ConcurrentHashMap<String, org.siros.sdk.credentials.ZkIssuancePreparation>()
+        preparations["flow-1"] = fakeZkIssuancePreparation()
+        preparations["flow-2"] = fakeZkIssuancePreparation()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.FlowActive(
+                    userId = "user-1",
+                    displayName = "Alice",
+                    flowId = "flow-1",
+                    flowType = "issuance",
+                    status = "in_progress",
+                )
+            ),
+            "engineSession" to engine,
+            "accountRegistry" to accountRegistry,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+            "json" to Json { ignoreUnknownKeys = true },
+            "httpClient" to OkHttpClient(),
+            "zkPreparationsByFlow" to preparations,
+        )
+
+        wallet.cancelCurrentFlow()
+
+        assertNull(
+            "cancelCurrentFlow() must discard the cancelled flow's holder commitment material",
+            wallet.takeZkIssuancePreparation("flow-1"),
+        )
+        assertNotNull(
+            "cancelling one flow must not consume another flow's preparation",
+            wallet.takeZkIssuancePreparation("flow-2"),
+        )
+    }
+
+    private fun fakeZkIssuancePreparation() = object : org.siros.sdk.credentials.ZkIssuancePreparation {
+        override val credentialRequestFields: Map<String, String> =
+            mapOf("bbs_commitment" to "\"AAAA\"")
+    }
+
     /** header.{"exp": exp}.sig - just enough for CredentialUtils.parseJwtPayload to read `exp`. */
     private fun fakeJwtWithExp(exp: Long): String {
         val payload = java.util.Base64.getUrlEncoder().withoutPadding()
@@ -3605,6 +3659,15 @@ class SirosWalletTest {
         // credentialConsumptionPolicy's default (NEVER_CONSUME) never runs
         // unless set here explicitly - matches every existing test's
         // expectation of today's actual (pre-this-feature) behavior.
+        // Same reason as pendingMatchResultsByFlow above: allocateInstance
+        // skips the initializer, and every terminal issuance path
+        // (flow_complete/flow_error/reportSignFailure/cancelCurrentFlow)
+        // now discards this flow's ZK issuance preparation, so a null map
+        // NPEs there.
+        if ("zkPreparationsByFlow" !in values) {
+            values["zkPreparationsByFlow"] =
+                java.util.concurrent.ConcurrentHashMap<String, org.siros.sdk.credentials.ZkIssuancePreparation>()
+        }
         if ("credentialConsumptionPolicy" !in values) {
             values["credentialConsumptionPolicy"] = CredentialConsumptionPolicy.NEVER_CONSUME
         }
