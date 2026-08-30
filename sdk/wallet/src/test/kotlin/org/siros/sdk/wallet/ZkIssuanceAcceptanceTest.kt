@@ -120,9 +120,11 @@ class ZkIssuanceAcceptanceTest {
             holderState,
             runBlocking { h.vault.get(credentialId.toString()) },
         )
-        assertTrue(
-            "the preparation is spent once the credential is accepted",
-            h.preparations.isEmpty(),
+        assertEquals(
+            "the preparation must survive an accepted credential, or the rest of the " +
+                "batch stops being checked against it - see aSecondCredentialAgainstOneCommitmentIsRefused",
+            1,
+            h.preparations.size,
         )
     }
 
@@ -172,6 +174,13 @@ class ZkIssuanceAcceptanceTest {
      * Accepting a second credential against the first one's preparation
      * would store state that describes different messages than the
      * credential it is filed under.
+     *
+     * Both entries run against the *same* preparation the flow actually
+     * has, without putting it back between them. That is what a real batch
+     * does, and it is where this rule can quietly stop applying: the caller
+     * enters this path only while the flow has a preparation, so consuming
+     * it on the first accepted credential would send index 1 down the
+     * ordinary JWT-validation branch and store it instead of refusing it.
      */
     @Test
     fun aSecondCredentialAgainstOneCommitmentIsRefused() {
@@ -179,7 +188,10 @@ class ZkIssuanceAcceptanceTest {
         h.preparations["flow-1"] = preparationAccepting("the.jwp.here")
 
         assertNotNull(h.accept("flow-1", "the.jwp.here", 0))
-        h.preparations["flow-1"] = preparationAccepting("second.jwp.here")
+        assertTrue(
+            "the flow must still look like a ZK flow to the caller's containsKey gate",
+            h.preparations.containsKey("flow-1"),
+        )
         assertNull(
             "nothing authorised a second credential",
             h.accept("flow-1", "second.jwp.here", 1),

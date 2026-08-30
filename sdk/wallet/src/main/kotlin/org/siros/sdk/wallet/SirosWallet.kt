@@ -2612,10 +2612,14 @@ class SirosWallet private constructor(
         }
         val credentialId = randomUint32Id()
         vault.put(credentialId.toString(), state)
-        // Only now is the preparation spent. Removing it earlier would let a
-        // failure above leave the flow with no way to retry and no record of
-        // what it had committed.
-        zkPreparationsByFlow.remove(flowId)
+        // Deliberately still in the map. The caller enters this method at all
+        // only while the flow has a preparation, so removing it here would
+        // send every later entry in the same batch down the ordinary
+        // JWT-validation branch instead - which is exactly the "no commitment
+        // authorised this" case the `index > 0` refusal above exists to catch,
+        // and it would be stored rather than refused. The preparation is
+        // dropped once the whole flow is done, by
+        // [discardZkIssuancePreparation] on the flow's terminal path.
         Timber.i("Accepted BBS credential $credentialId for flow $flowId and persisted its holder state")
         return credentialId
     }
