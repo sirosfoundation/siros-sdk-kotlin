@@ -70,7 +70,13 @@ dependencies {
     implementation("org.siros:zk-cred-bbs:0.0.6")
 
     // JNA is required by UniFFI-generated Kotlin bindings.
-    implementation("net.java.dev.jna:jna:5.14.0@aar")
+    //
+    // `api`, not `implementation`: the vendored bindings are compiled into
+    // this module and their public API mentions JNA types — SirosBlobBuilder
+    // has a `constructor(pointer: Pointer)`. A consumer touching that surface
+    // needs JNA on its own compile classpath, and the failure would be an
+    // unresolved reference inside a generated file, a long way from the cause.
+    api("net.java.dev.jna:jna:5.14.0@aar")
     // @RequiresApi, used by the Android-aware cleaner in the generated
     // bindings: it guards android.system.SystemCleaner behind an SDK_INT
     // check that lint can read.
