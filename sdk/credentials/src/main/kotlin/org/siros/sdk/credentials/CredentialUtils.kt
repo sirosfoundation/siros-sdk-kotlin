@@ -420,14 +420,21 @@ object CredentialUtils {
      * wallet-frontend's `CredentialsContextProvider.fetchVcData`: only the
      * `instanceId == 0` credential of a batch (see [StoredCredential.batchId])
      * is returned as a visible entry, with every sibling copy's usage count
-     * attached as [CredentialWithInstances.instances] - the UI derives its
-     * "remaining copies" badge from `instances.count { it.sigCount == 0 }`.
+     * and key availability attached as [CredentialWithInstances.instances] -
+     * the UI derives its "remaining copies" badge, and whether the whole
+     * batch has entered the "shadow" (renew-only) display state, from
+     * `instances.count { it.sigCount == 0 && it.hasKey }` - a batch down to
+     * zero by either consumption or lost keys looks the same to the UI, and
+     * [availableKeyIds] (see [hasAvailableKey]) is what makes the latter
+     * visible at all, not just silently excluded from presentation like
+     * [eligibleInstances] alone would do.
      * A credential with no [StoredCredential.batchId] (single-copy issuance)
      * is returned as its own one-instance family.
      */
     fun groupForDisplay(
         credentials: List<StoredCredential>,
         presentationHistory: List<PresentationRecord>,
+        availableKeyIds: Set<String>,
     ): List<CredentialWithInstances> {
         fun sigCountFor(credentialId: Long) =
             presentationHistory.count { credentialId in it.credentialIds }
@@ -439,7 +446,13 @@ object CredentialUtils {
             val visible = members.find { it.instanceId == 0 } ?: return@mapNotNull null
             val instances = members
                 .sortedBy { it.instanceId }
-                .map { CredentialInstance(it.instanceId, sigCountFor(it.id)) }
+                .map {
+                    CredentialInstance(
+                        it.instanceId,
+                        sigCountFor(it.id),
+                        hasAvailableKey(it.kid, availableKeyIds),
+                    )
+                }
             CredentialWithInstances(visible, instances)
         }
 
@@ -476,10 +489,8 @@ object CredentialUtils {
      * can silently strand a credential with no usable key. Without this
      * check, NEVER_CONSUME made every such credential report "available"
      * forever, right up until a live presentation attempt failed deep
-     * inside key selection with no user-facing signal at all. An instance
-     * whose [StoredCredential.kid] is null is never excluded here - that's
-     * a genuinely credential-less call shape (see
-     * `WscdKeystoreAdapter.selectSigningKey`'s doc comment), not a lost key.
+     * inside key selection with no user-facing signal at all. See
+     * [hasAvailableKey] for how a null [StoredCredential.kid] is handled.
      *
      * Otherwise, an instance is eligible only if it hasn't already been
      * presented (`sigCount == 0`) - each instance is bound to its own device
@@ -498,26 +509,7 @@ object CredentialUtils {
         // matters once either grows - this can run on every UI recomposition.
         val usedCredentialIds = presentationHistory.flatMapTo(HashSet()) { it.credentialIds }
         return instances.filter { instance ->
-            // A null kid should only mean "this signing call has no specific
-            // key to bind to" for a genuinely credential-less call shape
-            // (see WscdKeystoreAdapter.selectSigningKey's doc comment) - not
-            // "this credential's key binding got lost". Every credential
-            // issued through the current per-credential-key architecture
-            // gets a kid at storage time (SirosWallet's activeAttestedKeyIds
-            // wiring), so a real StoredCredential with a null kid here is a
-            // sign something already went wrong upstream, not a legitimate
-            // legacy case. Treating it as always-eligible let a credential
-            // whose key was silently dropped (e.g. an activeAttestedKeyIds
-            // race - see task #403) keep looking available forever. The
-            // best we can still check without a specific kid to match is
-            // whether the signer holds *any* key at all; if it holds none,
-            // a null-kid credential is certain to fail exactly the same way
-            // a known-but-missing kid would.
-            val keyAvailable = if (instance.kid != null) {
-                instance.kid in availableKeyIds
-            } else {
-                availableKeyIds.isNotEmpty()
-            }
+            val keyAvailable = hasAvailableKey(instance.kid, availableKeyIds)
             val consumptionEligible = policy == CredentialConsumptionPolicy.NEVER_CONSUME || run {
                 val consumes = policy == CredentialConsumptionPolicy.CONSUME_ALL || !isZkpFormat(instance.format)
                 !consumes || instance.id !in usedCredentialIds
@@ -525,6 +517,26 @@ object CredentialUtils {
             keyAvailable && consumptionEligible
         }
     }
+
+    /**
+     * Whether [kid] (a [StoredCredential.kid]) can actually be used to sign,
+     * given the signer's current [availableKeyIds] - shared by
+     * [eligibleInstances] (gates presentation) and [groupForDisplay] (gates
+     * the "shadow" display state, see [CredentialInstance.hasKey]) so the
+     * two never disagree about whether a credential is really usable.
+     *
+     * A null [kid] can't be matched against a specific entry, but every
+     * credential issued through the current per-credential-key architecture
+     * gets a kid at storage time (`SirosWallet`'s `activeAttestedKeyIds`
+     * wiring) - a real [StoredCredential] with a null kid reaching here is a
+     * sign its binding was silently lost (e.g. a concurrent-flow race, task
+     * #403), not a legitimate legacy case. The best check still possible
+     * without a specific kid to match is whether the signer holds *any* key
+     * at all; with zero keys, a null-kid credential is certain to fail to
+     * sign exactly like a known-but-missing kid would.
+     */
+    private fun hasAvailableKey(kid: String?, availableKeyIds: Set<String>): Boolean =
+        if (kid != null) kid in availableKeyIds else availableKeyIds.isNotEmpty()
 
     /**
      * Default fallback for [isBelowRenewThreshold] when no per-credential-
@@ -656,7 +668,22 @@ data class DisplayClaim(
 )
 
 /** One member of a batch-issued credential family, alongside its usage count. */
-data class CredentialInstance(val instanceId: Int, val sigCount: Int)
+data class CredentialInstance(
+    val instanceId: Int,
+    val sigCount: Int,
+    /**
+     * Whether this instance's bound signing key currently exists (see
+     * `CredentialUtils.hasAvailableKey`). An instance that's unused
+     * (`sigCount == 0`) but keyless still can't actually be presented - the
+     * UI's "remaining copies" count and "shadow" (renew-only) display state
+     * both gate on `sigCount == 0 && hasKey`, not `sigCount == 0` alone, so a
+     * lost key can't masquerade as a live, presentable copy. Defaults to
+     * `true` so call sites that only construct/assert instances by their
+     * consumption state (most existing tests) don't need to reason about
+     * key availability at all.
+     */
+    val hasKey: Boolean = true,
+)
 
 /** A visible credential card plus every instance in its batch (see [CredentialUtils.groupForDisplay]). */
 data class CredentialWithInstances(val credential: StoredCredential, val instances: List<CredentialInstance>)

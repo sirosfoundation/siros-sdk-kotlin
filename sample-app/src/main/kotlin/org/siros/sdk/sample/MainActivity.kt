@@ -586,6 +586,15 @@ fun WalletScreen(viewModel: WalletViewModel) {
             },
         )
 
+        // Recomputed whenever wallet state changes (new credential, key
+        // restored after unlock, etc.) so the credential list's "shadow"
+        // (renew-only) display state - see CredentialCard.isExhausted -
+        // never lags behind the signer's actual key inventory.
+        var credentialsTabAvailableKeyIds by remember { mutableStateOf(emptySet<String>()) }
+        LaunchedEffect(walletState) {
+            credentialsTabAvailableKeyIds = viewModel.currentAvailableKeyIds()
+        }
+
         // Content area
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             when (val state = walletState) {
@@ -627,6 +636,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onRenewCredential = viewModel::renewCredential,
                             onDeleteCredential = { viewModel.deleteCredential(it.id) },
                             onAddCredential = viewModel::openAddCredential,
+                            availableKeyIds = credentialsTabAvailableKeyIds,
                         )
                     }
                 }
@@ -1090,13 +1100,14 @@ fun CredentialsTab(
     onDeleteCredential: (org.siros.sdk.credentials.StoredCredential) -> Unit,
     onAddCredential: () -> Unit,
     modifier: Modifier = Modifier,
+    availableKeyIds: Set<String> = emptySet(),
 ) {
     // One entry per batch (see StoredCredential.batchId) instead of one per
     // issued copy - mirrors wallet-frontend's fetchVcData grouping so a
     // 5-copy batch issuance shows as a single card with a remaining-copies
     // ribbon, not five swipeable duplicates.
-    val grouped = remember(state.credentials, presentationHistory) {
-        org.siros.sdk.credentials.CredentialUtils.groupForDisplay(state.credentials, presentationHistory)
+    val grouped = remember(state.credentials, presentationHistory, availableKeyIds) {
+        org.siros.sdk.credentials.CredentialUtils.groupForDisplay(state.credentials, presentationHistory, availableKeyIds)
     }
 
     // Long-press action menu (Renew/Delete) - a quicker path to the same two
