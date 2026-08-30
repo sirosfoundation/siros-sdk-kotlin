@@ -24,8 +24,9 @@ import org.siros.sdk.credentials.CredentialOffer
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.Ts11CredentialDiscovery
 import org.siros.sdk.credentials.Ts11DiscoveredCredential
-import org.siros.sdk.sample.dcapi.DCAPIProviderRegistration
+
 import org.siros.sdk.sample.dcapi.WalletSessionHolder
+import org.siros.sdk.wallet.dcapi.SirosCredentialRegistry
 import org.siros.sdk.credentials.PresentationRecord
 import org.siros.sdk.credentials.SirosException
 import org.siros.sdk.credentials.ZkCircuitClient
@@ -668,14 +669,29 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 when (newState) {
                     is WalletState.Ready -> {
                         WalletSessionHolder.update(wallet)
-                        DCAPIProviderRegistration.refresh(activity, newState.credentials)
+                        SirosCredentialRegistry.refresh(
+                            context = activity,
+                            credentials = newState.credentials,
+                            // What this wallet can actually prove. Without it a
+                            // mso_mdoc_zk request matches nothing, which is the
+                            // right answer for a wallet that cannot produce the
+                            // proof and the wrong one for this app.
+                            // Identifiers only. Whether a specific circuit is
+                            // fetchable is known at proof time, not here, so
+                            // declaring particular attribute counts would claim
+                            // knowledge this wallet does not have and refuse
+                            // requests it can satisfy.
+                            zkSystems = wallet.zkSystemIds
+                                .map { SirosCredentialRegistry.ZkSystem(it, emptyMap()) },
+                            useStockMatcher = BuildConfig.STOCK_DC_MATCHER,
+                        )
                         refreshWscdTofuMapping()
                         refreshWscdUserOverrides()
                         maybeOfferWscdAutoEnroll()
                     }
                     else -> {
                         WalletSessionHolder.update(null)
-                        DCAPIProviderRegistration.clear(activity)
+                        SirosCredentialRegistry.clear(activity)
                     }
                 }
             }

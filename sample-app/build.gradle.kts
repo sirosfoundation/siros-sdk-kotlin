@@ -18,15 +18,15 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // Register our own DC API matcher instead of the one AndroidX ships.
-        // Off by default so ordinary builds keep stock behaviour; build with
-        // -PcustomDcMatcher=true to exercise it. Declared once here rather
-        // than per build type: the value does not vary by build type, and two
-        // copies of one rule only differ eventually.
+        // The SDK's matcher is the default: it understands everything the
+        // stock one does, plus the formats the stock one refuses. Build with
+        // -PstockDcMatcher=true to fall back to AndroidX's, which is worth
+        // keeping reachable in case a platform change ever makes a
+        // wallet-supplied matcher unwelcome.
         buildConfigField(
             "boolean",
-            "CUSTOM_DC_MATCHER",
-            (project.findProperty("customDcMatcher") == "true").toString(),
+            "STOCK_DC_MATCHER",
+            (project.findProperty("stockDcMatcher") == "true").toString(),
         )
     }
 

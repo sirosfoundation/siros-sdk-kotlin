@@ -2360,6 +2360,17 @@ class SirosWallet private constructor(
         )
 
     /**
+     * The zero-knowledge systems this wallet can prove with.
+     *
+     * Exposed because registration with the OS credential picker happens
+     * before any request exists: a wallet declaring what it can do has nothing
+     * to be asked about yet, so the registry's request-shaped `resolve` cannot
+     * answer it. Identifiers only - see [ZkProofSystemRegistry.systemIds] for
+     * why specific circuits are deliberately not claimed here.
+     */
+    val zkSystemIds: List<String> get() = zkProofSystemRegistry.systemIds
+
+    /**
      * Wraps a raw ZK [result] into the full `{version, status, zkDocuments:
      * [...]}` DeviceResponse-shaped CBOR structure multipaz's own
      * `DeviceResponseParser` requires (confirmed via direct source read -
