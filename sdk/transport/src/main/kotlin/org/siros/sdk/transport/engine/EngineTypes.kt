@@ -122,6 +122,30 @@ data class SignResponseMessage(
     @SerialName("proof_jwt") val proofJwt: String? = null,
     @SerialName("vp_token") val vpToken: String? = null,
     val proofs: List<ProofObject>? = null,
+    /**
+     * Extra members for the OID4VCI credential request the backend is about
+     * to send on this wallet's behalf.
+     *
+     * The wallet, not the backend, holds the state some credential formats
+     * need at issuance: blind BBS requires a commitment the holder computed
+     * locally, and the issuer will not sign without it. The backend builds
+     * the credential request, so that value has to travel here.
+     *
+     * Deliberately a generic bag rather than named BBS fields. It mirrors
+     * `ZkIssuancePreparation.credentialRequestFields`, so a future proof
+     * system needing its own request members costs a registry entry rather
+     * than another protocol change - the same argument as
+     * privatedata-spec's `S.extensions`.
+     *
+     * The backend MUST refuse members that collide with ones it sets itself
+     * (`credential_configuration_id`, `proofs`,
+     * `credential_response_encryption`). A wallet cannot be allowed to
+     * redirect or reshape the request through this field.
+     *
+     * Absent on every flow that does not need it, which is all of them
+     * today except blind BBS issuance.
+     */
+    @SerialName("credential_request_extras") val credentialRequestExtras: JsonObject? = null,
     val timestamp: String? = null,
 )
 

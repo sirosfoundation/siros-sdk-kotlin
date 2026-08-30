@@ -473,13 +473,21 @@ class WalletEngineSession(
         ))
     }
 
-    /** Send a signing response back to the server. */
+    /**
+     * Send a signing response back to the server.
+     *
+     * @param credentialRequestExtras extra members for the credential
+     *   request the backend will send - see
+     *   [SignResponseMessage.credentialRequestExtras]. Null for every flow
+     *   that does not need them.
+     */
     fun sendSignResponse(
         flowId: String,
         proofJwt: String? = null,
         vpToken: String? = null,
         proofs: List<ProofObject>? = null,
         messageId: String? = null,
+        credentialRequestExtras: kotlinx.serialization.json.JsonObject? = null,
     ) {
         send(SignResponseMessage.serializer(), SignResponseMessage(
             flowId = flowId,
@@ -487,6 +495,7 @@ class WalletEngineSession(
             proofJwt = proofJwt,
             vpToken = vpToken,
             proofs = proofs,
+            credentialRequestExtras = credentialRequestExtras,
         ))
     }
 

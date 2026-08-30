@@ -2,6 +2,7 @@ package org.siros.sdk.keystore
 
 import com.nimbusds.jose.JWEObject
 import com.nimbusds.jose.crypto.AESDecrypter
+import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -207,6 +208,60 @@ class ExtensionStoreTest {
         val keystore = freshKeystore()
         keystore.setExtensionEntry(BbsHolderStateVault.NAMESPACE, "cred-1", "not json at all")
         assertNull(BbsHolderStateVault(keystore).get("cred-1"))
+    }
+
+    // --- the other container owner -------------------------------------------
+
+    /**
+     * `WscdKeystoreAdapter` must write extension state into the same
+     * container its credentials live in.
+     *
+     * Two classes own a container, and which one a wallet has depends on
+     * whether its signing keys are WSCD-backed — a deployment detail that
+     * has nothing to do with extension state. If this adapter kept its own
+     * copy, or dropped writes, a WSCD-backed wallet would issue BBS
+     * credentials whose holder state never reached the account's other
+     * devices. Same failure as not storing it at all, only harder to see.
+     */
+    @Test
+    fun theWscdAdapterWritesIntoTheContainerItExports() = runTest {
+        val adapter = WscdKeystoreAdapter(mockk<Signer>(relaxed = true))
+        adapter.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+
+        BbsHolderStateVault(adapter).put(
+            "cred-1",
+            BbsHolderState(byteArrayOf(1), ByteArray(32) { 2 }, listOf(byteArrayOf(3)), emptyList()),
+        )
+
+        val extensions = extensionsOf(adapter.exportEncryptedContainer())
+        assertEquals(
+            "the entry must be in the exported container, not only in the adapter",
+            1,
+            extensions?.get(BbsHolderStateVault.NAMESPACE)?.jsonObject?.size,
+        )
+    }
+
+    /**
+     * And a container written by one owner must be readable by the other —
+     * they are the same format by design, so a user moving between a
+     * WSCD-backed build and a software one keeps their credentials usable.
+     */
+    @Test
+    fun eitherOwnerCanReadWhatTheOtherWrote() = runTest {
+        val state = BbsHolderState(byteArrayOf(9), ByteArray(32) { 4 }, listOf(byteArrayOf(5)), emptyList())
+
+        val adapter = WscdKeystoreAdapter(mockk<Signer>(relaxed = true))
+        adapter.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        BbsHolderStateVault(adapter).put("cred-1", state)
+
+        val plain = reopen(adapter.exportEncryptedContainer())
+        assertEquals(state, BbsHolderStateVault(plain).get("cred-1"))
+
+        // ...and back the other way.
+        BbsHolderStateVault(plain).put("cred-2", state)
+        val adapter2 = WscdKeystoreAdapter(mockk<Signer>(relaxed = true))
+        adapter2.unlock(fakePrfOutput, plain.exportEncryptedContainer(), hkdfSalt, hkdfInfo)
+        assertEquals(state, BbsHolderStateVault(adapter2).get("cred-2"))
     }
 
     // --- helpers ------------------------------------------------------------

@@ -63,7 +63,7 @@ data class CredentialRefreshTokenEntry(
  */
 class JweKeystore(
     private val json: Json = Json { ignoreUnknownKeys = true },
-) : KeystoreManager {
+) : KeystoreManager, ExtensionStore {
 
     private val mutex = Mutex()
     private var keys: MutableMap<String, ECKey> = mutableMapOf()
@@ -431,7 +431,7 @@ class JweKeystore(
      * which is not an error: a namespace only exists once something writes
      * to it.
      */
-    suspend fun extensionEntries(namespace: String): Map<String, String> = mutex.withLock {
+    override suspend fun extensionEntries(namespace: String): Map<String, String> = mutex.withLock {
         extensions[namespace]?.toMap() ?: emptyMap()
     }
 
@@ -445,7 +445,7 @@ class JweKeystore(
      *   plugin (§6.1.1). See the [extensions] field comment for why that is
      *   a correctness rule.
      */
-    suspend fun setExtensionEntry(namespace: String, key: String, value: String) = mutex.withLock {
+    override suspend fun setExtensionEntry(namespace: String, key: String, value: String) = mutex.withLock {
         extensions.getOrPut(namespace) { mutableMapOf() }[key] = value
     }
 
@@ -457,7 +457,7 @@ class JweKeystore(
      * dropped rather than left as an empty object, so a container carries no
      * trace of a namespace nothing uses.
      */
-    suspend fun removeExtensionEntry(namespace: String, key: String) = mutex.withLock {
+    override suspend fun removeExtensionEntry(namespace: String, key: String) = mutex.withLock {
         val ns = extensions[namespace] ?: return@withLock
         ns.remove(key)
         if (ns.isEmpty()) extensions.remove(namespace)

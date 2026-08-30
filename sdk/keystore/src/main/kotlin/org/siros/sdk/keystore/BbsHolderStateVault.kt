@@ -31,8 +31,10 @@ import org.siros.sdk.credentials.BbsHolderState
  * devices storing different credentials' state overwrite each other.
  *
  * @param keystore the container this state is stored in. Must be unlocked.
+ *   Typed as [ExtensionStore] rather than a concrete keystore because both
+ *   container owners qualify and this has no reason to know which one it has.
  */
-class BbsHolderStateVault(private val keystore: JweKeystore) {
+class BbsHolderStateVault(private val keystore: ExtensionStore) {
 
     /**
      * Store the state produced by accepting an issued credential.

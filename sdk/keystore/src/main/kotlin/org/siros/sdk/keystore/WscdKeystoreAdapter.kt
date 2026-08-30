@@ -41,7 +41,7 @@ data class TransactionDataItem(
  */
 class WscdKeystoreAdapter(
     private val signer: Signer,
-) : KeystoreManager, WscdManager {
+) : KeystoreManager, WscdManager, ExtensionStore {
 
     /**
      * Non-null only when [signer] is itself WSCD-backed (i.e. a
@@ -113,6 +113,22 @@ class WscdKeystoreAdapter(
     /** See [JweKeystore.removeCredentialRefreshToken]. */
     suspend fun removeCredentialRefreshToken(batchId: Long) =
         credentialsKeystore.removeCredentialRefreshToken(batchId)
+
+    // ---- ExtensionStore ----
+    //
+    // Delegated to [credentialsKeystore] because that is the JweKeystore
+    // that owns this adapter's container: extension state has to land in
+    // the same blob the credentials do, or it does not reach the account's
+    // other devices.
+
+    override suspend fun extensionEntries(namespace: String): Map<String, String> =
+        credentialsKeystore.extensionEntries(namespace)
+
+    override suspend fun setExtensionEntry(namespace: String, key: String, value: String) =
+        credentialsKeystore.setExtensionEntry(namespace, key, value)
+
+    override suspend fun removeExtensionEntry(namespace: String, key: String) =
+        credentialsKeystore.removeExtensionEntry(namespace, key)
 
     override fun registerR2psPlugin(config: R2psConfig, transport: R2psTransportProvider) =
         requireWscdManager().registerR2psPlugin(config, transport)
