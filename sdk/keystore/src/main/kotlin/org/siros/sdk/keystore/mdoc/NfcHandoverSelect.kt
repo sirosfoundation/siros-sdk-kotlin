@@ -2,6 +2,7 @@
 package org.siros.sdk.keystore.mdoc
 
 import java.io.ByteArrayOutputStream
+import java.util.UUID
 
 /**
  * ISO 18013-5 §9.2/§11.1.2 NFC Static Handover: builds the Handover Select
@@ -43,6 +44,7 @@ object NfcHandoverSelect {
 
     // Bluetooth Supplement to the Core Specification AD types (§11.1.2).
     private const val AD_TYPE_LE_ROLE = 0x1C
+    private const val AD_TYPE_COMPLETE_128_BIT_SERVICE_UUIDS = 0x07
 
     /** Bluetooth Supplement to the Core Specification LE Role AD (0x1C) values. */
     enum class LeRole(val value: Int) {
@@ -60,10 +62,32 @@ object NfcHandoverSelect {
      *
      * The LE Role advertised is derived from which BLE modes [engagement]
      * offers - matching the mandatory LE Role (0x1C) AD type (§11.1.2). LE
-     * Device Address (0x1B) is omitted: it's merely "recommended" and Android
-     * has no public API to read the local BLE MAC address (deprecated for
-     * privacy since API 23), so the reader is expected to connect using the
-     * UUID(s) embedded in the `DeviceEngagement` CBOR itself.
+     * Device Address (0x1B) is omitted: it's merely "recommended", and
+     * Android has no public API to read the local BLE MAC address
+     * (deprecated for privacy since API 23) - but §11.1.2 is explicit that
+     * LE Device Address only shortens the connection process "COMPARED TO
+     * USING THE UUID to identify the correct device to connect to", i.e. the
+     * UUID remains how a reader is meant to find the right device when no
+     * address is given. That UUID must therefore appear in this record's own
+     * Complete List of 128-bit Service UUIDs (0x07) AD - relying solely on
+     * the separate DeviceEngagement CBOR aux record leaves a reader with no
+     * AD-level UUID to scan for at all, confirmed live: a real mdoc reader
+     * reported receiving our engagement via NFC but never finding any UUID
+     * to connect to. (Annex D.3.3's own worked example omits 0x07, but only
+     * because IT includes 0x1B - not a precedent for omitting both.)
+     *
+     * Only ONE UUID goes in that AD, matching §11.1.2's own wording for
+     * Static Handover: "the mdoc shall send one UUID... to be used for mdoc
+     * central client mode or mdoc peripheral server mode AS APPROPRIATE".
+     * The AD has no way to label which of two UUIDs belongs to which role -
+     * sending both invites a reader to pick the wrong one for whichever role
+     * it actually plays (e.g. advertise under the peripheral UUID while we
+     * scan for the central one), a real deadlock confirmed live. The one
+     * UUID sent matches [leRole]'s own preference: the reader is being told
+     * (via LE Role) which mode to prefer, so it's also the mode whose UUID
+     * it needs from this AD to act on that preference. A reader that
+     * instead falls back to the other mode already has that mode's own UUID
+     * available from the DeviceEngagement CBOR's own keyed fields (10/11).
      */
     fun build(engagement: DeviceEngagement.Engagement): ByteArray {
         val leRole = when {
@@ -73,11 +97,20 @@ object NfcHandoverSelect {
             engagement.peripheralServerModeUuid != null -> LeRole.PERIPHERAL_ONLY
             else -> throw IllegalArgumentException("engagement offers no BLE retrieval method")
         }
-        return build(engagement.deviceEngagementBytes, leRole)
+        // leRole is only ever PERIPHERAL_ONLY, CENTRAL_ONLY, or
+        // BOTH_CENTRAL_PREFERRED here (see the assignment above) - the
+        // latter two both mean "the reader should use central client mode",
+        // so both map to centralClientModeUuid.
+        val preferredUuid = if (leRole == LeRole.PERIPHERAL_ONLY) {
+            engagement.peripheralServerModeUuid
+        } else {
+            engagement.centralClientModeUuid
+        }
+        return build(engagement.deviceEngagementBytes, leRole, listOfNotNull(preferredUuid))
     }
 
-    /** Lower-level overload taking the LE Role explicitly - used by tests. */
-    fun build(deviceEngagementBytes: ByteArray, leRole: LeRole): ByteArray {
+    /** Lower-level overload taking the LE Role (and optionally the UUID(s) to advertise) explicitly - used by tests. */
+    fun build(deviceEngagementBytes: ByteArray, leRole: LeRole, uuids: List<UUID> = emptyList()): ByteArray {
         val acMessage = ndefRecord(
             tnf = TNF_WELL_KNOWN,
             type = "ac".toByteArray(Charsets.US_ASCII),
@@ -103,7 +136,7 @@ object NfcHandoverSelect {
             tnf = TNF_MIME,
             type = BLE_OOB_MIME_TYPE.toByteArray(Charsets.US_ASCII),
             id = CARRIER_DATA_REFERENCE.toByteArray(Charsets.US_ASCII),
-            payload = bleOobPayload(leRole),
+            payload = bleOobPayload(leRole, uuids),
             messageBegin = false,
             messageEnd = false,
         )
@@ -147,15 +180,39 @@ object NfcHandoverSelect {
     /**
      * Bluetooth OOB data block (Supplement to the Bluetooth Core
      * Specification, referenced by §11.1.2): a sequence of AD structures,
-     * each `length(1) + type(1) + data(length-1)`. Only LE Role is included -
-     * see [build]'s doc comment for why LE Device Address is omitted.
+     * each `length(1) + type(1) + data(length-1)`. LE Role is always
+     * present; a Complete List of 128-bit Service UUIDs (0x07) AD is added
+     * when [uuids] is non-empty - see [build]'s doc comment for why this is
+     * required (not merely "if applicable") given LE Device Address is
+     * omitted.
      */
-    private fun bleOobPayload(leRole: LeRole): ByteArray {
+    private fun bleOobPayload(leRole: LeRole, uuids: List<UUID>): ByteArray {
         return ByteArrayOutputStream().apply {
             write(2) // AD length = type(1) + data(1)
             write(AD_TYPE_LE_ROLE)
             write(leRole.value)
+            if (uuids.isNotEmpty()) {
+                write(1 + 16 * uuids.size) // AD length = type(1) + 16 bytes per UUID
+                write(AD_TYPE_COMPLETE_128_BIT_SERVICE_UUIDS)
+                for (uuid in uuids) write(littleEndianUuidBytes(uuid))
+            }
         }.toByteArray()
+    }
+
+    /**
+     * Bluetooth's own OOB AD format packs multi-byte values little-endian
+     * (per §11.1.2's own note quoting the Bluetooth Core Specification
+     * Supplement) - the reverse of the big-endian/RFC 4122 §4.1.2 order
+     * `DeviceEngagement`'s BleOptions CBOR uses for the same UUID bytes
+     * (see `DeviceEngagement.uuidBytes`), so this can't share that function.
+     */
+    private fun littleEndianUuidBytes(uuid: UUID): ByteArray {
+        val bytes = ByteArray(16)
+        val msb = uuid.mostSignificantBits
+        val lsb = uuid.leastSignificantBits
+        for (i in 0 until 8) bytes[15 - i] = (msb ushr (8 * (7 - i))).toByte()
+        for (i in 0 until 8) bytes[7 - i] = (lsb ushr (8 * (7 - i))).toByte()
+        return bytes
     }
 
     private fun ndefRecord(
