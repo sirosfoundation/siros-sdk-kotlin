@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -102,6 +103,16 @@ fun CredentialCard(
      * `sigCount > 0`; ignored (no button rendered) if null.
      */
     onRenewClick: (() -> Unit)? = null,
+    /**
+     * Called when the user taps "Delete" on a fully-exhausted/"shadow"
+     * credential (see [onRenewClick]'s doc comment for when this state
+     * applies) - a shadow credential isn't reachable via long-press (see
+     * [isExhausted]'s use in this card's `combinedClickable` gate below), so
+     * without this the only way to remove one was renewing it first, even
+     * though the user may simply want it gone. Ignored (no button rendered)
+     * if null, same as [onRenewClick].
+     */
+    onDeleteClick: (() -> Unit)? = null,
 ) {
     // Null when the caller doesn't have batch/usage data on hand (see
     // [instances]'s doc comment) - only gates the greyed-out/Renew state
@@ -436,21 +447,41 @@ fun CredentialCard(
                         },
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (onRenewClick != null) {
-                        TextButton(onClick = onRenewClick) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(
-                                    imageVector = Icons.Filled.Refresh,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(32.dp),
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = stringResource(R.string.credential_renew),
-                                    color = Color.White,
-                                    fontWeight = FontWeight.Bold,
-                                )
+                    Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                        if (onRenewClick != null) {
+                            TextButton(onClick = onRenewClick) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Refresh,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(32.dp),
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = stringResource(R.string.credential_renew),
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                }
+                            }
+                        }
+                        if (onDeleteClick != null) {
+                            TextButton(onClick = onDeleteClick) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Delete,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(32.dp),
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = stringResource(R.string.credential_detail_delete),
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                }
                             }
                         }
                     }

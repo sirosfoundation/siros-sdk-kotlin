@@ -1247,6 +1247,7 @@ fun CredentialsTab(
                         onClick = { onCredentialClick(entry.credential) },
                         onLongClick = { actionMenuFor = entry.credential },
                         onRenewClick = { onRenewCredential(entry.credential) },
+                        onDeleteClick = { pendingDeleteFor = entry.credential },
                     )
                 }
                 if (visibleCount < grouped.size) {
