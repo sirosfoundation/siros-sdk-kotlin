@@ -303,6 +303,7 @@ class BleCentralClient(
         // Same API-33-vs-minSdk-28 reasoning as onCharacteristicRead above:
         // override the deprecated 2-arg form, not the newer 3-arg one.
         @Suppress("DEPRECATION")
+        @SuppressLint("MissingPermission")
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             if (characteristic.uuid != SERVER2CLIENT_UUID) return
             val value = characteristic.value ?: return
