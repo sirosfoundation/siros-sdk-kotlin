@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0]
+
+Highlights since v0.9.0 (1 commit). Sample app: versionName 0.10.0, versionCode 10.
+
+### Fixed
+- Register `mdoc-openid4vp://` (ISO 18013-7 Annex B's mdoc-specific OpenID4VP
+  scheme) in the manifest's intent-filter and `DeepLinkClassifier` - a link
+  using this scheme was silently dropped as `Unknown` before reaching the
+  app at all, since Android has no intent-filter to route it through
+  (#145)
+
 ## [0.9.0]
 
 Highlights since v0.8.0 (16 commits). Sample app: versionName 0.9.0, versionCode 9.
