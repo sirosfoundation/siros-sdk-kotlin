@@ -42,6 +42,9 @@ internal object SharedDcqlMatcher {
      * this ABI, or the engine may reject a request this SDK would have
      * accepted - both mean "no answer", and a caller must not read that as an
      * empty match.
+     *
+     * An *empty map* is the opposite: a definite answer of "offer nothing",
+     * returned when the request cannot be satisfied as a whole (§6.4).
      */
     fun candidatesByQuery(
         dcqlQuery: JsonObject,
@@ -55,6 +58,24 @@ internal object SharedDcqlMatcher {
                 builder.build()
             }
             val outcome = ffiMatchDcql(blob, dcqlQuery.toString())
+            if (!outcome.satisfiable) {
+                // §6.4: the wallet "MUST NOT return any Credential(s)" — not
+                // even the queries that did match on their own. A request can
+                // ask for two credentials and get one; offering that one lets
+                // a user consent to a presentation that cannot satisfy the
+                // verifier.
+                //
+                // Empty, not `null`. `null` means "no answer, keep the
+                // built-in matcher's"; an empty map is an answer, and the
+                // caller's `orEmpty()` turns it into the required nothing.
+                //
+                // The previous code got this for free: it read `combinations`,
+                // which is empty exactly when the request is unsatisfiable.
+                // `matches` is per-query and populated either way, so what was
+                // implicit has to be stated.
+                Timber.i("Shared engine: request unsatisfiable as a whole; offering nothing (§6.4)")
+                return emptyMap()
+            }
             // `matches`, not `combinations`. The engine bounds how many
             // combinations it returns, because the count is a product of the
             // per-query candidate counts — so reconstructing per-query
