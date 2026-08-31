@@ -193,7 +193,11 @@ object CredentialMatcher {
                 // Reported once for the request rather than per query. The
                 // per-query line explains a decline as a missing claim, which
                 // is the usual cause and the wrong one here.
-                SharedDcqlMatcher.reportUnsatisfiable(parsed.flatMap { it.candidates.map { c -> c.id } })
+                SharedDcqlMatcher.reportUnsatisfiable(
+                    // One credential can be a candidate for several queries;
+                    // the log names credentials, not candidacies.
+                    parsed.flatMap { r -> r.candidates.map { it.id } }.distinct(),
+                )
                 parsed.map { it.copy(candidates = emptyList()) }
             }
 
