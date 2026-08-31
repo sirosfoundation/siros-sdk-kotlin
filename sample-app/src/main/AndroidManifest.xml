@@ -62,12 +62,15 @@
                 <data android:scheme="openid-credential-offer" />
             </intent-filter>
 
-            <!-- OID4VP presentation request deep links -->
+            <!-- OID4VP presentation request deep links. "mdoc-openid4vp" is
+                 ISO 18013-7 Annex B's mdoc-specific scheme, using the same
+                 wire shape as plain "openid4vp". -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="openid4vp" />
+                <data android:scheme="mdoc-openid4vp" />
             </intent-filter>
 
             <!-- HAIP (High Assurance Interoperability Profile) presentation request deep links.
