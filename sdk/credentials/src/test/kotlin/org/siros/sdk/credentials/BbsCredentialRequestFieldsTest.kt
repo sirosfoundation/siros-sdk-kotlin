@@ -32,8 +32,9 @@ class BbsCredentialRequestFieldsTest {
     private fun preparation(
         pointers: List<String>,
         keybindPublicKeys: List<ByteArray> = emptyList(),
+        suiteId: BbsSuiteId = BbsSuiteId.SCHNORR,
     ) = BbsIssuancePreparation(
-        suiteId = BbsSuiteId.SCHNORR,
+        suiteId = suiteId,
         commitmentWithProof = ByteArray(48) { it.toByte() },
         holderPointers = pointers,
         committedMessages = pointers.map { it.toByteArray() },
@@ -50,6 +51,7 @@ class BbsCredentialRequestFieldsTest {
                 BbsIssuanceParticipant.COMMITMENT_FIELD,
                 BbsIssuanceParticipant.POINTERS_FIELD,
                 BbsIssuanceParticipant.KEY_BINDING_FIELD,
+                BbsIssuanceParticipant.SUITE_FIELD,
             ),
             fields.keys,
         )
@@ -134,5 +136,42 @@ class BbsCredentialRequestFieldsTest {
         // And it is a JSON boolean on the wire, not a quoted string - the
         // issuer decodes it into a bool.
         assertEquals(JsonPrimitive(true), json.parseToJsonElement(bound))
+    }
+
+    /**
+     * The suite has to travel, because the issuer cannot infer it.
+     *
+     * It selects the domain separation the commitment was built under, so
+     * an issuer building its side under the other one gets a commitment
+     * that verifies against nothing — reported as "does not verify", which
+     * is also what a corrupt commitment and a wrong issuer key say. Both
+     * suites are first-class; neither is a default.
+     */
+    @Test
+    fun theSuiteTravelsUnderItsWireName() {
+        for ((suite, wire) in listOf(BbsSuiteId.SCHNORR to "schnorr", BbsSuiteId.PLAIN to "plain")) {
+            val encoded = preparation(listOf("/a"), suiteId = suite)
+                .credentialRequestFields
+                .getValue(BbsIssuanceParticipant.SUITE_FIELD)
+            assertEquals(JsonPrimitive(wire), json.parseToJsonElement(encoded))
+        }
+    }
+
+    /**
+     * The suite is independent of key binding, and must not be derived
+     * from it.
+     *
+     * `schnorr` with no committed key binding keys is the ordinary unbound
+     * issuance — the case an issuer deriving the suite from key binding
+     * would get wrong for every credential this SDK issues today.
+     */
+    @Test
+    fun anUnboundIssuanceStillNamesItsSuite() {
+        val fields = preparation(listOf("/a"), keybindPublicKeys = emptyList()).credentialRequestFields
+        assertEquals("false", fields.getValue(BbsIssuanceParticipant.KEY_BINDING_FIELD))
+        assertEquals(
+            JsonPrimitive("schnorr"),
+            json.parseToJsonElement(fields.getValue(BbsIssuanceParticipant.SUITE_FIELD)),
+        )
     }
 }
