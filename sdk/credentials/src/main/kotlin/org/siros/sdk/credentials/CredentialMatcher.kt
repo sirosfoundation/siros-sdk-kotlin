@@ -171,17 +171,34 @@ object CredentialMatcher {
         // asked for is no longer offered. OID4VP 1.0 §6.4.1 requires that; the
         // parsing path above never checked it, so such a credential would be
         // offered, consented to, and then fail to satisfy the verifier.
-        val shared = SharedDcqlMatcher.candidatesByQuery(dcqlQuery, credentials)
-        val queryResults = if (shared == null) {
-            // No answer, not an empty answer. Falling back keeps
-            // presentations working where the engine cannot decide, which is
-            // worth more than consistency. SharedDcqlMatcher has already
-            // logged why — with the exception, when there was one — so
-            // repeating it here would only double the noise on every call.
-            parsed
-        } else {
-            parsed.map { result ->
-                val ids = shared[result.queryId].orEmpty()
+        val shared = SharedDcqlMatcher.evaluate(dcqlQuery, credentials)
+        val queryResults = when {
+            shared == null -> {
+                // No answer, not an empty answer. Falling back keeps
+                // presentations working where the engine cannot decide, which
+                // is worth more than consistency. SharedDcqlMatcher has
+                // already logged why — with the exception, when there was one
+                // — so repeating it here would only double the noise on every
+                // call.
+                parsed
+            }
+
+            !shared.satisfiable -> {
+                // §6.4: "MUST NOT return any Credential(s)" — not even the
+                // queries that were answerable on their own. A request can ask
+                // for two credentials and get one; offering that one lets a
+                // user consent to a presentation that cannot satisfy the
+                // verifier.
+                //
+                // Reported once for the request rather than per query. The
+                // per-query line explains a decline as a missing claim, which
+                // is the usual cause and the wrong one here.
+                SharedDcqlMatcher.reportUnsatisfiable(parsed.flatMap { it.candidates.map { c -> c.id } })
+                parsed.map { it.copy(candidates = emptyList()) }
+            }
+
+            else -> parsed.map { result ->
+                val ids = shared.candidatesByQuery[result.queryId].orEmpty()
                 SharedDcqlMatcher.reportDifference(
                     result.queryId,
                     result.candidates.map { it.id },
