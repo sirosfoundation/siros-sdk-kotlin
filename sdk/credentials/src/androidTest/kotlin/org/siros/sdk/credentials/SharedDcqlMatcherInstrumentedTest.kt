@@ -36,12 +36,12 @@ class SharedDcqlMatcherInstrumentedTest {
     /** The engine loads and answers, rather than reporting itself unavailable. */
     @Test
     fun the_engine_runs_on_a_real_device() {
-        val byQuery = SharedDcqlMatcher.candidatesByQuery(
+        val outcome = SharedDcqlMatcher.evaluate(
             query("""{"credentials":[{"id":"q","format":"mso_mdoc","meta":{}}]}"""),
             emptyList(),
         )
-        assertNotNull("null means the native library did not load, not that nothing matched", byQuery)
-        assertTrue(byQuery!!.values.all { it.isEmpty() })
+        assertNotNull("null means the native library did not load, not that nothing matched", outcome)
+        assertTrue(outcome!!.candidatesByQuery.values.all { it.isEmpty() })
     }
 
     /**
@@ -71,20 +71,25 @@ class SharedDcqlMatcherInstrumentedTest {
      */
     @Test
     fun a_requested_claim_the_credential_lacks_prevents_a_match() {
-        val byQuery = SharedDcqlMatcher.candidatesByQuery(
+        val outcome = SharedDcqlMatcher.evaluate(
             query(
                 """{"credentials":[{"id":"q","format":"mso_mdoc","meta":{},
                      "claims":[{"path":["org.iso.18013.5.1","age_over_18"]}]}]}"""
             ),
             listOf(mdoc(1L)),
         )
-        assertEquals(emptyList<Long>(), byQuery.orEmpty()["q"].orEmpty())
+        assertEquals(emptyList<Long>(), outcome?.candidatesByQuery?.get("q").orEmpty())
+        assertEquals(
+            "one query, unanswerable, so the request as a whole is not satisfiable",
+            false,
+            outcome?.satisfiable,
+        )
     }
 
     /** A malformed query is "no answer", never a crash across the boundary. */
     @Test
     fun a_malformed_query_reports_no_answer_rather_than_crashing() {
-        assertEquals(null, SharedDcqlMatcher.candidatesByQuery(query("""{"credentials":42}"""), emptyList()))
+        assertEquals(null, SharedDcqlMatcher.evaluate(query("""{"credentials":42}"""), emptyList()))
     }
 }
 
@@ -93,7 +98,7 @@ class SharedDcqlMatcherInstrumentedTest {
  * engine for which credentials qualify.
  *
  * These cannot be JVM tests. Off-device the native library does not load,
- * `candidatesByQuery` returns null, and `matchDcql` falls back to the built-in
+ * `evaluate` returns null, and `matchDcql` falls back to the built-in
  * parser — so a JVM test would pass while exercising none of this.
  */
 @RunWith(AndroidJUnit4::class)
@@ -155,6 +160,31 @@ class CredentialMatcherDefersToSharedEngineTest {
         assertEquals(
             listOf(listOf("org.iso.18013.5.1", "age_over_18")),
             result.requestedClaims,
+        )
+    }
+
+    /**
+     * §6.4: when part of a request cannot be answered, none of it may be
+     * offered - not even the part that could.
+     *
+     * The engine reports per-query candidates regardless, so the answerable
+     * query here has one. Offering it would let a user consent to a
+     * presentation that cannot satisfy the verifier.
+     */
+    @Test
+    fun an_unanswerable_query_withholds_the_answerable_one_too() {
+        val out = CredentialMatcher.matchDcql(
+            query(
+                """{"credentials":[
+                     {"id":"answerable","format":"mso_mdoc","meta":{}},
+                     {"id":"unanswerable","format":"mso_mdoc","meta":{},
+                      "claims":[{"path":["org.iso.18013.5.1","age_over_18"]}]}]}"""
+            ),
+            listOf(mdoc(1L)),
+        )
+        assertTrue(
+            "no query may offer candidates when the request is unsatisfiable",
+            out.queryResults.all { it.candidates.isEmpty() },
         )
     }
 
