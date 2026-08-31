@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0]
+
+Highlights since v0.10.0 (1 commit). Sample app: versionName 0.11.0, versionCode 11.
+
+### Fixed
+- NFC static handover: send the mandatory "Complete List of 128-bit Service
+  UUIDs" AD (type `0x07`) in little-endian byte order, sending only the
+  single UUID matching the LE-Role-preferred mode - a real reader rejected
+  a 2-UUID AD outright and otherwise saw no UUIDs at all in our handover
+  message (#147)
+- BLE central-client mode: restart the scan window at the moment a real NFC
+  tap actually completes handover, instead of trusting a window that
+  started when the presentation screen mounted - the first scan attempt
+  reliably timed out before a real tap completed (#147)
+- BLE central-client/peripheral-server: distinguish a peer's own
+  session-termination status from an unexpected data-carrying message once
+  the session is already established, replying only in the latter case
+  (#147)
+- BLE central-client mode: add a grace delay before signaling end-of-transfer
+  after the final response chunk - sending it immediately raced a real
+  reader's background verification thread (#147)
+
 ## [0.10.0]
 
 Highlights since v0.9.0 (1 commit). Sample app: versionName 0.10.0, versionCode 10.
