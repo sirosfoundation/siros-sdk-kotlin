@@ -371,21 +371,31 @@ class BlePeripheralServer(
             try {
                 if (session.established) {
                     // Multiple request/response round trips within a single
-                    // connection aren't supported - rather than silently
-                    // dropping this message (leaving the reader with no
-                    // response and no reason to stop retrying, and this
-                    // role's outcome unresolved), tell it explicitly that the
-                    // session is over. Only this one connection is torn down
-                    // - advertising stays up so a genuine retry (a new
-                    // connection, which gets a fresh session - see
-                    // onConnectionStateChange) can still succeed.
-                    Timber.w("BlePeripheralServer: received a SessionData message after this session already completed - terminating this connection")
-                    sendNotification(
-                        ProximitySessionMessages.buildSessionData(
-                            encryptedData = null,
-                            status = ProximitySessionMessages.StatusCode.SESSION_TERMINATION,
-                        ),
-                    )
+                    // connection aren't supported. Two different cases land
+                    // here and need different responses: the reader sending
+                    // ITS OWN session-termination status (a normal, correct
+                    // way to close out after our response - just disconnect,
+                    // don't reply with another status onto a connection the
+                    // peer is already closing) versus the reader sending
+                    // some other, unexpected data-carrying message (tell it
+                    // explicitly the session is over, since silently
+                    // dropping it would leave the reader with no response
+                    // and no reason to stop retrying). Only this one
+                    // connection is torn down either way - advertising stays
+                    // up so a genuine retry (a new connection, which gets a
+                    // fresh session - see onConnectionStateChange) can still
+                    // succeed.
+                    if (ProximitySessionMessages.peekStatus(message) == ProximitySessionMessages.StatusCode.SESSION_TERMINATION) {
+                        Timber.d("BlePeripheralServer: reader sent its own session-termination status - disconnecting")
+                    } else {
+                        Timber.w("BlePeripheralServer: received a SessionData message after this session already completed - terminating this connection")
+                        sendNotification(
+                            ProximitySessionMessages.buildSessionData(
+                                encryptedData = null,
+                                status = ProximitySessionMessages.StatusCode.SESSION_TERMINATION,
+                            ),
+                        )
+                    }
                     connectedDevice?.let { gattServer?.cancelConnection(it) }
                     return@launch
                 }

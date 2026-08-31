@@ -237,39 +237,69 @@ fun ProximityEngagementScreen(
                     }
                 },
             )
-            centralClient = BleCentralClient(
-                context = context,
-                engagement = engagement,
-                getHandoverSelectBytes = { ActiveEngagement.handoverSelectBytes },
-                getCredentials = getCredentials,
-                signPresentation = signPresentation,
-                requestConsent = requestConsent,
-                filterEligible = filterEligible,
-                evaluateReaderTrust = evaluateReaderTrust,
-                onStep = { step -> uiScope.launch(Dispatchers.Main.immediate) { currentStep = step } },
-                onComplete = { success ->
-                    uiScope.launch(Dispatchers.Main.immediate) {
-                        centralOutcome = success
-                        if (success) {
-                            peripheralServer?.stop()
-                            result = true
-                        } else {
-                            // See the peripheralServer onComplete's matching
-                            // comment above - same reasoning, mirrored role.
-                            centralClient?.stop()
-                            if (peripheralOutcome != null) {
-                                result = false
+            fun startCentralClient() {
+                centralClient?.stop()
+                centralOutcome = null
+                centralClient = BleCentralClient(
+                    context = context,
+                    engagement = engagement,
+                    getHandoverSelectBytes = { ActiveEngagement.handoverSelectBytes },
+                    getCredentials = getCredentials,
+                    signPresentation = signPresentation,
+                    requestConsent = requestConsent,
+                    filterEligible = filterEligible,
+                    evaluateReaderTrust = evaluateReaderTrust,
+                    onStep = { step -> uiScope.launch(Dispatchers.Main.immediate) { currentStep = step } },
+                    onComplete = { success ->
+                        uiScope.launch(Dispatchers.Main.immediate) {
+                            centralOutcome = success
+                            if (success) {
+                                peripheralServer?.stop()
+                                result = true
+                            } else {
+                                // See the peripheralServer onComplete's matching
+                                // comment above - same reasoning, mirrored role.
+                                centralClient?.stop()
+                                if (peripheralOutcome != null) {
+                                    result = false
+                                }
                             }
                         }
-                    }
-                },
-            )
+                    },
+                ).also { it.start() }
+            }
+            startCentralClient()
             peripheralServer.start()
-            centralClient.start()
+            // A physical NFC tap completes at an unpredictable, possibly much
+            // later time than this effect running (walk up, position, hold
+            // steady - real seconds, not milliseconds) - see
+            // ActiveEngagement.onHandoverServed's doc comment. A reader that
+            // picked mdoc central client mode via NFC can only start
+            // advertising for BleCentralClient to find once it actually has
+            // the engagement, so give the scan a fresh window at exactly
+            // that moment rather than trusting the window that started when
+            // this effect first ran (which may already be gone).
+            ActiveEngagement.onHandoverServed = {
+                uiScope.launch(Dispatchers.Main.immediate) {
+                    // Deliberately NOT gated on centralOutcome == null: the
+                    // very common case is that the FIRST central-client scan
+                    // (started at mount, before the physical NFC tap even
+                    // happens) already timed out and set centralOutcome to
+                    // false well before this signal fires - that's exactly
+                    // the stale failure this restart exists to override, not
+                    // a reason to skip it. Only the overall result matters:
+                    // once the whole presentation has concluded (either way),
+                    // there's nothing left to restart for.
+                    if (result == null) {
+                        startCentralClient()
+                    }
+                }
+            }
         } else {
             blePermissionsDenied = true
         }
         onDispose {
+            ActiveEngagement.onHandoverServed = null
             peripheralServer?.stop()
             centralClient?.stop()
         }
