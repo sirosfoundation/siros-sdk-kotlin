@@ -55,32 +55,21 @@ internal object SharedDcqlMatcher {
                 builder.build()
             }
             val outcome = ffiMatchDcql(blob, dcqlQuery.toString())
-            if (outcome.dropped > 0u) {
-                // The engine bounds how many combinations it returns, because the
-                // count is a product of the per-query candidate counts. Deriving
-                // per-query candidates from a truncated list would miss
-                // credentials that do qualify, and this result is used to *filter*
-                // — so a missing one is silently dropped from what the user is
-                // offered, which is the exact failure this component is prone to.
-                //
-                // No answer rather than a partial one. The engine has the complete
-                // per-query candidates internally; exposing them directly, instead
-                // of reconstructing them from combinations, is the real fix and
-                // needs a change on the Rust side.
-                Timber.i(
-                    "Shared engine truncated %d combinations; keeping the built-in matcher's " +
-                        "answer rather than filtering on a partial one",
-                    outcome.dropped.toInt(),
-                )
-                return null
+            // `matches`, not `combinations`. The engine bounds how many
+            // combinations it returns, because the count is a product of the
+            // per-query candidate counts — so reconstructing per-query
+            // candidates from them would omit credentials that do qualify, and
+            // this result is used to *filter*. An omission there is a
+            // credential silently missing from what the user is offered, which
+            // is the exact failure this component is prone to.
+            //
+            // `matches` is the engine's own per-query candidates, complete and
+            // uncapped, so `dropped` no longer bears on this answer at all.
+            outcome.matches.associate { queryMatch ->
+                queryMatch.queryId to queryMatch.credentials
+                    .mapNotNull { it.credentialId.toLongOrNull() }
+                    .distinct()
             }
-            outcome
-                .combinations
-                .flatMap { it.members }
-                .groupBy { it.queryId }
-                .mapValues { (_, members) ->
-                    members.mapNotNull { it.credentialId.toLongOrNull() }.distinct()
-                }
         } catch (e: Throwable) {
             // Deliberately broad. This is the first call into a native library
             // on the presentation path, and an UnsatisfiedLinkError from a
