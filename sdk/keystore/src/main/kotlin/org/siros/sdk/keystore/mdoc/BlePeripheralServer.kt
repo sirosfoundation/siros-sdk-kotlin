@@ -354,6 +354,7 @@ class BlePeripheralServer(
         }
     }
 
+    @SuppressLint("MissingPermission")
     private fun handleDataWrite(chunk: ByteArray) {
         // This is invoked directly from the system's GattServerCallback, not
         // inside the scope.launch below - an uncaught exception here (e.g.
