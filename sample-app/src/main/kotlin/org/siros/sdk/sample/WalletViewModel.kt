@@ -638,6 +638,36 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _availableWscdPluginIds = MutableStateFlow<List<String>>(emptyList())
     val availableWscdPluginIds: StateFlow<List<String>> = _availableWscdPluginIds
 
+    // Keyed by manager instance -> the transport mode it was last registered
+    // with. A plain "registered once, ever" guard (as R2PS still uses below)
+    // is wrong here: buildWalletConfig() eagerly registers fido2 with
+    // whatever _fido2TransportMode happened to be at WALLET-CONSTRUCTION
+    // time (before the user can touch the dev screen's transport toggle) -
+    // a one-shot guard would then permanently lock that manager to the
+    // wrong transport, ignoring every later switch. Re-registering on the
+    // SAME manager is safe (Rust's register_plugin is a plain HashMap
+    // insert, no destructive side effect), so re-register whenever the
+    // desired mode differs from what's currently registered, rather than
+    // only ever once.
+    // Declared here, before [wallet], since [buildWalletConfig] (run as part
+    // of constructing [wallet]) reads it via [buildWscdKeystore] ->
+    // [registerFido2OnSigner] - a property read inside another property's
+    // initializer must already be initialized itself, i.e. appear earlier in
+    // the class body (see [_selectedPluginId]/[_fido2TransportMode] above for
+    // the same constraint). Left at its natural declaration point (right
+    // next to [registerFido2OnSigner], far below [wallet]) threw the exact
+    // same class of NPE those properties' own doc comments already warn
+    // about - "$propertyName must not be null" from Kotlin's own
+    // not-yet-initialized-property intrinsics check - confirmed live on a
+    // real device: buildWscdKeystore's try/catch swallowed it and silently
+    // fell back to a plugin registration with no restored key state, making
+    // every existing credential bound to a FIDO2/hardware key look like a
+    // "shadow" (key-unavailable) credential even though the key itself was
+    // never actually lost.
+    private val fido2RegisteredTransport = java.util.Collections.synchronizedMap(
+        java.util.IdentityHashMap<WscdManager, Fido2TransportMode>(),
+    )
+
     // ── Wallet ──────────────────────────────────────────────────────
 
     private var wallet: SirosWallet = SirosWallet.create(
@@ -1315,21 +1345,6 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         manager.registerR2psPlugin(r2psConfig, OkHttpR2psTransport(serverUrl = _r2psServerUrl.value))
         Log.i(TAG, "R2PS plugin registered at ${_r2psServerUrl.value}")
     }
-
-    // Keyed by manager instance -> the transport mode it was last registered
-    // with. A plain "registered once, ever" guard (as R2PS still uses above)
-    // is wrong here: buildWalletConfig() eagerly registers fido2 with
-    // whatever _fido2TransportMode happened to be at WALLET-CONSTRUCTION
-    // time (before the user can touch the dev screen's transport toggle) -
-    // a one-shot guard would then permanently lock that manager to the
-    // wrong transport, ignoring every later switch. Re-registering on the
-    // SAME manager is safe (Rust's register_plugin is a plain HashMap
-    // insert, no destructive side effect), so re-register whenever the
-    // desired mode differs from what's currently registered, rather than
-    // only ever once.
-    private val fido2RegisteredTransport = java.util.Collections.synchronizedMap(
-        java.util.IdentityHashMap<WscdManager, Fido2TransportMode>(),
-    )
 
     /**
      * Register the FIDO2 previewSign plugin on the given manager with
