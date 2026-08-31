@@ -153,9 +153,19 @@ class UniFFISigner(
      */
     override suspend fun exportPrivateKeypairs(): List<ExportedPrivateKeypair> = withContext(Dispatchers.IO) {
         if (defaultPluginId != "softkey") return@withContext emptyList()
-        val rawKeys = Json.parseToJsonElement(
+        // The container's top level is an OBJECT ({"keys": [...], "lifecycle":
+        // {...}}, per SoftkeyPlugin's Rust-side ContainerData), not a bare
+        // array - confirmed live via a diagnostic log of the raw bytes. Every
+        // key was previously silently dropped here (the `as? JsonArray` cast
+        // of the whole object always failed, falling through to emptyList()),
+        // meaning a softkey-plugin credential's key never actually survived
+        // into privatedata's S.keypairs despite generateKey() succeeding -
+        // the credential looked "shadow" (no available key) on the very next
+        // app restart, 100% of the time.
+        val container = Json.parseToJsonElement(
             String(ffi.exportSoftkeyContainer(), Charsets.UTF_8)
-        ) as? JsonArray ?: return@withContext emptyList()
+        ) as? JsonObject ?: return@withContext emptyList()
+        val rawKeys = container["keys"] as? JsonArray ?: return@withContext emptyList()
 
         rawKeys.mapNotNull { element ->
             val obj = element as? JsonObject ?: return@mapNotNull null
