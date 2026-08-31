@@ -320,7 +320,20 @@ class BleCentralClient(
             scope.launch {
                 try {
                     if (session.established) {
-                        Timber.w("BleCentralClient: additional SessionData messages after the first request are not yet handled")
+                        // See BlePeripheralServer's matching branch: rather
+                        // than silently dropping this and leaving the reader
+                        // with no response, tell it explicitly the session is
+                        // over. This role's own lifecycle is already a
+                        // single scan-and-connect attempt (no retry to
+                        // preserve), so it's safe to just disconnect.
+                        Timber.w("BleCentralClient: received a SessionData message after this session already completed - terminating this connection")
+                        sendData(
+                            ProximitySessionMessages.buildSessionData(
+                                encryptedData = null,
+                                status = ProximitySessionMessages.StatusCode.SESSION_TERMINATION,
+                            ),
+                        )
+                        gatt.disconnect()
                         return@launch
                     }
                     when (val result = session.handleSessionEstablishment(message)) {
