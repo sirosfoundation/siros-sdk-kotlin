@@ -122,6 +122,16 @@ data class SignResponseMessage(
     @SerialName("proof_jwt") val proofJwt: String? = null,
     @SerialName("vp_token") val vpToken: String? = null,
     val proofs: List<ProofObject>? = null,
+    /**
+     * Response to a `request_attestation` sign request (go-wallet-backend
+     * `SignActionRequestAttestation`): the Wallet Instance Attestation JWT
+     * (`oauth-client-attestation+jwt`) and the per-flow PoP
+     * (`oauth-client-attestation-pop+jwt`) signed with the instance key over
+     * the `audience`/`issuer` the engine supplied in [SignRequestParams].
+     * Both null means "no attestation available - proceed without".
+     */
+    @SerialName("client_attestation") val clientAttestation: String? = null,
+    @SerialName("client_attestation_pop") val clientAttestationPoP: String? = null,
     val timestamp: String? = null,
 )
 
