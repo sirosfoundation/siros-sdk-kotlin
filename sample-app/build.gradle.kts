@@ -37,8 +37,15 @@ android {
             // ephemeral, so without this every CI-built debug APK gets a
             // fresh random signing key, silently invalidating any
             // Digital Asset Links (assetlinks.json) fingerprint entry
-            // added for a previous release. Not sensitive - this is a
-            // debug-only key, never used for a Play Store upload.
+            // added for a previous release.
+            //
+            // The key is public: this repository is, and so is the
+            // password. That is the trust boundary, so be clear about what
+            // an assetlinks.json entry for its fingerprint means - "some
+            // debug build of the sample app", which anyone with the file
+            // can produce, never "a build we vouch for". It is only fit for
+            // development and test environments, and is never used for a
+            // Play Store upload; release builds sign with their own key.
             storeFile = file("debug.keystore")
             storePassword = "android"
             keyAlias = "androiddebugkey"
