@@ -3410,6 +3410,90 @@ class SirosWalletTest {
     }
 
     @Test
+    fun handleDCAPIRequest_credentialMatchesBothZkAndPlainQuery_usesFirstMatchForZkFlag() = runTest(dispatcher) {
+        // Regression test (found in review): a single stored mso_mdoc
+        // credential can legitimately appear as a candidate under BOTH a
+        // plain "mso_mdoc" query and an "mso_mdoc_zk" query in the same
+        // request (CredentialMatcher.matchesFormat's own zk-matches-plain
+        // rule). Which one actually governs the presentation - and thus
+        // whether a ZK proof or a raw disclosure happens - is decided by
+        // first-match over queryResults, same order as the request's own
+        // "credentials" array. Here the plain query comes first, so this
+        // MUST be a raw disclosure: PresentationRecord.zkProof must be
+        // false and the raw-mdoc signing path must be used, never the ZK
+        // one. A previous bug computed the zk-eligible id set as "is this
+        // id a candidate under ANY zk query" independently of first-match,
+        // so it wrongly reported this same case as a ZK presentation.
+        io.mockk.mockkStatic(android.util.Base64::class)
+        every { android.util.Base64.decode(any<String>(), any()) } returns "fake-cbor".toByteArray()
+        every { android.util.Base64.encodeToString(any(), any()) } returns "ZGV2aWNlLXJlc3BvbnNl"
+        try {
+            val apiClient = mockk<BackendApiClient>()
+            coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
+            val keystore = mockk<KeystoreManager>()
+            every { keystore.isUnlocked } returns false
+            every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+            coEvery {
+                keystore.signMdocPresentationForDCAPI(any(), any(), any(), any(), any())
+            } returns "device-response".toByteArray()
+            val store = FakeCredentialStore(mutableListOf(
+                StoredCredential(
+                    id = 1L,
+                    format = "mso_mdoc",
+                    raw = "ZmFrZS1jYm9y",
+                    metadata = CredentialMetadata(name = "mDL", doctype = "org.iso.18013.5.1.mDL"),
+                    batchId = 1L,
+                    instanceId = 0,
+                ),
+            ))
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
+                "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                "apiClient" to apiClient,
+                "keystore" to keystore,
+                "credentialStore" to store,
+                "trustCache" to TrustCache(),
+                "_presentationHistory" to mutableListOf<PresentationRecord>(),
+            )
+
+            val requestJson = wrapDCAPIRequest("openid4vp-v1-unsigned", buildJsonObject {
+                put("nonce", "dc-nonce-mixed")
+                put("response_mode", "dc_api")
+                putJsonObject("dcql_query") {
+                    putJsonArray("credentials") {
+                        add(buildJsonObject {
+                            put("id", "mdl_plain")
+                            put("format", "mso_mdoc")
+                            putJsonObject("meta") { put("doctype_value", "org.iso.18013.5.1.mDL") }
+                        })
+                        add(buildJsonObject {
+                            put("id", "mdl_zk")
+                            put("format", "mso_mdoc_zk")
+                            putJsonObject("meta") { put("doctype_value", "org.iso.18013.5.1.mDL") }
+                        })
+                    }
+                }
+            })
+
+            wallet.handleDCAPIRequest(requestJson, origin = "https://relying-party.example")
+
+            coVerify(exactly = 1) {
+                keystore.signMdocPresentationForDCAPI(
+                    credentialBytes = any(),
+                    disclosedClaims = any(),
+                    nonce = "dc-nonce-mixed",
+                    origin = "https://relying-party.example",
+                    encryptionPublicJwkThumbprint = null,
+                )
+            }
+            assertEquals(1, wallet.presentationHistory.size)
+            assertEquals(false, wallet.presentationHistory.single().zkProof)
+        } finally {
+            io.mockk.unmockkStatic(android.util.Base64::class)
+        }
+    }
+
+    @Test
     fun handleDCAPIRequest_noMatchingCredential_throwsWalletException() = runTest(dispatcher) {
         // Selection/consent for DC API happens natively via the OS's own
         // credential picker before this Activity/call is ever reached - so

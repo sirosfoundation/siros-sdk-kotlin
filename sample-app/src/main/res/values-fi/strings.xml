@@ -42,6 +42,10 @@
     <!-- Presentation consent screen -->
     <string name="presentation_consent_title">Todistuspyyntö</string>
 
+    <!-- DC API loading screen -->
+    <string name="dcapi_zk_proof_status">Luodaan nollatietotodistetta…</string>
+    <string name="dcapi_zk_proof_detail">Henkilötietoja ei jaeta - vain kryptografinen todiste siitä, että täytät pyynnön vaatimukset.</string>
+
     <!-- Credential detail screen -->
     <string name="credential_detail_title">Todistuksen tiedot</string>
     <string name="credential_detail_tab_info">Tiedot</string>
@@ -94,6 +98,7 @@
     <string name="history_credentials_shared">%1$d todistusta jaettu</string>
     <string name="history_success">Onnistui</string>
     <string name="history_failed">Epäonnistui</string>
+    <string name="history_zk_proof">Nollatietotodiste</string>
 
     <!-- QR Scanner -->
     <string name="qr_scanner_title">Skannaa QR-koodi</string>

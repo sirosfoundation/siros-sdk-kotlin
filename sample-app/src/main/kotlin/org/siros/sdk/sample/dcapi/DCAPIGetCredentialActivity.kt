@@ -7,12 +7,22 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
 import androidx.credentials.DigitalCredential
 import androidx.credentials.ExperimentalDigitalCredentialApi
 import androidx.credentials.GetCredentialResponse
@@ -23,8 +33,10 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import org.siros.sdk.credentials.CredentialMatcher
 import org.siros.sdk.credentials.WalletException
 import org.siros.sdk.sample.R
+import org.siros.sdk.wallet.dcapi.DCAPIRequestParser
 import timber.log.Timber
 
 /**
@@ -57,7 +69,6 @@ import timber.log.Timber
 class DCAPIGetCredentialActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { LoadingSpinner() }
 
         val request = PendingIntentHandler.retrieveProviderGetCredentialRequest(intent)
         if (request == null) {
@@ -72,6 +83,19 @@ class DCAPIGetCredentialActivity : ComponentActivity() {
             finishWithError("No digital credential option in request")
             return
         }
+
+        // Cheap, synchronous pre-check (no network/trust eval - see
+        // CredentialMatcher.isZkRequest's own doc comment) so the loading UI
+        // can immediately signal "this is a zero-knowledge proof, not a raw
+        // disclosure" instead of a generic spinner, without waiting for
+        // SirosWallet.handleDCAPIRequest's full async request handling below.
+        val isZkProof = try {
+            DCAPIRequestParser.parse(digitalOption.requestJson).dcqlQuery
+                ?.let { CredentialMatcher.isZkRequest(it) } == true
+        } catch (e: Exception) {
+            false
+        }
+        setContent { LoadingSpinner(isZkProof = isZkProof) }
 
         // The verified origin the OS/browser attests, NOT anything read from
         // the request body itself - resolved against Google Password
@@ -170,11 +194,37 @@ class DCAPIGetCredentialActivity : ComponentActivity() {
 }
 
 @Composable
-private fun LoadingSpinner() {
+private fun LoadingSpinner(isZkProof: Boolean = false) {
     Box(
         modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)),
         contentAlignment = Alignment.Center,
     ) {
-        CircularProgressIndicator(color = Color.White)
+        if (isZkProof) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    imageVector = Icons.Filled.Lock,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.padding(bottom = 12.dp),
+                )
+                CircularProgressIndicator(color = Color.White)
+                Text(
+                    text = stringResource(R.string.dcapi_zk_proof_status),
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 16.dp, start = 24.dp, end = 24.dp),
+                )
+                Text(
+                    text = stringResource(R.string.dcapi_zk_proof_detail),
+                    color = Color.White.copy(alpha = 0.8f),
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 8.dp, start = 24.dp, end = 24.dp),
+                )
+            }
+        } else {
+            CircularProgressIndicator(color = Color.White)
+        }
     }
 }

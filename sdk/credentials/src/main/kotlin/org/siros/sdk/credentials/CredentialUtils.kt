@@ -502,15 +502,23 @@ object CredentialUtils {
     }
 
     /**
-     * Every credential format this SDK currently supports discloses via
-     * salted-hash element digests (mdoc's MSO, SD-JWT's `_sd` array) - none
-     * is a real ZKP predicate proof - so [CredentialConsumptionPolicy.CONSUME_NON_ZKP]
-     * is indistinguishable from [CredentialConsumptionPolicy.CONSUME_ALL]
-     * today. Kept as a real, separate policy value (not collapsed into one)
-     * since it's the right shape for once a ZKP-based format exists; this
-     * function is the single place that would need updating then.
+     * True for `"mso_mdoc_zk"` - a real ZKP predicate-proof format now exists
+     * (`LongfellowZkProofSystem`, wired into `SirosWallet.handleDCAPIRequest`),
+     * unlike every other format this SDK supports, which discloses via
+     * salted-hash element digests (mdoc's MSO, SD-JWT's `_sd` array).
+     *
+     * Note this checks a *requested/presented* format, not necessarily
+     * [StoredCredential.format] - a ZK presentation is a presentation-time
+     * transform of an ordinarily-stored `"mso_mdoc"` credential (see
+     * `CredentialMatcher.matchesFormat`'s doc comment), so the stored
+     * instance's own format is never `"mso_mdoc_zk"`. Callers that know which
+     * *query* format matched a given instance for the presentation in
+     * progress should pass that via [eligibleInstances]'s `isZkPresentation`
+     * parameter rather than relying on this function's default fallback of
+     * checking [StoredCredential.format] directly (which - for exactly the
+     * reason above - never returns true).
      */
-    private fun isZkpFormat(format: String): Boolean = false
+    private fun isZkpFormat(format: String): Boolean = format.equals("mso_mdoc_zk", ignoreCase = true)
 
     /**
      * Instances from [instances] (all copies of one batch - see
@@ -539,12 +547,23 @@ object CredentialUtils {
      * key specifically so a verifier can't correlate repeated presentations
      * by a reused key/signature; reusing an already-presented instance
      * would throw that guarantee away.
+     *
+     * @param isZkPresentation Whether presenting [instances]'s given member
+     * THIS time will be a ZK proof rather than a raw disclosure - defaults to
+     * checking [StoredCredential.format] via [isZkpFormat] (which, per that
+     * function's own doc comment, is never true, since ZK-ness lives in the
+     * matched DCQL query's format, not the stored credential's). Callers that
+     * know the matched query format for each candidate (e.g.
+     * `SirosWallet.handleDCAPIRequest`) should pass a real resolver so
+     * [CredentialConsumptionPolicy.CONSUME_NON_ZKP] actually distinguishes
+     * ZK presentations (never consumed) from raw ones (consumed).
      */
     fun eligibleInstances(
         instances: List<StoredCredential>,
         policy: CredentialConsumptionPolicy,
         presentationHistory: List<PresentationRecord>,
         availableKeyIds: Set<String>,
+        isZkPresentation: (StoredCredential) -> Boolean = { isZkpFormat(it.format) },
     ): List<StoredCredential> {
         // A single pass building this set, rather than rescanning all of
         // presentationHistory per instance (O(instances x history) before),
@@ -553,7 +572,7 @@ object CredentialUtils {
         return instances.filter { instance ->
             val keyAvailable = hasAvailableKey(instance.kid, availableKeyIds)
             val consumptionEligible = policy == CredentialConsumptionPolicy.NEVER_CONSUME || run {
-                val consumes = policy == CredentialConsumptionPolicy.CONSUME_ALL || !isZkpFormat(instance.format)
+                val consumes = policy == CredentialConsumptionPolicy.CONSUME_ALL || !isZkPresentation(instance)
                 !consumes || instance.id !in usedCredentialIds
             }
             keyAvailable && consumptionEligible
