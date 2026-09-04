@@ -126,7 +126,6 @@ object SirosCredentialRegistry {
         useStockMatcher: Boolean = false,
     ) {
         if (credentials.isEmpty()) {
-            latestRequest.set(null)
             clear(context)
             return
         }
@@ -294,8 +293,14 @@ object SirosCredentialRegistry {
      * clear does not reach the latter, so without the second call a wallet
      * that logged out would keep offering its last snapshot under the legacy
      * type until it next logged in.
+     *
+     * Also forgets the last snapshot, so a background icon sweep that
+     * finishes after this does not put it straight back. That has to happen
+     * here and not only in [refresh]'s empty-list path: this is public, and
+     * logout calls it directly.
      */
     suspend fun clear(context: Context) {
+        latestRequest.set(null)
         try {
             RegistryManager.create(context)
                 .clearCredentialRegistry(ClearCredentialRegistryRequest(true))

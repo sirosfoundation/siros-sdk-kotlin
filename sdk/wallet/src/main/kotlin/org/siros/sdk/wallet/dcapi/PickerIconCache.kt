@@ -13,6 +13,7 @@ import org.siros.sdk.credentials.FetchCacheStatus
 import timber.log.Timber
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URI
 import java.security.MessageDigest
@@ -128,7 +129,7 @@ class PickerIconCache(
         val missFile = missFile(logoUrl, backgroundColor)
         try {
             dir.mkdirs()
-            pngFile(logoUrl, backgroundColor).writeBytes(png)
+            writeAtomically(pngFile(logoUrl, backgroundColor), png)
             // A miss marker that outlives its icon is harmless to [cached] and
             // [isDue], which check for the PNG first - but it is still wrong
             // on disk, so say so rather than silently leaving it.
@@ -139,6 +140,23 @@ class PickerIconCache(
         } catch (e: Exception) {
             Timber.w(e, "PickerIconCache: failed to store icon for $logoUrl")
         }
+    }
+
+    /**
+     * Write via a sibling temp file and rename, so [target] is only ever the
+     * previous complete file or the new one. A write interrupted halfway would
+     * otherwise leave a truncated-but-non-empty PNG that [cached] serves
+     * forever, since nothing downstream validates the bytes.
+     */
+    private fun writeAtomically(target: File, bytes: ByteArray) {
+        val tmp = File(target.parentFile, "${target.name}.tmp")
+        tmp.writeBytes(bytes)
+        if (tmp.renameTo(target)) return
+        // Some filesystems refuse to rename over an existing file.
+        val cleared = target.delete() || !target.exists()
+        if (cleared && tmp.renameTo(target)) return
+        if (!tmp.delete()) Timber.d("PickerIconCache: ${tmp.name} left behind")
+        throw IOException("could not move ${tmp.name} into place")
     }
 
     /** Extend (or start) the backoff for a logo that yielded no icon. Caller holds [mutex]. */
