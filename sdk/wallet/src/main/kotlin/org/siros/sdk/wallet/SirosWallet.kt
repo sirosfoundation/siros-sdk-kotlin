@@ -5090,7 +5090,15 @@ class SirosWallet private constructor(
     ) {
         scope.launch {
             try {
-                val dcqlQuery = payload?.get("dcql_query")?.jsonObject
+                // `.jsonObject` throws on JsonNull rather than treating it
+                // like absent - a real NIST reference-verifier request over
+                // mdoc-openid4vp:// (a non-DCQL request shape) has the
+                // backend relay this key as JSON `null` rather than omitting
+                // it, which crashed here and got misreported to the engine
+                // as "User declined the request". `as? JsonObject` treats
+                // any non-object value (absent, null, or otherwise) the same
+                // way the `dcqlQuery != null` fallback below already expects.
+                val dcqlQuery = payload?.get("dcql_query") as? JsonObject
                 val verifierInfo = payload?.get("verifier")?.jsonObject
                 // The backend defaults verifier.name to the raw client_id
                 // (e.g. "x509_san_dns:verifier.multipaz.org") whenever the
