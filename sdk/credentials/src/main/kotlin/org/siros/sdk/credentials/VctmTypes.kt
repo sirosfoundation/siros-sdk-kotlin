@@ -142,3 +142,15 @@ data class VctmClaimDisplay(
     /** User-facing description. */
     val description: String? = null,
 )
+
+/**
+ * A VCTM together with the exact bytes it arrived as.
+ *
+ * SD-JWT VC Type Metadata's `vct#integrity` is a digest over the document as
+ * served, so verifying it needs the original bytes: re-serialising the parsed
+ * form would change key order and whitespace and hash to something else.
+ */
+data class VctmDocument(
+    val raw: String,
+    val vctm: Vctm,
+)

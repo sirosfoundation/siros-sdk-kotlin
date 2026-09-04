@@ -69,7 +69,7 @@ class VctmFetcher(
 
     private val cached = CachedDocumentFetcher(
         namespace = "vctm",
-        parse = ::parseVctm,
+        parse = ::parseVctmDocument,
         memoryTtlMillis = cacheTtlSeconds * 1000,
         persistentCache = persistentCache,
         freshTtlMillis = persistentFreshTtlSeconds * 1000,
@@ -106,7 +106,22 @@ class VctmFetcher(
         scope: String,
         vct: String? = null,
         registryUrl: String? = null,
-    ): Vctm? = cached.fetch(listOf(issuerUrl, scope, vct, registryUrl)) {
+    ): Vctm? = fetchDocument(issuerUrl, scope, vct, registryUrl)?.vctm
+
+    /**
+     * The parsed VCTM together with the exact bytes it was parsed from.
+     *
+     * The raw document is what an integrity digest is computed over, so a
+     * caller checking `vct#integrity` needs it rather than a re-serialisation
+     * of the parsed form - which would differ in key order and whitespace and
+     * hash to something else entirely.
+     */
+    suspend fun fetchDocument(
+        issuerUrl: String,
+        scope: String,
+        vct: String? = null,
+        registryUrl: String? = null,
+    ): VctmDocument? = cached.fetch(listOf(issuerUrl, scope, vct, registryUrl)) {
         // Only the network hop needs IO; cache reads that answer without it
         // (the common case after the first launch) stay on the caller's
         // dispatcher, and a background revalidation launched by the cache
@@ -157,6 +172,9 @@ class VctmFetcher(
      * Useful when the VCTM is embedded in the issuer metadata response
      * or available from a local file.
      */
+    private fun parseVctmDocument(jsonString: String): VctmDocument? =
+        parseVctm(jsonString)?.let { VctmDocument(raw = jsonString, vctm = it) }
+
     fun parseVctm(jsonString: String): Vctm? {
         return try {
             json.decodeFromString(Vctm.serializer(), jsonString)
