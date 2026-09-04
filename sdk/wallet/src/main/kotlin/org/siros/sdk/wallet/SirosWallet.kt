@@ -83,6 +83,7 @@ import org.siros.sdk.transport.CredentialNotifier
 import org.siros.sdk.transport.engine.CredentialMatch
 import org.siros.sdk.transport.engine.CredentialNotificationEvent
 import org.siros.sdk.transport.engine.ProofObject
+import org.siros.sdk.transport.engine.SignRequestMessage
 import org.siros.sdk.transport.engine.WalletEngineSession
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -1329,27 +1330,90 @@ class SirosWallet private constructor(
      */
     private suspend fun resolveClientAttestation(issuerUrl: String): Pair<String, String>? {
         val wia = ensureWalletInstanceAttestation() ?: return null
+        val asUrl = try {
+            getIssuerMetadata(issuerUrl).authorizationServers
+                ?.firstOrNull { it.isNotBlank() } ?: issuerUrl
+        } catch (e: Exception) {
+            issuerUrl
+        }
+        val pop = buildClientAttestationPoP(asUrl, clientAttestationClientId()) ?: return null
+        return wia to pop
+    }
+
+    /**
+     * Sign a per-flow OAuth Client Attestation PoP
+     * (`oauth-client-attestation-pop+jwt`, draft-ietf-oauth-attestation-based-client-auth-10
+     * §4.2) with this instance's key: `aud` = [asUrl] (the authorization
+     * server the PAR/token request is sent to), `iss` = [clientId] (must equal
+     * the WIA's `sub`), plus the AS's `challenge` when it publishes a
+     * `challenge_endpoint` - see [fetchAttestationChallenge].
+     *
+     * Shared by the client-side [resolveClientAttestation] path and the
+     * engine-requested `request_attestation` sign action, where
+     * go-wallet-backend supplies [asUrl]/[clientId] itself after resolving the
+     * issuer's metadata (its `SignActionRequestAttestation`).
+     *
+     * Best-effort: returns null on any failure rather than throwing.
+     */
+    private suspend fun buildClientAttestationPoP(asUrl: String, clientId: String): String? {
         return try {
-            val asUrl = try {
-                getIssuerMetadata(issuerUrl).authorizationServers
-                    ?.firstOrNull { it.isNotBlank() } ?: issuerUrl
-            } catch (e: Exception) {
-                issuerUrl
-            }
             val challenge = fetchAttestationChallenge(asUrl)
             val keyId = ensureInstanceKeyId()
-            val pop = keystore.generateKeyProof(
+            keystore.generateKeyProof(
                 keyId = keyId,
                 typ = "oauth-client-attestation-pop+jwt",
-                issuer = clientAttestationClientId(),
+                issuer = clientId,
                 audience = asUrl,
                 extraClaims = challenge?.let { mapOf("challenge" to it) } ?: emptyMap(),
             )
-            wia to pop
         } catch (e: Exception) {
             Timber.w(e, "Failed to generate client attestation PoP")
             null
         }
+    }
+
+    /**
+     * Answer the engine's `request_attestation` sign request
+     * (go-wallet-backend `SignActionRequestAttestation`): the backend sends it
+     * from `OID4VCIHandler.Execute` once it has resolved the issuer's
+     * authorization server, whenever the flow_start carried no attestation,
+     * with `params.audience` = that AS (the PoP `aud`) and `params.issuer` =
+     * the flow's effective OAuth client_id (the PoP `iss`).
+     *
+     * ALWAYS sends exactly one sign_response: the WIA + PoP when available,
+     * otherwise an empty one so the backend proceeds without wallet
+     * attestation immediately - its `RequestSign` otherwise blocks the whole
+     * issuance for its 30 s `ErrSignTimeout` waiting on us. Never throws.
+     */
+    private suspend fun handleRequestAttestation(engine: WalletEngineSession, msg: SignRequestMessage) {
+        val audience = msg.params.audience?.takeIf { it.isNotBlank() }
+        val clientId = msg.params.issuer?.takeIf { it.isNotBlank() } ?: clientAttestationClientId()
+        var wia: String? = null
+        var pop: String? = null
+        try {
+            if (audience == null) {
+                Timber.w("request_attestation for flow ${msg.flowId} carried no audience; declining")
+            } else {
+                wia = ensureWalletInstanceAttestation()
+                if (wia == null) {
+                    Timber.d("No Wallet Instance Attestation available for flow ${msg.flowId}; declining")
+                } else {
+                    pop = buildClientAttestationPoP(audience, clientId)
+                }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to resolve client attestation for flow ${msg.flowId}; declining")
+        }
+        val attested = wia != null && pop != null
+        Timber.d("Sending request_attestation response for flow ${msg.flowId} (attested=$attested, aud=$audience, iss=$clientId)")
+        engine.sendSignResponse(
+            flowId = msg.flowId,
+            messageId = msg.messageId,
+            clientAttestation = if (attested) wia else null,
+            clientAttestationPoP = if (attested) pop else null,
+        )
     }
 
     /**
@@ -3881,8 +3945,16 @@ class SirosWallet private constructor(
                             engine.sendSignResponse(msg.flowId, vpToken = vpToken, messageId = msg.messageId)
                             Timber.d("VP sign response sent successfully for flow ${msg.flowId}")
                         }
+                        "request_attestation" -> handleRequestAttestation(engine, msg)
                         else -> {
-                            Timber.w("Unknown sign action: ${msg.action}")
+                            // go-wallet-backend's RequestSign only unblocks on a
+                            // sign_response carrying this message_id (there is no
+                            // sign-error message); staying silent would stall the
+                            // flow for its full 30 s ErrSignTimeout. An empty
+                            // response lets the backend decide what a missing
+                            // result means for the action it asked for.
+                            Timber.w("Unknown sign action: ${msg.action}; sending empty sign_response")
+                            engine.sendSignResponse(flowId = msg.flowId, messageId = msg.messageId)
                         }
                     }
                 } catch (e: KeystoreException) {

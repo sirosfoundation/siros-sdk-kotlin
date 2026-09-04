@@ -2067,6 +2067,176 @@ class SirosWalletTest {
         }
     }
 
+    /**
+     * Engine-requested client attestation (go-wallet-backend#304,
+     * `SignActionRequestAttestation`): when the flow_start carried no WIA the
+     * backend asks for one after resolving the issuer's authorization server,
+     * handing us the PoP `aud` (`params.audience`) and `iss` (`params.issuer`)
+     * itself. The reply must carry the WIA and a PoP signed over exactly those
+     * values, correlated by message_id.
+     */
+    @Test
+    fun requestAttestationSignRequest_repliesWithWiaAndPopOverEngineSuppliedAudAndIss() = runTest(dispatcher) {
+        val server = MockWebServer()
+        server.start()
+        try {
+            // fetchAttestationChallenge probes the AS's two well-known metadata
+            // paths; neither publishes a challenge_endpoint here.
+            server.enqueue(MockResponse().setResponseCode(404))
+            server.enqueue(MockResponse().setResponseCode(404))
+            val asUrl = server.url("/").toString().trimEnd('/')
+
+            val signFlow = MutableSharedFlow<SignRequestMessage>()
+            val engine = mockEngineConstructor(signRequests = signFlow)
+            every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any()) } just runs
+            val sessionStore = mockk<SessionStore>(relaxed = true)
+            every { sessionStore.instanceKeyId } returns "instance-key-1"
+            val keystore = mockk<KeystoreManager>(relaxed = true)
+            coEvery {
+                keystore.generateKeyProof(
+                    keyId = "instance-key-1", typ = "oauth-client-attestation-pop+jwt",
+                    issuer = "https://registered-client.example.com", audience = asUrl, extraClaims = any(),
+                )
+            } returns "engine-pop-jwt"
+            val wiaJwt = fakeJwtWithExp(System.currentTimeMillis() / 1000 + 3600)
+
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+                "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+                "sessionStore" to sessionStore,
+                "keystore" to keystore,
+                "json" to Json { ignoreUnknownKeys = true },
+                "httpClient" to OkHttpClient(),
+            )
+            invokeConnectEngine(wallet, "app-token")
+            setField(wallet, "cachedWia", wiaJwt)
+            setField(wallet, "cachedWiaExpiresAt", System.currentTimeMillis() / 1000 + 3600)
+            advanceUntilIdle()
+
+            signFlow.emit(
+                SignRequestMessage(
+                    flowId = "flow-att",
+                    messageId = "msg-att-1",
+                    action = "request_attestation",
+                    params = SignRequestParams(
+                        audience = asUrl,
+                        issuer = "https://registered-client.example.com",
+                    ),
+                )
+            )
+            // fetchAttestationChallenge hops onto the real Dispatchers.IO for
+            // its MockWebServer calls - see completeAuthorization_attachesClientAttestation.
+            repeat(10) {
+                runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(100) }
+                advanceUntilIdle()
+            }
+
+            verify(exactly = 1) {
+                engine.sendSignResponse(
+                    flowId = "flow-att",
+                    messageId = "msg-att-1",
+                    clientAttestation = wiaJwt,
+                    clientAttestationPoP = "engine-pop-jwt",
+                )
+            }
+            // Fallback client_id (config.redirectUri) must NOT have been used
+            // when the engine supplied the flow's effective client_id.
+            coVerify(exactly = 0) {
+                keystore.generateKeyProof(keyId = any(), typ = any(), issuer = "siros-sample://callback", audience = any(), extraClaims = any())
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    /**
+     * No WIA available (backend WIA support unreachable/disabled) must still
+     * produce exactly one - empty - sign_response for the request's
+     * message_id, so go-wallet-backend proceeds without attestation right
+     * away instead of stalling the issuance for its 30 s ErrSignTimeout.
+     */
+    @Test
+    fun requestAttestationSignRequest_sendsEmptyResponse_whenNoWiaAvailable() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any()) } just runs
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        every { sessionStore.instanceKeyId } returns "instance-key-1"
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery { apiClient.requestWIAChallenge() } throws java.io.IOException("backend unreachable")
+
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+            "sessionStore" to sessionStore,
+            "keystore" to keystore,
+            "json" to Json { ignoreUnknownKeys = true },
+            "httpClient" to OkHttpClient(),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        setField(wallet, "apiClient", apiClient)
+        advanceUntilIdle()
+
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-att",
+                messageId = "msg-att-2",
+                action = "request_attestation",
+                params = SignRequestParams(audience = "https://as.example.com", issuer = "https://client.example.com"),
+            )
+        )
+        advanceUntilIdle()
+
+        verify(exactly = 1) {
+            engine.sendSignResponse(
+                flowId = "flow-att",
+                messageId = "msg-att-2",
+                clientAttestation = null,
+                clientAttestationPoP = null,
+            )
+        }
+        coVerify(exactly = 0) { keystore.generateKeyProof(any(), any(), any(), any(), any()) }
+        // Declining is not a flow failure - the backend carries on without us.
+        assertTrue(wallet.state.value is WalletState.Ready)
+    }
+
+    /**
+     * An engine sign action this SDK version doesn't know must never be
+     * answered with silence: go-wallet-backend's RequestSign unblocks only on
+     * a sign_response for its message_id, so an empty one goes back.
+     */
+    @Test
+    fun unknownSignAction_sendsEmptyResponse_ratherThanSilence() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any()) } just runs
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        signFlow.emit(
+            SignRequestMessage(flowId = "flow-x", messageId = "msg-x", action = "sign_something_new", params = SignRequestParams())
+        )
+        advanceUntilIdle()
+
+        verify(exactly = 1) {
+            engine.sendSignResponse(
+                flowId = "flow-x",
+                messageId = "msg-x",
+                clientAttestation = null,
+                clientAttestationPoP = null,
+            )
+        }
+    }
+
     private fun issuerMetadataJson(server: MockWebServer, configId: String): String {
         val issuerUrl = server.url("/").toString().trimEnd('/')
         return """
