@@ -11,6 +11,19 @@ enum class CredentialFormat(val value: String) {
     DC_SD_JWT("dc+sd-jwt"),
     MSO_MDOC("mso_mdoc"),
     JWT_VC_JSON("jwt_vc_json"),
+
+    /**
+     * A JSON Web Proof carrying a BBS credential
+     * (`draft-bormann-jwp-modular-bbs`).
+     *
+     * Not a variant of SD-JWT despite both using the SD-JWT VC data model.
+     * The container is different - JWP has its own issued and presented
+     * forms, and selective disclosure is BBS itself rather than `_sd`
+     * digests - so none of the `~`-delimited parsing applies. What is
+     * shared is everything above the container: `vct`, the VCTM metadata
+     * path, claim display.
+     */
+    JWP("jwp"),
 }
 
 /** A stored verifiable credential with parsed metadata. */
@@ -80,7 +93,29 @@ data class CredentialMetadata(
     val claims: List<ClaimMeta>? = null,
     /** VCTM SVG rendering templates, if the issuer's VCTM published any. */
     @SerialName("svg_templates") val svgTemplates: List<SvgTemplateInfo>? = null,
-)
+    /**
+     * How this metadata came to be. Null (the norm) means it was built from
+     * the issuer's real VCTM/MDDL document. [HYDRATION_FALLBACK] means the
+     * wallet could not obtain that document - the fetch failed, or the
+     * negative cache said not to try yet - and synthesised the minimum a
+     * card can render from (name, issuer host, format) so the UI never has
+     * to show a spinner for something that is not actually loading. Such a
+     * credential is still "in need of hydration" and is upgraded to real
+     * metadata whenever a later fetch succeeds.
+     *
+     * Nullable with a default so JSON persisted before this field existed
+     * still decodes; see `CredentialMetadataCompatTest`.
+     */
+    val hydration: String? = null,
+) {
+    /** True when this metadata is a synthesised stand-in rather than the issuer's own - see [hydration]. */
+    val isFallback: Boolean get() = hydration == HYDRATION_FALLBACK
+
+    companion object {
+        /** [hydration] marker for synthesised stand-in metadata. */
+        const val HYDRATION_FALLBACK = "fallback"
+    }
+}
 
 /** Metadata about an individual claim within a credential. */
 @Serializable

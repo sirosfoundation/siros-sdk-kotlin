@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "org.siros.sdk.credentials"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 28
@@ -40,9 +40,54 @@ dependencies {
     // release artifact). The AAR is built by `make aar` in that crate.
     // For local development, publish to mavenLocal:
     //   cd zk-cred-longfellow && make aar && make publish-local
+    // The DC API matcher: the CBOR encoder for the blob a wallet registers,
+    // matcher.wasm itself as an asset, and the shared DCQL engine. One
+    // dependency at one version, so the blob's writer and its reader cannot
+    // drift apart.
+    //
+    // `api`, because :sdk:wallet registers the blob and ships the asset, and
+    // consumers of the SDK see the matcher's types through CredentialMatcher.
+    api("org.siros:siros-dc-matcher:0.4.0")
+
     implementation("org.siros:zk-cred-longfellow:0.1.1")
+
+    // zk-cred-vega UniFFI bindings - real GitHub Packages Maven artifact
+    // (resolved via GitHubPackagesZkCredVega in settings.gradle.kts), built
+    // against sirosfoundation/vega-prover's fork (a 2-line #[serde(skip)]
+    // fix shrinking the FFI prep-state from ~356MB to ~100MB so it fits
+    // Android's heap ceiling). v0.0.3 carries a real, independently-flagged
+    // privacy fix (undisclosed-claim digest concealment) - see
+    // VegaProofSystem.kt's own doc comment for the crate's current status.
+    // v0.0.4 bumps vega-prover to sirosfoundation/vega-prover@2a7dcb3, a
+    // real measured ~35-40% prove() speedup on x86_64 (chunk-overhead fix
+    // in bind_and_prepare_poly_ABC_inner) - not yet confirmed on-device.
+    implementation("org.siros:zk-cred-vega:0.0.5")
+
+    // zk-cred-bbs UniFFI bindings - blind BBS with Schnorr key binding.
+    // Same shape as above: AAR from GitHub Packages (or mavenLocal via
+    // `cd zk-cred-bbs && make publish-local`), Kotlin bindings vendored
+    // under src/main/kotlin/uniffi/zk_cred_bbs/.
+    implementation("org.siros:zk-cred-bbs:0.0.6")
+
     // JNA is required by UniFFI-generated Kotlin bindings.
-    implementation("net.java.dev.jna:jna:5.14.0@aar")
+    //
+    // `api`, not `implementation`: the vendored bindings are compiled into
+    // this module and their public API mentions JNA types — SirosBlobBuilder
+    // has a `constructor(pointer: Pointer)`. A consumer touching that surface
+    // needs JNA on its own compile classpath, and the failure would be an
+    // unresolved reference inside a generated file, a long way from the cause.
+    api("net.java.dev.jna:jna:5.14.0@aar")
+    // @RequiresApi, used by the Android-aware cleaner in the generated
+    // bindings: it guards android.system.SystemCleaner behind an SDK_INT
+    // check that lint can read.
+    implementation("androidx.annotation:annotation:1.9.1")
+
+    // Instrumented tests: the zk-cred-bbs native library ships as .so files
+    // inside its AAR, so anything exercising the UniFFI surface has to run
+    // on a device or emulator - a JVM unit test cannot load them.
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation(libs.kotlinx.coroutines.test)
 
     testImplementation(libs.junit)
     testImplementation(libs.mockk)

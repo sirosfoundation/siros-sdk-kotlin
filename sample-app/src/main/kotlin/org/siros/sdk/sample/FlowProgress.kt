@@ -35,6 +35,9 @@ private val STEP_LABEL_RES: Map<String, Int> = mapOf(
     "submitting_response" to R.string.flow_step_submitting_response,
     "waiting_for_reader" to R.string.flow_step_waiting_for_reader,
     "reader_connected" to R.string.flow_step_reader_connected,
+    // Client-only status - see SirosWallet.kt's sign_presentation ZK-proof
+    // handling, not part of FlowStepCatalog's server-mirrored vocabulary.
+    "computing_proof" to R.string.flow_step_computing_proof,
 )
 
 /** Localized label resource for a raw FlowStep token, falling back to a generic "Processing…" for unrecognized tokens. */

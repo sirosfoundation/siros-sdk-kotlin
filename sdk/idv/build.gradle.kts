@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "org.siros.sdk.idv"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 28

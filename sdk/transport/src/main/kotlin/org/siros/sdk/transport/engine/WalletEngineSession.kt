@@ -480,6 +480,8 @@ class WalletEngineSession(
         vpToken: String? = null,
         proofs: List<ProofObject>? = null,
         messageId: String? = null,
+        clientAttestation: String? = null,
+        clientAttestationPoP: String? = null,
     ) {
         send(SignResponseMessage.serializer(), SignResponseMessage(
             flowId = flowId,
@@ -487,6 +489,8 @@ class WalletEngineSession(
             proofJwt = proofJwt,
             vpToken = vpToken,
             proofs = proofs,
+            clientAttestation = clientAttestation,
+            clientAttestationPoP = clientAttestationPoP,
         ))
     }
 

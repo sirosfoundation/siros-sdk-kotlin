@@ -2,7 +2,9 @@
 package org.siros.sdk.sample
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -77,6 +79,50 @@ fun AddCredentialScreen(
     onRetry: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    // Long-press detail modal — lets the user inspect an offer's full
+    // description/format before committing to the issuance-consent dialog
+    // below, without the row's own tap target already starting that flow.
+    var detailOffer by remember { mutableStateOf<CredentialOffer?>(null) }
+    if (detailOffer != null) {
+        val offer = detailOffer!!
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { detailOffer = null },
+            title = { Text(offer.credentialName) },
+            text = {
+                Column {
+                    Text(
+                        text = offer.issuerName,
+                        style = androidx.compose.material3.MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    if (offer.credentialDescription != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = offer.credentialDescription!!,
+                            style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                            color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    CapabilityIconRow(capabilityFlagsFor(offer.format))
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    detailOffer = null
+                    onOfferSelected(offer)
+                }) {
+                    Text(stringResource(R.string.add_credential_row_action_add))
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { detailOffer = null }) {
+                    Text(stringResource(R.string.add_credential_row_action_close))
+                }
+            },
+        )
+    }
+
     // Issuance consent dialog
     if (pendingOffer != null) {
         androidx.compose.material3.AlertDialog(
@@ -134,7 +180,14 @@ fun AddCredentialScreen(
                     Text(stringResource(R.string.add_credential_loading))
                 }
             }
-        } else if (offers.isEmpty()) {
+        } else if (offers.isEmpty() && onStartIDV == null) {
+            // Truly nothing to show - no generic offers AND no IDV path
+            // either. Must NOT be reached just because `offers` is empty on
+            // its own (real bug this replaced: openAddCredential filters out
+            // the plain siros_id offer - see task #275 - so a tenant whose
+            // ONLY offer is SIROS ID hit this branch and lost the one path
+            // meant to actually issue it, since ScanPhysicalIDCard below was
+            // previously only reachable when offers was non-empty).
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
@@ -156,31 +209,58 @@ fun AddCredentialScreen(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
-                // Scan Physical ID card (when IDV is available)
+                // Scan Physical ID card (when IDV is available) - always
+                // shown here regardless of whether `offers` is empty, so
+                // it's never hidden behind the empty-state branch above.
                 if (onStartIDV != null) {
                     item {
                         ScanPhysicalIDCard(onClick = onStartIDV)
                         HorizontalDivider(thickness = 2.dp)
                     }
                 }
-                items(offers) { offer ->
-                    CredentialOfferRow(offer = offer, onClick = { onOfferSelected(offer) })
-                    HorizontalDivider()
+                if (offers.isEmpty()) {
+                    item {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text(
+                                text = stringResource(R.string.add_credential_empty),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Button(onClick = onRetry) {
+                                Text(stringResource(R.string.add_credential_retry))
+                            }
+                        }
+                    }
+                } else {
+                    items(offers) { offer ->
+                        CredentialOfferRow(
+                            offer = offer,
+                            onClick = { onOfferSelected(offer) },
+                            onLongClick = { detailOffer = offer },
+                        )
+                        HorizontalDivider()
+                    }
                 }
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CredentialOfferRow(
     offer: CredentialOffer,
     onClick: () -> Unit,
+    onLongClick: () -> Unit = {},
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -215,13 +295,28 @@ private fun CredentialOfferRow(
                     )
                 }
                 if (offer.logoUri != null) {
+                    val logo = rememberNormalizedLogoModel(offer.logoUri!!)
+                    // Full-bleed raster background (if any) drawn underneath the
+                    // (now `<image>`-free) SVG - see NormalizedLogo's doc comment;
+                    // without this, an offer whose logo SVG has an embedded
+                    // full-card raster <image> mis-renders via AndroidSVG with a
+                    // dark band roughly 30% down (the same bug already fixed for
+                    // full-size stored-credential cards).
+                    logo.backgroundImageBytes?.let { backgroundBytes ->
+                        coil.compose.AsyncImage(
+                            model = backgroundBytes,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                        )
+                    }
                     // SubcomposeAsyncImage, not AsyncImage: a plain AsyncImage
                     // renders nothing at all while loading or on a failed fetch
                     // (a real issue found via live device testing - offers whose
                     // logo URI didn't resolve showed a blank square instead of
                     // ever falling back to the initial-letter placeholder).
                     coil.compose.SubcomposeAsyncImage(
-                        model = coilLogoModel(offer.logoUri!!),
+                        model = logo.model,
                         contentDescription = offer.credentialName,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,

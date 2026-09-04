@@ -149,6 +149,22 @@ object MdocCbor {
      * that wrapper. Also tolerates issuers that skip the tag-24 wrapper
      * entirely and emit the MSO map directly.
      */
+    /**
+     * Decode the MSO (MobileSecurityObject) map from a document's
+     * `issuerAuth` COSE_Sign1 - the same double-CBOR-decode payload shape as
+     * [extractDocTypeFromIssuerAuth], but returning the full map rather than
+     * just `docType`. New capability for callers that need real MSO fields
+     * (`deviceKeyInfo`, `validityInfo`) that no wallet-side use case needed
+     * before ZK proof systems (e.g. `VegaProofSystem`) - see this file's own
+     * doc comment on why [MdocCbor] otherwise stays clear of MSO parsing.
+     */
+    fun decodeMso(issuerAuth: CBORObject): CBORObject {
+        require(issuerAuth.type == CBORType.Array && issuerAuth.size() >= 3) {
+            "issuerAuth is not a COSE_Sign1 array"
+        }
+        return decodeMsoFromPayload(issuerAuth[2])
+    }
+
     private fun decodeMsoFromPayload(payload: CBORObject): CBORObject {
         val outerBytes = payload.GetByteString()
         val decoded = CBORObject.DecodeFromBytes(outerBytes)

@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "org.siros.sdk.keystore"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 28
@@ -40,7 +40,7 @@ dependencies {
     // The AAR is built by `make aar` in the siros-wscd-manager crate.
     // For local development, publish to mavenLocal:
     //   cd siros-wscd-manager && make aar && make publish-local
-    implementation("org.siros:siros-wscd-manager:0.7.2")
+    implementation("org.siros:siros-wscd-manager:0.7.4")
     // JNA is required by UniFFI-generated Kotlin bindings.
     implementation("net.java.dev.jna:jna:5.14.0@aar")
     // Circuits fetched from go-zk-circuits (see ZkCircuitClient, sdk/credentials)

@@ -27,6 +27,37 @@ dependencyResolutionManagement {
                 ).getOrElse("")
             }
         }
+        // siros-dc-matcher AAR — the DC API credential matcher and the CBOR
+        // encoder for the blob it reads, shipped together so a wallet cannot
+        // pair a writer with a reader that predates it. Its own GH Packages
+        // Maven for the same per-repo-scoping reason as the entries below.
+        maven {
+            name = "GitHubPackagesDcMatcher"
+            url = uri("https://maven.pkg.github.com/sirosfoundation/siros-dc-matcher")
+            credentials {
+                username = providers.gradleProperty("gpr.user").orElse(
+                    providers.environmentVariable("GITHUB_ACTOR")
+                ).getOrElse("")
+                password = providers.gradleProperty("gpr.key").orElse(
+                    providers.environmentVariable("GITHUB_TOKEN")
+                ).getOrElse("")
+            }
+        }
+        // zk-cred-bbs AAR — blind BBS with hardware key binding. Separate
+        // entry for the same reason as zk-cred-longfellow below: GH Packages
+        // Maven repos are scoped per-repo, not org-wide.
+        maven {
+            name = "GitHubPackagesZkCredBbs"
+            url = uri("https://maven.pkg.github.com/sirosfoundation/zk-cred-bbs")
+            credentials {
+                username = providers.gradleProperty("gpr.user").orElse(
+                    providers.environmentVariable("GITHUB_ACTOR")
+                ).getOrElse("")
+                password = providers.gradleProperty("gpr.key").orElse(
+                    providers.environmentVariable("GITHUB_TOKEN")
+                ).getOrElse("")
+            }
+        }
         // zk-cred-longfellow AAR, published to its own GitHub Packages Maven -
         // each GH Packages Maven repo is scoped per-repo, not shared org-wide,
         // so this is a separate entry from siros-wscd-manager's above even
@@ -34,6 +65,23 @@ dependencyResolutionManagement {
         maven {
             name = "GitHubPackagesZkCredLongfellow"
             url = uri("https://maven.pkg.github.com/sirosfoundation/zk-cred-longfellow")
+            credentials {
+                username = providers.gradleProperty("gpr.user").orElse(
+                    providers.environmentVariable("GITHUB_ACTOR")
+                ).getOrElse("")
+                password = providers.gradleProperty("gpr.key").orElse(
+                    providers.environmentVariable("GITHUB_TOKEN")
+                ).getOrElse("")
+            }
+        }
+        // zk-cred-vega AAR, published to its own GitHub Packages Maven as of
+        // v0.0.2 - same per-repo-scoped reasoning as zk-cred-longfellow above.
+        // See VegaProofSystem.kt's own doc comment for the crate's current
+        // status (expert review still pending - not for real relying-party
+        // use yet, but the circuit is published for early testing).
+        maven {
+            name = "GitHubPackagesZkCredVega"
+            url = uri("https://maven.pkg.github.com/sirosfoundation/zk-cred-vega")
             credentials {
                 username = providers.gradleProperty("gpr.user").orElse(
                     providers.environmentVariable("GITHUB_ACTOR")

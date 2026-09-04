@@ -24,8 +24,9 @@ import org.siros.sdk.credentials.CredentialOffer
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.Ts11CredentialDiscovery
 import org.siros.sdk.credentials.Ts11DiscoveredCredential
-import org.siros.sdk.sample.dcapi.DCAPIProviderRegistration
+
 import org.siros.sdk.sample.dcapi.WalletSessionHolder
+import org.siros.sdk.wallet.dcapi.SirosCredentialRegistry
 import org.siros.sdk.credentials.PresentationRecord
 import org.siros.sdk.credentials.SirosException
 import org.siros.sdk.credentials.ZkCircuitClient
@@ -165,6 +166,19 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _credentialConsumptionPolicy: MutableStateFlow<CredentialConsumptionPolicy>
     val credentialConsumptionPolicy: StateFlow<CredentialConsumptionPolicy> get() = _credentialConsumptionPolicy
 
+    /** See [org.siros.sdk.wallet.WalletConfig.preferLocalReaderTrustEvaluation]'s doc comment. */
+    private val _preferLocalReaderTrustEvaluation: MutableStateFlow<Boolean>
+    val preferLocalReaderTrustEvaluation: StateFlow<Boolean> get() = _preferLocalReaderTrustEvaluation
+
+    /**
+     * A single PEM-encoded RICAL root certificate for local reader-trust
+     * fallback (see [org.siros.sdk.wallet.WalletConfig.readerTrustRootCertificatesPem]) -
+     * blank means none configured, matching that config field defaulting to
+     * an empty list.
+     */
+    private val _readerTrustRootCertificatePem: MutableStateFlow<String>
+    val readerTrustRootCertificatePem: StateFlow<String> get() = _readerTrustRootCertificatePem
+
     init {
         // Read test overrides - set either via the settings sheet UI, or (debug
         // builds only) via `adb shell am start ... --es backend_url ... --es
@@ -211,6 +225,12 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     prefs.getString("credential_consumption_policy", null) ?: ""
                 )
             }.getOrDefault(CredentialConsumptionPolicy.NEVER_CONSUME)
+        )
+        _preferLocalReaderTrustEvaluation = MutableStateFlow(
+            prefs.getBoolean("prefer_local_reader_trust_evaluation", false)
+        )
+        _readerTrustRootCertificatePem = MutableStateFlow(
+            prefs.getString("reader_trust_root_certificate_pem", null) ?: ""
         )
     }
 
@@ -278,6 +298,22 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
             .edit()
             .putString("credential_consumption_policy", policy.name)
+            .apply()
+    }
+
+    fun updatePreferLocalReaderTrustEvaluation(enabled: Boolean) {
+        _preferLocalReaderTrustEvaluation.value = enabled
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean("prefer_local_reader_trust_evaluation", enabled)
+            .apply()
+    }
+
+    fun updateReaderTrustRootCertificatePem(pem: String) {
+        _readerTrustRootCertificatePem.value = pem
+        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putString("reader_trust_root_certificate_pem", pem)
             .apply()
     }
 
@@ -516,8 +552,26 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     ) = wallet.signMdocPresentationForProximity(credentialId, disclosedClaims, sessionTranscriptBytes)
 
     /** For `BlePeripheralServer`/`BleCentralClient`'s injected `filterEligible` dependency. */
-    fun filterEligibleForProximity(instances: List<StoredCredential>): List<StoredCredential> =
-        CredentialUtils.eligibleInstances(instances, wallet.credentialConsumptionPolicy, wallet.presentationHistory)
+    suspend fun filterEligibleForProximity(instances: List<StoredCredential>): List<StoredCredential> =
+        wallet.eligibleInstances(instances)
+
+    /** For `PresentationConsentScreen`'s exhausted-query precheck - see [SirosWallet.availableKeyIds]. */
+    suspend fun currentAvailableKeyIds(): Set<String> = wallet.availableKeyIds()
+
+    /**
+     * For `BlePeripheralServer`/`BleCentralClient`'s injected `evaluateReaderTrust`
+     * dependency - adapts `SirosWallet.evaluateReaderTrust`'s richer
+     * `TrustResult` (shared with the verifier/issuer trust paths) down to
+     * `MdocProximitySession`'s narrower `ReaderTrustResult`.
+     */
+    suspend fun evaluateReaderTrustForProximity(x5chain: List<ByteArray>): org.siros.sdk.keystore.mdoc.ReaderTrustResult {
+        val result = wallet.evaluateReaderTrust(x5chain)
+        return org.siros.sdk.keystore.mdoc.ReaderTrustResult(
+            trusted = result.trusted,
+            reason = result.reason,
+            entityName = result.entityName,
+        )
+    }
 
     // ── Loading / error feedback ────────────────────────────────────
 
@@ -584,6 +638,36 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _availableWscdPluginIds = MutableStateFlow<List<String>>(emptyList())
     val availableWscdPluginIds: StateFlow<List<String>> = _availableWscdPluginIds
 
+    // Keyed by manager instance -> the transport mode it was last registered
+    // with. A plain "registered once, ever" guard (as R2PS still uses below)
+    // is wrong here: buildWalletConfig() eagerly registers fido2 with
+    // whatever _fido2TransportMode happened to be at WALLET-CONSTRUCTION
+    // time (before the user can touch the dev screen's transport toggle) -
+    // a one-shot guard would then permanently lock that manager to the
+    // wrong transport, ignoring every later switch. Re-registering on the
+    // SAME manager is safe (Rust's register_plugin is a plain HashMap
+    // insert, no destructive side effect), so re-register whenever the
+    // desired mode differs from what's currently registered, rather than
+    // only ever once.
+    // Declared here, before [wallet], since [buildWalletConfig] (run as part
+    // of constructing [wallet]) reads it via [buildWscdKeystore] ->
+    // [registerFido2OnSigner] - a property read inside another property's
+    // initializer must already be initialized itself, i.e. appear earlier in
+    // the class body (see [_selectedPluginId]/[_fido2TransportMode] above for
+    // the same constraint). Left at its natural declaration point (right
+    // next to [registerFido2OnSigner], far below [wallet]) threw the exact
+    // same class of NPE those properties' own doc comments already warn
+    // about - "$propertyName must not be null" from Kotlin's own
+    // not-yet-initialized-property intrinsics check - confirmed live on a
+    // real device: buildWscdKeystore's try/catch swallowed it and silently
+    // fell back to a plugin registration with no restored key state, making
+    // every existing credential bound to a FIDO2/hardware key look like a
+    // "shadow" (key-unavailable) credential even though the key itself was
+    // never actually lost.
+    private val fido2RegisteredTransport = java.util.Collections.synchronizedMap(
+        java.util.IdentityHashMap<WscdManager, Fido2TransportMode>(),
+    )
+
     // ── Wallet ──────────────────────────────────────────────────────
 
     private var wallet: SirosWallet = SirosWallet.create(
@@ -618,14 +702,29 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 when (newState) {
                     is WalletState.Ready -> {
                         WalletSessionHolder.update(wallet)
-                        DCAPIProviderRegistration.refresh(activity, newState.credentials)
+                        SirosCredentialRegistry.refresh(
+                            context = activity,
+                            credentials = newState.credentials,
+                            // What this wallet can actually prove. Without it a
+                            // mso_mdoc_zk request matches nothing, which is the
+                            // right answer for a wallet that cannot produce the
+                            // proof and the wrong one for this app.
+                            // Identifiers only. Whether a specific circuit is
+                            // fetchable is known at proof time, not here, so
+                            // declaring particular attribute counts would claim
+                            // knowledge this wallet does not have and refuse
+                            // requests it can satisfy.
+                            zkSystems = wallet.zkSystemIds
+                                .map { SirosCredentialRegistry.ZkSystem(it, emptyMap()) },
+                            useStockMatcher = BuildConfig.STOCK_DC_MATCHER,
+                        )
                         refreshWscdTofuMapping()
                         refreshWscdUserOverrides()
                         maybeOfferWscdAutoEnroll()
                     }
                     else -> {
                         WalletSessionHolder.update(null)
-                        DCAPIProviderRegistration.clear(activity)
+                        SirosCredentialRegistry.clear(activity)
                     }
                 }
             }
@@ -929,7 +1028,15 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _isLoadingOffers.value = true
         viewModelScope.launch {
             try {
+                // Filter out the plain "siros_id" offer: the "Scan Physical ID
+                // card" row above the list (onStartIDV/startIDV()) is the one,
+                // unified path to a SIROS ID credential - it drives real
+                // FaceTec identity verification before issuance. Leaving the
+                // no-questions-asked issuer offer alongside it would give the
+                // user two competing, confusing routes to the same
+                // credential, one of which silently skips verification.
                 _availableCredentials.value = wallet.getAvailableCredentials()
+                    .filterNot { it.credentialConfigurationId == SIROS_ID_CREDENTIAL_CONFIGURATION_ID }
                 android.util.Log.d("SIROS_VM", "Available credentials: ${_availableCredentials.value.size}")
             } catch (e: Exception) {
                 android.util.Log.e("SIROS_VM", "getAvailableCredentials failed", e)
@@ -1238,21 +1345,6 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         manager.registerR2psPlugin(r2psConfig, OkHttpR2psTransport(serverUrl = _r2psServerUrl.value))
         Log.i(TAG, "R2PS plugin registered at ${_r2psServerUrl.value}")
     }
-
-    // Keyed by manager instance -> the transport mode it was last registered
-    // with. A plain "registered once, ever" guard (as R2PS still uses above)
-    // is wrong here: buildWalletConfig() eagerly registers fido2 with
-    // whatever _fido2TransportMode happened to be at WALLET-CONSTRUCTION
-    // time (before the user can touch the dev screen's transport toggle) -
-    // a one-shot guard would then permanently lock that manager to the
-    // wrong transport, ignoring every later switch. Re-registering on the
-    // SAME manager is safe (Rust's register_plugin is a plain HashMap
-    // insert, no destructive side effect), so re-register whenever the
-    // desired mode differs from what's currently registered, rather than
-    // only ever once.
-    private val fido2RegisteredTransport = java.util.Collections.synchronizedMap(
-        java.util.IdentityHashMap<WscdManager, Fido2TransportMode>(),
-    )
 
     /**
      * Register the FIDO2 previewSign plugin on the given manager with
@@ -2062,6 +2154,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             // than in that screen's always-visible user-facing section.
             defaultWscdMapping = _defaultWscdMapping.value.takeIf { it.isNotEmpty() },
             requestWscdChoice = requestWscdChoice,
+            preferLocalReaderTrustEvaluation = _preferLocalReaderTrustEvaluation.value,
+            readerTrustRootCertificatesPem = _readerTrustRootCertificatePem.value.takeIf { it.isNotBlank() }
+                ?.let { listOf(it) } ?: emptyList(),
             // Mirrors enrollWscd/rotateLifecycle's own prefetch-PIN-before-
             // transport pattern (see awaitFido2PinEntry's doc comment) for
             // real credential issuance too - found necessary via live
@@ -2092,6 +2187,15 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         private const val DEFAULT_R2PS_URL = "http://192.168.240.1:9443"
         private const val REDIRECT_URI = "siros-sample://callback"
         private const val REDIRECT_SCHEME = "siros-sample"
+
+        /**
+         * OID4VCI `credential_configuration_id` for the SIROS ID credential
+         * (see vc-issuer's config: `credential_configurations.siros_id`) -
+         * used to hide the plain issuer offer from [openAddCredential]'s list
+         * in favor of the "Scan Physical ID card" / [startIDV] row, which is
+         * the one path meant to actually issue this credential.
+         */
+        private const val SIROS_ID_CREDENTIAL_CONFIGURATION_ID = "siros_id"
 
         /**
          * Hard ceiling for enroll/rotate/destroy so a hang anywhere in the

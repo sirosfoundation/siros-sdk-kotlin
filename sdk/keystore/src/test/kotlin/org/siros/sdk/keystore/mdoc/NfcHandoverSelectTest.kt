@@ -4,6 +4,7 @@ package org.siros.sdk.keystore.mdoc
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import java.util.UUID
 
 /**
  * Verifies [NfcHandoverSelect.build] against the real ISO/IEC 18013-5
@@ -154,6 +155,40 @@ class NfcHandoverSelectTest {
         assertEquals(NfcHandoverSelect.LeRole.PERIPHERAL_ONLY, leRoleOf(NfcHandoverSelect.build(peripheralOnly)))
     }
 
+    @Test
+    fun build_fromEngagement_sendsOnlyTheUuidMatchingTheRoleTheReaderIsToldToPrefer() {
+        // Both modes offered -> LE Role hints central-preferred, so the AD
+        // must carry centralClientModeUuid, NOT peripheralServerModeUuid -
+        // sending both/the wrong one leaves a reader that honors the hint
+        // advertising under a UUID nobody is scanning for.
+        val both = DeviceEngagement.create(supportsCentralClientMode = true, supportsPeripheralServerMode = true)
+        assertEquals(listOf(both.centralClientModeUuid), uuidsOf(NfcHandoverSelect.build(both)))
+
+        val peripheralOnly = DeviceEngagement.create(supportsCentralClientMode = false, supportsPeripheralServerMode = true)
+        assertEquals(listOf(peripheralOnly.peripheralServerModeUuid), uuidsOf(NfcHandoverSelect.build(peripheralOnly)))
+    }
+
+    /** Extract the Complete List of 128-bit Service UUIDs (0x07) AD, if present, from a built message. */
+    private fun uuidsOf(message: ByteArray): List<UUID> {
+        val hsPayloadLen = message[2].toInt() and 0xFF
+        val offset = 5 + hsPayloadLen
+        val carrierTypeLen = message[offset + 1].toInt() and 0xFF
+        val carrierIdLen = message[offset + 3].toInt() and 0xFF
+        val carrierPayloadStart = offset + 4 + carrierTypeLen + carrierIdLen
+        // AD1 (LE Role) is always length=2 + the length byte itself = 3 bytes.
+        val ad2Start = carrierPayloadStart + 3
+        if (ad2Start >= message.size || message[ad2Start + 1].toInt() and 0xFF != 0x07) return emptyList()
+        val ad2Len = message[ad2Start].toInt() and 0xFF
+        val uuidBytesTotal = ad2Len - 1
+        val data = message.copyOfRange(ad2Start + 2, ad2Start + 2 + uuidBytesTotal)
+        return (0 until uuidBytesTotal / 16).map { i ->
+            val reversed = data.copyOfRange(i * 16, i * 16 + 16).reversed().toByteArray()
+            val msb = (0 until 8).fold(0L) { acc, b -> (acc shl 8) or (reversed[b].toLong() and 0xFF) }
+            val lsb = (0 until 8).fold(0L) { acc, b -> (acc shl 8) or (reversed[8 + b].toLong() and 0xFF) }
+            UUID(msb, lsb)
+        }
+    }
+
     /** Extract the LE Role AD value from a built Handover Select message's fixed-offset carrier record. */
     private fun leRoleOf(message: ByteArray): NfcHandoverSelect.LeRole {
         val hsPayloadLen = message[2].toInt() and 0xFF
@@ -162,6 +197,39 @@ class NfcHandoverSelectTest {
         val carrierIdLen = message[5 + hsPayloadLen + 3].toInt() and 0xFF
         val roleValue = message[carrierPayloadStart + carrierTypeLen + carrierIdLen + 2].toInt()
         return NfcHandoverSelect.LeRole.entries.first { it.value == roleValue }
+    }
+
+    @Test
+    fun build_withUuids_includesCompleteListOf128BitServiceUuidsAdInLittleEndianOrder() {
+        val deBytes = hex(d33DeviceEngagementHex)
+        // A UUID with a distinct byte in every position, so any byte-order
+        // mistake (reversal, half-swap) shows up as a mismatch rather than
+        // coincidentally passing (e.g. a palindrome-like UUID wouldn't).
+        val uuid = UUID.fromString("01020304-0506-0708-090a-0b0c0d0e0f10")
+
+        val message = NfcHandoverSelect.build(deBytes, NfcHandoverSelect.LeRole.CENTRAL_ONLY, listOf(uuid))
+
+        val hsPayloadLen = message[2].toInt() and 0xFF
+        val offset = 5 + hsPayloadLen
+        val carrierTypeLen = message[offset + 1].toInt() and 0xFF
+        val carrierIdLen = message[offset + 3].toInt() and 0xFF
+        val carrierPayloadStart = offset + 4 + carrierTypeLen + carrierIdLen
+        val carrierPayload = message.copyOfRange(carrierPayloadStart, carrierPayloadStart + 21)
+
+        // AD 1: LE Role (unaffected by the new AD following it).
+        assertEquals(2, carrierPayload[0].toInt())
+        assertEquals(0x1C, carrierPayload[1].toInt() and 0xFF)
+        assertEquals(NfcHandoverSelect.LeRole.CENTRAL_ONLY.value, carrierPayload[2].toInt())
+
+        // AD 2: Complete List of 128-bit Service UUIDs (0x07), length = type(1) + 16 bytes.
+        assertEquals(17, carrierPayload[3].toInt())
+        assertEquals(0x07, carrierPayload[4].toInt() and 0xFF)
+        val uuidBytes = carrierPayload.copyOfRange(5, 21)
+        // Bluetooth OOB AD data is little-endian - the reverse of the
+        // big-endian byte order RFC 4122 (and DeviceEngagement's BleOptions
+        // CBOR) uses for the same UUID.
+        val expectedLittleEndian = hex("100f0e0d0c0b0a090807060504030201")
+        assertArrayEquals(expectedLittleEndian, uuidBytes)
     }
 
     @Test

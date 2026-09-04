@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -23,6 +24,7 @@ import kotlin.reflect.full.callSuspend
 import kotlin.reflect.full.declaredMemberFunctions
 import kotlin.reflect.jvm.isAccessible
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import okhttp3.OkHttpClient
@@ -48,15 +50,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.siros.sdk.auth.BackendApiClient
+import org.siros.sdk.credentials.BackendApiException
 import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialMatcher
 import org.siros.sdk.credentials.CredentialMetadata
 import org.siros.sdk.credentials.CredentialStore
+import org.siros.sdk.credentials.NetworkException
 import org.siros.sdk.credentials.PresentationRecord
 import org.siros.sdk.credentials.SignerSecurityProperties
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.credentials.WalletException
 import org.siros.sdk.keystore.AttestationChain
+import org.siros.sdk.keystore.KeyInfo
 import org.siros.sdk.keystore.KeypairInfo
 import org.siros.sdk.keystore.KeystoreManager
 import org.siros.sdk.keystore.NativeAttestationEvidence
@@ -2064,6 +2069,176 @@ class SirosWalletTest {
         }
     }
 
+    /**
+     * Engine-requested client attestation (go-wallet-backend#304,
+     * `SignActionRequestAttestation`): when the flow_start carried no WIA the
+     * backend asks for one after resolving the issuer's authorization server,
+     * handing us the PoP `aud` (`params.audience`) and `iss` (`params.issuer`)
+     * itself. The reply must carry the WIA and a PoP signed over exactly those
+     * values, correlated by message_id.
+     */
+    @Test
+    fun requestAttestationSignRequest_repliesWithWiaAndPopOverEngineSuppliedAudAndIss() = runTest(dispatcher) {
+        val server = MockWebServer()
+        server.start()
+        try {
+            // fetchAttestationChallenge probes the AS's two well-known metadata
+            // paths; neither publishes a challenge_endpoint here.
+            server.enqueue(MockResponse().setResponseCode(404))
+            server.enqueue(MockResponse().setResponseCode(404))
+            val asUrl = server.url("/").toString().trimEnd('/')
+
+            val signFlow = MutableSharedFlow<SignRequestMessage>()
+            val engine = mockEngineConstructor(signRequests = signFlow)
+            every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any()) } just runs
+            val sessionStore = mockk<SessionStore>(relaxed = true)
+            every { sessionStore.instanceKeyId } returns "instance-key-1"
+            val keystore = mockk<KeystoreManager>(relaxed = true)
+            coEvery {
+                keystore.generateKeyProof(
+                    keyId = "instance-key-1", typ = "oauth-client-attestation-pop+jwt",
+                    issuer = "https://registered-client.example.com", audience = asUrl, extraClaims = any(),
+                )
+            } returns "engine-pop-jwt"
+            val wiaJwt = fakeJwtWithExp(System.currentTimeMillis() / 1000 + 3600)
+
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+                "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+                "sessionStore" to sessionStore,
+                "keystore" to keystore,
+                "json" to Json { ignoreUnknownKeys = true },
+                "httpClient" to OkHttpClient(),
+            )
+            invokeConnectEngine(wallet, "app-token")
+            setField(wallet, "cachedWia", wiaJwt)
+            setField(wallet, "cachedWiaExpiresAt", System.currentTimeMillis() / 1000 + 3600)
+            advanceUntilIdle()
+
+            signFlow.emit(
+                SignRequestMessage(
+                    flowId = "flow-att",
+                    messageId = "msg-att-1",
+                    action = "request_attestation",
+                    params = SignRequestParams(
+                        audience = asUrl,
+                        issuer = "https://registered-client.example.com",
+                    ),
+                )
+            )
+            // fetchAttestationChallenge hops onto the real Dispatchers.IO for
+            // its MockWebServer calls - see completeAuthorization_attachesClientAttestation.
+            repeat(10) {
+                runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(100) }
+                advanceUntilIdle()
+            }
+
+            verify(exactly = 1) {
+                engine.sendSignResponse(
+                    flowId = "flow-att",
+                    messageId = "msg-att-1",
+                    clientAttestation = wiaJwt,
+                    clientAttestationPoP = "engine-pop-jwt",
+                )
+            }
+            // Fallback client_id (config.redirectUri) must NOT have been used
+            // when the engine supplied the flow's effective client_id.
+            coVerify(exactly = 0) {
+                keystore.generateKeyProof(keyId = any(), typ = any(), issuer = "siros-sample://callback", audience = any(), extraClaims = any())
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    /**
+     * No WIA available (backend WIA support unreachable/disabled) must still
+     * produce exactly one - empty - sign_response for the request's
+     * message_id, so go-wallet-backend proceeds without attestation right
+     * away instead of stalling the issuance for its 30 s ErrSignTimeout.
+     */
+    @Test
+    fun requestAttestationSignRequest_sendsEmptyResponse_whenNoWiaAvailable() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any()) } just runs
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        every { sessionStore.instanceKeyId } returns "instance-key-1"
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery { apiClient.requestWIAChallenge() } throws java.io.IOException("backend unreachable")
+
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+            "sessionStore" to sessionStore,
+            "keystore" to keystore,
+            "json" to Json { ignoreUnknownKeys = true },
+            "httpClient" to OkHttpClient(),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        setField(wallet, "apiClient", apiClient)
+        advanceUntilIdle()
+
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-att",
+                messageId = "msg-att-2",
+                action = "request_attestation",
+                params = SignRequestParams(audience = "https://as.example.com", issuer = "https://client.example.com"),
+            )
+        )
+        advanceUntilIdle()
+
+        verify(exactly = 1) {
+            engine.sendSignResponse(
+                flowId = "flow-att",
+                messageId = "msg-att-2",
+                clientAttestation = null,
+                clientAttestationPoP = null,
+            )
+        }
+        coVerify(exactly = 0) { keystore.generateKeyProof(any(), any(), any(), any(), any()) }
+        // Declining is not a flow failure - the backend carries on without us.
+        assertTrue(wallet.state.value is WalletState.Ready)
+    }
+
+    /**
+     * An engine sign action this SDK version doesn't know must never be
+     * answered with silence: go-wallet-backend's RequestSign unblocks only on
+     * a sign_response for its message_id, so an empty one goes back.
+     */
+    @Test
+    fun unknownSignAction_sendsEmptyResponse_ratherThanSilence() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any()) } just runs
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        signFlow.emit(
+            SignRequestMessage(flowId = "flow-x", messageId = "msg-x", action = "sign_something_new", params = SignRequestParams())
+        )
+        advanceUntilIdle()
+
+        verify(exactly = 1) {
+            engine.sendSignResponse(
+                flowId = "flow-x",
+                messageId = "msg-x",
+                clientAttestation = null,
+                clientAttestationPoP = null,
+            )
+        }
+    }
+
     private fun issuerMetadataJson(server: MockWebServer, configId: String): String {
         val issuerUrl = server.url("/").toString().trimEnd('/')
         return """
@@ -2989,6 +3164,7 @@ class SirosWalletTest {
         val engine = mockEngineConstructor(matchRequests = matchFlow)
         val keystore = mockk<KeystoreManager>()
         every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(
                 WalletState.Ready(userId = "user-1", displayName = "Alice", credentials = initialCredentials)
@@ -3038,6 +3214,7 @@ class SirosWalletTest {
         coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
         val keystore = mockk<KeystoreManager>()
         every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
         coEvery { keystore.signVpToken(any(), any(), any(), any()) } returns "signed-vp-token"
         val store = FakeCredentialStore(mutableListOf(
             StoredCredential(
@@ -3161,6 +3338,7 @@ class SirosWalletTest {
         }
         val keystore = mockk<KeystoreManager>()
         every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
         coEvery { keystore.signVpToken(any(), any(), any(), any()) } returns "signed-vp-token"
         val store = FakeCredentialStore(mutableListOf(
             StoredCredential(
@@ -3215,6 +3393,7 @@ class SirosWalletTest {
             coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
             val keystore = mockk<KeystoreManager>()
             every { keystore.isUnlocked } returns false
+            every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
             coEvery {
                 keystore.signMdocPresentationForDCAPI(any(), any(), any(), any(), any())
             } returns "device-response".toByteArray()
@@ -3298,6 +3477,7 @@ class SirosWalletTest {
         coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
         val keystore = mockk<KeystoreManager>()
         every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
         coEvery { keystore.signVpToken(any(), any(), any(), any()) } returns "signed-vp-token"
         val store = FakeCredentialStore(mutableListOf(
             StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw", metadata = CredentialMetadata(name = "X"), batchId = 1L, instanceId = 0),
@@ -3358,6 +3538,7 @@ class SirosWalletTest {
         coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
         val keystore = mockk<KeystoreManager>()
         every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
         coEvery { keystore.signVpToken(any(), any(), any(), any()) } returns "signed-vp-token"
         val store = FakeCredentialStore(mutableListOf(
             StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw", metadata = CredentialMetadata(name = "X"), batchId = 1L, instanceId = 0),
@@ -3426,6 +3607,146 @@ class SirosWalletTest {
         assertTrue(thrown is org.siros.sdk.wallet.dcapi.DCAPIRequestException)
     }
 
+    @Test
+    fun evaluateReaderTrust_remoteCallThrowsAuthzDeny_failsClosedWithoutFallingBackToLocal() = runTest(dispatcher) {
+        // Mirrors evaluateIssuerTrust_remoteCallThrowsAuthzDeny_* below -
+        // evaluateReaderTrust shares the same isRemoteTrustEvaluationUnreachable
+        // classifier, so a 403 from /v1/evaluate must fail closed here too
+        // rather than silently falling back to local RICAL root validation.
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws BackendApiException(403, "API request failed: 403", "")
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+
+        val result = wallet.evaluateReaderTrust(listOf(ByteArray(4)))
+
+        assertTrue(!result.trusted)
+        assertEquals("mdocrical", result.framework)
+        assertTrue(result.reason?.contains("403") == true)
+    }
+
+    @Test
+    fun evaluateIssuerTrust_remoteDecisionTrue_returnsTrustedResult() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        val evaluationRequest = slot<JsonObject>()
+        coEvery { apiClient.evaluateTrust(capture(evaluationRequest)) } returns buildJsonObject {
+            put("decision", JsonPrimitive(true))
+            putJsonObject("context") {
+                put("framework", JsonPrimitive("vical"))
+                put("entity_name", JsonPrimitive("Test Issuer CA"))
+            }
+        }
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+
+        val leafCert = ByteArray(4) { it.toByte() }
+        val result = wallet.evaluateIssuerTrust(listOf(leafCert), docType = "org.iso.18013.5.1.mDL")
+
+        assertTrue(result.trusted)
+        assertEquals("Test Issuer CA", result.entityName)
+        assertEquals("mdoc-issuer-auth", evaluationRequest.captured["action"]?.jsonObject?.get("name")?.jsonPrimitive?.content)
+        assertEquals("org.iso.18013.5.1.mDL", evaluationRequest.captured["context"]?.jsonObject?.get("doc_type")?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun evaluateIssuerTrust_remoteDecisionFalse_returnsUntrustedResult() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject {
+            put("decision", JsonPrimitive(false))
+            putJsonObject("context") {
+                put("reason", JsonPrimitive("certificate not listed in VICAL for docType"))
+            }
+        }
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+
+        val result = wallet.evaluateIssuerTrust(listOf(ByteArray(4)), docType = "org.iso.18013.5.1.mDL")
+
+        assertTrue(!result.trusted)
+        assertEquals("certificate not listed in VICAL for docType", result.reason)
+    }
+
+    @Test
+    fun evaluateIssuerTrust_remoteCallThrowsNetworkException_fallsBackToLocalAndReportsUnconfigured() = runTest(dispatcher) {
+        // A genuine network failure (timeout, DNS, connection refused) surfaces as
+        // NetworkException from BackendApiClient - the only condition that should
+        // fall back to weaker local validation. See the sibling
+        // *_remoteCallThrowsAuthzDeny_* test below for the 403 case, which must
+        // NOT fall back.
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws NetworkException("network unreachable")
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+
+        val result = wallet.evaluateIssuerTrust(listOf(ByteArray(4)), docType = "org.iso.18013.5.1.mDL")
+
+        assertTrue(!result.trusted)
+        assertEquals("local-vical-root", result.framework)
+        assertTrue(result.reason?.contains("no VICAL root certificate configured") == true)
+    }
+
+    @Test
+    fun evaluateIssuerTrust_remoteCallThrowsAuthzDeny_failsClosedWithoutFallingBackToLocal() = runTest(dispatcher) {
+        // GDC/SDK-6 (Geneva 2026): a 403 from /v1/evaluate is an authorization
+        // failure, not a trust decision - it must not be silently treated the
+        // same as an unreachable backend, since a locally-configured VICAL root
+        // could still declare the chain trusted even though the backend
+        // explicitly refused to even answer the question.
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws BackendApiException(403, "API request failed: 403", "")
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+
+        val result = wallet.evaluateIssuerTrust(listOf(ByteArray(4)), docType = "org.iso.18013.5.1.mDL")
+
+        assertTrue(!result.trusted)
+        // "vical" (not "local-vical-root") plus a "403"-mentioning reason proves
+        // this took the fail-closed remote-error path, not the local-fallback
+        // path (which would report "local-vical-root" / "no VICAL root
+        // certificate configured", per the sibling NetworkException test above).
+        assertEquals("vical", result.framework)
+        assertTrue(result.reason?.contains("403") == true)
+    }
+
+    @Test
+    fun evaluateIssuerTrust_preferLocalIssuerTrustEvaluation_skipsRemoteCallEntirely() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", preferLocalIssuerTrustEvaluation = true),
+        )
+
+        val result = wallet.evaluateIssuerTrust(listOf(ByteArray(4)), docType = "org.iso.18013.5.1.mDL")
+
+        assertTrue(!result.trusted)
+        coVerify(exactly = 0) { apiClient.evaluateTrust(any()) }
+    }
+
+    @Test
+    fun evaluateIssuerTrust_emptyX5chain_returnsUntrustedWithoutCallingBackend() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+
+        val result = wallet.evaluateIssuerTrust(emptyList(), docType = "org.iso.18013.5.1.mDL")
+
+        assertTrue(!result.trusted)
+        assertEquals("issuerAuth has no certificate chain", result.reason)
+        coVerify(exactly = 0) { apiClient.evaluateTrust(any()) }
+    }
+
     /**
      * Wraps a request's `data` object in the envelope
      * [org.siros.sdk.wallet.dcapi.DCAPIRequestParser.parse] actually expects
@@ -3441,6 +3762,207 @@ class SirosWalletTest {
             })
         }
     }.toString()
+
+    // ── hydrateReloadedCredentials ──────────────────────────────────
+
+    /** `{"alg":"ES256"}.{"iat":1700000000,"exp":1800000000,"vct":"urn:eudi:pid:1"}.sig~` */
+    private val reloadedSdJwt = "eyJhbGciOiJFUzI1NiJ9." +
+        java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(
+            """{"iat":1700000000,"exp":1800000000,"vct":"urn:eudi:pid:1"}""".toByteArray(),
+        ) + ".c2ln~"
+
+    private fun reloadedCredential(id: Long, metadata: CredentialMetadata? = null) = StoredCredential(
+        id = id,
+        format = "dc+sd-jwt",
+        raw = reloadedSdJwt,
+        batchId = id,
+        instanceId = 0,
+        credentialIssuerIdentifier = "https://issuer.example.com",
+        credentialConfigurationId = "eu.europa.ec.eudi.pid_sd_jwt",
+        metadata = metadata,
+    )
+
+    private fun hydrate(wallet: SirosWallet) {
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "hydrateReloadedCredentials" }
+        method.isAccessible = true
+        method.call(wallet)
+    }
+
+    /**
+     * The user-visible bug this guards against: a credential whose VCTM
+     * can't be fetched used to stay `metadata == null` forever, and the card
+     * UI treats null as "loading" - a spinner on every launch. Now a fallback
+     * is persisted immediately so the card has something real to draw.
+     */
+    @Test
+    fun hydrate_persistsFallbackMetadata_whenNoDocumentIsAvailable() = runTest(dispatcher) {
+        val store = FakeCredentialStore(mutableListOf(reloadedCredential(1L)))
+        val vctmFetcher = mockk<org.siros.sdk.credentials.VctmFetcher>()
+        coEvery { vctmFetcher.fetch(any(), any(), any(), any()) } returns null
+        val state = MutableStateFlow<WalletState>(
+            WalletState.Ready(userId = "u", displayName = null, credentials = store.getAll()),
+        )
+        val wallet = newWallet(
+            "_state" to state,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "vctmFetcher" to vctmFetcher,
+        )
+
+        hydrate(wallet)
+        advanceUntilIdle()
+
+        val saved = store.getById(1L)!!
+        val meta = saved.metadata!!
+        assertTrue(meta.isFallback)
+        assertEquals("Pid Sd Jwt", meta.name)
+        assertEquals("issuer.example.com", meta.issuer!!.name)
+        assertEquals("urn:eudi:pid:1", meta.vct)
+        assertNull(meta.svgTemplates)
+        // iat/exp are still derived alongside.
+        assertEquals(1700000000L, saved.issuedAt)
+        assertEquals(1800000000L, saved.expiresAt)
+        // And Ready was re-emitted with the hydrated list.
+        assertTrue((state.value as WalletState.Ready).credentials.single().metadata!!.isFallback)
+        coVerify(exactly = 1) {
+            vctmFetcher.fetch(
+                issuerUrl = "https://issuer.example.com",
+                scope = "eu.europa.ec.eudi.pid_sd_jwt",
+                vct = "urn:eudi:pid:1",
+                registryUrl = "https://wallet.example.com/registry",
+            )
+        }
+    }
+
+    /** A fallback is still "needs hydration": the next successful fetch replaces it. */
+    @Test
+    fun hydrate_replacesFallback_whenDocumentBecomesAvailable() = runTest(dispatcher) {
+        val fallback = org.siros.sdk.credentials.CredentialUtils.buildFallbackMetadata(reloadedCredential(1L))
+        val store = FakeCredentialStore(
+            mutableListOf(reloadedCredential(1L, metadata = fallback).copy(issuedAt = 1700000000L, expiresAt = 1800000000L)),
+        )
+        val vctmFetcher = mockk<org.siros.sdk.credentials.VctmFetcher>()
+        coEvery { vctmFetcher.fetch(any(), any(), any(), any()) } returns
+            org.siros.sdk.credentials.VctmFetcher().parseVctm(
+                """{"vct":"urn:eudi:pid:1","display":[{"locale":"en","name":"Personal ID",
+                   "rendering":{"simple":{"background_color":"#003366"}}}]}""",
+            )
+        val state = MutableStateFlow<WalletState>(
+            WalletState.Ready(userId = "u", displayName = null, credentials = store.getAll()),
+        )
+        val wallet = newWallet(
+            "_state" to state,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "vctmFetcher" to vctmFetcher,
+        )
+
+        hydrate(wallet)
+        advanceUntilIdle()
+
+        val meta = store.getById(1L)!!.metadata!!
+        assertEquals(false, meta.isFallback)
+        assertEquals("Personal ID", meta.name)
+        assertEquals("#003366", meta.backgroundColor)
+        assertEquals("Personal ID", (state.value as WalletState.Ready).credentials.single().metadata!!.name)
+    }
+
+    /**
+     * While the negative cache says "not due", `fetch` returns null at once;
+     * an existing fallback must then be left alone - no re-save, no Ready
+     * re-emission - or every launch would still churn state for nothing.
+     */
+    @Test
+    fun hydrate_leavesExistingFallbackUntouched_whenStillNoDocument() = runTest(dispatcher) {
+        val fallback = org.siros.sdk.credentials.CredentialUtils.buildFallbackMetadata(reloadedCredential(1L))
+        val existing = reloadedCredential(1L, metadata = fallback).copy(issuedAt = 1700000000L, expiresAt = 1800000000L)
+        val saves = mutableListOf<StoredCredential>()
+        val store = object : CredentialStore by FakeCredentialStore(mutableListOf(existing)) {
+            override suspend fun save(credential: StoredCredential) { saves.add(credential) }
+        }
+        val vctmFetcher = mockk<org.siros.sdk.credentials.VctmFetcher>()
+        coEvery { vctmFetcher.fetch(any(), any(), any(), any()) } returns null
+        val initial = WalletState.Ready(userId = "u", displayName = null, credentials = listOf(existing))
+        val state = MutableStateFlow<WalletState>(initial)
+        val wallet = newWallet(
+            "_state" to state,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "vctmFetcher" to vctmFetcher,
+        )
+
+        hydrate(wallet)
+        advanceUntilIdle()
+
+        assertTrue(saves.isEmpty())
+        assertTrue(state.value === initial)
+    }
+
+    /** Real (non-fallback) metadata is never touched, and the fetcher is not even asked. */
+    @Test
+    fun hydrate_skipsCredentialsWithRealMetadata() = runTest(dispatcher) {
+        val real = CredentialMetadata(name = "Personal ID", vct = "urn:eudi:pid:1")
+        val store = FakeCredentialStore(mutableListOf(reloadedCredential(1L, metadata = real)))
+        val vctmFetcher = mockk<org.siros.sdk.credentials.VctmFetcher>()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = null)),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "vctmFetcher" to vctmFetcher,
+        )
+
+        hydrate(wallet)
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { vctmFetcher.fetch(any(), any(), any(), any()) }
+        assertEquals(real, store.getById(1L)!!.metadata)
+    }
+
+    /**
+     * Credentials hydrate concurrently: with two slow fetches that each take
+     * a (virtual) second, the whole pass takes one second, not two - and
+     * Ready is still emitted exactly once, at the end.
+     */
+    @Test
+    fun hydrate_runsCredentialsConcurrently_andEmitsReadyOnce() = runTest(dispatcher) {
+        val store = FakeCredentialStore(mutableListOf(reloadedCredential(1L), reloadedCredential(2L)))
+        val vctmFetcher = mockk<org.siros.sdk.credentials.VctmFetcher>()
+        coEvery { vctmFetcher.fetch(any(), any(), any(), any()) } coAnswers {
+            kotlinx.coroutines.delay(1_000)
+            null
+        }
+        val state = MutableStateFlow<WalletState>(
+            WalletState.Ready(userId = "u", displayName = null, credentials = store.getAll()),
+        )
+        var emissions = 0
+        // Foreground, not backgroundScope: advanceUntilIdle() stops once only
+        // background tasks remain, so a background collector would never be
+        // resumed for the re-emission it is here to count.
+        val collector = launch { state.collect { emissions++ } }
+        runCurrent() // subscribe before hydration starts
+        val wallet = newWallet(
+            "_state" to state,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "vctmFetcher" to vctmFetcher,
+        )
+
+        hydrate(wallet)
+        val started = testScheduler.currentTime
+        advanceUntilIdle()
+        val elapsed = testScheduler.currentTime - started
+
+        assertEquals(1_000L, elapsed)
+        assertTrue(store.getAll().all { it.metadata?.isFallback == true })
+        // Initial value + one re-emission.
+        assertEquals(2, emissions)
+        collector.cancel()
+    }
 
     private fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {
         val wallet = allocateInstance(SirosWallet::class.java) as SirosWallet
@@ -3467,6 +3989,22 @@ class SirosWalletTest {
             values["credentialConsumptionPolicy"] = CredentialConsumptionPolicy.NEVER_CONSUME
         }
         values.forEach { (name, value) -> setField(wallet, name, value) }
+        // allocateInstance bypasses property initializers entirely, so a
+        // `by lazy { ... }` property's synthetic backing field (a Lazy<T>,
+        // not the computed value itself) is never initialized either -
+        // touching readerTrustRootCertificates/issuerTrustRootCertificates
+        // without this NPEs with "Cannot invoke Lazy.getValue() because ...
+        // is null", not a normal lazy-recompute. Force each one to its
+        // usual empty-config default here so evaluateReaderTrust/
+        // evaluateIssuerTrust's local-fallback path is actually reachable
+        // in tests; a test that needs non-empty roots overrides the
+        // delegate field directly instead.
+        if ("issuerTrustRootCertificates\$delegate" !in values) {
+            setField(wallet, "issuerTrustRootCertificates\$delegate", lazy { emptyList<java.security.cert.X509Certificate>() })
+        }
+        if ("readerTrustRootCertificates\$delegate" !in values) {
+            setField(wallet, "readerTrustRootCertificates\$delegate", lazy { emptyList<java.security.cert.X509Certificate>() })
+        }
         return wallet
     }
 
