@@ -143,16 +143,19 @@ class PickerIconCache(
     }
 
     /**
-     * Write via a sibling temp file and rename, so [target] is only ever the
-     * previous complete file or the new one. A write interrupted halfway would
-     * otherwise leave a truncated-but-non-empty PNG that [cached] serves
-     * forever, since nothing downstream validates the bytes.
+     * Write via a sibling temp file and rename. The bytes themselves are
+     * never partially visible: a write interrupted halfway leaves a stray
+     * `.tmp`, not a truncated [target] that [cached] would serve forever
+     * (nothing downstream validates the bytes). Replacement is best-effort
+     * rather than strictly atomic: on a filesystem that refuses to rename
+     * over an existing file, the old one is removed first, and if the retry
+     * then fails too the entry is briefly absent - a cache miss, refetched
+     * on the next sweep, never a corrupt file.
      */
     private fun writeAtomically(target: File, bytes: ByteArray) {
         val tmp = File(target.parentFile, "${target.name}.tmp")
         tmp.writeBytes(bytes)
         if (tmp.renameTo(target)) return
-        // Some filesystems refuse to rename over an existing file.
         val cleared = target.delete() || !target.exists()
         if (cleared && tmp.renameTo(target)) return
         if (!tmp.delete()) Timber.d("PickerIconCache: ${tmp.name} left behind")
@@ -165,7 +168,11 @@ class PickerIconCache(
         val miss = FetchBackoff.recordMiss(readMissLocked(missFile), nowMillis())
         try {
             dir.mkdirs()
-            missFile.writeText(json.encodeToString(FetchCacheEntry.serializer(), miss))
+            // Atomic for the same reason as the icon: a half-written marker
+            // reads as corrupt, corrupt reads as absent, and absent means
+            // `isDue` says yes - the backoff this file exists to enforce
+            // would be gone.
+            writeAtomically(missFile, json.encodeToString(FetchCacheEntry.serializer(), miss).toByteArray())
         } catch (e: Exception) {
             Timber.w(e, "PickerIconCache: failed to record miss for $logoUrl")
         }

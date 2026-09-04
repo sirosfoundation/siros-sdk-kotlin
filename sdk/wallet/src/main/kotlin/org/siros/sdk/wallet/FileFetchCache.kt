@@ -124,10 +124,13 @@ class FileFetchCache(
             val tmp = File(file.parentFile, "${file.name}.tmp")
             tmp.writeText(json.encodeToString(serializer, map))
             if (!tmp.renameTo(file)) {
-                // Some filesystems refuse to rename over an existing file.
-                // If the old one cannot be removed either, the retry cannot
-                // succeed, so don't bother - the previous contents stay in
-                // place, which is the least bad outcome.
+                // Some filesystems refuse to rename over an existing file, so
+                // remove the old one and retry. Best-effort: if the old one
+                // cannot be removed the retry cannot succeed and is skipped,
+                // leaving the previous contents; if it is removed and the
+                // retry still fails, the cache is empty until the next fetch
+                // repopulates it. Either way nothing half-written is ever
+                // read back.
                 val cleared = file.delete() || !file.exists()
                 if (!cleared || !tmp.renameTo(file)) {
                     Timber.w("FileFetchCache: could not move ${tmp.name} into place")
