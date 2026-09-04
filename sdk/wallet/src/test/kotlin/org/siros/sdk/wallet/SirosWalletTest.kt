@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -23,6 +24,7 @@ import kotlin.reflect.full.callSuspend
 import kotlin.reflect.full.declaredMemberFunctions
 import kotlin.reflect.jvm.isAccessible
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import okhttp3.OkHttpClient
@@ -3590,6 +3592,207 @@ class SirosWalletTest {
             })
         }
     }.toString()
+
+    // ── hydrateReloadedCredentials ──────────────────────────────────
+
+    /** `{"alg":"ES256"}.{"iat":1700000000,"exp":1800000000,"vct":"urn:eudi:pid:1"}.sig~` */
+    private val reloadedSdJwt = "eyJhbGciOiJFUzI1NiJ9." +
+        java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(
+            """{"iat":1700000000,"exp":1800000000,"vct":"urn:eudi:pid:1"}""".toByteArray(),
+        ) + ".c2ln~"
+
+    private fun reloadedCredential(id: Long, metadata: CredentialMetadata? = null) = StoredCredential(
+        id = id,
+        format = "dc+sd-jwt",
+        raw = reloadedSdJwt,
+        batchId = id,
+        instanceId = 0,
+        credentialIssuerIdentifier = "https://issuer.example.com",
+        credentialConfigurationId = "eu.europa.ec.eudi.pid_sd_jwt",
+        metadata = metadata,
+    )
+
+    private fun hydrate(wallet: SirosWallet) {
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "hydrateReloadedCredentials" }
+        method.isAccessible = true
+        method.call(wallet)
+    }
+
+    /**
+     * The user-visible bug this guards against: a credential whose VCTM
+     * can't be fetched used to stay `metadata == null` forever, and the card
+     * UI treats null as "loading" - a spinner on every launch. Now a fallback
+     * is persisted immediately so the card has something real to draw.
+     */
+    @Test
+    fun hydrate_persistsFallbackMetadata_whenNoDocumentIsAvailable() = runTest(dispatcher) {
+        val store = FakeCredentialStore(mutableListOf(reloadedCredential(1L)))
+        val vctmFetcher = mockk<org.siros.sdk.credentials.VctmFetcher>()
+        coEvery { vctmFetcher.fetch(any(), any(), any(), any()) } returns null
+        val state = MutableStateFlow<WalletState>(
+            WalletState.Ready(userId = "u", displayName = null, credentials = store.getAll()),
+        )
+        val wallet = newWallet(
+            "_state" to state,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "vctmFetcher" to vctmFetcher,
+        )
+
+        hydrate(wallet)
+        advanceUntilIdle()
+
+        val saved = store.getById(1L)!!
+        val meta = saved.metadata!!
+        assertTrue(meta.isFallback)
+        assertEquals("Pid Sd Jwt", meta.name)
+        assertEquals("issuer.example.com", meta.issuer!!.name)
+        assertEquals("urn:eudi:pid:1", meta.vct)
+        assertNull(meta.svgTemplates)
+        // iat/exp are still derived alongside.
+        assertEquals(1700000000L, saved.issuedAt)
+        assertEquals(1800000000L, saved.expiresAt)
+        // And Ready was re-emitted with the hydrated list.
+        assertTrue((state.value as WalletState.Ready).credentials.single().metadata!!.isFallback)
+        coVerify(exactly = 1) {
+            vctmFetcher.fetch(
+                issuerUrl = "https://issuer.example.com",
+                scope = "eu.europa.ec.eudi.pid_sd_jwt",
+                vct = "urn:eudi:pid:1",
+                registryUrl = "https://wallet.example.com/registry",
+            )
+        }
+    }
+
+    /** A fallback is still "needs hydration": the next successful fetch replaces it. */
+    @Test
+    fun hydrate_replacesFallback_whenDocumentBecomesAvailable() = runTest(dispatcher) {
+        val fallback = org.siros.sdk.credentials.CredentialUtils.buildFallbackMetadata(reloadedCredential(1L))
+        val store = FakeCredentialStore(
+            mutableListOf(reloadedCredential(1L, metadata = fallback).copy(issuedAt = 1700000000L, expiresAt = 1800000000L)),
+        )
+        val vctmFetcher = mockk<org.siros.sdk.credentials.VctmFetcher>()
+        coEvery { vctmFetcher.fetch(any(), any(), any(), any()) } returns
+            org.siros.sdk.credentials.VctmFetcher().parseVctm(
+                """{"vct":"urn:eudi:pid:1","display":[{"locale":"en","name":"Personal ID",
+                   "rendering":{"simple":{"background_color":"#003366"}}}]}""",
+            )
+        val state = MutableStateFlow<WalletState>(
+            WalletState.Ready(userId = "u", displayName = null, credentials = store.getAll()),
+        )
+        val wallet = newWallet(
+            "_state" to state,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "vctmFetcher" to vctmFetcher,
+        )
+
+        hydrate(wallet)
+        advanceUntilIdle()
+
+        val meta = store.getById(1L)!!.metadata!!
+        assertEquals(false, meta.isFallback)
+        assertEquals("Personal ID", meta.name)
+        assertEquals("#003366", meta.backgroundColor)
+        assertEquals("Personal ID", (state.value as WalletState.Ready).credentials.single().metadata!!.name)
+    }
+
+    /**
+     * While the negative cache says "not due", `fetch` returns null at once;
+     * an existing fallback must then be left alone - no re-save, no Ready
+     * re-emission - or every launch would still churn state for nothing.
+     */
+    @Test
+    fun hydrate_leavesExistingFallbackUntouched_whenStillNoDocument() = runTest(dispatcher) {
+        val fallback = org.siros.sdk.credentials.CredentialUtils.buildFallbackMetadata(reloadedCredential(1L))
+        val existing = reloadedCredential(1L, metadata = fallback).copy(issuedAt = 1700000000L, expiresAt = 1800000000L)
+        val saves = mutableListOf<StoredCredential>()
+        val store = object : CredentialStore by FakeCredentialStore(mutableListOf(existing)) {
+            override suspend fun save(credential: StoredCredential) { saves.add(credential) }
+        }
+        val vctmFetcher = mockk<org.siros.sdk.credentials.VctmFetcher>()
+        coEvery { vctmFetcher.fetch(any(), any(), any(), any()) } returns null
+        val initial = WalletState.Ready(userId = "u", displayName = null, credentials = listOf(existing))
+        val state = MutableStateFlow<WalletState>(initial)
+        val wallet = newWallet(
+            "_state" to state,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "vctmFetcher" to vctmFetcher,
+        )
+
+        hydrate(wallet)
+        advanceUntilIdle()
+
+        assertTrue(saves.isEmpty())
+        assertTrue(state.value === initial)
+    }
+
+    /** Real (non-fallback) metadata is never touched, and the fetcher is not even asked. */
+    @Test
+    fun hydrate_skipsCredentialsWithRealMetadata() = runTest(dispatcher) {
+        val real = CredentialMetadata(name = "Personal ID", vct = "urn:eudi:pid:1")
+        val store = FakeCredentialStore(mutableListOf(reloadedCredential(1L, metadata = real)))
+        val vctmFetcher = mockk<org.siros.sdk.credentials.VctmFetcher>()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = null)),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "vctmFetcher" to vctmFetcher,
+        )
+
+        hydrate(wallet)
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { vctmFetcher.fetch(any(), any(), any(), any()) }
+        assertEquals(real, store.getById(1L)!!.metadata)
+    }
+
+    /**
+     * Credentials hydrate concurrently: with two slow fetches that each take
+     * a (virtual) second, the whole pass takes one second, not two - and
+     * Ready is still emitted exactly once, at the end.
+     */
+    @Test
+    fun hydrate_runsCredentialsConcurrently_andEmitsReadyOnce() = runTest(dispatcher) {
+        val store = FakeCredentialStore(mutableListOf(reloadedCredential(1L), reloadedCredential(2L)))
+        val vctmFetcher = mockk<org.siros.sdk.credentials.VctmFetcher>()
+        coEvery { vctmFetcher.fetch(any(), any(), any(), any()) } coAnswers {
+            kotlinx.coroutines.delay(1_000)
+            null
+        }
+        val state = MutableStateFlow<WalletState>(
+            WalletState.Ready(userId = "u", displayName = null, credentials = store.getAll()),
+        )
+        var emissions = 0
+        // Foreground, not backgroundScope: advanceUntilIdle() stops once only
+        // background tasks remain, so a background collector would never be
+        // resumed for the re-emission it is here to count.
+        val collector = launch { state.collect { emissions++ } }
+        runCurrent() // subscribe before hydration starts
+        val wallet = newWallet(
+            "_state" to state,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "vctmFetcher" to vctmFetcher,
+        )
+
+        hydrate(wallet)
+        val started = testScheduler.currentTime
+        advanceUntilIdle()
+        val elapsed = testScheduler.currentTime - started
+
+        assertEquals(1_000L, elapsed)
+        assertTrue(store.getAll().all { it.metadata?.isFallback == true })
+        // Initial value + one re-emission.
+        assertEquals(2, emissions)
+        collector.cancel()
+    }
 
     private fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {
         val wallet = allocateInstance(SirosWallet::class.java) as SirosWallet

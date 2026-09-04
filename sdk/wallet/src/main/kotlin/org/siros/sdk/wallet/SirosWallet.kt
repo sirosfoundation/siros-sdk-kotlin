@@ -8,7 +8,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -43,6 +47,7 @@ import org.siros.sdk.credentials.CredentialStore
 import org.siros.sdk.credentials.InMemoryCredentialStore
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.credentials.CredentialOffer
+import org.siros.sdk.credentials.CredentialMetadata
 import org.siros.sdk.credentials.CredentialMatcher
 import org.siros.sdk.credentials.PresentationRecord
 import org.siros.sdk.credentials.IssuerEntry
@@ -685,7 +690,7 @@ class SirosWallet private constructor(
     /**
      * After loading credentials from a reimported private-data container
      * (fresh login here, or [unlockKeystore] after [resumeSession]), re-fetch
-     * VCTM display metadata and re-derive issuedAt/expiresAt for any
+     * VCTM/MDDL display metadata and re-derive issuedAt/expiresAt for any
      * credential that's missing them.
      *
      * privatedata-spec's container format doesn't persist `metadata`/
@@ -697,101 +702,147 @@ class SirosWallet private constructor(
      * (metadata is never null for a credential saved earlier in the same
      * session, only for one just reconstructed from a container).
      *
-     * Fire-and-forget: re-emits [WalletState.Ready] with the refreshed list
-     * once done, rather than blocking login/unlock on however many VCTM
-     * fetches are needed.
+     * ### Never a spinner for nothing
+     *
+     * Because this runs on every login, a type whose document can't be
+     * fetched used to cost the user a network round-trip and a loading
+     * indicator on its card on every launch. Two things fix that:
+     *
+     * 1. The fetchers share [displayMetadataCache], which remembers misses
+     *    with backoff. While a retry isn't due, `fetch` returns null at once
+     *    with no network.
+     * 2. When no document is available, a synthesised
+     *    [CredentialUtils.buildFallbackMetadata] is persisted on the
+     *    credential (marked [CredentialMetadata.HYDRATION_FALLBACK]) so the
+     *    UI has non-null metadata to render the flat layout from
+     *    immediately. A fallback still counts as "needs hydration": it is
+     *    replaced by real metadata the moment a later fetch succeeds.
+     *
+     * Credentials are hydrated concurrently (capped at
+     * [HYDRATION_PARALLELISM]) so one slow issuer doesn't hold up the rest,
+     * but [WalletState.Ready] is re-emitted exactly once at the end, as
+     * before. Fire-and-forget: never blocks login/unlock.
      */
     private fun hydrateReloadedCredentials() {
         scope.launch {
-            var changed = false
-            for (cred in credentialStore.getAll()) {
-                if (cred.metadata != null) continue
-                val issuerIdent = cred.credentialIssuerIdentifier
-                val configId = cred.credentialConfigurationId
-
-                if (cred.format == "mso_mdoc") {
-                    // mdoc has no JWT iat/exp claims to re-derive here (ISO
-                    // 18013-5 validity lives in the MSO's validityInfo, inside
-                    // issuerAuth - deliberately not parsed by this wallet, see
-                    // MdocCbor's doc comment: MSO parsing is a verifier-side
-                    // concern this holder doesn't need). Only metadata (via
-                    // MDDLSchema) is re-hydrated here.
-                    if (issuerIdent.isNullOrBlank() || configId.isNullOrBlank()) continue
-                    val mddlSchema = try {
-                        mddlSchemaFetcher.fetch(
-                            issuerUrl = issuerIdent,
-                            scope = configId,
-                            registryUrl = registryUrl,
-                        )
-                    } catch (e: Exception) {
-                        Timber.w(e, "Failed to re-fetch MDDL schema for reloaded credential ${cred.id}")
-                        null
-                    } ?: continue
-                    val metadata = CredentialUtils.buildMdocMetadata(
-                        offer = CredentialOffer(
-                            credentialConfigurationId = configId,
-                            credentialIssuerIdentifier = issuerIdent,
-                            credentialName = cred.format,
-                            issuerName = issuerIdent,
-                            format = cred.format,
-                        ),
-                        mddlSchema = mddlSchema,
-                    )
-                    credentialStore.save(cred.copy(metadata = metadata))
-                    changed = true // NOSONAR kotlin:S6615 - false positive, read after the loop at "if (changed)" below
-                    continue
-                }
-
-                val payload = CredentialUtils.parseJwtPayload(cred.raw) ?: continue
-                val issuedAt = payload["iat"]?.jsonPrimitive?.longOrNull
-                val expiresAt = payload["exp"]?.jsonPrimitive?.longOrNull
-                val vct = payload["vct"]?.jsonPrimitive?.contentOrNull
-                val vctm = if (!issuerIdent.isNullOrBlank() && !configId.isNullOrBlank()) {
-                    try {
-                        vctmFetcher.fetch(
-                            issuerUrl = issuerIdent,
-                            scope = configId,
-                            vct = vct,
-                            registryUrl = registryUrl,
-                        )
-                    } catch (e: Exception) {
-                        Timber.w(e, "Failed to re-fetch VCTM for reloaded credential ${cred.id}")
-                        null
-                    }
-                } else {
-                    null
-                }
-                val metadata = vctm?.let {
-                    CredentialUtils.buildMetadata(
-                        offer = CredentialOffer(
-                            credentialConfigurationId = configId ?: "",
-                            credentialIssuerIdentifier = issuerIdent ?: "",
-                            credentialName = cred.format,
-                            issuerName = issuerIdent ?: "",
-                            format = cred.format,
-                        ),
-                        vctm = it,
-                        rawCredential = cred.raw,
-                    )
-                }
-                if (metadata != null || issuedAt != null || expiresAt != null) {
-                    credentialStore.save(
-                        cred.copy(
-                            metadata = metadata ?: cred.metadata,
-                            issuedAt = issuedAt ?: cred.issuedAt,
-                            expiresAt = expiresAt ?: cred.expiresAt,
-                        )
-                    )
-                    changed = true
-                }
-            }
-            if (changed) {
-                val current = _state.value
-                if (current is WalletState.Ready) {
-                    _state.value = current.copy(credentials = credentialStore.getAll())
-                }
+            val candidates = credentialStore.getAll().filter { it.metadata?.isFallback != false }
+            if (candidates.isEmpty()) return@launch
+            val gate = Semaphore(HYDRATION_PARALLELISM)
+            val updates = candidates
+                .map { cred -> async { gate.withPermit { hydrateOne(cred) } } }
+                .awaitAll()
+                .filterNotNull()
+            if (updates.isEmpty()) return@launch
+            updates.forEach { credentialStore.save(it) }
+            val fallbacks = updates.count { it.metadata?.isFallback == true }
+            Timber.i(
+                "Hydrated ${updates.size}/${candidates.size} reloaded credentials " +
+                    "(${updates.size - fallbacks} from issuer documents, $fallbacks fallback)",
+            )
+            val current = _state.value
+            if (current is WalletState.Ready) {
+                _state.value = current.copy(credentials = credentialStore.getAll())
             }
         }
+    }
+
+    /**
+     * One credential's share of [hydrateReloadedCredentials]: the credential
+     * with whatever could be (re)derived applied, or null when nothing
+     * changed - so an existing fallback whose retry isn't due yet is not
+     * re-saved on every launch.
+     */
+    private suspend fun hydrateOne(cred: StoredCredential): StoredCredential? {
+        val issuerIdent = cred.credentialIssuerIdentifier
+        val configId = cred.credentialConfigurationId
+        val canFetch = !issuerIdent.isNullOrBlank() && !configId.isNullOrBlank()
+        // Only synthesise a fallback when there is no metadata at all; an
+        // existing fallback stays as it is until a real document replaces it.
+        fun fallbackIfNone(): CredentialMetadata? =
+            if (cred.metadata == null) CredentialUtils.buildFallbackMetadata(cred) else null
+
+        if (cred.format == "mso_mdoc") {
+            // mdoc has no JWT iat/exp claims to re-derive here (ISO 18013-5
+            // validity lives in the MSO's validityInfo, inside issuerAuth -
+            // deliberately not parsed by this wallet, see MdocCbor's doc
+            // comment: MSO parsing is a verifier-side concern this holder
+            // doesn't need). Only metadata (via MDDLSchema) is re-hydrated.
+            val mddlSchema = if (canFetch) {
+                try {
+                    mddlSchemaFetcher.fetch(
+                        issuerUrl = issuerIdent!!,
+                        scope = configId!!,
+                        // The docType is parseable from the credential's own
+                        // MSO, so the registry-first strategy can run - and
+                        // the cache key then matches what issuance wrote.
+                        vct = CredentialUtils.parseMdocDocument(cred)?.docType,
+                        registryUrl = registryUrl,
+                    )
+                } catch (e: Exception) {
+                    Timber.w(e, "Failed to re-fetch MDDL schema for reloaded credential ${cred.id}")
+                    null
+                }
+            } else {
+                null
+            }
+            val metadata = mddlSchema?.let {
+                CredentialUtils.buildMdocMetadata(
+                    offer = CredentialOffer(
+                        credentialConfigurationId = configId!!,
+                        credentialIssuerIdentifier = issuerIdent!!,
+                        credentialName = cred.format,
+                        issuerName = issuerIdent,
+                        format = cred.format,
+                    ),
+                    mddlSchema = it,
+                )
+            } ?: fallbackIfNone()
+            return metadata?.let { cred.copy(metadata = it) }
+        }
+
+        // A JWP (or anything else that isn't `<jwt>~...`) has no parseable
+        // payload here; it still gets a VCTM attempt and a fallback rather
+        // than being skipped and left spinning.
+        val payload = CredentialUtils.parseJwtPayload(cred.raw)
+        val issuedAt = payload?.get("iat")?.jsonPrimitive?.longOrNull
+        val expiresAt = payload?.get("exp")?.jsonPrimitive?.longOrNull
+        val vct = payload?.get("vct")?.jsonPrimitive?.contentOrNull
+        val vctm = if (canFetch) {
+            try {
+                vctmFetcher.fetch(
+                    issuerUrl = issuerIdent!!,
+                    scope = configId!!,
+                    vct = vct,
+                    registryUrl = registryUrl,
+                )
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to re-fetch VCTM for reloaded credential ${cred.id}")
+                null
+            }
+        } else {
+            null
+        }
+        val metadata = vctm?.let {
+            CredentialUtils.buildMetadata(
+                offer = CredentialOffer(
+                    credentialConfigurationId = configId ?: "",
+                    credentialIssuerIdentifier = issuerIdent ?: "",
+                    credentialName = cred.format,
+                    issuerName = issuerIdent ?: "",
+                    format = cred.format,
+                ),
+                vctm = it,
+                rawCredential = cred.raw,
+            )
+        } ?: fallbackIfNone()
+        val newIssuedAt = issuedAt ?: cred.issuedAt
+        val newExpiresAt = expiresAt ?: cred.expiresAt
+        if (metadata == null && newIssuedAt == cred.issuedAt && newExpiresAt == cred.expiresAt) return null
+        return cred.copy(
+            metadata = metadata ?: cred.metadata,
+            issuedAt = newIssuedAt,
+            expiresAt = newExpiresAt,
+        )
     }
 
     /**
@@ -2510,8 +2561,28 @@ class SirosWallet private constructor(
             credentials = credentialStore.getAll(),
         )
     }
-    private val vctmFetcher = VctmFetcher(httpGet = ::fetchTypeMetadataUrl)
-    private val mddlSchemaFetcher = MddlSchemaFetcher(httpGet = ::fetchTypeMetadataUrl)
+    /**
+     * On-device, cross-launch cache of VCTM/MDDL documents AND of the fact
+     * that a document could not be fetched (see [FileFetchCache] and
+     * [org.siros.sdk.credentials.FetchBackoff]). Without it, every login
+     * re-ran every failed type-metadata fetch - [hydrateReloadedCredentials]
+     * runs on each login because the private-data container never persists
+     * `metadata` - and each failure was a visible spinner on the card.
+     * Application context: this outlives any one Activity.
+     */
+    private val displayMetadataCache: org.siros.sdk.credentials.FetchCache =
+        FileFetchCache(activity.applicationContext)
+
+    private val vctmFetcher = VctmFetcher(
+        httpGet = ::fetchTypeMetadataUrl,
+        persistentCache = displayMetadataCache,
+        revalidateScope = scope,
+    )
+    private val mddlSchemaFetcher = MddlSchemaFetcher(
+        httpGet = ::fetchTypeMetadataUrl,
+        persistentCache = displayMetadataCache,
+        revalidateScope = scope,
+    )
 
     /**
      * Base URL for go-wallet-backend's credential-type registry service (see
@@ -5150,6 +5221,15 @@ class SirosWallet private constructor(
 
     companion object {
         internal const val HKDF_INFO = "eDiplomas PRF"
+
+        /**
+         * How many reloaded credentials [hydrateReloadedCredentials] fetches
+         * metadata for at once. Small: the common case after the first launch
+         * is answered from [displayMetadataCache] with no network at all, and
+         * when the network is involved a handful of concurrent connections to
+         * (usually) one or two issuers is plenty.
+         */
+        private const val HYDRATION_PARALLELISM = 4
         internal var createEngineSession: (String, String) -> WalletEngineSession =
             { baseUrl, tenantId -> WalletEngineSession(baseUrl, tenantId) }
 
