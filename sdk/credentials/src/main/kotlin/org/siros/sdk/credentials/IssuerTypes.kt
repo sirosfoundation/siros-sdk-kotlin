@@ -32,6 +32,61 @@ data class IssuerMetadata(
     val display: List<IssuerDisplay>? = null,
     @SerialName("credential_configurations_supported")
     val credentialConfigurationsSupported: Map<String, CredentialConfiguration> = emptyMap(),
+    /**
+     * The signed form of this metadata, per OpenID4VCI 12.2.3. ETSI TS 119 472-3
+     * ISS-MDATA-4.2.1-01 requires it, and ISS-MDATA-4.2.1-02 requires the JWS to
+     * be signed with the provider's access certificate. Kept so the document can
+     * be round-tripped and verified rather than silently dropped on parse.
+     */
+    @SerialName("signed_metadata") val signedMetadata: String? = null,
+    /**
+     * Attestations about the issuer, per ETSI TS 119 472-3
+     * ISS-MDATA-REG_CERT-4.2.3-01. The element with format "registration_cert"
+     * carries the provider's WRPRC, which is what says the provider is
+     * registered to issue these credential types.
+     *
+     * Not to be confused with the wallet engine's own issuer display payload,
+     * which travels under a different key precisely so these two do not collide.
+     */
+    @SerialName("issuer_info") val issuerInfo: List<IssuerInfoEntry>? = null,
+)
+
+/**
+ * One attestation about the issuer from [IssuerMetadata.issuerInfo]. Mirrors
+ * OpenID4VP's verifier_info, which ISS-MDATA-REG_CERT-4.2.3-03 says to reuse.
+ */
+@Serializable
+data class IssuerInfoEntry(
+    val format: String,
+    val data: kotlinx.serialization.json.JsonElement,
+    @SerialName("credential_ids") val credentialIds: List<String>? = null,
+)
+
+/**
+ * Whether a provider is registered to issue what it is offering, as decided by
+ * the wallet backend per ARF section 6.6.2.3.
+ *
+ * [evaluated] is deliberately separate from [allowed]: a provider that carries
+ * no registration certificate is not the same as one that was checked and
+ * passed, and treating the two alike would make an unregistered issuer look
+ * verified.
+ */
+@Serializable
+data class IssuerEntitlement(
+    val allowed: Boolean,
+    val mode: String? = null,
+    val evaluated: Boolean = false,
+    val findings: List<IssuerEntitlementFinding> = emptyList(),
+    val entitlements: List<String> = emptyList(),
+    val subject: String? = null,
+)
+
+/** One reason an entitlement check did not pass. */
+@Serializable
+data class IssuerEntitlementFinding(
+    val code: String,
+    val message: String,
+    @SerialName("credential_type") val credentialType: String? = null,
 )
 
 @Serializable

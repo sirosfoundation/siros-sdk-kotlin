@@ -92,6 +92,36 @@ class BackendApiClient(
     suspend fun evaluateTrust(requestBody: JsonObject): JsonObject =
         post("/v1/evaluate", requestBody)
 
+    /**
+     * POST /v1/resolve — resolve credential issuer metadata through the backend.
+     *
+     * Unlike fetching the well-known document directly, this returns metadata
+     * the backend has already authenticated: it verifies the signed_metadata
+     * JWS, evaluates the signer against the trust registry, and (per ARF
+     * section 6.6.2.3) reports whether the provider is registered to issue the
+     * requested credential types.
+     *
+     * [credentialTypes] are credential configuration ids from the offer. They
+     * are what lets the backend answer "may this provider issue *this*", rather
+     * than only "is this provider trusted at all".
+     */
+    suspend fun resolveIssuer(issuerUrl: String, credentialTypes: List<String> = emptyList()): JsonObject {
+        val body = kotlinx.serialization.json.buildJsonObject {
+            put("subject_id", kotlinx.serialization.json.JsonPrimitive(issuerUrl))
+            put("subject_type", kotlinx.serialization.json.JsonPrimitive("url"))
+            put("resource_type", kotlinx.serialization.json.JsonPrimitive("credential_issuer"))
+            if (credentialTypes.isNotEmpty()) {
+                put(
+                    "credential_types",
+                    kotlinx.serialization.json.JsonArray(
+                        credentialTypes.map { kotlinx.serialization.json.JsonPrimitive(it) },
+                    ),
+                )
+            }
+        }
+        return post("/v1/resolve", body)
+    }
+
     /** POST /user/session/refresh — refresh appToken using refreshToken */
     suspend fun refreshSession(refreshToken: String): JsonObject = withContext(Dispatchers.IO) {
         val body = kotlinx.serialization.json.buildJsonObject {

@@ -22,6 +22,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonObject
@@ -38,6 +39,7 @@ import org.siros.sdk.auth.PrfOutput
 import org.siros.sdk.auth.WebAuthnAuthClient
 import org.siros.sdk.auth.WscdAutoEnrollHint
 import org.siros.sdk.credentials.AuthException
+import org.siros.sdk.credentials.IssuerEntitlement
 import org.siros.sdk.credentials.BackendApiException
 import org.siros.sdk.credentials.KeystoreException
 import org.siros.sdk.credentials.NetworkException
@@ -1203,7 +1205,66 @@ class SirosWallet private constructor(
      * internal network access). Falls back to a direct HTTP call if
      * no authenticated session is available.
      */
-    suspend fun getIssuerMetadata(issuerUrl: String): IssuerMetadata = withContext(Dispatchers.IO) {
+    suspend fun getIssuerMetadata(
+        issuerUrl: String,
+        credentialTypes: List<String> = emptyList(),
+    ): IssuerMetadata = resolveIssuerMetadata(issuerUrl, credentialTypes).metadata
+
+    /**
+     * Issuer metadata together with what the backend concluded about it.
+     *
+     * [entitlement] is null when the backend was not consulted - see
+     * [resolveIssuerMetadata] - and a null entitlement means "not checked",
+     * never "checked and fine".
+     */
+    data class ResolvedIssuerMetadata(
+        val metadata: IssuerMetadata,
+        val entitlement: IssuerEntitlement? = null,
+        val trusted: Boolean? = null,
+    )
+
+    /**
+     * Resolve issuer metadata, preferring the backend so the document arrives
+     * authenticated rather than merely fetched.
+     *
+     * The backend verifies the signed_metadata JWS, evaluates the signer
+     * against the trust registry, and reports whether the provider is
+     * registered to issue [credentialTypes] (ARF section 6.6.2.3). Doing this
+     * wallet-side would mean a second certificate-handling implementation in
+     * every SDK language, kept in sync by hand.
+     *
+     * Falls back to fetching the well-known document directly when there is no
+     * authenticated session. That path returns metadata that is parsed but not
+     * authenticated, so [ResolvedIssuerMetadata.entitlement] is left null and
+     * callers must not read the absence of findings as a pass.
+     */
+    suspend fun resolveIssuerMetadata(
+        issuerUrl: String,
+        credentialTypes: List<String> = emptyList(),
+    ): ResolvedIssuerMetadata = withContext(Dispatchers.IO) {
+        val client = apiClient
+        if (client != null) {
+            try {
+                val resolved = client.resolveIssuer(issuerUrl, credentialTypes)
+                val metadataJson = resolved["context"]?.jsonObject?.get("trust_metadata")?.jsonObject
+                if (metadataJson != null) {
+                    return@withContext ResolvedIssuerMetadata(
+                        metadata = json.decodeFromJsonElement(IssuerMetadata.serializer(), metadataJson),
+                        entitlement = resolved["issuer_entitlement"]?.let {
+                            json.decodeFromJsonElement(IssuerEntitlement.serializer(), it)
+                        },
+                        trusted = resolved["decision"]?.jsonPrimitive?.booleanOrNull,
+                    )
+                }
+                Timber.w("Backend resolve returned no metadata for $issuerUrl; falling back to a direct fetch")
+            } catch (e: Exception) {
+                // A backend that is unreachable must not make issuance
+                // impossible, but the caller has to be able to tell that the
+                // checks did not run - hence a null entitlement below.
+                Timber.w(e, "Backend resolve failed for $issuerUrl; falling back to a direct fetch")
+            }
+        }
+
         val url = issuerUrl.trimEnd('/') + "/.well-known/openid-credential-issuer"
         val request = Request.Builder().url(url).get().build()
         val response = httpClient.newCall(request).execute()
@@ -1212,7 +1273,47 @@ class SirosWallet private constructor(
         if (!response.isSuccessful) {
             throw WalletException("Metadata fetch failed: ${response.code}")
         }
-        json.decodeFromString(IssuerMetadata.serializer(), body)
+        ResolvedIssuerMetadata(json.decodeFromString(IssuerMetadata.serializer(), body))
+    }
+
+    /**
+     * The backend's entitlement decision for one credential configuration, or
+     * null if it could not be obtained.
+     *
+     * Null means "not checked", and a check that could not run must not block
+     * issuance - the same distinction the backend draws between "revoked" and
+     * "could not determine". Making issuance depend on this round-trip
+     * succeeding would turn a backend outage into an outage for every issuer.
+     */
+    private suspend fun issuerEntitlementFor(issuerUrl: String, configurationId: String): IssuerEntitlement? =
+        try {
+            resolveIssuerMetadata(issuerUrl, listOf(configurationId)).entitlement
+        } catch (e: Exception) {
+            Timber.w(e, "Could not obtain an entitlement decision for $issuerUrl; proceeding unchecked")
+            null
+        }
+
+    /**
+     * Refuse issuance when the backend says the provider is not registered to
+     * issue what it is offering.
+     *
+     * Mirrors the guard the DC API verifier path already applies: a decision is
+     * computed and then acted on, rather than computed and ignored. Warn mode
+     * reports findings while leaving [IssuerEntitlement.allowed] true, so this
+     * only throws when the deployment has asked it to.
+     */
+    private fun enforceIssuerEntitlement(issuerUrl: String, entitlement: IssuerEntitlement?) {
+        if (entitlement == null || entitlement.allowed) {
+            if (entitlement != null && entitlement.findings.isNotEmpty()) {
+                Timber.w(
+                    "Issuer $issuerUrl has entitlement findings (mode=${entitlement.mode}): " +
+                        entitlement.findings.joinToString { "${it.code}: ${it.message}" },
+                )
+            }
+            return
+        }
+        val reasons = entitlement.findings.joinToString { "${it.code}: ${it.message}" }
+        throw WalletException("Issuer '$issuerUrl' is not registered to issue this credential: $reasons")
     }
 
     /**
@@ -1583,6 +1684,19 @@ class SirosWallet private constructor(
         pendingRenewalSourceBatchId = replacesBatchId
         activeZkIssuanceInput = zkInput
         try {
+            // ARF section 6.6.2.3: before requesting issuance, check that the
+            // provider registered for this credential type. Done here rather
+            // than on the display paths, which deliberately swallow failures so
+            // a missing card image cannot block issuance - a place that
+            // swallows exceptions cannot also be where a refusal is decided.
+            enforceIssuerEntitlement(
+                offer.credentialIssuerIdentifier,
+                issuerEntitlementFor(
+                    offer.credentialIssuerIdentifier,
+                    offer.credentialConfigurationId,
+                ),
+            )
+
             activeOffer = offer
             activeVctm = try {
                 vctmFetcher.fetch(
