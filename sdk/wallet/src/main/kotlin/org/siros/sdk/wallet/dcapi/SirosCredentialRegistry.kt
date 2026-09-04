@@ -2,6 +2,7 @@
 package org.siros.sdk.wallet.dcapi
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -9,7 +10,14 @@ import androidx.credentials.registry.digitalcredentials.openid4vp.OpenId4VpRegis
 import androidx.credentials.registry.provider.ClearCredentialRegistryRequest
 import androidx.credentials.registry.provider.RegistryManager
 import androidx.credentials.registry.provider.digitalcredentials.DigitalCredentialRegistry
+import com.google.android.gms.identitycredentials.ClearRegistryRequest
+import com.google.android.gms.identitycredentials.IdentityCredentialManager
+import com.google.android.gms.identitycredentials.RegistrationRequest
+import com.google.android.gms.tasks.Task
 import java.io.ByteArrayOutputStream
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.suspendCancellableCoroutine
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.StoredCredential
 import timber.log.Timber
@@ -53,6 +61,19 @@ object SirosCredentialRegistry {
     /** Asset path of the matcher, shipped inside the `siros-dc-matcher` AAR. */
     private const val MATCHER_ASSET = "matcher.wasm"
 
+    /**
+     * The pre-standardization Credential Manager type string.
+     *
+     * [DigitalCredentialRegistry] (via [RegistryManager]) registers under
+     * `androidx.credentials.TYPE_DIGITAL_CREDENTIAL` only. multipaz's
+     * wallet-side registry code (`DigitalCredentialsExt.android.kt`) and
+     * animo's `expo-digital-credentials-api` both register the identical
+     * database a second time under this older string via the raw GMS client,
+     * for browsers whose dispatch still keys off it. [refresh] does the same;
+     * it costs one extra call and reaches whatever still looks here.
+     */
+    private const val LEGACY_TYPE = "com.credman.IdentityCredential"
+
     /** Icon edge length, in pixels, for the placeholder card image. */
     private const val ICON_SIZE = 64
 
@@ -79,17 +100,52 @@ object SirosCredentialRegistry {
                 registerWithStockMatcher(context, credentials)
                 return
             }
-            val blob = buildBlob(credentials, zkSystems)
+            val blob = buildBlob(credentials, zkSystems, debug = context.isDebuggable())
             val matcher = context.assets.open(MATCHER_ASSET).use { it.readBytes() }
             RegistryManager.create(context).registerCredentials(
                 SirosRegistry(credentials = blob, matcher = matcher),
             )
+            registerLegacyType(context, blob, matcher)
             Timber.d("DC API registry updated: ${credentials.size} credentials, ${blob.size}-byte blob")
         } catch (e: Exception) {
             // Registration failing must never break the rest of the app - on a
             // device without DC API support it simply means these credentials
             // are not offered through the browser.
             Timber.w(e, "Failed to register DC API credentials")
+        }
+    }
+
+    /**
+     * Register the same blob and matcher again under [LEGACY_TYPE], via the
+     * raw GMS client rather than [RegistryManager].
+     *
+     * Best-effort and additive: the [RegistryManager] registration above is
+     * the one every current API surface documents, and this is not meant to
+     * replace it - only to also reach whatever still dispatches on the old
+     * type string, the way multipaz's independently-working implementation
+     * does. A failure here must not affect the primary registration, so it
+     * is caught and logged rather than propagated.
+     *
+     * Awaited, not fire-and-forget: [refresh] and [clear] run back to back on
+     * login and logout, and a registration still in flight when the next call
+     * starts could land after the clear that was meant to remove it.
+     */
+    private suspend fun registerLegacyType(context: Context, blob: ByteArray, matcher: ByteArray) {
+        try {
+            IdentityCredentialManager.getClient(context)
+                .registerCredentials(
+                    RegistrationRequest(
+                        credentials = blob,
+                        matcher = matcher,
+                        type = LEGACY_TYPE,
+                        requestType = "",
+                        protocolTypes = emptyList(),
+                    ),
+                )
+                .await()
+            Timber.d("DC API legacy-type registration succeeded")
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to register DC API credentials under the legacy type")
         }
     }
 
@@ -125,13 +181,49 @@ object SirosCredentialRegistry {
         Timber.d("DC API registry updated via the stock matcher (${entries.size} entries)")
     }
 
-    /** Remove this wallet's entries from the picker. */
+    /**
+     * Remove this wallet's entries from the picker.
+     *
+     * Clears both registrations [refresh] makes: the [RegistryManager] one
+     * and the [LEGACY_TYPE] one made through the raw GMS client. The AndroidX
+     * clear does not reach the latter, so without the second call a wallet
+     * that logged out would keep offering its last snapshot under the legacy
+     * type until it next logged in.
+     */
     suspend fun clear(context: Context) {
         try {
             RegistryManager.create(context)
                 .clearCredentialRegistry(ClearCredentialRegistryRequest(true))
         } catch (e: Exception) {
             Timber.w(e, "Failed to clear DC API credential registry")
+        }
+        try {
+            IdentityCredentialManager.getClient(context)
+                .clearRegistry(ClearRegistryRequest())
+                .await()
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to clear DC API legacy-type registry")
+        }
+    }
+
+    /**
+     * Suspend until a Play Services [Task] completes, surfacing failure as an
+     * exception. Same shape as `PlayIntegrityProvider`, kept private here
+     * rather than shared because a module-wide Task bridge would pull the GMS
+     * Tasks API into every module's surface for two call sites.
+     *
+     * A [Task] cannot be cancelled, so cancellation of the caller only stops
+     * it from being resumed; the request itself still reaches the host.
+     */
+    private suspend fun <T> Task<T>.await(): T = suspendCancellableCoroutine { continuation ->
+        addOnCompleteListener { task ->
+            if (!continuation.isActive) return@addOnCompleteListener
+            val error = task.exception
+            when {
+                task.isCanceled -> continuation.cancel()
+                error != null -> continuation.resumeWithException(error)
+                else -> continuation.resume(task.result)
+            }
         }
     }
 
@@ -167,19 +259,27 @@ object SirosCredentialRegistry {
     internal fun buildBlob(
         credentials: List<StoredCredential>,
         zkSystems: List<ZkSystem>,
+        debug: Boolean = false,
     ): ByteArray {
         // `use`, not a bare call: the builder holds a native handle, and
         // leaving it to the Cleaner means the handle survives until a GC that
         // may never come under memory pressure. Registration runs on every
         // credential change, so a leak here accumulates.
-        return SirosBlobBuilder().use { builder -> buildWith(builder, credentials, zkSystems) }
+        return SirosBlobBuilder().use { builder -> buildWith(builder, credentials, zkSystems, debug) }
     }
 
     private fun buildWith(
         builder: SirosBlobBuilder,
         credentials: List<StoredCredential>,
         zkSystems: List<ZkSystem>,
+        debug: Boolean,
     ): ByteArray {
+        // With this on, a request that matches nothing gets one picker entry
+        // naming why (see the matcher's `Diagnostics`). Only ever for a
+        // debuggable build: an end user cannot act on "not satisfiable", and
+        // selecting the entry hands this wallet a credential id that does not
+        // exist.
+        builder.setDebug(debug)
         zkSystems.forEach { builder.addZkSystem(FfiCapability(it.system, it.params)) }
 
         credentials.forEach { cred ->
@@ -260,6 +360,9 @@ object SirosCredentialRegistry {
             out.toByteArray()
         }
     }
+
+    private fun Context.isDebuggable(): Boolean =
+        applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
 
     /** The registration request itself. */
     private class SirosRegistry(credentials: ByteArray, matcher: ByteArray) :

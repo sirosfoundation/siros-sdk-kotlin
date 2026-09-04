@@ -8,6 +8,7 @@ nimbus-jose-jwt = "10.0.2"
 androidx-core = "1.15.0"
 androidx-credentials = "1.6.0"
 androidx-credentials-registry = "1.0.0-alpha05"
+play-services-identity-credentials = "16.0.0-alpha11"
 play-integrity = "1.4.0"
 androidx-biometric = "1.1.0"
 androidx-security-crypto = "1.1.0"
@@ -44,6 +45,7 @@ androidx-credentials-registry-provider-play = { module = "androidx.credentials.r
 androidx-credentials-registry-mdoc = { module = "androidx.credentials.registry:registry-digitalcredentials-mdoc", version.ref = "androidx-credentials-registry" }
 androidx-credentials-registry-openid = { module = "androidx.credentials.registry:registry-digitalcredentials-openid", version.ref = "androidx-credentials-registry" }
 androidx-credentials-registry-sdjwtvc = { module = "androidx.credentials.registry:registry-digitalcredentials-sdjwtvc", version.ref = "androidx-credentials-registry" }
+play-services-identity-credentials = { module = "com.google.android.gms:play-services-identity-credentials", version.ref = "play-services-identity-credentials" }
 play-integrity = { module = "com.google.android.play:integrity", version.ref = "play-integrity" }
 androidx-biometric = { module = "androidx.biometric:biometric", version.ref = "androidx-biometric" }
 androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "androidx-security-crypto" }
