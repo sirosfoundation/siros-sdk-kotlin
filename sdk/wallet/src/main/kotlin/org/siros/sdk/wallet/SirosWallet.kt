@@ -1211,7 +1211,7 @@ class SirosWallet private constructor(
                 // iss doesn't need to equal client_id for THIS PoP - it's
                 // validated by our own backend (WIAService.validatePop only
                 // checks iss is non-empty), unlike the per-issuer PoP built in
-                // resolveClientAttestation. clientAttestationClientId() is
+                // buildClientAttestationPoP. clientAttestationClientId() is
                 // still a reasonable choice: consistent, and non-empty.
                 issuer = clientAttestationClientId(),
                 // Must match the backend's configured wallet_provider_uri, if
@@ -1298,47 +1298,13 @@ class SirosWallet private constructor(
      * The OAuth `client_id` this wallet uses in OID4VCI/OID4VP flows.
      * Mirrors go-wallet-backend's `OID4VCIHandler.clientID` default
      * (`h.clientID = h.redirectURI`, OID4VCI §7.1's unregistered-client
-     * convention) - known to be correct for any issuer that doesn't have its
-     * own registered client_id override server-side (the common case; a
-     * registered override isn't visible to the client, so a cached WIA/PoP
-     * built against this default would be spec-inconsistent for that rarer
-     * case - a known, accepted limitation rather than something this method
-     * can resolve without per-issuer client_id discovery).
+     * convention). Used as the WIA's `sub`, and as the per-flow PoP `iss`
+     * fallback only: the engine's `request_attestation` sign request carries
+     * the flow's *effective* client_id (including any registered per-issuer
+     * override the client can't otherwise see), which
+     * [handleRequestAttestation] prefers.
      */
     private fun clientAttestationClientId(): String = config.redirectUri
-
-    /**
-     * Resolve OAuth Client Attestation (a WIA plus a fresh per-flow PoP) for
-     * an issuance flow targeting [issuerUrl] - the pair the engine forwards
-     * as `OAuth-Client-Attestation`/`OAuth-Client-Attestation-PoP` headers to
-     * the credential issuer (see go-wallet-backend's
-     * `client_attestation.go`'s `TransportSuppliedAttestation`).
-     *
-     * The PoP's `aud` targets the issuer's own authorization server if
-     * discoverable from its metadata (mirrors go-wallet-backend's
-     * `IssuerMetadata.authorizationServer()`), falling back to the credential
-     * issuer URL itself for issuers that self-host their AS at the same origin.
-     * Its `iss` is the same client_id used for the WIA's `sub` (see
-     * [ensureWalletInstanceAttestation]) - draft-ietf-oauth-attestation-based-client-auth-10
-     * requires both to match. Its `challenge` claim, when the AS publishes a
-     * `challenge_endpoint` in its metadata, is fetched fresh from there
-     * (§ "Challenge Endpoint" - POST returns `{"attestation_challenge": ...}`);
-     * omitted otherwise, since the claim is optional per spec.
-     *
-     * Best-effort: returns null on any failure - missing/misconfigured WIA
-     * support must never block issuance itself.
-     */
-    private suspend fun resolveClientAttestation(issuerUrl: String): Pair<String, String>? {
-        val wia = ensureWalletInstanceAttestation() ?: return null
-        val asUrl = try {
-            getIssuerMetadata(issuerUrl).authorizationServers
-                ?.firstOrNull { it.isNotBlank() } ?: issuerUrl
-        } catch (e: Exception) {
-            issuerUrl
-        }
-        val pop = buildClientAttestationPoP(asUrl, clientAttestationClientId()) ?: return null
-        return wia to pop
-    }
 
     /**
      * Sign a per-flow OAuth Client Attestation PoP
@@ -1348,10 +1314,10 @@ class SirosWallet private constructor(
      * the WIA's `sub`), plus the AS's `challenge` when it publishes a
      * `challenge_endpoint` - see [fetchAttestationChallenge].
      *
-     * Shared by the client-side [resolveClientAttestation] path and the
-     * engine-requested `request_attestation` sign action, where
+     * Driven by the engine-requested `request_attestation` sign action, where
      * go-wallet-backend supplies [asUrl]/[clientId] itself after resolving the
-     * issuer's metadata (its `SignActionRequestAttestation`).
+     * issuer's metadata (its `SignActionRequestAttestation`) - see
+     * [handleRequestAttestation].
      *
      * Best-effort: returns null on any failure rather than throwing.
      */
@@ -1593,12 +1559,9 @@ class SirosWallet private constructor(
                     }
                 })
             }
-            val clientAttestation = resolveClientAttestation(offer.credentialIssuerIdentifier)
             engine.startIssuance(
                 offer = credentialOffer.toString(),
                 redirectUri = config.redirectUri.ifBlank { null },
-                clientAttestation = clientAttestation?.first,
-                clientAttestationPoP = clientAttestation?.second,
             )
         } catch (e: Exception) {
             // The flow was never registered server-side (no flow ID was ever
@@ -1694,26 +1657,18 @@ class SirosWallet private constructor(
                     null
                 }
             }
-            // Resolve OAuth Client Attestation once, independent of whether the
-            // display-metadata resolution above succeeded - a client that can't
-            // be shown a name/logo should still get an attestation attached.
-            val clientAttestation = try {
-                extractOfferJson(offerUri)?.get("credential_issuer")?.jsonPrimitive?.contentOrNull
-                    ?.let { resolveClientAttestation(it) }
-            } catch (e: Exception) {
-                Timber.w(e, "Failed to resolve client attestation for offer")
-                null
-            }
-            val attestation = clientAttestation?.first
-            val attestationPoP = clientAttestation?.second
+            // OAuth Client Attestation is no longer resolved here: the engine
+            // asks for it via a `request_attestation` sign request once it has
+            // resolved the issuer's authorization server itself - see
+            // handleRequestAttestation. That spares this side a second fetch
+            // of a possibly single-use credential_offer_uri and a duplicate
+            // authorization_servers/client_id discovery.
             if (offerUri.startsWith("openid-credential-offer://")) {
                 // Deep-link URI with inline offer — send as "offer" so the engine
                 // extracts the credential_offer query parameter instead of HTTP-fetching.
                 engine.startIssuance(
                     offer = offerUri,
                     redirectUri = redirectUri,
-                    clientAttestation = attestation,
-                    clientAttestationPoP = attestationPoP,
                 )
             } else if (offerUri.startsWith("http")) {
                 // Universal-link-style offer: the credential_offer/credential_offer_uri
@@ -1728,24 +1683,18 @@ class SirosWallet private constructor(
                         engine.startIssuance(
                             offer = params.getValue("credential_offer"),
                             redirectUri = redirectUri,
-                            clientAttestation = attestation,
-                            clientAttestationPoP = attestationPoP,
                         )
                     }
                     params.containsKey("credential_offer_uri") -> {
                         engine.startIssuance(
                             credentialOfferUri = params.getValue("credential_offer_uri"),
                             redirectUri = redirectUri,
-                            clientAttestation = attestation,
-                            clientAttestationPoP = attestationPoP,
                         )
                     }
                     else -> {
                         engine.startIssuance(
                             credentialOfferUri = offerUri,
                             redirectUri = redirectUri,
-                            clientAttestation = attestation,
-                            clientAttestationPoP = attestationPoP,
                         )
                     }
                 }
@@ -1753,8 +1702,6 @@ class SirosWallet private constructor(
                 engine.startIssuance(
                     offer = offerUri,
                     redirectUri = redirectUri,
-                    clientAttestation = attestation,
-                    clientAttestationPoP = attestationPoP,
                 )
             }
         } catch (e: Exception) {
@@ -2301,30 +2248,18 @@ class SirosWallet private constructor(
             try {
                 engine.forceReconnect()
                 engine.awaitConnected()
-                // Client attestation for the resumed flow: Execute() sets up
-                // h.attestationProvider identically whether msg.AuthCode is
-                // set or not (it runs before that branch), so the ONLY thing
-                // missing here was the client never sending it - the backend
-                // already handled resume correctly. Confirmed missing via a
-                // real geneva2026.mdoc.online conformance run: the token
-                // request (which only ever happens via this resume path for
-                // redirect-based authorization_code issuers) showed "No OAuth
-                // Client Attestations were provided".
-                val clientAttestation = try {
-                    pending.offerJson
-                        ?.let { json.parseToJsonElement(it).jsonObject["credential_issuer"]?.jsonPrimitive?.contentOrNull }
-                        ?.let { resolveClientAttestation(it) }
-                } catch (e: Exception) {
-                    Timber.w(e, "Failed to resolve client attestation for resumed flow $flowId")
-                    null
-                }
+                // Client attestation for the resumed flow arrives the same way
+                // as for a fresh one: go-wallet-backend's Execute() runs its
+                // attestation setup before branching on msg.AuthCode, so it
+                // sends us a `request_attestation` sign request on this resume
+                // too (the token request - the one that actually needs it for
+                // redirect-based authorization_code issuers - only ever happens
+                // via this path). See handleRequestAttestation.
                 engine.resumeIssuance(
                     offer = pending.offerJson,
                     redirectUri = pending.redirectUri,
                     authCode = code,
                     codeVerifier = pending.codeVerifier,
-                    clientAttestation = clientAttestation?.first,
-                    clientAttestationPoP = clientAttestation?.second,
                 )
             } catch (e: Exception) {
                 Timber.e(e, "Failed to resume authorization for flow $flowId")

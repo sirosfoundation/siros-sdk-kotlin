@@ -64,6 +64,13 @@ data class FlowStartMessage(
      * Forwarded by go-wallet-backend as the `OAuth-Client-Attestation` HTTP
      * header on PAR/token requests to the credential issuer - see
      * `internal/engine/client_attestation.go`'s `TransportSuppliedAttestation`.
+     *
+     * DEPRECATED as an up-front field: when absent, the backend requests the
+     * attestation itself via a `request_attestation` sign request after
+     * resolving the issuer's authorization server, which is the only place the
+     * PoP audience is reliably known - reply via
+     * [SignResponseMessage.clientAttestation]. Kept on the wire for clients
+     * that have already resolved the offer/AS themselves.
      */
     @SerialName("client_attestation") val clientAttestation: String? = null,
     /**
