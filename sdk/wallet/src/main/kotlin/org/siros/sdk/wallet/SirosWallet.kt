@@ -1329,7 +1329,16 @@ class SirosWallet private constructor(
      * against it would fail every time and refuse legitimate issuance.
      */
     private fun authorisedCredentialType(format: String): String? =
-        if (format == "mso_mdoc") activeMddlSchema?.doctype else activeVctm?.vct
+        if (format == "mso_mdoc") {
+            // The offer first: it is what the entitlement check was run
+            // against, and unlike the resolved schema it is present even when
+            // metadata resolution failed. Taking only the resolved metadata
+            // would make this check a no-op in exactly the situation where the
+            // wallet knows least about the credential.
+            activeOffer?.doctype ?: activeMddlSchema?.doctype
+        } else {
+            activeOffer?.vct ?: activeVctm?.vct
+        }
 
     /**
      * Refuse a credential whose issuer pinned its type metadata to something
@@ -1716,6 +1725,8 @@ class SirosWallet private constructor(
             credentialDescription = credDisplay?.description,
             issuerName = issuerName,
             format = config.format,
+            vct = config.vct,
+            doctype = config.doctype,
             backgroundColor = credDisplay?.backgroundColor
                 ?: issuerDisplay?.backgroundColor,
             textColor = credDisplay?.textColor
