@@ -80,20 +80,15 @@ object PickerIconRenderer {
             Timber.d("PickerIconRenderer: bounds decoded but full decode failed")
             return null
         }
-        return try {
-            val tile = Bitmap.createBitmap(ICON_SIZE, ICON_SIZE, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(tile)
-            canvas.drawColor(parseColor(backgroundColor))
-            val dst = fitInside(source.width, source.height, ICON_SIZE, INSET)
-            canvas.drawBitmap(
-                source,
-                null,
-                Rect(dst[0], dst[1], dst[2], dst[3]),
-                Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG),
-            )
-            ByteArrayOutputStream().use { out ->
-                tile.compress(Bitmap.CompressFormat.PNG, 100, out)
-                out.toByteArray()
+        try {
+            return onTile(backgroundColor) { canvas ->
+                val dst = fitInside(source.width, source.height, ICON_SIZE, INSET)
+                canvas.drawBitmap(
+                    source,
+                    null,
+                    Rect(dst[0], dst[1], dst[2], dst[3]),
+                    Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG),
+                )
             }
         } finally {
             source.recycle()
@@ -101,12 +96,26 @@ object PickerIconRenderer {
     }
 
     /** A solid [backgroundColor] tile - the floor every picker entry gets when no logo is usable. */
-    fun placeholder(backgroundColor: String?): ByteArray {
-        val bitmap = Bitmap.createBitmap(ICON_SIZE, ICON_SIZE, Bitmap.Config.ARGB_8888)
-        Canvas(bitmap).drawColor(parseColor(backgroundColor))
-        return ByteArrayOutputStream().use { out ->
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-            out.toByteArray()
+    fun placeholder(backgroundColor: String?): ByteArray = onTile(backgroundColor) {}
+
+    /**
+     * A [backgroundColor]-filled [ICON_SIZE] tile with [draw] applied, as PNG
+     * bytes. The bitmap is recycled before returning: pixel buffers are native
+     * memory, and this runs once per credential per registration, so leaving
+     * them to the GC would let an icon sweep pile them up.
+     */
+    private inline fun onTile(backgroundColor: String?, draw: (Canvas) -> Unit): ByteArray {
+        val tile = Bitmap.createBitmap(ICON_SIZE, ICON_SIZE, Bitmap.Config.ARGB_8888)
+        try {
+            val canvas = Canvas(tile)
+            canvas.drawColor(parseColor(backgroundColor))
+            draw(canvas)
+            return ByteArrayOutputStream().use { out ->
+                tile.compress(Bitmap.CompressFormat.PNG, 100, out)
+                out.toByteArray()
+            }
+        } finally {
+            tile.recycle()
         }
     }
 
