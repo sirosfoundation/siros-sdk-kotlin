@@ -31,6 +31,8 @@ import androidx.credentials.exceptions.GetCredentialUnknownException
 import androidx.credentials.provider.PendingIntentHandler
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import org.siros.sdk.credentials.CredentialMatcher
 import org.siros.sdk.credentials.WalletException
 import org.siros.sdk.sample.R
@@ -132,8 +134,18 @@ class DCAPIGetCredentialActivity : ComponentActivity() {
                 setResult(RESULT_OK, responseIntent)
                 finish()
             } catch (e: WalletException) {
-                Timber.w(e, "DC API presentation declined or failed")
-                finishWithError(e.message ?: "Presentation failed")
+                // A decline (untrusted verifier, no matching/eligible
+                // credential, missing encryption key, ...) is a normal
+                // OpenID4VP-protocol outcome, not a platform-level failure -
+                // surfacing it via setGetCredentialException makes Chrome
+                // reject navigator.credentials.get() with a generic
+                // "error retrieving a token", discarding our specific reason
+                // before the RP's own JS ever sees it. Returning it as a
+                // real (successful) DC API response whose body is an
+                // OpenID4VP error object lets the RP read and display the
+                // actual reason instead.
+                Timber.w(e, "DC API presentation declined")
+                finishWithProtocolError(e.message ?: "Presentation declined")
             } catch (e: Exception) {
                 Timber.e(e, "DC API presentation failed unexpectedly")
                 finishWithError(e.message ?: "Presentation failed")
@@ -144,6 +156,35 @@ class DCAPIGetCredentialActivity : ComponentActivity() {
     private fun finishWithError(message: String) {
         val responseIntent = Intent()
         PendingIntentHandler.setGetCredentialException(responseIntent, GetCredentialUnknownException(message))
+        setResult(RESULT_OK, responseIntent)
+        finish()
+    }
+
+    /**
+     * Finishes with a real DC API response carrying an OpenID4VP error
+     * object (`{"error": "access_denied", "error_description": "..."}`) -
+     * per OpenID4VP 1.0's DC API response mode, this is returned as plain
+     * JSON regardless of whether the request asked for an encrypted
+     * (`dc_api.jwt`) success response; there is no RP-supplied encryption
+     * key to use here since trust evaluation (which is what most declines
+     * happen during) runs before `client_metadata.jwks` is ever consulted.
+     * `access_denied` covers every current decline reason (untrusted
+     * verifier, no matching/eligible credential, missing encryption key) -
+     * none of them are distinguished by [WalletException.errorCode] today,
+     * and OpenID4VP doesn't define a more specific code for most of them
+     * anyway.
+     */
+    private fun finishWithProtocolError(description: String) {
+        val errorJson = buildJsonObject {
+            put("error", JsonPrimitive("access_denied"))
+            put("error_description", JsonPrimitive(description))
+        }.toString()
+        Timber.d("DCAPI error response: $errorJson")
+        val responseIntent = Intent()
+        PendingIntentHandler.setGetCredentialResponse(
+            responseIntent,
+            GetCredentialResponse(DigitalCredential(errorJson)),
+        )
         setResult(RESULT_OK, responseIntent)
         finish()
     }

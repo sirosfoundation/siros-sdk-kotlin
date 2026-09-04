@@ -1,5 +1,5 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
-package org.siros.sdk.sample.dcapi
+package org.siros.sdk.wallet.dcapi
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -18,16 +18,19 @@ import org.siros.sdk.credentials.StoredCredential
 import timber.log.Timber
 
 /**
- * Builds the [DigitalCredentialEntry] list registered with the OS's Digital
- * Credentials API picker via [androidx.credentials.registry.provider.RegistryManager]
- * (see [DCAPIProviderRegistration]).
+ * Builds the [DigitalCredentialEntry] list for the **stock** AndroidX matcher.
+ *
+ * Only used when a caller asks [SirosCredentialRegistry] for the stock path.
+ * The SDK's own matcher does not need this: it reads the registered blob and
+ * decides for itself, which is what lets it understand formats the stock
+ * matcher refuses.
  *
  * Field/claim VALUES (not just labels) are included because the OS's own
  * matcher engine evaluates each incoming verifier's DCQL query against these
  * registered entries to decide which ones to even show in the picker -
  * unlike the in-app credential list, which is purely for display.
  */
-object DCAPICredentialEntryBuilder {
+internal object StockEntryBuilder {
     fun buildEntries(credentials: List<StoredCredential>): List<DigitalCredentialEntry> {
         return credentials.mapNotNull { cred ->
             try {

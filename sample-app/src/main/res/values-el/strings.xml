@@ -23,6 +23,7 @@
     <string name="credentials_welcome">Καλώς ήρθατε, %1$s</string>
     <string name="credentials_count_one">%1$d πιστοποιητικό</string>
     <string name="credentials_count_other">%1$d πιστοποιητικά</string>
+    <string name="credentials_stack_overflow_more">+%1$d ακόμα</string>
     <string name="credentials_empty_title">Δεν υπάρχουν πιστοποιητικά</string>
     <string name="credentials_empty_subtitle">Πατήστε Προσθήκη παρακάτω για να ξεκινήσετε</string>
 
@@ -31,7 +32,12 @@
     <string name="add_credential_loading">Φόρτωση διαθέσιμων πιστοποιητικών\u2026</string>
     <string name="add_credential_empty">Δεν υπάρχουν διαθέσιμα πιστοποιητικά</string>
     <string name="add_credential_retry">Δοκιμάστε Ξανά</string>
+    <string name="add_credential_row_action_add">Προσθήκη</string>
+    <string name="add_credential_row_action_close">Κλείσιμο</string>
     <string name="nav_back">Πίσω</string>
+    <string name="credential_capability_online">Μπορεί να παρουσιαστεί διαδικτυακά</string>
+    <string name="credential_capability_proximity">Μπορεί να παρουσιαστεί αυτοπροσώπως αγγίζοντας το τηλέφωνό σας</string>
+    <string name="credential_capability_zkp">Μπορεί να αποδείξει την ταυτότητά σας χωρίς να αποκαλύψει όλα τα στοιχεία σας</string>
 
     <!-- Presentation consent screen -->
     <string name="presentation_consent_title">Αίτημα Πιστοποιητικού</string>
@@ -133,6 +139,7 @@
     <string name="flow_step_awaiting_consent">Αναμονή της συγκατάθεσής σας…</string>
     <string name="flow_step_credential_selection">Επιλογή πιστοποιητικών…</string>
     <string name="flow_step_submitting_response">Αποστολή απάντησης στον επαληθευτή…</string>
+    <string name="flow_step_computing_proof">Υπολογισμός απόδειξης…</string>
     <string name="flow_step_unknown">Επεξεργασία…</string>
     <string name="flow_diagnostic_label">Διαγνωστικό: %1$s</string>
     <string name="flow_credentials_received">Ελήφθησαν %1$d πιστοποιητικά</string>

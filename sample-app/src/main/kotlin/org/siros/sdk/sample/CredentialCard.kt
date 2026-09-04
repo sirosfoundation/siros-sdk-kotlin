@@ -19,9 +19,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -34,7 +38,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -93,12 +103,26 @@ fun CredentialCard(
      * `sigCount > 0`; ignored (no button rendered) if null.
      */
     onRenewClick: (() -> Unit)? = null,
+    /**
+     * Called when the user taps "Delete" on a fully-exhausted/"shadow"
+     * credential (see [onRenewClick]'s doc comment for when this state
+     * applies) - a shadow credential isn't reachable via long-press (see
+     * [isExhausted]'s use in this card's `combinedClickable` gate below), so
+     * without this the only way to remove one was renewing it first, even
+     * though the user may simply want it gone. Ignored (no button rendered)
+     * if null, same as [onRenewClick].
+     */
+    onDeleteClick: (() -> Unit)? = null,
 ) {
     // Null when the caller doesn't have batch/usage data on hand (see
     // [instances]'s doc comment) - only gates the greyed-out/Renew state
     // when we actually know the count, never on the strength of an absence.
-    val unusedCount = instances?.count { it.sigCount == 0 }
-    val isExhausted = unusedCount == 0
+    // A copy that's unused but keyless still can't actually be presented -
+    // "remaining" (and therefore the "shadow"/renew-only state below) counts
+    // only copies that are both, so a lost key can't masquerade as a live,
+    // presentable one (see CredentialInstance.hasKey's doc comment).
+    val remainingCount = instances?.count { it.sigCount == 0 && it.hasKey }
+    val isExhausted = remainingCount == 0
     val meta = credential.metadata
     val bgColor = meta?.backgroundColor?.toComposeColor()
         ?: MaterialTheme.colorScheme.primaryContainer
@@ -141,6 +165,14 @@ fun CredentialCard(
     // no SVG template, only that hydrateReloadedCredentials() hasn't finished
     // yet. Collapsing that into NotApplicable was what caused a flash of the
     // flat/blue card before the real metadata (and its SVG) arrived.
+    //
+    // Since the SDK persists fallback metadata (CredentialMetadata.hydration
+    // == "fallback") for any credential whose VCTM/MDDL can't be fetched, and
+    // answers repeat launches from an on-device cache, meta is only ever null
+    // for the brief window between the first Ready emission and hydration
+    // completing - not for "the issuer is down", which used to mean a spinner
+    // on every launch. A fallback has no svgTemplates, so it takes the
+    // NotApplicable branch and renders the flat layout at once.
     var svgState by remember(credential.id, meta?.svgTemplates) {
         mutableStateOf<SvgLoadState>(
             when {
@@ -155,11 +187,17 @@ fun CredentialCard(
             // Wait (bounded) for hydration to populate metadata; the
             // remember/LaunchedEffect keys above cancel and re-fire this
             // block once meta?.svgTemplates actually changes. If that never
-            // happens (VCTM fetch failed, no VCTM published, etc.) this
-            // delay completes uncancelled and we settle to the flat layout
-            // instead of spinning forever.
+            // happens this delay completes uncancelled and we settle to the
+            // flat layout instead of spinning forever.
+            //
+            // The ceiling used to be 5 s, sized for a live VCTM fetch to an
+            // issuer. Hydration now either answers from the SDK's on-device
+            // cache (milliseconds) or persists fallback metadata immediately
+            // when the negative cache says a fetch isn't due, so a null here
+            // that outlives ~1.5 s means something is genuinely wrong - and
+            // the right response to that is the flat card, not more waiting.
             svgState = SvgLoadState.Loading
-            delay(5000)
+            delay(HYDRATION_WAIT_CEILING_MS)
             svgState = SvgLoadState.NotApplicable
             return@LaunchedEffect
         }
@@ -185,7 +223,16 @@ fun CredentialCard(
             "CredentialCard ${credential.id} (${meta.vct ?: meta.doctype}): using SVG template " +
                 "$uriDescription (colorScheme=${template.colorScheme})",
         )
-        val payload = fetchAndSubstituteSvg(credential, template.uri, bgColor)
+        val cacheKey = svgRenderCacheKey(credential, template.uri, preferredScheme, bgColor)
+        val cached = svgRenderCache.get(cacheKey)
+        val payload = if (cached != null) {
+            Timber.i("CredentialCard ${credential.id}: using cached SVG render")
+            cached
+        } else {
+            fetchAndSubstituteSvg(credential, template.uri, bgColor)?.also {
+                svgRenderCache.put(cacheKey, it)
+            }
+        }
         svgState = if (payload != null) {
             SvgLoadState.Loaded(payload.svgBytes, payload.backgroundImageBytes)
         } else {
@@ -357,13 +404,13 @@ fun CredentialCard(
             // UsagesRibbon (CredentialImage.jsx): count of batch copies not
             // yet used in a presentation (sigCount == 0), so it counts down
             // as copies get consumed rather than showing the fixed batch size.
-            if (unusedCount != null) {
+            if (remainingCount != null) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(8.dp)
                         .background(
-                            color = if (unusedCount > 0) {
+                            color = if (remainingCount > 0) {
                                 MaterialTheme.colorScheme.tertiaryContainer
                             } else {
                                 MaterialTheme.colorScheme.surfaceVariant
@@ -373,9 +420,9 @@ fun CredentialCard(
                         .padding(horizontal = 8.dp, vertical = 3.dp),
                 ) {
                     Text(
-                        text = unusedCount.toString(),
+                        text = remainingCount.toString(),
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (unusedCount > 0) {
+                        color = if (remainingCount > 0) {
                             MaterialTheme.colorScheme.onTertiaryContainer
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
@@ -385,24 +432,71 @@ fun CredentialCard(
                 }
             }
 
-            // Every batch instance already used - grey the whole card out
-            // (it can no longer be presented, see CredentialUtils.eligibleInstances)
-            // and offer Renew instead of leaving it looking like a normal,
-            // selectable credential.
+            // Every batch instance already used or keyless - the card enters
+            // the "shadow" display state (it can no longer be presented, see
+            // CredentialUtils.eligibleInstances/CredentialInstance.hasKey):
+            // a dashed outline in place of the card's normal solid edge, a
+            // dimmed scrim, and a renew icon overlay in place of the normal
+            // face, rather than leaving it looking like a live, selectable
+            // credential.
             if (isExhausted) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.55f)),
+                        .background(Color.Black.copy(alpha = 0.45f))
+                        .drawWithContent {
+                            drawContent()
+                            val strokeWidthPx = 3.dp.toPx()
+                            val cornerRadiusPx = 16.dp.toPx()
+                            drawRoundRect(
+                                color = Color.White.copy(alpha = 0.85f),
+                                topLeft = Offset(strokeWidthPx / 2, strokeWidthPx / 2),
+                                size = Size(size.width - strokeWidthPx, size.height - strokeWidthPx),
+                                cornerRadius = CornerRadius(cornerRadiusPx, cornerRadiusPx),
+                                style = Stroke(
+                                    width = strokeWidthPx,
+                                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f)),
+                                ),
+                            )
+                        },
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (onRenewClick != null) {
-                        TextButton(onClick = onRenewClick) {
-                            Text(
-                                text = stringResource(R.string.credential_renew),
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                            )
+                    Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                        if (onRenewClick != null) {
+                            TextButton(onClick = onRenewClick) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Refresh,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(32.dp),
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = stringResource(R.string.credential_renew),
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                }
+                            }
+                        }
+                        if (onDeleteClick != null) {
+                            TextButton(onClick = onDeleteClick) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Delete,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(32.dp),
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = stringResource(R.string.credential_detail_delete),
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -451,6 +545,31 @@ private val svgHttpClient = OkHttpClient()
  * never touches the SVG's own styling).
  */
 private data class SvgRenderPayload(val svgBytes: ByteArray, val backgroundImageBytes: ByteArray?)
+
+/**
+ * Process-lifetime cache of rendered card SVGs, keyed by everything that
+ * can affect the output (credential, template, color scheme, background).
+ * Without this, every recomposition of [CredentialCard] - not just app
+ * launch, but every navigation back to the credential list - redid the
+ * full fetch/decode-base64 + claim-substitution + viewBox/height/contrast-
+ * correction + background-image-extraction pipeline from scratch, even
+ * though the result is fully deterministic for a given credential (whose
+ * `raw` bytes and metadata never change in place - renewal replaces the
+ * whole [StoredCredential] under a new id, per the batch-replacement
+ * pattern, rather than mutating one) plus render parameters. 64 entries is
+ * comfortably above a realistic on-screen credential count; this is a
+ * memory cache only (cleared on process death), not a disk cache - stale
+ * output from a leaked cache entry would be a worse bug than a cache miss
+ * after a process restart.
+ */
+private val svgRenderCache = android.util.LruCache<String, SvgRenderPayload>(64)
+
+private fun svgRenderCacheKey(
+    credential: StoredCredential,
+    templateUri: String,
+    colorScheme: String,
+    cardBackground: Color,
+): String = "${credential.id}|$templateUri|$colorScheme|${cardBackground.value}"
 
 private suspend fun fetchAndSubstituteSvg(credential: StoredCredential, templateUri: String, cardBackground: Color): SvgRenderPayload? {
     return try {
@@ -567,6 +686,15 @@ internal fun contrastRatio(a: Color, b: Color): Float {
  * unreadable, not merely non-ideal (see [CredentialCard]'s use of this).
  */
 internal const val MIN_READABLE_CONTRAST_RATIO = 3.0f
+
+/**
+ * Longest a card shows its loading indicator waiting for `metadata` to be
+ * hydrated before settling to the flat layout. Generous relative to the
+ * cache-served/fallback path the SDK now takes (milliseconds), short enough
+ * that a genuinely stuck hydration never reads as "the wallet is slow" - see
+ * the `meta == null` branch in [CredentialCard].
+ */
+internal const val HYDRATION_WAIT_CEILING_MS = 1_500L
 
 /** Matches a `<text ...>` or `<tspan ...>` opening tag, whose own `fill` attribute (if any) [correctSvgTextContrast] inspects. */
 private val SVG_TEXT_TAG = Regex("""<(?:text|tspan)\b[^>]*>""")
@@ -807,4 +935,94 @@ internal fun coilLogoModel(uri: String): Any {
     } catch (e: Exception) {
         uri
     }
+}
+
+/**
+ * Result of normalizing a logo/preview SVG: [model] is what a Coil
+ * `AsyncImage`/`SubcomposeAsyncImage` should load as the (possibly
+ * `<image>`-stripped) foreground layer; [backgroundImageBytes] is a
+ * full-bleed raster `<image>` pulled out of it (see
+ * [extractFullBleedBackgroundImage]) that must be drawn as a separate
+ * bitmap layer *underneath* [model] - null when there was nothing to
+ * extract, in which case a caller can render [model] alone exactly as
+ * before this type existed.
+ */
+internal data class NormalizedLogo(val model: Any, val backgroundImageBytes: ByteArray? = null)
+
+/**
+ * Async counterpart to [coilLogoModel] for logo/preview URIs that need
+ * fetching (remote `http(s)`) rather than just base64-decoding an already-
+ * inline `data:` URI. Applies the same [ensureSvgViewBox]/
+ * [ensureSvgImageHeight]/[extractFullBleedBackgroundImage] normalization an
+ * already-stored credential's card SVG gets in [fetchAndSubstituteSvg] -
+ * without it, a logo/preview URI pointing at an SVG whose `<image>` element
+ * omits `height` (a real, confirmed-live issuer template:
+ * demo-issuer.wwwallet.org's EHIC card) renders fully blank with no error,
+ * or - if the SVG has a full-bleed embedded raster `<image>` - renders with
+ * AndroidSVG's confirmed ~30%-down dark-band mis-render (see
+ * [extractFullBleedBackgroundImage]'s doc comment), since the plain
+ * [coilLogoModel] path (used by the Add Credentials offer list and the
+ * stored-credential detail screen, neither of which goes through
+ * [fetchAndSubstituteSvg]'s pipeline) hands Coil the untouched SVG
+ * bytes/URI.
+ *
+ * Falls back to [coilLogoModel]'s existing behavior (or the raw [uri]) on
+ * any fetch/decode failure - never worse than what callers had before this
+ * function existed.
+ */
+internal suspend fun fetchAndNormalizeLogoModel(uri: String): NormalizedLogo {
+    if (uri.startsWith("data:")) {
+        if (!uri.startsWith("data:image/svg+xml", ignoreCase = true)) {
+            return NormalizedLogo(coilLogoModel(uri))
+        }
+        val svgText = decodeSvgDataUri(uri) ?: return NormalizedLogo(coilLogoModel(uri))
+        return normalizeSvgLogoOrFallback(svgText, uri)
+    }
+    if (!uri.startsWith("http")) return NormalizedLogo(uri)
+    return try {
+        withContext(Dispatchers.IO) {
+            val request = Request.Builder().url(uri).build()
+            svgHttpClient.newCall(request).execute().use { response ->
+                val body = if (response.isSuccessful) response.body?.string() else null
+                if (body == null) {
+                    NormalizedLogo(uri)
+                } else {
+                    val contentType = response.header("Content-Type") ?: ""
+                    val looksLikeSvg = contentType.contains("svg", ignoreCase = true) ||
+                        body.trimStart().startsWith("<svg", ignoreCase = true)
+                    if (looksLikeSvg) normalizeSvgLogoOrFallback(body, uri) else NormalizedLogo(uri)
+                }
+            }
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Timber.w(e, "Failed to fetch/normalize remote logo: $uri")
+        NormalizedLogo(uri)
+    }
+}
+
+private fun normalizeSvgLogoOrFallback(svgText: String, fallback: String): NormalizedLogo = try {
+    val sized = ensureSvgImageHeight(ensureSvgViewBox(svgText))
+    val (stripped, backgroundBytes) = extractFullBleedBackgroundImage(sized)
+    NormalizedLogo(stripped.toByteArray(Charsets.UTF_8), backgroundBytes)
+} catch (e: Exception) {
+    Timber.w(e, "Failed to normalize logo SVG, falling back: $fallback")
+    NormalizedLogo(fallback)
+}
+
+/**
+ * Remembers a [NormalizedLogo] for [uri] via [fetchAndNormalizeLogoModel],
+ * starting from [coilLogoModel]'s synchronous result so there's no
+ * flash-of-nothing while the async fetch/normalize is in flight - it just
+ * gets replaced once ready, identically to the synchronous behavior for any
+ * URI the normalization doesn't end up touching.
+ */
+@Composable
+internal fun rememberNormalizedLogoModel(uri: String): NormalizedLogo {
+    var logo by remember(uri) { mutableStateOf(NormalizedLogo(coilLogoModel(uri))) }
+    LaunchedEffect(uri) {
+        logo = fetchAndNormalizeLogoModel(uri)
+    }
+    return logo
 }

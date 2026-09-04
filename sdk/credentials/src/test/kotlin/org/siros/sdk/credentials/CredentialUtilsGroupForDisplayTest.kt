@@ -7,15 +7,21 @@ import org.junit.Test
 
 class CredentialUtilsGroupForDisplayTest {
 
-    private fun credential(id: Long, batchId: Long = id, instanceId: Int = 0, issuedAt: Long? = null) =
-        StoredCredential(
-            id = id,
-            format = "vc+sd-jwt",
-            raw = "raw-$id",
-            batchId = batchId,
-            instanceId = instanceId,
-            issuedAt = issuedAt,
-        )
+    private fun credential(
+        id: Long,
+        batchId: Long = id,
+        instanceId: Int = 0,
+        issuedAt: Long? = null,
+        kid: String? = null,
+    ) = StoredCredential(
+        id = id,
+        format = "vc+sd-jwt",
+        raw = "raw-$id",
+        batchId = batchId,
+        instanceId = instanceId,
+        issuedAt = issuedAt,
+        kid = kid,
+    )
 
     private fun presentation(vararg credentialIds: Long) = PresentationRecord(
         id = credentialIds.sum() + 1000L,
@@ -31,7 +37,7 @@ class CredentialUtilsGroupForDisplayTest {
         // StoredCredential.batchId's KDoc).
         val cred = credential(id = 1L)
 
-        val result = CredentialUtils.groupForDisplay(listOf(cred), emptyList())
+        val result = CredentialUtils.groupForDisplay(listOf(cred), emptyList(), setOf("irrelevant-kid"))
 
         assertEquals(1, result.size)
         assertEquals(cred, result.first().credential)
@@ -47,7 +53,7 @@ class CredentialUtilsGroupForDisplayTest {
             credential(id = 3L, batchId = batchId, instanceId = 2),
         )
 
-        val result = CredentialUtils.groupForDisplay(credentials, emptyList())
+        val result = CredentialUtils.groupForDisplay(credentials, emptyList(), setOf("irrelevant-kid"))
 
         assertEquals(1, result.size)
         assertEquals(1L, result.first().credential.id)
@@ -65,12 +71,31 @@ class CredentialUtilsGroupForDisplayTest {
         // instance 1 used once, instance 2 used twice, instance 0 never used
         val history = listOf(presentation(11L), presentation(12L), presentation(12L))
 
-        val result = CredentialUtils.groupForDisplay(credentials, history)
+        val result = CredentialUtils.groupForDisplay(credentials, history, setOf("irrelevant-kid"))
 
         val instances = result.first().instances.associateBy { it.instanceId }
         assertEquals(0, instances.getValue(0).sigCount)
         assertEquals(1, instances.getValue(1).sigCount)
         assertEquals(2, instances.getValue(2).sigCount)
+    }
+
+    @Test
+    fun hasKeyReflectsWhetherEachInstancesBoundKeyIsAvailable() {
+        // An instance whose kid isn't in availableKeyIds - the "shadow"
+        // state trigger the UI derives via sigCount == 0 && hasKey (see
+        // CredentialInstance.hasKey's doc comment) - a lost key must read
+        // the same as an already-consumed one, not as still-usable.
+        val batchId = 250L
+        val credentials = listOf(
+            credential(id = 13L, batchId = batchId, instanceId = 0, kid = "kid-13"),
+            credential(id = 14L, batchId = batchId, instanceId = 1, kid = "kid-14"),
+        )
+
+        val result = CredentialUtils.groupForDisplay(credentials, emptyList(), setOf("kid-13"))
+
+        val instances = result.first().instances.associateBy { it.instanceId }
+        assertEquals(true, instances.getValue(0).hasKey)
+        assertEquals(false, instances.getValue(1).hasKey)
     }
 
     @Test
@@ -83,7 +108,7 @@ class CredentialUtilsGroupForDisplayTest {
             credential(id = 22L, batchId = batchId, instanceId = 2),
         )
 
-        val result = CredentialUtils.groupForDisplay(credentials, emptyList())
+        val result = CredentialUtils.groupForDisplay(credentials, emptyList(), setOf("irrelevant-kid"))
 
         assertTrue(result.isEmpty())
     }
@@ -95,7 +120,7 @@ class CredentialUtilsGroupForDisplayTest {
         val newerBatchVisible = credential(id = 31L, batchId = batchId, instanceId = 0, issuedAt = 200L)
         val newerBatchSibling = credential(id = 32L, batchId = batchId, instanceId = 1, issuedAt = 200L)
 
-        val result = CredentialUtils.groupForDisplay(listOf(older, newerBatchVisible, newerBatchSibling), emptyList())
+        val result = CredentialUtils.groupForDisplay(listOf(older, newerBatchVisible, newerBatchSibling), emptyList(), setOf("irrelevant-kid"))
 
         assertEquals(2, result.size)
         assertEquals(31L, result.first().credential.id)

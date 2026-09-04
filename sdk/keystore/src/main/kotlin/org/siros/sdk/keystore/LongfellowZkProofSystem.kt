@@ -1,9 +1,14 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.keystore
 
-import com.github.luben.zstd.Zstd
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import org.siros.sdk.credentials.COSE_ALG_ES256
+import org.siros.sdk.credentials.CredentialDocument
+import org.siros.sdk.credentials.CredentialFormat
+import org.siros.sdk.credentials.CredentialTypeRef
 import org.siros.sdk.credentials.DefaultZkPseudonymDeriver
 import org.siros.sdk.credentials.VerifierIdentity
 import org.siros.sdk.credentials.ZkCircuitClient
@@ -12,9 +17,9 @@ import org.siros.sdk.credentials.ZkProofResult
 import org.siros.sdk.credentials.ZkProofSystem
 import org.siros.sdk.credentials.ZkPseudonymDeriver
 import org.siros.sdk.credentials.ZkSystemSpec
+import org.siros.sdk.credentials.ZkWitnessSigner
 import org.siros.sdk.credentials.PseudonymOutcome
 import org.siros.sdk.credentials.mdoc.MdocCbor
-import timber.log.Timber
 import uniffi.zk_cred_longfellow.CircuitVersion
 import uniffi.zk_cred_longfellow.MdocZkProver
 import uniffi.zk_cred_longfellow.initializeProver
@@ -62,27 +67,26 @@ class LongfellowZkProofSystem(
         const val PSEUDONYM_CLAIM = "pairwise_pseudonym"
 
         /**
-         * The mdoc element identifier an issuer actually stores the raw seed
-         * under (confirmed against zk-cred-longfellow's own reference source,
-         * `mdoc::find_attributes` - it matches a *requested* id of
-         * [PSEUDONYM_CLAIM] against a credential attribute *stored* as this
-         * name: `desired_attribute_id == "pairwise_pseudonym" &&
-         * attribute_id == "pseudonym_seed"`). [PSEUDONYM_CLAIM] is the
-         * session-specific value the wallet DERIVES from this seed at
-         * presentation time (`SHA256(seed || verifier_context)`) and
-         * discloses to the verifier - it is never itself a stored issuer
-         * claim, so a direct CBOR namespace lookup for it (see
-         * [generateProof]'s own re-derivation below) must fall back to this
-         * name, mirroring the crate's own alias.
+         * The actual mdoc namespace element that holds the raw seed value
+         * (`PSEUDONYM_CLAIM` is the DERIVED/requested claim name a verifier
+         * asks for in DCQL - it is never itself a stored element in the
+         * credential). Confirmed live: looking this up by [PSEUDONYM_CLAIM]
+         * instead of this constant always failed to find the item, leaving
+         * [generateProof]'s own pseudonym derivation permanently unreachable
+         * (pseudonymOutcome always NOT_SUPPORTED_BY_SYSTEM, regardless of
+         * whether the proof itself succeeded).
          */
-        private const val PSEUDONYM_SEED_CLAIM = "pseudonym_seed"
+        private const val PSEUDONYM_SEED_ELEMENT = "pseudonym_seed"
     }
 
     override val systemId: String = "longfellow-libzk-v1"
 
-    override val supportedDocTypes: Set<String> = setOf(
-        "org.iso.18013.5.1.mDL",
-        "eu.europa.ec.eudi.pid.1",
+    // mdoc only: this system proves over a DeviceResponse, and its native
+    // prover parses CBOR. Declaring the format explicitly is what keeps an
+    // SD-JWT VC or JWP credential of the same type from being routed here.
+    override val supportedCredentialTypes: Set<CredentialTypeRef> = setOf(
+        CredentialTypeRef(CredentialFormat.MSO_MDOC, "org.iso.18013.5.1.mDL"),
+        CredentialTypeRef(CredentialFormat.MSO_MDOC, "eu.europa.ec.eudi.pid.1"),
     )
 
     /**
@@ -95,8 +99,17 @@ class LongfellowZkProofSystem(
     private val cacheMutex = Mutex()
 
     /**
-     * Matches any requested spec declaring `system == "longfellow"` -
-     * mirrors [org.siros.sdk.wallet.WscdSelectionPolicy]'s "nominal
+     * Matches any requested spec declaring `system == "longfellow-libzk-v1"`
+     * (this system's own [systemId] - confirmed live against
+     * multipaz-verifier-server's actual DCQL `zk_system_type` output, which
+     * sends `"system": "longfellow-libzk-v1"`, not the shorter `"longfellow"`
+     * this comparison incorrectly used before - a real bug, unit-tested only
+     * against our own self-consistent test fixtures, never against the real
+     * wire value, so it went unnoticed until a live device presentation)
+     * AND whose own `num_attributes` param equals [numAttributes] - see
+     * [ZkProofSystem.matchingSpec]'s doc comment for why a circuit's
+     * attribute count is fixed at compile time and can't be ignored.
+     * Mirrors [org.siros.sdk.wallet.WscdSelectionPolicy]'s "nominal
      * capability" convention (a static declaration, not a live probe):
      * whether the specific circuit [ZkSystemSpec.id] names is actually
      * fetchable is only verified lazily, in [generateProof] - `matchingSpec`
@@ -104,8 +117,10 @@ class LongfellowZkProofSystem(
      * during request-vs-capability matching before any proof generation is
      * committed to).
      */
-    override fun matchingSpec(requestedSpecs: List<ZkSystemSpec>): ZkSystemSpec? =
-        requestedSpecs.firstOrNull { it.system == "longfellow" }
+    override fun matchingSpec(requestedSpecs: List<ZkSystemSpec>, numAttributes: Int): ZkSystemSpec? =
+        requestedSpecs.firstOrNull {
+            it.system == systemId && it.getParam("num_attributes")?.toIntOrNull() == numAttributes
+        }
 
     /**
      * The vendored UniFFI bindings' `&[u8]` parameters need a DIRECT
@@ -121,11 +136,11 @@ class LongfellowZkProofSystem(
 
     override suspend fun generateProof(
         spec: ZkSystemSpec,
-        credentialBytes: ByteArray,
+        document: CredentialDocument,
         sessionTranscript: ByteArray,
         requestedClaims: List<String>,
         verifierIdentity: VerifierIdentity?,
-        signer: suspend (ByteArray) -> ByteArray,
+        signer: ZkWitnessSigner,
         priorState: ByteArray?,
     ): ZkProofResult {
         val effectiveClaims = if (verifierIdentity != null && PSEUDONYM_CLAIM !in requestedClaims) {
@@ -134,9 +149,16 @@ class LongfellowZkProofSystem(
             requestedClaims
         }
 
-        val document = MdocCbor.parseStoredCredential(credentialBytes)
-        val namespace = document.issuerSigned.nameSpaces.keys.firstOrNull()
-            ?: error("mdoc credential '${document.docType}' has no disclosed namespaces")
+        // Reject rather than assume: a caller bypassing the registry could
+        // hand us a format whose bytes are not a DeviceResponse at all, and
+        // the native prover's failure would say nothing useful.
+        val credentialBytes = (document as? CredentialDocument.Mdoc)?.bytes
+            ?: throw IllegalArgumentException(
+                "$systemId proves over mdoc only, got ${document::class.simpleName}"
+            )
+        val mdoc = MdocCbor.parseStoredCredential(credentialBytes)
+        val namespace = mdoc.issuerSigned.nameSpaces.keys.firstOrNull()
+            ?: error("mdoc credential '${mdoc.docType}' has no disclosed namespaces")
 
         val prover = getOrInitProver(spec, effectiveClaims.size)
 
@@ -148,53 +170,69 @@ class LongfellowZkProofSystem(
         // what's needed here regardless of which real transport the caller
         // is presenting over.
         val witnessDeviceResponse = MdocDeviceResponseBuilder(credentialBytes)
-            .buildForProximity(sessionTranscript, disclosedClaims = null, signer = signer)
+            .buildForProximity(
+                sessionTranscript,
+                disclosedClaims = null,
+                signer = { data -> signer.sign(COSE_ALG_ES256, data) },
+            )
 
-        val time = Instant.now().toString()
+        // The native prover requires an exact 20-byte RFC 3339 timestamp
+        // ("YYYY-MM-DDTHH:MM:SSZ", no fractional seconds) - confirmed live
+        // ("current time is not correctly formatted, must be 20 bytes
+        // long"). Instant.now().toString() includes a variable-precision
+        // fractional-seconds component whenever it's non-zero, so it's
+        // rarely exactly 20 bytes. Truncating to whole seconds first makes
+        // Instant.toString() omit the fractional part entirely, always
+        // producing the fixed-width form the prover expects.
+        val time = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString()
 
+        // prove/proveWithPpid are synchronous, CPU-bound native calls -
+        // running them on whatever dispatcher the caller happens to be on
+        // (often Dispatchers.Main for a UI-triggered presentation flow)
+        // blocks the UI thread for their full duration, freezing any
+        // in-progress animation (e.g. a spinner). See VegaProofSystem's
+        // identical fix/comment for the same reasoning.
         if (verifierIdentity == null) {
-            val proofBytes = prove(
+            val proofBytes = withContext(Dispatchers.Default) {
+                prove(
+                    prover = prover,
+                    deviceResponse = directByteBuffer(witnessDeviceResponse),
+                    namespace = namespace,
+                    requestedClaims = effectiveClaims,
+                    sessionTranscript = directByteBuffer(sessionTranscript),
+                    time = time,
+                )
+            }
+            return ZkProofResult(proofBytes = proofBytes, timestamp = time)
+        }
+
+        val verifierContext = pseudonymDeriver.deriveVerifierContext(verifierIdentity)
+        val proofBytes = withContext(Dispatchers.Default) {
+            proveWithPpid(
                 prover = prover,
                 deviceResponse = directByteBuffer(witnessDeviceResponse),
                 namespace = namespace,
                 requestedClaims = effectiveClaims,
                 sessionTranscript = directByteBuffer(sessionTranscript),
                 time = time,
+                verifierContext = directByteBuffer(verifierContext),
             )
-            return ZkProofResult(proofBytes = proofBytes)
         }
-
-        val verifierContext = pseudonymDeriver.deriveVerifierContext(verifierIdentity)
-        val proofBytes = proveWithPpid(
-            prover = prover,
-            deviceResponse = directByteBuffer(witnessDeviceResponse),
-            namespace = namespace,
-            requestedClaims = effectiveClaims,
-            sessionTranscript = directByteBuffer(sessionTranscript),
-            time = time,
-            verifierContext = directByteBuffer(verifierContext),
-        )
 
         // The native API returns only proof bytes - the pseudonym itself
         // (SHA256(pseudonym_seed || verifier_context), the same formula the
         // circuit itself asserts) is computed locally so the caller can
         // display/track it, mirroring the feat/longfellow-zk reference's own
         // separate computePPID() step.
-        // PSEUDONYM_SEED_CLAIM is checked first, deliberately: it's the only
-        // one that should ever actually be present in a credential (the
-        // issuer's own stored claim - see PSEUDONYM_SEED_CLAIM's doc
-        // comment), so an explicit priority order removes any ambiguity
-        // about which wins if a namespace somehow contained both, rather
-        // than relying on whatever order nameSpaces happens to iterate in.
-        val namespaceItems = document.issuerSigned.nameSpaces[namespace]
-        val seedItem = namespaceItems?.firstOrNull { it.item.elementIdentifier == PSEUDONYM_SEED_CLAIM }
-            ?: namespaceItems?.firstOrNull { it.item.elementIdentifier == PSEUDONYM_CLAIM }
+        val seedItem = mdoc.issuerSigned.nameSpaces[namespace]
+            ?.firstOrNull { it.item.elementIdentifier == PSEUDONYM_SEED_ELEMENT }
         val pseudonym = seedItem?.let { sha256(it.item.elementValue.GetByteString() + verifierContext) }
 
         return ZkProofResult(
             proofBytes = proofBytes,
             pseudonym = pseudonym,
             pseudonymOutcome = if (pseudonym != null) PseudonymOutcome.PROVIDED else PseudonymOutcome.NOT_SUPPORTED_BY_SYSTEM,
+            timestamp = time,
         )
     }
 
@@ -207,11 +245,11 @@ class LongfellowZkProofSystem(
         val descriptor = zkCircuitClient.fetchCircuit(spec.id)
             ?: error("Longfellow circuit '${spec.id}' not found in any configured zk-circuits source")
         val compressedBytes = zkCircuitClient.downloadArtifact(descriptor)
-        val circuitBytes = decompress(compressedBytes, descriptor)
+        val circuitBuffer = decompressZkCircuitArtifact(compressedBytes, descriptor)
         val circuitVersion = circuitVersionOf(descriptor)
 
         val prover = initializeProver(
-            circuit = directByteBuffer(circuitBytes),
+            circuit = circuitBuffer,
             circuitVersion = circuitVersion,
             numAttributes = numAttributes.toUByte(),
         )
@@ -225,32 +263,6 @@ class LongfellowZkProofSystem(
             proverCache[cacheKey] = prover
             return prover
         }
-    }
-
-    /**
-     * Decompresses [compressedBytes] to the exact size recorded in the
-     * zstd frame's own header (`Zstd.getFrameContentSize`) when present -
-     * these circuits compress at roughly 300-400x (a 319KB real V8 2-attribute
-     * circuit decompresses to ~104MB, confirmed via `zstd -l`), so any fixed
-     * multiplier guess is fragile; falls back to
-     * [ZkCircuitDescriptor.artifact]'s `uncompressed.size` catalog metadata,
-     * and only as a last resort to a generous fixed multiplier.
-     */
-    private fun decompress(compressedBytes: ByteArray, descriptor: ZkCircuitDescriptor): ByteArray {
-        val frameSize = Zstd.getFrameContentSize(compressedBytes)
-        val outputSize = if (frameSize > 0) {
-            frameSize
-        } else {
-            val uncompressedSize = descriptor.artifact?.uncompressed?.size
-            if (uncompressedSize != null && uncompressedSize > 0) {
-                Timber.w("Circuit '${descriptor.id}' zstd frame has no embedded content size; using catalog metadata")
-                uncompressedSize
-            } else {
-                Timber.w("Circuit '${descriptor.id}' has no known uncompressed size; guessing buffer size")
-                compressedBytes.size.toLong() * 400
-            }
-        }
-        return Zstd.decompress(compressedBytes, outputSize.toInt())
     }
 
     private fun circuitVersionOf(descriptor: ZkCircuitDescriptor): CircuitVersion =

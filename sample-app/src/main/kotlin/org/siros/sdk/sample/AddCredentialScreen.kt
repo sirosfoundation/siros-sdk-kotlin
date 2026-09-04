@@ -2,13 +2,20 @@
 package org.siros.sdk.sample
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Contactless
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.SubcomposeAsyncImageContent
 
 
 import androidx.compose.material3.Button
@@ -30,6 +37,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -71,6 +79,50 @@ fun AddCredentialScreen(
     onRetry: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    // Long-press detail modal — lets the user inspect an offer's full
+    // description/format before committing to the issuance-consent dialog
+    // below, without the row's own tap target already starting that flow.
+    var detailOffer by remember { mutableStateOf<CredentialOffer?>(null) }
+    if (detailOffer != null) {
+        val offer = detailOffer!!
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { detailOffer = null },
+            title = { Text(offer.credentialName) },
+            text = {
+                Column {
+                    Text(
+                        text = offer.issuerName,
+                        style = androidx.compose.material3.MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    if (offer.credentialDescription != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = offer.credentialDescription!!,
+                            style = androidx.compose.material3.MaterialTheme.typography.bodyMedium,
+                            color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    CapabilityIconRow(capabilityFlagsFor(offer.format))
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    detailOffer = null
+                    onOfferSelected(offer)
+                }) {
+                    Text(stringResource(R.string.add_credential_row_action_add))
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { detailOffer = null }) {
+                    Text(stringResource(R.string.add_credential_row_action_close))
+                }
+            },
+        )
+    }
+
     // Issuance consent dialog
     if (pendingOffer != null) {
         androidx.compose.material3.AlertDialog(
@@ -99,6 +151,8 @@ fun AddCredentialScreen(
                             color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    CapabilityIconRow(capabilityFlagsFor(pendingOffer.format))
                 }
             },
             confirmButton = {
@@ -126,7 +180,14 @@ fun AddCredentialScreen(
                     Text(stringResource(R.string.add_credential_loading))
                 }
             }
-        } else if (offers.isEmpty()) {
+        } else if (offers.isEmpty() && onStartIDV == null) {
+            // Truly nothing to show - no generic offers AND no IDV path
+            // either. Must NOT be reached just because `offers` is empty on
+            // its own (real bug this replaced: openAddCredential filters out
+            // the plain siros_id offer - see task #275 - so a tenant whose
+            // ONLY offer is SIROS ID hit this branch and lost the one path
+            // meant to actually issue it, since ScanPhysicalIDCard below was
+            // previously only reachable when offers was non-empty).
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
@@ -148,58 +209,141 @@ fun AddCredentialScreen(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
-                // Scan Physical ID card (when IDV is available)
+                // Scan Physical ID card (when IDV is available) - always
+                // shown here regardless of whether `offers` is empty, so
+                // it's never hidden behind the empty-state branch above.
                 if (onStartIDV != null) {
                     item {
                         ScanPhysicalIDCard(onClick = onStartIDV)
                         HorizontalDivider(thickness = 2.dp)
                     }
                 }
-                items(offers) { offer ->
-                    CredentialOfferRow(offer = offer, onClick = { onOfferSelected(offer) })
-                    HorizontalDivider()
+                if (offers.isEmpty()) {
+                    item {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text(
+                                text = stringResource(R.string.add_credential_empty),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Button(onClick = onRetry) {
+                                Text(stringResource(R.string.add_credential_retry))
+                            }
+                        }
+                    }
+                } else {
+                    items(offers) { offer ->
+                        CredentialOfferRow(
+                            offer = offer,
+                            onClick = { onOfferSelected(offer) },
+                            onLongClick = { detailOffer = offer },
+                        )
+                        HorizontalDivider()
+                    }
                 }
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CredentialOfferRow(
     offer: CredentialOffer,
     onClick: () -> Unit,
+    onLongClick: () -> Unit = {},
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Credential initial badge with background color
+        // Credential badge: the issuer's own logo image when published
+        // (credential_metadata.display[].logo - real graphical metadata, not
+        // just a color), falling back to a colored initial letter otherwise.
+        // Sized to the standard ID-1/credit-card ratio (15.86:10), not
+        // square: these issuers' "logo" is frequently the full card-body
+        // template (e.g. a ~829x504 SVG with {{given_name}}-style
+        // placeholders), not a small icon - a square Crop just showed an
+        // unrecognizable, randomly-cropped sliver of it.
         val bgColor = offer.backgroundColor?.let { parseColor(it) }
             ?: MaterialTheme.colorScheme.secondaryContainer
         val fgColor = offer.textColor?.let { parseColor(it) }
             ?: MaterialTheme.colorScheme.onSecondaryContainer
 
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(bgColor),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = offer.credentialName.take(1).uppercase(),
-                style = MaterialTheme.typography.titleMedium,
-                color = fgColor,
-                fontWeight = FontWeight.Bold,
-            )
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(
+                modifier = Modifier
+                    .height(40.dp)
+                    .aspectRatio(15.86f / 10f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(bgColor),
+                contentAlignment = Alignment.Center,
+            ) {
+                val initial = @Composable {
+                    Text(
+                        text = offer.credentialName.take(1).uppercase(),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = fgColor,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+                if (offer.logoUri != null) {
+                    val logo = rememberNormalizedLogoModel(offer.logoUri!!)
+                    // Full-bleed raster background (if any) drawn underneath the
+                    // (now `<image>`-free) SVG - see NormalizedLogo's doc comment;
+                    // without this, an offer whose logo SVG has an embedded
+                    // full-card raster <image> mis-renders via AndroidSVG with a
+                    // dark band roughly 30% down (the same bug already fixed for
+                    // full-size stored-credential cards).
+                    logo.backgroundImageBytes?.let { backgroundBytes ->
+                        coil.compose.AsyncImage(
+                            model = backgroundBytes,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                        )
+                    }
+                    // SubcomposeAsyncImage, not AsyncImage: a plain AsyncImage
+                    // renders nothing at all while loading or on a failed fetch
+                    // (a real issue found via live device testing - offers whose
+                    // logo URI didn't resolve showed a blank square instead of
+                    // ever falling back to the initial-letter placeholder).
+                    coil.compose.SubcomposeAsyncImage(
+                        model = logo.model,
+                        contentDescription = offer.credentialName,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    ) {
+                        if (painter.state is coil.compose.AsyncImagePainter.State.Success) {
+                            SubcomposeAsyncImageContent()
+                        } else {
+                            // SubcomposeAsyncImage's content slot doesn't inherit the
+                            // outer Box's contentAlignment - without this, the
+                            // fallback letter rendered top-left instead of centered
+                            // (confirmed via live device screenshot).
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                initial()
+                            }
+                        }
+                    }
+                } else {
+                    initial()
+                }
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            CapabilityIconRow(capabilityFlagsFor(offer.format))
         }
 
         Spacer(modifier = Modifier.width(12.dp))
 
-        // Credential name + issuer
+        // Credential name + description + issuer
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = offer.credentialName,
@@ -208,8 +352,20 @@ private fun CredentialOfferRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            // Issuer-authored description is often the clearest signal for
+            // telling apart two same-named offers (e.g. "Physical card" vs
+            // "Digital-only ID") - shown here, not just in the confirm
+            // dialog, since that's exactly where users need it.
+            if (!offer.credentialDescription.isNullOrBlank()) {
+                Text(
+                    text = offer.credentialDescription!!,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Spacer(modifier = Modifier.height(2.dp))
-            // Issuer badge
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     modifier = Modifier
@@ -231,10 +387,54 @@ private fun CredentialOfferRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
                 )
             }
         }
     }
+}
+
+/**
+ * Which of a credential format's presentation capabilities apply - shown as
+ * a small icon row under the credential's mini-card badge instead of a text
+ * label, since a user has no reason to know what "mDoc" or "SD-JWT" mean.
+ * mdoc formats support this wallet's BLE/NFC proximity presentation AND
+ * remote OpenID4VP/DC API use, AND can be presented as a zero-knowledge
+ * proof via DC API (see LongfellowZkProofSystem/CredentialMatcher's
+ * mso_mdoc_zk matching - a ZK query matches a plain mso_mdoc credential,
+ * there is no separately-stored "zk format"). The SD-JWT/JWT-VC formats
+ * here are remote-presentation only, with no ZK support in this system yet.
+ */
+private data class CapabilityFlags(val online: Boolean, val proximity: Boolean, val zkp: Boolean)
+
+private fun capabilityFlagsFor(format: String): CapabilityFlags {
+    val isMdoc = format.equals("mso_mdoc", ignoreCase = true) ||
+        format.equals("mso_mdoc_zk", ignoreCase = true)
+    return CapabilityFlags(online = true, proximity = isMdoc, zkp = isMdoc)
+}
+
+@Composable
+private fun CapabilityIconRow(flags: CapabilityFlags) {
+    Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        CapabilityIcon(Icons.Filled.Public, flags.online, stringResource(R.string.credential_capability_online))
+        CapabilityIcon(Icons.Filled.Contactless, flags.proximity, stringResource(R.string.credential_capability_proximity))
+        CapabilityIcon(Icons.Filled.Shield, flags.zkp, stringResource(R.string.credential_capability_zkp))
+    }
+}
+
+/** Enabled capabilities render at full tint; inapplicable ones are dimmed rather than hidden, so the icon set always lines up the same way across rows. */
+@Composable
+private fun CapabilityIcon(icon: ImageVector, enabled: Boolean, description: String) {
+    Icon(
+        icon,
+        contentDescription = if (enabled) description else null,
+        tint = if (enabled) {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
+        },
+        modifier = Modifier.size(14.dp),
+    )
 }
 
 private fun parseColor(hex: String): Color? {

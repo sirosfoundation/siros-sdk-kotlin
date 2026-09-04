@@ -74,8 +74,9 @@ fun classifyDeepLink(uriString: String, redirectScheme: String): DeepLinkType {
         return DeepLinkType.CredentialOffer(uri = uriString)
     }
 
-    // 3. OID4VP: openid4vp://...
-    if (scheme == "openid4vp") {
+    // 3. OID4VP: openid4vp://... or mdoc-openid4vp://... (ISO 18013-7 Annex
+    // B's mdoc-specific scheme, same wire shape as plain OID4VP).
+    if (scheme == "openid4vp" || scheme == "mdoc-openid4vp") {
         return DeepLinkType.PresentationRequest(uri = uriString)
     }
 

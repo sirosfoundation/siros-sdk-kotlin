@@ -122,6 +122,16 @@ data class SignResponseMessage(
     @SerialName("proof_jwt") val proofJwt: String? = null,
     @SerialName("vp_token") val vpToken: String? = null,
     val proofs: List<ProofObject>? = null,
+    /**
+     * Response to a `request_attestation` sign request (go-wallet-backend
+     * `SignActionRequestAttestation`): the Wallet Instance Attestation JWT
+     * (`oauth-client-attestation+jwt`) and the per-flow PoP
+     * (`oauth-client-attestation-pop+jwt`) signed with the instance key over
+     * the `audience`/`issuer` the engine supplied in [SignRequestParams].
+     * Both null means "no attestation available - proceed without".
+     */
+    @SerialName("client_attestation") val clientAttestation: String? = null,
+    @SerialName("client_attestation_pop") val clientAttestationPoP: String? = null,
     val timestamp: String? = null,
 )
 
@@ -245,6 +255,13 @@ data class SignRequestParams(
     @SerialName("credentials_to_include") val credentialsToInclude: List<CredentialRef>? = null,
     @SerialName("response_uri") val responseUri: String? = null,
     @SerialName("verifier_jwk_thumbprint") val verifierJwkThumbprint: String? = null,
+    // The verifier's own session id for this presentation (from the
+    // request_uri's "sessionId" query param, forwarded by go-wallet-backend)
+    // - a real ZK/PPID pseudonym's verifier_context binds to THIS specific
+    // session, not the verifier's static identity (confirmed 2026-08-17,
+    // direct report from zk-cred-longfellow's V8/PPID author). Null for
+    // non-ZK presentations or verifiers whose request_uri never carried one.
+    @SerialName("verifier_session_id") val verifierSessionId: String? = null,
 )
 
 @Serializable

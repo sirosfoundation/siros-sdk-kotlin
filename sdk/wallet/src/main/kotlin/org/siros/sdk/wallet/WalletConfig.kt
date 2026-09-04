@@ -120,6 +120,52 @@ data class WalletConfig(
     val registryUrl: String? = null,
     val zkCircuitUrls: List<String> = listOf(ZkCircuitClient.DEFAULT_ZK_CIRCUIT_URL),
     /**
+     * PEM-encoded RICAL (Reader Identity CA List, ISO/IEC 18013-5 second
+     * edition Annex F) root certificate(s) for [SirosWallet.evaluateReaderTrust]'s
+     * local fallback path - plain X.509 path validation against these
+     * anchors, with none of the RICAL CBOR/COSE document parsing or
+     * `trustConstraints` enforcement the remote go-trust `mdocrical`
+     * registry does (see that registry for the full RICAL semantics). Empty
+     * by default: until an operator configures at least one root here,
+     * local reader-trust evaluation always reports untrusted rather than
+     * silently no-oping.
+     */
+    val readerTrustRootCertificatesPem: List<String> = emptyList(),
+    /**
+     * Forces [SirosWallet.evaluateReaderTrust] to always use the local
+     * X.509 fallback (see [readerTrustRootCertificatesPem]) instead of
+     * attempting the remote AuthZEN call first - e.g. for offline event
+     * scenarios, or a host app setting the user explicitly opted into.
+     * Default `false`: the remote path is preferred since it's the only
+     * one that honors RICAL's temporary/dynamic trust roots (go-trust's
+     * own registry cache/refresh handles freshness) - local fallback only
+     * happens automatically when the remote call itself fails.
+     */
+    val preferLocalReaderTrustEvaluation: Boolean = false,
+    /**
+     * PEM-encoded VICAL (Verified Issuer CA List, ISO/IEC 18013-5 Annex C)
+     * root certificate(s) for [SirosWallet.evaluateIssuerTrust]'s local
+     * fallback path - plain X.509 path validation against these anchors,
+     * with none of the VICAL CBOR/COSE document parsing or per-certificate
+     * `docType` enforcement the remote go-trust `vical` registry does (see
+     * that registry for the full VICAL semantics). Empty by default: until
+     * an operator configures at least one root here, local issuer-trust
+     * evaluation always reports untrusted rather than silently no-oping -
+     * same convention as [readerTrustRootCertificatesPem].
+     */
+    val issuerTrustRootCertificatesPem: List<String> = emptyList(),
+    /**
+     * Forces [SirosWallet.evaluateIssuerTrust] to always use the local
+     * X.509 fallback (see [issuerTrustRootCertificatesPem]) instead of
+     * attempting the remote AuthZEN call first. Default `false`: the
+     * remote path is preferred since it's the only one that honors
+     * VICAL's dynamic updates (go-trust's own registry cache/refresh
+     * handles freshness) - local fallback only happens automatically when
+     * the remote call itself fails. Same convention as
+     * [preferLocalReaderTrustEvaluation].
+     */
+    val preferLocalIssuerTrustEvaluation: Boolean = false,
+    /**
      * Called right before [SirosWallet] is about to invoke a WSCD signing
      * operation (`generateProof`/`generateKeyAttestation`/`generateKeypairs`)
      * on [resolveEffectiveKeystoreForIssuance]'s resolved plugin, with that

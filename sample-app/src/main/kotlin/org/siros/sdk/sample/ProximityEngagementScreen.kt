@@ -31,7 +31,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
@@ -43,6 +42,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,6 +69,7 @@ import org.siros.sdk.keystore.mdoc.BlePeripheralServer
 import org.siros.sdk.keystore.mdoc.DeviceEngagement
 import org.siros.sdk.keystore.mdoc.NfcHandoverSelect
 import org.siros.sdk.keystore.mdoc.ProximityConsentResult
+import org.siros.sdk.keystore.mdoc.ReaderTrustResult
 import org.siros.sdk.keystore.mdoc.RequestProximityConsent
 import org.siros.sdk.sample.proximity.ActiveEngagement
 
@@ -90,7 +91,8 @@ import org.siros.sdk.sample.proximity.ActiveEngagement
 fun ProximityEngagementScreen(
     getCredentials: suspend () -> List<StoredCredential>,
     signPresentation: suspend (credentialId: Long, disclosedClaims: List<String>?, sessionTranscriptBytes: ByteArray) -> ByteArray,
-    filterEligible: (List<StoredCredential>) -> List<StoredCredential>,
+    filterEligible: suspend (List<StoredCredential>) -> List<StoredCredential>,
+    evaluateReaderTrust: suspend (x5chain: List<ByteArray>) -> ReaderTrustResult,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -152,13 +154,14 @@ fun ProximityEngagementScreen(
     // taps Approve or Deny. withContext(Main.immediate) hops back to the
     // main thread first - Compose state writes (pendingConsent) must
     // happen there, not on IO.
-    val requestConsent: RequestProximityConsent = { docType, requestedClaims, matchingFamilies ->
+    val requestConsent: RequestProximityConsent = { docType, requestedClaims, matchingFamilies, readerTrust ->
         withContext(Dispatchers.Main.immediate) {
             suspendCancellableCoroutine { continuation ->
                 val consent = PendingConsent(
                     docType = docType,
                     requestedClaims = requestedClaims,
                     matchingFamilies = matchingFamilies,
+                    readerTrust = readerTrust,
                     respond = { chosen ->
                         pendingConsent = null
                         if (continuation.isActive) {
@@ -199,6 +202,7 @@ fun ProximityEngagementScreen(
                 signPresentation = signPresentation,
                 requestConsent = requestConsent,
                 filterEligible = filterEligible,
+                evaluateReaderTrust = evaluateReaderTrust,
                 onStep = { step -> uiScope.launch(Dispatchers.Main.immediate) { currentStep = step } },
                 onComplete = { success ->
                     uiScope.launch(Dispatchers.Main.immediate) {
@@ -210,42 +214,92 @@ fun ProximityEngagementScreen(
                             // that will never come, so stop it.
                             centralClient?.stop()
                             result = true
-                        } else if (centralOutcome != null) {
+                        } else {
+                            // This role's own session is done regardless of
+                            // whether the other role has also finished - its
+                            // GATT server/advertising must be torn down now,
+                            // not left alive until the whole screen disposes.
+                            // Without this, a reader that already received
+                            // (or was denied) a response is left waiting on a
+                            // connection nothing will ever answer again -
+                            // confirmed live via a OneProof interop capture
+                            // where the reader sat stuck for 90+ seconds
+                            // after this role's own "no matching credential"
+                            // failure, until the user manually backed out.
+                            peripheralServer?.stop()
                             // Only report terminal failure once the OTHER
                             // role has also finished/failed - it may yet
                             // succeed on its own.
-                            result = false
+                            if (centralOutcome != null) {
+                                result = false
+                            }
                         }
                     }
                 },
             )
-            centralClient = BleCentralClient(
-                context = context,
-                engagement = engagement,
-                getHandoverSelectBytes = { ActiveEngagement.handoverSelectBytes },
-                getCredentials = getCredentials,
-                signPresentation = signPresentation,
-                requestConsent = requestConsent,
-                filterEligible = filterEligible,
-                onStep = { step -> uiScope.launch(Dispatchers.Main.immediate) { currentStep = step } },
-                onComplete = { success ->
-                    uiScope.launch(Dispatchers.Main.immediate) {
-                        centralOutcome = success
-                        if (success) {
-                            peripheralServer?.stop()
-                            result = true
-                        } else if (peripheralOutcome != null) {
-                            result = false
+            fun startCentralClient() {
+                centralClient?.stop()
+                centralOutcome = null
+                centralClient = BleCentralClient(
+                    context = context,
+                    engagement = engagement,
+                    getHandoverSelectBytes = { ActiveEngagement.handoverSelectBytes },
+                    getCredentials = getCredentials,
+                    signPresentation = signPresentation,
+                    requestConsent = requestConsent,
+                    filterEligible = filterEligible,
+                    evaluateReaderTrust = evaluateReaderTrust,
+                    onStep = { step -> uiScope.launch(Dispatchers.Main.immediate) { currentStep = step } },
+                    onComplete = { success ->
+                        uiScope.launch(Dispatchers.Main.immediate) {
+                            centralOutcome = success
+                            if (success) {
+                                peripheralServer?.stop()
+                                result = true
+                            } else {
+                                // See the peripheralServer onComplete's matching
+                                // comment above - same reasoning, mirrored role.
+                                centralClient?.stop()
+                                if (peripheralOutcome != null) {
+                                    result = false
+                                }
+                            }
                         }
-                    }
-                },
-            )
+                    },
+                ).also { it.start() }
+            }
+            startCentralClient()
             peripheralServer.start()
-            centralClient.start()
+            // A physical NFC tap completes at an unpredictable, possibly much
+            // later time than this effect running (walk up, position, hold
+            // steady - real seconds, not milliseconds) - see
+            // ActiveEngagement.onHandoverServed's doc comment. A reader that
+            // picked mdoc central client mode via NFC can only start
+            // advertising for BleCentralClient to find once it actually has
+            // the engagement, so give the scan a fresh window at exactly
+            // that moment rather than trusting the window that started when
+            // this effect first ran (which may already be gone).
+            ActiveEngagement.onHandoverServed = {
+                uiScope.launch(Dispatchers.Main.immediate) {
+                    // Deliberately NOT gated on centralOutcome == null: the
+                    // very common case is that the FIRST central-client scan
+                    // (started at mount, before the physical NFC tap even
+                    // happens) already timed out and set centralOutcome to
+                    // false well before this signal fires - that's exactly
+                    // the stale failure this restart exists to override, not
+                    // a reason to skip it. Only the overall result matters:
+                    // once the whole presentation has concluded (either way),
+                    // there's nothing left to restart for.
+                    if (result == null) {
+                        startCentralClient()
+                    }
+                }
+            }
         } else {
             blePermissionsDenied = true
         }
         onDispose {
+            ActiveEngagement.onHandoverServed = null
             peripheralServer?.stop()
             centralClient?.stop()
         }
@@ -343,31 +397,22 @@ fun ProximityEngagementScreen(
 private fun ProximityProgressView(step: String, onCancel: () -> Unit, modifier: Modifier = Modifier) {
     val stepProgress = flowStepProgress("proximity", step)
 
-    // Same monotonic guard as FlowActiveView: real execution order can
-    // deviate slightly (e.g. both BLE modes reporting steps interleaved
-    // before one wins), but the bar should never visibly un-progress.
-    var maxProgress by remember { mutableStateOf(0f) }
-    LaunchedEffect(stepProgress) {
-        stepProgress?.let { maxProgress = maxOf(maxProgress, it) }
-    }
+    // Same decoupled-from-step-completion animator as FlowActiveView: real
+    // execution order can deviate slightly (e.g. both BLE modes reporting
+    // steps interleaved before one wins), and a long-running step (e.g. ZK
+    // proof generation ahead of `"submitting_response"`) has no intermediate
+    // progress signal of its own - see FlowProgressAnimator's doc comment.
+    val progressAnimator = remember { FlowProgressAnimator() }
+    val displayProgress by progressAnimator.displayProgress.collectAsState()
+    LaunchedEffect(Unit) { progressAnimator.run() }
+    LaunchedEffect(stepProgress) { progressAnimator.onRealProgress(stepProgress) }
 
     Column(
         modifier = modifier.padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        if (stepProgress != null) {
-            LinearProgressIndicator(
-                progress = { maxProgress },
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.primary,
-            )
-        } else {
-            LinearProgressIndicator(
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
+        SirosSpinner(progress = if (stepProgress != null) displayProgress else null)
         Spacer(modifier = Modifier.height(24.dp))
         Text(
             text = stringResource(R.string.flow_presenting),
@@ -430,22 +475,63 @@ private data class PendingConsent(
     val docType: String,
     val requestedClaims: List<String>,
     val matchingFamilies: List<CredentialFamily>,
+    /** See [RequestProximityConsent]'s `readerTrust` parameter doc comment. */
+    val readerTrust: ReaderTrustResult?,
     /** Call with the chosen family to approve, or null to deny. */
     val respond: (CredentialFamily?) -> Unit,
 )
 
+/**
+ * RICAL reader-trust indicator for the consent dialog (Geneva 2026 interop
+ * requirement: reader trust must be a visible, distinguishable signal, not
+ * enforced/blocking - see this session's RICAL plan). Three states:
+ * trusted (verified signature + trusted chain), untrusted (verified
+ * signature but an untrusted/unresolved chain), and no badge at all when
+ * [readerTrust] is null - see [ReaderTrustResult]'s doc comment for why "no
+ * `readerAuth`/invalid signature" is deliberately silent rather than shown
+ * as "untrusted".
+ */
 @Composable
-private fun ProximityConsentDialog(consent: PendingConsent, filterEligible: (List<StoredCredential>) -> List<StoredCredential>) {
-    // A family with zero eligible instances (every copy already used under
-    // the active consumption policy) is shown, not silently omitted - so the
-    // user isn't confused about where their credential went - but disabled:
-    // the SDK refuses to sign with an exhausted instance regardless (defense
-    // in depth), so letting the user pick one here would just fail later.
-    val eligibleFamilies = remember(consent, filterEligible) {
-        consent.matchingFamilies.filter { filterEligible(it.instances).isNotEmpty() }.toSet()
+private fun ReaderTrustBadge(readerTrust: ReaderTrustResult?) {
+    if (readerTrust == null) return
+    val (icon, tint, label) = if (readerTrust.trusted) {
+        Triple(Icons.Filled.CheckCircle, MaterialTheme.colorScheme.primary, "Trusted reader" + (readerTrust.entityName?.let { ": $it" } ?: ""))
+    } else {
+        Triple(Icons.Filled.Error, MaterialTheme.colorScheme.error, "Reader identity not trusted" + (readerTrust.reason?.let { " ($it)" } ?: ""))
     }
-    var selected by remember(consent) {
-        mutableStateOf(consent.matchingFamilies.firstOrNull { it in eligibleFamilies } ?: consent.matchingFamilies.first())
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.height(18.dp).width(18.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(label, style = MaterialTheme.typography.labelMedium, color = tint)
+    }
+}
+
+@Composable
+private fun ProximityConsentDialog(consent: PendingConsent, filterEligible: suspend (List<StoredCredential>) -> List<StoredCredential>) {
+    // A family with zero eligible instances (every copy already used under
+    // the active consumption policy, OR its signing key was lost - see
+    // CredentialUtils.eligibleInstances's doc comment) is shown, not
+    // silently omitted - so the user isn't confused about where their
+    // credential went - but disabled: the SDK refuses to sign with an
+    // exhausted/keyless instance regardless (defense in depth), so letting
+    // the user pick one here would just fail later.
+    //
+    // filterEligible is suspend (it needs a live keystore.listKeys() round
+    // trip), so this can't be a plain `remember` - computed once per
+    // [consent] in a LaunchedEffect instead, re-picking [selected] onto a
+    // real eligible family once the async result lands if the synchronous
+    // initial guess (matchingFamilies.first()) wasn't already one.
+    var eligibleFamilies by remember(consent) { mutableStateOf(emptySet<CredentialFamily>()) }
+    var selected by remember(consent) { mutableStateOf(consent.matchingFamilies.first()) }
+    LaunchedEffect(consent) {
+        val result = mutableSetOf<CredentialFamily>()
+        for (family in consent.matchingFamilies) {
+            if (filterEligible(family.instances).isNotEmpty()) result += family
+        }
+        eligibleFamilies = result
+        if (selected !in result) {
+            selected = consent.matchingFamilies.firstOrNull { it in result } ?: selected
+        }
     }
     val selectedIsEligible = selected in eligibleFamilies
 
@@ -459,6 +545,8 @@ private fun ProximityConsentDialog(consent: PendingConsent, filterEligible: (Lis
                 // a glance whether this is really their own mDL/etc.
                 CredentialCard(credential = selected.representative, modifier = Modifier.fillMaxWidth())
                 Spacer(modifier = Modifier.height(16.dp))
+                ReaderTrustBadge(consent.readerTrust)
+                Spacer(modifier = Modifier.height(8.dp))
                 Text("A reader is requesting the following, from this credential:", style = MaterialTheme.typography.bodyMedium)
                 Spacer(modifier = Modifier.height(8.dp))
                 for (claim in consent.requestedClaims) {

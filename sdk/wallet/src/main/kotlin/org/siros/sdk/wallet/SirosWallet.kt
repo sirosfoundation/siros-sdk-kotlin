@@ -8,7 +8,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -43,6 +47,7 @@ import org.siros.sdk.credentials.CredentialStore
 import org.siros.sdk.credentials.InMemoryCredentialStore
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.credentials.CredentialOffer
+import org.siros.sdk.credentials.CredentialMetadata
 import org.siros.sdk.credentials.CredentialMatcher
 import org.siros.sdk.credentials.PresentationRecord
 import org.siros.sdk.credentials.IssuerEntry
@@ -52,9 +57,15 @@ import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.Vctm
 import org.siros.sdk.credentials.ZkCircuitClient
+import org.siros.sdk.credentials.COSE_ALG_ES256
+import org.siros.sdk.credentials.CredentialDocument
+import org.siros.sdk.credentials.CredentialFormat
+import org.siros.sdk.credentials.CredentialTypeRef
 import org.siros.sdk.credentials.ZkProofSystemRegistry
 import org.siros.sdk.credentials.VerifierIdentity
+import com.upokecenter.cbor.CBORObject
 import org.siros.sdk.credentials.mdoc.MdocCbor
+import org.siros.sdk.keystore.mdoc.MdocCose
 import org.siros.sdk.credentials.VctmFetcher
 import org.siros.sdk.credentials.MddlSchema
 import org.siros.sdk.credentials.MddlSchemaFetcher
@@ -65,6 +76,10 @@ import org.siros.sdk.keystore.KeypairInfo
 import org.siros.sdk.keystore.KeystoreManager
 import org.siros.sdk.keystore.LongfellowZkProofSystem
 import org.siros.sdk.keystore.MdocDeviceResponseBuilder
+// VegaProofSystem: LOCAL ONLY, DO NOT PUSH/MERGE this line to origin/main -
+// see VegaProofSystem.kt's own doc comment for why (zk-cred-vega only
+// resolves via mavenLocal right now).
+import org.siros.sdk.keystore.VegaProofSystem
 import org.siros.sdk.keystore.WscdKeystoreAdapter
 import org.siros.sdk.keystore.WscdManager
 import org.siros.sdk.wallet.dcapi.DCAPIRequest
@@ -73,6 +88,7 @@ import org.siros.sdk.transport.CredentialNotifier
 import org.siros.sdk.transport.engine.CredentialMatch
 import org.siros.sdk.transport.engine.CredentialNotificationEvent
 import org.siros.sdk.transport.engine.ProofObject
+import org.siros.sdk.transport.engine.SignRequestMessage
 import org.siros.sdk.transport.engine.WalletEngineSession
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -675,7 +691,7 @@ class SirosWallet private constructor(
     /**
      * After loading credentials from a reimported private-data container
      * (fresh login here, or [unlockKeystore] after [resumeSession]), re-fetch
-     * VCTM display metadata and re-derive issuedAt/expiresAt for any
+     * VCTM/MDDL display metadata and re-derive issuedAt/expiresAt for any
      * credential that's missing them.
      *
      * privatedata-spec's container format doesn't persist `metadata`/
@@ -687,99 +703,147 @@ class SirosWallet private constructor(
      * (metadata is never null for a credential saved earlier in the same
      * session, only for one just reconstructed from a container).
      *
-     * Fire-and-forget: re-emits [WalletState.Ready] with the refreshed list
-     * once done, rather than blocking login/unlock on however many VCTM
-     * fetches are needed.
+     * ### Never a spinner for nothing
+     *
+     * Because this runs on every login, a type whose document can't be
+     * fetched used to cost the user a network round-trip and a loading
+     * indicator on its card on every launch. Two things fix that:
+     *
+     * 1. The fetchers share [displayMetadataCache], which remembers misses
+     *    with backoff. While a retry isn't due, `fetch` returns null at once
+     *    with no network.
+     * 2. When no document is available, a synthesised
+     *    [CredentialUtils.buildFallbackMetadata] is persisted on the
+     *    credential (marked [CredentialMetadata.HYDRATION_FALLBACK]) so the
+     *    UI has non-null metadata to render the flat layout from
+     *    immediately. A fallback still counts as "needs hydration": it is
+     *    replaced by real metadata the moment a later fetch succeeds.
+     *
+     * Credentials are hydrated concurrently (capped at
+     * [HYDRATION_PARALLELISM]) so one slow issuer doesn't hold up the rest,
+     * but [WalletState.Ready] is re-emitted exactly once at the end, as
+     * before. Fire-and-forget: never blocks login/unlock.
      */
     private fun hydrateReloadedCredentials() {
         scope.launch {
-            var changed = false
-            for (cred in credentialStore.getAll()) {
-                if (cred.metadata != null) continue
-                val issuerIdent = cred.credentialIssuerIdentifier
-                val configId = cred.credentialConfigurationId
-
-                if (cred.format == "mso_mdoc") {
-                    // mdoc has no JWT iat/exp claims to re-derive here (ISO
-                    // 18013-5 validity lives in the MSO's validityInfo, inside
-                    // issuerAuth - deliberately not parsed by this wallet, see
-                    // MdocCbor's doc comment: MSO parsing is a verifier-side
-                    // concern this holder doesn't need). Only metadata (via
-                    // MDDLSchema) is re-hydrated here.
-                    if (issuerIdent.isNullOrBlank() || configId.isNullOrBlank()) continue
-                    val mddlSchema = try {
-                        mddlSchemaFetcher.fetch(
-                            issuerUrl = issuerIdent,
-                            scope = configId,
-                            registryUrl = registryUrl,
-                        )
-                    } catch (e: Exception) {
-                        Timber.w(e, "Failed to re-fetch MDDL schema for reloaded credential ${cred.id}")
-                        null
-                    } ?: continue
-                    val metadata = CredentialUtils.buildMdocMetadata(
-                        offer = CredentialOffer(
-                            credentialConfigurationId = configId,
-                            credentialIssuerIdentifier = issuerIdent,
-                            credentialName = cred.format,
-                            issuerName = issuerIdent,
-                        ),
-                        mddlSchema = mddlSchema,
-                    )
-                    credentialStore.save(cred.copy(metadata = metadata))
-                    changed = true
-                    continue
-                }
-
-                val payload = CredentialUtils.parseJwtPayload(cred.raw) ?: continue
-                val issuedAt = payload["iat"]?.jsonPrimitive?.longOrNull
-                val expiresAt = payload["exp"]?.jsonPrimitive?.longOrNull
-                val vct = payload["vct"]?.jsonPrimitive?.contentOrNull
-                val vctm = if (!issuerIdent.isNullOrBlank() && !configId.isNullOrBlank()) {
-                    try {
-                        vctmFetcher.fetch(
-                            issuerUrl = issuerIdent,
-                            scope = configId,
-                            vct = vct,
-                            registryUrl = registryUrl,
-                        )
-                    } catch (e: Exception) {
-                        Timber.w(e, "Failed to re-fetch VCTM for reloaded credential ${cred.id}")
-                        null
-                    }
-                } else {
-                    null
-                }
-                val metadata = vctm?.let {
-                    CredentialUtils.buildMetadata(
-                        offer = CredentialOffer(
-                            credentialConfigurationId = configId ?: "",
-                            credentialIssuerIdentifier = issuerIdent ?: "",
-                            credentialName = cred.format,
-                            issuerName = issuerIdent ?: "",
-                        ),
-                        vctm = it,
-                        rawCredential = cred.raw,
-                    )
-                }
-                if (metadata != null || issuedAt != null || expiresAt != null) {
-                    credentialStore.save(
-                        cred.copy(
-                            metadata = metadata ?: cred.metadata,
-                            issuedAt = issuedAt ?: cred.issuedAt,
-                            expiresAt = expiresAt ?: cred.expiresAt,
-                        )
-                    )
-                    changed = true
-                }
-            }
-            if (changed) {
-                val current = _state.value
-                if (current is WalletState.Ready) {
-                    _state.value = current.copy(credentials = credentialStore.getAll())
-                }
+            val candidates = credentialStore.getAll().filter { it.metadata?.isFallback != false }
+            if (candidates.isEmpty()) return@launch
+            val gate = Semaphore(HYDRATION_PARALLELISM)
+            val updates = candidates
+                .map { cred -> async { gate.withPermit { hydrateOne(cred) } } }
+                .awaitAll()
+                .filterNotNull()
+            if (updates.isEmpty()) return@launch
+            updates.forEach { credentialStore.save(it) }
+            val fallbacks = updates.count { it.metadata?.isFallback == true }
+            Timber.i(
+                "Hydrated ${updates.size}/${candidates.size} reloaded credentials " +
+                    "(${updates.size - fallbacks} from issuer documents, $fallbacks fallback)",
+            )
+            val current = _state.value
+            if (current is WalletState.Ready) {
+                _state.value = current.copy(credentials = credentialStore.getAll())
             }
         }
+    }
+
+    /**
+     * One credential's share of [hydrateReloadedCredentials]: the credential
+     * with whatever could be (re)derived applied, or null when nothing
+     * changed - so an existing fallback whose retry isn't due yet is not
+     * re-saved on every launch.
+     */
+    private suspend fun hydrateOne(cred: StoredCredential): StoredCredential? {
+        val issuerIdent = cred.credentialIssuerIdentifier
+        val configId = cred.credentialConfigurationId
+        val canFetch = !issuerIdent.isNullOrBlank() && !configId.isNullOrBlank()
+        // Only synthesise a fallback when there is no metadata at all; an
+        // existing fallback stays as it is until a real document replaces it.
+        fun fallbackIfNone(): CredentialMetadata? =
+            if (cred.metadata == null) CredentialUtils.buildFallbackMetadata(cred) else null
+
+        if (cred.format == "mso_mdoc") {
+            // mdoc has no JWT iat/exp claims to re-derive here (ISO 18013-5
+            // validity lives in the MSO's validityInfo, inside issuerAuth -
+            // deliberately not parsed by this wallet, see MdocCbor's doc
+            // comment: MSO parsing is a verifier-side concern this holder
+            // doesn't need). Only metadata (via MDDLSchema) is re-hydrated.
+            val mddlSchema = if (canFetch) {
+                try {
+                    mddlSchemaFetcher.fetch(
+                        issuerUrl = issuerIdent!!,
+                        scope = configId!!,
+                        // The docType is parseable from the credential's own
+                        // MSO, so the registry-first strategy can run - and
+                        // the cache key then matches what issuance wrote.
+                        vct = CredentialUtils.parseMdocDocument(cred)?.docType,
+                        registryUrl = registryUrl,
+                    )
+                } catch (e: Exception) {
+                    Timber.w(e, "Failed to re-fetch MDDL schema for reloaded credential ${cred.id}")
+                    null
+                }
+            } else {
+                null
+            }
+            val metadata = mddlSchema?.let {
+                CredentialUtils.buildMdocMetadata(
+                    offer = CredentialOffer(
+                        credentialConfigurationId = configId!!,
+                        credentialIssuerIdentifier = issuerIdent!!,
+                        credentialName = cred.format,
+                        issuerName = issuerIdent,
+                        format = cred.format,
+                    ),
+                    mddlSchema = it,
+                )
+            } ?: fallbackIfNone()
+            return metadata?.let { cred.copy(metadata = it) }
+        }
+
+        // A JWP (or anything else that isn't `<jwt>~...`) has no parseable
+        // payload here; it still gets a VCTM attempt and a fallback rather
+        // than being skipped and left spinning.
+        val payload = CredentialUtils.parseJwtPayload(cred.raw)
+        val issuedAt = payload?.get("iat")?.jsonPrimitive?.longOrNull
+        val expiresAt = payload?.get("exp")?.jsonPrimitive?.longOrNull
+        val vct = payload?.get("vct")?.jsonPrimitive?.contentOrNull
+        val vctm = if (canFetch) {
+            try {
+                vctmFetcher.fetch(
+                    issuerUrl = issuerIdent!!,
+                    scope = configId!!,
+                    vct = vct,
+                    registryUrl = registryUrl,
+                )
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to re-fetch VCTM for reloaded credential ${cred.id}")
+                null
+            }
+        } else {
+            null
+        }
+        val metadata = vctm?.let {
+            CredentialUtils.buildMetadata(
+                offer = CredentialOffer(
+                    credentialConfigurationId = configId ?: "",
+                    credentialIssuerIdentifier = issuerIdent ?: "",
+                    credentialName = cred.format,
+                    issuerName = issuerIdent ?: "",
+                    format = cred.format,
+                ),
+                vctm = it,
+                rawCredential = cred.raw,
+            )
+        } ?: fallbackIfNone()
+        val newIssuedAt = issuedAt ?: cred.issuedAt
+        val newExpiresAt = expiresAt ?: cred.expiresAt
+        if (metadata == null && newIssuedAt == cred.issuedAt && newExpiresAt == cred.expiresAt) return null
+        return cred.copy(
+            metadata = metadata ?: cred.metadata,
+            issuedAt = newIssuedAt,
+            expiresAt = newExpiresAt,
+        )
     }
 
     /**
@@ -1088,7 +1152,7 @@ class SirosWallet private constructor(
         val credential = credentialStore.getById(credentialId)
             ?: throw WalletException("Credential not found: $credentialId")
         val allInstances = credentialStore.getAll().filter { it.batchId == credential.batchId }
-        if (CredentialUtils.eligibleInstances(allInstances, credentialConsumptionPolicy, presentationHistory).none { it.id == credentialId }) {
+        if (eligibleInstances(allInstances).none { it.id == credentialId }) {
             throw WalletException("No eligible copies of this credential remain - renew it to get more")
         }
         val response = keystore.signMdocPresentationForProximity(
@@ -1317,27 +1381,90 @@ class SirosWallet private constructor(
      */
     private suspend fun resolveClientAttestation(issuerUrl: String): Pair<String, String>? {
         val wia = ensureWalletInstanceAttestation() ?: return null
+        val asUrl = try {
+            getIssuerMetadata(issuerUrl).authorizationServers
+                ?.firstOrNull { it.isNotBlank() } ?: issuerUrl
+        } catch (e: Exception) {
+            issuerUrl
+        }
+        val pop = buildClientAttestationPoP(asUrl, clientAttestationClientId()) ?: return null
+        return wia to pop
+    }
+
+    /**
+     * Sign a per-flow OAuth Client Attestation PoP
+     * (`oauth-client-attestation-pop+jwt`, draft-ietf-oauth-attestation-based-client-auth-10
+     * §4.2) with this instance's key: `aud` = [asUrl] (the authorization
+     * server the PAR/token request is sent to), `iss` = [clientId] (must equal
+     * the WIA's `sub`), plus the AS's `challenge` when it publishes a
+     * `challenge_endpoint` - see [fetchAttestationChallenge].
+     *
+     * Shared by the client-side [resolveClientAttestation] path and the
+     * engine-requested `request_attestation` sign action, where
+     * go-wallet-backend supplies [asUrl]/[clientId] itself after resolving the
+     * issuer's metadata (its `SignActionRequestAttestation`).
+     *
+     * Best-effort: returns null on any failure rather than throwing.
+     */
+    private suspend fun buildClientAttestationPoP(asUrl: String, clientId: String): String? {
         return try {
-            val asUrl = try {
-                getIssuerMetadata(issuerUrl).authorizationServers
-                    ?.firstOrNull { it.isNotBlank() } ?: issuerUrl
-            } catch (e: Exception) {
-                issuerUrl
-            }
             val challenge = fetchAttestationChallenge(asUrl)
             val keyId = ensureInstanceKeyId()
-            val pop = keystore.generateKeyProof(
+            keystore.generateKeyProof(
                 keyId = keyId,
                 typ = "oauth-client-attestation-pop+jwt",
-                issuer = clientAttestationClientId(),
+                issuer = clientId,
                 audience = asUrl,
                 extraClaims = challenge?.let { mapOf("challenge" to it) } ?: emptyMap(),
             )
-            wia to pop
         } catch (e: Exception) {
             Timber.w(e, "Failed to generate client attestation PoP")
             null
         }
+    }
+
+    /**
+     * Answer the engine's `request_attestation` sign request
+     * (go-wallet-backend `SignActionRequestAttestation`): the backend sends it
+     * from `OID4VCIHandler.Execute` once it has resolved the issuer's
+     * authorization server, whenever the flow_start carried no attestation,
+     * with `params.audience` = that AS (the PoP `aud`) and `params.issuer` =
+     * the flow's effective OAuth client_id (the PoP `iss`).
+     *
+     * ALWAYS sends exactly one sign_response: the WIA + PoP when available,
+     * otherwise an empty one so the backend proceeds without wallet
+     * attestation immediately - its `RequestSign` otherwise blocks the whole
+     * issuance for its 30 s `ErrSignTimeout` waiting on us. Never throws.
+     */
+    private suspend fun handleRequestAttestation(engine: WalletEngineSession, msg: SignRequestMessage) {
+        val audience = msg.params.audience?.takeIf { it.isNotBlank() }
+        val clientId = msg.params.issuer?.takeIf { it.isNotBlank() } ?: clientAttestationClientId()
+        var wia: String? = null
+        var pop: String? = null
+        try {
+            if (audience == null) {
+                Timber.w("request_attestation for flow ${msg.flowId} carried no audience; declining")
+            } else {
+                wia = ensureWalletInstanceAttestation()
+                if (wia == null) {
+                    Timber.d("No Wallet Instance Attestation available for flow ${msg.flowId}; declining")
+                } else {
+                    pop = buildClientAttestationPoP(audience, clientId)
+                }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to resolve client attestation for flow ${msg.flowId}; declining")
+        }
+        val attested = wia != null && pop != null
+        Timber.d("Sending request_attestation response for flow ${msg.flowId} (attested=$attested, aud=$audience, iss=$clientId)")
+        engine.sendSignResponse(
+            flowId = msg.flowId,
+            messageId = msg.messageId,
+            clientAttestation = if (attested) wia else null,
+            clientAttestationPoP = if (attested) pop else null,
+        )
     }
 
     /**
@@ -1449,6 +1576,7 @@ class SirosWallet private constructor(
             credentialName = credName,
             credentialDescription = credDisplay?.description,
             issuerName = issuerName,
+            format = config.format,
             backgroundColor = credDisplay?.backgroundColor
                 ?: issuerDisplay?.backgroundColor,
             textColor = credDisplay?.textColor
@@ -1462,14 +1590,23 @@ class SirosWallet private constructor(
      * Start an issuance flow for a specific credential offer.
      *
      * Constructs the OID4VCI credential_offer and sends it to the engine.
+     *
+     * @param replacesBatchId when set, this flow's completion supersedes an
+     * existing batch (e.g. [renewCredential]'s fallback to full re-issuance
+     * when no refresh_token is available) - the same batch-replacement/
+     * attribute-diff logic in flow_complete that a silent [renewCredential]
+     * triggers via `pendingRenewalSourceBatchId` applies here too, so the
+     * old batch's credentials are deleted instead of left duplicated
+     * alongside the newly-issued one.
      */
-    suspend fun startIssuanceByOffer(offer: CredentialOffer) {
+    suspend fun startIssuanceByOffer(offer: CredentialOffer, replacesBatchId: Long? = null) {
         val engine = engineSession ?: throw WalletException("Not connected")
         ensureEngineConnected(engine)
         if (issuanceInFlight) {
             throw WalletException("Another issuance is already in progress")
         }
         issuanceInFlight = true
+        pendingRenewalSourceBatchId = replacesBatchId
         try {
             activeOffer = offer
             activeVctm = try {
@@ -1880,12 +2017,7 @@ class SirosWallet private constructor(
         // the shared wallet instance (by MainActivity's WalletViewModel, for
         // the unrelated in-app flow) and stays registered even once
         // MainActivity is backgrounded, that wait would hang forever.
-        val selectedIds = CredentialUtils.eligibleInstances(
-            candidates,
-            credentialConsumptionPolicy,
-            presentationHistory,
-            isZkPresentation = { it.id in zkRequestedIds },
-        ).map { it.id }
+        val selectedIds = eligibleInstances(candidates) { it.id in zkRequestedIds }.map { it.id }
 
         if (selectedIds.isEmpty()) {
             throw WalletException(
@@ -1931,10 +2063,34 @@ class SirosWallet private constructor(
                 val credBytes = android.util.Base64.decode(
                     cred.raw, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
                 )
-                val kid = cred.kid
-                    ?: throw WalletException("Credential $id has no key id - cannot generate a ZK proof for it")
+                // cred.kid is commonly null for a softkey-issued credential
+                // with no explicit per-credential key binding (the plain,
+                // non-ZK signMdocPresentation/-ForDCAPI paths tolerate this
+                // via selectSigningKey's null-kid fallback to the only
+                // available key) - keystore.sign() below needs an explicit
+                // key id, so resolve the same default here rather than
+                // treating a null kid as "no key exists". Resolved lazily
+                // (checked only inside the signer lambda, not eagerly here):
+                // a ZK system without a device-binding concept (Vega, unlike
+                // Longfellow's real-witness-DeviceResponse construction)
+                // never calls signer at all, so requiring a key up front
+                // would spuriously fail a Vega presentation whenever no
+                // signing key happens to be resolvable, even though nothing
+                // in that flow ever needs one.
+                val kid = cred.kid ?: keystore.listKeys().firstOrNull()?.keyId
                 val docType = MdocCbor.parseStoredCredential(credBytes).docType
-                val (system, spec) = zkProofSystemRegistry.resolve(docType, matchResult.zkSystemTypes.orEmpty())
+                // A circuit is compiled for a fixed attribute count, so the
+                // verifier's zk_system_type list must be matched against how
+                // many claims are actually being disclosed here - see
+                // ZkProofSystem.matchingSpec's doc comment. disclosedClaims
+                // already includes "pairwise_pseudonym" whenever a pseudonym
+                // is being requested (see wantsPseudonym below), so this
+                // count already equals generateProof's own effectiveClaims.size.
+                val (system, spec) = zkProofSystemRegistry.resolve(
+                    CredentialTypeRef(CredentialFormat.MSO_MDOC, docType),
+                    matchResult.zkSystemTypes.orEmpty(),
+                    disclosedClaims?.size ?: 0,
+                )
                     ?: throw WalletException(
                         "No registered ZK proof system satisfies the verifier's zk_system_type for $docType"
                     )
@@ -1956,14 +2112,29 @@ class SirosWallet private constructor(
                 )
                 val result = system.generateProof(
                     spec = spec,
-                    credentialBytes = credBytes,
+                    document = CredentialDocument.Mdoc(credBytes),
                     sessionTranscript = sessionTranscript,
                     requestedClaims = disclosedClaims ?: emptyList(),
                     verifierIdentity = verifierIdentity,
-                    signer = { data -> keystore.sign(kid, data) },
+                    signer = { algorithm, data ->
+                        require(algorithm == COSE_ALG_ES256) {
+                            "This keystore signs ES256 only, proof system asked for COSE alg $algorithm"
+                        }
+                        keystore.sign(
+                            requireNotNull(kid) { "No signing key available for credential $id - cannot generate a ZK proof for it" },
+                            data,
+                        )
+                    },
+                )
+                val deviceResponse = buildZkPresentationToken(
+                    credBytes = credBytes,
+                    docType = docType,
+                    spec = spec,
+                    disclosedClaimNames = disclosedClaims ?: emptyList(),
+                    result = result,
                 )
                 android.util.Base64.encodeToString(
-                    result.proofBytes, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+                    deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
                 )
             } else if (cred.format == "mso_mdoc") {
                 val credBytes = android.util.Base64.decode(
@@ -2056,7 +2227,9 @@ class SirosWallet private constructor(
             verifierName = trustResult.entityName,
             credentialIds = selectedIds,
             credentialNames = selectedIds.mapNotNull { id -> allCreds.find { it.id == id }?.metadata?.name },
-            requestedClaims = matchResults.flatMap { it.requestedClaims.flatten() }.distinct(),
+            requestedClaims = matchResults.flatMap { result ->
+                result.requestedClaims.mapNotNull { path -> path.lastOrNull() }
+            }.distinct(),
             zkProof = selectedIds.any { it in zkRequestedIds },
             timestamp = System.currentTimeMillis(),
         ))
@@ -2309,15 +2482,120 @@ class SirosWallet private constructor(
     /**
      * Every ZK proof system this wallet can satisfy a verifier's
      * `"mso_mdoc_zk"` DCQL request with - see [handleDCAPIRequest]'s
-     * `mso_mdoc_zk` branch, the only current caller. Longfellow is the only
-     * real implementation today; this registry is where a future
-     * system (e.g. Vega/BBS) would also be registered.
+     * `mso_mdoc_zk` branch, the only current caller. [ZkProofSystemRegistry]
+     * tries each system in order via [ZkProofSystem.matchingSpec] until one
+     * claims the request, so ordering only matters when two systems could
+     * both match the same spec (not the case today - Vega and Longfellow
+     * declare disjoint `system` ids).
+     *
+     * VegaProofSystem: LOCAL ONLY, DO NOT PUSH/MERGE this line to
+     * origin/main - see its own doc comment for current gating (crate's own
+     * expert review running in parallel with this session's testing, not a
+     * blocker to local/self-hosted use; `go-zk-circuits` catalog entries
+     * still `--unpublished`; a genuinely open on-device heap constraint).
      */
     private val zkProofSystemRegistry: ZkProofSystemRegistry =
-        ZkProofSystemRegistry(listOf(LongfellowZkProofSystem(zkCircuitClient)))
+        ZkProofSystemRegistry(
+            listOf(
+                LongfellowZkProofSystem(zkCircuitClient),
+                VegaProofSystem(zkCircuitClient),
+            ),
+        )
+
+    /**
+     * The zero-knowledge systems this wallet can prove with.
+     *
+     * Exposed because registration with the OS credential picker happens
+     * before any request exists: a wallet declaring what it can do has nothing
+     * to be asked about yet, so the registry's request-shaped `resolve` cannot
+     * answer it. Identifiers only - see [ZkProofSystemRegistry.systemIds] for
+     * why specific circuits are deliberately not claimed here.
+     */
+    val zkSystemIds: List<String> get() = zkProofSystemRegistry.systemIds
+
+    /**
+     * Wraps a raw ZK [result] into the full `{version, status, zkDocuments:
+     * [...]}` DeviceResponse-shaped CBOR structure multipaz's own
+     * `DeviceResponseParser` requires (confirmed via direct source read -
+     * see [MdocDeviceResponseBuilder.buildZkDeviceResponse]'s doc comment).
+     * Bare [result].proofBytes alone is not a valid `vp_token` entry - a
+     * verifier that understands this format silently shows nothing for one,
+     * since its parser never finds a `documents` or `zkDocuments` key at all.
+     * Shared by both ZK call sites ([handleDCAPIRequest] and the
+     * `sign_presentation` handler below) since the wrapping logic is
+     * identical regardless of transport.
+     */
+    private fun buildZkPresentationToken(
+        credBytes: ByteArray,
+        docType: String,
+        spec: org.siros.sdk.credentials.ZkSystemSpec,
+        disclosedClaimNames: List<String>,
+        result: org.siros.sdk.credentials.ZkProofResult,
+    ): ByteArray {
+        val document = MdocCbor.parseStoredCredential(credBytes)
+        val namespace = document.issuerSigned.nameSpaces.keys.firstOrNull()
+            ?: error("mdoc credential '$docType' has no disclosed namespaces")
+        val storedItems = document.issuerSigned.nameSpaces[namespace].orEmpty()
+
+        val disclosedClaims = linkedMapOf<String, com.upokecenter.cbor.CBORObject>()
+        val digestIds = linkedMapOf<String, UInt>()
+        val issuerSignedItemBytes = linkedMapOf<String, ByteArray>()
+        disclosedClaimNames.forEach { claimName ->
+            if (claimName == LongfellowZkProofSystem.PSEUDONYM_CLAIM) {
+                result.pseudonym?.let {
+                    disclosedClaims[claimName] = com.upokecenter.cbor.CBORObject.FromObject(it)
+                }
+            } else {
+                storedItems.firstOrNull { it.item.elementIdentifier == claimName }?.let {
+                    disclosedClaims[claimName] = it.item.elementValue
+                    digestIds[claimName] = it.item.digestId.toUInt()
+                    issuerSignedItemBytes[claimName] = it.original.EncodeToBytes()
+                }
+            }
+        }
+
+        // Vega-only (see MdocDeviceResponseBuilder.buildZkDeviceResponse's
+        // doc comment on claimSlotDigestIds): storedItems is already in the
+        // credential's own document order - the same order
+        // VegaProofSystem.buildWitness assigns to FfiClaim slots - so its
+        // digestIds, in this order, ARE the verifier-facing slot list.
+        val claimSlotDigestIds = if (spec.system == org.siros.sdk.keystore.VegaProofSystem.SYSTEM_ID) {
+            storedItems.map { it.item.digestId.toUInt() }
+        } else {
+            null
+        }
+
+        return MdocDeviceResponseBuilder.buildZkDeviceResponse(
+            proofBytes = result.proofBytes,
+            zkSystemId = spec.id,
+            docType = docType,
+            timestamp = result.timestamp,
+            namespace = namespace,
+            disclosedClaims = disclosedClaims,
+            issuerAuth = document.issuerSigned.issuerAuth,
+            digestIds = digestIds,
+            issuerSignedItemBytes = issuerSignedItemBytes,
+            claimSlotDigestIds = claimSlotDigestIds,
+        )
+    }
 
     /** Stores trust evaluation results keyed by flow ID for use in credential selection UI. */
     private val lastTrustResults = mutableMapOf<String, TrustResult>()
+
+    /**
+     * DCQL [CredentialMatcher.MatchResult]s from this flow's match_request,
+     * keyed by flow ID - populated in the `matchRequests()` collector below,
+     * consumed by the `sign_presentation` handler so it can tell whether a
+     * matched credential's originating query requested `"mso_mdoc_zk"` (and
+     * if so, which [CredentialMatcher.MatchResult.zkSystemTypes]/
+     * [CredentialMatcher.MatchResult.ppidContext] to use) - the stored
+     * credential's own format is always plain `"mso_mdoc"`, so that alone
+     * can never signal this. Mirrors [handleDCAPIRequest]'s in-scope
+     * `matchResults` local, just persisted across the match/sign round trip
+     * since the WS-engine protocol has no wire field to carry it instead.
+     * Removed once consumed or once the flow reaches a terminal state.
+     */
+    private val pendingMatchResultsByFlow = mutableMapOf<String, List<CredentialMatcher.MatchResult>>()
 
     /** Resume context for in-progress OAuth authorizations, keyed by flow ID - see [PendingAuthorization]. */
     private val pendingAuthorizations = mutableMapOf<String, PendingAuthorization>()
@@ -2354,6 +2632,7 @@ class SirosWallet private constructor(
      */
     private suspend fun reportSignFailure(flowId: String, message: String) {
         terminatedFlowIds.add(flowId)
+        pendingMatchResultsByFlow.remove(flowId)
         eventListener?.onFlowError(flowId, message)
         // A sign-request failure during issuance (e.g. the FIDO2 PIN_INVALID
         // this was written for) is a client-side termination of that
@@ -2374,8 +2653,28 @@ class SirosWallet private constructor(
             credentials = credentialStore.getAll(),
         )
     }
-    private val vctmFetcher = VctmFetcher(httpGet = ::fetchTypeMetadataUrl)
-    private val mddlSchemaFetcher = MddlSchemaFetcher(httpGet = ::fetchTypeMetadataUrl)
+    /**
+     * On-device, cross-launch cache of VCTM/MDDL documents AND of the fact
+     * that a document could not be fetched (see [FileFetchCache] and
+     * [org.siros.sdk.credentials.FetchBackoff]). Without it, every login
+     * re-ran every failed type-metadata fetch - [hydrateReloadedCredentials]
+     * runs on each login because the private-data container never persists
+     * `metadata` - and each failure was a visible spinner on the card.
+     * Application context: this outlives any one Activity.
+     */
+    private val displayMetadataCache: org.siros.sdk.credentials.FetchCache =
+        FileFetchCache(activity.applicationContext)
+
+    private val vctmFetcher = VctmFetcher(
+        httpGet = ::fetchTypeMetadataUrl,
+        persistentCache = displayMetadataCache,
+        revalidateScope = scope,
+    )
+    private val mddlSchemaFetcher = MddlSchemaFetcher(
+        httpGet = ::fetchTypeMetadataUrl,
+        persistentCache = displayMetadataCache,
+        revalidateScope = scope,
+    )
 
     /**
      * Base URL for go-wallet-backend's credential-type registry service (see
@@ -2622,13 +2921,55 @@ class SirosWallet private constructor(
     /**
      * Filters [instances] down to the ones this wallet's own
      * [credentialConsumptionPolicy] and [presentationHistory] currently
-     * consider eligible (i.e. not yet consumed) - the same computation
-     * this class performs internally before every presentation, exposed as
-     * a convenience so consent/selection UI doesn't need to thread both
-     * properties through [CredentialUtils.eligibleInstances] itself.
+     * consider eligible (i.e. not yet consumed), AND whose bound signing
+     * key still actually exists in [keystore] - the same computation this
+     * class performs internally before every presentation, exposed as a
+     * convenience so consent/selection UI doesn't need to thread policy,
+     * history, and live key availability through
+     * [CredentialUtils.eligibleInstances] itself.
+     *
+     * The key-availability half of this check exists because a real,
+     * recurring bug (found via live proximity-presentation testing) let a
+     * credential whose signing key was silently lost (e.g. a sync that
+     * never folded a software key into the persisted container - see
+     * privatedata-spec#1/siros-wscd-manager#68 for the deeper architectural
+     * fix) keep reporting "available" under
+     * [CredentialConsumptionPolicy.NEVER_CONSUME] forever, right up until a
+     * live presentation attempt failed deep inside key selection with no
+     * user-facing signal at all.
+     *
+     * @param isZkPresentation Per-candidate: will THIS presentation be a ZK
+     * proof? Callers that know the matched query's format (the DC API path)
+     * pass it so [CredentialConsumptionPolicy.CONSUME_NON_ZKP] can tell ZK
+     * from raw; the default falls back to the stored format, which is never
+     * ZK - see [CredentialUtils.eligibleInstances].
      */
-    fun eligibleInstances(instances: List<StoredCredential>): List<StoredCredential> =
-        CredentialUtils.eligibleInstances(instances, credentialConsumptionPolicy, presentationHistory)
+    suspend fun eligibleInstances(
+        instances: List<StoredCredential>,
+        isZkPresentation: ((StoredCredential) -> Boolean)? = null,
+    ): List<StoredCredential> {
+        val keyIds = availableKeyIds()
+        return if (isZkPresentation == null) {
+            CredentialUtils.eligibleInstances(instances, credentialConsumptionPolicy, presentationHistory, keyIds)
+        } else {
+            CredentialUtils.eligibleInstances(
+                instances,
+                credentialConsumptionPolicy,
+                presentationHistory,
+                keyIds,
+                isZkPresentation,
+            )
+        }
+    }
+
+    /**
+     * The `kid`s this wallet's keystore can currently sign with - exposed so
+     * consent/selection UI (e.g. `PresentationConsentScreen`'s exhausted-
+     * query precheck) can compute eligibility ahead of time, in a
+     * `LaunchedEffect`/`produceState`, without needing a full
+     * [eligibleInstances] round trip per candidate list.
+     */
+    suspend fun availableKeyIds(): Set<String> = keystore.listKeys().map { it.keyId }.toSet()
 
     /**
      * Record a new presentation: adds it to the in-memory history and
@@ -2675,7 +3016,7 @@ class SirosWallet private constructor(
             val batchInstances = allCredentials.filter { it.batchId == batchId }
             val representative = batchInstances.find { it.instanceId == 0 } ?: batchInstances.firstOrNull() ?: continue
             val threshold = renewThresholdFor(representative.credentialConfigurationId)
-            val eligible = CredentialUtils.eligibleInstances(batchInstances, credentialConsumptionPolicy, presentationHistory)
+            val eligible = eligibleInstances(batchInstances)
             if (eligible.size <= threshold) {
                 eventListener?.onCredentialNearExpiry(representative, eligible.size, threshold)
             }
@@ -2765,12 +3106,19 @@ class SirosWallet private constructor(
      * left [issuanceInFlight] stuck `true` forever, since nothing else was
      * left running to clear it, permanently blocking every future issuance
      * attempt until the app process was killed).
+     *
+     * Also clears [pendingRenewalSourceBatchId]: a renewal attempt (silent
+     * or the full-reissuance fallback) that fails or is cancelled before its
+     * own flow_complete arrives must not leave this set - otherwise the
+     * NEXT, unrelated successful issuance's flow_complete would find it
+     * still set and incorrectly delete that stale batch's credentials.
      */
     private fun resetIssuanceGuards() {
         activeOffer = null
         activeVctm = null
         activeAttestedKeyIds = null
         issuanceInFlight = false
+        pendingRenewalSourceBatchId = null
     }
 
     /**
@@ -2928,6 +3276,10 @@ class SirosWallet private constructor(
     private var wmpPeer: org.siros.sdk.transport.wmp.WmpPeer? = null
 
     private suspend fun connectViaWmp(appToken: String) {
+        // Same leaked-connection hazard as connectEngine's engineSession -
+        // tear down any prior live peer before replacing the reference.
+        wmpPeer?.close()
+
         // Resolve engine URL: explicit config > discovery > same as backend
         val engineBaseUrl = (config.engineUrl
             ?: WalletConfig.discoverEngineUrl(config.backendUrl)
@@ -3475,6 +3827,15 @@ class SirosWallet private constructor(
     // ── Legacy Engine Path ────────────────────────────────────────────
 
     private suspend fun connectEngine(appToken: String) {
+        // connectEngineWithToken can run more than once on the same wallet
+        // instance (initial login, session restore on startup, re-auth) -
+        // without tearing down a prior live session first, its WebSocket
+        // was leaked (never disconnected) while a brand new one took over
+        // engineSession, leaving the backend with multiple concurrent
+        // connections for the same user that kept evicting each other.
+        engineStateJob?.cancel()
+        engineSession?.disconnect()
+
         // Resolve engine URL: explicit config > discovery > same as backend
         val engineBaseUrl = config.engineUrl
             ?: WalletConfig.discoverEngineUrl(config.backendUrl)
@@ -3544,6 +3905,11 @@ class SirosWallet private constructor(
 
                             val vpToken = if (!credsToInclude.isNullOrEmpty()) {
                                 val allCreds = credentialStore.getAll()
+                                val storedMatchResults = pendingMatchResultsByFlow.remove(msg.flowId)
+                                Timber.d(
+                                    "sign_presentation: flow=${msg.flowId} storedMatchResults=" +
+                                        "${storedMatchResults?.map { "${it.queryId}:${it.format}" }}"
+                                )
                                 val vpParts = credsToInclude.mapNotNull { ref ->
                                     // ref.credentialId arrives as a string over the WMP wire
                                     // protocol - see the CredentialMatch construction sites'
@@ -3553,8 +3919,106 @@ class SirosWallet private constructor(
                                         Timber.w("Credential ...${ref.credentialId.takeLast(4)} not found in store for VP signing")
                                         return@mapNotNull null
                                     }
+                                    val matchResult = storedMatchResults?.firstOrNull { r ->
+                                        r.queryId == ref.credentialQueryId || r.candidates.any { it.id == cred.id }
+                                    }
+                                    Timber.d(
+                                        "sign_presentation: credentialQueryId=${ref.credentialQueryId} " +
+                                            "credId=${cred.id} matchResult.format=${matchResult?.format} " +
+                                            "zkSystemTypes=${matchResult?.zkSystemTypes} disclosedClaims=${ref.disclosedClaims}"
+                                    )
 
-                                    if (cred.format == "mso_mdoc") {
+                                    if (matchResult?.format?.equals("mso_mdoc_zk", ignoreCase = true) == true) {
+                                        // ZK-wrapped mDoc presentation (see handleDCAPIRequest's
+                                        // identical branch, which this mirrors for the WS-engine/
+                                        // redirect-flow transport instead of DC API).
+                                        val credBytes = android.util.Base64.decode(cred.raw, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
+                                        // cred.kid is commonly null for a softkey-issued credential
+                                        // with no explicit per-credential key binding - see the
+                                        // identical fallback + comment in handleDCAPIRequest.
+                                        // Resolved lazily (checked only inside the signer lambda) -
+                                        // see handleDCAPIRequest's identical comment for why.
+                                        val kid = cred.kid ?: keystore.listKeys().firstOrNull()?.keyId
+                                        val docType = MdocCbor.parseStoredCredential(credBytes).docType
+                                        // See handleDCAPIRequest's identical comment: a circuit is
+                                        // compiled for a fixed attribute count, so matching must
+                                        // account for how many claims are actually being disclosed.
+                                        val (system, spec) = zkProofSystemRegistry.resolve(
+                                            CredentialTypeRef(CredentialFormat.MSO_MDOC, docType),
+                                            matchResult.zkSystemTypes.orEmpty(),
+                                            ref.disclosedClaims?.size ?: 0,
+                                        )
+                                            ?: throw WalletException(
+                                                "No registered ZK proof system satisfies the verifier's zk_system_type for $docType"
+                                            )
+                                        // Only bind a pseudonym when actually disclosed for this
+                                        // query - see handleDCAPIRequest's identical comment.
+                                        val wantsPseudonym = ref.disclosedClaims?.contains(LongfellowZkProofSystem.PSEUDONYM_CLAIM) == true
+                                        val verifierIdentity = if (wantsPseudonym) {
+                                            // audience has already been checked against the
+                                            // trust-evaluated verifier identifier by
+                                            // validateAudience above, so it's the confirmed
+                                            // client id for this flow. sessionId (when
+                                            // present) is the real verifier_context binding
+                                            // input - see VerifierIdentity.sessionId's doc
+                                            // comment.
+                                            VerifierIdentity(
+                                                clientId = audience,
+                                                ppidContext = matchResult.ppidContext,
+                                                sessionId = params?.verifierSessionId,
+                                            )
+                                        } else {
+                                            null
+                                        }
+                                        val sessionTranscript = MdocDeviceResponseBuilder.buildOpenID4VPSessionTranscript(
+                                            clientId = audience,
+                                            nonce = nonce,
+                                            responseUri = params?.responseUri ?: "",
+                                            verifierJwkThumbprint = params?.verifierJwkThumbprint,
+                                        )
+                                        Timber.d("sign_presentation: generating ZK proof, system=${system.systemId} wantsPseudonym=$wantsPseudonym verifierIdentity=$verifierIdentity")
+                                        // ZK proof generation is a multi-second native compute
+                                        // with no intermediate progress signal from the engine (the
+                                        // last real server step was "credential_selection", and the
+                                        // next one - "submitting_response" - only arrives after this
+                                        // call returns) - without this, the UI shows a stale
+                                        // "Selecting credential" label the whole time. "computing_proof"
+                                        // is a CLIENT-ONLY status token, never sent by the server and
+                                        // deliberately absent from FlowStepCatalog (which mirrors
+                                        // go-wallet-backend's real FlowStep vocabulary 1:1) - it's
+                                        // overwritten by the next genuine engine.flowProgress() update
+                                        // as soon as one arrives.
+                                        (_state.value as? WalletState.FlowActive)
+                                            ?.takeIf { it.flowId == msg.flowId }
+                                            ?.let { _state.value = it.copy(status = "computing_proof") }
+                                        val result = system.generateProof(
+                                            spec = spec,
+                                            document = CredentialDocument.Mdoc(credBytes),
+                                            sessionTranscript = sessionTranscript,
+                                            requestedClaims = ref.disclosedClaims ?: emptyList(),
+                                            verifierIdentity = verifierIdentity,
+                                            signer = { algorithm, data ->
+                                                require(algorithm == COSE_ALG_ES256) {
+                                                    "This keystore signs ES256 only, proof system asked for COSE alg $algorithm"
+                                                }
+                                                keystore.sign(
+                                                    requireNotNull(kid) { "No signing key available for credential ${cred.id} - cannot generate a ZK proof for it" },
+                                                    data,
+                                                )
+                                            },
+                                        )
+                                        Timber.d("sign_presentation: ZK proof generated, pseudonymOutcome=${result.pseudonymOutcome} proofBytes.size=${result.proofBytes.size}")
+                                        val zkDeviceResponse = buildZkPresentationToken(
+                                            credBytes = credBytes,
+                                            docType = docType,
+                                            spec = spec,
+                                            disclosedClaimNames = ref.disclosedClaims ?: emptyList(),
+                                            result = result,
+                                        )
+                                        android.util.Base64.encodeToString(
+                                            zkDeviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+                                        )
+                                    } else if (cred.format == "mso_mdoc") {
                                         // mDoc DeviceResponse (ISO 18013-5)
                                         val credBytes = android.util.Base64.decode(cred.raw, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
                                         val deviceResponse = keystore.signMdocPresentation(
@@ -3596,8 +4060,16 @@ class SirosWallet private constructor(
                             engine.sendSignResponse(msg.flowId, vpToken = vpToken, messageId = msg.messageId)
                             Timber.d("VP sign response sent successfully for flow ${msg.flowId}")
                         }
+                        "request_attestation" -> handleRequestAttestation(engine, msg)
                         else -> {
-                            Timber.w("Unknown sign action: ${msg.action}")
+                            // go-wallet-backend's RequestSign only unblocks on a
+                            // sign_response carrying this message_id (there is no
+                            // sign-error message); staying silent would stall the
+                            // flow for its full 30 s ErrSignTimeout. An empty
+                            // response lets the backend decide what a missing
+                            // result means for the action it asked for.
+                            Timber.w("Unknown sign action: ${msg.action}; sending empty sign_response")
+                            engine.sendSignResponse(flowId = msg.flowId, messageId = msg.messageId)
                         }
                     }
                 } catch (e: KeystoreException) {
@@ -3661,13 +4133,13 @@ class SirosWallet private constructor(
                             )
                         )
                     } else {
-                        CredentialUtils.eligibleInstances(candidates, credentialConsumptionPolicy, presentationHistory).map { it.id }
+                        eligibleInstances(candidates).map { it.id }
                     }
 
                     // The app is trusted to only return IDs it was offered,
                     // but shouldn't be the only thing enforcing consumption -
                     // re-validate here too (defense in depth).
-                    val eligibleIds = CredentialUtils.eligibleInstances(candidates, credentialConsumptionPolicy, presentationHistory).map { it.id }.toSet()
+                    val eligibleIds = eligibleInstances(candidates).map { it.id }.toSet()
                     if (selectedIds.any { it !in eligibleIds }) {
                         throw WalletException("Selected credential has no eligible copies remaining - renew it to get more")
                     }
@@ -3680,9 +4152,13 @@ class SirosWallet private constructor(
                         credentialNames = selectedIds.mapNotNull { id ->
                             allCreds.find { it.id == id }?.metadata?.name
                         },
-                        requestedClaims = matchResults.flatMap { it.requestedClaims.flatten() }.distinct(),
+                        requestedClaims = matchResults.flatMap { result ->
+                            result.requestedClaims.mapNotNull { path -> path.lastOrNull() }
+                        }.distinct(),
                         timestamp = System.currentTimeMillis(),
                     ))
+
+                    pendingMatchResultsByFlow[msg.flowId] = matchResults
 
                     val matches = selectedIds.mapNotNull { id ->
                         allCreds.find { it.id == id }?.let { cred ->
@@ -3827,6 +4303,7 @@ class SirosWallet private constructor(
             engine.flowComplete().collect { msg ->
                 Timber.i("Flow ${msg.flowId} complete")
                 terminatedFlowIds.add(msg.flowId)
+                pendingMatchResultsByFlow.remove(msg.flowId)
 
                 // Tracks whether any credential in this batch actually made it
                 // into the store, so a flow that "completes" per the engine
@@ -3891,6 +4368,19 @@ class SirosWallet private constructor(
                             Timber.w(e, "Skipping unparseable mdoc credential in flow ${msg.flowId}")
                             storeFailureReason = "Received credential could not be read (${e.message ?: e::class.simpleName})"
                             return@forEachIndexed
+                        }
+                        // VICAL issuer-trust (ISO 18013-5 Annex C): defensive
+                        // check on the newly-issued credential's issuerAuth,
+                        // surfaced via logging only - not a blocking gate,
+                        // same convention as evaluateReaderTrust's remote/
+                        // local-fallback reader-trust check at presentation
+                        // time (see evaluateIssuerTrust's doc comment).
+                        val issuerTrust = verifyAndEvaluateIssuerTrust(parsed.issuerSigned.issuerAuth, parsed.docType)
+                        if (issuerTrust != null) {
+                            Timber.i(
+                                "mdoc issuer trust for docType=${parsed.docType}: " +
+                                    "trusted=${issuerTrust.trusted} reason=${issuerTrust.reason}",
+                            )
                         }
                         val metadata = activeOffer?.let { offer ->
                             val mddlSchema = try {
@@ -4065,6 +4555,7 @@ class SirosWallet private constructor(
                 Timber.e("Flow ${msg.flowId} error: ${msg.error.code} — ${msg.error.message}")
                 val fid = msg.flowId ?: "unknown"
                 terminatedFlowIds.add(fid)
+                pendingMatchResultsByFlow.remove(fid)
                 val redirectUri = msg.error.details?.get("redirect_uri")?.jsonPrimitive?.contentOrNull
                 eventListener?.onFlowError(fid, msg.error.message, redirectUri)
                 // See the flow_complete handler's matching reset: without
@@ -4226,6 +4717,36 @@ class SirosWallet private constructor(
         jwk: kotlinx.serialization.json.JsonElement?,
         context: kotlinx.serialization.json.JsonElement?,
     ): TrustResult {
+        // A verifier/RP or issuer presenting an x5c chain here is the same
+        // real-world trust question already answered locally for proximity
+        // mdoc readers (RICAL, evaluateReaderTrust) and mdoc issuers (VICAL,
+        // evaluateIssuerTrust) - this function is the shared remote-only
+        // counterpart for both subject types (engine-relayed trust_evaluation
+        // covers issuers too, see the caller at handleTrustEvaluation), so
+        // reuse whichever local root set/prefer-local switch matches
+        // subjectType instead of leaving it with no offline/local-anchor
+        // option. Falls through to remote-only behavior (unchanged) if x5c is
+        // absent, jwk-only, or fails to decode as standard base64 DER (e.g. a
+        // non-cert placeholder value).
+        val isVerifier = subjectType == "credential_verifier"
+        val x5chain = try {
+            (x5c as? kotlinx.serialization.json.JsonArray)?.map {
+                Base64.getDecoder().decode(it.jsonPrimitive.content)
+            }
+        } catch (_: Exception) {
+            null
+        }
+        if (x5chain != null) {
+            val preferLocal = if (isVerifier) {
+                config.preferLocalReaderTrustEvaluation
+            } else {
+                config.preferLocalIssuerTrustEvaluation
+            }
+            if (preferLocal) {
+                return if (isVerifier) evaluateReaderTrustLocally(x5chain) else evaluateIssuerTrustLocally(x5chain)
+            }
+        }
+
         val client = apiClient ?: throw WalletException("Not connected")
 
         val evaluationRequest = kotlinx.serialization.json.buildJsonObject {
@@ -4251,7 +4772,222 @@ class SirosWallet private constructor(
             context?.let { put("context", it) }
         }
 
-        Timber.d("Calling /v1/evaluate for $subjectId")
+        return try {
+            Timber.d("Calling /v1/evaluate for $subjectId")
+            val response = client.evaluateTrust(evaluationRequest)
+
+            val decision = response["decision"]?.jsonPrimitive?.boolean ?: false
+            val respContext = response["context"]?.jsonObject
+
+            TrustResult(
+                trusted = decision,
+                framework = respContext?.get("framework")?.jsonPrimitive?.contentOrNull,
+                reason = reasonText(respContext?.get("reason"))
+                    ?: reasonText(respContext?.get("message")),
+                entityName = respContext?.get("entity_name")?.jsonPrimitive?.contentOrNull,
+                entityLogo = respContext?.get("logo_uri")?.jsonPrimitive?.contentOrNull,
+                clientIdScheme = null,
+                identifier = subjectId,
+                domain = respContext?.get("domain")?.jsonPrimitive?.contentOrNull,
+            )
+        } catch (e: Exception) {
+            if (x5chain == null) throw e
+            Timber.w(e, "Remote trust evaluation failed, falling back to local " +
+                (if (isVerifier) "RICAL" else "VICAL") + " root validation")
+            if (isVerifier) evaluateReaderTrustLocally(x5chain) else evaluateIssuerTrustLocally(x5chain)
+        }
+    }
+
+    /**
+     * Evaluates a proximity reader's authenticated identity for trust - the
+     * `evaluateReaderTrust` dependency [org.siros.sdk.keystore.mdoc.MdocProximitySession]
+     * expects, for wiring into [org.siros.sdk.keystore.mdoc.BlePeripheralServer]/
+     * [org.siros.sdk.keystore.mdoc.BleCentralClient]. Only ever called with an
+     * x5chain whose `readerAuth` COSE_Sign1 signature has ALREADY verified
+     * locally (see [MdocCose.verify1]) - this method is purely the trust
+     * decision, mirroring [evaluateTrustDirect]'s request shape with a new
+     * `"mdoc-reader-auth"` action name against go-trust's `mdocrical`
+     * registry.
+     *
+     * Defaults to the remote AuthZEN call - this is the only path that
+     * honors RICAL's temporary/dynamic trust roots, since go-trust's own
+     * registry cache/refresh handles freshness and the wallet just calls it
+     * fresh each time. Falls back to local X.509 path validation against
+     * [WalletConfig.readerTrustRootCertificatesPem] if the remote call
+     * throws (backend unreachable), or unconditionally if
+     * [WalletConfig.preferLocalReaderTrustEvaluation] is set.
+     *
+     * @param x5chain the reader's DER-encoded certificate chain, leaf first.
+     */
+    suspend fun evaluateReaderTrust(x5chain: List<ByteArray>): TrustResult {
+        if (x5chain.isEmpty()) {
+            return TrustResult(trusted = false, reason = "readerAuth has no certificate chain")
+        }
+        if (config.preferLocalReaderTrustEvaluation) {
+            return evaluateReaderTrustLocally(x5chain)
+        }
+        return try {
+            evaluateReaderTrustRemote(x5chain)
+        } catch (e: Exception) {
+            if (!isRemoteTrustEvaluationUnreachable(e)) {
+                Timber.e(e, "Remote reader trust evaluation was rejected by the backend (not unreachable) - failing closed rather than falling back to local RICAL root validation")
+                return TrustResult(trusted = false, framework = "mdocrical", reason = "Remote reader trust evaluation failed: ${e.message}")
+            }
+            Timber.w(e, "Remote reader trust evaluation unreachable, falling back to local RICAL root validation")
+            evaluateReaderTrustLocally(x5chain)
+        }
+    }
+
+    private suspend fun evaluateReaderTrustRemote(x5chain: List<ByteArray>): TrustResult =
+        evaluateMdocTrustRemote(x5chain, actionName = "mdoc-reader-auth", defaultFramework = "mdocrical", subjectPrefix = "reader")
+
+    /**
+     * Plain X.509 path validation against [WalletConfig.readerTrustRootCertificatesPem] -
+     * no RICAL CBOR parsing, no `trustConstraints` enforcement, since this
+     * path exists purely as an offline/unreachable-backend fallback for the
+     * stable, known-in-advance official root(s), not a full reimplementation
+     * of go-trust's `mdocrical` registry.
+     */
+    private fun evaluateReaderTrustLocally(x5chain: List<ByteArray>): TrustResult =
+        evaluateMdocTrustLocally(
+            x5chain,
+            rootCertificates = readerTrustRootCertificates,
+            rootCertificatesPemConfigSize = config.readerTrustRootCertificatesPem.size,
+            frameworkLabel = "local-rical-root",
+            entityLabel = "reader",
+            registryName = "RICAL",
+        )
+
+    /**
+     * Evaluates an mdoc credential's issuer authenticated identity for trust
+     * (ISO/IEC 18013-5 Annex C, `issuerAuth`) - the wallet-side counterpart
+     * to [evaluateReaderTrust], called defensively when a newly-issued
+     * `mso_mdoc` credential is about to be stored, before it's trusted.
+     * Mirrors [evaluateReaderTrust]'s exact remote-then-local-fallback
+     * shape with a new `"mdoc-issuer-auth"` action name against go-trust's
+     * `vical` registry. Only ever called with an x5chain whose `issuerAuth`
+     * COSE_Sign1 signature has ALREADY verified locally (see
+     * [MdocCose.verify1]) - this method is purely the trust decision.
+     *
+     * Defaults to the remote AuthZEN call - this is the only path that
+     * honors VICAL's dynamic updates, since go-trust's own registry
+     * cache/refresh handles freshness and the wallet just calls it fresh
+     * each time. Falls back to local X.509 path validation against
+     * [WalletConfig.issuerTrustRootCertificatesPem] if the remote call
+     * throws (backend unreachable), or unconditionally if
+     * [WalletConfig.preferLocalIssuerTrustEvaluation] is set.
+     *
+     * @param x5chain the issuer's DER-encoded certificate chain, leaf first.
+     * @param docType the credential's mdoc doctype (e.g. `"org.iso.18013.5.1.mDL"`),
+     *   used for VICAL's per-certificate docType enforcement - only enforced
+     *   remotely (go-trust's `vical` registry skips, not denies, if omitted);
+     *   the local fallback never enforces it, same as RICAL's fallback
+     *   skipping `trustConstraints`.
+     */
+    suspend fun evaluateIssuerTrust(x5chain: List<ByteArray>, docType: String?): TrustResult {
+        if (x5chain.isEmpty()) {
+            return TrustResult(trusted = false, reason = "issuerAuth has no certificate chain")
+        }
+        if (config.preferLocalIssuerTrustEvaluation) {
+            return evaluateIssuerTrustLocally(x5chain)
+        }
+        return try {
+            evaluateIssuerTrustRemote(x5chain, docType)
+        } catch (e: Exception) {
+            if (!isRemoteTrustEvaluationUnreachable(e)) {
+                Timber.e(e, "Remote issuer trust evaluation was rejected by the backend (not unreachable) - failing closed rather than falling back to local VICAL root validation")
+                return TrustResult(trusted = false, framework = "vical", reason = "Remote issuer trust evaluation failed: ${e.message}")
+            }
+            Timber.w(e, "Remote issuer trust evaluation unreachable, falling back to local VICAL root validation")
+            evaluateIssuerTrustLocally(x5chain)
+        }
+    }
+
+    /**
+     * Whether [e] represents the remote AuthZEN backend being unreachable
+     * (network failure, backend outage) - the only condition that should
+     * fall back to LOCAL, weaker X.509-root validation for
+     * [evaluateReaderTrust]/[evaluateIssuerTrust]. An explicit HTTP 4xx from
+     * [BackendApiException] means the backend was reachable and rejected
+     * the CALLER (an authorization failure), not the trust QUESTION -
+     * falling back to a weaker local check on that specific failure would
+     * let anything that makes the proxy/backend return e.g. 403 silently
+     * downgrade what should be a security-relevant deny (confirmed live at
+     * Geneva 2026: a 403 on `/v1/evaluate` was silently treated the same as
+     * an unreachable backend).
+     */
+    private fun isRemoteTrustEvaluationUnreachable(e: Exception): Boolean = when (e) {
+        is NetworkException -> true
+        is BackendApiException -> e.code == 0 || e.code >= 500
+        else -> false
+    }
+
+    private suspend fun evaluateIssuerTrustRemote(x5chain: List<ByteArray>, docType: String?): TrustResult =
+        evaluateMdocTrustRemote(
+            x5chain,
+            actionName = "mdoc-issuer-auth",
+            defaultFramework = "vical",
+            subjectPrefix = "issuer",
+            extraContext = docType?.let { dt -> { put("doc_type", kotlinx.serialization.json.JsonPrimitive(dt)) } },
+        )
+
+    /**
+     * Plain X.509 path validation against [WalletConfig.issuerTrustRootCertificatesPem] -
+     * no VICAL CBOR parsing, no per-certificate `docType` enforcement, since
+     * this path exists purely as an offline/unreachable-backend fallback for
+     * the stable, known-in-advance official root(s), not a full
+     * reimplementation of go-trust's `vical` registry.
+     */
+    private fun evaluateIssuerTrustLocally(x5chain: List<ByteArray>): TrustResult =
+        evaluateMdocTrustLocally(
+            x5chain,
+            rootCertificates = issuerTrustRootCertificates,
+            rootCertificatesPemConfigSize = config.issuerTrustRootCertificatesPem.size,
+            frameworkLabel = "local-vical-root",
+            entityLabel = "issuer",
+            registryName = "VICAL",
+        )
+
+    /**
+     * Shared remote-AuthZEN-call implementation for [evaluateReaderTrust]
+     * (RICAL, action `mdoc-reader-auth`) and [evaluateIssuerTrust] (VICAL,
+     * action `mdoc-issuer-auth`) - both mirror [evaluateTrustDirect]'s
+     * request shape exactly, differing only in the action name, the
+     * default `framework` label (used when go-trust's response omits its
+     * own), an optional `context` block (VICAL's `doc_type` enforcement
+     * hint - omitted entirely, not sent empty, when [extraContext] is
+     * null), and the subject noun used in the debug log line.
+     */
+    private suspend fun evaluateMdocTrustRemote(
+        x5chain: List<ByteArray>,
+        actionName: String,
+        defaultFramework: String,
+        subjectPrefix: String,
+        extraContext: (kotlinx.serialization.json.JsonObjectBuilder.() -> Unit)? = null,
+    ): TrustResult {
+        val client = apiClient ?: throw WalletException("Not connected")
+        val subjectId = sha256Hex(x5chain[0])
+        val x5c = kotlinx.serialization.json.buildJsonArray {
+            x5chain.forEach { add(kotlinx.serialization.json.JsonPrimitive(java.util.Base64.getEncoder().encodeToString(it))) }
+        }
+
+        val evaluationRequest = kotlinx.serialization.json.buildJsonObject {
+            putJsonObject("subject") {
+                put("type", kotlinx.serialization.json.JsonPrimitive("key"))
+                put("id", kotlinx.serialization.json.JsonPrimitive(subjectId))
+            }
+            putJsonObject("resource") {
+                put("type", kotlinx.serialization.json.JsonPrimitive("x5c"))
+                put("id", kotlinx.serialization.json.JsonPrimitive(subjectId))
+                put("key", x5c)
+            }
+            putJsonObject("action") {
+                put("name", kotlinx.serialization.json.JsonPrimitive(actionName))
+            }
+            extraContext?.let { putJsonObject("context", it) }
+        }
+
+        Timber.d("Calling /v1/evaluate for $subjectPrefix $subjectId ($actionName)")
         val response = client.evaluateTrust(evaluationRequest)
 
         val decision = response["decision"]?.jsonPrimitive?.boolean ?: false
@@ -4259,16 +4995,140 @@ class SirosWallet private constructor(
 
         return TrustResult(
             trusted = decision,
-            framework = respContext?.get("framework")?.jsonPrimitive?.contentOrNull,
-            reason = reasonText(respContext?.get("reason"))
-                ?: reasonText(respContext?.get("message")),
+            framework = respContext?.get("framework")?.jsonPrimitive?.contentOrNull ?: defaultFramework,
+            reason = reasonText(respContext?.get("reason")) ?: reasonText(respContext?.get("message")),
             entityName = respContext?.get("entity_name")?.jsonPrimitive?.contentOrNull,
-            entityLogo = respContext?.get("logo_uri")?.jsonPrimitive?.contentOrNull,
-            clientIdScheme = null,
             identifier = subjectId,
-            domain = respContext?.get("domain")?.jsonPrimitive?.contentOrNull,
         )
     }
+
+    /**
+     * Shared local X.509-path-validation fallback for [evaluateReaderTrust]
+     * (RICAL) and [evaluateIssuerTrust] (VICAL) - neither does any RICAL/VICAL
+     * CBOR parsing or `trustConstraints`/`docType` enforcement locally, since
+     * this path exists purely as an offline/unreachable-backend fallback for
+     * the stable, known-in-advance official root(s).
+     *
+     * Distinguishes "nothing configured" from "configured but every entry
+     * failed to parse" (a real Copilot-review finding: a single message here
+     * originally masked misconfiguration, since [readerTrustRootCertificates]/
+     * [issuerTrustRootCertificates] silently drop unparsable PEMs - see their
+     * own doc comments for why a warning is logged there, not here, at the
+     * point each entry actually fails to parse).
+     */
+    private fun evaluateMdocTrustLocally(
+        x5chain: List<ByteArray>,
+        rootCertificates: List<java.security.cert.X509Certificate>,
+        rootCertificatesPemConfigSize: Int,
+        frameworkLabel: String,
+        entityLabel: String,
+        registryName: String,
+    ): TrustResult {
+        val subjectId = sha256Hex(x5chain[0])
+        if (rootCertificates.isEmpty()) {
+            val reason = if (rootCertificatesPemConfigSize == 0) {
+                "Local $entityLabel trust evaluation is unavailable: no $registryName root certificate configured"
+            } else {
+                "Local $entityLabel trust evaluation is unavailable: $rootCertificatesPemConfigSize " +
+                    "$registryName root certificate(s) configured but none could be parsed - check Timber logs for the parse error"
+            }
+            return TrustResult(
+                trusted = false,
+                framework = frameworkLabel,
+                reason = reason,
+                identifier = subjectId,
+            )
+        }
+        return try {
+            val certFactory = java.security.cert.CertificateFactory.getInstance("X.509")
+            val certPath = certFactory.generateCertPath(x5chain.map { certFactory.generateCertificate(it.inputStream()) })
+            val anchors = rootCertificates.map { java.security.cert.TrustAnchor(it, null) }.toSet()
+            val params = java.security.cert.PKIXParameters(anchors).apply { isRevocationEnabled = false }
+            java.security.cert.CertPathValidator.getInstance("PKIX").validate(certPath, params)
+            val leaf = certPath.certificates.first() as java.security.cert.X509Certificate
+            TrustResult(
+                trusted = true,
+                framework = frameworkLabel,
+                reason = "Validated locally against a configured $registryName root certificate",
+                entityName = leaf.subjectX500Principal?.name,
+                identifier = subjectId,
+            )
+        } catch (e: Exception) {
+            TrustResult(
+                trusted = false,
+                framework = frameworkLabel,
+                reason = "Local $registryName root validation failed: ${e.message}",
+                identifier = subjectId,
+            )
+        }
+    }
+
+    /**
+     * Parses [WalletConfig.issuerTrustRootCertificatesPem] into certificates,
+     * logging (not silently dropping) any entry that fails to parse - same
+     * convention as [readerTrustRootCertificates].
+     */
+    private val issuerTrustRootCertificates: List<java.security.cert.X509Certificate> by lazy {
+        val certFactory = java.security.cert.CertificateFactory.getInstance("X.509")
+        config.issuerTrustRootCertificatesPem.mapNotNull { pem ->
+            runCatching { certFactory.generateCertificate(pem.byteInputStream()) as java.security.cert.X509Certificate }
+                .onFailure { Timber.w(it, "Failed to parse a configured VICAL root certificate PEM") }
+                .getOrNull()
+        }
+    }
+
+    /**
+     * Verifies an mdoc credential's `issuerAuth` COSE_Sign1 (ISO 18013-5
+     * Annex C) against its own embedded x5chain, then hands that chain to
+     * [evaluateIssuerTrust] for the actual trust decision - the issuance-
+     * time counterpart to [org.siros.sdk.keystore.mdoc.MdocProximitySession]'s
+     * presentation-time readerAuth check. Returns null (skip, don't block
+     * storage) if `issuerAuth` has no x5chain or its signature doesn't
+     * verify, mirroring that same "no badge, not untrusted" convention for
+     * a check that can't even be attempted.
+     *
+     * @param issuerAuth the credential's `issuerAuth` COSE_Sign1 4-element array.
+     * @param docType the credential's mdoc doctype, for VICAL docType enforcement.
+     */
+    private suspend fun verifyAndEvaluateIssuerTrust(issuerAuth: CBORObject, docType: String): TrustResult? {
+        return try {
+            val chain = MdocCose.extractX5Chain(issuerAuth)
+            if (chain.isEmpty()) {
+                Timber.w("issuerAuth present but has no x5chain")
+                return null
+            }
+            val issuerCert = java.security.cert.CertificateFactory.getInstance("X.509")
+                .generateCertificate(chain[0].inputStream()) as java.security.cert.X509Certificate
+            val msoBytes = issuerAuth[2].GetByteString()
+            if (!MdocCose.verify1(issuerAuth, msoBytes, issuerCert.publicKey)) {
+                Timber.w("issuerAuth signature verification failed")
+                return null
+            }
+            evaluateIssuerTrust(chain, docType)
+        } catch (e: Exception) {
+            Timber.w(e, "issuerAuth verification threw")
+            null
+        }
+    }
+
+    /**
+     * Parses [WalletConfig.readerTrustRootCertificatesPem] into certificates,
+     * logging (not silently dropping) any entry that fails to parse - a real
+     * Copilot-review finding: an operator who pastes a malformed PEM would
+     * otherwise get no diagnostic signal beyond "untrusted", with no way to
+     * tell a genuine trust decision apart from their own misconfiguration.
+     */
+    private val readerTrustRootCertificates: List<java.security.cert.X509Certificate> by lazy {
+        val certFactory = java.security.cert.CertificateFactory.getInstance("X.509")
+        config.readerTrustRootCertificatesPem.mapNotNull { pem ->
+            runCatching { certFactory.generateCertificate(pem.byteInputStream()) as java.security.cert.X509Certificate }
+                .onFailure { Timber.w(it, "Failed to parse a configured RICAL root certificate PEM") }
+                .getOrNull()
+        }
+    }
+
+    private fun sha256Hex(bytes: ByteArray): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
 
     /**
      * Handle credential_selection step from the engine.
@@ -4284,7 +5144,15 @@ class SirosWallet private constructor(
     ) {
         scope.launch {
             try {
-                val dcqlQuery = payload?.get("dcql_query")?.jsonObject
+                // `.jsonObject` throws on JsonNull rather than treating it
+                // like absent - a real NIST reference-verifier request over
+                // mdoc-openid4vp:// (a non-DCQL request shape) has the
+                // backend relay this key as JSON `null` rather than omitting
+                // it, which crashed here and got misreported to the engine
+                // as "User declined the request". `as? JsonObject` treats
+                // any non-object value (absent, null, or otherwise) the same
+                // way the `dcqlQuery != null` fallback below already expects.
+                val dcqlQuery = payload?.get("dcql_query") as? JsonObject
                 val verifierInfo = payload?.get("verifier")?.jsonObject
                 // The backend defaults verifier.name to the raw client_id
                 // (e.g. "x509_san_dns:verifier.multipaz.org") whenever the
@@ -4324,6 +5192,13 @@ class SirosWallet private constructor(
                     )
                 ).queryResults
                 val candidates = matchResults.flatMap { it.candidates }.distinctBy { it.id }
+                // This (not the matchRequests() collector) is the code path
+                // actually exercised by the redirect-flow/haip-vp:// protocol
+                // this backend uses for the "credential_selection" progress
+                // step - confirmed live: matchRequests() never fires for this
+                // flow type. sign_presentation's ZK branch needs this cached
+                // so it knows the originating query's format/zkSystemTypes.
+                pendingMatchResultsByFlow[flowId] = matchResults
 
                 val listener = eventListener
                 val selectedIds = if (listener != null && candidates.isNotEmpty()) {
@@ -4345,7 +5220,7 @@ class SirosWallet private constructor(
                         )
                     )
                 } else {
-                    CredentialUtils.eligibleInstances(candidates, credentialConsumptionPolicy, presentationHistory).map { it.id }
+                    eligibleInstances(candidates).map { it.id }
                 }
 
                 if (selectedIds.isEmpty()) {
@@ -4360,7 +5235,7 @@ class SirosWallet private constructor(
                 // The app is trusted to only return IDs it was offered, but
                 // shouldn't be the only thing enforcing consumption -
                 // re-validate here too (defense in depth).
-                val eligibleIds = CredentialUtils.eligibleInstances(candidates, credentialConsumptionPolicy, presentationHistory).map { it.id }.toSet()
+                val eligibleIds = eligibleInstances(candidates).map { it.id }.toSet()
                 if (selectedIds.any { it !in eligibleIds }) {
                     throw WalletException("Selected credential has no eligible copies remaining - renew it to get more")
                 }
@@ -4374,7 +5249,9 @@ class SirosWallet private constructor(
                     credentialNames = selectedIds.mapNotNull { id ->
                         allCreds.find { it.id == id }?.metadata?.name
                     },
-                    requestedClaims = matchResults.flatMap { it.requestedClaims.flatten() }.distinct(),
+                    requestedClaims = matchResults.flatMap { result ->
+                        result.requestedClaims.mapNotNull { path -> path.lastOrNull() }
+                    }.distinct(),
                     timestamp = System.currentTimeMillis(),
                 ))
 
@@ -4396,9 +5273,23 @@ class SirosWallet private constructor(
                                 // than changing an unverified backend field type.
                                 put("credential_id", kotlinx.serialization.json.JsonPrimitive(id.toString()))
                                 // Include disclosed_claims from DCQL match so backend can
-                                // round-trip them into sign_request's credentials_to_include
+                                // round-trip them into sign_request's credentials_to_include.
+                                // Each entry in requestedClaims is a full DCQL claim PATH
+                                // (e.g. ["eu.europa.ec.eudi.pid.1", "pairwise_pseudonym"] -
+                                // [namespace, elementIdentifier]) - only the last segment is
+                                // the actual disclosable element id. flatten() (the old,
+                                // wrong code here) merged every path segment together,
+                                // including the namespace, into one flat list - harmless for
+                                // the plain (non-ZK) signing path (MdocDeviceResponseBuilder's
+                                // namespace filter just silently ignores an extra string that
+                                // never matches a real elementIdentifier), but the native
+                                // Longfellow ZK prover validates every requested claim
+                                // strictly and throws ("attribute was not found in mdoc:
+                                // eu.europa.ec.eudi.pid.1") - confirmed live. Mirrors
+                                // handleDCAPIRequest's identical, already-correct
+                                // `mapNotNull { it.lastOrNull() }`.
                                 val requestedClaims = matchResult?.requestedClaims
-                                    ?.flatten()
+                                    ?.mapNotNull { it.lastOrNull() }
                                     ?.distinct()
                                     ?: emptyList()
                                 put("disclosed_claims", kotlinx.serialization.json.buildJsonArray {
@@ -4478,6 +5369,15 @@ class SirosWallet private constructor(
 
     companion object {
         internal const val HKDF_INFO = "eDiplomas PRF"
+
+        /**
+         * How many reloaded credentials [hydrateReloadedCredentials] fetches
+         * metadata for at once. Small: the common case after the first launch
+         * is answered from [displayMetadataCache] with no network at all, and
+         * when the network is involved a handful of concurrent connections to
+         * (usually) one or two issuers is plenty.
+         */
+        private const val HYDRATION_PARALLELISM = 4
         internal var createEngineSession: (String, String) -> WalletEngineSession =
             { baseUrl, tenantId -> WalletEngineSession(baseUrl, tenantId) }
 

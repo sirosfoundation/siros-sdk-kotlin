@@ -6,14 +6,20 @@ import org.junit.Test
 
 class CredentialUtilsEligibleInstancesTest {
 
-    private fun credential(id: Long, batchId: Long = 1L, instanceId: Int = 0, format: String = "vc+sd-jwt") =
-        StoredCredential(
-            id = id,
-            format = format,
-            raw = "raw-$id",
-            batchId = batchId,
-            instanceId = instanceId,
-        )
+    private fun credential(
+        id: Long,
+        batchId: Long = 1L,
+        instanceId: Int = 0,
+        format: String = "vc+sd-jwt",
+        kid: String? = null,
+    ) = StoredCredential(
+        id = id,
+        format = format,
+        raw = "raw-$id",
+        batchId = batchId,
+        instanceId = instanceId,
+        kid = kid,
+    )
 
     private fun presentation(vararg credentialIds: Long) = PresentationRecord(
         id = credentialIds.sum() + 1000L,
@@ -27,7 +33,7 @@ class CredentialUtilsEligibleInstancesTest {
         val instances = listOf(credential(id = 1L, instanceId = 0), credential(id = 2L, instanceId = 1))
         val history = listOf(presentation(1L), presentation(2L))
 
-        val result = CredentialUtils.eligibleInstances(instances, CredentialConsumptionPolicy.NEVER_CONSUME, history)
+        val result = CredentialUtils.eligibleInstances(instances, CredentialConsumptionPolicy.NEVER_CONSUME, history, setOf("irrelevant-kid"))
 
         assertEquals(instances, result)
     }
@@ -38,7 +44,7 @@ class CredentialUtilsEligibleInstancesTest {
         val unused = credential(id = 2L, instanceId = 1)
         val history = listOf(presentation(1L))
 
-        val result = CredentialUtils.eligibleInstances(listOf(used, unused), CredentialConsumptionPolicy.CONSUME_ALL, history)
+        val result = CredentialUtils.eligibleInstances(listOf(used, unused), CredentialConsumptionPolicy.CONSUME_ALL, history, setOf("irrelevant-kid"))
 
         assertEquals(listOf(unused), result)
     }
@@ -47,7 +53,7 @@ class CredentialUtilsEligibleInstancesTest {
     fun consumeAll_withNoHistory_everyInstanceIsEligible() {
         val instances = listOf(credential(id = 1L, instanceId = 0), credential(id = 2L, instanceId = 1))
 
-        val result = CredentialUtils.eligibleInstances(instances, CredentialConsumptionPolicy.CONSUME_ALL, emptyList())
+        val result = CredentialUtils.eligibleInstances(instances, CredentialConsumptionPolicy.CONSUME_ALL, emptyList(), setOf("irrelevant-kid"))
 
         assertEquals(instances, result)
     }
@@ -58,7 +64,7 @@ class CredentialUtilsEligibleInstancesTest {
         val b = credential(id = 2L, instanceId = 1)
         val history = listOf(presentation(1L), presentation(2L))
 
-        val result = CredentialUtils.eligibleInstances(listOf(a, b), CredentialConsumptionPolicy.CONSUME_ALL, history)
+        val result = CredentialUtils.eligibleInstances(listOf(a, b), CredentialConsumptionPolicy.CONSUME_ALL, history, setOf("irrelevant-kid"))
 
         assertEquals(emptyList<StoredCredential>(), result)
     }
@@ -73,7 +79,7 @@ class CredentialUtilsEligibleInstancesTest {
         val unused = credential(id = 2L, instanceId = 1, format = "mso_mdoc")
         val history = listOf(presentation(1L))
 
-        val result = CredentialUtils.eligibleInstances(listOf(used, unused), CredentialConsumptionPolicy.CONSUME_NON_ZKP, history)
+        val result = CredentialUtils.eligibleInstances(listOf(used, unused), CredentialConsumptionPolicy.CONSUME_NON_ZKP, history, setOf("irrelevant-kid"))
 
         assertEquals(listOf(unused), result)
     }
@@ -83,7 +89,84 @@ class CredentialUtilsEligibleInstancesTest {
         val overused = credential(id = 1L, instanceId = 0)
         val history = listOf(presentation(1L), presentation(1L), presentation(1L))
 
-        val result = CredentialUtils.eligibleInstances(listOf(overused), CredentialConsumptionPolicy.CONSUME_ALL, history)
+        val result = CredentialUtils.eligibleInstances(listOf(overused), CredentialConsumptionPolicy.CONSUME_ALL, history, setOf("irrelevant-kid"))
+
+        assertEquals(emptyList<StoredCredential>(), result)
+    }
+
+    // ── Key-availability checks ────────────────────────────────────────
+    // A real, recurring bug (found via live proximity-presentation testing):
+    // a credential whose signing key was silently lost (e.g. a sync that
+    // never folded a software key into the persisted container) kept
+    // reporting "available" under NEVER_CONSUME forever, since the old
+    // 3-arg eligibleInstances was entirely blind to key existence.
+
+    @Test
+    fun neverConsume_stillExcludesInstanceWhoseKeyIsMissing() {
+        val hasKey = credential(id = 1L, instanceId = 0, kid = "kid-1")
+        val missingKey = credential(id = 2L, instanceId = 1, kid = "kid-2")
+
+        val result = CredentialUtils.eligibleInstances(
+            listOf(hasKey, missingKey),
+            CredentialConsumptionPolicy.NEVER_CONSUME,
+            emptyList(),
+            availableKeyIds = setOf("kid-1"),
+        )
+
+        assertEquals(listOf(hasKey), result)
+    }
+
+    @Test
+    fun instanceWithNullKid_eligibleWhenSignerHoldsAnyKeyAtAll() {
+        // A null kid can't be matched against a specific availableKeyIds
+        // entry, but as long as the signer holds *some* key, the low-level
+        // "no specific kid" call shape (see WscdKeystoreAdapter's
+        // selectSigningKey doc comment) can still succeed.
+        val noKidBinding = credential(id = 1L, instanceId = 0, kid = null)
+
+        val result = CredentialUtils.eligibleInstances(
+            listOf(noKidBinding),
+            CredentialConsumptionPolicy.NEVER_CONSUME,
+            emptyList(),
+            availableKeyIds = setOf("some-other-kid"),
+        )
+
+        assertEquals(listOf(noKidBinding), result)
+    }
+
+    @Test
+    fun instanceWithNullKid_excludedWhenSignerHoldsNoKeysAtAll() {
+        // Real StoredCredentials always get a kid at storage time (see
+        // SirosWallet's activeAttestedKeyIds wiring) - a null kid reaching
+        // here is a sign its binding was silently lost (e.g. a concurrent-
+        // flow race, task #403), not a legitimate legacy call shape. With
+        // zero keys in the signer, a null-kid credential is certain to fail
+        // to sign exactly like a known-but-missing kid would, so it must be
+        // excluded the same way.
+        val noKidBinding = credential(id = 1L, instanceId = 0, kid = null)
+
+        val result = CredentialUtils.eligibleInstances(
+            listOf(noKidBinding),
+            CredentialConsumptionPolicy.NEVER_CONSUME,
+            emptyList(),
+            availableKeyIds = emptySet(),
+        )
+
+        assertEquals(emptyList<StoredCredential>(), result)
+    }
+
+    @Test
+    fun consumeAll_excludesInstanceThatIsBothUnusedAndKeyless() {
+        // Consumption-eligible (never presented) but its key is gone -
+        // both conditions are independently enforced.
+        val keyless = credential(id = 1L, instanceId = 0, kid = "kid-1")
+
+        val result = CredentialUtils.eligibleInstances(
+            listOf(keyless),
+            CredentialConsumptionPolicy.CONSUME_ALL,
+            emptyList(),
+            availableKeyIds = emptySet(),
+        )
 
         assertEquals(emptyList<StoredCredential>(), result)
     }
@@ -100,6 +183,7 @@ class CredentialUtilsEligibleInstancesTest {
             listOf(used),
             CredentialConsumptionPolicy.CONSUME_NON_ZKP,
             history,
+            setOf("irrelevant-kid"),
             isZkPresentation = { true },
         )
 
@@ -118,6 +202,7 @@ class CredentialUtilsEligibleInstancesTest {
             listOf(used, unused),
             CredentialConsumptionPolicy.CONSUME_NON_ZKP,
             history,
+            setOf("irrelevant-kid"),
             isZkPresentation = { false },
         )
 
@@ -137,6 +222,7 @@ class CredentialUtilsEligibleInstancesTest {
             listOf(zkUsed, rawUsed),
             CredentialConsumptionPolicy.CONSUME_NON_ZKP,
             history,
+            setOf("irrelevant-kid"),
             isZkPresentation = { it.id == zkUsed.id },
         )
 

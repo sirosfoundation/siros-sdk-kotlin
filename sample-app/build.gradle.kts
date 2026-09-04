@@ -7,16 +7,27 @@ plugins {
 
 android {
     namespace = "org.siros.sdk.sample"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "org.siros.sdk.sample"
         minSdk = 28
-        targetSdk = 35
-        versionCode = 6
-        versionName = "0.2.2"
+        targetSdk = 36
+        versionCode = 11
+        versionName = "0.11.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // The SDK's matcher is the default: it understands everything the
+        // stock one does, plus the formats the stock one refuses. Build with
+        // -PstockDcMatcher=true to fall back to AndroidX's, which is worth
+        // keeping reachable in case a platform change ever makes a
+        // wallet-supplied matcher unwelcome.
+        buildConfigField(
+            "boolean",
+            "STOCK_DC_MATCHER",
+            (project.findProperty("stockDcMatcher") == "true").toString(),
+        )
     }
 
     buildTypes {
@@ -118,6 +129,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.okhttp.mockwebserver)
 
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")

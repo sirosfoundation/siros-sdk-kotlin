@@ -26,6 +26,7 @@
     <string name="credentials_welcome">Welcome, %1$s</string>
     <string name="credentials_count_one">%1$d credential</string>
     <string name="credentials_count_other">%1$d credentials</string>
+    <string name="credentials_stack_overflow_more">+%1$d more</string>
     <string name="credentials_empty_title">No credentials yet</string>
     <string name="credentials_empty_subtitle">Tap the Add tab below to get started</string>
 
@@ -34,7 +35,15 @@
     <string name="add_credential_loading">Loading available credentials\u2026</string>
     <string name="add_credential_empty">No credentials available</string>
     <string name="add_credential_retry">Try Again</string>
+    <string name="add_credential_row_action_add">Add</string>
+    <string name="add_credential_row_action_close">Close</string>
     <string name="nav_back">Back</string>
+    <!-- Capability icon content descriptions on the Add Credential list, to
+         tell apart same-named offers (e.g. a PID issued both as mdoc and
+         SD-JWT VC) in plain language rather than raw wire-format terms -->
+    <string name="credential_capability_online">Can be presented online</string>
+    <string name="credential_capability_proximity">Can be presented in person by tapping your phone</string>
+    <string name="credential_capability_zkp">Can prove your identity without revealing your full details</string>
 
     <!-- Presentation consent screen -->
     <string name="presentation_consent_title">Credential Request</string>
@@ -141,6 +150,7 @@
     <string name="flow_step_awaiting_consent">Waiting for your consent\u2026</string>
     <string name="flow_step_credential_selection">Selecting credentials\u2026</string>
     <string name="flow_step_submitting_response">Sending response to verifier\u2026</string>
+    <string name="flow_step_computing_proof">Computing proof\u2026</string>
     <string name="flow_step_unknown">Processing\u2026</string>
     <string name="flow_diagnostic_label">Diagnostic: %1$s</string>
     <string name="flow_credentials_received">Received %1$d credential(s)</string>

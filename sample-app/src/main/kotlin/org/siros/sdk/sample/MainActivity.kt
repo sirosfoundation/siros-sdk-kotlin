@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -40,7 +41,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -54,6 +54,7 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
@@ -61,6 +62,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -72,6 +74,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.vectorResource
@@ -258,14 +262,21 @@ fun WalletScreen(viewModel: WalletViewModel) {
 
     LaunchedEffect(errorMessage) {
         errorMessage?.let {
-            snackbarHostState.showSnackbar(it)
+            // withDismissAction shows Material3's built-in close (X) icon on the
+            // snackbar; Long duration gives users time to read an error before it
+            // auto-dismisses, while the X still lets them dismiss immediately.
+            snackbarHostState.showSnackbar(
+                message = it,
+                withDismissAction = true,
+                duration = SnackbarDuration.Long,
+            )
             viewModel.clearError()
         }
     }
 
     LaunchedEffect(infoMessage) {
         infoMessage?.let {
-            snackbarHostState.showSnackbar(it)
+            snackbarHostState.showSnackbar(message = it, withDismissAction = true)
             viewModel.clearInfo()
         }
     }
@@ -344,6 +355,8 @@ fun WalletScreen(viewModel: WalletViewModel) {
         val tenantIdState by viewModel.tenantId.collectAsState()
         val engineUrlOverrideState by viewModel.engineUrlOverride.collectAsState()
         val zkCircuitUrlsState by viewModel.zkCircuitUrls.collectAsState()
+        val preferLocalReaderTrustEvaluationState by viewModel.preferLocalReaderTrustEvaluation.collectAsState()
+        val readerTrustRootCertificatePemState by viewModel.readerTrustRootCertificatePem.collectAsState()
         LoginScreen(
             cachedAccounts = cachedAccounts,
             backendUrl = backendUrlState,
@@ -351,6 +364,8 @@ fun WalletScreen(viewModel: WalletViewModel) {
             engineUrl = engineUrlOverrideState,
             useWmpProtocol = useWmpProtocol,
             zkCircuitUrls = zkCircuitUrlsState,
+            preferLocalReaderTrustEvaluation = preferLocalReaderTrustEvaluationState,
+            readerTrustRootCertificatePem = readerTrustRootCertificatePemState,
             showPreLoginSettings = BuildConfig.SHOW_PRE_LOGIN_SETTINGS,
             isLoading = isLoading || walletState is WalletState.Connecting,
             snackbarHostState = snackbarHostState,
@@ -363,6 +378,8 @@ fun WalletScreen(viewModel: WalletViewModel) {
             onUpdateEngineUrl = viewModel::updateEngineUrl,
             onUpdateUseWmpProtocol = viewModel::updateUseWmpProtocol,
             onUpdateZkCircuitUrls = viewModel::updateZkCircuitUrls,
+            onUpdatePreferLocalReaderTrustEvaluation = viewModel::updatePreferLocalReaderTrustEvaluation,
+            onUpdateReaderTrustRootCertificatePem = viewModel::updateReaderTrustRootCertificatePem,
         )
         return
     }
@@ -381,6 +398,14 @@ fun WalletScreen(viewModel: WalletViewModel) {
     val showWscaDeveloper by viewModel.showWscaDeveloper.collectAsState()
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
 
+    // Measured height of the custom bottom tab bar Row below, so the shared
+    // SnackbarHost (which spans every sub-screen in the Box below - see its
+    // comment) can pad itself above the bar instead of rendering on top of it.
+    // Reset to 0 via DisposableEffect when the bar itself isn't composed (any
+    // branch other than the main tabs below), so it doesn't leave stale
+    // padding under the snackbar on those other screens.
+    var bottomNavBarHeightPx by remember { mutableIntStateOf(0) }
+
     // Everything below shares one Box so the SnackbarHost always has somewhere to
     // render, no matter which sub-screen is active - previously each sub-screen
     // branch `return`ed before ever reaching a SnackbarHost, so post-login errors
@@ -388,13 +413,23 @@ fun WalletScreen(viewModel: WalletViewModel) {
     Box(modifier = Modifier.fillMaxSize()) {
         when {
             // Presentation consent dialog — shown as a full-screen overlay
-            pendingPresentation != null -> PresentationConsentScreen(
-                request = pendingPresentation!!,
-                onAccept = viewModel::acceptPresentation,
-                onDecline = viewModel::declinePresentation,
-                presentationHistory = presentationHistory,
-                consumptionPolicy = viewModel.credentialConsumptionPolicy.collectAsState().value,
-            )
+            pendingPresentation != null -> {
+                // Recomputed per new presentation request, not cached: a key
+                // lost since the last check must be reflected immediately -
+                // see SirosWallet.availableKeyIds's doc comment.
+                var availableKeyIds by remember(pendingPresentation) { mutableStateOf(emptySet<String>()) }
+                LaunchedEffect(pendingPresentation) {
+                    availableKeyIds = viewModel.currentAvailableKeyIds()
+                }
+                PresentationConsentScreen(
+                    request = pendingPresentation!!,
+                    onAccept = viewModel::acceptPresentation,
+                    onDecline = viewModel::declinePresentation,
+                    presentationHistory = presentationHistory,
+                    consumptionPolicy = viewModel.credentialConsumptionPolicy.collectAsState().value,
+                    availableKeyIds = availableKeyIds,
+                )
+            }
 
             // Credential detail sub-screen
             selectedCredential != null -> CredentialDetailScreen(
@@ -472,6 +507,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                 getCredentials = viewModel::getCredentialsForProximity,
                 signPresentation = viewModel::signMdocPresentationForProximity,
                 filterEligible = viewModel::filterEligibleForProximity,
+                evaluateReaderTrust = viewModel::evaluateReaderTrustForProximity,
                 onBack = viewModel::closeProximityEngagement,
             )
 
@@ -510,6 +546,9 @@ fun WalletScreen(viewModel: WalletViewModel) {
 
             // Main app with bottom navigation
             else -> Column(modifier = Modifier.fillMaxSize()) {
+        DisposableEffect(Unit) {
+            onDispose { bottomNavBarHeightPx = 0 }
+        }
         // Top bar
         TopAppBar(
             title = {
@@ -547,6 +586,15 @@ fun WalletScreen(viewModel: WalletViewModel) {
             },
         )
 
+        // Recomputed whenever wallet state changes (new credential, key
+        // restored after unlock, etc.) so the credential list's "shadow"
+        // (renew-only) display state - see CredentialCard.isExhausted -
+        // never lags behind the signer's actual key inventory.
+        var credentialsTabAvailableKeyIds by remember { mutableStateOf(emptySet<String>()) }
+        LaunchedEffect(walletState) {
+            credentialsTabAvailableKeyIds = viewModel.currentAvailableKeyIds()
+        }
+
         // Content area
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             when (val state = walletState) {
@@ -572,6 +620,10 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onUpdateShowDiagnosticMessages = viewModel::updateShowDiagnosticMessages,
                             credentialConsumptionPolicy = viewModel.credentialConsumptionPolicy.collectAsState().value,
                             onUpdateCredentialConsumptionPolicy = viewModel::updateCredentialConsumptionPolicy,
+                            preferLocalReaderTrustEvaluation = viewModel.preferLocalReaderTrustEvaluation.collectAsState().value,
+                            onUpdatePreferLocalReaderTrustEvaluation = viewModel::updatePreferLocalReaderTrustEvaluation,
+                            readerTrustRootCertificatePem = viewModel.readerTrustRootCertificatePem.collectAsState().value,
+                            onUpdateReaderTrustRootCertificatePem = viewModel::updateReaderTrustRootCertificatePem,
                         )
                         // selectedTab can transiently be 1 (the "Add" action, not a
                         // real persisted tab) right as a flow finishes and the state
@@ -584,6 +636,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onRenewCredential = viewModel::renewCredential,
                             onDeleteCredential = { viewModel.deleteCredential(it.id) },
                             onAddCredential = viewModel::openAddCredential,
+                            availableKeyIds = credentialsTabAvailableKeyIds,
                         )
                     }
                 }
@@ -605,6 +658,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .onGloballyPositioned { bottomNavBarHeightPx = it.size.height }
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 .padding(vertical = 8.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
@@ -662,9 +716,12 @@ fun WalletScreen(viewModel: WalletViewModel) {
     }
         }
 
+        val bottomNavBarHeightDp = with(LocalDensity.current) { bottomNavBarHeightPx.toDp() }
         SnackbarHost(
             hostState = snackbarHostState,
-            modifier = Modifier.align(Alignment.BottomCenter),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = bottomNavBarHeightDp),
         )
     }
 }
@@ -680,6 +737,8 @@ fun LoginScreen(
     engineUrl: String,
     useWmpProtocol: Boolean,
     zkCircuitUrls: List<String>,
+    preferLocalReaderTrustEvaluation: Boolean = false,
+    readerTrustRootCertificatePem: String = "",
     showPreLoginSettings: Boolean,
     isLoading: Boolean,
     snackbarHostState: SnackbarHostState,
@@ -692,6 +751,8 @@ fun LoginScreen(
     onUpdateEngineUrl: (String) -> Unit,
     onUpdateUseWmpProtocol: (Boolean) -> Unit,
     onUpdateZkCircuitUrls: (List<String>) -> Unit,
+    onUpdatePreferLocalReaderTrustEvaluation: (Boolean) -> Unit = {},
+    onUpdateReaderTrustRootCertificatePem: (String) -> Unit = {},
 ) {
     var showRegister by remember { mutableStateOf(false) }
     var showOtherLogin by remember { mutableStateOf(false) }
@@ -706,11 +767,15 @@ fun LoginScreen(
             engineUrl = engineUrl,
             useWmpProtocol = useWmpProtocol,
             zkCircuitUrls = zkCircuitUrls,
+            preferLocalReaderTrustEvaluation = preferLocalReaderTrustEvaluation,
+            readerTrustRootCertificatePem = readerTrustRootCertificatePem,
             onUpdateBackendUrl = onUpdateBackendUrl,
             onUpdateTenantId = onUpdateTenantId,
             onUpdateEngineUrl = onUpdateEngineUrl,
             onUpdateUseWmpProtocol = onUpdateUseWmpProtocol,
             onUpdateZkCircuitUrls = onUpdateZkCircuitUrls,
+            onUpdatePreferLocalReaderTrustEvaluation = onUpdatePreferLocalReaderTrustEvaluation,
+            onUpdateReaderTrustRootCertificatePem = onUpdateReaderTrustRootCertificatePem,
             onDismiss = { showSettingsSheet = false },
         )
     }
@@ -890,11 +955,15 @@ fun PreLoginSettingsSheet(
     engineUrl: String,
     useWmpProtocol: Boolean,
     zkCircuitUrls: List<String>,
+    preferLocalReaderTrustEvaluation: Boolean = false,
+    readerTrustRootCertificatePem: String = "",
     onUpdateBackendUrl: (String) -> Unit,
     onUpdateTenantId: (String) -> Unit,
     onUpdateEngineUrl: (String) -> Unit,
     onUpdateUseWmpProtocol: (Boolean) -> Unit,
     onUpdateZkCircuitUrls: (List<String>) -> Unit,
+    onUpdatePreferLocalReaderTrustEvaluation: (Boolean) -> Unit = {},
+    onUpdateReaderTrustRootCertificatePem: (String) -> Unit = {},
     onDismiss: () -> Unit,
 ) {
     var editBackendUrl by remember { mutableStateOf(backendUrl) }
@@ -904,6 +973,7 @@ fun PreLoginSettingsSheet(
     // onUpdateZkCircuitUrls rather than storing List<String> as Compose
     // TextField state directly.
     var editZkCircuitUrls by remember { mutableStateOf(zkCircuitUrls.joinToString("\n")) }
+    var editReaderTrustRootCertificatePem by remember { mutableStateOf(readerTrustRootCertificatePem) }
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -977,11 +1047,48 @@ fun PreLoginSettingsSheet(
                     onCheckedChange = onUpdateUseWmpProtocol,
                 )
             }
+
+            // RICAL reader-trust local fallback (Geneva 2026 interop event) -
+            // off by default: the remote go-trust `mdocrical` AuthZEN call
+            // is preferred since only it honors RICAL's temporary/dynamic
+            // trust roots. See WalletConfig.preferLocalReaderTrustEvaluation.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Evaluate reader trust locally", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Skip the remote RICAL trust check and validate proximity readers " +
+                            "only against the root certificate below.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = preferLocalReaderTrustEvaluation,
+                    onCheckedChange = onUpdatePreferLocalReaderTrustEvaluation,
+                )
+            }
+            OutlinedTextField(
+                value = editReaderTrustRootCertificatePem,
+                onValueChange = { text ->
+                    editReaderTrustRootCertificatePem = text
+                    onUpdateReaderTrustRootCertificatePem(text)
+                },
+                label = { Text("RICAL root certificate (PEM)") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = false,
+            )
         }
     }
 }
 
 // ── Credentials Tab ─────────────────────────────────────────────────
+
+/** Number of credential cards shown in full before the rest collapse into [CredentialStackOverflow]. */
+private const val CREDENTIAL_STACK_THRESHOLD = 3
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -993,13 +1100,14 @@ fun CredentialsTab(
     onDeleteCredential: (org.siros.sdk.credentials.StoredCredential) -> Unit,
     onAddCredential: () -> Unit,
     modifier: Modifier = Modifier,
+    availableKeyIds: Set<String> = emptySet(),
 ) {
     // One entry per batch (see StoredCredential.batchId) instead of one per
     // issued copy - mirrors wallet-frontend's fetchVcData grouping so a
     // 5-copy batch issuance shows as a single card with a remaining-copies
     // ribbon, not five swipeable duplicates.
-    val grouped = remember(state.credentials, presentationHistory) {
-        org.siros.sdk.credentials.CredentialUtils.groupForDisplay(state.credentials, presentationHistory)
+    val grouped = remember(state.credentials, presentationHistory, availableKeyIds) {
+        org.siros.sdk.credentials.CredentialUtils.groupForDisplay(state.credentials, presentationHistory, availableKeyIds)
     }
 
     // Long-press action menu (Renew/Delete) - a quicker path to the same two
@@ -1007,6 +1115,15 @@ fun CredentialsTab(
     // credential overlay, for a credential the user hasn't tapped into yet.
     var actionMenuFor by remember { mutableStateOf<org.siros.sdk.credentials.StoredCredential?>(null) }
     var pendingDeleteFor by remember { mutableStateOf<org.siros.sdk.credentials.StoredCredential?>(null) }
+
+    // Past CREDENTIAL_STACK_THRESHOLD cards, the tail is collapsed into one
+    // fanned overflow item instead of extending the scrollable list further -
+    // keeps the common case (a handful of credentials) showing several full
+    // cards at once (see the LazyColumn comment below for why that's
+    // preferred over a one-at-a-time layout), while an overview that would
+    // otherwise require a lot of scrolling gets a single glanceable summary
+    // that expands to the full list on tap.
+    var showAllCredentials by remember { mutableStateOf(false) }
 
     actionMenuFor?.let { credential ->
         ModalBottomSheet(onDismissRequest = { actionMenuFor = null }) {
@@ -1111,21 +1228,80 @@ fun CredentialsTab(
             // has far more vertical than horizontal real estate, so a
             // one-at-a-time horizontal pager wasted the available space -
             // a scrollable column lets multiple cards be visible/scrollable
-            // at once instead.
+            // at once instead. Past CREDENTIAL_STACK_THRESHOLD cards, the
+            // tail collapses into one fanned overflow item (below) rather
+            // than just extending the scroll further.
+            val visibleCount = if (showAllCredentials) {
+                grouped.size
+            } else {
+                minOf(grouped.size, CREDENTIAL_STACK_THRESHOLD)
+            }
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                items(grouped, key = { it.credential.batchId }) { entry ->
+                items(grouped.take(visibleCount), key = { it.credential.batchId }) { entry ->
                     CredentialCard(
                         credential = entry.credential,
                         instances = entry.instances,
                         onClick = { onCredentialClick(entry.credential) },
                         onLongClick = { actionMenuFor = entry.credential },
                         onRenewClick = { onRenewCredential(entry.credential) },
+                        onDeleteClick = { pendingDeleteFor = entry.credential },
                     )
                 }
+                if (visibleCount < grouped.size) {
+                    item(key = "credential-stack-overflow") {
+                        CredentialStackOverflow(
+                            remaining = grouped.drop(visibleCount),
+                            onClick = { showAllCredentials = true },
+                        )
+                    }
+                }
             }
+        }
+    }
+}
+
+/**
+ * Compact fanned-card summary for credentials past [CREDENTIAL_STACK_THRESHOLD]
+ * - a glance at how many/which issuers are collapsed, without rendering each
+ * one's full SVG card (that's the expensive part [277] caches; this overview
+ * only needs flat background colors). Tapping it expands the full list.
+ */
+@Composable
+fun CredentialStackOverflow(
+    remaining: List<org.siros.sdk.credentials.CredentialWithInstances>,
+    onClick: () -> Unit,
+) {
+    val maxFanned = 3
+    Card(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(72.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Box(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+            remaining.take(maxFanned).forEachIndexed { index, entry ->
+                val bgColor = entry.credential.metadata?.backgroundColor?.toComposeColor()
+                    ?: MaterialTheme.colorScheme.secondaryContainer
+                Box(
+                    modifier = Modifier
+                        .offset(x = (index * 14).dp)
+                        .size(width = 40.dp, height = 26.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(bgColor)
+                        .align(Alignment.CenterStart),
+                )
+            }
+            Text(
+                text = stringResource(R.string.credentials_stack_overflow_more, remaining.size),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.align(Alignment.CenterEnd),
+            )
         }
     }
 }
@@ -1198,6 +1374,16 @@ fun SettingsTab(
     credentialConsumptionPolicy: org.siros.sdk.credentials.CredentialConsumptionPolicy =
         org.siros.sdk.credentials.CredentialConsumptionPolicy.NEVER_CONSUME,
     onUpdateCredentialConsumptionPolicy: ((org.siros.sdk.credentials.CredentialConsumptionPolicy) -> Unit)? = null,
+    // RICAL reader-trust local fallback - see PreLoginSettingsSheet's identical
+    // controls for why this exists. Duplicated here (not moved) because
+    // PreLoginSettingsSheet also configures backendUrl/tenantId, which must
+    // stay reachable before a session exists; reader trust is just as useful
+    // to flip mid-session (e.g. right before a proximity test), where the
+    // pre-login sheet is no longer reachable at all.
+    preferLocalReaderTrustEvaluation: Boolean = false,
+    onUpdatePreferLocalReaderTrustEvaluation: ((Boolean) -> Unit)? = null,
+    readerTrustRootCertificatePem: String = "",
+    onUpdateReaderTrustRootCertificatePem: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -1281,6 +1467,59 @@ fun SettingsTab(
                         enabled = onUpdateShowDiagnosticMessages != null,
                     )
                 }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Reader trust (RICAL) section - see PreLoginSettingsSheet's
+        // identical controls for the full rationale; kept reachable here too
+        // since flipping it mid-session (right before a proximity test) is
+        // the common case, and this tab - unlike the pre-login sheet - is
+        // still reachable once a wallet session is active.
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+                Text(
+                    "Reader Trust (RICAL)",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Evaluate reader trust locally", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "Skip the remote RICAL trust check and validate proximity readers " +
+                                "only against the root certificate below.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = preferLocalReaderTrustEvaluation,
+                        onCheckedChange = onUpdatePreferLocalReaderTrustEvaluation,
+                        enabled = onUpdatePreferLocalReaderTrustEvaluation != null,
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = readerTrustRootCertificatePem,
+                    onValueChange = { onUpdateReaderTrustRootCertificatePem?.invoke(it) },
+                    label = { Text("RICAL root certificate (PEM)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = onUpdateReaderTrustRootCertificatePem != null,
+                    singleLine = false,
+                )
             }
         }
 
@@ -1581,10 +1820,7 @@ fun FlowStartingView(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        LinearProgressIndicator(
-            modifier = Modifier.fillMaxWidth(),
-            color = MaterialTheme.colorScheme.primary,
-        )
+        SirosSpinner(progress = null)
         Spacer(modifier = Modifier.height(24.dp))
         Text(
             text = when (flowType) {
@@ -1622,31 +1858,25 @@ fun FlowActiveView(
 ) {
     val stepProgress = flowStepProgress(state.flowType, state.status)
 
-    // Guard against a visible backward jump: real execution order can
-    // deviate slightly from the canonical step list (e.g. a step retried
-    // after a transient error), but the bar should never un-progress.
-    var maxProgress by remember(state.flowId) { mutableStateOf(0f) }
-    LaunchedEffect(stepProgress) {
-        stepProgress?.let { maxProgress = maxOf(maxProgress, it) }
-    }
+    // The visual must never sit frozen for the full duration of a
+    // long-running step (most notably native ZK proof generation, which can
+    // take real wall-clock time with zero intermediate progress signal from
+    // the underlying Rust/Longfellow library) - so the displayed value is
+    // decoupled from raw step-completion events via FlowProgressAnimator,
+    // which eases the display value forward on its own ticker between real
+    // events and snaps to the genuine value the instant one arrives. A fresh
+    // animator per flowId keeps state from leaking across flows.
+    val progressAnimator = remember(state.flowId) { FlowProgressAnimator() }
+    val displayProgress by progressAnimator.displayProgress.collectAsState()
+    LaunchedEffect(state.flowId) { progressAnimator.run() }
+    LaunchedEffect(stepProgress) { progressAnimator.onRealProgress(stepProgress) }
 
     Column(
         modifier = modifier.fillMaxSize().padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        if (stepProgress != null) {
-            LinearProgressIndicator(
-                progress = { maxProgress },
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.primary,
-            )
-        } else {
-            LinearProgressIndicator(
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
+        SirosSpinner(progress = if (stepProgress != null) displayProgress else null)
         Spacer(modifier = Modifier.height(24.dp))
         Text(
             text = when (state.flowType) {

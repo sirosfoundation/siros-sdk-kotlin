@@ -206,8 +206,62 @@ object CredentialMatcher {
             )
         }
 
-        val queryResults = credentialQueries.mapNotNull { queryElement ->
+        val parsed = credentialQueries.mapNotNull { queryElement ->
             matchSingleQuery(queryElement.jsonObject, credentials)
+        }
+
+        // Which credentials qualify is decided by the shared engine - the same
+        // one the OS credential picker runs, and the only implementation here
+        // tested against the specification's own examples. This matcher still
+        // parses everything else the wallet needs at presentation time
+        // (requested claims, zk_system_type, ppid_context), because those are
+        // read from the query rather than decided by it.
+        //
+        // The visible change is that a credential missing a claim the verifier
+        // asked for is no longer offered. OID4VP 1.0 §6.4.1 requires that; the
+        // parsing path above never checked it, so such a credential would be
+        // offered, consented to, and then fail to satisfy the verifier.
+        val shared = SharedDcqlMatcher.evaluate(dcqlQuery, credentials)
+        val queryResults = when {
+            shared == null -> {
+                // No answer, not an empty answer. Falling back keeps
+                // presentations working where the engine cannot decide, which
+                // is worth more than consistency. SharedDcqlMatcher has
+                // already logged why — with the exception, when there was one
+                // — so repeating it here would only double the noise on every
+                // call.
+                parsed
+            }
+
+            !shared.satisfiable -> {
+                // §6.4: "MUST NOT return any Credential(s)" — not even the
+                // queries that were answerable on their own. A request can ask
+                // for two credentials and get one; offering that one lets a
+                // user consent to a presentation that cannot satisfy the
+                // verifier.
+                //
+                // Reported once for the request rather than per query. The
+                // per-query line explains a decline as a missing claim, which
+                // is the usual cause and the wrong one here.
+                SharedDcqlMatcher.reportUnsatisfiable(
+                    // One credential can be a candidate for several queries;
+                    // the log names credentials, not candidacies.
+                    parsed.flatMap { r -> r.candidates.map { it.id } }.distinct(),
+                )
+                parsed.map { it.copy(candidates = emptyList()) }
+            }
+
+            else -> parsed.map { result ->
+                val ids = shared.candidatesByQuery[result.queryId].orEmpty()
+                SharedDcqlMatcher.reportDifference(
+                    result.queryId,
+                    result.candidates.map { it.id },
+                    ids,
+                )
+                // Built once per query, not once per candidate.
+                val qualifying = ids.toSet()
+                result.copy(candidates = result.candidates.filter { it.id in qualifying })
+            }
         }
 
         val credentialSets = parseCredentialSets(dcqlQuery)
@@ -337,15 +391,25 @@ object CredentialMatcher {
 
     /**
      * Parses one entry of a DCQL query's `meta.zk_system_type` array into a
-     * [ZkSystemSpec] - `{id, system, params}`, mirroring multipaz's own wire
-     * shape (confirmed via `balfanz/multipaz`'s `ppid` branch `verifier.kt`).
+     * [ZkSystemSpec] - `{id, system, ...params}`. Confirmed via multipaz's
+     * own parsing of this exact wire shape (`OpenID4VP.kt`'s
+     * `for (param in entry) { if (key == "system" || key == "id") continue;
+     * item.addParam(param.key, param.value) }`): every OTHER top-level key
+     * on the entry (e.g. `num_attributes`, `version`, `circuit_hash`,
+     * `block_enc_hash`, `block_enc_sig`) IS a param - there is no nested
+     * `"params"` object on the wire. An earlier version of this parser
+     * looked for `obj["params"]`, which never exists on a real request -
+     * `zkSystemTypes` parsed successfully (id/system were still read) but
+     * every param (including `num_attributes`) silently came back empty,
+     * masking a real circuit-selection bug until it started being checked.
      */
     private fun parseZkSystemSpec(element: JsonElement): ZkSystemSpec? {
         val obj = element as? JsonObject ?: return null
         val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: return null
         val system = obj["system"]?.jsonPrimitive?.contentOrNull ?: return null
-        val params = obj["params"]?.jsonObject?.mapValues { (_, v) -> v.jsonPrimitive.contentOrNull ?: "" }
-            ?: emptyMap()
+        val params = obj.entries
+            .filterNot { (key, _) -> key == "id" || key == "system" }
+            .associate { (key, value) -> key to (value.jsonPrimitive.contentOrNull ?: "") }
         return ZkSystemSpec(id = id, system = system, params = params)
     }
 

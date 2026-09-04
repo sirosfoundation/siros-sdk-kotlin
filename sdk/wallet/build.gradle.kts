@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "org.siros.sdk.wallet"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 28
@@ -31,6 +31,21 @@ dependencies {
     api(project(":sdk:keystore"))
     api(project(":sdk:flow"))
     api(project(":sdk:credentials"))
+
+    // Registry provider API — DigitalCredentialRegistry takes the matcher as
+    // a plain ByteArray, which is what makes supplying our own supported
+    // rather than a workaround.
+    implementation(libs.androidx.credentials.registry.provider)
+    implementation(libs.androidx.credentials.registry.provider.play)
+    // Only for the stock-matcher fallback path.
+    implementation(libs.androidx.credentials.registry.mdoc)
+    implementation(libs.androidx.credentials.registry.openid)
+    implementation(libs.androidx.credentials.registry.sdjwtvc)
+    // Registering through this directly, alongside the AndroidX registry
+    // provider above, rather than instead of it — see the doc comment on
+    // SirosCredentialRegistry.registerLegacyType for why both are needed.
+    implementation(libs.play.services.identity.credentials)
+
     api(project(":sdk:idv"))
 
     implementation(libs.kotlinx.serialization.json)
@@ -51,4 +66,9 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.kotlin.reflect)
     testImplementation(libs.okhttp.mockwebserver)
+
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:rules:1.6.1")
+    androidTestImplementation(libs.kotlinx.coroutines.test)
 }

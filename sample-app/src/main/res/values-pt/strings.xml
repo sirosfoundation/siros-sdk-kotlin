@@ -23,6 +23,7 @@
     <string name="credentials_welcome">Bem-vindo, %1$s</string>
     <string name="credentials_count_one">%1$d credencial</string>
     <string name="credentials_count_other">%1$d credenciais</string>
+    <string name="credentials_stack_overflow_more">+%1$d mais</string>
     <string name="credentials_empty_title">Nenhuma credencial ainda</string>
     <string name="credentials_empty_subtitle">Toque em Adicionar abaixo para começar</string>
 
@@ -31,7 +32,12 @@
     <string name="add_credential_loading">Carregando credenciais disponíveis\u2026</string>
     <string name="add_credential_empty">Nenhuma credencial disponível</string>
     <string name="add_credential_retry">Tentar Novamente</string>
+    <string name="add_credential_row_action_add">Adicionar</string>
+    <string name="add_credential_row_action_close">Fechar</string>
     <string name="nav_back">Voltar</string>
+    <string name="credential_capability_online">Pode ser apresentado online</string>
+    <string name="credential_capability_proximity">Pode ser apresentado presencialmente ao tocar com o telemóvel</string>
+    <string name="credential_capability_zkp">Pode provar a sua identidade sem revelar todos os seus dados</string>
 
     <!-- Presentation consent screen -->
     <string name="presentation_consent_title">Solicitação de Credencial</string>
@@ -133,6 +139,7 @@
     <string name="flow_step_awaiting_consent">Aguardando seu consentimento…</string>
     <string name="flow_step_credential_selection">Selecionando credenciais…</string>
     <string name="flow_step_submitting_response">Enviando resposta ao verificador…</string>
+    <string name="flow_step_computing_proof">Calculando prova…</string>
     <string name="flow_step_unknown">Processando…</string>
     <string name="flow_diagnostic_label">Diagnóstico: %1$s</string>
     <string name="flow_credentials_received">Recebida(s) %1$d credencial(is)</string>
