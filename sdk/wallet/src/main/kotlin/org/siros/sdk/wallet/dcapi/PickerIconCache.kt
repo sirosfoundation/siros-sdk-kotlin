@@ -286,11 +286,42 @@ class PickerIconCache(
                     // else outside the alphabet is a malformed URI, not noise.
                     java.util.Base64.getDecoder().decode(payload.filterNot { it.isWhitespace() })
                 } else {
-                    java.net.URLDecoder.decode(payload, "UTF-8").toByteArray(Charsets.ISO_8859_1)
+                    percentDecode(payload)
                 }
             } catch (_: Exception) {
                 null
             }?.takeIf { it.size <= MAX_DOWNLOAD_BYTES }
+        }
+
+        /**
+         * RFC 3986 percent-decoding straight to bytes: `%XX` is one byte,
+         * everything else is taken literally - including `+`, which
+         * `URLDecoder` would turn into a space under its form-encoding rules.
+         * Decoding to a `String` and back was the other problem: any byte at
+         * or above 0x80 came out mangled by the UTF-8/Latin-1 round trip.
+         * Non-ASCII characters, which a well-formed data URI does not carry,
+         * contribute their UTF-8 bytes, which is what browsers do with them.
+         * Null on a truncated or non-hex escape.
+         */
+        internal fun percentDecode(payload: String): ByteArray? {
+            val input = payload.toByteArray(Charsets.UTF_8)
+            val out = ByteArrayOutputStream(input.size)
+            var i = 0
+            while (i < input.size) {
+                val b = input[i].toInt()
+                if (b != '%'.code) {
+                    out.write(b)
+                    i++
+                    continue
+                }
+                if (i + 2 >= input.size) return null
+                val hi = Character.digit(input[i + 1].toInt(), 16)
+                val lo = Character.digit(input[i + 2].toInt(), 16)
+                if (hi < 0 || lo < 0) return null
+                out.write((hi shl 4) or lo)
+                i += 3
+            }
+            return out.toByteArray()
         }
     }
 }

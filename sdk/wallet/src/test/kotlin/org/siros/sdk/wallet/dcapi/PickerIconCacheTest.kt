@@ -122,6 +122,19 @@ class PickerIconCacheTest {
     }
 
     @Test
+    fun `percent-encoded data URIs decode to raw bytes, with plus taken literally`() {
+        // PNG signature (all eight bytes escaped, two of them above 0x7F or
+        // control characters), then a literal `+` and an unescaped `x`.
+        val expected = byteArrayOf(
+            0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, '+'.code.toByte(), 'x'.code.toByte(),
+        )
+        assertArrayEquals(expected, PickerIconCache.decodeDataUri("data:image/png,%89PNG%0D%0A%1A%0A+x"))
+        assertArrayEquals(byteArrayOf(0xFF.toByte(), 0x00), PickerIconCache.percentDecode("%ff%00"))
+        assertNull(PickerIconCache.percentDecode("%4")) // truncated escape
+        assertNull(PickerIconCache.percentDecode("%zz")) // non-hex escape
+    }
+
+    @Test
     fun `only http, https and data schemes are fetched`() {
         assertNull(PickerIconCache.downloadWithUrlConnection("file:///etc/passwd"))
         assertNull(PickerIconCache.downloadWithUrlConnection("ftp://example.com/logo.png"))
