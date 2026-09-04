@@ -45,11 +45,26 @@ internal class SessionStore(context: Context) {
         return prefs.getString("${id}/${name}", null)
     }
 
-    private fun putString(name: String, value: String?) {
+    /**
+     * @param durable When true, blocks until the write is committed to disk
+     *   (`Editor.commit()`) instead of the default `apply()`, which queues an
+     *   ASYNCHRONOUS background flush and returns immediately - fine for most
+     *   properties here, but wrong for anything whose loss is catastrophic
+     *   and irreversible (see [privateDataJwe]'s setter): a process hard-kill
+     *   shortly after `apply()` returns can kill the app before that pending
+     *   background write ever reaches disk, silently discarding whatever was
+     *   just written even though the call site already returned successfully -
+     *   confirmed live: a credential issued this way stored fine (via a
+     *   synchronous Room write in credentialStore.save()) while its signing
+     *   key, written moments later via this class's async apply(), didn't
+     *   survive an immediate hard-close, leaving the credential "shadow"
+     *   (unusable, no key) on next launch.
+     */
+    private fun putString(name: String, value: String?, durable: Boolean = false) {
         val id = activeAccountId ?: return
         val k = "${id}/${name}"
-        if (value != null) prefs.edit().putString(k, value).apply()
-        else prefs.edit().remove(k).apply()
+        val editor = if (value != null) prefs.edit().putString(k, value) else prefs.edit().remove(k)
+        if (durable) editor.commit() else editor.apply()
     }
 
     // ── Session ─────────────────────────────────────────────────────
@@ -112,11 +127,44 @@ internal class SessionStore(context: Context) {
 
     var privateDataJwe: String?
         get() = getString("private_data_jwe")
-        set(value) = putString("private_data_jwe", value)
+        set(value) = putString("private_data_jwe", value, durable = true)
 
     var privateDataETag: String?
         get() = getString("private_data_etag")
         set(value) = putString("private_data_etag", value)
+
+    /**
+     * TOFU (trust-on-first-use) mapping of `"issuer|credentialType"` ->
+     * chosen WSCD plugin ID, serialized as a single JSON string blob (see
+     * [SessionStoreWscdTofuStore]) - matches [privateDataJwe]'s "one opaque
+     * string" precedent rather than one property per (issuer, credentialType)
+     * pair, since that set is open-ended.
+     */
+    var wscdTofuMappingJson: String?
+        get() = getString("wscd_tofu_mapping")
+        set(value) = putString("wscd_tofu_mapping", value)
+
+    /**
+     * Explicit per-`"issuer|credentialType"` user overrides for which WSCD
+     * plugin to use - distinct from [wscdTofuMappingJson]: TOFU is an
+     * auto-remembered outcome of an ambiguous resolution, this is a
+     * deliberate "always use this plugin here" preference the user set
+     * directly (e.g. from a settings screen). Same "one opaque JSON blob"
+     * shape as [wscdTofuMappingJson] (see [SessionStoreWscdUserOverrideStore]).
+     */
+    var wscdUserOverrideMappingJson: String?
+        get() = getString("wscd_user_override_mapping")
+        set(value) = putString("wscd_user_override_mapping", value)
+
+    /**
+     * A single user-chosen WSCD plugin ID to prefer for EVERY issuer/
+     * credential type, unless a more specific [wscdUserOverrideMappingJson]
+     * entry applies instead - e.g. "always use my YubiKey, no matter what
+     * any individual issuer/credential type actually requires."
+     */
+    var wscdGlobalOverridePluginId: String?
+        get() = getString("wscd_global_override_plugin_id")
+        set(value) = putString("wscd_global_override_plugin_id", value)
 
     // ── Lifecycle ───────────────────────────────────────────────────
 

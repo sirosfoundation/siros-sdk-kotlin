@@ -21,6 +21,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -73,6 +74,7 @@ fun CredentialDetailScreen(
     credential: StoredCredential,
     onBack: () -> Unit,
     onDelete: () -> Unit,
+    onRenew: () -> Unit,
 ) {
     var showDeleteDialog by remember { mutableStateOf(false) }
 
@@ -119,6 +121,12 @@ fun CredentialDetailScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onRenew) {
+                        Icon(
+                            Icons.Filled.Refresh,
+                            stringResource(R.string.credential_renew),
+                        )
+                    }
                     IconButton(onClick = { showDeleteDialog = true }) {
                         Icon(
                             Icons.Filled.Delete,
@@ -179,14 +187,32 @@ private fun InfoTab(credential: StoredCredential) {
         // Logo
         meta?.logo?.uri?.let { logoUri ->
             Row(verticalAlignment = Alignment.CenterVertically) {
-                AsyncImage(
-                    model = coilLogoModel(logoUri),
-                    contentDescription = meta.logo?.altText,
+                val logo = rememberNormalizedLogoModel(logoUri)
+                Box(
                     modifier = Modifier
                         .size(48.dp)
                         .clip(RoundedCornerShape(8.dp)),
-                    contentScale = ContentScale.Fit,
-                )
+                ) {
+                    // Full-bleed raster background (if any) drawn underneath the
+                    // (now `<image>`-free) SVG - see NormalizedLogo's doc comment;
+                    // without this a logo SVG with an embedded full-card raster
+                    // <image> mis-renders via AndroidSVG with a dark band roughly
+                    // 30% down, the same bug already fixed for full-size cards.
+                    logo.backgroundImageBytes?.let { backgroundBytes ->
+                        AsyncImage(
+                            model = backgroundBytes,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                        )
+                    }
+                    AsyncImage(
+                        model = logo.model,
+                        contentDescription = meta.logo?.altText,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit,
+                    )
+                }
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
                     text = meta.name ?: credential.format,

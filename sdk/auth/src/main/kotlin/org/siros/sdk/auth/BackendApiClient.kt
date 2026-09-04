@@ -206,6 +206,39 @@ class BackendApiClient(
         } ?: throw BackendApiException(0, "Missing wallet_instance_attestation in response", "")
     }
 
+    /**
+     * POST /wallet-provider/fido2-attestation/register — register a FIDO2/CTAP2
+     * hardware-key attestation once, at key-creation time, so the backend can
+     * durably mark the wallet instance as hardware-key-attested (see
+     * `FIDO2AttestationService` in go-wallet-backend). Throws [BackendApiException]
+     * if the backend rejects the attestation (e.g. untrusted AAGUID/chain) or the
+     * feature isn't enabled.
+     *
+     * @param walletInstanceId the WIA JWK Thumbprint (`cnf.jkt`) this key belongs to
+     * @param attestationObject the raw CTAP2 makeCredential attestation object
+     *   (siros-wscd-manager's `AttestationChain.certificates[0]`)
+     * @param clientDataHash the 32-byte hash the attestation signature was computed
+     *   over (`AttestationChain.clientDataHash`)
+     */
+    suspend fun registerFido2Attestation(
+        walletInstanceId: String,
+        attestationObject: ByteArray,
+        clientDataHash: ByteArray,
+    ) {
+        val body = kotlinx.serialization.json.buildJsonObject {
+            put("wallet_instance_id", kotlinx.serialization.json.JsonPrimitive(walletInstanceId))
+            put(
+                "attestation_object",
+                kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(attestationObject)),
+            )
+            put(
+                "client_data_hash",
+                kotlinx.serialization.json.JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(clientDataHash)),
+            )
+        }
+        post("/wallet-provider/fido2-attestation/register", body)
+    }
+
     // ── HTTP primitives ─────────────────────────────────────────────
 
     private suspend fun get(path: String): JsonObject = withContext(Dispatchers.IO) {
@@ -267,6 +300,16 @@ class BackendApiClient(
 
         if (!response.isSuccessful) {
             Timber.e("API request failed: ${request.method} ${request.url} -> ${response.code}")
+            if (response.code == 401) {
+                // Every request in this class authenticates via the backend
+                // token (see addCommonHeaders/ensureBackendToken) - feed a 401
+                // into AuthTokens' rejection counter so REJECTION_THRESHOLD
+                // rejections within REJECTION_WINDOW_MS actually trigger
+                // onSessionRejected/logout, instead of silently doing nothing
+                // (registerTokenRejection was previously dead code - nothing
+                // called it despite AuthTokens already tracking rejections).
+                authTokens?.registerTokenRejection(AuthTokens.TOKEN_BACKEND)
+            }
             throw BackendApiException(
                 code = response.code,
                 message = "API request failed: ${response.code}",

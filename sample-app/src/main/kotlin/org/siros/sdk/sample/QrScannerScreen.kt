@@ -10,6 +10,12 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,9 +24,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -40,6 +49,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -168,6 +178,9 @@ fun QrScannerScreen(
     }
 }
 
+/** How long the detection flash/checkmark stays on screen before handing off to [onQrScanned]. */
+private const val DETECTION_FEEDBACK_DELAY_MS = 350L
+
 @Composable
 @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
 private fun CameraPreviewWithScanner(
@@ -176,13 +189,30 @@ private fun CameraPreviewWithScanner(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    var scanned by remember { mutableStateOf(false) }
+
+    // Set the instant a barcode is decoded (on the analyzer's background thread,
+    // dispatched to the main thread - see the executor.execute below). Drives the
+    // detection overlay immediately, independent of onQrScanned's handoff, so the
+    // user gets visual confirmation the scan succeeded even before the app reacts.
+    var detectedValue by remember { mutableStateOf<String?>(null) }
+    val scanned = detectedValue != null
+
+    // Delay the actual handoff briefly so the detection overlay below is visible
+    // for at least one frame before this screen is navigated away from - without
+    // this, onQrScanned (which immediately closes the scanner) would fire in the
+    // same frame the overlay would have appeared in, and the user would never see it.
+    LaunchedEffect(detectedValue) {
+        val value = detectedValue ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(DETECTION_FEEDBACK_DELAY_MS)
+        onQrScanned(value)
+    }
 
     Box(modifier = modifier.fillMaxSize()) {
         AndroidView(
             factory = { ctx ->
                 val previewView = PreviewView(ctx)
                 val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
+                val mainExecutor = ContextCompat.getMainExecutor(ctx)
 
                 cameraProviderFuture.addListener({
                     val cameraProvider = cameraProviderFuture.get()
@@ -200,7 +230,7 @@ private fun CameraPreviewWithScanner(
 
                     analyzer.setAnalyzer(executor) { imageProxy ->
                         val mediaImage = imageProxy.image
-                        if (mediaImage != null && !scanned) {
+                        if (mediaImage != null && detectedValue == null) {
                             val inputImage = InputImage.fromMediaImage(
                                 mediaImage,
                                 imageProxy.imageInfo.rotationDegrees,
@@ -219,10 +249,12 @@ private fun CameraPreviewWithScanner(
                                             // recognized scheme/query shape, e.g. some verifiers' "Link"
                                             // pages). A stricter gate here would silently drop those before
                                             // handleQrResult's own fallback ever runs.
-                                            scanned = true
                                             val parsed = android.net.Uri.parse(value)
                                             Timber.d("QR scanned: ${parsed.scheme}://${parsed.host}")
-                                            onQrScanned(value)
+                                            // Compose state must be written on the main thread;
+                                            // this analyzer callback runs on its own executor.
+                                            mainExecutor.execute { detectedValue = value }
+                                            break
                                         }
                                     }
                                 }
@@ -245,12 +277,52 @@ private fun CameraPreviewWithScanner(
                     } catch (e: Exception) {
                         Timber.e(e, "Camera bind failed")
                     }
-                }, ContextCompat.getMainExecutor(ctx))
+                }, mainExecutor)
 
                 previewView
             },
             modifier = Modifier.fillMaxSize(),
         )
+
+        // Detection flash: a brief colored border around the whole preview,
+        // the instant a QR code is decoded - immediate, obvious peripheral
+        // feedback that doesn't depend on the user looking at any one spot.
+        AnimatedVisibility(
+            visible = scanned,
+            enter = fadeIn(animationSpec = tween(durationMillis = 80)),
+            exit = fadeOut(animationSpec = tween(durationMillis = 200)),
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .border(width = 6.dp, color = DetectionAccentColor),
+            )
+        }
+
+        // Detection checkmark: centered confirmation icon, the immediate and
+        // visually obvious signal that the scan succeeded, before the app
+        // hands off to the "starting…" feedback step.
+        AnimatedVisibility(
+            visible = scanned,
+            enter = fadeIn(animationSpec = tween(durationMillis = 120)),
+            exit = fadeOut(animationSpec = tween(durationMillis = 150)),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(96.dp)
+                    .background(color = DetectionAccentColor.copy(alpha = 0.85f), shape = CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.CheckCircle,
+                    contentDescription = stringResource(R.string.qr_scanner_detected),
+                    tint = Color.White,
+                    modifier = Modifier.size(56.dp),
+                )
+            }
+        }
 
         // Hint overlay
         Text(
@@ -264,3 +336,6 @@ private fun CameraPreviewWithScanner(
         )
     }
 }
+
+/** Accent color for the QR-detection flash/checkmark overlay - a clear "success" green. */
+private val DetectionAccentColor = Color(0xFF2E7D32)

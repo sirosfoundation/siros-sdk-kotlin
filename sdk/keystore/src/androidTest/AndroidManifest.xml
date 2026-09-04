@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Copyright 2026 SIROS Foundation. BSD 2-Clause License.
+
+    largeHeap is required for VegaZkVectorTest: zk-cred-vega's
+    prep_prove()-returned prep-state (a rerandomizable NeutronNova SNARK
+    cache) is genuinely ~340MB uncompressed, on top of the ~110MB
+    prover/verifier setup keys each test needs one at a time - confirmed via
+    a real OutOfMemoryError against the default 256MB heap limit before this
+    manifest existed. Nothing else in this module's instrumented tests
+    needs this; it's scoped to the test APK's own manifest, never the SDK's
+    real AndroidManifest.xml a consuming app merges in.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:largeHeap="true" />
+</manifest>

@@ -64,6 +64,13 @@ data class FlowStartMessage(
      * Forwarded by go-wallet-backend as the `OAuth-Client-Attestation` HTTP
      * header on PAR/token requests to the credential issuer - see
      * `internal/engine/client_attestation.go`'s `TransportSuppliedAttestation`.
+     *
+     * DEPRECATED as an up-front field: when absent, the backend requests the
+     * attestation itself via a `request_attestation` sign request after
+     * resolving the issuer's authorization server, which is the only place the
+     * PoP audience is reliably known - reply via
+     * [SignResponseMessage.clientAttestation]. Kept on the wire for clients
+     * that have already resolved the offer/AS themselves.
      */
     @SerialName("client_attestation") val clientAttestation: String? = null,
     /**
@@ -73,6 +80,35 @@ data class FlowStartMessage(
      * to (`cnf.jwk`/`cnf.jkt`). Forwarded as `OAuth-Client-Attestation-PoP`.
      */
     @SerialName("client_attestation_pop") val clientAttestationPoP: String? = null,
+    /**
+     * Renewal fields (credential re-issuance/renewal plan, Phase 1 Slice 2 -
+     * see go-wallet-backend's `internal/engine/oid4vci.go` `Execute`). When
+     * [refreshToken] is set, this is a renewal request rather than a fresh
+     * issuance: [offer]/[credentialOfferUri] are unused, and [credentialIssuer]/
+     * [selectedCredentialConfigurationId] are required instead (the client
+     * already knows both from the credential being renewed).
+     */
+    @SerialName("refresh_token") val refreshToken: String? = null,
+    @SerialName("credential_issuer") val credentialIssuer: String? = null,
+    @SerialName("selected_credential_configuration_id") val selectedCredentialConfigurationId: String? = null,
+    /**
+     * When set, asks the server to request a `generate_proof` signature
+     * using this existing kid instead of a fresh key - same-wallet-unit
+     * continuity evidence for a renewal (see
+     * [SignRequestParams.reissuanceKid] equivalent server-side). Optional
+     * even on a renewal request.
+     */
+    @SerialName("reissuance_kid") val reissuanceKid: String? = null,
+    /**
+     * On a renewal request, the private DPoP JWK previously captured from
+     * [FlowCompleteMessage.dpopJwk] for this same refresh_token. The issuer
+     * binds refresh_token to the exact DPoP key used at initial issuance
+     * (RFC 9449/ARF 3.0 §6.6.6.2.2), so the backend must reuse this key
+     * rather than generate a fresh one - see go-wallet-backend's
+     * FlowStartMessage.DPoPJWK doc comment. Never persisted by the SDK
+     * itself beyond whatever the caller does with it (privatedata, Phase 2).
+     */
+    @SerialName("dpop_jwk") val dpopJwk: String? = null,
     val timestamp: String? = null,
 )
 
@@ -93,6 +129,16 @@ data class SignResponseMessage(
     @SerialName("proof_jwt") val proofJwt: String? = null,
     @SerialName("vp_token") val vpToken: String? = null,
     val proofs: List<ProofObject>? = null,
+    /**
+     * Response to a `request_attestation` sign request (go-wallet-backend
+     * `SignActionRequestAttestation`): the Wallet Instance Attestation JWT
+     * (`oauth-client-attestation+jwt`) and the per-flow PoP
+     * (`oauth-client-attestation-pop+jwt`) signed with the instance key over
+     * the `audience`/`issuer` the engine supplied in [SignRequestParams].
+     * Both null means "no attestation available - proceed without".
+     */
+    @SerialName("client_attestation") val clientAttestation: String? = null,
+    @SerialName("client_attestation_pop") val clientAttestationPoP: String? = null,
     val timestamp: String? = null,
 )
 
@@ -150,6 +196,23 @@ data class FlowCompleteMessage(
     @SerialName("type_metadata") val typeMetadata: JsonElement? = null,
     @SerialName("credential_issuer") val credentialIssuer: String? = null,
     @SerialName("selected_credential_configuration_id") val selectedCredentialConfigurationId: String? = null,
+    /**
+     * OAuth refresh_token the issuer returned alongside this batch, if any
+     * (credential re-issuance/renewal plan, Phase 1). The SDK does not
+     * persist this durably yet (that's Phase 2 - `privatedata` storage);
+     * for now the caller is responsible for holding onto it if a renewal
+     * is wanted later.
+     */
+    @SerialName("refresh_token") val refreshToken: String? = null,
+    /**
+     * Present only alongside [refreshToken]: the private JWK of the
+     * ephemeral DPoP key this flow used for its token exchange. Must be
+     * presented back as [FlowStartMessage.dpopJwk] on a renewal request -
+     * see that field's doc comment for why. The backend does not persist
+     * this itself; the caller is responsible for storing it durably
+     * alongside [refreshToken] (e.g. via privatedata).
+     */
+    @SerialName("dpop_jwk") val dpopJwk: String? = null,
     val timestamp: String? = null,
 )
 
@@ -199,6 +262,13 @@ data class SignRequestParams(
     @SerialName("credentials_to_include") val credentialsToInclude: List<CredentialRef>? = null,
     @SerialName("response_uri") val responseUri: String? = null,
     @SerialName("verifier_jwk_thumbprint") val verifierJwkThumbprint: String? = null,
+    // The verifier's own session id for this presentation (from the
+    // request_uri's "sessionId" query param, forwarded by go-wallet-backend)
+    // - a real ZK/PPID pseudonym's verifier_context binds to THIS specific
+    // session, not the verifier's static identity (confirmed 2026-08-17,
+    // direct report from zk-cred-longfellow's V8/PPID author). Null for
+    // non-ZK presentations or verifiers whose request_uri never carried one.
+    @SerialName("verifier_session_id") val verifierSessionId: String? = null,
 )
 
 @Serializable

@@ -85,6 +85,27 @@ class JweKeystoreTest {
     }
 
     @Test
+    fun wscdCredentialsRoundTripThroughExportAndReimport() = runTest {
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+
+        // Matches PreviewSignPlugin::export_state()'s JSON shape (opaque to
+        // this SDK) - privatedata-spec §6.1 S.wscdCredentials, the
+        // native-SDK-only extension letting a FIDO2 (roaming authenticator)
+        // key stay addressable from any device sharing this account.
+        val fido2State = """{"keys":[{"kid":"fido-0","credential_id":"AQID","key_handle":"BAUG"}],"next_id":1}"""
+        keystore.setWscdCredentials("fido2", fido2State)
+        assertEquals(fido2State, keystore.exportWscdCredentials()["fido2"])
+
+        val exported = keystore.exportEncryptedContainer()
+        keystore.lock()
+        assertTrue(keystore.exportWscdCredentials().isEmpty())
+
+        keystore.unlock(fakePrfOutput, exported, hkdfSalt, hkdfInfo)
+        assertEquals(fido2State, keystore.exportWscdCredentials()["fido2"])
+    }
+
+    @Test
     fun lockClearsKeys() = runTest {
         val keystore = JweKeystore()
         keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)

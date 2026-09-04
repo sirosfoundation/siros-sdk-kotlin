@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.wallet
 
+import org.siros.sdk.credentials.CredentialAttributeDiff
 import org.siros.sdk.credentials.CredentialMatcher
 import org.siros.sdk.credentials.StoredCredential
 
@@ -56,14 +57,54 @@ interface WalletEventListener {
     fun onCredentialReceived(credential: StoredCredential) {}
 
     /**
-     * Called when a flow completes (issuance or presentation).
+     * A credential batch was renewed (credential re-issuance/renewal plan,
+     * Phase 2, `AttributeDiffService`-equivalent, ISSU_59) and at least one
+     * claim differs from the batch it replaced. The renewal's own network
+     * round-trip was silent (no user interaction), but ISSU_59 mandates
+     * notifying the user of any claim change - the app should surface this
+     * (e.g. wallet-frontend #73's consent/notification popup) even though
+     * [onCredentialReceived] already fired for the new credential.
+     *
+     * Not called when a renewal completes with identical claims (the fully
+     * silent case per plan §4.4) - only when [CredentialAttributeDiff.hasChanges]
+     * is true.
      */
-    fun onFlowComplete(flowId: String) {}
+    fun onCredentialRenewedWithAttributeDiff(credential: StoredCredential, diff: CredentialAttributeDiff) {}
+
+    /**
+     * A credential batch's eligible (unused) instance count has dropped to
+     * or below its renew threshold (credential re-issuance/renewal plan
+     * §4.3/wallet-frontend #72 parity - EUDI ARF ISSU_50/54's proactive
+     * renewal trigger). The app should surface this as a near-expiry
+     * banner/nudge (Phase 3 UX, not yet built here) rather than waiting for
+     * the reactive fully-exhausted case. Fires at most once per drop below
+     * threshold per [SirosWallet.recordPresentation] call - not repeated on
+     * every recomposition.
+     */
+    fun onCredentialNearExpiry(credential: StoredCredential, eligibleRemaining: Int, threshold: Int) {}
+
+    /**
+     * Called when a flow completes (issuance or presentation).
+     *
+     * @param redirectUri For an OID4VP `direct_post.jwt` presentation, some
+     *   verifiers (e.g. verifier.multipaz.org) return a `redirect_uri` in
+     *   their response so the user's browser/session can be returned to the
+     *   verifier's own page to see the result. When present, the app should
+     *   open it (Custom Tab or browser), matching [onAuthorizationRequired]'s
+     *   pattern. Null when the verifier didn't return one (also true for
+     *   every OID4VCI issuance completion).
+     */
+    fun onFlowComplete(flowId: String, redirectUri: String? = null) {}
 
     /**
      * Called when a flow fails.
+     *
+     * @param redirectUri Some verifiers return a `redirect_uri` even from
+     *   their error-response endpoint (e.g. when the user declines an OID4VP
+     *   presentation) - see [onFlowComplete]'s equivalent param. Null unless
+     *   the verifier provided one.
      */
-    fun onFlowError(flowId: String, errorMessage: String) {}
+    fun onFlowError(flowId: String, errorMessage: String, redirectUri: String? = null) {}
 
     /**
      * An issuer requires user authorization (OAuth consent).
@@ -97,4 +138,19 @@ interface WalletEventListener {
         flowId: String,
         description: String?,
     ): String? = null
+
+    /**
+     * The current session could not be silently refreshed and is no longer
+     * valid - e.g. the engine WebSocket's token refresh failed before a
+     * reconnect, or repeated REST calls were rejected as unauthenticated.
+     * [SirosWallet] fires this *before* logging out (logout is launched
+     * asynchronously right after), so wallet state read during this callback
+     * may still briefly reflect the old session. Unlike [onFlowError] (a
+     * specific flow's failure, session otherwise fine), this means the whole
+     * session is gone - route the user to the login screen rather than
+     * surfacing a generic error message.
+     */
+    fun onReauthenticationRequired() {
+        // Default: no-op. Host apps override to route to a login screen.
+    }
 }

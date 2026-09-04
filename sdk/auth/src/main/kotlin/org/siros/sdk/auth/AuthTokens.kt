@@ -44,8 +44,15 @@ class AuthTokens(
     var onSessionRejected: (() -> Unit)? = null
 
     private val mutex = Mutex()
-    private val tokens = mutableMapOf<String, AccessToken>()
-    private val rejections = mutableMapOf<String, MutableList<Long>>()
+    private val tokens = java.util.concurrent.ConcurrentHashMap<String, AccessToken>()
+    // ConcurrentHashMap/CopyOnWriteArrayList (rather than plain mutableMapOf/
+    // mutableListOf) because registerTokenRejection is a plain (non-suspend)
+    // function called directly from request-handling threads (e.g.
+    // BackendApiClient.executeRaw on Dispatchers.IO, potentially from several
+    // concurrent requests) - it can't take the coroutine `mutex` above without
+    // becoming suspend itself, so its own map/list mutations need to be safe
+    // under concurrent access independent of that mutex.
+    private val rejections = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CopyOnWriteArrayList<Long>>()
 
     /**
      * Ensure a valid token of the given kind is available.
@@ -60,10 +67,15 @@ class AuthTokens(
             tokens.remove(name)
         }
 
-        val token = if (kind.anonymous) {
-            authServerClient.requestAnonymousToken(kind.aud, kind.tac)
-        } else {
-            authServerClient.requestAccessToken(kind.aud, kind.tac)
+        val token = try {
+            if (kind.anonymous) {
+                authServerClient.requestAnonymousToken(kind.aud, kind.tac)
+            } else {
+                authServerClient.requestAccessToken(kind.aud, kind.tac)
+            }
+        } catch (e: AuthException) {
+            handleAsTokenFailure(e)
+            throw e
         }
         tokens[name] = token
         token
@@ -72,7 +84,14 @@ class AuthTokens(
     /** Convenience: ensure a backend token (authenticated, full CRUD). */
     suspend fun ensureBackendToken(): AccessToken = ensureToken(TOKEN_BACKEND)
 
-    /** Convenience: ensure an anonymous token (read-only, no auth required). */
+    /**
+     * Convenience: ensure an anonymous token (issued without a `sub` claim;
+     * still requires a real, already-authenticated session server-side).
+     * Scoped to `tac ⊆ "rl"` (read/list only), enforced server-side - intended
+     * for registry-style read calls, NOT for anything that needs to write
+     * (e.g. the engine WebSocket session, which needs `insert` for OID4VCI
+     * issuance - use [ensureBackendToken] there instead).
+     */
     suspend fun ensureAnonymousToken(): AccessToken = ensureToken(TOKEN_ANONYMOUS)
 
     /**
@@ -83,13 +102,40 @@ class AuthTokens(
         val kind = MANIFEST[name]
             ?: throw AuthException("Unknown token kind: $name")
 
-        val token = if (kind.anonymous) {
-            authServerClient.requestAnonymousToken(kind.aud, kind.tac)
-        } else {
-            authServerClient.requestAccessToken(kind.aud, kind.tac)
+        val token = try {
+            if (kind.anonymous) {
+                authServerClient.requestAnonymousToken(kind.aud, kind.tac)
+            } else {
+                authServerClient.requestAccessToken(kind.aud, kind.tac)
+            }
+        } catch (e: AuthException) {
+            handleAsTokenFailure(e)
+            throw e
         }
         tokens[name] = token
         token
+    }
+
+    /**
+     * A 401 straight from the AS's own `/auth/token` endpoint (i.e. minting a
+     * *new* token failed, not just a previously-issued one being rejected
+     * later by a backend API call) means the AS itself has already declared
+     * the session dead - unlike [registerTokenRejection]'s REST-401 case,
+     * there's no ambiguity to wait out via [REJECTION_THRESHOLD]/
+     * [REJECTION_WINDOW_MS], so this fires [onSessionRejected] immediately.
+     *
+     * Without this, a call like "add credential" made with an AS session
+     * that's expired (but whose locally-cached access token hadn't yet hit
+     * its own claimed expiry, or had none cached at all) would throw a raw
+     * [AuthException] straight out of [ensureToken]/[forceRefreshToken] with
+     * no logout/re-login ever triggered — confirmed via a live "AS request
+     * failed 401 - /auth/token" report with no reauth flow firing.
+     */
+    private fun handleAsTokenFailure(e: AuthException) {
+        if (e.code == 401) {
+            Timber.w("AS token request rejected (401) — session invalid")
+            onSessionRejected?.invoke()
+        }
     }
 
     /**
@@ -99,7 +145,7 @@ class AuthTokens(
      */
     fun registerTokenRejection(name: String) {
         val now = System.currentTimeMillis()
-        val list = rejections.getOrPut(name) { mutableListOf() }
+        val list = rejections.computeIfAbsent(name) { java.util.concurrent.CopyOnWriteArrayList() }
         list.add(now)
 
         // Clear the rejected token from cache so it won't be re-served
@@ -137,7 +183,7 @@ class AuthTokens(
             ),
             TOKEN_ANONYMOUS to TokenKind(
                 name = TOKEN_ANONYMOUS,
-                aud = "wallet-backend",
+                aud = "wallet-registry",
                 tac = "rl",
                 anonymous = true,
             ),

@@ -29,7 +29,33 @@ sealed class ClientIdScheme {
     /** Pre-registered or unknown scheme — catch-all. */
     data class PreRegistered(override val identifier: String) : ClientIdScheme()
 
+    /**
+     * A user-facing identifier with the scheme prefix stripped - a raw
+     * client_id like "x509_san_dns:verifier.multipaz.org" is meaningless to
+     * a user; the hostname alone is what matters. Falls back to the
+     * unmodified [identifier] when no hostname can be extracted (e.g. a
+     * non-web DID, or an x509_hash whose value is a certificate hash, not a
+     * name).
+     */
+    val displayName: String
+        get() = when (this) {
+            is X509SanDns -> identifier
+            is X509SanUri -> hostFromUrl(identifier) ?: identifier
+            is Https -> hostFromUrl(identifier) ?: identifier
+            is Did -> if (method == "web") {
+                // did:web:example.com[:path...] -> example.com - path segments
+                // after the host are colon-separated per the did:web spec.
+                identifier.removePrefix("did:web:").substringBefore(':')
+            } else {
+                identifier
+            }
+            is VerifierAttestation, is PreRegistered -> identifier
+        }
+
     companion object {
+        private fun hostFromUrl(value: String): String? =
+            runCatching { java.net.URI(value).host }.getOrNull()?.takeIf { it.isNotBlank() }
+
         /**
          * Parse a raw client_id string into a typed [ClientIdScheme].
          *

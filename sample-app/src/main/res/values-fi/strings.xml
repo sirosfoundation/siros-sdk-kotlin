@@ -23,6 +23,7 @@
     <string name="credentials_welcome">Tervetuloa, %1$s</string>
     <string name="credentials_count_one">%1$d todistus</string>
     <string name="credentials_count_other">%1$d todistusta</string>
+    <string name="credentials_stack_overflow_more">+%1$d lisää</string>
     <string name="credentials_empty_title">Ei todistuksia</string>
     <string name="credentials_empty_subtitle">Paina Lisää aloittaaksesi</string>
 
@@ -31,7 +32,15 @@
     <string name="add_credential_loading">Ladataan saatavilla olevia todistuksia\u2026</string>
     <string name="add_credential_empty">Ei saatavilla olevia todistuksia</string>
     <string name="add_credential_retry">Yritä uudelleen</string>
+    <string name="add_credential_row_action_add">Lisää</string>
+    <string name="add_credential_row_action_close">Sulje</string>
     <string name="nav_back">Takaisin</string>
+    <string name="credential_capability_online">Voidaan esittää verkossa</string>
+    <string name="credential_capability_proximity">Voidaan esittää kasvokkain koskettamalla puhelinta</string>
+    <string name="credential_capability_zkp">Voi todistaa henkilöllisyytesi paljastamatta kaikkia tietojasi</string>
+
+    <!-- Presentation consent screen -->
+    <string name="presentation_consent_title">Todistuspyyntö</string>
 
     <!-- Credential detail screen -->
     <string name="credential_detail_title">Todistuksen tiedot</string>
@@ -50,6 +59,7 @@
     <string name="copy_to_clipboard">Kopioi leikepöydälle</string>
     <string name="copied_to_clipboard">Kopioitu leikepöydälle</string>
     <string name="credential_renew">Uusi</string>
+    <string name="credential_renew_not_possible">Uusiminen ei ole mahdollista</string>
     <string name="credential_detail_delete">Poista todistus</string>
     <string name="credential_detail_delete_confirm_title">Poista todistus</string>
     <string name="credential_detail_delete_confirm_message">Haluatko varmasti poistaa \"%1$s\"? Tätä toimintoa ei voi peruuttaa.</string>
@@ -60,6 +70,7 @@
     <string name="settings_account_section">Tili</string>
     <string name="settings_signed_in_as">Kirjautunut nimellä</string>
     <string name="settings_backend_url">Palvelin</string>
+    <string name="settings_zk_circuit_urls">ZK-piirien isännöinti</string>
     <string name="settings_tenant_id">Vuokralainen</string>
     <string name="settings_credentials_stored">Tallennetut todistukset</string>
     <string name="settings_app_version">Sovellusversio</string>
@@ -92,11 +103,15 @@
     <string name="qr_scan_button">Skannaa QR-koodi</string>
     <string name="qr_scanner_paste_label">Tai liitä todistustarjouksen URI</string>
     <string name="qr_scanner_paste_button">Lunasta tarjous</string>
+    <string name="qr_scanner_detected">QR-koodi tunnistettu</string>
 
     <!-- Flow states -->
     <string name="flow_issuing">Myönnetään todistusta\u2026</string>
     <string name="flow_presenting">Esitetään todistusta\u2026</string>
     <string name="flow_processing">Käsitellään\u2026</string>
+    <string name="flow_starting_issuance">Otetaan yhteyttä myöntäjään\u2026</string>
+    <string name="flow_starting_presentation">Otetaan yhteyttä todentajaan\u2026</string>
+    <string name="flow_starting_subtitle">Tämä voi kestää hetken myöntäjästä tai todentajasta riippuen - odota hetki.</string>
     <string name="flow_cancel">Peruuta</string>
     <string name="flow_close">Sulje</string>
     <string name="flow_error_title">Prosessi epäonnistui</string>
@@ -119,6 +134,7 @@
     <string name="flow_step_awaiting_consent">Odotetaan suostumustasi…</string>
     <string name="flow_step_credential_selection">Valitaan todistuksia…</string>
     <string name="flow_step_submitting_response">Lähetetään vastausta todentajalle…</string>
+    <string name="flow_step_computing_proof">Lasketaan todistetta…</string>
     <string name="flow_step_unknown">Käsitellään…</string>
     <string name="flow_diagnostic_label">Diagnostiikka: %1$s</string>
     <string name="flow_credentials_received">Vastaanotettu %1$d todistusta</string>

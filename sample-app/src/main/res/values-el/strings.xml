@@ -23,6 +23,7 @@
     <string name="credentials_welcome">Καλώς ήρθατε, %1$s</string>
     <string name="credentials_count_one">%1$d πιστοποιητικό</string>
     <string name="credentials_count_other">%1$d πιστοποιητικά</string>
+    <string name="credentials_stack_overflow_more">+%1$d ακόμα</string>
     <string name="credentials_empty_title">Δεν υπάρχουν πιστοποιητικά</string>
     <string name="credentials_empty_subtitle">Πατήστε Προσθήκη παρακάτω για να ξεκινήσετε</string>
 
@@ -31,7 +32,15 @@
     <string name="add_credential_loading">Φόρτωση διαθέσιμων πιστοποιητικών\u2026</string>
     <string name="add_credential_empty">Δεν υπάρχουν διαθέσιμα πιστοποιητικά</string>
     <string name="add_credential_retry">Δοκιμάστε Ξανά</string>
+    <string name="add_credential_row_action_add">Προσθήκη</string>
+    <string name="add_credential_row_action_close">Κλείσιμο</string>
     <string name="nav_back">Πίσω</string>
+    <string name="credential_capability_online">Μπορεί να παρουσιαστεί διαδικτυακά</string>
+    <string name="credential_capability_proximity">Μπορεί να παρουσιαστεί αυτοπροσώπως αγγίζοντας το τηλέφωνό σας</string>
+    <string name="credential_capability_zkp">Μπορεί να αποδείξει την ταυτότητά σας χωρίς να αποκαλύψει όλα τα στοιχεία σας</string>
+
+    <!-- Presentation consent screen -->
+    <string name="presentation_consent_title">Αίτημα Πιστοποιητικού</string>
 
     <!-- Credential detail screen -->
     <string name="credential_detail_title">Λεπτομέρειες Πιστοποιητικού</string>
@@ -50,6 +59,7 @@
     <string name="copy_to_clipboard">Αντιγραφή στο πρόχειρο</string>
     <string name="copied_to_clipboard">Αντιγράφηκε στο πρόχειρο</string>
     <string name="credential_renew">Ανανέωση</string>
+    <string name="credential_renew_not_possible">Δεν είναι δυνατή η ανανέωση</string>
     <string name="credential_detail_delete">Διαγραφή Πιστοποιητικού</string>
     <string name="credential_detail_delete_confirm_title">Διαγραφή Πιστοποιητικού</string>
     <string name="credential_detail_delete_confirm_message">Σίγουρα θέλετε να διαγράψετε το \"%1$s\"; Αυτή η ενέργεια δεν μπορεί να αναιρεθεί.</string>
@@ -60,6 +70,7 @@
     <string name="settings_account_section">Λογαριασμός</string>
     <string name="settings_signed_in_as">Συνδεδεμένος ως</string>
     <string name="settings_backend_url">Διακομιστής</string>
+    <string name="settings_zk_circuit_urls">Φιλοξενία κυκλωμάτων ZK</string>
     <string name="settings_tenant_id">Ενοικιαστής</string>
     <string name="settings_credentials_stored">Αποθηκευμένα πιστοποιητικά</string>
     <string name="settings_app_version">Έκδοση εφαρμογής</string>
@@ -92,11 +103,15 @@
     <string name="qr_scan_button">Σάρωση Κωδικού QR</string>
     <string name="qr_scanner_paste_label">Ή επικολλήστε ένα URI προσφοράς πιστοποιητικού</string>
     <string name="qr_scanner_paste_button">Εξαργύρωση Προσφοράς</string>
+    <string name="qr_scanner_detected">Εντοπίστηκε κωδικός QR</string>
 
     <!-- Flow states -->
     <string name="flow_issuing">Έκδοση Πιστοποιητικού\u2026</string>
     <string name="flow_presenting">Παρουσίαση Πιστοποιητικού\u2026</string>
     <string name="flow_processing">Επεξεργασία\u2026</string>
+    <string name="flow_starting_issuance">Επικοινωνία με τον εκδότη\u2026</string>
+    <string name="flow_starting_presentation">Επικοινωνία με τον επαληθευτή\u2026</string>
+    <string name="flow_starting_subtitle">Αυτό μπορεί να διαρκέσει λίγο ανάλογα με τον εκδότη ή τον επαληθευτή - περιμένετε λίγο.</string>
     <string name="flow_cancel">Ακύρωση</string>
     <string name="flow_close">Κλείσιμο</string>
     <string name="flow_error_title">Η Ροή Απέτυχε</string>
@@ -119,6 +134,7 @@
     <string name="flow_step_awaiting_consent">Αναμονή της συγκατάθεσής σας…</string>
     <string name="flow_step_credential_selection">Επιλογή πιστοποιητικών…</string>
     <string name="flow_step_submitting_response">Αποστολή απάντησης στον επαληθευτή…</string>
+    <string name="flow_step_computing_proof">Υπολογισμός απόδειξης…</string>
     <string name="flow_step_unknown">Επεξεργασία…</string>
     <string name="flow_diagnostic_label">Διαγνωστικό: %1$s</string>
     <string name="flow_credentials_received">Ελήφθησαν %1$d πιστοποιητικά</string>

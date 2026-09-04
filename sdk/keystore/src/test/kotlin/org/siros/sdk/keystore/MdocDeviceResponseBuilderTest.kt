@@ -217,12 +217,19 @@ class MdocDeviceResponseBuilderTest {
         // "OpenID4VPHandover"/clientId/responseUri shape.
         val origin = "https://relying-party.example"
         val nonce = "dc-api-nonce"
-        val thumbprint = "enc-thumbprint"
+        // A realistic JWK.computeThumbprint().toString() value: base64url,
+        // no padding, decoding to a 32-byte SHA-256 digest.
+        val thumbprintBytes = ByteArray(32) { it.toByte() }
+        val thumbprint = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(thumbprintBytes)
 
         val handoverInfo = CBORObject.NewArray()
         handoverInfo.Add(CBORObject.FromObject(origin))
         handoverInfo.Add(CBORObject.FromObject(nonce))
-        handoverInfo.Add(CBORObject.FromObject(thumbprint))
+        // Per OpenID4VP 1.0 (#dc_api), this element MUST be a CBOR Byte
+        // String of the raw thumbprint digest - not a text string of its
+        // base64url form (a real bug: encoding it as text made the wallet's
+        // handover hash disagree with any spec-conformant verifier's).
+        handoverInfo.Add(CBORObject.FromObject(thumbprintBytes))
         val expectedHash = java.security.MessageDigest.getInstance("SHA-256")
             .digest(handoverInfo.EncodeToBytes())
 
@@ -277,5 +284,76 @@ class MdocDeviceResponseBuilderTest {
         val deviceAuth = CBORObject.DecodeFromBytes(outerTag.UntagOne().GetByteString())
         val handover = deviceAuth[1][2]
         assertEquals("OpenID4VPDCAPIHandover", handover[0].AsString())
+    }
+
+    @Test
+    fun build_unsupportedAlgorithm_throwsInsteadOfSilentlyDefaultingToEs256() = runTest {
+        // `algorithm` here comes from a real signing key's own reported
+        // algorithm (WscdKeystoreAdapter's `key.algorithm`) - silently
+        // defaulting an unrecognized value to ES256 would put the wrong COSE
+        // alg identifier in the protected header while the signature itself
+        // was produced with a different algorithm.
+        val credentialBytes = buildStoredCredential()
+        val builder = MdocDeviceResponseBuilder(credentialBytes, algorithm = "RS256")
+
+        var thrown: Throwable? = null
+        try {
+            builder.build(
+                nonce = "n",
+                audience = "https://verifier.example.com",
+                responseUri = "https://verifier.example.com/response",
+                verifierJwkThumbprint = null,
+                disclosedClaims = null,
+                signer = { ByteArray(64) },
+            )
+        } catch (e: Throwable) {
+            thrown = e
+        }
+        assertTrue(thrown is IllegalArgumentException)
+    }
+
+    @Test
+    fun buildZkDeviceResponse_includesDigestIdOnlyWhenProvided() {
+        val disclosedClaims = linkedMapOf(
+            "family_name" to CBORObject.FromObject("Doe"),
+            "given_name" to CBORObject.FromObject("Jane"),
+        )
+        // Only family_name has a known digestId - given_name's is
+        // deliberately omitted, mirroring a claim buildZkPresentationToken
+        // couldn't resolve one for (e.g. the derived pseudonym claim,
+        // which has no real IssuerSignedItem.digestID of its own).
+        val digestIds = mapOf("family_name" to 26u)
+
+        val issuerAuth = CBORObject.NewArray()
+        issuerAuth.Add(CBORObject.FromObject(ByteArray(0)))
+        issuerAuth.Add(CBORObject.NewMap())
+        issuerAuth.Add(CBORObject.FromObject(ByteArray(0)))
+        issuerAuth.Add(CBORObject.FromObject(ByteArray(0)))
+
+        val response = MdocDeviceResponseBuilder.buildZkDeviceResponse(
+            proofBytes = ByteArray(4) { it.toByte() },
+            zkSystemId = "vega-mc-p256-v1-prover-key-r7",
+            docType = docType,
+            timestamp = "2026-08-25T00:00:00Z",
+            namespace = namespace,
+            disclosedClaims = disclosedClaims,
+            issuerAuth = issuerAuth,
+            digestIds = digestIds,
+        )
+
+        val decoded = CBORObject.DecodeFromBytes(response)
+        val zkDocuments = decoded["zkDocuments"]
+        assertEquals(1, zkDocuments.size())
+        val documentData = CBORObject.DecodeFromBytes(zkDocuments[0]["documentData"].UntagOne().GetByteString())
+        val items = documentData["issuerSigned"][CBORObject.FromObject(namespace)]
+        assertEquals(2, items.size())
+
+        val familyNameItem = (0 until items.size()).map { items[it] }
+            .first { it["elementIdentifier"].AsString() == "family_name" }
+        assertEquals(26L, familyNameItem["digestId"].AsInt64Value())
+
+        val givenNameItem = (0 until items.size()).map { items[it] }
+            .first { it["elementIdentifier"].AsString() == "given_name" }
+        assertTrue(givenNameItem["digestId"] == null || givenNameItem["digestId"].isNull)
     }
 }

@@ -2,13 +2,17 @@
 package org.siros.sdk.credentials
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.siros.sdk.credentials.mdoc.DocumentMdoc
 import org.siros.sdk.credentials.mdoc.MdocCbor
 import timber.log.Timber
+import java.security.MessageDigest
 import java.util.Base64
 
 /**
@@ -85,7 +89,18 @@ object CredentialUtils {
      */
     fun extractClaims(credential: StoredCredential): List<DisplayClaim> {
         if (credential.format == "mso_mdoc") return extractMdocClaims(credential)
-        val payload = parseJwtPayload(credential.raw) ?: return emptyList()
+        val rawPayload = parseJwtPayload(credential.raw) ?: return emptyList()
+        // The JWT payload alone only ever carries whatever the issuer chose
+        // NOT to selectively disclose (typically just iss/vct/exp/_sd/cnf) -
+        // every real user-facing claim in a properly-issued SD-JWT VC (the
+        // entire point of "selective disclosure") lives in the `~`-separated
+        // disclosure segments instead, keyed into the payload only by SHA-256
+        // digest under `_sd`. Without merging those back in, VCTM path
+        // resolution below silently finds nothing for any disclosed claim -
+        // confirmed via live testing: an mdoc (whose claims live directly in
+        // CBOR namespaces, no disclosure indirection) rendered fine while an
+        // SD-JWT PID showed claim labels with no values at all.
+        val payload = mergeSdJwtDisclosures(credential.raw, rawPayload)
         val vctmClaims = credential.metadata?.claims.orEmpty()
 
         // VCTM claim paths can be arbitrarily nested (e.g. diploma's ELM schema
@@ -240,6 +255,69 @@ object CredentialUtils {
     }
 
     /**
+     * Splices an SD-JWT VC's `~`-separated disclosures back into its JWT
+     * [payload], so [resolveClaimPath]/the top-level "uncovered claims" dump
+     * in [extractClaims] can actually find them - per the SD-JWT spec, a
+     * disclosed claim is NOT present in the payload directly; only a
+     * SHA-256 digest of its disclosure is, listed under an `_sd` array
+     * (which can appear at any nesting level, not just the top). Returns
+     * [payload] unchanged if there are no disclosures, none decode, or
+     * `_sd_alg` declares an algorithm other than the default `sha-256`
+     * (not attempted - logged and left as-is rather than guessing).
+     *
+     * Deliberately does NOT re-verify each disclosure's digest against the
+     * issuer's signature the way a verifier would - this credential was
+     * already accepted and stored, so for display purposes matching digests
+     * to disclosures is just reassembling the claim tree, not re-trusting
+     * it. Array-element disclosures (`[salt, value]`, no claim name) are
+     * skipped - there's no key to splice them in under for a flat claims
+     * list; only object-property disclosures (`[salt, claimName, value]`)
+     * are useful here.
+     */
+    private fun mergeSdJwtDisclosures(raw: String, payload: JsonObject): JsonObject {
+        val disclosureSegments = raw.split("~").drop(1).filter { it.isNotBlank() }
+        if (disclosureSegments.isEmpty()) return payload
+
+        val sdAlg = (payload["_sd_alg"] as? JsonPrimitive)?.contentOrNull ?: "sha-256"
+        if (sdAlg != "sha-256") {
+            Timber.w("Unsupported _sd_alg '$sdAlg' - selectively disclosed claims will not be shown")
+            return payload
+        }
+
+        val sha256 = MessageDigest.getInstance("SHA-256")
+        val byDigest = mutableMapOf<String, Pair<String, JsonElement>>()
+        for (segment in disclosureSegments) {
+            val array = decodeJsonSegment(segment) as? JsonArray ?: continue
+            if (array.size != 3) continue // not an object-property disclosure
+            val claimName = (array[1] as? JsonPrimitive)?.contentOrNull ?: continue
+            // Digest is over the disclosure's own compact (base64url) string,
+            // exactly as it appears in `raw` - never a re-serialization of
+            // the decoded JSON, which could byte-for-byte differ from what
+            // the issuer originally hashed.
+            val digest = Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(sha256.digest(segment.toByteArray(Charsets.UTF_8)))
+            byDigest[digest] = claimName to array[2]
+        }
+        if (byDigest.isEmpty()) return payload
+
+        fun mergeObject(obj: JsonObject): JsonObject {
+            val result = LinkedHashMap<String, JsonElement>()
+            for ((key, value) in obj) {
+                if (key == "_sd") continue // replaced by the spliced-in claims below
+                result[key] = if (value is JsonObject) mergeObject(value) else value
+            }
+            val digests = (obj["_sd"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+            for (digest in digests) {
+                val (claimName, claimValue) = byDigest[digest] ?: continue
+                result[claimName] = if (claimValue is JsonObject) mergeObject(claimValue) else claimValue
+            }
+            return JsonObject(result)
+        }
+
+        return mergeObject(payload)
+    }
+
+    /**
      * Build [CredentialMetadata] by combining issuer display metadata with VCTM.
      *
      * Call this when storing a new credential to populate its metadata from
@@ -315,6 +393,48 @@ object CredentialUtils {
     }
 
     /**
+     * Build the minimal stand-in [CredentialMetadata] for a credential whose
+     * VCTM/MDDL document could not be obtained (see
+     * [CredentialMetadata.hydration]).
+     *
+     * Everything here is derived from what the wallet already holds - nothing
+     * is fetched. The name is the credential configuration ID (the closest
+     * thing to a type name the issuer gave us, humanised via
+     * [formatClaimKey] so `eu.europa.ec.eudi.pid_mdoc` reads as a word rather
+     * than an identifier), falling back to the format. The issuer is shown by
+     * host name, which is what a user recognises an issuer by when no display
+     * name was published. `vct`/`doctype` come from the credential itself so
+     * the DC API registry can still match it. No logo, no colours, no claim
+     * labels, no SVG templates: the UI's flat layout handles all of those
+     * being absent.
+     */
+    fun buildFallbackMetadata(credential: StoredCredential): CredentialMetadata {
+        val configId = credential.credentialConfigurationId?.takeIf { it.isNotBlank() }
+        val issuerIdent = credential.credentialIssuerIdentifier?.takeIf { it.isNotBlank() }
+        val isMdoc = credential.format == "mso_mdoc"
+        val doctype = if (isMdoc) parseMdocDocument(credential)?.docType else null
+        val vct = if (!isMdoc) parseJwtPayload(credential.raw)?.get("vct")?.jsonPrimitive?.contentOrNull else null
+        return CredentialMetadata(
+            name = configId?.let { formatClaimKey(it.substringAfterLast('.')) } ?: credential.format,
+            issuer = IssuerInfo(
+                name = issuerIdent?.let { hostOf(it) } ?: issuerIdent,
+                url = issuerIdent,
+            ),
+            vct = vct,
+            doctype = doctype,
+            hydration = CredentialMetadata.HYDRATION_FALLBACK,
+        )
+    }
+
+    /** The host of [url], or the whole string if it doesn't parse as one. */
+    private fun hostOf(url: String): String =
+        try {
+            java.net.URI(url).host ?: url
+        } catch (_: Exception) {
+            url
+        }
+
+    /**
      * Format a raw claim key like "given_name" into "Given Name".
      */
     fun formatClaimKey(key: String): String {
@@ -342,14 +462,21 @@ object CredentialUtils {
      * wallet-frontend's `CredentialsContextProvider.fetchVcData`: only the
      * `instanceId == 0` credential of a batch (see [StoredCredential.batchId])
      * is returned as a visible entry, with every sibling copy's usage count
-     * attached as [CredentialWithInstances.instances] - the UI derives its
-     * "remaining copies" badge from `instances.count { it.sigCount == 0 }`.
+     * and key availability attached as [CredentialWithInstances.instances] -
+     * the UI derives its "remaining copies" badge, and whether the whole
+     * batch has entered the "shadow" (renew-only) display state, from
+     * `instances.count { it.sigCount == 0 && it.hasKey }` - a batch down to
+     * zero by either consumption or lost keys looks the same to the UI, and
+     * [availableKeyIds] (see [hasAvailableKey]) is what makes the latter
+     * visible at all, not just silently excluded from presentation like
+     * [eligibleInstances] alone would do.
      * A credential with no [StoredCredential.batchId] (single-copy issuance)
      * is returned as its own one-instance family.
      */
     fun groupForDisplay(
         credentials: List<StoredCredential>,
         presentationHistory: List<PresentationRecord>,
+        availableKeyIds: Set<String>,
     ): List<CredentialWithInstances> {
         fun sigCountFor(credentialId: Long) =
             presentationHistory.count { credentialId in it.credentialIds }
@@ -361,7 +488,13 @@ object CredentialUtils {
             val visible = members.find { it.instanceId == 0 } ?: return@mapNotNull null
             val instances = members
                 .sortedBy { it.instanceId }
-                .map { CredentialInstance(it.instanceId, sigCountFor(it.id)) }
+                .map {
+                    CredentialInstance(
+                        it.instanceId,
+                        sigCountFor(it.id),
+                        hasAvailableKey(it.kid, availableKeyIds),
+                    )
+                }
             CredentialWithInstances(visible, instances)
         }
 
@@ -388,35 +521,91 @@ object CredentialUtils {
      * "remaining copies" ribbon never disagree.
      *
      * [CredentialConsumptionPolicy.NEVER_CONSUME] (the default - today's
-     * actual behavior) returns every instance unconditionally. Otherwise, an
-     * instance is eligible only if it hasn't already been presented
-     * (`sigCount == 0`) - each instance is bound to its own device key
-     * specifically so a verifier can't correlate repeated presentations by a
-     * reused key/signature; reusing an already-presented instance would
-     * throw that guarantee away.
+     * actual behavior) skips the usage check, but every policy still
+     * requires the instance's bound signing key to actually exist in
+     * [availableKeyIds] - a real, recurring bug found via live testing:
+     * a software key only ever lives in the WSCD's process memory plus
+     * whatever was last folded into the persisted container, so a lost
+     * sync (or, per privatedata-spec#1/siros-wscd-manager#68, a concurrent-
+     * write merge conflict on the legacy, non-namespaced `S.keypairs` field)
+     * can silently strand a credential with no usable key. Without this
+     * check, NEVER_CONSUME made every such credential report "available"
+     * forever, right up until a live presentation attempt failed deep
+     * inside key selection with no user-facing signal at all. See
+     * [hasAvailableKey] for how a null [StoredCredential.kid] is handled.
+     *
+     * Otherwise, an instance is eligible only if it hasn't already been
+     * presented (`sigCount == 0`) - each instance is bound to its own device
+     * key specifically so a verifier can't correlate repeated presentations
+     * by a reused key/signature; reusing an already-presented instance
+     * would throw that guarantee away.
      */
     fun eligibleInstances(
         instances: List<StoredCredential>,
         policy: CredentialConsumptionPolicy,
         presentationHistory: List<PresentationRecord>,
+        availableKeyIds: Set<String>,
     ): List<StoredCredential> {
-        if (policy == CredentialConsumptionPolicy.NEVER_CONSUME) return instances
         // A single pass building this set, rather than rescanning all of
         // presentationHistory per instance (O(instances x history) before),
         // matters once either grows - this can run on every UI recomposition.
         val usedCredentialIds = presentationHistory.flatMapTo(HashSet()) { it.credentialIds }
         return instances.filter { instance ->
-            val consumes = policy == CredentialConsumptionPolicy.CONSUME_ALL || !isZkpFormat(instance.format)
-            !consumes || instance.id !in usedCredentialIds
+            val keyAvailable = hasAvailableKey(instance.kid, availableKeyIds)
+            val consumptionEligible = policy == CredentialConsumptionPolicy.NEVER_CONSUME || run {
+                val consumes = policy == CredentialConsumptionPolicy.CONSUME_ALL || !isZkpFormat(instance.format)
+                !consumes || instance.id !in usedCredentialIds
+            }
+            keyAvailable && consumptionEligible
         }
     }
 
     /**
-     * Below this many eligible (unused) instances remaining, the UI should
-     * offer to renew/re-issue the credential rather than let it silently run
-     * out. Not user-configurable in this pass - just the stated default.
+     * Whether [kid] (a [StoredCredential.kid]) can actually be used to sign,
+     * given the signer's current [availableKeyIds] - shared by
+     * [eligibleInstances] (gates presentation) and [groupForDisplay] (gates
+     * the "shadow" display state, see [CredentialInstance.hasKey]) so the
+     * two never disagree about whether a credential is really usable.
+     *
+     * A null [kid] can't be matched against a specific entry, but every
+     * credential issued through the current per-credential-key architecture
+     * gets a kid at storage time (`SirosWallet`'s `activeAttestedKeyIds`
+     * wiring) - a real [StoredCredential] with a null kid reaching here is a
+     * sign its binding was silently lost (e.g. a concurrent-flow race, task
+     * #403), not a legitimate legacy case. The best check still possible
+     * without a specific kid to match is whether the signer holds *any* key
+     * at all; with zero keys, a null-kid credential is certain to fail to
+     * sign exactly like a known-but-missing kid would.
+     */
+    private fun hasAvailableKey(kid: String?, availableKeyIds: Set<String>): Boolean =
+        if (kid != null) kid in availableKeyIds else availableKeyIds.isNotEmpty()
+
+    /**
+     * Default fallback for [isBelowRenewThreshold] when no per-credential-
+     * type override is configured (see `SirosWallet.renewThresholds` in
+     * `sdk:wallet`) - below this many eligible (unused) instances
+     * remaining, the wallet should proactively offer to renew rather than
+     * let it silently run out (EUDI ARF ISSU_50/54; OID4VCI itself has no
+     * wire slot for the issuer to communicate this, so v1 is
+     * wallet-local-threshold-only - see the credential re-issuance/renewal
+     * plan §6 item 1).
      */
     const val RENEW_THRESHOLD = 0
+
+    /**
+     * True when [instances]' eligible (unused) count under [policy]/
+     * [presentationHistory] has dropped to or below [threshold] - the
+     * proactive-renewal trigger (plan §4.3). Note [CredentialConsumptionPolicy.NEVER_CONSUME]
+     * (this SDK's default policy) makes [eligibleInstances] always return
+     * every instance, so this only ever fires under a consuming policy.
+     */
+    fun isBelowRenewThreshold(
+        instances: List<StoredCredential>,
+        policy: CredentialConsumptionPolicy,
+        presentationHistory: List<PresentationRecord>,
+        availableKeyIds: Set<String>,
+        threshold: Int = RENEW_THRESHOLD,
+    ): Boolean = eligibleInstances(instances, policy, presentationHistory, availableKeyIds).size <= threshold
 
     /**
      * Group stored credentials into one [CredentialFamily] per
@@ -438,6 +627,50 @@ object CredentialUtils {
             CredentialFamily(representative = representative, instances = members)
         }
     }
+
+    /**
+     * Compares two claim sets (typically [extractClaims]'s output for a
+     * credential batch before and after a renewal) - the credential
+     * re-issuance/renewal plan's `AttributeDiffService`-equivalent
+     * (wallet-frontend #68 parity, ISSU_59's mandatory attribute-diff
+     * notification). Compares by claim [DisplayClaim.key], not by list
+     * position, since claim ordering isn't a stability guarantee of any
+     * issuer.
+     */
+    fun computeAttributeDiff(before: List<DisplayClaim>, after: List<DisplayClaim>): CredentialAttributeDiff {
+        val beforeByKey = before.associateBy { it.key }
+        val afterByKey = after.associateBy { it.key }
+        val changed = afterByKey.keys.intersect(beforeByKey.keys)
+            .mapNotNull { key ->
+                val old = beforeByKey.getValue(key)
+                val new = afterByKey.getValue(key)
+                if (old.value != new.value) AttributeChange(key = key, label = new.label, oldValue = old.value, newValue = new.value) else null
+            }
+        val added = afterByKey.keys.minus(beforeByKey.keys).map { afterByKey.getValue(it) }
+        val removed = beforeByKey.keys.minus(afterByKey.keys).map { beforeByKey.getValue(it) }
+        return CredentialAttributeDiff(changed = changed, added = added, removed = removed)
+    }
+}
+
+/** One claim whose value changed between two versions of the same credential. */
+data class AttributeChange(
+    val key: String,
+    val label: String,
+    val oldValue: String,
+    val newValue: String,
+)
+
+/**
+ * The result of [CredentialUtils.computeAttributeDiff]. [hasChanges] is
+ * false (the fully-silent-renewal case per plan §4.4) only when all three
+ * lists are empty.
+ */
+data class CredentialAttributeDiff(
+    val changed: List<AttributeChange>,
+    val added: List<DisplayClaim>,
+    val removed: List<DisplayClaim>,
+) {
+    val hasChanges: Boolean get() = changed.isNotEmpty() || added.isNotEmpty() || removed.isNotEmpty()
 }
 
 /**
@@ -477,7 +710,22 @@ data class DisplayClaim(
 )
 
 /** One member of a batch-issued credential family, alongside its usage count. */
-data class CredentialInstance(val instanceId: Int, val sigCount: Int)
+data class CredentialInstance(
+    val instanceId: Int,
+    val sigCount: Int,
+    /**
+     * Whether this instance's bound signing key currently exists (see
+     * `CredentialUtils.hasAvailableKey`). An instance that's unused
+     * (`sigCount == 0`) but keyless still can't actually be presented - the
+     * UI's "remaining copies" count and "shadow" (renew-only) display state
+     * both gate on `sigCount == 0 && hasKey`, not `sigCount == 0` alone, so a
+     * lost key can't masquerade as a live, presentable copy. Defaults to
+     * `true` so call sites that only construct/assert instances by their
+     * consumption state (most existing tests) don't need to reason about
+     * key availability at all.
+     */
+    val hasKey: Boolean = true,
+)
 
 /** A visible credential card plus every instance in its batch (see [CredentialUtils.groupForDisplay]). */
 data class CredentialWithInstances(val credential: StoredCredential, val instances: List<CredentialInstance>)

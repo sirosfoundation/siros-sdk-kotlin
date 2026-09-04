@@ -14,9 +14,14 @@ import com.upokecenter.cbor.CBORType
  * ItemsRequestBytes = #6.24(bstr .cbor ItemsRequest)
  * ItemsRequest = { "docType": tstr, "nameSpaces": { tstr => { tstr => bool } } }
  * ```
- * `readerAuth` (mdoc reader authentication, §9.1.4) is intentionally not
- * parsed or verified here - see the proximity plan's Phase 3.5, deferred
- * until after the Tier 0 BLE transport itself is validated.
+ * `readerAuth` (mdoc reader authentication, §9.1.4) is parsed here (the
+ * bare COSE_Sign1 array - `ReaderAuth = COSE_Sign1`, confirmed untagged
+ * from the base spec's own worked example's diagnostic notation) but not
+ * verified in this class - see [MdocCose.verify1]/[MdocCose.extractX5Chain]
+ * for the signature/x5chain half and RICAL trust evaluation (go-trust's
+ * `mdocrical` registry, or a local fallback) for the trust-decision half,
+ * both driven from the wallet layer that has the session transcript this
+ * parser doesn't.
  */
 object DeviceRequestParser {
 
@@ -25,6 +30,10 @@ object DeviceRequestParser {
         val docType: String,
         /** Namespace -> requested element identifiers (the reader's per-element `IntentToRetain` bit is ignored - every listed identifier is being requested regardless of its value). */
         val requestedItems: Map<String, List<String>>,
+        /** The reader's `readerAuth` COSE_Sign1 (bare 4-element array), if the reader sent one - null for readers that don't participate in reader authentication (it's optional per §9.1.4). */
+        val readerAuth: CBORObject? = null,
+        /** The exact tag-24-wrapped `itemsRequest` CBOR bytes as they appeared on the wire - needed verbatim (not re-encoded) to reconstruct `ReaderAuthenticationBytes` via [MdocCose.buildReaderAuthenticationBytes]. */
+        val itemsRequestTaggedBytes: ByteArray = ByteArray(0),
     ) {
         /** Flattened element identifiers across all namespaces - the shape [MdocDeviceResponseBuilder]'s `disclosedClaims` expects. */
         fun disclosedClaims(): List<String> = requestedItems.values.flatten()
@@ -60,7 +69,19 @@ object DeviceRequestParser {
                 val elementIds = elementsObj.keys.map { it.AsString() }
                 requestedItems[nsKey.AsString()] = elementIds
             }
-            DocRequest(docType = docType, requestedItems = requestedItems)
+
+            // readerAuth = COSE_Sign1 (bare array, confirmed untagged from
+            // ISO 18013-5:2021's own worked example's diagnostic notation) -
+            // optional per §9.1.4, so a reader that doesn't participate in
+            // reader authentication is not an error.
+            val readerAuth = docRequest[CBORObject.FromObject("readerAuth")]
+
+            DocRequest(
+                docType = docType,
+                requestedItems = requestedItems,
+                readerAuth = readerAuth,
+                itemsRequestTaggedBytes = itemsRequestTagged.EncodeToBytes(),
+            )
         }
     }
 }

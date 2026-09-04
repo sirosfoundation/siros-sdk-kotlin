@@ -23,6 +23,7 @@
     <string name="credentials_welcome">Bem-vindo, %1$s</string>
     <string name="credentials_count_one">%1$d credencial</string>
     <string name="credentials_count_other">%1$d credenciais</string>
+    <string name="credentials_stack_overflow_more">+%1$d mais</string>
     <string name="credentials_empty_title">Nenhuma credencial ainda</string>
     <string name="credentials_empty_subtitle">Toque em Adicionar abaixo para começar</string>
 
@@ -31,7 +32,15 @@
     <string name="add_credential_loading">Carregando credenciais disponíveis\u2026</string>
     <string name="add_credential_empty">Nenhuma credencial disponível</string>
     <string name="add_credential_retry">Tentar Novamente</string>
+    <string name="add_credential_row_action_add">Adicionar</string>
+    <string name="add_credential_row_action_close">Fechar</string>
     <string name="nav_back">Voltar</string>
+    <string name="credential_capability_online">Pode ser apresentado online</string>
+    <string name="credential_capability_proximity">Pode ser apresentado presencialmente ao tocar com o telemóvel</string>
+    <string name="credential_capability_zkp">Pode provar a sua identidade sem revelar todos os seus dados</string>
+
+    <!-- Presentation consent screen -->
+    <string name="presentation_consent_title">Solicitação de Credencial</string>
 
     <!-- Credential detail screen -->
     <string name="credential_detail_title">Detalhes da Credencial</string>
@@ -50,6 +59,7 @@
     <string name="copy_to_clipboard">Copiar para a área de transferência</string>
     <string name="copied_to_clipboard">Copiado para a área de transferência</string>
     <string name="credential_renew">Renovar</string>
+    <string name="credential_renew_not_possible">Não é possível renovar</string>
     <string name="credential_detail_delete">Excluir Credencial</string>
     <string name="credential_detail_delete_confirm_title">Excluir Credencial</string>
     <string name="credential_detail_delete_confirm_message">Tem certeza de que deseja excluir \"%1$s\"? Esta ação não pode ser desfeita.</string>
@@ -60,6 +70,7 @@
     <string name="settings_account_section">Conta</string>
     <string name="settings_signed_in_as">Conectado como</string>
     <string name="settings_backend_url">Servidor</string>
+    <string name="settings_zk_circuit_urls">Hospedagem de circuitos ZK</string>
     <string name="settings_tenant_id">Inquilino</string>
     <string name="settings_credentials_stored">Credenciais armazenadas</string>
     <string name="settings_app_version">Versão do aplicativo</string>
@@ -92,11 +103,15 @@
     <string name="qr_scan_button">Escanear Código QR</string>
     <string name="qr_scanner_paste_label">Ou cole um URI de oferta de credencial</string>
     <string name="qr_scanner_paste_button">Resgatar Oferta</string>
+    <string name="qr_scanner_detected">Código QR detectado</string>
 
     <!-- Flow states -->
     <string name="flow_issuing">Emitindo Credencial\u2026</string>
     <string name="flow_presenting">Apresentando Credencial\u2026</string>
     <string name="flow_processing">Processando\u2026</string>
+    <string name="flow_starting_issuance">Contatando emissor\u2026</string>
+    <string name="flow_starting_presentation">Contatando verificador\u2026</string>
+    <string name="flow_starting_subtitle">Isso pode levar um momento dependendo do emissor ou verificador - aguarde um instante.</string>
     <string name="flow_cancel">Cancelar</string>
     <string name="flow_close">Fechar</string>
     <string name="flow_error_title">Falha no Fluxo</string>
@@ -119,6 +134,7 @@
     <string name="flow_step_awaiting_consent">Aguardando seu consentimento…</string>
     <string name="flow_step_credential_selection">Selecionando credenciais…</string>
     <string name="flow_step_submitting_response">Enviando resposta ao verificador…</string>
+    <string name="flow_step_computing_proof">Calculando prova…</string>
     <string name="flow_step_unknown">Processando…</string>
     <string name="flow_diagnostic_label">Diagnóstico: %1$s</string>
     <string name="flow_credentials_received">Recebida(s) %1$d credencial(is)</string>

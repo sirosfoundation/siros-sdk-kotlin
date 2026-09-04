@@ -33,10 +33,11 @@ interface Signer {
      * Return the attestation certificate chain for a key, if available.
      *
      * For hardware-backed keys (FIDO2, CTAP2), this returns the
-     * attestation statement certificate chain proving key provenance.
-     * For software keys, returns null.
+     * attestation statement certificate chain proving key provenance,
+     * plus the client data hash the attestation signature was computed
+     * over. For software keys, returns null.
      */
-    suspend fun attestationChain(keyId: String): List<ByteArray>?
+    suspend fun attestationChain(keyId: String): AttestationChain?
 
     /**
      * Export the public key in JWK format (JSON-encoded bytes).
@@ -109,6 +110,24 @@ sealed class MigrationResult {
 data class SignerKeyInfo(
     val keyId: String,
     val algorithm: String,
+)
+
+/**
+ * A hardware-backed key's attestation evidence, as returned by
+ * [Signer.attestationChain]. For the FIDO2/CTAP2 (previewSign) plugin -
+ * currently the only plugin that returns non-null here - [certificates]
+ * is a single-element list holding the *raw CBOR attestationObject* from
+ * `authenticatorMakeCredential` (fmt/authData/attStmt), not a decoded
+ * X.509 certificate chain; the backend does the CBOR decoding and x5c
+ * extraction itself (see siros-wscd-manager's `AttestationChain` and
+ * `FIDO2AttestationService.Verify` in go-wallet-backend). [clientDataHash]
+ * is the client data hash the attestation signature was computed over.
+ * Both are needed to register the attestation with the backend (see
+ * BackendApiClient.registerFido2Attestation in the auth module).
+ */
+data class AttestationChain(
+    val certificates: List<ByteArray>,
+    val clientDataHash: ByteArray,
 )
 
 /**

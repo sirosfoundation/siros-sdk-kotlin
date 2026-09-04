@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.transport.engine
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -22,6 +23,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import org.siros.sdk.credentials.AuthException
 import org.siros.sdk.transport.CredentialNotifier
 import timber.log.Timber
 import java.util.concurrent.TimeUnit
@@ -43,7 +45,14 @@ class WalletEngineSession(
     private val tenantId: String = "default",
     private val client: OkHttpClient = defaultClient(),
 ) : CredentialNotifier {
-    enum class State { DISCONNECTED, CONNECTING, CONNECTED, RECONNECTING, FAILED }
+    /**
+     * [REAUTH_REQUIRED] is distinct from [FAILED]: it means a reconnect
+     * attempt's [tokenProvider] call itself failed (the access-token/session
+     * refresh mechanism was rejected), not merely that the socket couldn't
+     * connect - see [scheduleReconnect]/[forceReconnect]. [FAILED] is reserved
+     * for exhausting reconnect attempts on a transient network-level failure.
+     */
+    enum class State { DISCONNECTED, CONNECTING, CONNECTED, RECONNECTING, REAUTH_REQUIRED, FAILED }
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
@@ -51,12 +60,68 @@ class WalletEngineSession(
     private val _state = MutableStateFlow(State.DISCONNECTED)
     val state: StateFlow<State> = _state
 
+    // @Volatile: these are written from the caller's thread (connect/disconnect),
+    // OkHttp's own WebSocketListener callback thread, and this class's own
+    // scope.launch coroutines (which can run on different Dispatchers.IO
+    // threads) - without this, a write on one thread isn't guaranteed to be
+    // visible to a read on another.
+    @Volatile
     private var webSocket: WebSocket? = null
+    @Volatile
     private var sessionId: String? = null
+    @Volatile
     private var lastAppToken: String? = null
+    /**
+     * Mints a fresh handshake token on demand - called before every
+     * reconnect attempt (automatic backoff or [forceReconnect]) instead of
+     * replaying [lastAppToken], which is otherwise never updated after the
+     * initial [connect] and goes stale within minutes (the AS's default
+     * access-token TTL is 2 minutes) since the WS path had no refresh logic
+     * at all. Typically wraps `authTokens.ensureBackendToken()`/
+     * `ensureAnonymousToken()`, which already handles expiry-aware caching -
+     * this class only needs to call it, not duplicate that logic. Null
+     * preserves the old (non-refreshing) behavior for callers that haven't
+     * opted in.
+     */
+    @Volatile
+    private var tokenProvider: (suspend () -> String)? = null
+    /**
+     * Invoked whenever [refreshTokenOrSignalReauth] sees an explicit 401/403
+     * auth rejection from the AS before a reconnect - lets the caller (e.g.
+     * [org.siros.sdk.wallet.SirosWallet], which owns the `AuthTokens`
+     * instance this class has no dependency on) feed the rejection into its
+     * own rejection-counting/auto-logout mechanism, the same way a REST 401
+     * does via `AuthTokens.registerTokenRejection`. This class only reports
+     * the rejection; it doesn't decide what "too many" means.
+     */
+    @Volatile
+    private var onAuthRejected: (() -> Unit)? = null
+    @Volatile
     private var reconnectAttempts = 0
     private val maxReconnectAttempts = 5
     private val baseReconnectDelayMs = 1000L
+
+    /**
+     * Raw incoming WS text frames, processed strictly one at a time by a
+     * single consumer coroutine (started in [init]) - `onMessage` previously
+     * did `scope.launch { handleMessage(text) }` per frame, an unstructured
+     * launch onto the shared [scope] (backed by [Dispatchers.IO], a real
+     * thread pool). Two frames arriving close together (e.g. a flow_progress
+     * immediately followed by flow_complete) could then have their
+     * [handleMessage] bodies run concurrently on different threads while
+     * both read/write [sessionId] and friends. Routing through this channel
+     * preserves OkHttp's own delivery order while guaranteeing at most one
+     * [handleMessage] call is ever in flight at a time.
+     */
+    private val rawMessageChannel = Channel<String>(Channel.UNLIMITED)
+
+    init {
+        scope.launch {
+            for (text in rawMessageChannel) {
+                handleMessage(text)
+            }
+        }
+    }
 
     private val incomingMessages = Channel<EngineMessage>(Channel.BUFFERED)
     private val flowProgressChannel = Channel<FlowProgressMessage>(Channel.BUFFERED)
@@ -101,12 +166,26 @@ class WalletEngineSession(
 
     /**
      * Connect to the engine WebSocket and perform the handshake.
-     * @param appToken JWT obtained from login/register
+     * @param appToken JWT obtained from login/register, used for this initial
+     *   handshake (avoids an extra round trip re-minting a token we were
+     *   just handed).
+     * @param tokenProvider mints a fresh token before each subsequent
+     *   reconnect attempt - see [tokenProvider]'s doc comment. Omit only if
+     *   the caller genuinely has no refresh mechanism to offer; every real
+     *   [SirosWallet] call site should pass one.
+     * @param onAuthRejected called on an explicit 401/403 auth rejection
+     *   before a reconnect - see [onAuthRejected]'s doc comment.
      */
-    fun connect(appToken: String) {
+    fun connect(
+        appToken: String,
+        tokenProvider: (suspend () -> String)? = null,
+        onAuthRejected: (() -> Unit)? = null,
+    ) {
         if (_state.value == State.CONNECTED) return
         _state.value = State.CONNECTING
         lastAppToken = appToken
+        this.tokenProvider = tokenProvider
+        this.onAuthRejected = onAuthRejected
         reconnectAttempts = 0
         doConnect(appToken)
     }
@@ -134,7 +213,7 @@ class WalletEngineSession(
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
-                scope.launch { handleMessage(text) }
+                rawMessageChannel.trySend(text)
             }
 
             override fun onClosing(ws: WebSocket, code: Int, reason: String) {
@@ -151,8 +230,13 @@ class WalletEngineSession(
     }
 
     private fun scheduleReconnect() {
-        val token = lastAppToken
-        if (token == null || reconnectAttempts >= maxReconnectAttempts) {
+        if (lastAppToken == null) {
+            // disconnect() already nulled this and set State.DISCONNECTED itself -
+            // this is OkHttp delivering a stale onClosing/onFailure for the socket
+            // we just closed on purpose. Don't clobber that with FAILED.
+            return
+        }
+        if (reconnectAttempts >= maxReconnectAttempts) {
             Timber.w("WebSocket reconnection exhausted ($reconnectAttempts attempts)")
             _state.value = State.FAILED
             return
@@ -163,9 +247,47 @@ class WalletEngineSession(
         Timber.i("Reconnecting in ${delayMs}ms (attempt $reconnectAttempts/$maxReconnectAttempts)")
         scope.launch {
             kotlinx.coroutines.delay(delayMs)
+            if (_state.value != State.RECONNECTING) return@launch
+            val token = refreshTokenOrSignalReauth() ?: return@launch
             if (_state.value == State.RECONNECTING) {
                 doConnect(token)
             }
+        }
+    }
+
+    /**
+     * Mints a fresh token via [tokenProvider] (falling back to [lastAppToken]
+     * if no provider was supplied) for a reconnect attempt. Only an explicit
+     * auth/session rejection (401/403 from the AS - see [AuthException.code])
+     * means the refresh mechanism itself was rejected, so only that
+     * short-circuits straight to [State.REAUTH_REQUIRED] rather than
+     * consuming the remaining backoff budget on a broken session. Any other
+     * failure (network blip, AS 5xx, etc.) is transient like a socket-connect
+     * failure, so it falls back to [lastAppToken] and lets the normal
+     * reconnect/backoff loop keep retrying. Cancellation is always rethrown,
+     * never treated as a token-refresh failure.
+     * @return the token to reconnect with, or null if reconnecting should
+     *   stop (state has already been updated to reflect why).
+     */
+    private suspend fun refreshTokenOrSignalReauth(): String? {
+        val provider = tokenProvider ?: return lastAppToken
+        return try {
+            provider().also { lastAppToken = it }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: AuthException) {
+            if (e.code == 401 || e.code == 403) {
+                Timber.w(e, "Token refresh rejected (${e.code}) before reconnect - session invalid")
+                onAuthRejected?.invoke()
+                _state.value = State.REAUTH_REQUIRED
+                null
+            } else {
+                Timber.w(e, "Token refresh failed before reconnect (AS error ${e.code}) - retrying with existing token")
+                lastAppToken
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "Token refresh failed before reconnect (transient) - retrying with existing token")
+            lastAppToken
         }
     }
 
@@ -230,11 +352,15 @@ class WalletEngineSession(
     /**
      * Start an OID4VCI credential issuance flow.
      *
-     * @param clientAttestation optional Wallet Instance Attestation JWT (OAuth
-     *   Client Attestation, draft-ietf-oauth-attestation-based-client-auth-04
-     *   §3.1) - see [FlowStartMessage.clientAttestation].
-     * @param clientAttestationPoP the matching per-flow PoP JWT, required
-     *   whenever [clientAttestation] is set.
+     * @param clientAttestation DEPRECATED - leave null. go-wallet-backend now
+     *   requests the Wallet Instance Attestation itself via a
+     *   `request_attestation` sign request once it has resolved the issuer's
+     *   authorization server (see [SignResponseMessage.clientAttestation]);
+     *   supplying one up front only bypasses that and requires the caller to
+     *   have discovered the PoP audience on its own. Still honoured on the
+     *   wire for callers that have - see [FlowStartMessage.clientAttestation].
+     * @param clientAttestationPoP DEPRECATED - the matching per-flow PoP JWT,
+     *   required whenever [clientAttestation] is set.
      */
     fun startIssuance(
         offer: String? = null,
@@ -263,12 +389,10 @@ class WalletEngineSession(
      * no longer exists server-side (the common case - see [WalletEngineSession] backoff
      * reconnect logic, and SirosWallet.completeAuthorization for why that happens).
      *
-     * @param clientAttestation/[clientAttestationPoP] OAuth Client Attestation
-     *   for the resumed flow - go-wallet-backend's `Execute()` sets up its
-     *   attestation provider identically regardless of whether this is a
-     *   fresh flow or a resume (the setup runs before branching on
-     *   `msg.AuthCode`), so this is just as meaningful here as on the
-     *   original [startIssuance] call - see [FlowStartMessage.clientAttestation].
+     * @param clientAttestation/[clientAttestationPoP] DEPRECATED - leave null;
+     *   the engine requests attestation itself on the resumed flow exactly as
+     *   on a fresh one (`Execute()` runs its attestation setup before
+     *   branching on `msg.AuthCode`) - see [startIssuance]'s note.
      */
     fun resumeIssuance(
         offer: String? = null,
@@ -288,6 +412,37 @@ class WalletEngineSession(
             codeVerifier = codeVerifier,
             clientAttestation = clientAttestation,
             clientAttestationPoP = clientAttestationPoP,
+        ))
+    }
+
+    /**
+     * Start a credential renewal flow (credential re-issuance/renewal plan,
+     * Phase 1 Slice 2 - go-wallet-backend's `Execute` synthesizes a
+     * single-config offer from [credentialIssuer]/[selectedCredentialConfigurationId]
+     * rather than parsing a fresh one). [reissuanceKid], if provided, asks
+     * the server to request the client sign the renewal's holder-binding
+     * proof with that existing key instead of a fresh one - see
+     * [FlowStartMessage.reissuanceKid].
+     *
+     * Debug/test-only entry point for now - no SDK-level API wraps this yet
+     * (Phase 2, not built), and callers are responsible for having captured
+     * [refreshToken] from a prior [FlowCompleteMessage.refreshToken]
+     * themselves.
+     */
+    fun startRenewal(
+        refreshToken: String,
+        credentialIssuer: String,
+        selectedCredentialConfigurationId: String,
+        reissuanceKid: String? = null,
+        dpopJwk: String? = null,
+    ) {
+        send(FlowStartMessage.serializer(), FlowStartMessage(
+            protocol = "oid4vci",
+            refreshToken = refreshToken,
+            credentialIssuer = credentialIssuer,
+            selectedCredentialConfigurationId = selectedCredentialConfigurationId,
+            reissuanceKid = reissuanceKid,
+            dpopJwk = dpopJwk,
         ))
     }
 
@@ -327,6 +482,8 @@ class WalletEngineSession(
         vpToken: String? = null,
         proofs: List<ProofObject>? = null,
         messageId: String? = null,
+        clientAttestation: String? = null,
+        clientAttestationPoP: String? = null,
     ) {
         send(SignResponseMessage.serializer(), SignResponseMessage(
             flowId = flowId,
@@ -334,6 +491,8 @@ class WalletEngineSession(
             proofJwt = proofJwt,
             vpToken = vpToken,
             proofs = proofs,
+            clientAttestation = clientAttestation,
+            clientAttestationPoP = clientAttestationPoP,
         ))
     }
 
@@ -391,10 +550,15 @@ class WalletEngineSession(
      */
     suspend fun awaitConnected(timeoutMs: Long = 10_000) {
         withTimeout(timeoutMs) {
-            state.first { it == State.CONNECTED || it == State.FAILED }
+            state.first { it == State.CONNECTED || it == State.FAILED || it == State.REAUTH_REQUIRED }
         }
-        if (_state.value == State.FAILED) {
-            throw IllegalStateException("Engine WebSocket connection failed")
+        when (_state.value) {
+            State.REAUTH_REQUIRED -> throw AuthException(
+                "Session expired and could not be refreshed - user must log in again",
+                errorCode = "reauth_required",
+            )
+            State.FAILED -> throw IllegalStateException("Engine WebSocket connection failed")
+            else -> {}
         }
     }
 
@@ -416,11 +580,16 @@ class WalletEngineSession(
      * time-sensitive right after the app regains foreground from such a background
      * gap, rather than trusting the existing connection is still good.
      */
-    fun forceReconnect() {
-        val token = lastAppToken ?: return
+    suspend fun forceReconnect() {
+        if (lastAppToken == null) return
+        val token = refreshTokenOrSignalReauth()
+        // Clear the (possibly zombie) socket unconditionally, even if refresh was
+        // rejected below - otherwise isConnected stays true and send() would keep
+        // appearing usable on a session that's actually no longer valid.
         webSocket?.cancel() // ungraceful - the connection may already be dead
         webSocket = null
         sessionId = null
+        if (token == null) return // refreshTokenOrSignalReauth already set State.REAUTH_REQUIRED
         _state.value = State.CONNECTING
         reconnectAttempts = 0
         doConnect(token)
@@ -429,6 +598,8 @@ class WalletEngineSession(
     /** Disconnect the WebSocket session. */
     fun disconnect() {
         lastAppToken = null  // prevent reconnection
+        tokenProvider = null
+        onAuthRejected = null
         webSocket?.close(1000, "client disconnect")
         webSocket = null
         sessionId = null

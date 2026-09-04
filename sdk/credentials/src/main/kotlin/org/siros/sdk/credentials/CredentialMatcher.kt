@@ -65,6 +65,21 @@ object CredentialMatcher {
         val candidates: List<StoredCredential>,
         /** Claim paths requested by the verifier. */
         val requestedClaims: List<List<String>>,
+        /**
+         * Parsed `meta.zk_system_type` (present only when [format] is
+         * `"mso_mdoc_zk"`) - the verifier's own list of acceptable ZK proof
+         * systems, in priority order, per multipaz's wire convention
+         * (confirmed via `balfanz/multipaz`'s `ppid` branch `verifier.kt`).
+         * Feed to [ZkProofSystem.matchingSpec]/[ZkProofSystemRegistry.resolve]
+         * to pick which one (if any) this wallet can actually satisfy.
+         */
+        val zkSystemTypes: List<ZkSystemSpec>? = null,
+        /**
+         * Parsed `meta.ppid_context`, if the verifier supplied one - see
+         * [VerifierIdentity.ppidContext]'s doc comment. `null` is a normal,
+         * common case (most requests won't set this).
+         */
+        val ppidContext: String? = null,
     )
 
     /**
@@ -141,8 +156,62 @@ object CredentialMatcher {
             )
         }
 
-        val queryResults = credentialQueries.mapNotNull { queryElement ->
+        val parsed = credentialQueries.mapNotNull { queryElement ->
             matchSingleQuery(queryElement.jsonObject, credentials)
+        }
+
+        // Which credentials qualify is decided by the shared engine - the same
+        // one the OS credential picker runs, and the only implementation here
+        // tested against the specification's own examples. This matcher still
+        // parses everything else the wallet needs at presentation time
+        // (requested claims, zk_system_type, ppid_context), because those are
+        // read from the query rather than decided by it.
+        //
+        // The visible change is that a credential missing a claim the verifier
+        // asked for is no longer offered. OID4VP 1.0 §6.4.1 requires that; the
+        // parsing path above never checked it, so such a credential would be
+        // offered, consented to, and then fail to satisfy the verifier.
+        val shared = SharedDcqlMatcher.evaluate(dcqlQuery, credentials)
+        val queryResults = when {
+            shared == null -> {
+                // No answer, not an empty answer. Falling back keeps
+                // presentations working where the engine cannot decide, which
+                // is worth more than consistency. SharedDcqlMatcher has
+                // already logged why — with the exception, when there was one
+                // — so repeating it here would only double the noise on every
+                // call.
+                parsed
+            }
+
+            !shared.satisfiable -> {
+                // §6.4: "MUST NOT return any Credential(s)" — not even the
+                // queries that were answerable on their own. A request can ask
+                // for two credentials and get one; offering that one lets a
+                // user consent to a presentation that cannot satisfy the
+                // verifier.
+                //
+                // Reported once for the request rather than per query. The
+                // per-query line explains a decline as a missing claim, which
+                // is the usual cause and the wrong one here.
+                SharedDcqlMatcher.reportUnsatisfiable(
+                    // One credential can be a candidate for several queries;
+                    // the log names credentials, not candidacies.
+                    parsed.flatMap { r -> r.candidates.map { it.id } }.distinct(),
+                )
+                parsed.map { it.copy(candidates = emptyList()) }
+            }
+
+            else -> parsed.map { result ->
+                val ids = shared.candidatesByQuery[result.queryId].orEmpty()
+                SharedDcqlMatcher.reportDifference(
+                    result.queryId,
+                    result.candidates.map { it.id },
+                    ids,
+                )
+                // Built once per query, not once per candidate.
+                val qualifying = ids.toSet()
+                result.copy(candidates = result.candidates.filter { it.id in qualifying })
+            }
         }
 
         val credentialSets = parseCredentialSets(dcqlQuery)
@@ -248,6 +317,9 @@ object CredentialMatcher {
             ?.toSet()
 
         val doctypeValue = meta?.get("doctype_value")?.jsonPrimitive?.contentOrNull
+        val zkSystemTypes = meta?.get("zk_system_type")?.jsonArray?.mapNotNull { parseZkSystemSpec(it) }
+            ?.takeIf { it.isNotEmpty() }
+        val ppidContext = meta?.get("ppid_context")?.jsonPrimitive?.contentOrNull
 
         val matched = credentials.filter { cred ->
             matchesFormat(cred, format) &&
@@ -262,11 +334,45 @@ object CredentialMatcher {
             format = format,
             candidates = matched,
             requestedClaims = claims,
+            zkSystemTypes = zkSystemTypes,
+            ppidContext = ppidContext,
         )
+    }
+
+    /**
+     * Parses one entry of a DCQL query's `meta.zk_system_type` array into a
+     * [ZkSystemSpec] - `{id, system, ...params}`. Confirmed via multipaz's
+     * own parsing of this exact wire shape (`OpenID4VP.kt`'s
+     * `for (param in entry) { if (key == "system" || key == "id") continue;
+     * item.addParam(param.key, param.value) }`): every OTHER top-level key
+     * on the entry (e.g. `num_attributes`, `version`, `circuit_hash`,
+     * `block_enc_hash`, `block_enc_sig`) IS a param - there is no nested
+     * `"params"` object on the wire. An earlier version of this parser
+     * looked for `obj["params"]`, which never exists on a real request -
+     * `zkSystemTypes` parsed successfully (id/system were still read) but
+     * every param (including `num_attributes`) silently came back empty,
+     * masking a real circuit-selection bug until it started being checked.
+     */
+    private fun parseZkSystemSpec(element: JsonElement): ZkSystemSpec? {
+        val obj = element as? JsonObject ?: return null
+        val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: return null
+        val system = obj["system"]?.jsonPrimitive?.contentOrNull ?: return null
+        val params = obj.entries
+            .filterNot { (key, _) -> key == "id" || key == "system" }
+            .associate { (key, value) -> key to (value.jsonPrimitive.contentOrNull ?: "") }
+        return ZkSystemSpec(id = id, system = system, params = params)
     }
 
     private fun matchesFormat(credential: StoredCredential, format: String?): Boolean {
         if (format == null) return true
+        if (format.equals("mso_mdoc_zk", ignoreCase = true)) {
+            // A verifier requesting a ZK-wrapped presentation ("mso_mdoc_zk")
+            // still matches a credential stored in the ordinary "mso_mdoc"
+            // shape - producing a ZK proof is a presentation-time transform
+            // (see ZkProofSystem.generateProof), not a distinct storage
+            // format. There is no separate on-device "ZK credential" to store.
+            return credential.format.equals("mso_mdoc", ignoreCase = true)
+        }
         return credential.format.equals(format, ignoreCase = true)
     }
 

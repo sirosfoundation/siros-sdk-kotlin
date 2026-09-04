@@ -73,6 +73,47 @@ class WscdKeystoreAdapter(
     override fun registerFido2Plugin(transport: Ctap2TransportProvider) =
         requireWscdManager().registerFido2Plugin(transport)
 
+    override fun registerFido2PluginWithState(transport: Ctap2TransportProvider, state: ByteArray) =
+        requireWscdManager().registerFido2PluginWithState(transport, state)
+
+    override fun exportFido2State(): ByteArray =
+        requireWscdManager().exportFido2State()
+
+    /**
+     * The persisted (privatedata-synced) copy of every hardware-backed WSCD
+     * plugin's key metadata - see [JweKeystore.exportWscdCredentials]'s doc
+     * comment. Read this after [unlock] to restore a previously-enrolled
+     * key via e.g. [registerFido2PluginWithState], rather than
+     * [exportFido2State] which only reflects the CURRENT process's live
+     * plugin state.
+     */
+    suspend fun exportWscdCredentialsState(): Map<String, String> =
+        credentialsKeystore.exportWscdCredentials()
+
+    /**
+     * Record a WSCD plugin's freshly-exported key metadata so it round-trips
+     * through privatedata on the next [exportEncryptedContainer] - see
+     * [JweKeystore.setWscdCredentials].
+     */
+    suspend fun setWscdCredentialsState(pluginId: String, state: String) =
+        credentialsKeystore.setWscdCredentials(pluginId, state)
+
+    /**
+     * The persisted (privatedata-synced) renewal candidates for every
+     * credential batch - see [JweKeystore.exportCredentialRefreshTokens]'s
+     * doc comment.
+     */
+    suspend fun exportCredentialRefreshTokens(): Map<Long, CredentialRefreshTokenEntry> =
+        credentialsKeystore.exportCredentialRefreshTokens()
+
+    /** See [JweKeystore.setCredentialRefreshToken]. */
+    suspend fun setCredentialRefreshToken(batchId: Long, entry: CredentialRefreshTokenEntry) =
+        credentialsKeystore.setCredentialRefreshToken(batchId, entry)
+
+    /** See [JweKeystore.removeCredentialRefreshToken]. */
+    suspend fun removeCredentialRefreshToken(batchId: Long) =
+        credentialsKeystore.removeCredentialRefreshToken(batchId)
+
     override fun registerR2psPlugin(config: R2psConfig, transport: R2psTransportProvider) =
         requireWscdManager().registerR2psPlugin(config, transport)
 
@@ -437,7 +478,7 @@ class WscdKeystoreAdapter(
      * For hardware-backed keys (FIDO2/CTAP2), this provides attestation
      * proving key provenance for OID4VCI proof of possession.
      */
-    suspend fun attestationChain(keyId: String): List<ByteArray>? {
+    override suspend fun attestationChain(keyId: String): AttestationChain? {
         return signer.attestationChain(keyId)
     }
 

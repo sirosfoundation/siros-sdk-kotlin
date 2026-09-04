@@ -1,5 +1,5 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
-package org.siros.sdk.sample.proximity
+package org.siros.sdk.keystore.mdoc
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
@@ -17,16 +17,11 @@ import android.os.ParcelUuid
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import org.siros.sdk.credentials.StoredCredential
-import org.siros.sdk.keystore.mdoc.BleMessageChunker
-import org.siros.sdk.keystore.mdoc.DeviceEngagement
-import org.siros.sdk.keystore.mdoc.MdocProximitySession
-import org.siros.sdk.keystore.mdoc.ProximitySessionCrypto
-import org.siros.sdk.keystore.mdoc.RequestProximityConsent
 import timber.log.Timber
 import java.util.UUID
 
@@ -46,14 +41,26 @@ import java.util.UUID
  * the reverse, regardless of which side - mdoc or reader - holds the GATT
  * client/server role for a given transaction).
  *
- * Verified end-to-end on real hardware (Pixel) against siros-verifier-cli's
- * `siros-verify read --mode central`, which uses `bless` as a purpose-built
- * BlueZ GATT-server test peer (bleak itself is central/client-only on every
- * platform, the same role this class plays).
+ * UNVERIFIED ON REAL HARDWARE beyond compiling - there is no second BLE
+ * GATT-server test tool available yet (siros-verifier-cli's `siros-verify read`,
+ * https://github.com/sirosfoundation/siros-verifier-cli, uses `bleak`, which is
+ * central/client-only on every platform, the same role this class plays - it
+ * cannot stand in as a peripheral to test against).
+ * Needs testing against either a real ISO 18013-5 reader or a purpose-built
+ * BlueZ-peripheral test script before relying on it.
  */
 class BleCentralClient(
     private val context: Context,
     private val engagement: DeviceEngagement.Engagement,
+    /**
+     * NFC static-handover bytes for the currently-active engagement, if any -
+     * the host app owns wiring this to whatever bridges its Handover Select
+     * NFC service (e.g. an Android `HostApduService`) to the active
+     * engagement session, since that plumbing is inherently app/platform-
+     * lifecycle-specific (an HCE service is OS-instantiated with no
+     * constructor injection).
+     */
+    getHandoverSelectBytes: () -> ByteArray?,
     /** Mirrors `SirosWallet.getCredentials` - see [BlePeripheralServer]'s matching parameter doc comment. */
     getCredentials: suspend () -> List<StoredCredential>,
     /** Mirrors `SirosWallet.signMdocPresentationForProximity`. */
@@ -61,7 +68,9 @@ class BleCentralClient(
     /** See [RequestProximityConsent]'s doc comment. */
     requestConsent: RequestProximityConsent,
     /** See [BlePeripheralServer]'s matching parameter doc comment. */
-    filterEligible: (List<StoredCredential>) -> List<StoredCredential>,
+    filterEligible: suspend (List<StoredCredential>) -> List<StoredCredential>,
+    /** See [MdocProximitySession]'s matching constructor parameter's doc comment. */
+    evaluateReaderTrust: suspend (x5chain: List<ByteArray>) -> ReaderTrustResult,
     /** Reports a canonical step token (see `FlowStepCatalog.proximitySteps`) for driving the same progress-bar UI the issuance/presentation flows use. */
     private val onStep: (String) -> Unit,
     private val onComplete: (success: Boolean) -> Unit,
@@ -80,24 +89,61 @@ class BleCentralClient(
         private const val DEFAULT_MTU = 23
         private const val REQUESTED_MTU = 517
 
-        // Even for WRITE_TYPE_NO_RESPONSE, Android's BLE stack still queues
-        // writes one at a time internally - firing writeCharacteristic()
-        // again before the previous write's onCharacteristicWrite callback
-        // silently drops the new write on real hardware rather than
-        // erroring. A single chunk (e.g. STATE_START) never hits this; a
-        // multi-chunk DeviceResponse always did.
-        private const val WRITE_TIMEOUT_MS = 5_000L
+        // Android's GATT stack only allows one in-flight write per connection
+        // regardless of write type - writeCharacteristic() for a LATER chunk
+        // can silently fail/queue-drop if issued before onCharacteristicWrite
+        // fires for the PRIOR one. This bounds how long a single chunk's ack
+        // is awaited before giving up (e.g. the reader dropped the
+        // connection mid-transfer) rather than hanging forever.
+        private const val WRITE_ACK_TIMEOUT_MS = 5000L
+
+        // A real reader (com.ingenutec.sigil_id) logged "Peripheral Server
+        // error: mDL terminated transaction" firing on its main thread within
+        // milliseconds of receiving our final response chunk - concurrently
+        // with (not after) its own background thread's decrypt/MSO/signature
+        // verification, which went on to succeed. Root-caused via that
+        // reader's own log timeline: writing STATE_END back-to-back with the
+        // last data chunk (zero delay, only paced by the local write ack -
+        // which just means "queued for the radio", not "the peer finished
+        // processing it") is what the reader's library reads as the mdoc
+        // abruptly ending the transaction before verification could
+        // complete, and its main thread locks in that failure well before
+        // the real, successful result arrives. This grace delay gives a
+        // real device's decrypt+parse a chance to at least get underway
+        // before we signal transaction-end, without meaningfully slowing
+        // down the happy path.
+        private const val STATE_END_DELAY_MS = 500L
+
+        // ProximityEngagementScreen races this against BlePeripheralServer and
+        // only reports an overall failure once BOTH roles have given up - but
+        // the reader may only ever engage ONE of the two (e.g. it chose mdoc
+        // peripheral server mode, so it's never going to advertise as a GATT
+        // peripheral for THIS role to scan for). Without a bound, startScan()
+        // below runs forever in that case, and the "wait for both" logic never
+        // sees a centralOutcome, leaving the screen stuck on its terminal view
+        // forever even after the other role has already failed/succeeded.
+        private const val SCAN_TIMEOUT_MS = 20_000L
     }
 
-    private val scope = CoroutineScope(Dispatchers.IO)
+    // limitedParallelism(1), not plain Dispatchers.IO: GATT callbacks can
+    // fire back-to-back (a retried/duplicate write, or two characteristics
+    // reassembling independently), and Dispatchers.IO is a shared thread
+    // pool - two scope.launch{} bodies from separate callbacks could
+    // otherwise race on session.established's check-and-set, both passing
+    // the check before either sets it and double-processing a
+    // session-establishment message. Every callback-triggered launch below
+    // is inherently meant to run one-at-a-time for a single BLE connection
+    // anyway, so serializing costs nothing real.
+    private val scope = CoroutineScope(Dispatchers.IO.limitedParallelism(1))
     private val reassembler = BleMessageChunker.Reassembler()
     private val session = MdocProximitySession(
         engagement = engagement,
-        getHandoverSelectBytes = { ActiveEngagement.handoverSelectBytes },
+        getHandoverSelectBytes = getHandoverSelectBytes,
         getCredentials = getCredentials,
         signPresentation = signPresentation,
         requestConsent = requestConsent,
         filterEligible = filterEligible,
+        evaluateReaderTrust = evaluateReaderTrust,
         onStep = onStep,
         logTag = "BleCentralClient",
     )
@@ -106,15 +152,11 @@ class BleCentralClient(
     private var client2ServerCharacteristic: BluetoothGattCharacteristic? = null
     private var stateCharacteristic: BluetoothGattCharacteristic? = null
     private var scanning = false
-    // Written from the writeAndAwait() coroutine, read from the
-    // BluetoothGattCallback binder thread's onCharacteristicWrite - @Volatile
-    // is required so the callback thread can't observe a stale value.
-    @Volatile
-    private var pendingWrite: CompletableDeferred<Boolean>? = null
-    // Serializes writeAndAwait() calls so pendingWrite can never be
-    // clobbered by a second concurrent write (only one deferred can be
-    // in flight at a time).
-    private val writeMutex = Mutex()
+    // Set immediately before each writeCharacteristic() call and completed
+    // from onCharacteristicWrite - see WRITE_ACK_TIMEOUT_MS's doc comment on
+    // why writes must be paced rather than issued back-to-back.
+    private var pendingWriteAck: CompletableDeferred<Boolean>? = null
+    private var scanTimeoutJob: Job? = null
 
     @SuppressLint("MissingPermission")
     fun start() {
@@ -139,10 +181,20 @@ class BleCentralClient(
         scanning = true
         onStep("waiting_for_reader")
         scanner.startScan(listOf(filter), settings, scanCallback)
+        scanTimeoutJob = scope.launch {
+            delay(SCAN_TIMEOUT_MS)
+            if (scanning) {
+                Timber.w("BleCentralClient: no reader found within ${SCAN_TIMEOUT_MS}ms, giving up")
+                stop()
+                onComplete(false)
+            }
+        }
     }
 
     @SuppressLint("MissingPermission")
     fun stop() {
+        scanTimeoutJob?.cancel()
+        scanTimeoutJob = null
         if (scanning) {
             val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
             bluetoothManager?.adapter?.bluetoothLeScanner?.stopScan(scanCallback)
@@ -156,6 +208,7 @@ class BleCentralClient(
     private val scanCallback = object : ScanCallback() {
         @SuppressLint("MissingPermission")
         override fun onScanResult(callbackType: Int, result: ScanResult) {
+            scanTimeoutJob?.cancel()
             val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
             bluetoothManager.adapter.bluetoothLeScanner?.stopScan(this)
             scanning = false
@@ -163,6 +216,7 @@ class BleCentralClient(
         }
 
         override fun onScanFailed(errorCode: Int) {
+            scanTimeoutJob?.cancel()
             Timber.w("BleCentralClient: BLE scan failed to start (error $errorCode)")
             onComplete(false)
         }
@@ -175,6 +229,23 @@ class BleCentralClient(
                 BluetoothGatt.STATE_CONNECTED -> {
                     onStep("reader_connected")
                     gatt.requestMtu(REQUESTED_MTU)
+                }
+                BluetoothGatt.STATE_DISCONNECTED -> {
+                    // Unlike BlePeripheralServer (which keeps advertising
+                    // after a dropped connection and just resets back to
+                    // "waiting_for_reader"), this class's start()/stop()
+                    // lifecycle is a single scan-and-connect attempt - once
+                    // the one reader it connected to disconnects without
+                    // completing, there's nothing left to wait on. Guarded
+                    // on session.established so a disconnect that follows a
+                    // real success (this role's own stop() call after
+                    // onComplete(true)) doesn't get double-reported as a
+                    // failure. Mirrors the Swift SDK's BleCentralClient.swift,
+                    // which already had this handling.
+                    if (!session.established) {
+                        Timber.w("BleCentralClient: reader disconnected before completing a presentation")
+                        onComplete(false)
+                    }
                 }
             }
         }
@@ -235,37 +306,61 @@ class BleCentralClient(
                 STATE_UUID -> enableNotifications(gatt, descriptor.characteristic.service.getCharacteristic(SERVER2CLIENT_UUID))
                 SERVER2CLIENT_UUID -> {
                     val stateChar = descriptor.characteristic.service.getCharacteristic(STATE_UUID)
-                    // Routed through writeAndAwait (not fired-and-forgotten) so
-                    // pendingWrite always correlates to exactly one in-flight
-                    // write - onCharacteristicWrite completes whichever write
-                    // is currently pending without checking its UUID, so two
-                    // genuinely concurrent writes could otherwise cross-complete.
-                    scope.launch {
-                        if (!writeAndAwait(gatt, stateChar, byteArrayOf(STATE_START))) {
-                            Timber.w("BleCentralClient: STATE_START write failed/timed out - reader will never see this mdoc's response")
-                            onComplete(false)
-                        }
-                    }
+                    scope.launch { writeNoResponse(gatt, stateChar, byteArrayOf(STATE_START)) }
                 }
             }
         }
 
-        @SuppressLint("MissingPermission")
+        // Completes the write paced by writeNoResponse below - see
+        // WRITE_ACK_TIMEOUT_MS's doc comment for why this pacing exists.
         override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
-            pendingWrite?.complete(status == BluetoothGatt.GATT_SUCCESS)
+            pendingWriteAck?.complete(status == BluetoothGatt.GATT_SUCCESS)
         }
 
         // Same API-33-vs-minSdk-28 reasoning as onCharacteristicRead above:
         // override the deprecated 2-arg form, not the newer 3-arg one.
         @Suppress("DEPRECATION")
+        @SuppressLint("MissingPermission")
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             if (characteristic.uuid != SERVER2CLIENT_UUID) return
             val value = characteristic.value ?: return
-            val message = reassembler.feed(value) ?: return
+            // This callback runs on the system's Binder thread, not inside
+            // the scope.launch below - an uncaught exception here (e.g. the
+            // reassembler's max-size guard tripping) would crash the whole
+            // process instead of just this presentation attempt.
+            val message = try {
+                reassembler.feed(value) ?: return
+            } catch (e: IllegalStateException) {
+                Timber.w(e, "BleCentralClient: reassembly aborted")
+                onComplete(false)
+                return
+            }
             scope.launch {
                 try {
                     if (session.established) {
-                        Timber.w("BleCentralClient: additional SessionData messages after the first request are not yet handled")
+                        // See BlePeripheralServer's matching branch for the
+                        // full rationale. Two different cases land here and
+                        // need different responses: the reader sending ITS
+                        // OWN session-termination status (a normal, correct
+                        // way to close out after our response - just
+                        // disconnect, don't reply with another status onto a
+                        // connection the peer is already closing) versus the
+                        // reader sending some other, unexpected data-carrying
+                        // message (tell it explicitly the session is over,
+                        // since silently dropping it would leave the reader
+                        // with no response and no reason to stop retrying).
+                        if (ProximitySessionMessages.peekStatus(message) == ProximitySessionMessages.StatusCode.SESSION_TERMINATION) {
+                            Timber.d("BleCentralClient: reader sent its own session-termination status - disconnecting")
+                        } else {
+                            Timber.w("BleCentralClient: received a SessionData message after this session already completed - terminating this connection")
+                            sendData(
+                                ProximitySessionMessages.buildSessionData(
+                                    encryptedData = null,
+                                    status = ProximitySessionMessages.StatusCode.SESSION_TERMINATION,
+                                ),
+                            )
+                        }
+                        gatt.disconnect()
                         return@launch
                     }
                     when (val result = session.handleSessionEstablishment(message)) {
@@ -293,10 +388,7 @@ class BleCentralClient(
     private fun enableNotifications(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic?) {
         if (characteristic == null) return
         gatt.setCharacteristicNotification(characteristic, true)
-        val cccd = characteristic.getDescriptor(CCCD_UUID) ?: run {
-            Timber.w("BleCentralClient: reader's ${characteristic.uuid} characteristic has no CCCD descriptor to subscribe to")
-            return
-        }
+        val cccd = characteristic.getDescriptor(CCCD_UUID) ?: return
         // The 2-arg writeDescriptor(descriptor, value) overload requires API
         // 33 - this repo's minSdk is 28, so the deprecated
         // value-then-write pattern is what's actually compatible.
@@ -305,44 +397,29 @@ class BleCentralClient(
     }
 
     /**
-     * Writes [value] to [characteristic] and suspends until the local BLE
-     * stack signals completion via onCharacteristicWrite before returning -
-     * without this pacing, firing writeCharacteristic() again before the
-     * previous chunk's callback silently drops the new write on real
-     * hardware (see WRITE_TIMEOUT_MS's doc comment). Every write in this
-     * class goes through here (including the single-shot STATE_START) so
-     * [pendingWrite] always correlates to exactly one in-flight write -
-     * onCharacteristicWrite completes whichever write is pending without
-     * checking its characteristic, so two genuinely concurrent writes
-     * could otherwise cross-complete each other's deferred. [writeMutex]
-     * serializes callers so that can never actually happen, and the
-     * `finally` clears [pendingWrite] even if this coroutine is cancelled
-     * mid-await, so a later stray callback can't complete a stale deferred.
-     * @return false if the characteristic is null, the write couldn't be
-     * queued, or it timed out/failed.
+     * @return false if [characteristic] is null, the write couldn't be
+     *   initiated/queued, or its ack didn't arrive within
+     *   [WRITE_ACK_TIMEOUT_MS] (or arrived with a non-success status).
      */
     @Suppress("DEPRECATION")
     @SuppressLint("MissingPermission")
-    private suspend fun writeAndAwait(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic?, value: ByteArray): Boolean {
+    private suspend fun writeNoResponse(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic?, value: ByteArray): Boolean {
         if (characteristic == null) return false
-        return writeMutex.withLock {
-            characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-            characteristic.value = value
-            val deferred = CompletableDeferred<Boolean>()
-            pendingWrite = deferred
-            try {
-                if (!gatt.writeCharacteristic(characteristic)) {
-                    false
-                } else {
-                    withTimeoutOrNull(WRITE_TIMEOUT_MS) { deferred.await() } == true
-                }
-            } finally {
-                pendingWrite = null
-            }
+        val ack = CompletableDeferred<Boolean>()
+        pendingWriteAck = ack
+        // Same API-33-vs-minSdk-28 reasoning as enableNotifications above.
+        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+        characteristic.value = value
+        if (!gatt.writeCharacteristic(characteristic)) {
+            pendingWriteAck = null
+            return false
         }
+        val result = withTimeoutOrNull(WRITE_ACK_TIMEOUT_MS) { ack.await() }
+        pendingWriteAck = null
+        return result == true
     }
 
-    /** @return false if any chunk's write failed/timed out - the reader will not have received a complete response. */
+    /** @return false if any chunk's write failed to queue/ack - the reader will not have received a complete response. */
     private suspend fun sendData(message: ByteArray): Boolean {
         val characteristic = client2ServerCharacteristic ?: return false
         val currentGatt = gatt ?: return false
@@ -352,18 +429,15 @@ class BleCentralClient(
         // value that would crash chunking outright.
         val maxChunkSize = minOf(negotiatedMtu - 3, 512).coerceAtLeast(DEFAULT_MTU - 3)
         for (chunk in BleMessageChunker.chunk(message, maxChunkSize)) {
-            if (!writeAndAwait(currentGatt, characteristic, chunk)) return false
+            if (!writeNoResponse(currentGatt, characteristic, chunk)) return false
         }
         // §11.1.3.1: signal the end of this side's transaction once the
         // response has been fully written - without this, a reader
         // following the state machine strictly may keep waiting/hold the
-        // transaction open unnecessarily. The response chunks themselves
-        // (already confirmed above) are what the reader actually needs, so
-        // a failed/timed-out STATE_END doesn't fail the whole presentation -
-        // just log it rather than silently discarding the outcome.
-        if (!writeAndAwait(currentGatt, stateCharacteristic, byteArrayOf(STATE_END))) {
-            Timber.w("BleCentralClient: STATE_END write failed/timed out - reader may not promptly close the transaction")
-        }
+        // transaction open unnecessarily. See STATE_END_DELAY_MS's doc
+        // comment for why this isn't sent immediately.
+        delay(STATE_END_DELAY_MS)
+        writeNoResponse(currentGatt, stateCharacteristic, byteArrayOf(STATE_END))
         return true
     }
 }

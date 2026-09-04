@@ -30,9 +30,31 @@ class DeepLinkClassifierTest {
     }
 
     @Test
+    fun `presentation request via mdoc-openid4vp scheme`() {
+        // ISO 18013-7 Annex B's mdoc-specific scheme - same wire shape as
+        // plain openid4vp.
+        val result = classifyDeepLink("mdoc-openid4vp://?request_uri=https://verifier.example.com/request/abc", redirectScheme)
+        assertTrue(result is DeepLinkType.PresentationRequest)
+    }
+
+    @Test
     fun `presentation request via haip scheme`() {
         val result = classifyDeepLink("haip://?request_uri=https://verifier.example.com/req", redirectScheme)
         assertTrue(result is DeepLinkType.PresentationRequest)
+    }
+
+    @Test
+    fun `presentation request via haip-vp scheme`() {
+        // HAIP 1.0 final replaced the earlier drafts' single "haip" scheme
+        // with separate haip-vp (presentation) / haip-vci (issuance) schemes.
+        val result = classifyDeepLink("haip-vp://?request_uri=https://verifier.example.com/req", redirectScheme)
+        assertTrue(result is DeepLinkType.PresentationRequest)
+    }
+
+    @Test
+    fun `credential offer via haip-vci scheme`() {
+        val result = classifyDeepLink("haip-vci://?credential_offer=%7B%7D", redirectScheme)
+        assertTrue(result is DeepLinkType.CredentialOffer)
     }
 
     @Test

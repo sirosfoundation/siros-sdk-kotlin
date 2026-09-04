@@ -655,10 +655,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
     fun callback(`callbackData`: Long,`result`: UniffiForeignFutureStructVoid.UniffiByValue,)
 }
 internal interface UniffiCallbackInterfaceFfiAuthCallbackMethod0 : com.sun.jna.Callback {
-    fun callback(`uniffiHandle`: Long,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+    fun callback(`uniffiHandle`: Long,`pluginId`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
 }
 internal interface UniffiCallbackInterfaceFfiAuthCallbackMethod1 : com.sun.jna.Callback {
-    fun callback(`uniffiHandle`: Long,`challenge`: RustBuffer.ByValue,`rpId`: RustBuffer.ByValue,`allowedCredentials`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+    fun callback(`uniffiHandle`: Long,`pluginId`: RustBuffer.ByValue,`challenge`: RustBuffer.ByValue,`rpId`: RustBuffer.ByValue,`allowedCredentials`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
 }
 internal interface UniffiCallbackInterfaceFfiCtap2TransportMethod0 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`command`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
@@ -845,6 +845,14 @@ internal open class UniffiVTableCallbackInterfaceFfiProgressCallback(
 
 
 
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -882,6 +890,10 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_destroy_lifecycle(`ptr`: Pointer,`request`: RustBuffer.ByValue,`auth`: Long,`progress`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_export_fido2_state(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_export_public_key(`ptr`: Pointer,`kid`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_export_softkey_container(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_generate_key(`ptr`: Pointer,`algorithm`: RustBuffer.ByValue,`auth`: Long,`progress`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -895,6 +907,8 @@ internal interface UniffiLib : Library {
     fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_migrate_key(`ptr`: Pointer,`kid`: RustBuffer.ByValue,`targetPluginId`: RustBuffer.ByValue,`auth`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_fido2_plugin(`ptr`: Pointer,`transport`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_fido2_plugin_with_state(`ptr`: Pointer,`transport`: Long,`state`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_lifecycle(`ptr`: Pointer,`request`: RustBuffer.ByValue,`auth`: Long,`progress`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -919,6 +933,8 @@ internal interface UniffiLib : Library {
     fun uniffi_siros_wscd_manager_fn_func_decode_cose_ec2_public_key(`coseBytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_siros_wscd_manager_fn_func_extract_previewsign_signature(`authenticatorData`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_siros_wscd_manager_fn_func_wscd_manager_version(uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun ffi_siros_wscd_manager_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1036,6 +1052,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_siros_wscd_manager_checksum_func_extract_previewsign_signature(
     ): Short
+    fun uniffi_siros_wscd_manager_checksum_func_wscd_manager_version(
+    ): Short
     fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_activate_lifecycle(
     ): Short
     fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_attestation_chain(
@@ -1043,6 +1061,10 @@ internal interface UniffiLib : Library {
     fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_delete_key(
     ): Short
     fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_destroy_lifecycle(
+    ): Short
+    fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_fido2_state(
+    ): Short
+    fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_public_key(
     ): Short
     fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_softkey_container(
     ): Short
@@ -1057,6 +1079,8 @@ internal interface UniffiLib : Library {
     fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_migrate_key(
     ): Short
     fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_fido2_plugin(
+    ): Short
+    fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_fido2_plugin_with_state(
     ): Short
     fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_lifecycle(
     ): Short
@@ -1105,6 +1129,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_siros_wscd_manager_checksum_func_extract_previewsign_signature() != 41377.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_siros_wscd_manager_checksum_func_wscd_manager_version() != 29401.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_activate_lifecycle() != 28478.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1115,6 +1142,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_destroy_lifecycle() != 23469.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_fido2_state() != 37798.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_public_key() != 14419.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_softkey_container() != 4318.toShort()) {
@@ -1138,6 +1171,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_fido2_plugin() != 25606.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_fido2_plugin_with_state() != 38216.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_lifecycle() != 59574.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1159,10 +1195,10 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_siros_wscd_manager_checksum_constructor_ffiwscdmanager_new() != 22870.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_siros_wscd_manager_checksum_method_ffiauthcallback_request_pin() != 31779.toShort()) {
+    if (lib.uniffi_siros_wscd_manager_checksum_method_ffiauthcallback_request_pin() != 17826.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_siros_wscd_manager_checksum_method_ffiauthcallback_request_webauthn_assertion() != 26796.toShort()) {
+    if (lib.uniffi_siros_wscd_manager_checksum_method_ffiauthcallback_request_webauthn_assertion() != 63746.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_siros_wscd_manager_checksum_method_ffictap2transport_ctap2_send_command() != 64354.toShort()) {
@@ -1555,6 +1591,24 @@ public interface FfiWscdManagerInterface {
     fun `destroyLifecycle`(`request`: FfiDestroyLifecycleRequest, `auth`: FfiAuthCallback, `progress`: FfiProgressCallback): FfiDestructionOutcome
     
     /**
+     * Export the FIDO2 plugin's key state (credential handles + public
+     * keys) for the host app to persist and later restore via
+     * [`register_fido2_plugin_with_state`].
+     */
+    fun `exportFido2State`(): kotlin.ByteArray
+    
+    /**
+     * Export a key's public key as a JSON-encoded JWK string.
+     *
+     * Unlike `generate_key`'s return value (cached host-side right after
+     * generation), this looks the key up on the manager directly - the only
+     * way to recover a key's public JWK when it was created via a path other
+     * than `generate_key` (e.g. `register_lifecycle`/`activate_lifecycle`),
+     * or in a host process that didn't cache it itself.
+     */
+    fun `exportPublicKey`(`kid`: kotlin.String): kotlin.String
+    
+    /**
      * Export softkey plugin container as JSON bytes (caller wraps in JWE).
      *
      * Exports the actual StoredKey data (including private material)
@@ -1598,6 +1652,17 @@ public interface FfiWscdManagerInterface {
      * handles USB/BLE/NFC communication with the FIDO2 authenticator.
      */
     fun `registerFido2Plugin`(`transport`: FfiCtap2Transport)
+    
+    /**
+     * Register the FIDO2 previewSign plugin restored from a previously
+     * [`export_fido2_state`]-exported blob (key handles + public keys only,
+     * no private material - that never leaves the authenticator). The host
+     * app must persist that blob itself and pass it back here on the next
+     * launch, or every enrolled FIDO2 key becomes unreachable (its `kid`
+     * still exists in credential/session metadata, but the manager has no
+     * record of the credential handle needed to sign with it again).
+     */
+    fun `registerFido2PluginWithState`(`transport`: FfiCtap2Transport, `state`: kotlin.ByteArray)
     
     /**
      * Register lifecycle bindings for a context.
@@ -1801,6 +1866,46 @@ open class FfiWscdManager: Disposable, AutoCloseable, FfiWscdManagerInterface {
 
     
     /**
+     * Export the FIDO2 plugin's key state (credential handles + public
+     * keys) for the host app to persist and later restore via
+     * [`register_fido2_plugin_with_state`].
+     */
+    @Throws(FfiWscdException::class)override fun `exportFido2State`(): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiWscdException) { _status ->
+    UniffiLib.INSTANCE.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_export_fido2_state(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Export a key's public key as a JSON-encoded JWK string.
+     *
+     * Unlike `generate_key`'s return value (cached host-side right after
+     * generation), this looks the key up on the manager directly - the only
+     * way to recover a key's public JWK when it was created via a path other
+     * than `generate_key` (e.g. `register_lifecycle`/`activate_lifecycle`),
+     * or in a host process that didn't cache it itself.
+     */
+    @Throws(FfiWscdException::class)override fun `exportPublicKey`(`kid`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FfiWscdException) { _status ->
+    UniffiLib.INSTANCE.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_export_public_key(
+        it, FfiConverterString.lower(`kid`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Export softkey plugin container as JSON bytes (caller wraps in JWE).
      *
      * Exports the actual StoredKey data (including private material)
@@ -1914,6 +2019,27 @@ open class FfiWscdManager: Disposable, AutoCloseable, FfiWscdManagerInterface {
     uniffiRustCallWithError(FfiWscdException) { _status ->
     UniffiLib.INSTANCE.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_fido2_plugin(
         it, FfiConverterTypeFfiCtap2Transport.lower(`transport`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Register the FIDO2 previewSign plugin restored from a previously
+     * [`export_fido2_state`]-exported blob (key handles + public keys only,
+     * no private material - that never leaves the authenticator). The host
+     * app must persist that blob itself and pass it back here on the next
+     * launch, or every enrolled FIDO2 key becomes unreachable (its `kid`
+     * still exists in credential/session metadata, but the manager has no
+     * record of the credential handle needed to sign with it again).
+     */
+    @Throws(FfiWscdException::class)override fun `registerFido2PluginWithState`(`transport`: FfiCtap2Transport, `state`: kotlin.ByteArray)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FfiWscdException) { _status ->
+    UniffiLib.INSTANCE.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_fido2_plugin_with_state(
+        it, FfiConverterTypeFfiCtap2Transport.lower(`transport`),FfiConverterByteArray.lower(`state`),_status)
 }
     }
     
@@ -2128,7 +2254,8 @@ public object FfiConverterTypeFfiActivationOutcome: FfiConverterRustBuffer<FfiAc
 
 
 data class FfiAttestationChain (
-    var `certificates`: List<kotlin.ByteArray>
+    var `certificates`: List<kotlin.ByteArray>, 
+    var `clientDataHash`: kotlin.ByteArray
 ) {
     
     companion object
@@ -2141,15 +2268,18 @@ public object FfiConverterTypeFfiAttestationChain: FfiConverterRustBuffer<FfiAtt
     override fun read(buf: ByteBuffer): FfiAttestationChain {
         return FfiAttestationChain(
             FfiConverterSequenceByteArray.read(buf),
+            FfiConverterByteArray.read(buf),
         )
     }
 
     override fun allocationSize(value: FfiAttestationChain) = (
-            FfiConverterSequenceByteArray.allocationSize(value.`certificates`)
+            FfiConverterSequenceByteArray.allocationSize(value.`certificates`) +
+            FfiConverterByteArray.allocationSize(value.`clientDataHash`)
     )
 
     override fun write(value: FfiAttestationChain, buf: ByteBuffer) {
             FfiConverterSequenceByteArray.write(value.`certificates`, buf)
+            FfiConverterByteArray.write(value.`clientDataHash`, buf)
     }
 }
 
@@ -3334,9 +3464,9 @@ public object FfiConverterTypeFfiWscdError : FfiConverterRustBuffer<FfiWscdExcep
 
 public interface FfiAuthCallback {
     
-    fun `requestPin`(): kotlin.ByteArray
+    fun `requestPin`(`pluginId`: kotlin.String): kotlin.ByteArray
     
-    fun `requestWebauthnAssertion`(`challenge`: kotlin.ByteArray, `rpId`: kotlin.String, `allowedCredentials`: List<kotlin.ByteArray>): kotlin.ByteArray
+    fun `requestWebauthnAssertion`(`pluginId`: kotlin.String, `challenge`: kotlin.ByteArray, `rpId`: kotlin.String, `allowedCredentials`: List<kotlin.ByteArray>): kotlin.ByteArray
     
     companion object
 }
@@ -3377,10 +3507,11 @@ public abstract class FfiConverterCallbackInterface<CallbackInterface: Any>: Ffi
 // Put the implementation in an object so we don't pollute the top-level namespace
 internal object uniffiCallbackInterfaceFfiAuthCallback {
     internal object `requestPin`: UniffiCallbackInterfaceFfiAuthCallbackMethod0 {
-        override fun callback(`uniffiHandle`: Long,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+        override fun callback(`uniffiHandle`: Long,`pluginId`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
             val uniffiObj = FfiConverterTypeFfiAuthCallback.handleMap.get(uniffiHandle)
             val makeCall = { ->
                 uniffiObj.`requestPin`(
+                    FfiConverterString.lift(`pluginId`),
                 )
             }
             val writeReturn = { value: kotlin.ByteArray -> uniffiOutReturn.setValue(FfiConverterByteArray.lower(value)) }
@@ -3393,10 +3524,11 @@ internal object uniffiCallbackInterfaceFfiAuthCallback {
         }
     }
     internal object `requestWebauthnAssertion`: UniffiCallbackInterfaceFfiAuthCallbackMethod1 {
-        override fun callback(`uniffiHandle`: Long,`challenge`: RustBuffer.ByValue,`rpId`: RustBuffer.ByValue,`allowedCredentials`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+        override fun callback(`uniffiHandle`: Long,`pluginId`: RustBuffer.ByValue,`challenge`: RustBuffer.ByValue,`rpId`: RustBuffer.ByValue,`allowedCredentials`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
             val uniffiObj = FfiConverterTypeFfiAuthCallback.handleMap.get(uniffiHandle)
             val makeCall = { ->
                 uniffiObj.`requestWebauthnAssertion`(
+                    FfiConverterString.lift(`pluginId`),
                     FfiConverterByteArray.lift(`challenge`),
                     FfiConverterString.lift(`rpId`),
                     FfiConverterSequenceByteArray.lift(`allowedCredentials`),
@@ -3800,6 +3932,21 @@ public object FfiConverterSequenceTypeFfiKeyInfo: FfiConverterRustBuffer<List<Ff
     uniffiRustCallWithError(FfiWscdException) { _status ->
     UniffiLib.INSTANCE.uniffi_siros_wscd_manager_fn_func_extract_previewsign_signature(
         FfiConverterByteArray.lower(`authenticatorData`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * This crate's own version (`CARGO_PKG_VERSION`), for host apps to
+         * display in diagnostics/dev screens - the single source of truth,
+         * regardless of how a build resolved the dependency (published vs
+         * `mavenLocal`/local `Package.swift` override).
+         */ fun `wscdManagerVersion`(): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_siros_wscd_manager_fn_func_wscd_manager_version(
+        _status)
 }
     )
     }

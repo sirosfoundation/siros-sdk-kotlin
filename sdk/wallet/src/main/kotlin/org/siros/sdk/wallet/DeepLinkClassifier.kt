@@ -74,14 +74,22 @@ fun classifyDeepLink(uriString: String, redirectScheme: String): DeepLinkType {
         return DeepLinkType.CredentialOffer(uri = uriString)
     }
 
-    // 3. OID4VP: openid4vp://...
-    if (scheme == "openid4vp") {
+    // 3. OID4VP: openid4vp://... or mdoc-openid4vp://... (ISO 18013-7 Annex
+    // B's mdoc-specific scheme, same wire shape as plain OID4VP).
+    if (scheme == "openid4vp" || scheme == "mdoc-openid4vp") {
         return DeepLinkType.PresentationRequest(uri = uriString)
     }
 
-    // 4. HAIP: haip://...
-    if (scheme == "haip") {
+    // 4. HAIP presentation: haip://... (early draft scheme) or haip-vp://...
+    // (HAIP 1.0 final's replacement - see the manifest's intent-filter comment
+    // for why both are still recognized).
+    if (scheme == "haip" || scheme == "haip-vp") {
         return DeepLinkType.PresentationRequest(uri = uriString)
+    }
+
+    // 5. HAIP issuance: haip-vci://... (HAIP 1.0 final).
+    if (scheme == "haip-vci") {
+        return DeepLinkType.CredentialOffer(uri = uriString)
     }
 
     // 5. HTTPS with OID4VCI/OID4VP query parameters

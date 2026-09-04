@@ -116,6 +116,14 @@ class MdocHostApduService : HostApduService() {
 
         if (offset >= fileContent.size) return SW_FILE_NOT_FOUND
         val end = minOf(offset + length, fileContent.size)
+        if (selectedFile == SelectedFile.NDEF && end == fileContent.size) {
+            // The reader has now read every byte of the Handover Select
+            // message, including the trailing DeviceEngagement CBOR - see
+            // ActiveEngagement.onHandoverServed's doc comment for why this
+            // exact moment (not tag SELECT, not tag deactivation) is what
+            // ProximityEngagementScreen needs to know about.
+            ActiveEngagement.onHandoverServed?.invoke()
+        }
         return fileContent.copyOfRange(offset, end) + SW_OK
     }
 

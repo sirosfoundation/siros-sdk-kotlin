@@ -6,6 +6,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import org.siros.sdk.credentials.CredentialStore
+import org.siros.sdk.credentials.ZkCircuitClient
 import org.siros.sdk.keystore.KeystoreManager
 import org.siros.sdk.keystore.NativeAttestationProvider
 
@@ -43,6 +44,57 @@ import org.siros.sdk.keystore.NativeAttestationProvider
  *        app must construct it (it has the `Context`/`Activity` a provider like
  *        `PlayIntegrityProvider` needs) and inject the ready instance here. `null`
  *        (default) omits `native_attestation` entirely, matching today's behavior.
+ * @param availableKeystores Optional registry of every [KeystoreManager] the
+ *        host app has ready to use, keyed by WSCD plugin ID (e.g.
+ *        `"softkey"`, `"fido2"`, `"r2ps"` - see the sample app's plugin
+ *        chooser). Each entry's instance must already have its own platform
+ *        transport wired up (BLE/USB/etc.) - like [keystore], the SDK cannot
+ *        construct these itself. When set, [SirosWallet] can pick among
+ *        these (see [WscdSelectionPolicy]) to satisfy a credential type's
+ *        declared key-storage assurance requirement
+ *        (`Vctm.requiredKeyStorage` / `MddlSchema.requiredKeyStorage`)
+ *        before generating that batch's issuance keys, instead of using
+ *        [keystore] unconditionally. **Fully backward compatible**: `null`
+ *        (default) or an empty map disables this selection logic entirely -
+ *        [keystore] is used exactly as before, with no tier-checking or
+ *        prompting.
+ * @param defaultWscdMapping Optional pre-populated default plugin choice per
+ *        credential type, keyed by `"issuer|credentialType"` (e.g.
+ *        `"https://issuer.example.com|urn:eu.europa.ec.eudi:pid:1"` ->
+ *        `"fido2"`), consulted before asking the user (see
+ *        [WscdSelectionPolicy]'s resolution order) - lets an integrator that
+ *        already knows the right plugin for a given (issuer, credentialType)
+ *        pair skip the [requestWscdChoice] prompt entirely. Only consulted
+ *        when [availableKeystores] is non-empty.
+ * @param requestWscdChoice Optional suspending callback the SDK invokes when
+ *        [availableKeystores] contains more than one plugin capable of a
+ *        credential type's required tier and neither a persisted TOFU choice
+ *        nor [defaultWscdMapping] resolves it unambiguously - mirrors
+ *        `org.siros.sdk.keystore.mdoc.RequestProximityConsent`'s shape
+ *        exactly. See [RequestWscdChoice]'s doc comment.
+ * @param zkCircuitUrls Mirror base URLs for the go-zk-circuits catalog
+ *        service (read-only REST API for discovering/downloading ZK-proof
+ *        circuit artifacts used by the Longfellow-ZKP-pseudonym feature).
+ *        Tried in order, first-success-wins (see [org.siros.sdk.credentials.ZkCircuitClient]'s
+ *        doc comment for why this is ordered fallback across mirrors of the
+ *        SAME catalog, not merging like [registryUrl]'s TS11 registry
+ *        sources). Defaults to a single entry, the pre-DNS Fly.io deployment
+ *        (`https://zk-circuits.fly.dev`) - add `https://api.circuits.siros.org`
+ *        (or another mirror) once available, without removing the default.
+ * @param registryUrl Base URL for go-wallet-backend's credential-type
+ *        registry service (TS11-backed, ingests the external canonical
+ *        credential-type registry; includes `attestation_los`/
+ *        `Vctm.requiredKeyStorage`/`MddlSchema.requiredKeyStorage` data) -
+ *        queried as `<registryUrl>/type-metadata?vct=<vct-or-doctype>`. This
+ *        is the SAME service the reference wallet-frontend implementation
+ *        always calls for VCT/mdoc type metadata lookups, via its own
+ *        distinct, independently-settable `VCT_REGISTRY_URL` config value -
+ *        set this explicitly if your registry is deployed separately from
+ *        your main wallet backend (e.g. a different host/environment). When
+ *        `null` (the common case), derived automatically as
+ *        `<backendUrl>/registry`, which covers the common case (registry
+ *        mounted on the same host as the rest of go-wallet-backend's public
+ *        API) with zero extra configuration.
  */
 data class WalletConfig(
     val backendUrl: String,
@@ -62,6 +114,83 @@ data class WalletConfig(
      * of the legacy engine protocol. Requires go-wallet-backend with WMP support.
      */
     val useWmpProtocol: Boolean = false,
+    val availableKeystores: Map<String, KeystoreManager>? = null,
+    val defaultWscdMapping: Map<String, String>? = null,
+    val requestWscdChoice: RequestWscdChoice? = null,
+    val registryUrl: String? = null,
+    val zkCircuitUrls: List<String> = listOf(ZkCircuitClient.DEFAULT_ZK_CIRCUIT_URL),
+    /**
+     * PEM-encoded RICAL (Reader Identity CA List, ISO/IEC 18013-5 second
+     * edition Annex F) root certificate(s) for [SirosWallet.evaluateReaderTrust]'s
+     * local fallback path - plain X.509 path validation against these
+     * anchors, with none of the RICAL CBOR/COSE document parsing or
+     * `trustConstraints` enforcement the remote go-trust `mdocrical`
+     * registry does (see that registry for the full RICAL semantics). Empty
+     * by default: until an operator configures at least one root here,
+     * local reader-trust evaluation always reports untrusted rather than
+     * silently no-oping.
+     */
+    val readerTrustRootCertificatesPem: List<String> = emptyList(),
+    /**
+     * Forces [SirosWallet.evaluateReaderTrust] to always use the local
+     * X.509 fallback (see [readerTrustRootCertificatesPem]) instead of
+     * attempting the remote AuthZEN call first - e.g. for offline event
+     * scenarios, or a host app setting the user explicitly opted into.
+     * Default `false`: the remote path is preferred since it's the only
+     * one that honors RICAL's temporary/dynamic trust roots (go-trust's
+     * own registry cache/refresh handles freshness) - local fallback only
+     * happens automatically when the remote call itself fails.
+     */
+    val preferLocalReaderTrustEvaluation: Boolean = false,
+    /**
+     * PEM-encoded VICAL (Verified Issuer CA List, ISO/IEC 18013-5 Annex C)
+     * root certificate(s) for [SirosWallet.evaluateIssuerTrust]'s local
+     * fallback path - plain X.509 path validation against these anchors,
+     * with none of the VICAL CBOR/COSE document parsing or per-certificate
+     * `docType` enforcement the remote go-trust `vical` registry does (see
+     * that registry for the full VICAL semantics). Empty by default: until
+     * an operator configures at least one root here, local issuer-trust
+     * evaluation always reports untrusted rather than silently no-oping -
+     * same convention as [readerTrustRootCertificatesPem].
+     */
+    val issuerTrustRootCertificatesPem: List<String> = emptyList(),
+    /**
+     * Forces [SirosWallet.evaluateIssuerTrust] to always use the local
+     * X.509 fallback (see [issuerTrustRootCertificatesPem]) instead of
+     * attempting the remote AuthZEN call first. Default `false`: the
+     * remote path is preferred since it's the only one that honors
+     * VICAL's dynamic updates (go-trust's own registry cache/refresh
+     * handles freshness) - local fallback only happens automatically when
+     * the remote call itself fails. Same convention as
+     * [preferLocalReaderTrustEvaluation].
+     */
+    val preferLocalIssuerTrustEvaluation: Boolean = false,
+    /**
+     * Called right before [SirosWallet] is about to invoke a WSCD signing
+     * operation (`generateProof`/`generateKeyAttestation`/`generateKeypairs`)
+     * on [resolveEffectiveKeystoreForIssuance]'s resolved plugin, with that
+     * plugin's ID - lets a host app prefetch a PIN and/or show a "present
+     * your key" guide up front, mirroring the sample app's existing
+     * enroll/rotate dev-screen pattern (collect the PIN BEFORE any transport
+     * work starts, since a hardware-backed key's physical presentation and
+     * PIN entry both need the user's hands, and forcing a mid-ceremony PIN
+     * prompt can drop a live NFC session). Found necessary via live hardware
+     * testing: without this hook, real credential issuance's only PIN
+     * surface was a blocking dialog popped lazily mid-CTAP2-ceremony, with
+     * zero "you can present the key now" feedback for the transport-connect
+     * wait that happens first - the user had no way to know when to actually
+     * tap/plug in the authenticator. Always paired with [onWscdOperationEnd]
+     * (success or failure). `null` (default) preserves today's lazy-PIN
+     * behavior with no guide shown.
+     */
+    val onWscdOperationStart: (suspend (pluginId: String) -> Unit)? = null,
+    /**
+     * Called once the WSCD operation [onWscdOperationStart] announced has
+     * concluded (success or failure) - lets a host app dismiss any "present
+     * your key" guide and clear a prefetched PIN. Always called exactly
+     * once for every [onWscdOperationStart] call.
+     */
+    val onWscdOperationEnd: (suspend () -> Unit)? = null,
 ) {
     companion object {
         private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
