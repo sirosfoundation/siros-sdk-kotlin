@@ -165,6 +165,14 @@ fun CredentialCard(
     // no SVG template, only that hydrateReloadedCredentials() hasn't finished
     // yet. Collapsing that into NotApplicable was what caused a flash of the
     // flat/blue card before the real metadata (and its SVG) arrived.
+    //
+    // Since the SDK persists fallback metadata (CredentialMetadata.hydration
+    // == "fallback") for any credential whose VCTM/MDDL can't be fetched, and
+    // answers repeat launches from an on-device cache, meta is only ever null
+    // for the brief window between the first Ready emission and hydration
+    // completing - not for "the issuer is down", which used to mean a spinner
+    // on every launch. A fallback has no svgTemplates, so it takes the
+    // NotApplicable branch and renders the flat layout at once.
     var svgState by remember(credential.id, meta?.svgTemplates) {
         mutableStateOf<SvgLoadState>(
             when {
@@ -179,11 +187,17 @@ fun CredentialCard(
             // Wait (bounded) for hydration to populate metadata; the
             // remember/LaunchedEffect keys above cancel and re-fire this
             // block once meta?.svgTemplates actually changes. If that never
-            // happens (VCTM fetch failed, no VCTM published, etc.) this
-            // delay completes uncancelled and we settle to the flat layout
-            // instead of spinning forever.
+            // happens this delay completes uncancelled and we settle to the
+            // flat layout instead of spinning forever.
+            //
+            // The ceiling used to be 5 s, sized for a live VCTM fetch to an
+            // issuer. Hydration now either answers from the SDK's on-device
+            // cache (milliseconds) or persists fallback metadata immediately
+            // when the negative cache says a fetch isn't due, so a null here
+            // that outlives ~1.5 s means something is genuinely wrong - and
+            // the right response to that is the flat card, not more waiting.
             svgState = SvgLoadState.Loading
-            delay(5000)
+            delay(HYDRATION_WAIT_CEILING_MS)
             svgState = SvgLoadState.NotApplicable
             return@LaunchedEffect
         }
@@ -672,6 +686,15 @@ internal fun contrastRatio(a: Color, b: Color): Float {
  * unreadable, not merely non-ideal (see [CredentialCard]'s use of this).
  */
 internal const val MIN_READABLE_CONTRAST_RATIO = 3.0f
+
+/**
+ * Longest a card shows its loading indicator waiting for `metadata` to be
+ * hydrated before settling to the flat layout. Generous relative to the
+ * cache-served/fallback path the SDK now takes (milliseconds), short enough
+ * that a genuinely stuck hydration never reads as "the wallet is slow" - see
+ * the `meta == null` branch in [CredentialCard].
+ */
+internal const val HYDRATION_WAIT_CEILING_MS = 1_500L
 
 /** Matches a `<text ...>` or `<tspan ...>` opening tag, whose own `fill` attribute (if any) [correctSvgTextContrast] inspects. */
 private val SVG_TEXT_TAG = Regex("""<(?:text|tspan)\b[^>]*>""")
