@@ -154,7 +154,11 @@ class BleCentralClient(
     private var scanning = false
     // Set immediately before each writeCharacteristic() call and completed
     // from onCharacteristicWrite - see WRITE_ACK_TIMEOUT_MS's doc comment on
-    // why writes must be paced rather than issued back-to-back.
+    // why writes must be paced rather than issued back-to-back. Written on
+    // the coroutine that issues the write and read on the BluetoothGatt
+    // binder thread, so the reference needs a visibility guarantee of its
+    // own - the deferred inside is thread-safe, the field holding it is not.
+    @Volatile
     private var pendingWriteAck: CompletableDeferred<Boolean>? = null
     private var scanTimeoutJob: Job? = null
 
@@ -302,11 +306,32 @@ class BleCentralClient(
 
         @SuppressLint("MissingPermission")
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+            // A failed CCCD write means notifications on that characteristic
+            // never got enabled. Carrying on would send STATE_START to a
+            // reader whose replies this side can no longer hear, and the
+            // session would then sit silent until the reader gave up -
+            // indistinguishable, to the user, from a reader that never
+            // answered. Fail now, with the reason in the log.
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                Timber.w("BleCentralClient: enabling notifications on ${descriptor.characteristic.uuid} failed (status $status)")
+                onComplete(false)
+                gatt.disconnect()
+                return
+            }
             when (descriptor.characteristic.uuid) {
                 STATE_UUID -> enableNotifications(gatt, descriptor.characteristic.service.getCharacteristic(SERVER2CLIENT_UUID))
                 SERVER2CLIENT_UUID -> {
                     val stateChar = descriptor.characteristic.service.getCharacteristic(STATE_UUID)
-                    scope.launch { writeNoResponse(gatt, stateChar, byteArrayOf(STATE_START)) }
+                    scope.launch {
+                        // Same reasoning as the status check above: a
+                        // STATE_START the reader never received leaves both
+                        // sides waiting on each other.
+                        if (!writeNoResponse(gatt, stateChar, byteArrayOf(STATE_START))) {
+                            Timber.w("BleCentralClient: STATE_START write failed or was not acked - reader never saw the session begin")
+                            onComplete(false)
+                            gatt.disconnect()
+                        }
+                    }
                 }
             }
         }
