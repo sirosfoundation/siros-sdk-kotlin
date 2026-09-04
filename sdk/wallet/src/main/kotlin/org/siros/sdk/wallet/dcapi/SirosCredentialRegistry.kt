@@ -13,7 +13,11 @@ import androidx.credentials.registry.provider.digitalcredentials.DigitalCredenti
 import com.google.android.gms.identitycredentials.ClearRegistryRequest
 import com.google.android.gms.identitycredentials.IdentityCredentialManager
 import com.google.android.gms.identitycredentials.RegistrationRequest
+import com.google.android.gms.tasks.Task
 import java.io.ByteArrayOutputStream
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.suspendCancellableCoroutine
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.StoredCredential
 import timber.log.Timber
@@ -121,8 +125,12 @@ object SirosCredentialRegistry {
      * type string, the way multipaz's independently-working implementation
      * does. A failure here must not affect the primary registration, so it
      * is caught and logged rather than propagated.
+     *
+     * Awaited, not fire-and-forget: [refresh] and [clear] run back to back on
+     * login and logout, and a registration still in flight when the next call
+     * starts could land after the clear that was meant to remove it.
      */
-    private fun registerLegacyType(context: Context, blob: ByteArray, matcher: ByteArray) {
+    private suspend fun registerLegacyType(context: Context, blob: ByteArray, matcher: ByteArray) {
         try {
             IdentityCredentialManager.getClient(context)
                 .registerCredentials(
@@ -134,8 +142,8 @@ object SirosCredentialRegistry {
                         protocolTypes = emptyList(),
                     ),
                 )
-                .addOnSuccessListener { Timber.d("DC API legacy-type registration succeeded") }
-                .addOnFailureListener { Timber.w(it, "DC API legacy-type registration failed") }
+                .await()
+            Timber.d("DC API legacy-type registration succeeded")
         } catch (e: Exception) {
             Timber.w(e, "Failed to register DC API credentials under the legacy type")
         }
@@ -192,9 +200,30 @@ object SirosCredentialRegistry {
         try {
             IdentityCredentialManager.getClient(context)
                 .clearRegistry(ClearRegistryRequest())
-                .addOnFailureListener { Timber.w(it, "Failed to clear DC API legacy-type registry") }
+                .await()
         } catch (e: Exception) {
             Timber.w(e, "Failed to clear DC API legacy-type registry")
+        }
+    }
+
+    /**
+     * Suspend until a Play Services [Task] completes, surfacing failure as an
+     * exception. Same shape as `PlayIntegrityProvider`, kept private here
+     * rather than shared because a module-wide Task bridge would pull the GMS
+     * Tasks API into every module's surface for two call sites.
+     *
+     * A [Task] cannot be cancelled, so cancellation of the caller only stops
+     * it from being resumed; the request itself still reaches the host.
+     */
+    private suspend fun <T> Task<T>.await(): T = suspendCancellableCoroutine { continuation ->
+        addOnCompleteListener { task ->
+            if (!continuation.isActive) return@addOnCompleteListener
+            val error = task.exception
+            when {
+                task.isCanceled -> continuation.cancel()
+                error != null -> continuation.resumeWithException(error)
+                else -> continuation.resume(task.result)
+            }
         }
     }
 
