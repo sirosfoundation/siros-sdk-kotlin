@@ -26,6 +26,8 @@ class IssuedTypeVerificationTest {
     private val json = Json { ignoreUnknownKeys = true }
 
     private fun wallet(): SirosWallet {
+        // allocateInstance leaves every field null, which is what the existing
+        // cases below assume: no offer, so only resolved metadata is consulted.
         val unsafeClass = Class.forName("sun.misc.Unsafe")
         val f = unsafeClass.getDeclaredField("theUnsafe")
         f.isAccessible = true
@@ -114,6 +116,50 @@ class IssuedTypeVerificationTest {
         // No MDDL resolved, so nothing to compare - and crucially it does not
         // fall back to the SD-JWT vct.
         assertNull(call(w, "verifyIssuedType", "mso_mdoc", "not-a-jwt"))
+    }
+
+    @Test
+    fun usesTheOffersTypeWhenMetadataResolutionFailed() {
+        // The situation the check exists for and would otherwise miss: no
+        // metadata resolved, so no Vctm - but the offer still declared a vct,
+        // and that is what the entitlement check was run against.
+        val w = wallet()
+        setField(w, "activeVctm", null)
+        setField(w, "activeMddlSchema", null)
+        setField(
+            w,
+            "activeOffer",
+            org.siros.sdk.credentials.CredentialOffer(
+                credentialConfigurationId = "pid",
+                credentialIssuerIdentifier = "https://issuer.example.com",
+                credentialName = "PID",
+                issuerName = "Issuer",
+                vct = "urn:eudi:pid:1",
+            ),
+        )
+        assertNotNull(call(w, "verifyIssuedType", "dc+sd-jwt", sdJwt("urn:example:other")))
+        assertNull(call(w, "verifyIssuedType", "dc+sd-jwt", sdJwt("urn:eudi:pid:1")))
+    }
+
+    @Test
+    fun mdocUsesTheOffersDoctype() {
+        val w = wallet()
+        setField(w, "activeVctm", null)
+        setField(w, "activeMddlSchema", null)
+        setField(
+            w,
+            "activeOffer",
+            org.siros.sdk.credentials.CredentialOffer(
+                credentialConfigurationId = "mdl",
+                credentialIssuerIdentifier = "https://issuer.example.com",
+                credentialName = "mDL",
+                issuerName = "Issuer",
+                doctype = "org.iso.18013.5.1.mDL",
+            ),
+        )
+        // An unparseable mdoc still declares no type, so there is nothing to
+        // disagree with - the offer's doctype alone must not cause a refusal.
+        assertNull(call(w, "verifyIssuedType", "mso_mdoc", "not-a-real-mdoc"))
     }
 
     // --- vct#integrity ---

@@ -151,6 +151,17 @@ data class CredentialOffer(
      * an ARF PID issued as either an mdoc or an SD-JWT VC.
      */
     val format: String = "",
+    /**
+     * The credential type this configuration issues: the `vct` of an SD-JWT VC.
+     *
+     * Carried on the offer because it is the type the wallet's checks are made
+     * about - the issuer's entitlement, and the comparison against what
+     * actually arrives - and unlike resolved type metadata it is known whether
+     * or not that resolution succeeded.
+     */
+    val vct: String? = null,
+    /** The `doctype` of an mdoc, the counterpart to [vct]. */
+    val doctype: String? = null,
     val backgroundColor: String? = null,
     val textColor: String? = null,
     val logoUri: String? = null,
