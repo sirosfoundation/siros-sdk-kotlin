@@ -3,9 +3,6 @@ package org.siros.sdk.wallet.dcapi
 
 import android.content.Context
 import android.content.pm.ApplicationInfo
-import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Color
 import androidx.credentials.registry.digitalcredentials.openid4vp.OpenId4VpRegistry
 import androidx.credentials.registry.provider.ClearCredentialRegistryRequest
 import androidx.credentials.registry.provider.RegistryManager
@@ -14,9 +11,14 @@ import com.google.android.gms.identitycredentials.ClearRegistryRequest
 import com.google.android.gms.identitycredentials.IdentityCredentialManager
 import com.google.android.gms.identitycredentials.RegistrationRequest
 import com.google.android.gms.tasks.Task
-import java.io.ByteArrayOutputStream
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.StoredCredential
@@ -52,6 +54,17 @@ import uniffi.siros_dc_matcher_ffi.SirosBlobBuilder
  * The encoder and `matcher.wasm` both come from the `siros-dc-matcher` AAR.
  * Pairing an encoder with a matcher that predates it produces a wallet that
  * matches nothing and reports nothing, so they are deliberately not separable.
+ *
+ * ## Icons
+ *
+ * Every entry carries an icon, because the picker host silently drops an
+ * entry whose icon is null or empty - learned on a device, not from docs.
+ * The floor is a solid tile in the card's colour; when the issuer's logo has
+ * been fetched and rendered by [PickerIconCache] that is used instead. The
+ * cache is only ever *read* during registration, so registering never waits
+ * on the network; missing icons are fetched afterwards in the background
+ * and, if any land, the snapshot is registered once more so the picker
+ * picks them up (see [fetchMissingIconsThenReregister]).
  */
 object SirosCredentialRegistry {
 
@@ -60,6 +73,30 @@ object SirosCredentialRegistry {
 
     /** Asset path of the matcher, shipped inside the `siros-dc-matcher` AAR. */
     private const val MATCHER_ASSET = "matcher.wasm"
+
+    /**
+     * Where background icon fetches run. Process-lifetime, like this object;
+     * a SupervisorJob so one failed download can't cancel its siblings.
+     */
+    private val iconScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** One background icon sweep at a time; a second [refresh] while one runs doesn't stack another. */
+    private val iconFetchInFlight = AtomicBoolean(false)
+
+    /**
+     * The most recent [refresh] request, or null if the last one cleared the
+     * registry. A background icon sweep re-registers *this*, never the
+     * snapshot it was started from: a credential may have been added or
+     * deleted while the logos downloaded, and re-registering the older set
+     * would resurrect it in the picker.
+     */
+    private val latestRequest = AtomicReference<RefreshRequest?>(null)
+
+    private class RefreshRequest(
+        val credentials: List<StoredCredential>,
+        val zkSystems: List<ZkSystem>,
+        val useStockMatcher: Boolean,
+    )
 
     /**
      * The pre-standardization Credential Manager type string.
@@ -73,9 +110,6 @@ object SirosCredentialRegistry {
      * it costs one extra call and reaches whatever still looks here.
      */
     private const val LEGACY_TYPE = "com.credman.IdentityCredential"
-
-    /** Icon edge length, in pixels, for the placeholder card image. */
-    private const val ICON_SIZE = 64
 
     /**
      * Replace the registered snapshot with [credentials].
@@ -95,18 +129,26 @@ object SirosCredentialRegistry {
             clear(context)
             return
         }
+        latestRequest.set(RefreshRequest(credentials, zkSystems, useStockMatcher))
         try {
             if (useStockMatcher) {
                 registerWithStockMatcher(context, credentials)
                 return
             }
-            val blob = buildBlob(credentials, zkSystems, debug = context.isDebuggable())
+            val iconCache = PickerIconCache(context)
+            // File reads only (PickerIconCache hops to IO itself); no network here.
+            val icons = cachedIcons(iconCache, credentials)
+            val blob = buildBlob(credentials, zkSystems, icons, debug = context.isDebuggable())
             val matcher = context.assets.open(MATCHER_ASSET).use { it.readBytes() }
             RegistryManager.create(context).registerCredentials(
                 SirosRegistry(credentials = blob, matcher = matcher),
             )
             registerLegacyType(context, blob, matcher)
-            Timber.d("DC API registry updated: ${credentials.size} credentials, ${blob.size}-byte blob")
+            Timber.d(
+                "DC API registry updated: ${credentials.size} credentials, ${icons.size} with logo icons, " +
+                    "${blob.size}-byte blob",
+            )
+            fetchMissingIconsThenReregister(context.applicationContext, iconCache, credentials, icons)
         } catch (e: Exception) {
             // Registration failing must never break the rest of the app - on a
             // device without DC API support it simply means these credentials
@@ -181,6 +223,68 @@ object SirosCredentialRegistry {
         Timber.d("DC API registry updated via the stock matcher (${entries.size} entries)")
     }
 
+    /** Every credential's on-disk rendered logo icon, keyed by credential id. Reads files only. */
+    private suspend fun cachedIcons(
+        iconCache: PickerIconCache,
+        credentials: List<StoredCredential>,
+    ): Map<Long, ByteArray> = buildMap {
+        credentials.forEach { cred ->
+            val metadata = cred.metadata ?: return@forEach
+            val url = metadata.logo?.uri ?: return@forEach
+            iconCache.cached(url, metadata.backgroundColor)?.let { put(cred.id, it) }
+        }
+    }
+
+    /**
+     * After a registration went out with placeholders for some entries, try
+     * to fetch those logos in the background and, if any landed, register
+     * the *latest* snapshot once more so the picker picks them up.
+     *
+     * Bounded: [PickerIconCache.isDue] skips URLs with a current negative
+     * entry, so a dead or SVG logo costs one download per backoff interval,
+     * not one per registration. The re-registration's own sweep only starts
+     * if it still finds icons that are missing and due - which, for the
+     * snapshot just swept, it won't; for a newer snapshot that arrived
+     * mid-sweep (and was refused a sweep of its own by [iconFetchInFlight])
+     * it will, which is how that snapshot's logos get their turn.
+     */
+    private fun fetchMissingIconsThenReregister(
+        appContext: Context,
+        iconCache: PickerIconCache,
+        credentials: List<StoredCredential>,
+        alreadyCached: Map<Long, ByteArray>,
+    ) {
+        val missing = credentials
+            .filter { it.id !in alreadyCached && it.metadata?.logo?.uri != null }
+            .distinctBy { PickerIconCache.key(it.metadata!!.logo!!.uri!!, it.metadata!!.backgroundColor) }
+        if (missing.isEmpty()) return
+        if (!iconFetchInFlight.compareAndSet(false, true)) return
+        iconScope.launch {
+            var landed = 0
+            try {
+                for (cred in missing) {
+                    val url = cred.metadata?.logo?.uri ?: continue
+                    val colour = cred.metadata?.backgroundColor
+                    if (!iconCache.isDue(url, colour)) continue
+                    if (iconCache.fetchAndStore(url, colour) != null) landed++
+                }
+            } catch (e: Exception) {
+                Timber.w(e, "Background picker-icon fetch failed")
+            } finally {
+                iconFetchInFlight.set(false)
+            }
+            if (landed == 0) return@launch
+            val latest = latestRequest.get() ?: run {
+                // The registry was cleared while we downloaded (logout). The
+                // icons are on disk for whichever registration comes next.
+                Timber.d("Picker icons landed ($landed) but the registry was cleared; not re-registering")
+                return@launch
+            }
+            Timber.i("Re-registering DC API credentials with $landed newly rendered logo icon(s)")
+            refresh(appContext, latest.credentials, latest.zkSystems, latest.useStockMatcher)
+        }
+    }
+
     /**
      * Remove this wallet's entries from the picker.
      *
@@ -189,8 +293,14 @@ object SirosCredentialRegistry {
      * clear does not reach the latter, so without the second call a wallet
      * that logged out would keep offering its last snapshot under the legacy
      * type until it next logged in.
+     *
+     * Also forgets the last snapshot, so a background icon sweep that
+     * finishes after this does not put it straight back. That has to happen
+     * here and not only in [refresh]'s empty-list path: this is public, and
+     * logout calls it directly.
      */
     suspend fun clear(context: Context) {
+        latestRequest.set(null)
         try {
             RegistryManager.create(context)
                 .clearCredentialRegistry(ClearCredentialRegistryRequest(true))
@@ -259,19 +369,21 @@ object SirosCredentialRegistry {
     internal fun buildBlob(
         credentials: List<StoredCredential>,
         zkSystems: List<ZkSystem>,
+        icons: Map<Long, ByteArray> = emptyMap(),
         debug: Boolean = false,
     ): ByteArray {
         // `use`, not a bare call: the builder holds a native handle, and
         // leaving it to the Cleaner means the handle survives until a GC that
         // may never come under memory pressure. Registration runs on every
         // credential change, so a leak here accumulates.
-        return SirosBlobBuilder().use { builder -> buildWith(builder, credentials, zkSystems, debug) }
+        return SirosBlobBuilder().use { builder -> buildWith(builder, credentials, zkSystems, icons, debug) }
     }
 
     private fun buildWith(
         builder: SirosBlobBuilder,
         credentials: List<StoredCredential>,
         zkSystems: List<ZkSystem>,
+        icons: Map<Long, ByteArray>,
         debug: Boolean,
     ): ByteArray {
         // With this on, a request that matches nothing gets one picker entry
@@ -284,7 +396,10 @@ object SirosCredentialRegistry {
 
         credentials.forEach { cred ->
             val iconId = cred.id.toString()
-            builder.addIcon(iconId, placeholderIcon(cred))
+            // Never null, never empty: the host drops such entries outright.
+            // A rendered logo when the cache has one, the colour tile if not.
+            val icon = icons[cred.id]?.takeIf { it.isNotEmpty() } ?: placeholderIcon(cred)
+            builder.addIcon(iconId, icon)
             builder.addCredential(
                 FfiCredential(
                     id = cred.id.toString(),
@@ -340,26 +455,15 @@ object SirosCredentialRegistry {
         }
 
     /**
-     * A flat card-coloured placeholder.
+     * A flat card-coloured placeholder - the floor for every entry.
      *
-     * The real issuer logo is a remote URL, and fetching it needs async I/O
-     * this synchronous encode cannot do. Fetching and caching it is a
-     * reasonable follow-up; showing nothing is worse than showing the card's
-     * own colour.
+     * Used whenever [PickerIconCache] has no rendered logo yet (first
+     * registration, logo not yet downloaded, logo is an SVG this SDK can't
+     * rasterise, or the URL is dead). Showing nothing is not an option: the
+     * picker drops iconless entries.
      */
-    private fun placeholderIcon(cred: StoredCredential): ByteArray {
-        val color = try {
-            Color.parseColor(cred.metadata?.backgroundColor ?: "#1A365D")
-        } catch (_: Exception) {
-            Color.parseColor("#1A365D")
-        }
-        val bitmap = Bitmap.createBitmap(ICON_SIZE, ICON_SIZE, Bitmap.Config.ARGB_8888)
-        Canvas(bitmap).drawColor(color)
-        return ByteArrayOutputStream().use { out ->
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-            out.toByteArray()
-        }
-    }
+    private fun placeholderIcon(cred: StoredCredential): ByteArray =
+        PickerIconRenderer.placeholder(cred.metadata?.backgroundColor)
 
     private fun Context.isDebuggable(): Boolean =
         applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
