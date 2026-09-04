@@ -115,7 +115,7 @@ class MdocProximitySession(
      * used up, so a family the user approves can't sign with an exhausted
      * instance even if [requestConsent]'s UI failed to grey it out.
      */
-    private val filterEligible: (List<StoredCredential>) -> List<StoredCredential>,
+    private val filterEligible: suspend (List<StoredCredential>) -> List<StoredCredential>,
     /** Reports a canonical step token (see `FlowStepCatalog.proximitySteps`) for driving the same progress-bar UI the issuance/presentation flows use. */
     private val onStep: (String) -> Unit,
     /** Log-tag prefix distinguishing which BLE role a given session belongs to in shared logs (e.g. "BlePeripheralServer", "BleCentralClient"). */

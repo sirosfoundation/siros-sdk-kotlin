@@ -19,9 +19,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -34,7 +38,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -93,12 +103,26 @@ fun CredentialCard(
      * `sigCount > 0`; ignored (no button rendered) if null.
      */
     onRenewClick: (() -> Unit)? = null,
+    /**
+     * Called when the user taps "Delete" on a fully-exhausted/"shadow"
+     * credential (see [onRenewClick]'s doc comment for when this state
+     * applies) - a shadow credential isn't reachable via long-press (see
+     * [isExhausted]'s use in this card's `combinedClickable` gate below), so
+     * without this the only way to remove one was renewing it first, even
+     * though the user may simply want it gone. Ignored (no button rendered)
+     * if null, same as [onRenewClick].
+     */
+    onDeleteClick: (() -> Unit)? = null,
 ) {
     // Null when the caller doesn't have batch/usage data on hand (see
     // [instances]'s doc comment) - only gates the greyed-out/Renew state
     // when we actually know the count, never on the strength of an absence.
-    val unusedCount = instances?.count { it.sigCount == 0 }
-    val isExhausted = unusedCount == 0
+    // A copy that's unused but keyless still can't actually be presented -
+    // "remaining" (and therefore the "shadow"/renew-only state below) counts
+    // only copies that are both, so a lost key can't masquerade as a live,
+    // presentable one (see CredentialInstance.hasKey's doc comment).
+    val remainingCount = instances?.count { it.sigCount == 0 && it.hasKey }
+    val isExhausted = remainingCount == 0
     val meta = credential.metadata
     val bgColor = meta?.backgroundColor?.toComposeColor()
         ?: MaterialTheme.colorScheme.primaryContainer
@@ -141,6 +165,14 @@ fun CredentialCard(
     // no SVG template, only that hydrateReloadedCredentials() hasn't finished
     // yet. Collapsing that into NotApplicable was what caused a flash of the
     // flat/blue card before the real metadata (and its SVG) arrived.
+    //
+    // Since the SDK persists fallback metadata (CredentialMetadata.hydration
+    // == "fallback") for any credential whose VCTM/MDDL can't be fetched, and
+    // answers repeat launches from an on-device cache, meta is only ever null
+    // for the brief window between the first Ready emission and hydration
+    // completing - not for "the issuer is down", which used to mean a spinner
+    // on every launch. A fallback has no svgTemplates, so it takes the
+    // NotApplicable branch and renders the flat layout at once.
     var svgState by remember(credential.id, meta?.svgTemplates) {
         mutableStateOf<SvgLoadState>(
             when {
@@ -155,11 +187,17 @@ fun CredentialCard(
             // Wait (bounded) for hydration to populate metadata; the
             // remember/LaunchedEffect keys above cancel and re-fire this
             // block once meta?.svgTemplates actually changes. If that never
-            // happens (VCTM fetch failed, no VCTM published, etc.) this
-            // delay completes uncancelled and we settle to the flat layout
-            // instead of spinning forever.
+            // happens this delay completes uncancelled and we settle to the
+            // flat layout instead of spinning forever.
+            //
+            // The ceiling used to be 5 s, sized for a live VCTM fetch to an
+            // issuer. Hydration now either answers from the SDK's on-device
+            // cache (milliseconds) or persists fallback metadata immediately
+            // when the negative cache says a fetch isn't due, so a null here
+            // that outlives ~1.5 s means something is genuinely wrong - and
+            // the right response to that is the flat card, not more waiting.
             svgState = SvgLoadState.Loading
-            delay(5000)
+            delay(HYDRATION_WAIT_CEILING_MS)
             svgState = SvgLoadState.NotApplicable
             return@LaunchedEffect
         }
@@ -366,13 +404,13 @@ fun CredentialCard(
             // UsagesRibbon (CredentialImage.jsx): count of batch copies not
             // yet used in a presentation (sigCount == 0), so it counts down
             // as copies get consumed rather than showing the fixed batch size.
-            if (unusedCount != null) {
+            if (remainingCount != null) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(8.dp)
                         .background(
-                            color = if (unusedCount > 0) {
+                            color = if (remainingCount > 0) {
                                 MaterialTheme.colorScheme.tertiaryContainer
                             } else {
                                 MaterialTheme.colorScheme.surfaceVariant
@@ -382,9 +420,9 @@ fun CredentialCard(
                         .padding(horizontal = 8.dp, vertical = 3.dp),
                 ) {
                     Text(
-                        text = unusedCount.toString(),
+                        text = remainingCount.toString(),
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (unusedCount > 0) {
+                        color = if (remainingCount > 0) {
                             MaterialTheme.colorScheme.onTertiaryContainer
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
@@ -394,24 +432,71 @@ fun CredentialCard(
                 }
             }
 
-            // Every batch instance already used - grey the whole card out
-            // (it can no longer be presented, see CredentialUtils.eligibleInstances)
-            // and offer Renew instead of leaving it looking like a normal,
-            // selectable credential.
+            // Every batch instance already used or keyless - the card enters
+            // the "shadow" display state (it can no longer be presented, see
+            // CredentialUtils.eligibleInstances/CredentialInstance.hasKey):
+            // a dashed outline in place of the card's normal solid edge, a
+            // dimmed scrim, and a renew icon overlay in place of the normal
+            // face, rather than leaving it looking like a live, selectable
+            // credential.
             if (isExhausted) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.55f)),
+                        .background(Color.Black.copy(alpha = 0.45f))
+                        .drawWithContent {
+                            drawContent()
+                            val strokeWidthPx = 3.dp.toPx()
+                            val cornerRadiusPx = 16.dp.toPx()
+                            drawRoundRect(
+                                color = Color.White.copy(alpha = 0.85f),
+                                topLeft = Offset(strokeWidthPx / 2, strokeWidthPx / 2),
+                                size = Size(size.width - strokeWidthPx, size.height - strokeWidthPx),
+                                cornerRadius = CornerRadius(cornerRadiusPx, cornerRadiusPx),
+                                style = Stroke(
+                                    width = strokeWidthPx,
+                                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f)),
+                                ),
+                            )
+                        },
                     contentAlignment = Alignment.Center,
                 ) {
-                    if (onRenewClick != null) {
-                        TextButton(onClick = onRenewClick) {
-                            Text(
-                                text = stringResource(R.string.credential_renew),
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                            )
+                    Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                        if (onRenewClick != null) {
+                            TextButton(onClick = onRenewClick) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Refresh,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(32.dp),
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = stringResource(R.string.credential_renew),
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                }
+                            }
+                        }
+                        if (onDeleteClick != null) {
+                            TextButton(onClick = onDeleteClick) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Delete,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(32.dp),
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = stringResource(R.string.credential_detail_delete),
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -601,6 +686,15 @@ internal fun contrastRatio(a: Color, b: Color): Float {
  * unreadable, not merely non-ideal (see [CredentialCard]'s use of this).
  */
 internal const val MIN_READABLE_CONTRAST_RATIO = 3.0f
+
+/**
+ * Longest a card shows its loading indicator waiting for `metadata` to be
+ * hydrated before settling to the flat layout. Generous relative to the
+ * cache-served/fallback path the SDK now takes (milliseconds), short enough
+ * that a genuinely stuck hydration never reads as "the wallet is slow" - see
+ * the `meta == null` branch in [CredentialCard].
+ */
+internal const val HYDRATION_WAIT_CEILING_MS = 1_500L
 
 /** Matches a `<text ...>` or `<tspan ...>` opening tag, whose own `fill` attribute (if any) [correctSvgTextContrast] inspects. */
 private val SVG_TEXT_TAG = Regex("""<(?:text|tspan)\b[^>]*>""")

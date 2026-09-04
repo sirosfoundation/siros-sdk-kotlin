@@ -8,7 +8,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -43,6 +47,7 @@ import org.siros.sdk.credentials.CredentialStore
 import org.siros.sdk.credentials.InMemoryCredentialStore
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.credentials.CredentialOffer
+import org.siros.sdk.credentials.CredentialMetadata
 import org.siros.sdk.credentials.CredentialMatcher
 import org.siros.sdk.credentials.PresentationRecord
 import org.siros.sdk.credentials.IssuerEntry
@@ -84,6 +89,7 @@ import org.siros.sdk.transport.CredentialNotifier
 import org.siros.sdk.transport.engine.CredentialMatch
 import org.siros.sdk.transport.engine.CredentialNotificationEvent
 import org.siros.sdk.transport.engine.ProofObject
+import org.siros.sdk.transport.engine.SignRequestMessage
 import org.siros.sdk.transport.engine.WalletEngineSession
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -686,7 +692,7 @@ class SirosWallet private constructor(
     /**
      * After loading credentials from a reimported private-data container
      * (fresh login here, or [unlockKeystore] after [resumeSession]), re-fetch
-     * VCTM display metadata and re-derive issuedAt/expiresAt for any
+     * VCTM/MDDL display metadata and re-derive issuedAt/expiresAt for any
      * credential that's missing them.
      *
      * privatedata-spec's container format doesn't persist `metadata`/
@@ -698,101 +704,147 @@ class SirosWallet private constructor(
      * (metadata is never null for a credential saved earlier in the same
      * session, only for one just reconstructed from a container).
      *
-     * Fire-and-forget: re-emits [WalletState.Ready] with the refreshed list
-     * once done, rather than blocking login/unlock on however many VCTM
-     * fetches are needed.
+     * ### Never a spinner for nothing
+     *
+     * Because this runs on every login, a type whose document can't be
+     * fetched used to cost the user a network round-trip and a loading
+     * indicator on its card on every launch. Two things fix that:
+     *
+     * 1. The fetchers share [displayMetadataCache], which remembers misses
+     *    with backoff. While a retry isn't due, `fetch` returns null at once
+     *    with no network.
+     * 2. When no document is available, a synthesised
+     *    [CredentialUtils.buildFallbackMetadata] is persisted on the
+     *    credential (marked [CredentialMetadata.HYDRATION_FALLBACK]) so the
+     *    UI has non-null metadata to render the flat layout from
+     *    immediately. A fallback still counts as "needs hydration": it is
+     *    replaced by real metadata the moment a later fetch succeeds.
+     *
+     * Credentials are hydrated concurrently (capped at
+     * [HYDRATION_PARALLELISM]) so one slow issuer doesn't hold up the rest,
+     * but [WalletState.Ready] is re-emitted exactly once at the end, as
+     * before. Fire-and-forget: never blocks login/unlock.
      */
     private fun hydrateReloadedCredentials() {
         scope.launch {
-            var changed = false
-            for (cred in credentialStore.getAll()) {
-                if (cred.metadata != null) continue
-                val issuerIdent = cred.credentialIssuerIdentifier
-                val configId = cred.credentialConfigurationId
-
-                if (cred.format == "mso_mdoc") {
-                    // mdoc has no JWT iat/exp claims to re-derive here (ISO
-                    // 18013-5 validity lives in the MSO's validityInfo, inside
-                    // issuerAuth - deliberately not parsed by this wallet, see
-                    // MdocCbor's doc comment: MSO parsing is a verifier-side
-                    // concern this holder doesn't need). Only metadata (via
-                    // MDDLSchema) is re-hydrated here.
-                    if (issuerIdent.isNullOrBlank() || configId.isNullOrBlank()) continue
-                    val mddlSchema = try {
-                        mddlSchemaFetcher.fetch(
-                            issuerUrl = issuerIdent,
-                            scope = configId,
-                            registryUrl = registryUrl,
-                        )
-                    } catch (e: Exception) {
-                        Timber.w(e, "Failed to re-fetch MDDL schema for reloaded credential ${cred.id}")
-                        null
-                    } ?: continue
-                    val metadata = CredentialUtils.buildMdocMetadata(
-                        offer = CredentialOffer(
-                            credentialConfigurationId = configId,
-                            credentialIssuerIdentifier = issuerIdent,
-                            credentialName = cred.format,
-                            issuerName = issuerIdent,
-                            format = cred.format,
-                        ),
-                        mddlSchema = mddlSchema,
-                    )
-                    credentialStore.save(cred.copy(metadata = metadata))
-                    changed = true // NOSONAR kotlin:S6615 - false positive, read after the loop at "if (changed)" below
-                    continue
-                }
-
-                val payload = CredentialUtils.parseJwtPayload(cred.raw) ?: continue
-                val issuedAt = payload["iat"]?.jsonPrimitive?.longOrNull
-                val expiresAt = payload["exp"]?.jsonPrimitive?.longOrNull
-                val vct = payload["vct"]?.jsonPrimitive?.contentOrNull
-                val vctm = if (!issuerIdent.isNullOrBlank() && !configId.isNullOrBlank()) {
-                    try {
-                        vctmFetcher.fetch(
-                            issuerUrl = issuerIdent,
-                            scope = configId,
-                            vct = vct,
-                            registryUrl = registryUrl,
-                        )
-                    } catch (e: Exception) {
-                        Timber.w(e, "Failed to re-fetch VCTM for reloaded credential ${cred.id}")
-                        null
-                    }
-                } else {
-                    null
-                }
-                val metadata = vctm?.let {
-                    CredentialUtils.buildMetadata(
-                        offer = CredentialOffer(
-                            credentialConfigurationId = configId ?: "",
-                            credentialIssuerIdentifier = issuerIdent ?: "",
-                            credentialName = cred.format,
-                            issuerName = issuerIdent ?: "",
-                            format = cred.format,
-                        ),
-                        vctm = it,
-                        rawCredential = cred.raw,
-                    )
-                }
-                if (metadata != null || issuedAt != null || expiresAt != null) {
-                    credentialStore.save(
-                        cred.copy(
-                            metadata = metadata ?: cred.metadata,
-                            issuedAt = issuedAt ?: cred.issuedAt,
-                            expiresAt = expiresAt ?: cred.expiresAt,
-                        )
-                    )
-                    changed = true
-                }
-            }
-            if (changed) {
-                val current = _state.value
-                if (current is WalletState.Ready) {
-                    _state.value = current.copy(credentials = credentialStore.getAll())
-                }
+            val candidates = credentialStore.getAll().filter { it.metadata?.isFallback != false }
+            if (candidates.isEmpty()) return@launch
+            val gate = Semaphore(HYDRATION_PARALLELISM)
+            val updates = candidates
+                .map { cred -> async { gate.withPermit { hydrateOne(cred) } } }
+                .awaitAll()
+                .filterNotNull()
+            if (updates.isEmpty()) return@launch
+            updates.forEach { credentialStore.save(it) }
+            val fallbacks = updates.count { it.metadata?.isFallback == true }
+            Timber.i(
+                "Hydrated ${updates.size}/${candidates.size} reloaded credentials " +
+                    "(${updates.size - fallbacks} from issuer documents, $fallbacks fallback)",
+            )
+            val current = _state.value
+            if (current is WalletState.Ready) {
+                _state.value = current.copy(credentials = credentialStore.getAll())
             }
         }
+    }
+
+    /**
+     * One credential's share of [hydrateReloadedCredentials]: the credential
+     * with whatever could be (re)derived applied, or null when nothing
+     * changed - so an existing fallback whose retry isn't due yet is not
+     * re-saved on every launch.
+     */
+    private suspend fun hydrateOne(cred: StoredCredential): StoredCredential? {
+        val issuerIdent = cred.credentialIssuerIdentifier
+        val configId = cred.credentialConfigurationId
+        val canFetch = !issuerIdent.isNullOrBlank() && !configId.isNullOrBlank()
+        // Only synthesise a fallback when there is no metadata at all; an
+        // existing fallback stays as it is until a real document replaces it.
+        fun fallbackIfNone(): CredentialMetadata? =
+            if (cred.metadata == null) CredentialUtils.buildFallbackMetadata(cred) else null
+
+        if (cred.format == "mso_mdoc") {
+            // mdoc has no JWT iat/exp claims to re-derive here (ISO 18013-5
+            // validity lives in the MSO's validityInfo, inside issuerAuth -
+            // deliberately not parsed by this wallet, see MdocCbor's doc
+            // comment: MSO parsing is a verifier-side concern this holder
+            // doesn't need). Only metadata (via MDDLSchema) is re-hydrated.
+            val mddlSchema = if (canFetch) {
+                try {
+                    mddlSchemaFetcher.fetch(
+                        issuerUrl = issuerIdent!!,
+                        scope = configId!!,
+                        // The docType is parseable from the credential's own
+                        // MSO, so the registry-first strategy can run - and
+                        // the cache key then matches what issuance wrote.
+                        vct = CredentialUtils.parseMdocDocument(cred)?.docType,
+                        registryUrl = registryUrl,
+                    )
+                } catch (e: Exception) {
+                    Timber.w(e, "Failed to re-fetch MDDL schema for reloaded credential ${cred.id}")
+                    null
+                }
+            } else {
+                null
+            }
+            val metadata = mddlSchema?.let {
+                CredentialUtils.buildMdocMetadata(
+                    offer = CredentialOffer(
+                        credentialConfigurationId = configId!!,
+                        credentialIssuerIdentifier = issuerIdent!!,
+                        credentialName = cred.format,
+                        issuerName = issuerIdent,
+                        format = cred.format,
+                    ),
+                    mddlSchema = it,
+                )
+            } ?: fallbackIfNone()
+            return metadata?.let { cred.copy(metadata = it) }
+        }
+
+        // A JWP (or anything else that isn't `<jwt>~...`) has no parseable
+        // payload here; it still gets a VCTM attempt and a fallback rather
+        // than being skipped and left spinning.
+        val payload = CredentialUtils.parseJwtPayload(cred.raw)
+        val issuedAt = payload?.get("iat")?.jsonPrimitive?.longOrNull
+        val expiresAt = payload?.get("exp")?.jsonPrimitive?.longOrNull
+        val vct = payload?.get("vct")?.jsonPrimitive?.contentOrNull
+        val vctm = if (canFetch) {
+            try {
+                vctmFetcher.fetch(
+                    issuerUrl = issuerIdent!!,
+                    scope = configId!!,
+                    vct = vct,
+                    registryUrl = registryUrl,
+                )
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to re-fetch VCTM for reloaded credential ${cred.id}")
+                null
+            }
+        } else {
+            null
+        }
+        val metadata = vctm?.let {
+            CredentialUtils.buildMetadata(
+                offer = CredentialOffer(
+                    credentialConfigurationId = configId ?: "",
+                    credentialIssuerIdentifier = issuerIdent ?: "",
+                    credentialName = cred.format,
+                    issuerName = issuerIdent ?: "",
+                    format = cred.format,
+                ),
+                vctm = it,
+                rawCredential = cred.raw,
+            )
+        } ?: fallbackIfNone()
+        val newIssuedAt = issuedAt ?: cred.issuedAt
+        val newExpiresAt = expiresAt ?: cred.expiresAt
+        if (metadata == null && newIssuedAt == cred.issuedAt && newExpiresAt == cred.expiresAt) return null
+        return cred.copy(
+            metadata = metadata ?: cred.metadata,
+            issuedAt = newIssuedAt,
+            expiresAt = newExpiresAt,
+        )
     }
 
     /**
@@ -1101,7 +1153,7 @@ class SirosWallet private constructor(
         val credential = credentialStore.getById(credentialId)
             ?: throw WalletException("Credential not found: $credentialId")
         val allInstances = credentialStore.getAll().filter { it.batchId == credential.batchId }
-        if (CredentialUtils.eligibleInstances(allInstances, credentialConsumptionPolicy, presentationHistory).none { it.id == credentialId }) {
+        if (eligibleInstances(allInstances).none { it.id == credentialId }) {
             throw WalletException("No eligible copies of this credential remain - renew it to get more")
         }
         val response = keystore.signMdocPresentationForProximity(
@@ -1211,7 +1263,7 @@ class SirosWallet private constructor(
                 // iss doesn't need to equal client_id for THIS PoP - it's
                 // validated by our own backend (WIAService.validatePop only
                 // checks iss is non-empty), unlike the per-issuer PoP built in
-                // resolveClientAttestation. clientAttestationClientId() is
+                // buildClientAttestationPoP. clientAttestationClientId() is
                 // still a reasonable choice: consistent, and non-empty.
                 issuer = clientAttestationClientId(),
                 // Must match the backend's configured wallet_provider_uri, if
@@ -1298,59 +1350,88 @@ class SirosWallet private constructor(
      * The OAuth `client_id` this wallet uses in OID4VCI/OID4VP flows.
      * Mirrors go-wallet-backend's `OID4VCIHandler.clientID` default
      * (`h.clientID = h.redirectURI`, OID4VCI §7.1's unregistered-client
-     * convention) - known to be correct for any issuer that doesn't have its
-     * own registered client_id override server-side (the common case; a
-     * registered override isn't visible to the client, so a cached WIA/PoP
-     * built against this default would be spec-inconsistent for that rarer
-     * case - a known, accepted limitation rather than something this method
-     * can resolve without per-issuer client_id discovery).
+     * convention). Used as the WIA's `sub`, and as the per-flow PoP `iss`
+     * fallback only: the engine's `request_attestation` sign request carries
+     * the flow's *effective* client_id (including any registered per-issuer
+     * override the client can't otherwise see), which
+     * [handleRequestAttestation] prefers.
      */
     private fun clientAttestationClientId(): String = config.redirectUri
 
     /**
-     * Resolve OAuth Client Attestation (a WIA plus a fresh per-flow PoP) for
-     * an issuance flow targeting [issuerUrl] - the pair the engine forwards
-     * as `OAuth-Client-Attestation`/`OAuth-Client-Attestation-PoP` headers to
-     * the credential issuer (see go-wallet-backend's
-     * `client_attestation.go`'s `TransportSuppliedAttestation`).
+     * Sign a per-flow OAuth Client Attestation PoP
+     * (`oauth-client-attestation-pop+jwt`, draft-ietf-oauth-attestation-based-client-auth-10
+     * §4.2) with this instance's key: `aud` = [asUrl] (the authorization
+     * server the PAR/token request is sent to), `iss` = [clientId] (must equal
+     * the WIA's `sub`), plus the AS's `challenge` when it publishes a
+     * `challenge_endpoint` - see [fetchAttestationChallenge].
      *
-     * The PoP's `aud` targets the issuer's own authorization server if
-     * discoverable from its metadata (mirrors go-wallet-backend's
-     * `IssuerMetadata.authorizationServer()`), falling back to the credential
-     * issuer URL itself for issuers that self-host their AS at the same origin.
-     * Its `iss` is the same client_id used for the WIA's `sub` (see
-     * [ensureWalletInstanceAttestation]) - draft-ietf-oauth-attestation-based-client-auth-10
-     * requires both to match. Its `challenge` claim, when the AS publishes a
-     * `challenge_endpoint` in its metadata, is fetched fresh from there
-     * (§ "Challenge Endpoint" - POST returns `{"attestation_challenge": ...}`);
-     * omitted otherwise, since the claim is optional per spec.
+     * Driven by the engine-requested `request_attestation` sign action, where
+     * go-wallet-backend supplies [asUrl]/[clientId] itself after resolving the
+     * issuer's metadata (its `SignActionRequestAttestation`) - see
+     * [handleRequestAttestation].
      *
-     * Best-effort: returns null on any failure - missing/misconfigured WIA
-     * support must never block issuance itself.
+     * Best-effort: returns null on any failure rather than throwing.
      */
-    private suspend fun resolveClientAttestation(issuerUrl: String): Pair<String, String>? {
-        val wia = ensureWalletInstanceAttestation() ?: return null
+    private suspend fun buildClientAttestationPoP(asUrl: String, clientId: String): String? {
         return try {
-            val asUrl = try {
-                getIssuerMetadata(issuerUrl).authorizationServers
-                    ?.firstOrNull { it.isNotBlank() } ?: issuerUrl
-            } catch (e: Exception) {
-                issuerUrl
-            }
             val challenge = fetchAttestationChallenge(asUrl)
             val keyId = ensureInstanceKeyId()
-            val pop = keystore.generateKeyProof(
+            keystore.generateKeyProof(
                 keyId = keyId,
                 typ = "oauth-client-attestation-pop+jwt",
-                issuer = clientAttestationClientId(),
+                issuer = clientId,
                 audience = asUrl,
                 extraClaims = challenge?.let { mapOf("challenge" to it) } ?: emptyMap(),
             )
-            wia to pop
         } catch (e: Exception) {
             Timber.w(e, "Failed to generate client attestation PoP")
             null
         }
+    }
+
+    /**
+     * Answer the engine's `request_attestation` sign request
+     * (go-wallet-backend `SignActionRequestAttestation`): the backend sends it
+     * from `OID4VCIHandler.Execute` once it has resolved the issuer's
+     * authorization server, whenever the flow_start carried no attestation,
+     * with `params.audience` = that AS (the PoP `aud`) and `params.issuer` =
+     * the flow's effective OAuth client_id (the PoP `iss`).
+     *
+     * ALWAYS sends exactly one sign_response: the WIA + PoP when available,
+     * otherwise an empty one so the backend proceeds without wallet
+     * attestation immediately - its `RequestSign` otherwise blocks the whole
+     * issuance for its 30 s `ErrSignTimeout` waiting on us. Never throws.
+     */
+    private suspend fun handleRequestAttestation(engine: WalletEngineSession, msg: SignRequestMessage) {
+        val audience = msg.params.audience?.takeIf { it.isNotBlank() }
+        val clientId = msg.params.issuer?.takeIf { it.isNotBlank() } ?: clientAttestationClientId()
+        var wia: String? = null
+        var pop: String? = null
+        try {
+            if (audience == null) {
+                Timber.w("request_attestation for flow ${msg.flowId} carried no audience; declining")
+            } else {
+                wia = ensureWalletInstanceAttestation()
+                if (wia == null) {
+                    Timber.d("No Wallet Instance Attestation available for flow ${msg.flowId}; declining")
+                } else {
+                    pop = buildClientAttestationPoP(audience, clientId)
+                }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to resolve client attestation for flow ${msg.flowId}; declining")
+        }
+        val attested = wia != null && pop != null
+        Timber.d("Sending request_attestation response for flow ${msg.flowId} (attested=$attested, aud=$audience, iss=$clientId)")
+        engine.sendSignResponse(
+            flowId = msg.flowId,
+            messageId = msg.messageId,
+            clientAttestation = if (attested) wia else null,
+            clientAttestationPoP = if (attested) pop else null,
+        )
     }
 
     /**
@@ -1538,12 +1619,9 @@ class SirosWallet private constructor(
                     }
                 })
             }
-            val clientAttestation = resolveClientAttestation(offer.credentialIssuerIdentifier)
             engine.startIssuance(
                 offer = credentialOffer.toString(),
                 redirectUri = config.redirectUri.ifBlank { null },
-                clientAttestation = clientAttestation?.first,
-                clientAttestationPoP = clientAttestation?.second,
             )
         } catch (e: Exception) {
             // The flow was never registered server-side (no flow ID was ever
@@ -1644,26 +1722,18 @@ class SirosWallet private constructor(
                     null
                 }
             }
-            // Resolve OAuth Client Attestation once, independent of whether the
-            // display-metadata resolution above succeeded - a client that can't
-            // be shown a name/logo should still get an attestation attached.
-            val clientAttestation = try {
-                extractOfferJson(offerUri)?.get("credential_issuer")?.jsonPrimitive?.contentOrNull
-                    ?.let { resolveClientAttestation(it) }
-            } catch (e: Exception) {
-                Timber.w(e, "Failed to resolve client attestation for offer")
-                null
-            }
-            val attestation = clientAttestation?.first
-            val attestationPoP = clientAttestation?.second
+            // OAuth Client Attestation is no longer resolved here: the engine
+            // asks for it via a `request_attestation` sign request once it has
+            // resolved the issuer's authorization server itself - see
+            // handleRequestAttestation. That spares this side a second fetch
+            // of a possibly single-use credential_offer_uri and a duplicate
+            // authorization_servers/client_id discovery.
             if (offerUri.startsWith("openid-credential-offer://")) {
                 // Deep-link URI with inline offer — send as "offer" so the engine
                 // extracts the credential_offer query parameter instead of HTTP-fetching.
                 engine.startIssuance(
                     offer = offerUri,
                     redirectUri = redirectUri,
-                    clientAttestation = attestation,
-                    clientAttestationPoP = attestationPoP,
                 )
             } else if (offerUri.startsWith("http")) {
                 // Universal-link-style offer: the credential_offer/credential_offer_uri
@@ -1678,24 +1748,18 @@ class SirosWallet private constructor(
                         engine.startIssuance(
                             offer = params.getValue("credential_offer"),
                             redirectUri = redirectUri,
-                            clientAttestation = attestation,
-                            clientAttestationPoP = attestationPoP,
                         )
                     }
                     params.containsKey("credential_offer_uri") -> {
                         engine.startIssuance(
                             credentialOfferUri = params.getValue("credential_offer_uri"),
                             redirectUri = redirectUri,
-                            clientAttestation = attestation,
-                            clientAttestationPoP = attestationPoP,
                         )
                     }
                     else -> {
                         engine.startIssuance(
                             credentialOfferUri = offerUri,
                             redirectUri = redirectUri,
-                            clientAttestation = attestation,
-                            clientAttestationPoP = attestationPoP,
                         )
                     }
                 }
@@ -1703,8 +1767,6 @@ class SirosWallet private constructor(
                 engine.startIssuance(
                     offer = offerUri,
                     redirectUri = redirectUri,
-                    clientAttestation = attestation,
-                    clientAttestationPoP = attestationPoP,
                 )
             }
         } catch (e: Exception) {
@@ -1890,7 +1952,7 @@ class SirosWallet private constructor(
         // the shared wallet instance (by MainActivity's WalletViewModel, for
         // the unrelated in-app flow) and stays registered even once
         // MainActivity is backgrounded, that wait would hang forever.
-        val selectedIds = CredentialUtils.eligibleInstances(candidates, credentialConsumptionPolicy, presentationHistory).map { it.id }
+        val selectedIds = eligibleInstances(candidates).map { it.id }
 
         if (selectedIds.isEmpty()) {
             throw WalletException(
@@ -2255,30 +2317,18 @@ class SirosWallet private constructor(
             try {
                 engine.forceReconnect()
                 engine.awaitConnected()
-                // Client attestation for the resumed flow: Execute() sets up
-                // h.attestationProvider identically whether msg.AuthCode is
-                // set or not (it runs before that branch), so the ONLY thing
-                // missing here was the client never sending it - the backend
-                // already handled resume correctly. Confirmed missing via a
-                // real geneva2026.mdoc.online conformance run: the token
-                // request (which only ever happens via this resume path for
-                // redirect-based authorization_code issuers) showed "No OAuth
-                // Client Attestations were provided".
-                val clientAttestation = try {
-                    pending.offerJson
-                        ?.let { json.parseToJsonElement(it).jsonObject["credential_issuer"]?.jsonPrimitive?.contentOrNull }
-                        ?.let { resolveClientAttestation(it) }
-                } catch (e: Exception) {
-                    Timber.w(e, "Failed to resolve client attestation for resumed flow $flowId")
-                    null
-                }
+                // Client attestation for the resumed flow arrives the same way
+                // as for a fresh one: go-wallet-backend's Execute() runs its
+                // attestation setup before branching on msg.AuthCode, so it
+                // sends us a `request_attestation` sign request on this resume
+                // too (the token request - the one that actually needs it for
+                // redirect-based authorization_code issuers - only ever happens
+                // via this path). See handleRequestAttestation.
                 engine.resumeIssuance(
                     offer = pending.offerJson,
                     redirectUri = pending.redirectUri,
                     authCode = code,
                     codeVerifier = pending.codeVerifier,
-                    clientAttestation = clientAttestation?.first,
-                    clientAttestationPoP = clientAttestation?.second,
                 )
             } catch (e: Exception) {
                 Timber.e(e, "Failed to resume authorization for flow $flowId")
@@ -2785,8 +2835,28 @@ class SirosWallet private constructor(
             credentials = credentialStore.getAll(),
         )
     }
-    private val vctmFetcher = VctmFetcher(httpGet = ::fetchTypeMetadataUrl)
-    private val mddlSchemaFetcher = MddlSchemaFetcher(httpGet = ::fetchTypeMetadataUrl)
+    /**
+     * On-device, cross-launch cache of VCTM/MDDL documents AND of the fact
+     * that a document could not be fetched (see [FileFetchCache] and
+     * [org.siros.sdk.credentials.FetchBackoff]). Without it, every login
+     * re-ran every failed type-metadata fetch - [hydrateReloadedCredentials]
+     * runs on each login because the private-data container never persists
+     * `metadata` - and each failure was a visible spinner on the card.
+     * Application context: this outlives any one Activity.
+     */
+    private val displayMetadataCache: org.siros.sdk.credentials.FetchCache =
+        FileFetchCache(activity.applicationContext)
+
+    private val vctmFetcher = VctmFetcher(
+        httpGet = ::fetchTypeMetadataUrl,
+        persistentCache = displayMetadataCache,
+        revalidateScope = scope,
+    )
+    private val mddlSchemaFetcher = MddlSchemaFetcher(
+        httpGet = ::fetchTypeMetadataUrl,
+        persistentCache = displayMetadataCache,
+        revalidateScope = scope,
+    )
 
     /**
      * Base URL for go-wallet-backend's credential-type registry service (see
@@ -3033,13 +3103,39 @@ class SirosWallet private constructor(
     /**
      * Filters [instances] down to the ones this wallet's own
      * [credentialConsumptionPolicy] and [presentationHistory] currently
-     * consider eligible (i.e. not yet consumed) - the same computation
-     * this class performs internally before every presentation, exposed as
-     * a convenience so consent/selection UI doesn't need to thread both
-     * properties through [CredentialUtils.eligibleInstances] itself.
+     * consider eligible (i.e. not yet consumed), AND whose bound signing
+     * key still actually exists in [keystore] - the same computation this
+     * class performs internally before every presentation, exposed as a
+     * convenience so consent/selection UI doesn't need to thread policy,
+     * history, and live key availability through
+     * [CredentialUtils.eligibleInstances] itself.
+     *
+     * The key-availability half of this check exists because a real,
+     * recurring bug (found via live proximity-presentation testing) let a
+     * credential whose signing key was silently lost (e.g. a sync that
+     * never folded a software key into the persisted container - see
+     * privatedata-spec#1/siros-wscd-manager#68 for the deeper architectural
+     * fix) keep reporting "available" under
+     * [CredentialConsumptionPolicy.NEVER_CONSUME] forever, right up until a
+     * live presentation attempt failed deep inside key selection with no
+     * user-facing signal at all.
      */
-    fun eligibleInstances(instances: List<StoredCredential>): List<StoredCredential> =
-        CredentialUtils.eligibleInstances(instances, credentialConsumptionPolicy, presentationHistory)
+    suspend fun eligibleInstances(instances: List<StoredCredential>): List<StoredCredential> =
+        CredentialUtils.eligibleInstances(
+            instances,
+            credentialConsumptionPolicy,
+            presentationHistory,
+            availableKeyIds(),
+        )
+
+    /**
+     * The `kid`s this wallet's keystore can currently sign with - exposed so
+     * consent/selection UI (e.g. `PresentationConsentScreen`'s exhausted-
+     * query precheck) can compute eligibility ahead of time, in a
+     * `LaunchedEffect`/`produceState`, without needing a full
+     * [eligibleInstances] round trip per candidate list.
+     */
+    suspend fun availableKeyIds(): Set<String> = keystore.listKeys().map { it.keyId }.toSet()
 
     /**
      * Record a new presentation: adds it to the in-memory history and
@@ -3086,7 +3182,7 @@ class SirosWallet private constructor(
             val batchInstances = allCredentials.filter { it.batchId == batchId }
             val representative = batchInstances.find { it.instanceId == 0 } ?: batchInstances.firstOrNull() ?: continue
             val threshold = renewThresholdFor(representative.credentialConfigurationId)
-            val eligible = CredentialUtils.eligibleInstances(batchInstances, credentialConsumptionPolicy, presentationHistory)
+            val eligible = eligibleInstances(batchInstances)
             if (eligible.size <= threshold) {
                 eventListener?.onCredentialNearExpiry(representative, eligible.size, threshold)
             }
@@ -3350,6 +3446,10 @@ class SirosWallet private constructor(
     private var wmpPeer: org.siros.sdk.transport.wmp.WmpPeer? = null
 
     private suspend fun connectViaWmp(appToken: String) {
+        // Same leaked-connection hazard as connectEngine's engineSession -
+        // tear down any prior live peer before replacing the reference.
+        wmpPeer?.close()
+
         // Resolve engine URL: explicit config > discovery > same as backend
         val engineBaseUrl = (config.engineUrl
             ?: WalletConfig.discoverEngineUrl(config.backendUrl)
@@ -3900,6 +4000,15 @@ class SirosWallet private constructor(
     // ── Legacy Engine Path ────────────────────────────────────────────
 
     private suspend fun connectEngine(appToken: String) {
+        // connectEngineWithToken can run more than once on the same wallet
+        // instance (initial login, session restore on startup, re-auth) -
+        // without tearing down a prior live session first, its WebSocket
+        // was leaked (never disconnected) while a brand new one took over
+        // engineSession, leaving the backend with multiple concurrent
+        // connections for the same user that kept evicting each other.
+        engineStateJob?.cancel()
+        engineSession?.disconnect()
+
         // Resolve engine URL: explicit config > discovery > same as backend
         val engineBaseUrl = config.engineUrl
             ?: WalletConfig.discoverEngineUrl(config.backendUrl)
@@ -4129,8 +4238,16 @@ class SirosWallet private constructor(
                             engine.sendSignResponse(msg.flowId, vpToken = vpToken, messageId = msg.messageId)
                             Timber.d("VP sign response sent successfully for flow ${msg.flowId}")
                         }
+                        "request_attestation" -> handleRequestAttestation(engine, msg)
                         else -> {
-                            Timber.w("Unknown sign action: ${msg.action}")
+                            // go-wallet-backend's RequestSign only unblocks on a
+                            // sign_response carrying this message_id (there is no
+                            // sign-error message); staying silent would stall the
+                            // flow for its full 30 s ErrSignTimeout. An empty
+                            // response lets the backend decide what a missing
+                            // result means for the action it asked for.
+                            Timber.w("Unknown sign action: ${msg.action}; sending empty sign_response")
+                            engine.sendSignResponse(flowId = msg.flowId, messageId = msg.messageId)
                         }
                     }
                 } catch (e: KeystoreException) {
@@ -4184,13 +4301,13 @@ class SirosWallet private constructor(
                             )
                         )
                     } else {
-                        CredentialUtils.eligibleInstances(candidates, credentialConsumptionPolicy, presentationHistory).map { it.id }
+                        eligibleInstances(candidates).map { it.id }
                     }
 
                     // The app is trusted to only return IDs it was offered,
                     // but shouldn't be the only thing enforcing consumption -
                     // re-validate here too (defense in depth).
-                    val eligibleIds = CredentialUtils.eligibleInstances(candidates, credentialConsumptionPolicy, presentationHistory).map { it.id }.toSet()
+                    val eligibleIds = eligibleInstances(candidates).map { it.id }.toSet()
                     if (selectedIds.any { it !in eligibleIds }) {
                         throw WalletException("Selected credential has no eligible copies remaining - renew it to get more")
                     }
@@ -5286,7 +5403,15 @@ class SirosWallet private constructor(
     ) {
         scope.launch {
             try {
-                val dcqlQuery = payload?.get("dcql_query")?.jsonObject
+                // `.jsonObject` throws on JsonNull rather than treating it
+                // like absent - a real NIST reference-verifier request over
+                // mdoc-openid4vp:// (a non-DCQL request shape) has the
+                // backend relay this key as JSON `null` rather than omitting
+                // it, which crashed here and got misreported to the engine
+                // as "User declined the request". `as? JsonObject` treats
+                // any non-object value (absent, null, or otherwise) the same
+                // way the `dcqlQuery != null` fallback below already expects.
+                val dcqlQuery = payload?.get("dcql_query") as? JsonObject
                 val verifierInfo = payload?.get("verifier")?.jsonObject
                 // The backend defaults verifier.name to the raw client_id
                 // (e.g. "x509_san_dns:verifier.multipaz.org") whenever the
@@ -5340,7 +5465,7 @@ class SirosWallet private constructor(
                         )
                     )
                 } else {
-                    CredentialUtils.eligibleInstances(candidates, credentialConsumptionPolicy, presentationHistory).map { it.id }
+                    eligibleInstances(candidates).map { it.id }
                 }
 
                 if (selectedIds.isEmpty()) {
@@ -5355,7 +5480,7 @@ class SirosWallet private constructor(
                 // The app is trusted to only return IDs it was offered, but
                 // shouldn't be the only thing enforcing consumption -
                 // re-validate here too (defense in depth).
-                val eligibleIds = CredentialUtils.eligibleInstances(candidates, credentialConsumptionPolicy, presentationHistory).map { it.id }.toSet()
+                val eligibleIds = eligibleInstances(candidates).map { it.id }.toSet()
                 if (selectedIds.any { it !in eligibleIds }) {
                     throw WalletException("Selected credential has no eligible copies remaining - renew it to get more")
                 }
@@ -5489,6 +5614,15 @@ class SirosWallet private constructor(
 
     companion object {
         internal const val HKDF_INFO = "eDiplomas PRF"
+
+        /**
+         * How many reloaded credentials [hydrateReloadedCredentials] fetches
+         * metadata for at once. Small: the common case after the first launch
+         * is answered from [displayMetadataCache] with no network at all, and
+         * when the network is involved a handful of concurrent connections to
+         * (usually) one or two issuers is plenty.
+         */
+        private const val HYDRATION_PARALLELISM = 4
         internal var createEngineSession: (String, String) -> WalletEngineSession =
             { baseUrl, tenantId -> WalletEngineSession(baseUrl, tenantId) }
 

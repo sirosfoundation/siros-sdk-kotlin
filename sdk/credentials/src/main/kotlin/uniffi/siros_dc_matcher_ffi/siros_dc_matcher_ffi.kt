@@ -1788,6 +1788,10 @@ public object FfiConverterTypeFfiCredential: FfiConverterRustBuffer<FfiCredentia
  */
 data class FfiMatchOutcome (
     /**
+     * Per-query candidates, complete and uncapped.
+     */
+    var `matches`: List<FfiQueryMatch>, 
+    /**
      * Whether the wallet can satisfy the request at all.
      *
      * False means §6.4's "MUST NOT return any Credential(s)" — nothing should
@@ -1813,6 +1817,7 @@ data class FfiMatchOutcome (
 public object FfiConverterTypeFfiMatchOutcome: FfiConverterRustBuffer<FfiMatchOutcome> {
     override fun read(buf: ByteBuffer): FfiMatchOutcome {
         return FfiMatchOutcome(
+            FfiConverterSequenceTypeFfiQueryMatch.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterSequenceTypeFfiCombination.read(buf),
             FfiConverterUInt.read(buf),
@@ -1820,12 +1825,14 @@ public object FfiConverterTypeFfiMatchOutcome: FfiConverterRustBuffer<FfiMatchOu
     }
 
     override fun allocationSize(value: FfiMatchOutcome) = (
+            FfiConverterSequenceTypeFfiQueryMatch.allocationSize(value.`matches`) +
             FfiConverterBoolean.allocationSize(value.`satisfiable`) +
             FfiConverterSequenceTypeFfiCombination.allocationSize(value.`combinations`) +
             FfiConverterUInt.allocationSize(value.`dropped`)
     )
 
     override fun write(value: FfiMatchOutcome, buf: ByteBuffer) {
+            FfiConverterSequenceTypeFfiQueryMatch.write(value.`matches`, buf)
             FfiConverterBoolean.write(value.`satisfiable`, buf)
             FfiConverterSequenceTypeFfiCombination.write(value.`combinations`, buf)
             FfiConverterUInt.write(value.`dropped`, buf)
@@ -1901,6 +1908,54 @@ public object FfiConverterTypeFfiMatchedCredential: FfiConverterRustBuffer<FfiMa
             FfiConverterSequenceSequenceString.write(value.`claims`, buf)
             FfiConverterSequenceTypeFfiCapability.write(value.`capabilities`, buf)
             FfiConverterMapStringString.write(value.`meta`, buf)
+    }
+}
+
+
+
+/**
+ * The credentials answering one credential query.
+ *
+ * Complete, and independent of [`FfiMatchOutcome::combinations`]. Callers that
+ * only need "which credentials qualify for this query" must read this rather
+ * than unioning the combinations: the combination list is *capped*, because
+ * its length is a product of the per-query candidate counts, so a union of it
+ * can omit credentials that do qualify. Filtering on such a union silently
+ * drops them from what a user is offered.
+ */
+data class FfiQueryMatch (
+    /**
+     * The DCQL credential query.
+     */
+    var `queryId`: kotlin.String, 
+    /**
+     * Every credential that satisfies it.
+     */
+    var `credentials`: List<FfiMatchedCredential>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiQueryMatch: FfiConverterRustBuffer<FfiQueryMatch> {
+    override fun read(buf: ByteBuffer): FfiQueryMatch {
+        return FfiQueryMatch(
+            FfiConverterString.read(buf),
+            FfiConverterSequenceTypeFfiMatchedCredential.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiQueryMatch) = (
+            FfiConverterString.allocationSize(value.`queryId`) +
+            FfiConverterSequenceTypeFfiMatchedCredential.allocationSize(value.`credentials`)
+    )
+
+    override fun write(value: FfiQueryMatch, buf: ByteBuffer) {
+            FfiConverterString.write(value.`queryId`, buf)
+            FfiConverterSequenceTypeFfiMatchedCredential.write(value.`credentials`, buf)
     }
 }
 
@@ -2306,6 +2361,34 @@ public object FfiConverterSequenceTypeFfiMatchedCredential: FfiConverterRustBuff
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeFfiMatchedCredential.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeFfiQueryMatch: FfiConverterRustBuffer<List<FfiQueryMatch>> {
+    override fun read(buf: ByteBuffer): List<FfiQueryMatch> {
+        val len = buf.getInt()
+        return List<FfiQueryMatch>(len) {
+            FfiConverterTypeFfiQueryMatch.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<FfiQueryMatch>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeFfiQueryMatch.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<FfiQueryMatch>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeFfiQueryMatch.write(it, buf)
         }
     }
 }

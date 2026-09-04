@@ -35,18 +35,34 @@ import uniffi.siros_dc_matcher_ffi.matchDcql as ffiMatchDcql
 internal object SharedDcqlMatcher {
 
     /**
-     * Credential ids the shared engine matches per credential query, or `null`
-     * if it could not run.
+     * What the shared engine decided.
+     *
+     * [satisfiable] is not derivable from [candidatesByQuery]. A request can
+     * ask for two credentials and get one: the answerable query has
+     * candidates, and the request as a whole still must offer nothing
+     * (§6.4). Carrying the flag rather than collapsing it into an empty map
+     * keeps the two reasons for offering nothing distinguishable — which
+     * matters, because they are explained to a user differently.
+     */
+    internal data class Outcome(
+        /** Whether anything at all may be offered (§6.4). */
+        val satisfiable: Boolean,
+        /** Per-query candidates, complete and uncapped. */
+        val candidatesByQuery: Map<String, List<Long>>,
+    )
+
+    /**
+     * What the shared engine matched, or `null` if it could not run.
      *
      * `null` is not "nothing matched". The native library may be missing for
      * this ABI, or the engine may reject a request this SDK would have
      * accepted - both mean "no answer", and a caller must not read that as an
      * empty match.
      */
-    fun candidatesByQuery(
+    fun evaluate(
         dcqlQuery: JsonObject,
         credentials: List<StoredCredential>,
-    ): Map<String, List<Long>>? {
+    ): Outcome? {
         return try {
             // `use`: the builder holds a native handle, and matching runs on every
             // presentation.
@@ -55,32 +71,27 @@ internal object SharedDcqlMatcher {
                 builder.build()
             }
             val outcome = ffiMatchDcql(blob, dcqlQuery.toString())
-            if (outcome.dropped > 0u) {
-                // The engine bounds how many combinations it returns, because the
-                // count is a product of the per-query candidate counts. Deriving
-                // per-query candidates from a truncated list would miss
-                // credentials that do qualify, and this result is used to *filter*
-                // — so a missing one is silently dropped from what the user is
-                // offered, which is the exact failure this component is prone to.
-                //
-                // No answer rather than a partial one. The engine has the complete
-                // per-query candidates internally; exposing them directly, instead
-                // of reconstructing them from combinations, is the real fix and
-                // needs a change on the Rust side.
-                Timber.i(
-                    "Shared engine truncated %d combinations; keeping the built-in matcher's " +
-                        "answer rather than filtering on a partial one",
-                    outcome.dropped.toInt(),
-                )
-                return null
-            }
-            outcome
-                .combinations
-                .flatMap { it.members }
-                .groupBy { it.queryId }
-                .mapValues { (_, members) ->
-                    members.mapNotNull { it.credentialId.toLongOrNull() }.distinct()
-                }
+            // `matches`, not `combinations`. The engine bounds how many
+            // combinations it returns, because the count is a product of the
+            // per-query candidate counts — so reconstructing per-query
+            // candidates from them would omit credentials that do qualify, and
+            // this result is used to *filter*. An omission there is a
+            // credential silently missing from what the user is offered, which
+            // is the exact failure this component is prone to.
+            //
+            // `matches` is the engine's own per-query candidates, complete and
+            // uncapped, so `dropped` does not bear on this answer at all.
+            // It is also populated whether or not the request can be satisfied
+            // as a whole, which is why `satisfiable` is carried alongside it
+            // rather than inferred from it.
+            Outcome(
+                satisfiable = outcome.satisfiable,
+                candidatesByQuery = outcome.matches.associate { queryMatch ->
+                    queryMatch.queryId to queryMatch.credentials
+                        .mapNotNull { it.credentialId.toLongOrNull() }
+                        .distinct()
+                },
+            )
         } catch (e: Throwable) {
             // Deliberately broad. This is the first call into a native library
             // on the presentation path, and an UnsatisfiedLinkError from a
@@ -102,6 +113,16 @@ internal object SharedDcqlMatcher {
      * "my credential stopped appearing" is a support question, and this is the
      * line that answers it.
      */
+    fun reportUnsatisfiable(builtIn: List<Long>) {
+        Timber.i(
+            "The shared engine declined the request as a whole (OID4VP 1.0 §6.4): some part of " +
+                "it cannot be answered, so none of it may be offered. The built-in matcher would " +
+                "have offered %s. This is not a per-credential decline - no credential here is " +
+                "missing a requested claim",
+            builtIn,
+        )
+    }
+
     fun reportDifference(queryId: String, builtIn: List<Long>, shared: List<Long>) {
         val onlyBuiltIn = builtIn - shared.toSet()
         val onlyShared = shared - builtIn.toSet()

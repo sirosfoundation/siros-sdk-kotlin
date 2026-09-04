@@ -91,7 +91,7 @@ import org.siros.sdk.sample.proximity.ActiveEngagement
 fun ProximityEngagementScreen(
     getCredentials: suspend () -> List<StoredCredential>,
     signPresentation: suspend (credentialId: Long, disclosedClaims: List<String>?, sessionTranscriptBytes: ByteArray) -> ByteArray,
-    filterEligible: (List<StoredCredential>) -> List<StoredCredential>,
+    filterEligible: suspend (List<StoredCredential>) -> List<StoredCredential>,
     evaluateReaderTrust: suspend (x5chain: List<ByteArray>) -> ReaderTrustResult,
     onBack: () -> Unit,
 ) {
@@ -237,39 +237,69 @@ fun ProximityEngagementScreen(
                     }
                 },
             )
-            centralClient = BleCentralClient(
-                context = context,
-                engagement = engagement,
-                getHandoverSelectBytes = { ActiveEngagement.handoverSelectBytes },
-                getCredentials = getCredentials,
-                signPresentation = signPresentation,
-                requestConsent = requestConsent,
-                filterEligible = filterEligible,
-                evaluateReaderTrust = evaluateReaderTrust,
-                onStep = { step -> uiScope.launch(Dispatchers.Main.immediate) { currentStep = step } },
-                onComplete = { success ->
-                    uiScope.launch(Dispatchers.Main.immediate) {
-                        centralOutcome = success
-                        if (success) {
-                            peripheralServer?.stop()
-                            result = true
-                        } else {
-                            // See the peripheralServer onComplete's matching
-                            // comment above - same reasoning, mirrored role.
-                            centralClient?.stop()
-                            if (peripheralOutcome != null) {
-                                result = false
+            fun startCentralClient() {
+                centralClient?.stop()
+                centralOutcome = null
+                centralClient = BleCentralClient(
+                    context = context,
+                    engagement = engagement,
+                    getHandoverSelectBytes = { ActiveEngagement.handoverSelectBytes },
+                    getCredentials = getCredentials,
+                    signPresentation = signPresentation,
+                    requestConsent = requestConsent,
+                    filterEligible = filterEligible,
+                    evaluateReaderTrust = evaluateReaderTrust,
+                    onStep = { step -> uiScope.launch(Dispatchers.Main.immediate) { currentStep = step } },
+                    onComplete = { success ->
+                        uiScope.launch(Dispatchers.Main.immediate) {
+                            centralOutcome = success
+                            if (success) {
+                                peripheralServer?.stop()
+                                result = true
+                            } else {
+                                // See the peripheralServer onComplete's matching
+                                // comment above - same reasoning, mirrored role.
+                                centralClient?.stop()
+                                if (peripheralOutcome != null) {
+                                    result = false
+                                }
                             }
                         }
-                    }
-                },
-            )
+                    },
+                ).also { it.start() }
+            }
+            startCentralClient()
             peripheralServer.start()
-            centralClient.start()
+            // A physical NFC tap completes at an unpredictable, possibly much
+            // later time than this effect running (walk up, position, hold
+            // steady - real seconds, not milliseconds) - see
+            // ActiveEngagement.onHandoverServed's doc comment. A reader that
+            // picked mdoc central client mode via NFC can only start
+            // advertising for BleCentralClient to find once it actually has
+            // the engagement, so give the scan a fresh window at exactly
+            // that moment rather than trusting the window that started when
+            // this effect first ran (which may already be gone).
+            ActiveEngagement.onHandoverServed = {
+                uiScope.launch(Dispatchers.Main.immediate) {
+                    // Deliberately NOT gated on centralOutcome == null: the
+                    // very common case is that the FIRST central-client scan
+                    // (started at mount, before the physical NFC tap even
+                    // happens) already timed out and set centralOutcome to
+                    // false well before this signal fires - that's exactly
+                    // the stale failure this restart exists to override, not
+                    // a reason to skip it. Only the overall result matters:
+                    // once the whole presentation has concluded (either way),
+                    // there's nothing left to restart for.
+                    if (result == null) {
+                        startCentralClient()
+                    }
+                }
+            }
         } else {
             blePermissionsDenied = true
         }
         onDispose {
+            ActiveEngagement.onHandoverServed = null
             peripheralServer?.stop()
             centralClient?.stop()
         }
@@ -477,17 +507,31 @@ private fun ReaderTrustBadge(readerTrust: ReaderTrustResult?) {
 }
 
 @Composable
-private fun ProximityConsentDialog(consent: PendingConsent, filterEligible: (List<StoredCredential>) -> List<StoredCredential>) {
+private fun ProximityConsentDialog(consent: PendingConsent, filterEligible: suspend (List<StoredCredential>) -> List<StoredCredential>) {
     // A family with zero eligible instances (every copy already used under
-    // the active consumption policy) is shown, not silently omitted - so the
-    // user isn't confused about where their credential went - but disabled:
-    // the SDK refuses to sign with an exhausted instance regardless (defense
-    // in depth), so letting the user pick one here would just fail later.
-    val eligibleFamilies = remember(consent, filterEligible) {
-        consent.matchingFamilies.filter { filterEligible(it.instances).isNotEmpty() }.toSet()
-    }
-    var selected by remember(consent) {
-        mutableStateOf(consent.matchingFamilies.firstOrNull { it in eligibleFamilies } ?: consent.matchingFamilies.first())
+    // the active consumption policy, OR its signing key was lost - see
+    // CredentialUtils.eligibleInstances's doc comment) is shown, not
+    // silently omitted - so the user isn't confused about where their
+    // credential went - but disabled: the SDK refuses to sign with an
+    // exhausted/keyless instance regardless (defense in depth), so letting
+    // the user pick one here would just fail later.
+    //
+    // filterEligible is suspend (it needs a live keystore.listKeys() round
+    // trip), so this can't be a plain `remember` - computed once per
+    // [consent] in a LaunchedEffect instead, re-picking [selected] onto a
+    // real eligible family once the async result lands if the synchronous
+    // initial guess (matchingFamilies.first()) wasn't already one.
+    var eligibleFamilies by remember(consent) { mutableStateOf(emptySet<CredentialFamily>()) }
+    var selected by remember(consent) { mutableStateOf(consent.matchingFamilies.first()) }
+    LaunchedEffect(consent) {
+        val result = mutableSetOf<CredentialFamily>()
+        for (family in consent.matchingFamilies) {
+            if (filterEligible(family.instances).isNotEmpty()) result += family
+        }
+        eligibleFamilies = result
+        if (selected !in result) {
+            selected = consent.matchingFamilies.firstOrNull { it in result } ?: selected
+        }
     }
     val selectedIsEligible = selected in eligibleFamilies
 

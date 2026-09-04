@@ -68,7 +68,7 @@ class BleCentralClient(
     /** See [RequestProximityConsent]'s doc comment. */
     requestConsent: RequestProximityConsent,
     /** See [BlePeripheralServer]'s matching parameter doc comment. */
-    filterEligible: (List<StoredCredential>) -> List<StoredCredential>,
+    filterEligible: suspend (List<StoredCredential>) -> List<StoredCredential>,
     /** See [MdocProximitySession]'s matching constructor parameter's doc comment. */
     evaluateReaderTrust: suspend (x5chain: List<ByteArray>) -> ReaderTrustResult,
     /** Reports a canonical step token (see `FlowStepCatalog.proximitySteps`) for driving the same progress-bar UI the issuance/presentation flows use. */
@@ -96,6 +96,23 @@ class BleCentralClient(
         // is awaited before giving up (e.g. the reader dropped the
         // connection mid-transfer) rather than hanging forever.
         private const val WRITE_ACK_TIMEOUT_MS = 5000L
+
+        // A real reader (com.ingenutec.sigil_id) logged "Peripheral Server
+        // error: mDL terminated transaction" firing on its main thread within
+        // milliseconds of receiving our final response chunk - concurrently
+        // with (not after) its own background thread's decrypt/MSO/signature
+        // verification, which went on to succeed. Root-caused via that
+        // reader's own log timeline: writing STATE_END back-to-back with the
+        // last data chunk (zero delay, only paced by the local write ack -
+        // which just means "queued for the radio", not "the peer finished
+        // processing it") is what the reader's library reads as the mdoc
+        // abruptly ending the transaction before verification could
+        // complete, and its main thread locks in that failure well before
+        // the real, successful result arrives. This grace delay gives a
+        // real device's decrypt+parse a chance to at least get underway
+        // before we signal transaction-end, without meaningfully slowing
+        // down the happy path.
+        private const val STATE_END_DELAY_MS = 500L
 
         // ProximityEngagementScreen races this against BlePeripheralServer and
         // only reports an overall failure once BOTH roles have given up - but
@@ -303,6 +320,7 @@ class BleCentralClient(
         // Same API-33-vs-minSdk-28 reasoning as onCharacteristicRead above:
         // override the deprecated 2-arg form, not the newer 3-arg one.
         @Suppress("DEPRECATION")
+        @SuppressLint("MissingPermission")
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             if (characteristic.uuid != SERVER2CLIENT_UUID) return
             val value = characteristic.value ?: return
@@ -320,7 +338,29 @@ class BleCentralClient(
             scope.launch {
                 try {
                     if (session.established) {
-                        Timber.w("BleCentralClient: additional SessionData messages after the first request are not yet handled")
+                        // See BlePeripheralServer's matching branch for the
+                        // full rationale. Two different cases land here and
+                        // need different responses: the reader sending ITS
+                        // OWN session-termination status (a normal, correct
+                        // way to close out after our response - just
+                        // disconnect, don't reply with another status onto a
+                        // connection the peer is already closing) versus the
+                        // reader sending some other, unexpected data-carrying
+                        // message (tell it explicitly the session is over,
+                        // since silently dropping it would leave the reader
+                        // with no response and no reason to stop retrying).
+                        if (ProximitySessionMessages.peekStatus(message) == ProximitySessionMessages.StatusCode.SESSION_TERMINATION) {
+                            Timber.d("BleCentralClient: reader sent its own session-termination status - disconnecting")
+                        } else {
+                            Timber.w("BleCentralClient: received a SessionData message after this session already completed - terminating this connection")
+                            sendData(
+                                ProximitySessionMessages.buildSessionData(
+                                    encryptedData = null,
+                                    status = ProximitySessionMessages.StatusCode.SESSION_TERMINATION,
+                                ),
+                            )
+                        }
+                        gatt.disconnect()
                         return@launch
                     }
                     when (val result = session.handleSessionEstablishment(message)) {
@@ -394,7 +434,9 @@ class BleCentralClient(
         // §11.1.3.1: signal the end of this side's transaction once the
         // response has been fully written - without this, a reader
         // following the state machine strictly may keep waiting/hold the
-        // transaction open unnecessarily.
+        // transaction open unnecessarily. See STATE_END_DELAY_MS's doc
+        // comment for why this isn't sent immediately.
+        delay(STATE_END_DELAY_MS)
         writeNoResponse(currentGatt, stateCharacteristic, byteArrayOf(STATE_END))
         return true
     }

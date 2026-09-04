@@ -393,6 +393,48 @@ object CredentialUtils {
     }
 
     /**
+     * Build the minimal stand-in [CredentialMetadata] for a credential whose
+     * VCTM/MDDL document could not be obtained (see
+     * [CredentialMetadata.hydration]).
+     *
+     * Everything here is derived from what the wallet already holds - nothing
+     * is fetched. The name is the credential configuration ID (the closest
+     * thing to a type name the issuer gave us, humanised via
+     * [formatClaimKey] so `eu.europa.ec.eudi.pid_mdoc` reads as a word rather
+     * than an identifier), falling back to the format. The issuer is shown by
+     * host name, which is what a user recognises an issuer by when no display
+     * name was published. `vct`/`doctype` come from the credential itself so
+     * the DC API registry can still match it. No logo, no colours, no claim
+     * labels, no SVG templates: the UI's flat layout handles all of those
+     * being absent.
+     */
+    fun buildFallbackMetadata(credential: StoredCredential): CredentialMetadata {
+        val configId = credential.credentialConfigurationId?.takeIf { it.isNotBlank() }
+        val issuerIdent = credential.credentialIssuerIdentifier?.takeIf { it.isNotBlank() }
+        val isMdoc = credential.format == "mso_mdoc"
+        val doctype = if (isMdoc) parseMdocDocument(credential)?.docType else null
+        val vct = if (!isMdoc) parseJwtPayload(credential.raw)?.get("vct")?.jsonPrimitive?.contentOrNull else null
+        return CredentialMetadata(
+            name = configId?.let { formatClaimKey(it.substringAfterLast('.')) } ?: credential.format,
+            issuer = IssuerInfo(
+                name = issuerIdent?.let { hostOf(it) } ?: issuerIdent,
+                url = issuerIdent,
+            ),
+            vct = vct,
+            doctype = doctype,
+            hydration = CredentialMetadata.HYDRATION_FALLBACK,
+        )
+    }
+
+    /** The host of [url], or the whole string if it doesn't parse as one. */
+    private fun hostOf(url: String): String =
+        try {
+            java.net.URI(url).host ?: url
+        } catch (_: Exception) {
+            url
+        }
+
+    /**
      * Format a raw claim key like "given_name" into "Given Name".
      */
     fun formatClaimKey(key: String): String {
@@ -420,14 +462,21 @@ object CredentialUtils {
      * wallet-frontend's `CredentialsContextProvider.fetchVcData`: only the
      * `instanceId == 0` credential of a batch (see [StoredCredential.batchId])
      * is returned as a visible entry, with every sibling copy's usage count
-     * attached as [CredentialWithInstances.instances] - the UI derives its
-     * "remaining copies" badge from `instances.count { it.sigCount == 0 }`.
+     * and key availability attached as [CredentialWithInstances.instances] -
+     * the UI derives its "remaining copies" badge, and whether the whole
+     * batch has entered the "shadow" (renew-only) display state, from
+     * `instances.count { it.sigCount == 0 && it.hasKey }` - a batch down to
+     * zero by either consumption or lost keys looks the same to the UI, and
+     * [availableKeyIds] (see [hasAvailableKey]) is what makes the latter
+     * visible at all, not just silently excluded from presentation like
+     * [eligibleInstances] alone would do.
      * A credential with no [StoredCredential.batchId] (single-copy issuance)
      * is returned as its own one-instance family.
      */
     fun groupForDisplay(
         credentials: List<StoredCredential>,
         presentationHistory: List<PresentationRecord>,
+        availableKeyIds: Set<String>,
     ): List<CredentialWithInstances> {
         fun sigCountFor(credentialId: Long) =
             presentationHistory.count { credentialId in it.credentialIds }
@@ -439,7 +488,13 @@ object CredentialUtils {
             val visible = members.find { it.instanceId == 0 } ?: return@mapNotNull null
             val instances = members
                 .sortedBy { it.instanceId }
-                .map { CredentialInstance(it.instanceId, sigCountFor(it.id)) }
+                .map {
+                    CredentialInstance(
+                        it.instanceId,
+                        sigCountFor(it.id),
+                        hasAvailableKey(it.kid, availableKeyIds),
+                    )
+                }
             CredentialWithInstances(visible, instances)
         }
 
@@ -466,28 +521,64 @@ object CredentialUtils {
      * "remaining copies" ribbon never disagree.
      *
      * [CredentialConsumptionPolicy.NEVER_CONSUME] (the default - today's
-     * actual behavior) returns every instance unconditionally. Otherwise, an
-     * instance is eligible only if it hasn't already been presented
-     * (`sigCount == 0`) - each instance is bound to its own device key
-     * specifically so a verifier can't correlate repeated presentations by a
-     * reused key/signature; reusing an already-presented instance would
-     * throw that guarantee away.
+     * actual behavior) skips the usage check, but every policy still
+     * requires the instance's bound signing key to actually exist in
+     * [availableKeyIds] - a real, recurring bug found via live testing:
+     * a software key only ever lives in the WSCD's process memory plus
+     * whatever was last folded into the persisted container, so a lost
+     * sync (or, per privatedata-spec#1/siros-wscd-manager#68, a concurrent-
+     * write merge conflict on the legacy, non-namespaced `S.keypairs` field)
+     * can silently strand a credential with no usable key. Without this
+     * check, NEVER_CONSUME made every such credential report "available"
+     * forever, right up until a live presentation attempt failed deep
+     * inside key selection with no user-facing signal at all. See
+     * [hasAvailableKey] for how a null [StoredCredential.kid] is handled.
+     *
+     * Otherwise, an instance is eligible only if it hasn't already been
+     * presented (`sigCount == 0`) - each instance is bound to its own device
+     * key specifically so a verifier can't correlate repeated presentations
+     * by a reused key/signature; reusing an already-presented instance
+     * would throw that guarantee away.
      */
     fun eligibleInstances(
         instances: List<StoredCredential>,
         policy: CredentialConsumptionPolicy,
         presentationHistory: List<PresentationRecord>,
+        availableKeyIds: Set<String>,
     ): List<StoredCredential> {
-        if (policy == CredentialConsumptionPolicy.NEVER_CONSUME) return instances
         // A single pass building this set, rather than rescanning all of
         // presentationHistory per instance (O(instances x history) before),
         // matters once either grows - this can run on every UI recomposition.
         val usedCredentialIds = presentationHistory.flatMapTo(HashSet()) { it.credentialIds }
         return instances.filter { instance ->
-            val consumes = policy == CredentialConsumptionPolicy.CONSUME_ALL || !isZkpFormat(instance.format)
-            !consumes || instance.id !in usedCredentialIds
+            val keyAvailable = hasAvailableKey(instance.kid, availableKeyIds)
+            val consumptionEligible = policy == CredentialConsumptionPolicy.NEVER_CONSUME || run {
+                val consumes = policy == CredentialConsumptionPolicy.CONSUME_ALL || !isZkpFormat(instance.format)
+                !consumes || instance.id !in usedCredentialIds
+            }
+            keyAvailable && consumptionEligible
         }
     }
+
+    /**
+     * Whether [kid] (a [StoredCredential.kid]) can actually be used to sign,
+     * given the signer's current [availableKeyIds] - shared by
+     * [eligibleInstances] (gates presentation) and [groupForDisplay] (gates
+     * the "shadow" display state, see [CredentialInstance.hasKey]) so the
+     * two never disagree about whether a credential is really usable.
+     *
+     * A null [kid] can't be matched against a specific entry, but every
+     * credential issued through the current per-credential-key architecture
+     * gets a kid at storage time (`SirosWallet`'s `activeAttestedKeyIds`
+     * wiring) - a real [StoredCredential] with a null kid reaching here is a
+     * sign its binding was silently lost (e.g. a concurrent-flow race, task
+     * #403), not a legitimate legacy case. The best check still possible
+     * without a specific kid to match is whether the signer holds *any* key
+     * at all; with zero keys, a null-kid credential is certain to fail to
+     * sign exactly like a known-but-missing kid would.
+     */
+    private fun hasAvailableKey(kid: String?, availableKeyIds: Set<String>): Boolean =
+        if (kid != null) kid in availableKeyIds else availableKeyIds.isNotEmpty()
 
     /**
      * Default fallback for [isBelowRenewThreshold] when no per-credential-
@@ -512,8 +603,9 @@ object CredentialUtils {
         instances: List<StoredCredential>,
         policy: CredentialConsumptionPolicy,
         presentationHistory: List<PresentationRecord>,
+        availableKeyIds: Set<String>,
         threshold: Int = RENEW_THRESHOLD,
-    ): Boolean = eligibleInstances(instances, policy, presentationHistory).size <= threshold
+    ): Boolean = eligibleInstances(instances, policy, presentationHistory, availableKeyIds).size <= threshold
 
     /**
      * Group stored credentials into one [CredentialFamily] per
@@ -618,7 +710,22 @@ data class DisplayClaim(
 )
 
 /** One member of a batch-issued credential family, alongside its usage count. */
-data class CredentialInstance(val instanceId: Int, val sigCount: Int)
+data class CredentialInstance(
+    val instanceId: Int,
+    val sigCount: Int,
+    /**
+     * Whether this instance's bound signing key currently exists (see
+     * `CredentialUtils.hasAvailableKey`). An instance that's unused
+     * (`sigCount == 0`) but keyless still can't actually be presented - the
+     * UI's "remaining copies" count and "shadow" (renew-only) display state
+     * both gate on `sigCount == 0 && hasKey`, not `sigCount == 0` alone, so a
+     * lost key can't masquerade as a live, presentable copy. Defaults to
+     * `true` so call sites that only construct/assert instances by their
+     * consumption state (most existing tests) don't need to reason about
+     * key availability at all.
+     */
+    val hasKey: Boolean = true,
+)
 
 /** A visible credential card plus every instance in its batch (see [CredentialUtils.groupForDisplay]). */
 data class CredentialWithInstances(val credential: StoredCredential, val instances: List<CredentialInstance>)

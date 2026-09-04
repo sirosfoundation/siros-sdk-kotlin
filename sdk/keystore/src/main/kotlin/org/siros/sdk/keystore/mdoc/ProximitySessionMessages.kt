@@ -43,6 +43,23 @@ object ProximitySessionMessages {
         return map.EncodeToBytes()
     }
 
+    /**
+     * Reads the `status` field (if any) from a raw `SessionData` message
+     * without requiring it to also be a well-formed `SessionEstablishment`
+     * (unlike [parseSessionEstablishment], which demands `eReaderKey`/`data`)
+     * - used to tell "the peer sent its own session-termination status" from
+     * "the peer sent another data-carrying message" once this session is
+     * already established/complete, since those two cases need different
+     * responses (see the BLE roles' own call sites). Returns null on any
+     * parse failure or if no `status` field is present, rather than
+     * throwing - this is a best-effort peek, not the authoritative parse.
+     */
+    fun peekStatus(bytes: ByteArray): Int? = try {
+        CBORObject.DecodeFromBytes(bytes)[CBORObject.FromObject("status")]?.AsInt32()
+    } catch (_: Exception) {
+        null
+    }
+
     /** ISO 18013-5 Table 15 status codes. */
     object StatusCode {
         const val SESSION_ENCRYPTION_ERROR = 10

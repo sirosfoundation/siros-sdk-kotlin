@@ -352,11 +352,15 @@ class WalletEngineSession(
     /**
      * Start an OID4VCI credential issuance flow.
      *
-     * @param clientAttestation optional Wallet Instance Attestation JWT (OAuth
-     *   Client Attestation, draft-ietf-oauth-attestation-based-client-auth-04
-     *   §3.1) - see [FlowStartMessage.clientAttestation].
-     * @param clientAttestationPoP the matching per-flow PoP JWT, required
-     *   whenever [clientAttestation] is set.
+     * @param clientAttestation DEPRECATED - leave null. go-wallet-backend now
+     *   requests the Wallet Instance Attestation itself via a
+     *   `request_attestation` sign request once it has resolved the issuer's
+     *   authorization server (see [SignResponseMessage.clientAttestation]);
+     *   supplying one up front only bypasses that and requires the caller to
+     *   have discovered the PoP audience on its own. Still honoured on the
+     *   wire for callers that have - see [FlowStartMessage.clientAttestation].
+     * @param clientAttestationPoP DEPRECATED - the matching per-flow PoP JWT,
+     *   required whenever [clientAttestation] is set.
      */
     fun startIssuance(
         offer: String? = null,
@@ -385,12 +389,10 @@ class WalletEngineSession(
      * no longer exists server-side (the common case - see [WalletEngineSession] backoff
      * reconnect logic, and SirosWallet.completeAuthorization for why that happens).
      *
-     * @param clientAttestation/[clientAttestationPoP] OAuth Client Attestation
-     *   for the resumed flow - go-wallet-backend's `Execute()` sets up its
-     *   attestation provider identically regardless of whether this is a
-     *   fresh flow or a resume (the setup runs before branching on
-     *   `msg.AuthCode`), so this is just as meaningful here as on the
-     *   original [startIssuance] call - see [FlowStartMessage.clientAttestation].
+     * @param clientAttestation/[clientAttestationPoP] DEPRECATED - leave null;
+     *   the engine requests attestation itself on the resumed flow exactly as
+     *   on a fresh one (`Execute()` runs its attestation setup before
+     *   branching on `msg.AuthCode`) - see [startIssuance]'s note.
      */
     fun resumeIssuance(
         offer: String? = null,
@@ -488,6 +490,8 @@ class WalletEngineSession(
         proofs: List<ProofObject>? = null,
         messageId: String? = null,
         credentialRequestExtras: kotlinx.serialization.json.JsonObject? = null,
+        clientAttestation: String? = null,
+        clientAttestationPoP: String? = null,
     ) {
         send(SignResponseMessage.serializer(), SignResponseMessage(
             flowId = flowId,
@@ -496,6 +500,8 @@ class WalletEngineSession(
             vpToken = vpToken,
             proofs = proofs,
             credentialRequestExtras = credentialRequestExtras,
+            clientAttestation = clientAttestation,
+            clientAttestationPoP = clientAttestationPoP,
         ))
     }
 

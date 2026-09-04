@@ -68,17 +68,24 @@ fun PresentationConsentScreen(
     onDecline: () -> Unit,
     presentationHistory: List<PresentationRecord> = emptyList(),
     consumptionPolicy: CredentialConsumptionPolicy = CredentialConsumptionPolicy.NEVER_CONSUME,
+    // Which kids the keystore can currently sign with - see
+    // SirosWallet.availableKeyIds's doc comment. Without this, a credential
+    // whose signing key was silently lost (a real, recurring bug found via
+    // live testing) kept reporting "available" under NEVER_CONSUME forever,
+    // right up until "Share" failed deep inside key selection.
+    availableKeyIds: Set<String> = emptySet(),
     modifier: Modifier = Modifier,
 ) {
     // A query is unsatisfiable if every candidate that matched it has
-    // already been used up under the active consumption policy (see
-    // CredentialUtils.eligibleInstances) - the SDK itself refuses to sign
-    // with an exhausted instance regardless (defense in depth), but the user
-    // shouldn't be let all the way to "Share" only to have it silently fail.
-    val exhaustedQueryIds = remember(request, presentationHistory, consumptionPolicy) {
+    // already been used up under the active consumption policy, or has no
+    // usable signing key left (see CredentialUtils.eligibleInstances) - the
+    // SDK itself refuses to sign with an exhausted/keyless instance
+    // regardless (defense in depth), but the user shouldn't be let all the
+    // way to "Share" only to have it silently fail.
+    val exhaustedQueryIds = remember(request, presentationHistory, consumptionPolicy, availableKeyIds) {
         request.matchResults.filter { mr ->
             mr.candidates.isNotEmpty() &&
-                CredentialUtils.eligibleInstances(mr.candidates, consumptionPolicy, presentationHistory).isEmpty()
+                CredentialUtils.eligibleInstances(mr.candidates, consumptionPolicy, presentationHistory, availableKeyIds).isEmpty()
         }.map { it.queryId }.toSet()
     }
     val totalSteps = request.matchResults.size + 2 // preview + per-credential + summary
@@ -135,16 +142,17 @@ fun PresentationConsentScreen(
             // Content area
             Box(modifier = Modifier.weight(1f)) {
                 when {
-                    currentStep == 0 -> PreviewStep(request, exhaustedQueryIds, presentationHistory)
+                    currentStep == 0 -> PreviewStep(request, exhaustedQueryIds, presentationHistory, availableKeyIds)
                     currentStep <= request.matchResults.size -> {
                         val matchResult = request.matchResults[currentStep - 1]
                         ClaimSelectionStep(
                             matchResult = matchResult,
                             claimSelections = claimSelections,
                             presentationHistory = presentationHistory,
+                            availableKeyIds = availableKeyIds,
                         )
                     }
-                    else -> SummaryStep(request, claimSelections, presentationHistory)
+                    else -> SummaryStep(request, claimSelections, presentationHistory, availableKeyIds)
                 }
             }
 
@@ -186,7 +194,7 @@ fun PresentationConsentScreen(
                 } else {
                     Button(
                         onClick = {
-                            onAccept(CredentialUtils.eligibleInstances(request.candidates, consumptionPolicy, presentationHistory).map { it.id })
+                            onAccept(CredentialUtils.eligibleInstances(request.candidates, consumptionPolicy, presentationHistory, availableKeyIds).map { it.id })
                         },
                         enabled = exhaustedQueryIds.isEmpty(),
                         modifier = Modifier.weight(1f),
@@ -233,6 +241,7 @@ private fun PreviewStep(
     request: PresentationRequest,
     exhaustedQueryIds: Set<String> = emptySet(),
     presentationHistory: List<PresentationRecord> = emptyList(),
+    availableKeyIds: Set<String> = emptySet(),
 ) {
     Column(
         modifier = Modifier
@@ -280,7 +289,7 @@ private fun PreviewStep(
             // many interchangeable copies eligible for the same query (see
             // CredentialUtils.eligibleInstances), and the SDK - not the
             // user - picks which physical copy is actually used at share time.
-            val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory).firstOrNull()
+            val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory, availableKeyIds).firstOrNull()
             if (grouped != null) {
                 CredentialCard(
                     credential = grouped.credential,
@@ -315,8 +324,9 @@ private fun ClaimSelectionStep(
     matchResult: CredentialMatcher.MatchResult,
     claimSelections: MutableMap<String, Boolean>,
     presentationHistory: List<PresentationRecord> = emptyList(),
+    availableKeyIds: Set<String> = emptySet(),
 ) {
-    val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory).firstOrNull()
+    val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory, availableKeyIds).firstOrNull()
     val cred = grouped?.credential
     val claimMetaMap = cred?.metadata?.claims
         ?.associateBy { it.path.joinToString(".") } ?: emptyMap()
@@ -406,6 +416,7 @@ private fun SummaryStep(
     request: PresentationRequest,
     claimSelections: Map<String, Boolean>,
     presentationHistory: List<PresentationRecord> = emptyList(),
+    availableKeyIds: Set<String> = emptySet(),
 ) {
     Column(
         modifier = Modifier
@@ -437,7 +448,7 @@ private fun SummaryStep(
         Spacer(modifier = Modifier.height(16.dp))
 
         request.matchResults.forEach { matchResult ->
-            val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory).firstOrNull()
+            val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory, availableKeyIds).firstOrNull()
                 ?: return@forEach
             val cred = grouped.credential
             val claimMetaMap = cred.metadata?.claims

@@ -18,6 +18,8 @@ import android.os.ParcelUuid
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.siros.sdk.credentials.StoredCredential
@@ -52,13 +54,13 @@ class BlePeripheralServer(
      * NFC static-handover bytes for the currently-active engagement, if any -
      * see [BleCentralClient]'s matching parameter doc comment.
      */
-    getHandoverSelectBytes: () -> ByteArray?,
+    private val getHandoverSelectBytes: () -> ByteArray?,
     /** Mirrors `SirosWallet.getCredentials` - injected rather than taking a `SirosWallet` directly, keeping this BLE/GATT glue class independent of the wallet facade. */
-    getCredentials: suspend () -> List<StoredCredential>,
+    private val getCredentials: suspend () -> List<StoredCredential>,
     /** Mirrors `SirosWallet.signMdocPresentationForProximity`. */
-    signPresentation: suspend (credentialId: Long, disclosedClaims: List<String>?, sessionTranscriptBytes: ByteArray) -> ByteArray,
+    private val signPresentation: suspend (credentialId: Long, disclosedClaims: List<String>?, sessionTranscriptBytes: ByteArray) -> ByteArray,
     /** See [RequestProximityConsent]'s doc comment. */
-    requestConsent: RequestProximityConsent,
+    private val requestConsent: RequestProximityConsent,
     /**
      * Mirrors `CredentialUtils.eligibleInstances` bound to the caller's
      * current `SirosWallet.credentialConsumptionPolicy`/`presentationHistory` -
@@ -66,9 +68,9 @@ class BlePeripheralServer(
      * used up, so a family the user approves can't sign with an exhausted
      * instance even if [requestConsent]'s UI failed to grey it out.
      */
-    filterEligible: (List<StoredCredential>) -> List<StoredCredential>,
+    private val filterEligible: suspend (List<StoredCredential>) -> List<StoredCredential>,
     /** See [MdocProximitySession]'s matching constructor parameter's doc comment. */
-    evaluateReaderTrust: suspend (x5chain: List<ByteArray>) -> ReaderTrustResult,
+    private val evaluateReaderTrust: suspend (x5chain: List<ByteArray>) -> ReaderTrustResult,
     /** Reports a canonical step token (see `FlowStepCatalog.proximitySteps`) for driving the same progress-bar UI the issuance/presentation flows use. */
     private val onStep: (String) -> Unit,
     private val onComplete: (success: Boolean) -> Unit,
@@ -92,6 +94,18 @@ class BlePeripheralServer(
         // awaited before giving up (e.g. the reader dropped the connection
         // mid-transfer) rather than hanging forever.
         private const val NOTIFY_ACK_TIMEOUT_MS = 5000L
+
+        // Unlike BleCentralClient's SCAN_TIMEOUT_MS (a single scan-and-
+        // connect attempt), this server keeps advertising indefinitely so a
+        // reader that drops mid-presentation can retry against the same
+        // engagement - but with no bound at all, a reader that connects
+        // repeatedly without ever completing (or one that never shows up
+        // because it picked central-client mode instead) leaves this role's
+        // outcome unresolved forever, which ProximityEngagementScreen's
+        // "wait for both roles" logic then never surfaces to the user.
+        // Generous relative to NOTIFY_ACK_TIMEOUT_MS since it also has to
+        // cover a real user's consent-dialog think time.
+        private const val OVERALL_TIMEOUT_MS = 60_000L
     }
 
     // limitedParallelism(1), not plain Dispatchers.IO: GATT callbacks can
@@ -104,8 +118,17 @@ class BlePeripheralServer(
     // is inherently meant to run one-at-a-time for a single BLE connection
     // anyway, so serializing costs nothing real.
     private val scope = CoroutineScope(Dispatchers.IO.limitedParallelism(1))
-    private val reassembler = BleMessageChunker.Reassembler()
-    private val session = MdocProximitySession(
+    // Both re-created fresh per BLE connection (see onConnectionStateChange's
+    // STATE_CONNECTED branch) rather than once for this object's whole
+    // lifetime - this server keeps advertising and accepting reconnects after
+    // a dropped connection, and a fresh connection's SessionEstablishment
+    // message must not be silently dropped by a PRIOR, now-disconnected
+    // attempt's stale session.established == true (session-key derivation,
+    // which flips that flag, happens well before a response is signed and
+    // sent - see responseSent's doc comment - so an incomplete first attempt
+    // reaching that point already poisons every future connection without
+    // this reset).
+    private fun newSession() = MdocProximitySession(
         engagement = engagement,
         getHandoverSelectBytes = getHandoverSelectBytes,
         getCredentials = getCredentials,
@@ -116,6 +139,8 @@ class BlePeripheralServer(
         onStep = onStep,
         logTag = "BlePeripheralServer",
     )
+    private var reassembler = BleMessageChunker.Reassembler()
+    private var session = newSession()
     private var gattServer: BluetoothGattServer? = null
     private var connectedDevice: BluetoothDevice? = null
     private var negotiatedMtu = DEFAULT_MTU
@@ -133,11 +158,13 @@ class BlePeripheralServer(
     // comment on why notifications must be paced rather than issued
     // back-to-back.
     private var pendingNotifyAck: CompletableDeferred<Boolean>? = null
+    private var timeoutJob: Job? = null
 
     /** Reports the presentation's outcome exactly once - a signed response being sent and the reader's STATE_END write both resolve to "complete" and would otherwise double-report. */
     private fun completeOnce(success: Boolean) {
         if (completed) return
         completed = true
+        timeoutJob?.cancel()
         onComplete(success)
     }
 
@@ -208,10 +235,18 @@ class BlePeripheralServer(
             .build()
         advertiser.startAdvertising(settings, advertiseData, advertiseCallback)
         onStep("waiting_for_reader")
+        timeoutJob = scope.launch {
+            delay(OVERALL_TIMEOUT_MS)
+            Timber.w("BlePeripheralServer: giving up after ${OVERALL_TIMEOUT_MS}ms without a completed presentation")
+            stop()
+            completeOnce(false)
+        }
     }
 
     @SuppressLint("MissingPermission")
     fun stop() {
+        timeoutJob?.cancel()
+        timeoutJob = null
         val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
         bluetoothManager?.adapter?.bluetoothLeAdvertiser?.stopAdvertising(advertiseCallback)
         connectedDevice?.let { gattServer?.cancelConnection(it) }
@@ -237,6 +272,13 @@ class BlePeripheralServer(
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
             if (newState == BluetoothGatt.STATE_CONNECTED) {
                 connectedDevice = device
+                // A fresh connection gets a fresh session - see newSession()'s
+                // doc comment for why reusing a prior (possibly incomplete)
+                // attempt's session/reassembler here would silently swallow
+                // every message a genuine retry sends.
+                session = newSession()
+                reassembler = BleMessageChunker.Reassembler()
+                responseSent = false
                 onStep("reader_connected")
             } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
                 if (device == connectedDevice) {
@@ -312,6 +354,7 @@ class BlePeripheralServer(
         }
     }
 
+    @SuppressLint("MissingPermission")
     private fun handleDataWrite(chunk: ByteArray) {
         // This is invoked directly from the system's GattServerCallback, not
         // inside the scope.launch below - an uncaught exception here (e.g.
@@ -327,7 +370,33 @@ class BlePeripheralServer(
         scope.launch {
             try {
                 if (session.established) {
-                    Timber.w("BlePeripheralServer: additional SessionData messages after the first request are not yet handled")
+                    // Multiple request/response round trips within a single
+                    // connection aren't supported. Two different cases land
+                    // here and need different responses: the reader sending
+                    // ITS OWN session-termination status (a normal, correct
+                    // way to close out after our response - just disconnect,
+                    // don't reply with another status onto a connection the
+                    // peer is already closing) versus the reader sending
+                    // some other, unexpected data-carrying message (tell it
+                    // explicitly the session is over, since silently
+                    // dropping it would leave the reader with no response
+                    // and no reason to stop retrying). Only this one
+                    // connection is torn down either way - advertising stays
+                    // up so a genuine retry (a new connection, which gets a
+                    // fresh session - see onConnectionStateChange) can still
+                    // succeed.
+                    if (ProximitySessionMessages.peekStatus(message) == ProximitySessionMessages.StatusCode.SESSION_TERMINATION) {
+                        Timber.d("BlePeripheralServer: reader sent its own session-termination status - disconnecting")
+                    } else {
+                        Timber.w("BlePeripheralServer: received a SessionData message after this session already completed - terminating this connection")
+                        sendNotification(
+                            ProximitySessionMessages.buildSessionData(
+                                encryptedData = null,
+                                status = ProximitySessionMessages.StatusCode.SESSION_TERMINATION,
+                            ),
+                        )
+                    }
+                    connectedDevice?.let { gattServer?.cancelConnection(it) }
                     return@launch
                 }
                 when (val result = session.handleSessionEstablishment(message)) {

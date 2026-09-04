@@ -434,6 +434,66 @@ class WalletEngineSessionTest {
         }
     }
 
+    /**
+     * `request_attestation` reply (go-wallet-backend `SignActionRequestAttestation`):
+     * the WIA + PoP ride on the sign_response under exactly the wire names the
+     * backend's `SignResponseMessage` declares, alongside the message_id it
+     * correlates on.
+     */
+    @Test
+    fun send_sign_response_serializes_client_attestation_fields() {
+        val session = WalletEngineSession(
+            baseUrl = "https://wallet.example.com",
+            tenantId = "tenant-42",
+            client = client,
+        )
+        session.connect("app-token")
+
+        session.sendSignResponse(
+            flowId = "flow-77",
+            messageId = "msg-9",
+            clientAttestation = "wia-jwt",
+            clientAttestationPoP = "pop-jwt",
+        )
+
+        verify(exactly = 1) {
+            webSocket.send(match<String> { text ->
+                text.contains("\"type\":\"sign_response\"") &&
+                    text.contains("\"flow_id\":\"flow-77\"") &&
+                    text.contains("\"message_id\":\"msg-9\"") &&
+                    text.contains("\"client_attestation\":\"wia-jwt\"") &&
+                    text.contains("\"client_attestation_pop\":\"pop-jwt\"")
+            })
+        }
+    }
+
+    /**
+     * A declined `request_attestation` (no WIA available) is an empty
+     * sign_response: no attestation values on the wire, but still the
+     * message_id so the backend's RequestSign unblocks instead of waiting
+     * out its 30 s timeout.
+     */
+    @Test
+    fun send_sign_response_without_attestation_carries_no_attestation_values() {
+        val session = WalletEngineSession(
+            baseUrl = "https://wallet.example.com",
+            tenantId = "tenant-42",
+            client = client,
+        )
+        session.connect("app-token")
+
+        session.sendSignResponse(flowId = "flow-77", messageId = "msg-9")
+
+        verify(exactly = 1) {
+            webSocket.send(match<String> { text ->
+                text.contains("\"type\":\"sign_response\"") &&
+                    text.contains("\"message_id\":\"msg-9\"") &&
+                    !text.contains("\"client_attestation\":\"") &&
+                    !text.contains("\"client_attestation_pop\":\"")
+            })
+        }
+    }
+
     @Test
     fun send_match_response_serializes_selected_credentials() {
         val session = WalletEngineSession(

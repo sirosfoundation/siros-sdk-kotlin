@@ -64,6 +64,13 @@ data class FlowStartMessage(
      * Forwarded by go-wallet-backend as the `OAuth-Client-Attestation` HTTP
      * header on PAR/token requests to the credential issuer - see
      * `internal/engine/client_attestation.go`'s `TransportSuppliedAttestation`.
+     *
+     * DEPRECATED as an up-front field: when absent, the backend requests the
+     * attestation itself via a `request_attestation` sign request after
+     * resolving the issuer's authorization server, which is the only place the
+     * PoP audience is reliably known - reply via
+     * [SignResponseMessage.clientAttestation]. Kept on the wire for clients
+     * that have already resolved the offer/AS themselves.
      */
     @SerialName("client_attestation") val clientAttestation: String? = null,
     /**
@@ -146,6 +153,16 @@ data class SignResponseMessage(
      * today except blind BBS issuance.
      */
     @SerialName("credential_request_extras") val credentialRequestExtras: JsonObject? = null,
+    /**
+     * Response to a `request_attestation` sign request (go-wallet-backend
+     * `SignActionRequestAttestation`): the Wallet Instance Attestation JWT
+     * (`oauth-client-attestation+jwt`) and the per-flow PoP
+     * (`oauth-client-attestation-pop+jwt`) signed with the instance key over
+     * the `audience`/`issuer` the engine supplied in [SignRequestParams].
+     * Both null means "no attestation available - proceed without".
+     */
+    @SerialName("client_attestation") val clientAttestation: String? = null,
+    @SerialName("client_attestation_pop") val clientAttestationPoP: String? = null,
     val timestamp: String? = null,
 )
 
