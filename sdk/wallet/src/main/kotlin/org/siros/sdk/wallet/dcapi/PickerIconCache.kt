@@ -114,33 +114,47 @@ class PickerIconCache(
             }
         }
         mutex.withLock {
-            val pngFile = pngFile(logoUrl, backgroundColor)
-            val missFile = missFile(logoUrl, backgroundColor)
             if (png != null) {
-                try {
-                    dir.mkdirs()
-                    pngFile.writeBytes(png)
-                    missFile.delete()
-                    Timber.d("PickerIconCache: stored ${png.size}-byte icon for $logoUrl")
-                } catch (e: Exception) {
-                    Timber.w(e, "PickerIconCache: failed to store icon for $logoUrl")
-                }
+                storeIconLocked(logoUrl, backgroundColor, png)
             } else {
-                val previous = readMissLocked(missFile)
-                val miss = FetchBackoff.recordMiss(previous, nowMillis())
-                try {
-                    dir.mkdirs()
-                    missFile.writeText(json.encodeToString(FetchCacheEntry.serializer(), miss))
-                } catch (e: Exception) {
-                    Timber.w(e, "PickerIconCache: failed to record miss for $logoUrl")
-                }
-                Timber.d(
-                    "PickerIconCache: no usable icon from $logoUrl (attempt ${miss.attempts}, " +
-                        "next in ${(miss.nextRetryAtMillis - nowMillis()) / 1000}s)",
-                )
+                recordMissLocked(logoUrl, backgroundColor)
             }
         }
         png
+    }
+
+    /** Write the rendered icon and retire any negative entry for it. Caller holds [mutex]. */
+    private fun storeIconLocked(logoUrl: String, backgroundColor: String?, png: ByteArray) {
+        val missFile = missFile(logoUrl, backgroundColor)
+        try {
+            dir.mkdirs()
+            pngFile(logoUrl, backgroundColor).writeBytes(png)
+            // A miss marker that outlives its icon is harmless to [cached] and
+            // [isDue], which check for the PNG first - but it is still wrong
+            // on disk, so say so rather than silently leaving it.
+            if (!missFile.delete() && missFile.exists()) {
+                Timber.w("PickerIconCache: could not remove stale ${missFile.name}")
+            }
+            Timber.d("PickerIconCache: stored ${png.size}-byte icon for $logoUrl")
+        } catch (e: Exception) {
+            Timber.w(e, "PickerIconCache: failed to store icon for $logoUrl")
+        }
+    }
+
+    /** Extend (or start) the backoff for a logo that yielded no icon. Caller holds [mutex]. */
+    private fun recordMissLocked(logoUrl: String, backgroundColor: String?) {
+        val missFile = missFile(logoUrl, backgroundColor)
+        val miss = FetchBackoff.recordMiss(readMissLocked(missFile), nowMillis())
+        try {
+            dir.mkdirs()
+            missFile.writeText(json.encodeToString(FetchCacheEntry.serializer(), miss))
+        } catch (e: Exception) {
+            Timber.w(e, "PickerIconCache: failed to record miss for $logoUrl")
+        }
+        Timber.d(
+            "PickerIconCache: no usable icon from $logoUrl (attempt ${miss.attempts}, " +
+                "next in ${(miss.nextRetryAtMillis - nowMillis()) / 1000}s)",
+        )
     }
 
     /** Remove everything - for tests and a "clear caches" affordance. */

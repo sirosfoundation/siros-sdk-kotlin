@@ -230,8 +230,9 @@ object SirosCredentialRegistry {
         credentials: List<StoredCredential>,
     ): Map<Long, ByteArray> = buildMap {
         credentials.forEach { cred ->
-            val url = cred.metadata?.logo?.uri ?: return@forEach
-            iconCache.cached(url, cred.metadata?.backgroundColor)?.let { put(cred.id, it) }
+            val metadata = cred.metadata ?: return@forEach
+            val url = metadata.logo?.uri ?: return@forEach
+            iconCache.cached(url, metadata.backgroundColor)?.let { put(cred.id, it) }
         }
     }
 
