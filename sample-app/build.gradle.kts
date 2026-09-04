@@ -30,6 +30,29 @@ android {
         )
     }
 
+    signingConfigs {
+        getByName("debug") {
+            // A committed, stable keystore instead of AGP's implicit
+            // per-machine ~/.android/debug.keystore: CI runners are
+            // ephemeral, so without this every CI-built debug APK gets a
+            // fresh random signing key, silently invalidating any
+            // Digital Asset Links (assetlinks.json) fingerprint entry
+            // added for a previous release.
+            //
+            // The key is public: this repository is, and so is the
+            // password. That is the trust boundary, so be clear about what
+            // an assetlinks.json entry for its fingerprint means - "some
+            // debug build of the sample app", which anyone with the file
+            // can produce, never "a build we vouch for". It is only fit for
+            // development and test environments, and is never used for a
+            // Play Store upload; release builds sign with their own key.
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -48,6 +71,7 @@ android {
             buildConfigField("long", "PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER", "0L")
         }
         debug {
+            signingConfig = signingConfigs.getByName("debug")
             // Allow connecting to local backend over cleartext for development
             manifestPlaceholders["usesCleartextTraffic"] = "true"
             // Waydroid reaches host-mapped wallet backend via gateway + wallet-proxy
