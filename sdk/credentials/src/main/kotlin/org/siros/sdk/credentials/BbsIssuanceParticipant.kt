@@ -107,6 +107,44 @@ class BbsIssuanceParticipant(
          * rather than taking the wallet's word for it.
          */
         const val POINTERS_FIELD: String = "bbs_committed_claims"
+
+        /**
+         * Credential-request member saying whether the commitment carries
+         * key binding keys.
+         *
+         * The issuer cannot see inside the commitment, and this selects the
+         * message layout the credential is signed under - which a verifier
+         * reads back out of the header, so the two ends have to agree. It
+         * is not taken on trust: the issuer's signer checks the assertion
+         * against the commitment and refuses to sign a mismatch, so getting
+         * this wrong costs an issuance rather than producing a credential
+         * that claims a binding it does not have.
+         */
+        const val KEY_BINDING_FIELD: String = "bbs_key_binding"
+
+        /**
+         * Credential-request member naming the cipher suite the commitment
+         * was built under.
+         *
+         * The suite selects the domain separation everything is computed
+         * under, so the issuer must build its side under the same one or
+         * the commitment verifies against nothing. It cannot infer it: a
+         * wrong guess is indistinguishable from a corrupt commitment, a
+         * wrong issuer key or a tampered proof, so the wallet says.
+         *
+         * A different axis from [KEY_BINDING_FIELD] despite the similar
+         * name. This picks the domain separation; that one picks the
+         * message layout a verifier reads under. `schnorr` with no key
+         * binding keys is the ordinary unbound issuance, which is exactly
+         * why the issuer cannot derive one from the other.
+         */
+        const val SUITE_FIELD: String = "bbs_suite"
+
+        /** The wire name for a suite, as the issuer reads it. */
+        fun wireName(suiteId: BbsSuiteId): String = when (suiteId) {
+            BbsSuiteId.PLAIN -> "plain"
+            BbsSuiteId.SCHNORR -> "schnorr"
+        }
     }
 }
 
@@ -150,6 +188,8 @@ class BbsIssuancePreparation(
                 postfix = "]",
                 transform = ::jsonString,
             ),
+            BbsIssuanceParticipant.KEY_BINDING_FIELD to keybindPublicKeys.isNotEmpty().toString(),
+            BbsIssuanceParticipant.SUITE_FIELD to jsonString(BbsIssuanceParticipant.wireName(suiteId)),
         )
 
     /**

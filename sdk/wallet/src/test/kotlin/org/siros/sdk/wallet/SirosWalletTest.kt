@@ -1138,6 +1138,60 @@ class SirosWalletTest {
         verify(exactly = 2) { engine.startIssuance(offer = offerJson, credentialOfferUri = null, redirectUri = "siros-sample://callback") }
     }
 
+    /**
+     * A `ZkIssuancePreparation` carries what the holder committed to before
+     * the issuer signed - for blind BBS the secret prover blind behind the
+     * commitment. A cancelled issuance never produces a credential, so
+     * nothing will ever consume it: left in the pending map it would sit
+     * in process memory indefinitely
+     * and gain one entry per cancelled attempt. Verifies
+     * [SirosWallet.cancelCurrentFlow] drops the cancelled flow's preparation
+     * and leaves other flows' alone.
+     */
+    @Test
+    fun cancelCurrentFlow_discardsThatFlowsUnconsumedZkIssuancePreparation() = runTest(dispatcher) {
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val accountRegistry = mockk<AccountRegistry>(relaxed = true)
+        every { accountRegistry.listAccounts() } returns emptyList()
+        val preparations =
+            java.util.concurrent.ConcurrentHashMap<String, org.siros.sdk.credentials.ZkIssuancePreparation>()
+        preparations["flow-1"] = fakeZkIssuancePreparation()
+        preparations["flow-2"] = fakeZkIssuancePreparation()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.FlowActive(
+                    userId = "user-1",
+                    displayName = "Alice",
+                    flowId = "flow-1",
+                    flowType = "issuance",
+                    status = "in_progress",
+                )
+            ),
+            "engineSession" to engine,
+            "accountRegistry" to accountRegistry,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+            "json" to Json { ignoreUnknownKeys = true },
+            "httpClient" to OkHttpClient(),
+            "zkPreparationsByFlow" to preparations,
+        )
+
+        wallet.cancelCurrentFlow()
+
+        assertNull(
+            "cancelCurrentFlow() must discard the cancelled flow's holder commitment material",
+            preparations["flow-1"],
+        )
+        assertNotNull(
+            "cancelling one flow must not consume another flow's preparation",
+            preparations["flow-2"],
+        )
+    }
+
+    private fun fakeZkIssuancePreparation() = object : org.siros.sdk.credentials.ZkIssuancePreparation {
+        override val credentialRequestFields: Map<String, String> =
+            mapOf("bbs_commitment" to "\"AAAA\"")
+    }
+
     /** header.{"exp": exp}.sig - just enough for CredentialUtils.parseJwtPayload to read `exp`. */
     private fun fakeJwtWithExp(exp: Long): String {
         val payload = java.util.Base64.getUrlEncoder().withoutPadding()
@@ -1227,7 +1281,7 @@ class SirosWalletTest {
 
             val signFlow = MutableSharedFlow<SignRequestMessage>()
             val engine = mockEngineConstructor(signRequests = signFlow)
-            every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any()) } just runs
+            every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any()) } just runs
             val sessionStore = mockk<SessionStore>(relaxed = true)
             every { sessionStore.instanceKeyId } returns "instance-key-1"
             val keystore = mockk<KeystoreManager>(relaxed = true)
@@ -1885,7 +1939,7 @@ class SirosWalletTest {
 
             val signFlow = MutableSharedFlow<SignRequestMessage>()
             val engine = mockEngineConstructor(signRequests = signFlow)
-            every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any()) } just runs
+            every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any()) } just runs
             val sessionStore = mockk<SessionStore>(relaxed = true)
             every { sessionStore.instanceKeyId } returns "instance-key-1"
             val keystore = mockk<KeystoreManager>(relaxed = true)
@@ -1972,7 +2026,7 @@ class SirosWalletTest {
 
             val signFlow = MutableSharedFlow<SignRequestMessage>()
             val engine = mockEngineConstructor(signRequests = signFlow)
-            every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any()) } just runs
+            every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any()) } just runs
             val sessionStore = mockk<SessionStore>(relaxed = true)
             every { sessionStore.instanceKeyId } returns "instance-key-1"
             val keystore = mockk<KeystoreManager>(relaxed = true)
@@ -2061,7 +2115,7 @@ class SirosWalletTest {
 
             val signFlow = MutableSharedFlow<SignRequestMessage>()
             val engine = mockEngineConstructor(signRequests = signFlow)
-            every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any()) } just runs
+            every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any()) } just runs
             val sessionStore = mockk<SessionStore>(relaxed = true)
             every { sessionStore.instanceKeyId } returns "instance-key-1"
             val keystore = mockk<KeystoreManager>(relaxed = true)
@@ -2133,7 +2187,7 @@ class SirosWalletTest {
     fun requestAttestationSignRequest_sendsEmptyResponse_whenNoWiaAvailable() = runTest(dispatcher) {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val engine = mockEngineConstructor(signRequests = signFlow)
-        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any()) } just runs
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any()) } just runs
         val sessionStore = mockk<SessionStore>(relaxed = true)
         every { sessionStore.instanceKeyId } returns "instance-key-1"
         val keystore = mockk<KeystoreManager>(relaxed = true)
@@ -2185,7 +2239,7 @@ class SirosWalletTest {
     fun unknownSignAction_sendsEmptyResponse_ratherThanSilence() = runTest(dispatcher) {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val engine = mockEngineConstructor(signRequests = signFlow)
-        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any()) } just runs
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any()) } just runs
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
@@ -2289,6 +2343,109 @@ class SirosWalletTest {
         assertEquals("user-1", ready.userId)
         assertEquals(1, ready.credentials.size)
         assertEquals(testCredential, ready.credentials.single().raw)
+    }
+
+    /**
+     * A BBS credential's holder state has to reach the container before the
+     * credential reaches the store — the state is what names the credential's
+     * id. So a [CredentialStore] that refuses the credential (it is
+     * host-supplied, and may) would otherwise leave that entry behind: a
+     * long-lived secret filed under an id nothing will ever look up, and one
+     * nothing else deletes either, since §6.1.2's rule is "deleting the
+     * entity deletes the entry" and here the entity never existed.
+     */
+    @Test
+    fun connectEngine_flowComplete_rollsBackHolderState_whenStoringTheBbsCredentialFails() = runTest(dispatcher) {
+        val issuedJwp = "the.jwp.here"
+        val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val store = FakeCredentialStore(mutableListOf(), saveFailure = RuntimeException("store refused"))
+        val keystore = mockk<KeystoreManager>()
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        every { keystore.isUnlocked } returns true
+        every { sessionStore.privateDataJwe } returns null
+        coEvery { keystore.exportEncryptedContainer() } returns """{"prfKeys":[],"jwe":"j"}""".toByteArray()
+        coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+
+        val extensionStore = RecordingExtensionStore()
+        val holderState = org.siros.sdk.credentials.BbsHolderState(
+            issuerPublicKey = ByteArray(96) { 1 },
+            secretProverBlind = ByteArray(32) { 2 },
+            committedMessages = listOf(byteArrayOf(3)),
+            keybindPublicKeys = emptyList(),
+        )
+        val preparation = mockk<org.siros.sdk.credentials.BbsIssuancePreparation>().also {
+            every { it.accept(issuedJwp, any()) } returns holderState
+        }
+        val preparations =
+            java.util.concurrent.ConcurrentHashMap<String, org.siros.sdk.credentials.ZkIssuancePreparation>()
+        preparations["flow-complete"] = preparation
+
+        mockEngineConstructor(flowComplete = completeFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.FlowActive(
+                    userId = "user-1",
+                    displayName = "Alice",
+                    flowId = "flow-complete",
+                    flowType = "issuance",
+                    status = "in_progress",
+                )
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to sessionStore,
+            "apiClient" to apiClient,
+            "eventListener" to listener,
+            "zkPreparationsByFlow" to preparations,
+            "bbsHolderStateVault" to org.siros.sdk.keystore.BbsHolderStateVault(extensionStore),
+            "activeZkIssuanceInput" to ZkIssuanceInput("{}", issuerPublicKey = ByteArray(96)),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        completeFlow.emit(
+            FlowCompleteMessage(
+                flowId = "flow-complete",
+                credentials = listOf(CredentialResult(format = "jwp", credential = issuedJwp)),
+            )
+        )
+        advanceUntilIdle()
+
+        assertTrue(
+            "the holder state must have been written before the store was asked",
+            extensionStore.everWritten,
+        )
+        assertEquals(
+            "a credential that could not be stored must leave no holder state behind",
+            emptyMap<String, String>(),
+            extensionStore.entries[org.siros.sdk.keystore.BbsHolderStateVault.NAMESPACE].orEmpty(),
+        )
+        assertEquals("no credential may be reported as received", 0, store.getAll().size)
+        verify(exactly = 0) { listener.onCredentialReceived(any()) }
+        verify(exactly = 1) { listener.onFlowError("flow-complete", any(), any()) }
+    }
+
+    /** An in-memory [org.siros.sdk.keystore.ExtensionStore] that remembers whether anything was ever written. */
+    private class RecordingExtensionStore : org.siros.sdk.keystore.ExtensionStore {
+        val entries = mutableMapOf<String, MutableMap<String, String>>()
+        var everWritten = false
+            private set
+
+        override suspend fun extensionEntries(namespace: String): Map<String, String> =
+            entries[namespace]?.toMap() ?: emptyMap()
+
+        override suspend fun setExtensionEntry(namespace: String, key: String, value: String) {
+            everWritten = true
+            entries.getOrPut(namespace) { mutableMapOf() }[key] = value
+        }
+
+        override suspend fun removeExtensionEntry(namespace: String, key: String) {
+            entries[namespace]?.remove(key)
+        }
     }
 
     @Test
@@ -4040,6 +4197,15 @@ class SirosWalletTest {
         // credentialConsumptionPolicy's default (NEVER_CONSUME) never runs
         // unless set here explicitly - matches every existing test's
         // expectation of today's actual (pre-this-feature) behavior.
+        // Same reason as pendingMatchResultsByFlow above: allocateInstance
+        // skips the initializer, and every terminal issuance path
+        // (flow_complete/flow_error/reportSignFailure/cancelCurrentFlow)
+        // now discards this flow's ZK issuance preparation, so a null map
+        // NPEs there.
+        if ("zkPreparationsByFlow" !in values) {
+            values["zkPreparationsByFlow"] =
+                java.util.concurrent.ConcurrentHashMap<String, org.siros.sdk.credentials.ZkIssuancePreparation>()
+        }
         if ("credentialConsumptionPolicy" !in values) {
             values["credentialConsumptionPolicy"] = CredentialConsumptionPolicy.NEVER_CONSUME
         }
@@ -4140,12 +4306,15 @@ class SirosWalletTest {
 
     private class FakeCredentialStore(
         private val credentials: MutableList<StoredCredential>,
+        /** When set, [save] throws it instead of storing — a host store that refuses. */
+        private val saveFailure: Exception? = null,
     ) : CredentialStore {
         override suspend fun getAll(): List<StoredCredential> = credentials.toList()
 
         override suspend fun getById(id: Long): StoredCredential? = credentials.find { it.id == id }
 
         override suspend fun save(credential: StoredCredential) {
+            saveFailure?.let { throw it }
             credentials.removeAll { it.id == credential.id }
             credentials.add(credential)
         }

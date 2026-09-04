@@ -63,7 +63,7 @@ data class CredentialRefreshTokenEntry(
  */
 class JweKeystore(
     private val json: Json = Json { ignoreUnknownKeys = true },
-) : KeystoreManager {
+) : KeystoreManager, ExtensionStore {
 
     private val mutex = Mutex()
     private var keys: MutableMap<String, ECKey> = mutableMapOf()
@@ -81,6 +81,20 @@ class JweKeystore(
     // enrolled it - a roaming CTAP2 authenticator can be tapped/plugged into
     // a different device entirely, and every device needs the same mapping.
     private var wscdCredentials: MutableMap<String, String> = mutableMapOf()
+
+    // Namespaced client-defined state - privatedata-spec SPEC.md §6.1
+    // "S.extensions", the normative replacement for one-off top-level fields
+    // like `wscdCredentials` above.
+    //
+    // namespace -> entry key -> opaque value. Both levels are opaque to this
+    // class: it stores and round-trips them and never interprets a value,
+    // which is what lets a client carry a namespace it does not implement.
+    //
+    // Entry keys name an ENTITY - a kid, a credential id, a batch id - never
+    // a subsystem (§6.1.1). That is a correctness rule, not a style one:
+    // resolution is last-write-wins per (namespace, key), so one aggregate
+    // entry per subsystem loses data whenever two devices write concurrently.
+    private var extensions: MutableMap<String, MutableMap<String, String>> = mutableMapOf()
     // OID4VCI renewal (credential re-issuance/renewal plan, Phase 2) -
     // refresh_token + the DPoP key it's bound to, keyed by the credential
     // batch's batchId - see privatedata-spec SPEC.md §6.2
@@ -314,6 +328,41 @@ class JweKeystore(
             }
         }
 
+        // Parse extensions: { [namespace]: { [key]: "<opaque>" } } -
+        // privatedata-spec §6.1. Anything that is not a JSON string is
+        // skipped rather than rejected: a namespace this build does not
+        // implement may legitimately hold a shape it has never seen, and
+        // failing to load the whole container over it would be worse than
+        // carrying it.
+        //
+        // Skipped, specifically, rather than coerced: §6.1 makes an entry
+        // value a string, and [exportEncryptedContainer] writes every entry
+        // back as one. Taking a number or a boolean here would hand the
+        // peer that wrote it a re-typed value on the next round trip -
+        // quietly changing another client's data is worse than declining to
+        // carry a value the spec does not allow in the first place, and it
+        // treats primitives the same way objects and arrays are already
+        // treated.
+        //
+        // The map is cleared first because this is a load, not a merge: the
+        // same instance unlocked against a second container (a different
+        // account, or a re-unlock after entries were dropped) must not carry
+        // the first one's entries into it and write them back on export.
+        extensions.clear()
+        val extensionsObj = state["extensions"] as? kotlinx.serialization.json.JsonObject
+        if (extensionsObj != null) {
+            for ((namespace, nsValue) in extensionsObj) {
+                val entries = nsValue as? kotlinx.serialization.json.JsonObject ?: continue
+                val target = extensions.getOrPut(namespace) { mutableMapOf() }
+                for ((key, value) in entries) {
+                    val primitive = value as? kotlinx.serialization.json.JsonPrimitive ?: continue
+                    if (!primitive.isString) continue
+                    target[key] = primitive.content
+                }
+                if (target.isEmpty()) extensions.remove(namespace)
+            }
+        }
+
         // Parse credentialRefreshTokens: { [batchId]: {refreshToken, dpopJwk,
         // credentialIssuerIdentifier, credentialConfigurationId} } -
         // privatedata-spec §6.2, a native-SDK-only extension (see
@@ -341,6 +390,7 @@ class JweKeystore(
         credentials.clear()
         presentationRecords.clear()
         wscdCredentials.clear()
+        extensions.clear()
         credentialRefreshTokens.clear()
         mainKey = null
         containerMetadata = null
@@ -388,6 +438,67 @@ class JweKeystore(
      */
     suspend fun setWscdCredentials(pluginId: String, state: String) = mutex.withLock {
         wscdCredentials[pluginId] = state
+    }
+
+    /**
+     * One namespace's entries - privatedata-spec §6.1 `S.extensions`.
+     *
+     * Returns an empty map for a namespace this container does not carry,
+     * which is not an error: a namespace only exists once something writes
+     * to it.
+     *
+     * Deliberately readable while locked, unlike [setExtensionEntry] and
+     * [removeExtensionEntry]. A locked keystore holds no entries, so the
+     * answer is the same empty map a never-written namespace gives, and the
+     * caller's contract for that answer is already "this cannot be
+     * presented" - see [BbsHolderStateVault.get]. Throwing would turn a
+     * credential that cannot be presented right now into a crash on the
+     * presentation path.
+     */
+    override suspend fun extensionEntries(namespace: String): Map<String, String> = mutex.withLock {
+        extensions[namespace]?.toMap() ?: emptyMap()
+    }
+
+    /**
+     * Write one entry, so the next [exportEncryptedContainer] folds it into
+     * `S.extensions` and it survives to the next [unlock] on this device or
+     * any other sharing this account.
+     *
+     * @param key MUST name a single entity the wallet already tracks - a
+     *   kid, a credential id, a batch id - and MUST NOT name a subsystem or
+     *   plugin (§6.1.1). See the [extensions] field comment for why that is
+     *   a correctness rule.
+     * @throws KeystoreException if the keystore is locked. A write to a
+     *   locked keystore has nowhere to go: [lock] has already dropped the
+     *   in-memory map, and the next [unlock] loads the container it is
+     *   given rather than merging into what is there, so the entry would be
+     *   silently discarded. Failing loudly matters more here than for most
+     *   state, because for BBS the value being written cannot be
+     *   reconstructed after the fact.
+     */
+    override suspend fun setExtensionEntry(namespace: String, key: String, value: String) = mutex.withLock {
+        requireUnlocked()
+        extensions.getOrPut(namespace) { mutableMapOf() }[key] = value
+    }
+
+    /**
+     * Remove one entry.
+     *
+     * §6.1.2 requires that deleting the entity an entry names deletes the
+     * entry; this is how a caller honours that. An emptied namespace is
+     * dropped rather than left as an empty object, so a container carries no
+     * trace of a namespace nothing uses.
+     *
+     * @throws KeystoreException if the keystore is locked - same reason as
+     *   [setExtensionEntry]. A deletion that appears to succeed while locked
+     *   would leave the entry in the container it was meant to be removed
+     *   from.
+     */
+    override suspend fun removeExtensionEntry(namespace: String, key: String) = mutex.withLock {
+        requireUnlocked()
+        val ns = extensions[namespace] ?: return@withLock
+        ns.remove(key)
+        if (ns.isEmpty()) extensions.remove(namespace)
     }
 
     /**
@@ -791,6 +902,23 @@ class JweKeystore(
                     put("wscdCredentials", kotlinx.serialization.json.buildJsonObject {
                         for ((pluginId, state) in wscdCredentials) {
                             put(pluginId, kotlinx.serialization.json.JsonPrimitive(state))
+                        }
+                    })
+                }
+
+                // extensions (privatedata-spec §6.1) - written before the
+                // legacy fields below so a reader sees the normative shape
+                // first. Namespaces this build does not implement are
+                // written back exactly as they were read.
+                if (extensions.isNotEmpty()) {
+                    put("extensions", kotlinx.serialization.json.buildJsonObject {
+                        for ((namespace, entries) in extensions) {
+                            if (entries.isEmpty()) continue
+                            put(namespace, kotlinx.serialization.json.buildJsonObject {
+                                for ((key, value) in entries) {
+                                    put(key, kotlinx.serialization.json.JsonPrimitive(value))
+                                }
+                            })
                         }
                     })
                 }

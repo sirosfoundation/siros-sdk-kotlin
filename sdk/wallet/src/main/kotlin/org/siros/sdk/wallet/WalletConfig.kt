@@ -120,6 +120,22 @@ data class WalletConfig(
     val registryUrl: String? = null,
     val zkCircuitUrls: List<String> = listOf(ZkCircuitClient.DEFAULT_ZK_CIRCUIT_URL),
     /**
+     * The credential types (`vct` values) this wallet handles as blind BBS
+     * credentials — empty by default, which leaves BBS entirely inactive.
+     *
+     * Unlike the circuit-based proof systems, BBS constrains no credential
+     * type at all: anything issued this way can be proved. That makes the
+     * set of types a deployment decision rather than something the SDK can
+     * derive, and the wallet has to know it *before* the first credential
+     * exists — the wallet must commit to messages during issuance, so a type
+     * missing from this set is not a credential presented the ordinary way,
+     * it is a credential that never gets issued.
+     *
+     * Non-empty also registers the presentation half, so a listed type is
+     * both issuable and presentable.
+     */
+    val bbsCredentialTypes: Set<String> = emptySet(),
+    /**
      * PEM-encoded RICAL (Reader Identity CA List, ISO/IEC 18013-5 second
      * edition Annex F) root certificate(s) for [SirosWallet.evaluateReaderTrust]'s
      * local fallback path - plain X.509 path validation against these

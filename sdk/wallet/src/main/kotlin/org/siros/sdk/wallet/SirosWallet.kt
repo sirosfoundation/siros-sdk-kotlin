@@ -69,6 +69,7 @@ import org.siros.sdk.keystore.mdoc.MdocCose
 import org.siros.sdk.credentials.VctmFetcher
 import org.siros.sdk.credentials.MddlSchema
 import org.siros.sdk.credentials.MddlSchemaFetcher
+import org.siros.sdk.keystore.BbsHolderStateVault
 import org.siros.sdk.keystore.CredentialRefreshTokenEntry
 import org.siros.sdk.keystore.DCAPIResponseEncryption
 import org.siros.sdk.keystore.JweKeystore
@@ -1564,8 +1565,15 @@ class SirosWallet private constructor(
      * triggers via `pendingRenewalSourceBatchId` applies here too, so the
      * old batch's credentials are deleted instead of left duplicated
      * alongside the newly-issued one.
+     * @param zkInput what the holder contributes when the credential type
+     * cannot be issued by the issuer alone - see [ZkIssuanceInput]. Null for
+     * every ordinary credential.
      */
-    suspend fun startIssuanceByOffer(offer: CredentialOffer, replacesBatchId: Long? = null) {
+    suspend fun startIssuanceByOffer(
+        offer: CredentialOffer,
+        replacesBatchId: Long? = null,
+        zkInput: ZkIssuanceInput? = null,
+    ) {
         val engine = engineSession ?: throw WalletException("Not connected")
         ensureEngineConnected(engine)
         if (issuanceInFlight) {
@@ -1573,6 +1581,7 @@ class SirosWallet private constructor(
         }
         issuanceInFlight = true
         pendingRenewalSourceBatchId = replacesBatchId
+        activeZkIssuanceInput = zkInput
         try {
             activeOffer = offer
             activeVctm = try {
@@ -1624,6 +1633,7 @@ class SirosWallet private constructor(
             issuanceInFlight = false
             activeOffer = null
             activeVctm = null
+            activeZkIssuanceInput = null
             throw e
         }
     }
@@ -1681,13 +1691,17 @@ class SirosWallet private constructor(
      * Start a credential issuance flow with a raw offer or URI.
      *
      * @param offerUri a credential_offer_uri or raw JSON credential_offer string.
+     * @param zkInput what the holder contributes when the credential type
+     * cannot be issued by the issuer alone - see [ZkIssuanceInput]. Null for
+     * every ordinary credential.
      */
-    suspend fun startIssuance(offerUri: String) {
+    suspend fun startIssuance(offerUri: String, zkInput: ZkIssuanceInput? = null) {
         val engine = engineSession ?: throw WalletException("Not connected")
         ensureEngineConnected(engine)
         if (issuanceInFlight) {
             throw WalletException("Another issuance is already in progress")
         }
+        activeZkIssuanceInput = zkInput
         // Set unconditionally, before display-metadata resolution: every
         // branch below calls engine.startIssuance() regardless of whether
         // resolveOfferForDisplay() succeeds, so gating this on that result
@@ -1762,6 +1776,7 @@ class SirosWallet private constructor(
             issuanceInFlight = false
             activeOffer = null
             activeVctm = null
+            activeZkIssuanceInput = null
             throw e
         }
     }
@@ -2266,6 +2281,9 @@ class SirosWallet private constructor(
             } catch (e: Exception) {
                 Timber.w(e, "Failed to send cancel to backend")
             }
+            // A cancelled issuance produces no credential, so anything the
+            // holder committed for it is unusable from here on.
+            discardZkIssuancePreparation(current.flowId)
             _state.value = readyState(current.userId, current.displayName, current.credentials)
         }
         resetIssuanceGuards()
@@ -2354,6 +2372,12 @@ class SirosWallet private constructor(
     suspend fun deleteCredential(credentialId: Long) {
         val deletedBatchId = credentialStore.getAll().find { it.id == credentialId }?.batchId
         credentialStore.delete(credentialId)
+        // privatedata-spec §6.1.2: deleting the entity an extension entry
+        // names must delete the entry. Left behind, BBS holder state is a
+        // long-lived secret belonging to a credential that no longer exists
+        // - and it is a secret worth deleting, since it is exactly what
+        // would undo the blinding.
+        bbsHolderStateVault?.remove(credentialId.toString())
         // If that was the last instance of its batch, its refresh_token
         // entry (if any) is now orphaned - privatedata-spec §6.2 requires
         // it not linger pointing at a batch that no longer exists.
@@ -2415,6 +2439,34 @@ class SirosWallet private constructor(
     val zkCircuitClient: ZkCircuitClient = ZkCircuitClient(sources = config.zkCircuitUrls, httpClient = httpClient)
 
     /**
+     * The container-backed store [BbsHolderStateVault] writes, or `null`
+     * when this wallet's keystore does not own a container.
+     *
+     * `null` is not a degraded mode to work around: BBS holder state cannot
+     * be reconstructed, so a wallet that cannot persist it must not issue a
+     * BBS credential in the first place. [zkIssuanceExtras] refuses rather
+     * than committing to messages it will be unable to present.
+     */
+    private val bbsHolderStateVault: BbsHolderStateVault? =
+        (keystore as? org.siros.sdk.keystore.ExtensionStore)?.let { BbsHolderStateVault(it) }
+
+    /**
+     * Resolves a stored credential's BBS state for [BbsProofSystem].
+     *
+     * The proof system keys on the JWP itself, since that is all it has at
+     * presentation time; the container keys on credential id, since §6.1.1
+     * requires an entry key to name an entity the wallet tracks. This is the
+     * join between the two.
+     */
+    private val bbsHolderStateStore = object : org.siros.sdk.credentials.BbsHolderStateStore {
+        override suspend fun stateFor(issuedJwp: String): org.siros.sdk.credentials.BbsHolderState? {
+            val vault = bbsHolderStateVault ?: return null
+            val credential = credentialStore.getAll().firstOrNull { it.raw == issuedJwp } ?: return null
+            return vault.get(credential.id.toString())
+        }
+    }
+
+    /**
      * Every ZK proof system this wallet can satisfy a verifier's
      * `"mso_mdoc_zk"` DCQL request with - see [handleDCAPIRequest]'s
      * `mso_mdoc_zk` branch, the only current caller. [ZkProofSystemRegistry]
@@ -2431,10 +2483,23 @@ class SirosWallet private constructor(
      */
     private val zkProofSystemRegistry: ZkProofSystemRegistry =
         ZkProofSystemRegistry(
-            listOf(
-                LongfellowZkProofSystem(zkCircuitClient),
-                VegaProofSystem(zkCircuitClient),
-            ),
+            buildList {
+                add(LongfellowZkProofSystem(zkCircuitClient))
+                add(VegaProofSystem(zkCircuitClient))
+                // Registered only when the deployment declares BBS credential
+                // types (see [WalletConfig.bbsCredentialTypes]). The set is
+                // a constructor argument rather than something derived from
+                // what is stored because the issuance half needs it before
+                // any credential of that type exists.
+                if (config.bbsCredentialTypes.isNotEmpty()) {
+                    add(
+                        org.siros.sdk.credentials.BbsProofSystem(
+                            holderState = bbsHolderStateStore,
+                            supportedVcts = config.bbsCredentialTypes,
+                        ),
+                    )
+                }
+            },
         )
 
     /**
@@ -2447,6 +2512,215 @@ class SirosWallet private constructor(
      * why specific circuits are deliberately not claimed here.
      */
     val zkSystemIds: List<String> get() = zkProofSystemRegistry.systemIds
+
+    /**
+     * What the holder contributes to the issuance currently in flight, set
+     * by whichever [startIssuance]/[startIssuanceByOffer] began it.
+     *
+     * Scoped the same way [activeOffer] is - one issuance runs at a time
+     * (`issuanceInFlight` enforces it), so a single slot is the whole state.
+     */
+    private var activeZkIssuanceInput: ZkIssuanceInput? = null
+
+    /**
+     * Preparations produced during a sign request, by flow id.
+     *
+     * Kept past the request because the wallet is not finished with them:
+     * `accept()` on the preparation is the only place a mis-issued
+     * credential is caught, and the state it returns is what makes the
+     * credential presentable at all. Keyed by flow rather than held in one
+     * slot so a completion arriving for a superseded flow cannot consume
+     * another flow's blinding factor.
+     */
+    private val zkPreparationsByFlow =
+        java.util.concurrent.ConcurrentHashMap<String, org.siros.sdk.credentials.ZkIssuancePreparation>()
+
+    /**
+     * Drop [flowId]'s preparation, unconsumed, because the flow it belongs
+     * to has ended.
+     *
+     * A preparation holds material that must not outlive its flow - for BBS
+     * the secret prover blind behind the commitment. This is the only place
+     * one is removed: [acceptZkIssuedCredential] deliberately leaves it,
+     * because the credential loop enters that path at all only while the
+     * flow still has a preparation, and dropping it mid-batch would send
+     * every later credential down the ordinary validation branch. Left in
+     * the map past the flow, though, it would sit in memory for the life of
+     * the process and gain one entry per issuance, so every terminal path
+     * calls this the way every one of them already calls
+     * [resetIssuanceGuards].
+     *
+     * Not folded into [resetIssuanceGuards] itself because this is
+     * flow-scoped and that is not: `flow_complete` calls the reset *before*
+     * the credential loop's results are reported, and the preparation has
+     * to survive that far.
+     */
+    private fun discardZkIssuancePreparation(flowId: String?) {
+        if (flowId == null) return
+        if (zkPreparationsByFlow.remove(flowId) != null) {
+            Timber.d("Discarded unconsumed ZK issuance preparation for flow $flowId")
+        }
+    }
+
+    /**
+     * Runs the holder's half of issuance and returns what the credential
+     * request must carry, or `null` when this flow needs nothing.
+     *
+     * `null` is the answer for almost every issuance: it means no registered
+     * proof system claims the credential type being issued, or the caller
+     * supplied no [ZkIssuanceInput]. Both transports call this at the same
+     * point - the `generate_proof` sign request, the wallet's one turn to
+     * speak before the credential request goes out - so a flow behaves the
+     * same whichever transport carries it.
+     */
+    private suspend fun zkIssuanceExtras(flowId: String): kotlinx.serialization.json.JsonObject? {
+        val input = activeZkIssuanceInput ?: return null
+        val offer = activeOffer ?: return null
+        val credentialType = org.siros.sdk.credentials.CredentialTypeRef(
+            format = org.siros.sdk.credentials.CredentialFormat.JWP,
+            typeId = activeVctm?.vct ?: offer.credentialConfigurationId,
+        )
+        val participant = zkProofSystemRegistry.issuanceParticipant(credentialType) ?: run {
+            Timber.i("No ZK issuance participant for $credentialType - issuing without a holder commitment")
+            return null
+        }
+        // Refuse rather than commit to messages whose blinding factor has
+        // nowhere durable to live. Presenting needs that factor and it
+        // cannot be recomputed, so proceeding here would produce a
+        // credential that is issued, stored, and permanently unusable.
+        if (bbsHolderStateVault == null) {
+            throw WalletException(
+                "Cannot issue a ${credentialType.typeId} credential: this wallet's keystore does not own " +
+                    "a private-data container, so the holder state it requires could not be persisted",
+            )
+        }
+        // Same reasoning, one step later in the flow: without the issuer's
+        // key the credential that comes back cannot be checked against what
+        // was committed, and checking it is the wallet's only chance to
+        // notice the issuer signed something else. Refusing here costs an
+        // argument; refusing after issuance costs a credential.
+        if (input.issuerPublicKey == null) {
+            throw WalletException(
+                "Cannot issue a ${credentialType.typeId} credential: ZkIssuanceInput carries no " +
+                    "issuerPublicKey, so what the issuer returns could not be verified against the commitment",
+            )
+        }
+        val preparation = participant.prepare(
+            holderClaimsJson = input.holderClaimsJson,
+            keybindPublicKeys = input.keybindPublicKeys,
+            signer = input.signer ?: NoKeybindSigner,
+        )
+        val extras = kotlinx.serialization.json.buildJsonObject {
+            preparation.credentialRequestFields.forEach { (member, encodedValue) ->
+                // Already-encoded JSON, parsed rather than re-encoded: these
+                // values are covered by the commitment proof, and a
+                // round trip through a second encoder is how the two ends
+                // stop agreeing about what was signed.
+                put(member, json.parseToJsonElement(encodedValue))
+            }
+        }
+        // Registered only once the request members it belongs to exist. A
+        // participant returning something `parseToJsonElement` rejects
+        // means no sign response goes out and no credential ever arrives
+        // for this flow - and the throw leaves the sign request before any
+        // of the terminal paths that call [discardZkIssuancePreparation],
+        // so a preparation stored ahead of this point would hold its
+        // commitment secret with nothing left to consume or drop it.
+        zkPreparationsByFlow[flowId] = preparation
+        Timber.i(
+            "Prepared ${participant.systemId} issuance for flow $flowId " +
+                "(${input.keybindPublicKeys.size} key binding key(s))",
+        )
+        return extras
+    }
+
+    /**
+     * Checks an issued JWP against what was committed and persists the state
+     * that makes it presentable, returning the id to store it under.
+     *
+     * `null` means do not store this credential. That is deliberate and the
+     * whole point of the method: a blind BBS credential that fails this
+     * check is not a credential with a problem, it is bytes the issuer
+     * signed over something other than what the wallet committed to. Storing
+     * it would hide a mis-issuance until the first presentation failed, with
+     * nothing left pointing at the cause.
+     *
+     * @param index this credential's position in the issued batch. One
+     *   commitment authorises exactly one credential, so anything past the
+     *   first is refused rather than accepted against a preparation that
+     *   does not describe it.
+     */
+    private suspend fun acceptZkIssuedCredential(
+        flowId: String,
+        issuedJwp: String,
+        index: Int,
+    ): Long? {
+        // Peeked rather than taken: the same preparation has to be visible
+        // for every entry in the batch, so the refusal below can tell a
+        // second credential apart from a first one.
+        val preparation = zkPreparationsByFlow[flowId] ?: return null
+        val issuerPublicKey = activeZkIssuanceInput?.issuerPublicKey ?: run {
+            Timber.e("Flow $flowId has a ZK preparation but no issuer public key to check the result against")
+            return null
+        }
+        if (index > 0) {
+            Timber.e(
+                "Flow $flowId returned more than one credential for a single commitment - " +
+                    "refusing credential $index, which no commitment authorised",
+            )
+            return null
+        }
+        // The cast names BBS, unlike the issuance half, because what happens
+        // next is BBS-specific all the way down: the state is typed, and the
+        // namespace it lands in is `org.siros.bbs`. Generalising this is
+        // worth doing when there is a second participant to generalise over,
+        // not before.
+        val bbs = preparation as? org.siros.sdk.credentials.BbsIssuancePreparation ?: run {
+            Timber.e("Flow $flowId prepared a ${preparation.javaClass.simpleName} this wallet cannot accept")
+            return null
+        }
+        val vault = bbsHolderStateVault ?: run {
+            Timber.e("Flow $flowId has no container to persist holder state into")
+            return null
+        }
+        val state = try {
+            bbs.accept(issuedJwp, issuerPublicKey)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.e(e, "Issued credential for flow $flowId does not match what this wallet committed to")
+            return null
+        }
+        val credentialId = randomUint32Id()
+        vault.put(credentialId.toString(), state)
+        // Deliberately still in the map. The caller enters this method at all
+        // only while the flow has a preparation, so removing it here would
+        // send every later entry in the same batch down the ordinary
+        // JWT-validation branch instead - which is exactly the "no commitment
+        // authorised this" case the `index > 0` refusal above exists to catch,
+        // and it would be stored rather than refused. The preparation is
+        // dropped once the whole flow is done, by
+        // [discardZkIssuancePreparation] on the flow's terminal path.
+        Timber.i("Accepted BBS credential $credentialId for flow $flowId and persisted its holder state")
+        return credentialId
+    }
+
+    /**
+     * Stands in for a signer on an unbound issuance, where there are no key
+     * binding keys and so nothing is ever signed.
+     *
+     * Throwing rather than returning empty bytes: reaching this would mean a
+     * key binding key slipped through without a signer, and a credential
+     * bound to a key with a bogus proof is worse than a failed issuance.
+     * [ZkIssuanceInput]'s own `init` already rejects that combination, so
+     * this is the second of two guards, not the only one.
+     */
+    private object NoKeybindSigner : org.siros.sdk.credentials.ZkWitnessSigner {
+        override suspend fun sign(algorithm: Long, data: ByteArray): ByteArray =
+            throw IllegalStateException(
+                "a key binding key was committed without a signer to prove possession of it",
+            )
+    }
 
     /**
      * Wraps a raw ZK [result] into the full `{version, status, zkDocuments:
@@ -2577,6 +2851,7 @@ class SirosWallet private constructor(
         // no-op for a presentation sign-request failure, which never sets
         // these fields.
         resetIssuanceGuards()
+        discardZkIssuancePreparation(flowId)
         val current = _state.value
         val userId = (current as? WalletState.FlowActive)?.userId
             ?: (current as? WalletState.Ready)?.userId ?: ""
@@ -3054,6 +3329,10 @@ class SirosWallet private constructor(
         activeAttestedKeyIds = null
         issuanceInFlight = false
         pendingRenewalSourceBatchId = null
+        // The holder's contribution belongs to the flow that carried it. A
+        // later issuance that supplies none must not silently inherit this
+        // one's claims and commit to them.
+        activeZkIssuanceInput = null
     }
 
     /**
@@ -3651,7 +3930,10 @@ class SirosWallet private constructor(
                         proofType = it.proofType, jwt = it.jwt, attestation = it.attestation,
                     )
                 }
-                org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult(proofs = proofs)
+                org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult(
+                    proofs = proofs,
+                    credentialRequestExtras = zkIssuanceExtras(flowId),
+                )
             }
             "sign_presentation" -> {
                 // Same defense-in-depth audience check as the legacy engine
@@ -3826,7 +4108,12 @@ class SirosWallet private constructor(
                                 ProofObject(proofType = it.proofType, jwt = it.jwt, attestation = it.attestation)
                             }
                             Timber.d("Sending sign response with ${proofs.size} proofs for flow ${msg.flowId}, messageId=${msg.messageId}")
-                            engine.sendSignResponse(msg.flowId, proofs = proofs, messageId = msg.messageId)
+                            engine.sendSignResponse(
+                                msg.flowId,
+                                proofs = proofs,
+                                messageId = msg.messageId,
+                                credentialRequestExtras = zkIssuanceExtras(msg.flowId),
+                            )
                             Timber.d("Sign response sent successfully for flow ${msg.flowId}")
                         }
                         "sign_presentation" -> {
@@ -4275,7 +4562,12 @@ class SirosWallet private constructor(
                 pendingRenewalSourceBatchId?.let { oldBatchId ->
                     credentialStore.getAll()
                         .filter { it.batchId == oldBatchId }
-                        .forEach { credentialStore.delete(it.id) }
+                        .forEach {
+                            credentialStore.delete(it.id)
+                            // Same §6.1.2 rule as deleteCredential's - a
+                            // superseded batch's holder state must go with it.
+                            bbsHolderStateVault?.remove(it.id.toString())
+                        }
                     removeCredentialRefreshToken(oldBatchId)
                     Timber.d("Replaced renewed credential batch $oldBatchId with $batchId")
                 }
@@ -4351,6 +4643,78 @@ class SirosWallet private constructor(
                         eventListener?.onCredentialReceived(stored)
                         Timber.d("Stored mdoc credential docType=${parsed.docType}")
 
+                        cred.notificationId?.let { notificationId ->
+                            credentialNotifier?.sendCredentialNotification(
+                                flowId = msg.flowId,
+                                notificationId = notificationId,
+                                event = CredentialNotificationEvent.ACCEPTED,
+                            )
+                        }
+                        return@forEachIndexed
+                    }
+
+                    // A flow that carried a holder commitment gets its result
+                    // checked against that commitment before anything is
+                    // stored. This branch is taken on the presence of a
+                    // preparation rather than on a format string: the wallet
+                    // asked for a credential only it could have made
+                    // possible, so a result that is not the expected shape is
+                    // the mis-issuance being checked for, not a different
+                    // format to fall through to. (A JWP would fall through
+                    // badly in any case - its payloads are `~`-joined and
+                    // hold no claim values, so parseJwtPayload reads nothing
+                    // from one and it would be dropped as unparseable.)
+                    if (zkPreparationsByFlow.containsKey(msg.flowId)) {
+                        val credentialId = acceptZkIssuedCredential(msg.flowId, cred.credential, index)
+                        if (credentialId == null) {
+                            storeFailureReason =
+                                "Issued credential did not match what this wallet committed to"
+                            return@forEachIndexed
+                        }
+                        val stored = StoredCredential(
+                            id = credentialId,
+                            format = cred.format,
+                            raw = cred.credential,
+                            metadata = activeOffer?.let { offer ->
+                                CredentialUtils.buildMetadata(
+                                    offer = offer,
+                                    vctm = activeVctm,
+                                    rawCredential = cred.credential,
+                                )
+                            },
+                            notificationId = cred.notificationId,
+                            credentialIssuerIdentifier = activeOffer?.credentialIssuerIdentifier,
+                            credentialConfigurationId = activeOffer?.credentialConfigurationId,
+                            batchId = batchId,
+                            instanceId = index,
+                            // Deliberately not activeAttestedKeyIds: a BBS
+                            // credential's binding is to the key committed at
+                            // issuance, which is recorded in the holder state
+                            // and is not one of the P-256 proof keys this
+                            // field names.
+                            kid = null,
+                        )
+                        try {
+                            credentialStore.save(stored)
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            // The holder state went into the container before
+                            // the credential reached the store - it has to,
+                            // since the state is what names the credential's
+                            // id. A store that refuses the credential would
+                            // otherwise leave that entry behind: a long-lived
+                            // secret filed under an id nothing will ever look
+                            // up, and one nothing else deletes, because
+                            // §6.1.2's rule is "deleting the entity deletes
+                            // the entry" and the entity never existed.
+                            Timber.e(e, "Storing BBS credential $credentialId failed - rolling back its holder state")
+                            bbsHolderStateVault?.remove(credentialId.toString())
+                            storeFailureReason = "Credential could not be stored"
+                            return@forEachIndexed
+                        }
+                        storedCount++
+                        eventListener?.onCredentialReceived(stored)
                         cred.notificationId?.let { notificationId ->
                             credentialNotifier?.sendCredentialNotification(
                                 flowId = msg.flowId,
@@ -4470,6 +4834,17 @@ class SirosWallet private constructor(
                 } else {
                     eventListener?.onFlowComplete(msg.flowId, msg.redirectUri)
                 }
+                // The only place the preparation is consumed. It has to
+                // outlive the credential loop above, whether or not a
+                // credential was accepted: the loop enters the acceptance
+                // path at all only while this flow has a preparation, so
+                // dropping it on the first accepted credential sends every
+                // later entry in the same batch down the ordinary
+                // JWT-validation branch and stores it - the exact case
+                // acceptZkIssuedCredential's `index > 0` refusal exists to
+                // catch. Keeping it also lets a refusal say what the flow
+                // had committed to. The flow is over now, so it goes.
+                discardZkIssuancePreparation(msg.flowId)
 
                 val current = _state.value
                 val userId = (current as? WalletState.FlowActive)?.userId
@@ -4499,6 +4874,9 @@ class SirosWallet private constructor(
                 // reportSignFailure) would leave issuanceInFlight stuck,
                 // permanently blocking every future issuance attempt.
                 resetIssuanceGuards()
+                // No credential will ever arrive for this flow, so its
+                // holder-side commitment material is dead weight.
+                discardZkIssuancePreparation(msg.flowId)
 
                 val current = _state.value
                 val userId = (current as? WalletState.FlowActive)?.userId

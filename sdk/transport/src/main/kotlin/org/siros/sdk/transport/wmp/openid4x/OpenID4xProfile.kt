@@ -217,6 +217,17 @@ data class OpenID4xConfig(
 data class SignSubFlowResult(
     val proofs: List<ProofObject>? = null,
     val vpToken: String? = null,
+    /**
+     * Extra members for the OID4VCI credential request the backend is about
+     * to send on this wallet's behalf.
+     *
+     * Same field, same meaning and same reserved-name rule as the legacy
+     * protocol's `SignResponseMessage.credential_request_extras`. The two
+     * transports carry it identically on the wire so a backend can accept
+     * either without a second code path, and so a flow behaves the same
+     * whichever transport it runs over.
+     */
+    val credentialRequestExtras: JsonObject? = null,
 )
 
 @Serializable
@@ -387,6 +398,9 @@ class OpenID4xProfile(
             }
             result.vpToken?.let {
                 put("vp_token", JsonPrimitive(it))
+            }
+            result.credentialRequestExtras?.let {
+                put("credential_request_extras", it)
             }
         }
         ctx.notify(WmpMethods.FLOW_ACTION, params)

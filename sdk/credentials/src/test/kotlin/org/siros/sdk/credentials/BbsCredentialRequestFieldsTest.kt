@@ -1,0 +1,177 @@
+package org.siros.sdk.credentials
+
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import uniffi.zk_cred_bbs.BbsSuiteId
+
+/**
+ * The encoding contract at the boundary between
+ * [ZkIssuancePreparation.credentialRequestFields] and the transport.
+ *
+ * The map's values are pre-encoded JSON *strings*, deliberately: they are
+ * covered by the commitment proof, and re-encoding a value a signature
+ * covers is how the two ends stop agreeing about what was signed. The wallet
+ * therefore parses them rather than building them again — which only works if
+ * every value really is well-formed JSON, including for claim names the
+ * wallet did not choose.
+ *
+ * These construct the preparation directly rather than through `prepare()`,
+ * so they run on the JVM without the native library: the encoding under test
+ * is pure Kotlin either way.
+ */
+class BbsCredentialRequestFieldsTest {
+
+    private val json = Json
+
+    private fun preparation(
+        pointers: List<String>,
+        keybindPublicKeys: List<ByteArray> = emptyList(),
+        suiteId: BbsSuiteId = BbsSuiteId.SCHNORR,
+    ) = BbsIssuancePreparation(
+        suiteId = suiteId,
+        commitmentWithProof = ByteArray(48) { it.toByte() },
+        holderPointers = pointers,
+        committedMessages = pointers.map { it.toByteArray() },
+        secretProverBlind = ByteArray(32) { 7 },
+        keybindPublicKeys = keybindPublicKeys,
+    )
+
+    @Test
+    fun everyFieldIsWellFormedJson() {
+        val fields = preparation(listOf("/device_pin_hash", "/recovery_secret")).credentialRequestFields
+
+        assertEquals(
+            setOf(
+                BbsIssuanceParticipant.COMMITMENT_FIELD,
+                BbsIssuanceParticipant.POINTERS_FIELD,
+                BbsIssuanceParticipant.KEY_BINDING_FIELD,
+                BbsIssuanceParticipant.SUITE_FIELD,
+            ),
+            fields.keys,
+        )
+        fields.forEach { (member, encoded) ->
+            // Throws if it is not parseable, which is the assertion.
+            json.parseToJsonElement(encoded)
+            assertTrue("$member must not be empty", encoded.isNotEmpty())
+        }
+    }
+
+    @Test
+    fun theCommitmentIsBase64UrlWithoutPadding() {
+        val commitment = json
+            .parseToJsonElement(
+                preparation(listOf("/a")).credentialRequestFields
+                    .getValue(BbsIssuanceParticipant.COMMITMENT_FIELD),
+            )
+            .jsonPrimitive.content
+
+        assertTrue("must be base64url, not base64: $commitment", commitment.none { it == '+' || it == '/' })
+        assertTrue("must be unpadded: $commitment", !commitment.endsWith("="))
+    }
+
+    @Test
+    fun pointersSurviveInOrder() {
+        val pointers = listOf("/z_last", "/a_first", "/m_middle")
+        val decoded = json
+            .parseToJsonElement(
+                preparation(pointers).credentialRequestFields
+                    .getValue(BbsIssuanceParticipant.POINTERS_FIELD),
+            )
+            .jsonArray
+
+        assertEquals(pointers, decoded.map { it.jsonPrimitive.content })
+    }
+
+    /**
+     * A claim name the wallet did not choose must not be able to break the
+     * encoding.
+     *
+     * The pointers come from the holder's own claims object, which a host app
+     * may build from data it did not author. A name carrying a quote or a
+     * control character would, without escaping, produce a member the
+     * transport cannot parse — or, worse, one it parses into something other
+     * than what the commitment covers.
+     */
+    @Test
+    fun aHostileClaimNameIsEscapedRatherThanBreakingTheEncoding() {
+        val nasty = listOf("""/he said "hi"""", """/back\slash""", "/new\nline", "/tab\there")
+
+        val decoded = json
+            .parseToJsonElement(
+                preparation(nasty).credentialRequestFields
+                    .getValue(BbsIssuanceParticipant.POINTERS_FIELD),
+            )
+
+        assertTrue(decoded is JsonArray)
+        assertEquals(nasty, (decoded as JsonArray).map { it.jsonPrimitive.content })
+    }
+
+    /**
+     * The key binding flag must follow the commitment, since that is what
+     * the issuer checks it against.
+     *
+     * The issuer cannot see inside the commitment and this picks the message
+     * layout the credential is signed under. Getting it wrong does not
+     * produce a subtly different credential — it produces a failed issuance,
+     * because the signer refuses a mismatch. Which is the right outcome, and
+     * why this must not be a value the wallet guesses at.
+     */
+    @Test
+    fun theKeyBindingFlagFollowsWhetherAnyKeyWasCommitted() {
+        val unbound = preparation(listOf("/a")).credentialRequestFields
+            .getValue(BbsIssuanceParticipant.KEY_BINDING_FIELD)
+        assertEquals("false", unbound)
+
+        val bound = preparation(listOf("/a"), keybindPublicKeys = listOf(ByteArray(48)))
+            .credentialRequestFields
+            .getValue(BbsIssuanceParticipant.KEY_BINDING_FIELD)
+        assertEquals("true", bound)
+
+        // And it is a JSON boolean on the wire, not a quoted string - the
+        // issuer decodes it into a bool.
+        assertEquals(JsonPrimitive(true), json.parseToJsonElement(bound))
+    }
+
+    /**
+     * The suite has to travel, because the issuer cannot infer it.
+     *
+     * It selects the domain separation the commitment was built under, so
+     * an issuer building its side under the other one gets a commitment
+     * that verifies against nothing — reported as "does not verify", which
+     * is also what a corrupt commitment and a wrong issuer key say. Both
+     * suites are first-class; neither is a default.
+     */
+    @Test
+    fun theSuiteTravelsUnderItsWireName() {
+        for ((suite, wire) in listOf(BbsSuiteId.SCHNORR to "schnorr", BbsSuiteId.PLAIN to "plain")) {
+            val encoded = preparation(listOf("/a"), suiteId = suite)
+                .credentialRequestFields
+                .getValue(BbsIssuanceParticipant.SUITE_FIELD)
+            assertEquals(JsonPrimitive(wire), json.parseToJsonElement(encoded))
+        }
+    }
+
+    /**
+     * The suite is independent of key binding, and must not be derived
+     * from it.
+     *
+     * `schnorr` with no committed key binding keys is the ordinary unbound
+     * issuance — the case an issuer deriving the suite from key binding
+     * would get wrong for every credential this SDK issues today.
+     */
+    @Test
+    fun anUnboundIssuanceStillNamesItsSuite() {
+        val fields = preparation(listOf("/a"), keybindPublicKeys = emptyList()).credentialRequestFields
+        assertEquals("false", fields.getValue(BbsIssuanceParticipant.KEY_BINDING_FIELD))
+        assertEquals(
+            JsonPrimitive("schnorr"),
+            json.parseToJsonElement(fields.getValue(BbsIssuanceParticipant.SUITE_FIELD)),
+        )
+    }
+}
