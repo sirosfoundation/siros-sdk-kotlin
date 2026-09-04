@@ -41,6 +41,10 @@ dependencies {
     implementation(libs.androidx.credentials.registry.mdoc)
     implementation(libs.androidx.credentials.registry.openid)
     implementation(libs.androidx.credentials.registry.sdjwtvc)
+    // Registering through this directly, alongside the AndroidX registry
+    // provider above, rather than instead of it — see the doc comment on
+    // SirosCredentialRegistry.registerLegacyType for why both are needed.
+    implementation(libs.play.services.identity.credentials)
 
     api(project(":sdk:idv"))
 
