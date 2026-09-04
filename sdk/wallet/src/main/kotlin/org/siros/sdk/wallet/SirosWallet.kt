@@ -39,6 +39,7 @@ import org.siros.sdk.auth.PrfOutput
 import org.siros.sdk.auth.WebAuthnAuthClient
 import org.siros.sdk.auth.WscdAutoEnrollHint
 import org.siros.sdk.credentials.AuthException
+import org.siros.sdk.credentials.Integrity
 import org.siros.sdk.credentials.IssuerEntitlement
 import org.siros.sdk.credentials.BackendApiException
 import org.siros.sdk.credentials.KeystoreException
@@ -1317,6 +1318,76 @@ class SirosWallet private constructor(
     }
 
     /**
+     * The credential type this flow was authorised to receive, or null if the
+     * wallet never resolved one.
+     *
+     * This is the type whose metadata was fetched, whose WSCD requirement was
+     * applied, and which the issuer's registration was checked against - the
+     * same chain [resolveEffectiveKeystoreForIssuance] keys on. The credential
+     * configuration ID is deliberately NOT a fallback here: it is an
+     * OID4VCI-internal identifier, not a credential type, so comparing a `vct`
+     * against it would fail every time and refuse legitimate issuance.
+     */
+    private fun authorisedCredentialType(format: String): String? =
+        if (format == "mso_mdoc") activeMddlSchema?.doctype else activeVctm?.vct
+
+    /**
+     * Refuse a credential whose issuer pinned its type metadata to something
+     * other than what the wallet resolved.
+     *
+     * SD-JWT VC Type Metadata lets the credential carry `vct#integrity`, a
+     * digest over the type metadata document. It exists so the *issuer* decides
+     * what a credential type means. Without checking it, whoever serves the
+     * registry decides how the credential is displayed and which claims it is
+     * understood to carry - independently of the issuer who vouched for it, and
+     * even for a type the issuer is legitimately registered to issue.
+     *
+     * Only checked when the credential asks for it. A credential with no
+     * `vct#integrity` is not making a claim about its metadata, so there is
+     * nothing to disagree with.
+     */
+    private fun verifyVctIntegrity(format: String, payload: JsonObject): String? {
+        if (format == "mso_mdoc") return null
+        val expected = payload["vct#integrity"]?.jsonPrimitive?.contentOrNull ?: return null
+        val document = activeVctmDocument
+        if (document == null) {
+            // The issuer pinned metadata the wallet never resolved. Nothing was
+            // applied, so nothing was tampered with - but say so, because a
+            // credential asking to be checked and not being checked is exactly
+            // the state this method exists to make visible.
+            Timber.w("Credential pinned vct#integrity but no type metadata was resolved to check it against")
+            return null
+        }
+        if (Integrity.matches(document.raw.toByteArray(Charsets.UTF_8), expected)) return null
+        Timber.e("Type metadata for '${document.vctm.vct}' does not match the issuer's vct#integrity")
+        return "The issuer's type metadata does not match what it published"
+    }
+
+    /**
+     * Refuse a credential whose declared type is not the one this flow was
+     * authorised to receive.
+     *
+     * Every earlier decision in the issuance path - the issuer's entitlement
+     * under ARF section 6.6.2.3, which type metadata to apply, which WSCD to
+     * use - was made about the type the issuer *advertised*. None of them
+     * looked at what actually arrived. Without this, an issuer entitled to one
+     * attestation type could deliver another and have every one of those
+     * decisions stand, made about the wrong credential.
+     *
+     * Returns a failure reason, or null when the credential is acceptable.
+     * A type that could not be determined on either side is not a mismatch:
+     * as everywhere else in this path, a check that could not run must not
+     * become a refusal.
+     */
+    private fun verifyIssuedType(format: String, raw: String): String? {
+        val authorised = authorisedCredentialType(format) ?: return null
+        val declared = CredentialUtils.declaredType(format, raw) ?: return null
+        if (declared == authorised) return null
+        Timber.e("Issuer delivered type '$declared' for an offer authorised as '$authorised'")
+        return "Issuer delivered a '$declared' credential, but this offer was for '$authorised'"
+    }
+
+    /**
      * In-memory cache for this session's Wallet Instance Attestation (WIA) -
      * refetched when missing or close to expiry (see
      * [ensureWalletInstanceAttestation]). Not persisted across app restarts:
@@ -1698,14 +1769,30 @@ class SirosWallet private constructor(
             )
 
             activeOffer = offer
-            activeVctm = try {
-                vctmFetcher.fetch(
+            activeVctmDocument = try {
+                vctmFetcher.fetchDocument(
                     issuerUrl = offer.credentialIssuerIdentifier,
                     scope = offer.credentialConfigurationId,
                     registryUrl = registryUrl,
                 )
             } catch (e: Exception) {
                 Timber.w(e, "Failed to fetch VCTM for ${offer.credentialConfigurationId}")
+                null
+            }
+            activeVctm = activeVctmDocument?.vctm
+            // The mdoc half of the same lookup. Previously fetched on demand in
+            // resolveEffectiveKeystoreForIssuance and thrown away; kept now
+            // because verifyIssuedType needs the authorised doctype at
+            // flow_complete, and because the fetcher is cached this is the same
+            // request that path already makes rather than an extra one.
+            activeMddlSchema = try {
+                mddlSchemaFetcher.fetch(
+                    issuerUrl = offer.credentialIssuerIdentifier,
+                    scope = offer.credentialConfigurationId,
+                    registryUrl = registryUrl,
+                )
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to fetch MDDL schema for ${offer.credentialConfigurationId}")
                 null
             }
             val credentialOffer = kotlinx.serialization.json.buildJsonObject {
@@ -3376,6 +3463,13 @@ class SirosWallet private constructor(
     private var eventListener: WalletEventListener? = null
     private var activeOffer: CredentialOffer? = null
     private var activeVctm: Vctm? = null
+
+    /**
+     * The bytes [activeVctm] was parsed from, kept so `vct#integrity` can be
+     * checked against the document as served rather than a re-serialisation.
+     */
+    private var activeVctmDocument: org.siros.sdk.credentials.VctmDocument? = null
+    private var activeMddlSchema: org.siros.sdk.credentials.MddlSchema? = null
     /**
      * Set by [renewCredential] right before firing the renewal flow_start,
      * so the next flow_complete knows to replace this batchId's entries
@@ -3440,6 +3534,8 @@ class SirosWallet private constructor(
     private fun resetIssuanceGuards() {
         activeOffer = null
         activeVctm = null
+        activeVctmDocument = null
+        activeMddlSchema = null
         activeAttestedKeyIds = null
         issuanceInFlight = false
         pendingRenewalSourceBatchId = null
@@ -4779,6 +4875,14 @@ class SirosWallet private constructor(
                     // hold no claim values, so parseJwtPayload reads nothing
                     // from one and it would be dropped as unparseable.)
                     if (zkPreparationsByFlow.containsKey(msg.flowId)) {
+                        // Same check as the ordinary path below. The ZK
+                        // acceptance that follows proves the credential matches
+                        // what this wallet committed to, which says nothing
+                        // about whether it is the type that was offered.
+                        verifyIssuedType(cred.format, cred.credential)?.let { reason ->
+                            storeFailureReason = reason
+                            return@forEachIndexed
+                        }
                         val credentialId = acceptZkIssuedCredential(msg.flowId, cred.credential, index)
                         if (credentialId == null) {
                             storeFailureReason =
@@ -4852,6 +4956,14 @@ class SirosWallet private constructor(
                     if (exp != null && exp < now) {
                         Timber.w("Skipping expired credential (exp=$exp, now=$now)")
                         storeFailureReason = "Issued credential was already expired"
+                        return@forEachIndexed
+                    }
+                    verifyIssuedType(cred.format, cred.credential)?.let { reason ->
+                        storeFailureReason = reason
+                        return@forEachIndexed
+                    }
+                    verifyVctIntegrity(cred.format, payload)?.let { reason ->
+                        storeFailureReason = reason
                         return@forEachIndexed
                     }
                     val metadata = activeOffer?.let { offer ->

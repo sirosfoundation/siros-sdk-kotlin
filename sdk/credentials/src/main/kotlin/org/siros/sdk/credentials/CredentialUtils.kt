@@ -408,6 +408,29 @@ object CredentialUtils {
      * labels, no SVG templates: the UI's flat layout handles all of those
      * being absent.
      */
+    /**
+     * The credential type the credential itself declares: `vct` for an SD-JWT
+     * VC, `docType` for an mdoc. Null when it declares none, or cannot be read.
+     *
+     * This is what the holder actually received, as opposed to
+     * [CredentialOffer.credentialConfigurationId], which is what the issuer
+     * advertised. The two are checked against each other at issuance - see
+     * SirosWallet's issued-type verification - because everything else in the
+     * issuance path (entitlement, type metadata, WSCD selection) keys off the
+     * advertised type, so an issuer that advertises one type and issues another
+     * would have every one of those decisions made about the wrong credential.
+     */
+    fun declaredType(format: String, raw: String): String? = try {
+        if (format == "mso_mdoc") {
+            MdocCbor.parseStoredCredential(Base64.getUrlDecoder().decode(padBase64(raw)))?.docType
+        } else {
+            parseJwtPayload(raw)?.get("vct")?.jsonPrimitive?.contentOrNull
+        }
+    } catch (e: Exception) {
+        Timber.w(e, "Could not read the declared type of a $format credential")
+        null
+    }
+
     fun buildFallbackMetadata(credential: StoredCredential): CredentialMetadata {
         val configId = credential.credentialConfigurationId?.takeIf { it.isNotBlank() }
         val issuerIdent = credential.credentialIssuerIdentifier?.takeIf { it.isNotBlank() }

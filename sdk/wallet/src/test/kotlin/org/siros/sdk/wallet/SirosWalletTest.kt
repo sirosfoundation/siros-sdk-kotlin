@@ -846,7 +846,7 @@ class SirosWalletTest {
         )
 
         coVerify(exactly = 1) {
-            vctmFetcher.fetch(
+            vctmFetcher.fetchDocument(
                 issuerUrl = "https://issuer.example.com",
                 scope = "pid",
                 vct = null,
@@ -886,7 +886,7 @@ class SirosWalletTest {
         )
 
         coVerify(exactly = 1) {
-            vctmFetcher.fetch(
+            vctmFetcher.fetchDocument(
                 issuerUrl = "https://issuer.example.com",
                 scope = "pid",
                 vct = null,
