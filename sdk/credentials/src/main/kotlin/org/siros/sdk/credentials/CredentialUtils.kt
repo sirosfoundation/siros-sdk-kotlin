@@ -393,6 +393,48 @@ object CredentialUtils {
     }
 
     /**
+     * Build the minimal stand-in [CredentialMetadata] for a credential whose
+     * VCTM/MDDL document could not be obtained (see
+     * [CredentialMetadata.hydration]).
+     *
+     * Everything here is derived from what the wallet already holds - nothing
+     * is fetched. The name is the credential configuration ID (the closest
+     * thing to a type name the issuer gave us, humanised via
+     * [formatClaimKey] so `eu.europa.ec.eudi.pid_mdoc` reads as a word rather
+     * than an identifier), falling back to the format. The issuer is shown by
+     * host name, which is what a user recognises an issuer by when no display
+     * name was published. `vct`/`doctype` come from the credential itself so
+     * the DC API registry can still match it. No logo, no colours, no claim
+     * labels, no SVG templates: the UI's flat layout handles all of those
+     * being absent.
+     */
+    fun buildFallbackMetadata(credential: StoredCredential): CredentialMetadata {
+        val configId = credential.credentialConfigurationId?.takeIf { it.isNotBlank() }
+        val issuerIdent = credential.credentialIssuerIdentifier?.takeIf { it.isNotBlank() }
+        val isMdoc = credential.format == "mso_mdoc"
+        val doctype = if (isMdoc) parseMdocDocument(credential)?.docType else null
+        val vct = if (!isMdoc) parseJwtPayload(credential.raw)?.get("vct")?.jsonPrimitive?.contentOrNull else null
+        return CredentialMetadata(
+            name = configId?.let { formatClaimKey(it.substringAfterLast('.')) } ?: credential.format,
+            issuer = IssuerInfo(
+                name = issuerIdent?.let { hostOf(it) } ?: issuerIdent,
+                url = issuerIdent,
+            ),
+            vct = vct,
+            doctype = doctype,
+            hydration = CredentialMetadata.HYDRATION_FALLBACK,
+        )
+    }
+
+    /** The host of [url], or the whole string if it doesn't parse as one. */
+    private fun hostOf(url: String): String =
+        try {
+            java.net.URI(url).host ?: url
+        } catch (_: Exception) {
+            url
+        }
+
+    /**
      * Format a raw claim key like "given_name" into "Given Name".
      */
     fun formatClaimKey(key: String): String {

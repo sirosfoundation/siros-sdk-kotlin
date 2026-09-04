@@ -1,9 +1,8 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.credentials
 
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import timber.log.Timber
@@ -28,46 +27,64 @@ import java.net.URI
  * The final result of [fetch] - whichever strategy produced it - is cached
  * in-memory per instance for [cacheTtlSeconds] (default 1800s / 30 minutes,
  * matching the reference wallet-frontend implementation's IndexedDB-backed
- * HTTP cache default). Only successful (non-null) results are cached; a miss
- * across all strategies is retried fresh on every call so a transient failure
- * or a not-yet-registered doctype never gets stuck negative for the TTL
- * window. Since [MddlSchemaFetcher] is normally constructed once and held for
- * the lifetime of a wallet session, this cache meaningfully cuts down repeat
- * network calls for the same doctype.
+ * HTTP cache default). Since [MddlSchemaFetcher] is normally constructed once
+ * and held for the lifetime of a wallet session, this cache meaningfully cuts
+ * down repeat network calls for the same doctype.
+ *
+ * Optionally, a [persistentCache] adds a second layer that survives process
+ * restarts and remembers *failures* too - a doctype with no published schema
+ * is retried on [FetchBackoff]'s schedule rather than on every launch, and
+ * [fetch] returns null immediately (no network) while a retry is not yet due.
+ * See [CachedDocumentFetcher] for the exact semantics; identical to
+ * [VctmFetcher]'s on purpose. Without a persistent cache, a miss across all
+ * strategies is retried fresh on every call, as before.
  *
  * @param httpGet optional HTTP GET function for custom HTTP clients.
  *        Takes a URL string, returns the response body string or null on failure.
  *        When null, uses `java.net.HttpURLConnection`.
- * @param cacheTtlSeconds how long a successful [fetch] result stays cached, in seconds.
+ * @param cacheTtlSeconds how long a successful [fetch] result stays in the
+ *        in-memory cache, in seconds.
  * @param nowMillis time source used for cache expiry, defaulting to the wall clock.
  *        Overridable for deterministic tests.
+ * @param persistentCache optional durable cache of positive and negative
+ *        results; null (the default) keeps the in-memory-only behaviour.
+ * @param persistentFreshTtlSeconds age under which a persisted hit is served
+ *        without any refresh (default 24 h).
+ * @param persistentHardTtlSeconds age past which a persisted hit is refetched
+ *        inline rather than served (default 7 d).
+ * @param revalidateScope scope on which a stale-but-not-expired persisted hit
+ *        is refreshed in the background; null disables background refresh.
  */
 class MddlSchemaFetcher(
     private val httpGet: (suspend (String) -> String?)? = null,
     private val cacheTtlSeconds: Long = 1800,
     private val nowMillis: () -> Long = { System.currentTimeMillis() },
+    persistentCache: FetchCache? = null,
+    persistentFreshTtlSeconds: Long = 24 * 60 * 60,
+    persistentHardTtlSeconds: Long = 7 * 24 * 60 * 60,
+    revalidateScope: CoroutineScope? = null,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
-    private data class CacheKey(
-        val issuerUrl: String,
-        val scope: String,
-        val vct: String?,
-        val registryUrl: String?,
+    private val cached = CachedDocumentFetcher(
+        namespace = "mddl",
+        parse = ::parseMddlSchema,
+        memoryTtlMillis = cacheTtlSeconds * 1000,
+        persistentCache = persistentCache,
+        freshTtlMillis = persistentFreshTtlSeconds * 1000,
+        hardTtlMillis = persistentHardTtlSeconds * 1000,
+        revalidateScope = revalidateScope,
+        nowMillis = nowMillis,
     )
-
-    private data class CacheEntry(val schema: MddlSchema, val expiresAtMillis: Long)
-
-    private val cacheMutex = Mutex()
-    private val cache = mutableMapOf<CacheKey, CacheEntry>()
 
     /**
      * Fetch the MDDL schema for a credential configuration.
      *
      * Tries go-wallet-backend's registry service first (authoritative,
      * TS11-backed, cached - see [registryUrl]), then falls back to the
-     * issuer's own type-metadata endpoint. Successful results are cached
-     * in-memory for [cacheTtlSeconds]; see the class docs for details.
+     * issuer's own type-metadata endpoint. Results are cached in-memory for
+     * [cacheTtlSeconds] and, when a persistent cache was supplied, durably
+     * with negative caching; see the class docs for details.
      *
      * @param issuerUrl the credential issuer URL (e.g. "https://issuer.example.com")
      * @param scope the credential configuration ID / scope
@@ -88,29 +105,22 @@ class MddlSchemaFetcher(
         scope: String,
         vct: String? = null,
         registryUrl: String? = null,
-    ): MddlSchema? = withContext(Dispatchers.IO) {
-        val key = CacheKey(issuerUrl, scope, vct, registryUrl)
-        val now = nowMillis()
-
-        cacheMutex.withLock { cache[key] }?.let { entry ->
-            if (entry.expiresAtMillis > now) return@withContext entry.schema
-        }
-
-        val result = fetchUncached(issuerUrl, scope, vct, registryUrl)
-        if (result != null) {
-            cacheMutex.withLock {
-                cache[key] = CacheEntry(result, now + cacheTtlSeconds * 1000)
-            }
-        }
-        result
+    ): MddlSchema? = cached.fetch(listOf(issuerUrl, scope, vct, registryUrl)) {
+        // Only the network hop needs IO - see VctmFetcher.fetch for why.
+        withContext(Dispatchers.IO) { fetchUncached(issuerUrl, scope, vct, registryUrl) }
     }
 
+    /**
+     * Run the resolution strategies in order and return the raw body of the
+     * first one that yields a parseable schema - raw rather than parsed so
+     * the persistent cache can store exactly what came over the wire.
+     */
     private suspend fun fetchUncached(
         issuerUrl: String,
         scope: String,
         vct: String?,
         registryUrl: String?,
-    ): MddlSchema? {
+    ): String? {
         // Strategy 1: go-wallet-backend's credential-type registry service.
         if (registryUrl != null && vct != null) {
             val encodedVct = java.net.URLEncoder.encode(vct, "UTF-8")
@@ -136,11 +146,12 @@ class MddlSchemaFetcher(
         }
     }
 
-    private suspend fun fetchFromUrl(url: String): MddlSchema? {
+    /** GET [url] and return its body only if that body parses as an MDDL schema. */
+    private suspend fun fetchFromUrl(url: String): String? {
         return try {
             Timber.d("Fetching MDDL schema from $url")
             val body = if (httpGet != null) httpGet.invoke(url) else fetchWithUrlConnection(url)
-            if (body != null) parseMddlSchema(body) else null
+            body?.takeIf { parseMddlSchema(it) != null }
         } catch (e: Exception) {
             Timber.d(e, "MDDL schema fetch error from $url")
             null

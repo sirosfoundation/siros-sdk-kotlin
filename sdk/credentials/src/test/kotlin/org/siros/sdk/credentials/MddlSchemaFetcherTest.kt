@@ -263,4 +263,50 @@ class MddlSchemaFetcherTest {
         // Both calls retried the network - a miss is never cached.
         assertEquals(2, callCount)
     }
+
+    // ── Persistent cache ────────────────────────────────────────────
+    // The policy itself is exercised exhaustively in VctmFetcherTest; these
+    // confirm the mdoc fetcher is wired to the same layer under its own
+    // namespace.
+
+    @Test
+    fun `persistent cache suppresses a not-yet-due retry and is namespaced apart from VCTM`() = runTest {
+        var now = 0L
+        var callCount = 0
+        val cache = InMemoryFetchCache()
+        val fetcher = MddlSchemaFetcher(httpGet = { callCount++; null }, nowMillis = { now }, persistentCache = cache)
+
+        assertNull(fetcher.fetch("https://issuer.example.com", "mdl_scope"))
+        assertEquals(1, callCount)
+        val key = cache.snapshot().keys.single()
+        assertEquals(true, key.startsWith("mddl:"))
+        assertEquals(FetchCacheStatus.MISS, cache.snapshot().getValue(key).status)
+
+        now += 10 * 60 * 1000
+        assertNull(MddlSchemaFetcher(httpGet = { callCount++; null }, nowMillis = { now }, persistentCache = cache)
+            .fetch("https://issuer.example.com", "mdl_scope"))
+        assertEquals(1, callCount)
+    }
+
+    @Test
+    fun `persisted hit is served across instances without network`() = runTest {
+        var now = 0L
+        var callCount = 0
+        val cache = InMemoryFetchCache()
+        val first = MddlSchemaFetcher(
+            httpGet = { url ->
+                callCount++
+                if (url == "https://issuer.example.com/type-metadata/mdl_scope") sampleMddlSchemaJson else null
+            },
+            nowMillis = { now },
+            persistentCache = cache,
+        )
+        assertNotNull(first.fetch("https://issuer.example.com", "mdl_scope"))
+
+        now += 60 * 60 * 1000
+        val second = MddlSchemaFetcher(httpGet = { callCount++; null }, nowMillis = { now }, persistentCache = cache)
+        val schema = second.fetch("https://issuer.example.com", "mdl_scope")
+        assertEquals("org.iso.18013.5.1.mDL", schema!!.doctype)
+        assertEquals(1, callCount)
+    }
 }
