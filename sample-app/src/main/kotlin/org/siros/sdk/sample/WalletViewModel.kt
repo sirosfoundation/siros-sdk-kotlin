@@ -699,12 +699,34 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 // actual state - see WalletSessionHolder's doc comment for
                 // why the DC API Activity needs this instead of its own
                 // login flow.
+                //
+                // Keyed on whether this wallet currently *has* presentable
+                // credentials, not on whether its engine happens to be
+                // connected. Those are different questions, and answering the
+                // second was a bug: a transient WebSocket failure took the
+                // user's credentials out of the browser's credential picker,
+                // and since the engine gives up after five reconnect attempts
+                // they stayed out. Every site then reported "your info wasn't
+                // found" while the app itself still listed the credentials
+                // perfectly happily. Observed on a Pixel from one DNS blip:
+                //
+                //   Engine WebSocket failure … UnknownHostException
+                //   WebSocket reconnection exhausted (5 attempts)
+                //
+                // A presentation started from the picker does not need the
+                // engine — the matcher runs in the picker's own process and
+                // the wallet signs locally — so dropping the registration on a
+                // connectivity wobble removed a capability that still worked.
                 when (newState) {
-                    is WalletState.Ready -> {
+                    // Both carry credentials and both mean "logged in, keystore
+                    // unlocked". FlowActive used to fall into the `else` below,
+                    // which deregistered the wallet for the duration of any
+                    // issuance or presentation flow.
+                    is WalletState.Ready, is WalletState.FlowActive -> {
                         WalletSessionHolder.update(wallet)
                         SirosCredentialRegistry.refresh(
                             context = activity,
-                            credentials = newState.credentials,
+                            credentials = newState.credentialsOrEmpty(),
                             // What this wallet can actually prove. Without it a
                             // mso_mdoc_zk request matches nothing, which is the
                             // right answer for a wallet that cannot produce the
@@ -722,13 +744,38 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                         refreshWscdUserOverrides()
                         maybeOfferWscdAutoEnroll()
                     }
-                    else -> {
+                    // No usable credentials: logged out, or the keystore is
+                    // locked and nothing can be signed until PRF unlock.
+                    // Offering an entry we cannot honour walks the user through
+                    // a consent screen and then fails.
+                    is WalletState.Disconnected, is WalletState.KeystoreLocked -> {
                         WalletSessionHolder.update(null)
                         SirosCredentialRegistry.clear(activity)
                     }
+
+                    // Transient, and deliberately left alone. `Connecting` is
+                    // every reconnect; `Error` is recoverable and the app
+                    // offers a retry. Whatever was registered stays registered
+                    // and stays correct, because neither state says the
+                    // credentials went anywhere.
+                    is WalletState.Connecting, is WalletState.Error -> Unit
                 }
             }
         }
+    }
+
+    /**
+     * The credentials a state carries, for the two states that carry any.
+     *
+     * `Ready` and `FlowActive` both hold a credential list and both mean the
+     * keystore is unlocked; nothing else in [WalletState] does. Written as one
+     * function so the DC API registry is fed from a single definition of
+     * "presentable", rather than each call site deciding again.
+     */
+    private fun WalletState.credentialsOrEmpty(): List<StoredCredential> = when (this) {
+        is WalletState.Ready -> credentials
+        is WalletState.FlowActive -> credentials
+        else -> emptyList()
     }
 
     /** Pending authorization flow ID (set when browser opens, consumed on redirect). */
