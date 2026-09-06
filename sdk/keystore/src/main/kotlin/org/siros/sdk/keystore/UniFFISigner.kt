@@ -44,7 +44,7 @@ import uniffi.siros_wscd_manager.FfiWscdManager
  * (`Algorithm::as_str` in siros-wscd-manager), used as the SDK-side
  * algorithm string since JOSE has none for it.
  */
-const val BLS12381_G1_SCHNORR_NAME: String = "EcsdsaBls12381Bp1Sha256Sec1"
+internal const val BLS12381_G1_SCHNORR_NAME: String = "EcsdsaBls12381Bp1Sha256Sec1"
 
 /**
  * [UniFFISigner] wraps the Rust `siros-wscd-manager` UniFFI bindings
