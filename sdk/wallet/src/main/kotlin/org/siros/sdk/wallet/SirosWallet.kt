@@ -4562,15 +4562,20 @@ class SirosWallet private constructor(
                     // matching credential".
                     val matchResults = dcqlOutput.queryResults
                     val candidates = matchResults.flatMap { it.candidates }.distinctBy { it.id }
+                    // The query each candidate is answered under - first match
+                    // wins, the same rule the sign handler applies. Built once
+                    // and reused below (ZK flag, queryId per match) so the two
+                    // cannot drift apart. Mirrors handleDCAPIRequest.
+                    val matchResultByCredentialId = candidates.associate { c ->
+                        c.id to matchResults.firstOrNull { r -> r.candidates.any { it.id == c.id } }
+                    }
                     // Which candidates will be presented as a ZK proof rather
-                    // than disclosed - the same first-match rule the sign
-                    // handler applies, so consumption accounting
+                    // than disclosed, so consumption accounting
                     // (CONSUME_NON_ZKP) and the history flag agree with what
-                    // is actually sent. Mirrors handleDCAPIRequest.
-                    val zkRequestedIds = candidates.filter { c ->
-                        matchResults.firstOrNull { r -> r.candidates.any { it.id == c.id } }
-                            ?.format?.equals("mso_mdoc_zk", ignoreCase = true) == true
-                    }.map { it.id }.toSet()
+                    // is actually sent.
+                    val zkRequestedIds = matchResultByCredentialId
+                        .filterValues { it?.format?.equals("mso_mdoc_zk", ignoreCase = true) == true }
+                        .keys
                     val isZk: (StoredCredential) -> Boolean = { it.id in zkRequestedIds }
 
                     // Let the app filter further via user selection
@@ -4615,9 +4620,7 @@ class SirosWallet private constructor(
 
                     val matches = selectedIds.mapNotNull { id ->
                         allCreds.find { it.id == id }?.let { cred ->
-                            val queryId = matchResults.firstOrNull { r ->
-                                r.candidates.any { it.id == id }
-                            }?.queryId
+                            val queryId = matchResultByCredentialId[id]?.queryId
                             CredentialMatch(
                                 credentialQueryId = queryId,
                                 // The WMP engine's own wire protocol keeps
@@ -5745,12 +5748,15 @@ class SirosWallet private constructor(
                     ))
                 }
                 val candidates = matchResults.flatMap { it.candidates }.distinctBy { it.id }
-                // Same first-match rule as the sign handler, so consumption
-                // accounting and the history flag agree with what is sent.
-                val zkRequestedIds = candidates.filter { c ->
-                    matchResults.firstOrNull { r -> r.candidates.any { it.id == c.id } }
-                        ?.format?.equals("mso_mdoc_zk", ignoreCase = true) == true
-                }.map { it.id }.toSet()
+                // First match wins, as in the sign handler; built once so the
+                // ZK flag below and the handler agree on which query answers
+                // which credential. Mirrors handleDCAPIRequest.
+                val matchResultByCredentialId = candidates.associate { c ->
+                    c.id to matchResults.firstOrNull { r -> r.candidates.any { it.id == c.id } }
+                }
+                val zkRequestedIds = matchResultByCredentialId
+                    .filterValues { it?.format?.equals("mso_mdoc_zk", ignoreCase = true) == true }
+                    .keys
                 val isZk: (StoredCredential) -> Boolean = { it.id in zkRequestedIds }
                 // This (not the matchRequests() collector) is the code path
                 // actually exercised by the redirect-flow/haip-vp:// protocol
