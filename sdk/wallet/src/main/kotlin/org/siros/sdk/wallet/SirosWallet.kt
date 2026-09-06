@@ -4551,18 +4551,27 @@ class SirosWallet private constructor(
                         )
                     }
 
-                    // This engine-relayed flow has no ZK proof generation
-                    // (unlike SirosWallet.handleDCAPIRequest) - drop
-                    // "mso_mdoc_zk" queries' candidates rather than let them
-                    // falsely match here and later silently fall through to a
-                    // full raw disclosure at sign time (see
-                    // CredentialMatcher.dropUnsupportedZkQueries's own doc
-                    // comment). Filters the WHOLE output, not just
-                    // queryResults, so satisfiableOptions stays consistent
-                    // with the now-emptied zk query candidates.
-                    val filteredOutput = CredentialMatcher.dropUnsupportedZkQueries(dcqlOutput)
-                    val matchResults = filteredOutput.queryResults
+                    // "mso_mdoc_zk" queries match here on purpose: the
+                    // sign_presentation handler above has a full ZK branch
+                    // for this transport, keyed off the originating query's
+                    // format and zkSystemTypes, which is why the results are
+                    // cached in pendingMatchResultsByFlow below. Dropping
+                    // those candidates at match time - as an earlier version
+                    // did, when this transport could not prove - would
+                    // silently turn every engine-relayed ZK request into "no
+                    // matching credential".
+                    val matchResults = dcqlOutput.queryResults
                     val candidates = matchResults.flatMap { it.candidates }.distinctBy { it.id }
+                    // Which candidates will be presented as a ZK proof rather
+                    // than disclosed - the same first-match rule the sign
+                    // handler applies, so consumption accounting
+                    // (CONSUME_NON_ZKP) and the history flag agree with what
+                    // is actually sent. Mirrors handleDCAPIRequest.
+                    val zkRequestedIds = candidates.filter { c ->
+                        matchResults.firstOrNull { r -> r.candidates.any { it.id == c.id } }
+                            ?.format?.equals("mso_mdoc_zk", ignoreCase = true) == true
+                    }.map { it.id }.toSet()
+                    val isZk: (StoredCredential) -> Boolean = { it.id in zkRequestedIds }
 
                     // Let the app filter further via user selection
                     val selectedIds = if (listener != null && candidates.isNotEmpty()) {
@@ -4571,18 +4580,18 @@ class SirosWallet private constructor(
                                 verifierName = null,
                                 matchResults = matchResults,
                                 candidates = candidates,
-                                credentialSets = filteredOutput.credentialSets,
-                                satisfiableOptions = filteredOutput.satisfiableOptions,
+                                credentialSets = dcqlOutput.credentialSets,
+                                satisfiableOptions = dcqlOutput.satisfiableOptions,
                             )
                         )
                     } else {
-                        eligibleInstances(candidates).map { it.id }
+                        eligibleInstances(candidates, isZk).map { it.id }
                     }
 
                     // The app is trusted to only return IDs it was offered,
                     // but shouldn't be the only thing enforcing consumption -
                     // re-validate here too (defense in depth).
-                    val eligibleIds = eligibleInstances(candidates).map { it.id }.toSet()
+                    val eligibleIds = eligibleInstances(candidates, isZk).map { it.id }.toSet()
                     if (selectedIds.any { it !in eligibleIds }) {
                         throw WalletException("Selected credential has no eligible copies remaining - renew it to get more")
                     }
@@ -4598,6 +4607,7 @@ class SirosWallet private constructor(
                         requestedClaims = matchResults.flatMap { result ->
                             result.requestedClaims.mapNotNull { path -> path.lastOrNull() }
                         }.distinct(),
+                        zkProof = selectedIds.any { it in zkRequestedIds },
                         timestamp = System.currentTimeMillis(),
                     ))
 
@@ -5703,7 +5713,10 @@ class SirosWallet private constructor(
                 // any non-object value (absent, null, or otherwise) the same
                 // way the `dcqlQuery != null` fallback below already expects.
                 val dcqlQuery = payload?.get("dcql_query") as? JsonObject
-                val verifierInfo = payload?.get("verifier")?.jsonObject
+                // Same `as?` as the line above, for the same reason: a JSON
+                // null here would throw from `.jsonObject` just as dcql_query
+                // did before #150.
+                val verifierInfo = payload?.get("verifier") as? JsonObject
                 // The backend defaults verifier.name to the raw client_id
                 // (e.g. "x509_san_dns:verifier.multipaz.org") whenever the
                 // verifier hasn't declared a real client_metadata.client_name -
@@ -5717,14 +5730,11 @@ class SirosWallet private constructor(
                 val verifierName = rawVerifierName?.let { ClientIdScheme.parse(it).displayName }
 
                 val allCreds = credentialStore.getAll()
-                // Same reasoning as the WS "match request" handler above:
-                // this engine-relayed flow has no ZK proof generation, so
-                // drop "mso_mdoc_zk" queries' candidates rather than falsely
-                // match here (see CredentialMatcher.dropUnsupportedZkQueries).
-                // This call site never surfaces credentialSets/
-                // satisfiableOptions downstream (see PresentationRequest
-                // below), so a bare-queryResults wrapper is enough.
-                val rawResults = if (dcqlQuery != null) {
+                // "mso_mdoc_zk" queries match here on purpose - see the same
+                // note in the matchRequests() collector: sign_presentation's
+                // ZK branch serves this transport, and reads these results
+                // back from pendingMatchResultsByFlow below.
+                val matchResults = if (dcqlQuery != null) {
                     CredentialMatcher.match(dcqlQuery, allCreds)
                 } else {
                     listOf(CredentialMatcher.MatchResult(
@@ -5734,14 +5744,14 @@ class SirosWallet private constructor(
                         requestedClaims = emptyList(),
                     ))
                 }
-                val matchResults = CredentialMatcher.dropUnsupportedZkQueries(
-                    CredentialMatcher.DcqlMatchOutput(
-                        queryResults = rawResults,
-                        credentialSets = null,
-                        satisfiableOptions = emptyList(),
-                    )
-                ).queryResults
                 val candidates = matchResults.flatMap { it.candidates }.distinctBy { it.id }
+                // Same first-match rule as the sign handler, so consumption
+                // accounting and the history flag agree with what is sent.
+                val zkRequestedIds = candidates.filter { c ->
+                    matchResults.firstOrNull { r -> r.candidates.any { it.id == c.id } }
+                        ?.format?.equals("mso_mdoc_zk", ignoreCase = true) == true
+                }.map { it.id }.toSet()
+                val isZk: (StoredCredential) -> Boolean = { it.id in zkRequestedIds }
                 // This (not the matchRequests() collector) is the code path
                 // actually exercised by the redirect-flow/haip-vp:// protocol
                 // this backend uses for the "credential_selection" progress
@@ -5770,7 +5780,7 @@ class SirosWallet private constructor(
                         )
                     )
                 } else {
-                    eligibleInstances(candidates).map { it.id }
+                    eligibleInstances(candidates, isZk).map { it.id }
                 }
 
                 if (selectedIds.isEmpty()) {
@@ -5785,7 +5795,7 @@ class SirosWallet private constructor(
                 // The app is trusted to only return IDs it was offered, but
                 // shouldn't be the only thing enforcing consumption -
                 // re-validate here too (defense in depth).
-                val eligibleIds = eligibleInstances(candidates).map { it.id }.toSet()
+                val eligibleIds = eligibleInstances(candidates, isZk).map { it.id }.toSet()
                 if (selectedIds.any { it !in eligibleIds }) {
                     throw WalletException("Selected credential has no eligible copies remaining - renew it to get more")
                 }
@@ -5802,6 +5812,7 @@ class SirosWallet private constructor(
                     requestedClaims = matchResults.flatMap { result ->
                         result.requestedClaims.mapNotNull { path -> path.lastOrNull() }
                     }.distinct(),
+                    zkProof = selectedIds.any { it in zkRequestedIds },
                     timestamp = System.currentTimeMillis(),
                 ))
 

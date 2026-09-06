@@ -599,68 +599,6 @@ class CredentialMatcherTest {
     }
 
     @Test
-    fun dropUnsupportedZkQueries_recomputes_satisfiableOptions_consistently() {
-        val credentials = listOf(
-            StoredCredential(
-                id = 1L,
-                format = "dc+sd-jwt",
-                raw = "raw-1",
-                metadata = CredentialMetadata(vct = "urn:eu:pid:1"),
-                batchId = 1L,
-                instanceId = 0,
-            ),
-            StoredCredential(
-                id = 2L,
-                format = "mso_mdoc",
-                raw = mdocRaw("org.iso.18013.5.1.mDL"),
-                batchId = 2L,
-                instanceId = 0,
-            ),
-        )
-
-        // "mdl_zk" requests mso_mdoc_zk, which DOES match the stored plain
-        // mso_mdoc credential (matchesFormat's own rule) - but a transport
-        // that can't generate ZK proofs must not report this as a real,
-        // consentable option.
-        val query = json.parseToJsonElement(
-            """
-            {
-              "credentials": [
-                {
-                  "id": "pid",
-                  "format": "dc+sd-jwt",
-                  "meta": { "vct_values": ["urn:eu:pid:1"] }
-                },
-                {
-                  "id": "mdl_zk",
-                  "format": "mso_mdoc_zk",
-                  "meta": { "doctype_value": "org.iso.18013.5.1.mDL" }
-                }
-              ],
-              "credential_sets": [
-                { "options": [["pid"], ["mdl_zk"]] }
-              ]
-            }
-            """.trimIndent()
-        ).jsonObject
-
-        val output = CredentialMatcher.matchDcql(query, credentials)
-        // Before filtering: both options satisfiable (zk query matched).
-        assertEquals(2, output.satisfiableOptions.size)
-
-        val filtered = CredentialMatcher.dropUnsupportedZkQueries(output)
-
-        val mdlZkResult = filtered.queryResults.first { it.queryId == "mdl_zk" }
-        assertTrue(mdlZkResult.candidates.isEmpty())
-
-        // Only the "pid" option remains satisfiable - the "mdl_zk"-only
-        // option must NOT still be reported as satisfiable now that its
-        // query's candidates were dropped.
-        assertEquals(1, filtered.satisfiableOptions.size)
-        assertEquals(listOf("pid"), filtered.satisfiableOptions.first().queryIds)
-    }
-
-    @Test
     fun matchDcql_without_credential_sets_returns_null_sets() {
         val credentials = listOf(
             StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "r",

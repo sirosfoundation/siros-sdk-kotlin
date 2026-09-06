@@ -726,7 +726,12 @@ enum class CredentialConsumptionPolicy {
     /** Every successful presentation exhausts the instance it used, regardless of format. */
     CONSUME_ALL,
 
-    /** Same as [CONSUME_ALL] until a real ZKP presentation format exists (see [CredentialUtils.isZkpFormat]). */
+    /**
+     * A raw disclosure exhausts the instance; a ZK proof of it does not, since
+     * the verifier learns nothing that links two proofs. Which of the two a
+     * presentation is comes from the matched query's format - see the
+     * `isZkPresentation` parameter of [CredentialUtils.eligibleInstances].
+     */
     CONSUME_NON_ZKP,
 
     /** Instances are never exhausted - a presentation may reuse any matching instance. */
