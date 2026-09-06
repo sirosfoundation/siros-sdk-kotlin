@@ -3334,6 +3334,77 @@ class SirosWalletTest {
         assertEquals(listOf("Credential Two"), wallet.presentationHistory.single().credentialNames)
     }
 
+    /**
+     * Regression: an engine-relayed `mso_mdoc_zk` query must offer the plain
+     * mdoc it can be proven from. An earlier version dropped ZK queries'
+     * candidates at match time, from before this transport's
+     * sign_presentation handler could produce a ZK proof - which, once it
+     * could, turned every such request into "no matching credential".
+     */
+    @Test
+    fun connectEngine_matchRequest_offers_mdoc_for_zk_query_and_flags_history() = runTest(dispatcher) {
+        val matchFlow = MutableSharedFlow<MatchRequestMessage>()
+        val listener = mockk<WalletEventListener>()
+        val store = FakeCredentialStore(
+            mutableListOf(
+                StoredCredential(
+                    id = 1L,
+                    format = "mso_mdoc",
+                    raw = "raw-mdl",
+                    metadata = CredentialMetadata(name = "Driving Licence", doctype = "org.iso.18013.5.1.mDL"),
+                    batchId = 1L,
+                    instanceId = 0,
+                ),
+            )
+        )
+        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf(1L)
+        val engine = mockEngineConstructor(matchRequests = matchFlow)
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.Ready(userId = "user-1", displayName = "Alice", credentials = store.getAll())
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+        val zkQuery = buildJsonObject {
+            put("credentials", JsonArray(listOf(buildJsonObject {
+                put("id", "q-zk")
+                put("format", "mso_mdoc_zk")
+                put("meta", buildJsonObject { put("doctype_value", "org.iso.18013.5.1.mDL") })
+            })))
+        }
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        matchFlow.emit(MatchRequestMessage(flowId = "flow-zk", dcqlQuery = zkQuery))
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) {
+            listener.onCredentialSelectionRequired(
+                match<PresentationRequest> { request ->
+                    request.candidates.map { it.id } == listOf(1L) &&
+                        request.matchResults.single().format == "mso_mdoc_zk"
+                },
+            )
+        }
+        verify(exactly = 1) {
+            engine.sendMatchResponse(
+                "flow-zk",
+                match<List<CredentialMatch>> { matches ->
+                    matches.size == 1 && matches.single().credentialQueryId == "q-zk"
+                },
+            )
+        }
+        assertTrue(wallet.presentationHistory.single().zkProof)
+    }
+
     // ── DC API (Digital Credentials API) ─────────────────────────────
 
     @Test
