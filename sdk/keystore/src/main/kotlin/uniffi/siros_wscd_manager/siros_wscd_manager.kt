@@ -2824,7 +2824,13 @@ public object FfiConverterTypeFfiWscdConfig: FfiConverterRustBuffer<FfiWscdConfi
 enum class FfiAlgorithm {
     
     ES256,
-    ED_DSA;
+    ED_DSA,
+    /**
+     * See [`InternalAlgorithm::Bls12381G1Schnorr`] — BBS key binding,
+     * COSE -65609. Only the `fido2` plugin can serve this, and only on
+     * YubiKey 5.8 alpha firmware.
+     */
+    BLS12381_G1_SCHNORR;
     companion object
 }
 
