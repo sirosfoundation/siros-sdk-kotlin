@@ -4566,15 +4566,15 @@ class SirosWallet private constructor(
                     // wins, the same rule the sign handler applies. Built once
                     // and reused below (ZK flag, queryId per match) so the two
                     // cannot drift apart. Mirrors handleDCAPIRequest.
-                    val matchResultByCredentialId = candidates.associate { c ->
-                        c.id to matchResults.firstOrNull { r -> r.candidates.any { it.id == c.id } }
+                    val matchResultByCredentialId = buildMap {
+                        for (r in matchResults) for (c in r.candidates) putIfAbsent(c.id, r)
                     }
                     // Which candidates will be presented as a ZK proof rather
                     // than disclosed, so consumption accounting
                     // (CONSUME_NON_ZKP) and the history flag agree with what
                     // is actually sent.
                     val zkRequestedIds = matchResultByCredentialId
-                        .filterValues { it?.format?.equals("mso_mdoc_zk", ignoreCase = true) == true }
+                        .filterValues { it.format?.equals("mso_mdoc_zk", ignoreCase = true) == true }
                         .keys
                     val isZk: (StoredCredential) -> Boolean = { it.id in zkRequestedIds }
 
@@ -5751,11 +5751,11 @@ class SirosWallet private constructor(
                 // First match wins, as in the sign handler; built once so the
                 // ZK flag below and the handler agree on which query answers
                 // which credential. Mirrors handleDCAPIRequest.
-                val matchResultByCredentialId = candidates.associate { c ->
-                    c.id to matchResults.firstOrNull { r -> r.candidates.any { it.id == c.id } }
+                val matchResultByCredentialId = buildMap {
+                    for (r in matchResults) for (c in r.candidates) putIfAbsent(c.id, r)
                 }
                 val zkRequestedIds = matchResultByCredentialId
-                    .filterValues { it?.format?.equals("mso_mdoc_zk", ignoreCase = true) == true }
+                    .filterValues { it.format?.equals("mso_mdoc_zk", ignoreCase = true) == true }
                     .keys
                 val isZk: (StoredCredential) -> Boolean = { it.id in zkRequestedIds }
                 // This (not the matchRequests() collector) is the code path
