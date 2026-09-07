@@ -1628,6 +1628,22 @@ class SirosWallet private constructor(
     )
 
     /**
+     * What the engine asked for in one `sign_client_auth` (or legacy
+     * `request_attestation`) sign request, transport-agnostic - the legacy
+     * `SignRequestParams` and the WMP `SignSubFlowParams` both map onto it.
+     * Null/blank members mean "not asked for".
+     */
+    private data class ClientAuthRequest(
+        val keyIdHint: String? = null,
+        val audience: String? = null,
+        val issuer: String? = null,
+        val htm: String? = null,
+        val htu: String? = null,
+        val dpopNonce: String? = null,
+        val ath: String? = null,
+    )
+
+    /**
      * Produce the client authentication material the engine asked for in one
      * `sign_client_auth` sign request (go-wallet-backend#317), transport-
      * agnostic: [handleSignClientAuth] (legacy engine transport) and
@@ -1645,16 +1661,8 @@ class SirosWallet private constructor(
      * it was building (a missing DPoP proof fails it; missing attestation
      * proceeds unattested).
      */
-    private suspend fun buildClientAuth(
-        flowId: String,
-        keyIdHint: String?,
-        audience: String?,
-        issuer: String?,
-        htm: String?,
-        htu: String?,
-        dpopNonce: String?,
-        ath: String?,
-    ): ClientAuthMaterial {
+    private suspend fun buildClientAuth(flowId: String, req: ClientAuthRequest): ClientAuthMaterial {
+        val (keyIdHint, audience, issuer, htm, htu, dpopNonce, ath) = req
         val clientId = issuer?.takeIf { it.isNotBlank() } ?: clientAttestationClientId()
         var keyId: String? = null
         var dpopProof: String? = null
@@ -1704,14 +1712,16 @@ class SirosWallet private constructor(
     private suspend fun handleSignClientAuth(engine: WalletEngineSession, msg: SignRequestMessage) {
         val p = msg.params
         val m = buildClientAuth(
-            flowId = msg.flowId,
-            keyIdHint = p.keyId,
-            audience = p.audience,
-            issuer = p.issuer,
-            htm = p.htm,
-            htu = p.htu,
-            dpopNonce = p.dpopNonce,
-            ath = p.ath,
+            msg.flowId,
+            ClientAuthRequest(
+                keyIdHint = p.keyId,
+                audience = p.audience,
+                issuer = p.issuer,
+                htm = p.htm,
+                htu = p.htu,
+                dpopNonce = p.dpopNonce,
+                ath = p.ath,
+            ),
         )
         engine.sendSignResponse(
             flowId = msg.flowId,
@@ -4283,16 +4293,7 @@ class SirosWallet private constructor(
             // sub-flow carries the same params and the result goes back under
             // the same member names.
             "request_attestation" -> {
-                val m = buildClientAuth(
-                    flowId = flowId,
-                    keyIdHint = null,
-                    audience = params.audience,
-                    issuer = params.issuer,
-                    htm = null,
-                    htu = null,
-                    dpopNonce = null,
-                    ath = null,
-                )
+                val m = buildClientAuth(flowId, ClientAuthRequest(audience = params.audience, issuer = params.issuer))
                 org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult(
                     clientAttestation = m.wia,
                     clientAttestationPoP = m.pop,
@@ -4300,14 +4301,16 @@ class SirosWallet private constructor(
             }
             "sign_client_auth" -> {
                 val m = buildClientAuth(
-                    flowId = flowId,
-                    keyIdHint = params.keyId,
-                    audience = params.audience,
-                    issuer = params.issuer,
-                    htm = params.htm,
-                    htu = params.htu,
-                    dpopNonce = params.dpopNonce,
-                    ath = params.ath,
+                    flowId,
+                    ClientAuthRequest(
+                        keyIdHint = params.keyId,
+                        audience = params.audience,
+                        issuer = params.issuer,
+                        htm = params.htm,
+                        htu = params.htu,
+                        dpopNonce = params.dpopNonce,
+                        ath = params.ath,
+                    ),
                 )
                 org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult(
                     clientAttestation = m.wia,
