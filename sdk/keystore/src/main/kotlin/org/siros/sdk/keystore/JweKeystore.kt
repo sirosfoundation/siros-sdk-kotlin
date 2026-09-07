@@ -46,6 +46,14 @@ data class CredentialRefreshTokenEntry(
     val dpopJwk: String? = null,
     val credentialIssuerIdentifier: String,
     val credentialConfigurationId: String,
+    /**
+     * Identifier of the client-held DPoP key the token is bound to when this
+     * wallet signed the DPoP proofs itself (`sign_client_auth`,
+     * go-wallet-backend#317) - [dpopJwk] is null in that case. Presented back
+     * as `dpop_key_id` on renewal so the engine asks this wallet to sign with
+     * the same key.
+     */
+    val dpopKeyId: String? = null,
 )
 
 /**
@@ -609,6 +617,25 @@ class JweKeystore(
         jwt.serialize()
     }
 
+    override suspend fun generateDPoPProof(
+        keyId: String,
+        htm: String,
+        htu: String,
+        nonce: String?,
+        accessTokenHash: String?,
+    ): String = mutex.withLock {
+        requireUnlocked()
+        val key = keys[keyId] ?: throw KeystoreException("Key not found: $keyId")
+
+        val header = JWSHeader.Builder(JWSAlgorithm.ES256)
+            .type(com.nimbusds.jose.JOSEObjectType("dpop+jwt"))
+            .jwk(key.toPublicJWK())
+            .build()
+        val jwt = SignedJWT(header, dpopClaims(htm, htu, nonce, accessTokenHash))
+        jwt.sign(ECDSASigner(key))
+        jwt.serialize()
+    }
+
     override suspend fun signPresentation(nonce: String, audience: String, credentialIds: List<Long>, kid: String?): String = mutex.withLock {
         requireUnlocked()
         val key = selectSigningKey(kid)
@@ -1123,4 +1150,21 @@ class JweKeystore(
         val algorithm: String,
         val createdAt: Long,
     )
+}
+
+/**
+ * The claims of an RFC 9449 §4.2 DPoP proof: `jti`, `htm`, `htu`, `iat`, plus
+ * `nonce` (§8) and `ath` (§4.2, resource requests) when given. Deliberately
+ * no `iss`/`aud`/`exp` - those are PoP claims, not DPoP ones. Shared by every
+ * [KeystoreManager] implementation in this module.
+ */
+internal fun dpopClaims(htm: String, htu: String, nonce: String?, accessTokenHash: String?): JWTClaimsSet {
+    val b = JWTClaimsSet.Builder()
+        .jwtID(UUID.randomUUID().toString())
+        .claim("htm", htm)
+        .claim("htu", htu)
+        .issueTime(Date())
+    nonce?.takeIf { it.isNotEmpty() }?.let { b.claim("nonce", it) }
+    accessTokenHash?.takeIf { it.isNotEmpty() }?.let { b.claim("ath", it) }
+    return b.build()
 }

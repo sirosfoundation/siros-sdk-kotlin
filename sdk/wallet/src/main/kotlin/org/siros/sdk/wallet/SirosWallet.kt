@@ -1616,6 +1616,124 @@ class SirosWallet private constructor(
     }
 
     /**
+     * What one `sign_client_auth` request produced - see [buildClientAuth].
+     * [keyId] is null only when even naming the key failed, which the engine
+     * reads as "action unsupported" and falls back to its own DPoP key.
+     */
+    private data class ClientAuthMaterial(
+        val keyId: String?,
+        val dpopProof: String?,
+        val wia: String?,
+        val pop: String?,
+    )
+
+    /**
+     * What the engine asked for in one `sign_client_auth` (or legacy
+     * `request_attestation`) sign request, transport-agnostic - the legacy
+     * `SignRequestParams` and the WMP `SignSubFlowParams` both map onto it.
+     * Null/blank members mean "not asked for".
+     */
+    private data class ClientAuthRequest(
+        val keyIdHint: String? = null,
+        val audience: String? = null,
+        val issuer: String? = null,
+        val htm: String? = null,
+        val htu: String? = null,
+        val dpopNonce: String? = null,
+        val ath: String? = null,
+    )
+
+    /**
+     * Produce the client authentication material the engine asked for in one
+     * `sign_client_auth` sign request (go-wallet-backend#317), transport-
+     * agnostic: [handleSignClientAuth] (legacy engine transport) and
+     * [handleWmpSignRequest] (WMP) both call this.
+     *
+     * The key is this wallet's instance key ([ensureInstanceKeyId]) - the
+     * same key [ensureWalletInstanceAttestation] binds as the WIA `cnf`, so
+     * the DPoP-bound token and the attestation are bound to one key (EC TS03
+     * §2.2.1.1). On a renewal the engine names the key it must be
+     * ([keyIdHint], the `dpop_key_id` this wallet returned at issuance) and
+     * that is used instead. A DPoP proof is produced when [htm]/[htu] are
+     * given; a WIA and a **fresh** PoP (new `jti`, `aud` = [audience]) when
+     * [audience] is given. Never throws: whatever could not be produced is
+     * simply absent, and the engine decides what that means for the request
+     * it was building (a missing DPoP proof fails it; missing attestation
+     * proceeds unattested).
+     */
+    private suspend fun buildClientAuth(flowId: String, req: ClientAuthRequest): ClientAuthMaterial {
+        val (keyIdHint, audience, issuer, htm, htu, dpopNonce, ath) = req
+        val clientId = issuer?.takeIf { it.isNotBlank() } ?: clientAttestationClientId()
+        var keyId: String? = null
+        var dpopProof: String? = null
+        var wia: String? = null
+        var pop: String? = null
+        try {
+            keyId = keyIdHint?.takeIf { it.isNotBlank() } ?: ensureInstanceKeyId()
+            if (!htm.isNullOrBlank() && !htu.isNullOrBlank()) {
+                dpopProof = keystore.generateDPoPProof(
+                    keyId = keyId,
+                    htm = htm,
+                    htu = htu,
+                    nonce = dpopNonce?.takeIf { it.isNotBlank() },
+                    accessTokenHash = ath?.takeIf { it.isNotBlank() },
+                )
+            }
+            if (!audience.isNullOrBlank()) {
+                wia = ensureWalletInstanceAttestation()
+                if (wia == null) {
+                    Timber.d("No Wallet Instance Attestation available for flow $flowId; answering sign_client_auth unattested")
+                } else {
+                    pop = buildClientAttestationPoP(audience, clientId)
+                }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.w(e, "sign_client_auth for flow $flowId failed part-way; answering with what was produced")
+        }
+        val attested = wia != null && pop != null
+        Timber.d(
+            "sign_client_auth for flow $flowId: key=$keyId dpop=${dpopProof != null} attested=$attested aud=$audience htm=$htm"
+        )
+        return ClientAuthMaterial(
+            keyId = keyId,
+            dpopProof = dpopProof,
+            wia = if (attested) wia else null,
+            pop = if (attested) pop else null,
+        )
+    }
+
+    /**
+     * Answer the engine's `sign_client_auth` sign request on the legacy engine
+     * transport - see [buildClientAuth]. ALWAYS sends exactly one
+     * sign_response, like [handleRequestAttestation].
+     */
+    private suspend fun handleSignClientAuth(engine: WalletEngineSession, msg: SignRequestMessage) {
+        val p = msg.params
+        val m = buildClientAuth(
+            msg.flowId,
+            ClientAuthRequest(
+                keyIdHint = p.keyId,
+                audience = p.audience,
+                issuer = p.issuer,
+                htm = p.htm,
+                htu = p.htu,
+                dpopNonce = p.dpopNonce,
+                ath = p.ath,
+            ),
+        )
+        engine.sendSignResponse(
+            flowId = msg.flowId,
+            messageId = msg.messageId,
+            clientAttestation = m.wia,
+            clientAttestationPoP = m.pop,
+            dpopKeyId = m.keyId,
+            dpopProof = m.dpopProof,
+        )
+    }
+
+    /**
      * Fetch a fresh attestation challenge from [asUrl]'s own metadata-published
      * `challenge_endpoint` (draft-ietf-oauth-attestation-based-client-auth-10
      * §"Challenge Endpoint"), if it publishes one. Tries the OAuth 2.0
@@ -1896,6 +2014,7 @@ class SirosWallet private constructor(
             credentialIssuer = candidate.credentialIssuerIdentifier,
             selectedCredentialConfigurationId = candidate.credentialConfigurationId,
             dpopJwk = candidate.dpopJwk,
+            dpopKeyId = candidate.dpopKeyId,
         )
     }
 
@@ -4169,6 +4288,37 @@ class SirosWallet private constructor(
                 )
                 org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult(vpToken = vpToken)
             }
+            // Client authentication, same semantics as the legacy transport's
+            // handleRequestAttestation / handleSignClientAuth: the WMP sign
+            // sub-flow carries the same params and the result goes back under
+            // the same member names.
+            "request_attestation" -> {
+                val m = buildClientAuth(flowId, ClientAuthRequest(audience = params.audience, issuer = params.issuer))
+                org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult(
+                    clientAttestation = m.wia,
+                    clientAttestationPoP = m.pop,
+                )
+            }
+            "sign_client_auth" -> {
+                val m = buildClientAuth(
+                    flowId,
+                    ClientAuthRequest(
+                        keyIdHint = params.keyId,
+                        audience = params.audience,
+                        issuer = params.issuer,
+                        htm = params.htm,
+                        htu = params.htu,
+                        dpopNonce = params.dpopNonce,
+                        ath = params.ath,
+                    ),
+                )
+                org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult(
+                    clientAttestation = m.wia,
+                    clientAttestationPoP = m.pop,
+                    dpopKeyId = m.keyId,
+                    dpopProof = m.dpopProof,
+                )
+            }
             else -> throw IllegalArgumentException("Unknown sign action: ${params.action}")
         }
     }
@@ -4504,6 +4654,7 @@ class SirosWallet private constructor(
                             Timber.d("VP sign response sent successfully for flow ${msg.flowId}")
                         }
                         "request_attestation" -> handleRequestAttestation(engine, msg)
+                        "sign_client_auth" -> handleSignClientAuth(engine, msg)
                         else -> {
                             // go-wallet-backend's RequestSign only unblocks on a
                             // sign_response carrying this message_id (there is no
@@ -5039,6 +5190,7 @@ class SirosWallet private constructor(
                             CredentialRefreshTokenEntry(
                                 refreshToken = token,
                                 dpopJwk = msg.dpopJwk,
+                                dpopKeyId = msg.dpopKeyId,
                                 credentialIssuerIdentifier = offer.credentialIssuerIdentifier,
                                 credentialConfigurationId = offer.credentialConfigurationId,
                             ),

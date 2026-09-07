@@ -154,13 +154,32 @@ data class TransactionData(
 @Serializable
 data class SignSubFlowParams(
     val action: String,
-    val nonce: String,
-    val audience: String,
+    // Non-null for the generate_proof / sign_presentation callers that always
+    // have them, but a DPoP-only `sign_client_auth` (credential, deferred,
+    // notification request) carries no audience and no c_nonce, and a peer
+    // may omit the members rather than send "". Default to empty so decoding
+    // does not fail the whole sub-flow with INVALID_PARAMS.
+    val nonce: String = "",
+    val audience: String = "",
     @SerialName("proof_type") val proofType: String? = null,
     @SerialName("proof_types_supported") val proofTypesSupported: JsonObject? = null,
     @SerialName("parent_flow_id") val parentFlowId: String? = null,
     val count: Int? = null,
     @SerialName("transaction_data") val transactionData: List<TransactionData>? = null,
+    /** PoP/proof `iss` (the flow's OAuth client_id) for `request_attestation` and `sign_client_auth`. */
+    val issuer: String? = null,
+    /**
+     * `sign_client_auth` parameters (go-wallet-backend#317), same names and
+     * meaning as the legacy transport's `SignRequestParams`: [htm]/[htu] ask
+     * for a DPoP proof (with [dpopNonce] and [ath] claims), [keyId] names the
+     * key to sign with on a renewal. `audience` doubles as the attestation
+     * PoP aud when the request also needs client attestation.
+     */
+    val htm: String? = null,
+    val htu: String? = null,
+    @SerialName("dpop_nonce") val dpopNonce: String? = null,
+    val ath: String? = null,
+    @SerialName("key_id") val keyId: String? = null,
 )
 
 // ---------------------------------------------------------------------------
@@ -228,6 +247,17 @@ data class SignSubFlowResult(
      * whichever transport it runs over.
      */
     val credentialRequestExtras: JsonObject? = null,
+    /**
+     * `request_attestation` / `sign_client_auth` results, carried on the
+     * wire under the same names as the legacy transport's
+     * `SignResponseMessage` (`client_attestation`, `client_attestation_pop`,
+     * `dpop_key_id`, `dpop_proof`) so a backend accepts either transport
+     * without a second code path.
+     */
+    val clientAttestation: String? = null,
+    val clientAttestationPoP: String? = null,
+    val dpopKeyId: String? = null,
+    val dpopProof: String? = null,
 )
 
 @Serializable
@@ -402,6 +432,10 @@ class OpenID4xProfile(
             result.credentialRequestExtras?.let {
                 put("credential_request_extras", it)
             }
+            result.clientAttestation?.let { put("client_attestation", JsonPrimitive(it)) }
+            result.clientAttestationPoP?.let { put("client_attestation_pop", JsonPrimitive(it)) }
+            result.dpopKeyId?.let { put("dpop_key_id", JsonPrimitive(it)) }
+            result.dpopProof?.let { put("dpop_proof", JsonPrimitive(it)) }
         }
         ctx.notify(WmpMethods.FLOW_ACTION, params)
     }

@@ -494,6 +494,88 @@ class WalletEngineSessionTest {
         }
     }
 
+    /**
+     * `sign_client_auth` reply (go-wallet-backend#317): the key identifier,
+     * DPoP proof and fresh attestation ride on the sign_response under the
+     * backend's `SignResponseMessage` wire names.
+     */
+    @Test
+    fun send_sign_response_serializes_client_auth_fields() {
+        val session = WalletEngineSession(
+            baseUrl = "https://wallet.example.com",
+            tenantId = "tenant-42",
+            client = client,
+        )
+        session.connect("app-token")
+
+        session.sendSignResponse(
+            flowId = "flow-77",
+            messageId = "msg-9",
+            clientAttestation = "wia-jwt",
+            clientAttestationPoP = "pop-jwt",
+            dpopKeyId = "instance-key-1",
+            dpopProof = "dpop-jwt",
+        )
+
+        verify(exactly = 1) {
+            webSocket.send(match<String> { text ->
+                text.contains("\"type\":\"sign_response\"") &&
+                    text.contains("\"message_id\":\"msg-9\"") &&
+                    text.contains("\"client_attestation\":\"wia-jwt\"") &&
+                    text.contains("\"client_attestation_pop\":\"pop-jwt\"") &&
+                    text.contains("\"dpop_key_id\":\"instance-key-1\"") &&
+                    text.contains("\"dpop_proof\":\"dpop-jwt\"")
+            })
+        }
+    }
+
+    /** A renewal names the client-held key the refresh_token is bound to. */
+    @Test
+    fun start_renewal_serializes_dpop_key_id() {
+        val session = WalletEngineSession(
+            baseUrl = "https://wallet.example.com",
+            tenantId = "tenant-42",
+            client = client,
+        )
+        session.connect("app-token")
+
+        session.startRenewal(
+            refreshToken = "rt",
+            credentialIssuer = "https://issuer.example.com",
+            selectedCredentialConfigurationId = "pid",
+            dpopKeyId = "instance-key-1",
+        )
+
+        verify(exactly = 1) {
+            webSocket.send(match<String> { text ->
+                text.contains("\"type\":\"flow_start\"") &&
+                    text.contains("\"refresh_token\":\"rt\"") &&
+                    text.contains("\"dpop_key_id\":\"instance-key-1\"") &&
+                    !text.contains("\"dpop_jwk\":\"")
+            })
+        }
+    }
+
+    /** The engine's `sign_client_auth` params decode under their wire names. */
+    @Test
+    fun sign_request_params_decode_client_auth_fields() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val msg = json.decodeFromString(
+            SignRequestMessage.serializer(),
+            """{"type":"sign_request","flow_id":"f","message_id":"m","action":"sign_client_auth",
+               "params":{"audience":"https://as.example.com","issuer":"siros-sample://callback",
+               "htm":"POST","htu":"https://as.example.com/token","dpop_nonce":"n-1","ath":"h","key_id":"k-1"}}""",
+        )
+        assertEquals("sign_client_auth", msg.action)
+        assertEquals("POST", msg.params.htm)
+        assertEquals("https://as.example.com/token", msg.params.htu)
+        assertEquals("n-1", msg.params.dpopNonce)
+        assertEquals("h", msg.params.ath)
+        assertEquals("k-1", msg.params.keyId)
+        assertEquals("https://as.example.com", msg.params.audience)
+        assertEquals("siros-sample://callback", msg.params.issuer)
+    }
+
     @Test
     fun send_match_response_serializes_selected_credentials() {
         val session = WalletEngineSession(

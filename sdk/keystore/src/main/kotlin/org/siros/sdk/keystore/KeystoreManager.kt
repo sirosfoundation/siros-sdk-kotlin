@@ -323,6 +323,25 @@ interface KeystoreManager {
     ): String {
         throw UnsupportedOperationException("generateKeyProof not supported by this keystore")
     }
+
+    /**
+     * Sign an RFC 9449 DPoP proof JWT (`typ: dpop+jwt`, public key in the
+     * `jwk` header) with [keyId] over the HTTP method [htm] and URL [htu].
+     * [nonce] is the server-provided DPoP nonce (§8) and [accessTokenHash]
+     * the `ath` claim for resource requests, both omitted when null. Fresh
+     * `jti` and `iat` per call. Answers the engine's `sign_client_auth` sign
+     * request (go-wallet-backend#317), where the same key is the WIA `cnf`
+     * key so the sender-constrained token is bound to the attested key.
+     */
+    suspend fun generateDPoPProof(
+        keyId: String,
+        htm: String,
+        htu: String,
+        nonce: String? = null,
+        accessTokenHash: String? = null,
+    ): String {
+        throw UnsupportedOperationException("generateDPoPProof not supported by this keystore")
+    }
 }
 
 data class KeyInfo(

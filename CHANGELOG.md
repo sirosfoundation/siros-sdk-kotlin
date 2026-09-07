@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Answer the engine's `sign_client_auth` sign request (go-wallet-backend#317,
+  wallet-frontend#282) on both the legacy engine transport and WMP: sign the
+  RFC 9449 DPoP proof and a fresh OAuth client attestation PoP for each
+  request with the instance key - the same key the Wallet Instance
+  Attestation binds as `cnf` - and report it as `dpop_key_id`, so the
+  DPoP-bound token is bound to the attested key and no PoP is ever replayed.
+  `KeystoreManager.generateDPoPProof` is the new keystore primitive
+  (`JweKeystore` and `WscdKeystoreAdapter` implement it). `dpop_key_id` from
+  `flow_complete` is persisted with the refresh token
+  (`CredentialRefreshTokenEntry.dpopKeyId`) and presented back on renewal.
+  The WMP sign sub-flow also answers `request_attestation` now. Requires a
+  backend with go-wallet-backend#318; older backends never send the action.
+
 ## [0.11.0]
 
 Highlights since v0.10.0 (1 commit). Sample app: versionName 0.11.0, versionCode 11.
