@@ -154,8 +154,13 @@ data class TransactionData(
 @Serializable
 data class SignSubFlowParams(
     val action: String,
-    val nonce: String,
-    val audience: String,
+    // Non-null for the generate_proof / sign_presentation callers that always
+    // have them, but a DPoP-only `sign_client_auth` (credential, deferred,
+    // notification request) carries no audience and no c_nonce, and a peer
+    // may omit the members rather than send "". Default to empty so decoding
+    // does not fail the whole sub-flow with INVALID_PARAMS.
+    val nonce: String = "",
+    val audience: String = "",
     @SerialName("proof_type") val proofType: String? = null,
     @SerialName("proof_types_supported") val proofTypesSupported: JsonObject? = null,
     @SerialName("parent_flow_id") val parentFlowId: String? = null,

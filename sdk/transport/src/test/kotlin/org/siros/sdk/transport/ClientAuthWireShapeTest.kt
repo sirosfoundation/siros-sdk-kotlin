@@ -74,6 +74,27 @@ class ClientAuthWireShapeTest {
         assertEquals("k-1", p.keyId)
     }
 
+    /**
+     * A DPoP-only `sign_client_auth` (credential / deferred / notification
+     * request) has no audience and no c_nonce; a peer that omits the members
+     * instead of sending "" must still decode.
+     */
+    @Test
+    fun wmpSignSubFlowParamsTolerateAbsentAudienceAndNonce() {
+        val p = json.decodeFromJsonElement(
+            SignSubFlowParams.serializer(),
+            buildJsonObject {
+                put("action", JsonPrimitive("sign_client_auth"))
+                put("htm", JsonPrimitive("POST"))
+                put("htu", JsonPrimitive("https://issuer.example.com/credential"))
+                put("ath", JsonPrimitive("h"))
+            },
+        )
+        assertEquals("", p.audience)
+        assertEquals("", p.nonce)
+        assertEquals("POST", p.htm)
+    }
+
     @Test
     fun bothTransportsAgreeOnTheResultShape() = runBlocking {
         val legacy = json.encodeToJsonElement(
