@@ -164,6 +164,64 @@ class JweKeystoreTest {
     }
 
     @Test
+    fun generateDPoPProofBuildsRfc9449Proof() = runTest {
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        val keyId = keystore.generateKey()
+
+        val jwt = keystore.generateDPoPProof(
+            keyId = keyId,
+            htm = "POST",
+            htu = "https://as.example.com/token",
+            nonce = "server-nonce",
+            accessTokenHash = "fUHyO2r2Z3DZ53EsNrWBb0xWXoaNy59IiKCAqksmQEo",
+        )
+
+        val parsed = com.nimbusds.jwt.SignedJWT.parse(jwt)
+        assertEquals("dpop+jwt", parsed.header.type.toString())
+        assertEquals(com.nimbusds.jose.JWSAlgorithm.ES256, parsed.header.algorithm)
+        assertNotNull(parsed.header.jwk)
+        assertTrue(parsed.verify(com.nimbusds.jose.crypto.ECDSAVerifier(parsed.header.jwk.toECKey())))
+
+        val claims = parsed.jwtClaimsSet
+        assertEquals("POST", claims.getClaim("htm"))
+        assertEquals("https://as.example.com/token", claims.getClaim("htu"))
+        assertEquals("server-nonce", claims.getClaim("nonce"))
+        assertEquals("fUHyO2r2Z3DZ53EsNrWBb0xWXoaNy59IiKCAqksmQEo", claims.getClaim("ath"))
+        assertNotNull(claims.jwtid)
+        assertNotNull(claims.issueTime)
+        // DPoP proofs carry no PoP claims.
+        assertEquals(null, claims.issuer)
+        assertTrue(claims.audience.isEmpty())
+        assertEquals(null, claims.expirationTime)
+    }
+
+    @Test
+    fun generateDPoPProofOmitsNonceAndAthWhenAbsent_andIsFreshPerCall() = runTest {
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        val keyId = keystore.generateKey()
+
+        val a = com.nimbusds.jwt.SignedJWT.parse(keystore.generateDPoPProof(keyId, "POST", "https://as.example.com/token")).jwtClaimsSet
+        val b = com.nimbusds.jwt.SignedJWT.parse(keystore.generateDPoPProof(keyId, "POST", "https://as.example.com/token")).jwtClaimsSet
+        assertEquals(null, a.getClaim("nonce"))
+        assertEquals(null, a.getClaim("ath"))
+        assertTrue("each proof must carry a fresh jti", a.jwtid != b.jwtid)
+    }
+
+    @Test
+    fun generateDPoPProofThrowsForUnknownKeyId() = runTest {
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        try {
+            keystore.generateDPoPProof(keyId = "does-not-exist", htm = "POST", htu = "https://x")
+            fail("expected KeystoreException")
+        } catch (e: KeystoreException) {
+            // expected
+        }
+    }
+
+    @Test
     fun generateKeyProofThrowsForUnknownKeyId() = runTest {
         val keystore = JweKeystore()
         keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)

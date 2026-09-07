@@ -435,6 +435,7 @@ class WalletEngineSession(
         selectedCredentialConfigurationId: String,
         reissuanceKid: String? = null,
         dpopJwk: String? = null,
+        dpopKeyId: String? = null,
     ) {
         send(FlowStartMessage.serializer(), FlowStartMessage(
             protocol = "oid4vci",
@@ -443,6 +444,7 @@ class WalletEngineSession(
             selectedCredentialConfigurationId = selectedCredentialConfigurationId,
             reissuanceKid = reissuanceKid,
             dpopJwk = dpopJwk,
+            dpopKeyId = dpopKeyId,
         ))
     }
 
@@ -492,6 +494,8 @@ class WalletEngineSession(
         credentialRequestExtras: kotlinx.serialization.json.JsonObject? = null,
         clientAttestation: String? = null,
         clientAttestationPoP: String? = null,
+        dpopKeyId: String? = null,
+        dpopProof: String? = null,
     ) {
         send(SignResponseMessage.serializer(), SignResponseMessage(
             flowId = flowId,
@@ -502,6 +506,8 @@ class WalletEngineSession(
             credentialRequestExtras = credentialRequestExtras,
             clientAttestation = clientAttestation,
             clientAttestationPoP = clientAttestationPoP,
+            dpopKeyId = dpopKeyId,
+            dpopProof = dpopProof,
         ))
     }
 

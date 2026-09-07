@@ -265,6 +265,29 @@ class WscdKeystoreAdapter private constructor(
         return "$signingInput.${base64UrlEncode(signature)}"
     }
 
+    override suspend fun generateDPoPProof(
+        keyId: String,
+        htm: String,
+        htu: String,
+        nonce: String?,
+        accessTokenHash: String?,
+    ): String {
+        checkUnlocked()
+        val key = signer.listKeys().firstOrNull { it.keyId == keyId }
+            ?: throw IllegalStateException("Key not found: $keyId")
+        val pubJwk = com.nimbusds.jose.jwk.JWK.parse(String(signer.exportPublicKey(keyId), Charsets.UTF_8))
+
+        val header = JWSHeader.Builder(jwsAlgorithm(key.algorithm))
+            .type(com.nimbusds.jose.JOSEObjectType("dpop+jwt"))
+            .jwk(pubJwk)
+            .build()
+        val claims = dpopClaims(htm, htu, nonce, accessTokenHash)
+
+        val signingInput = "${base64Url(header.toJSONObject())}.${base64Url(claims.toJSONObject())}"
+        val signature = signer.sign(keyId, signingInput.toByteArray(Charsets.UTF_8))
+        return "$signingInput.${base64UrlEncode(signature)}"
+    }
+
     override suspend fun signPresentation(nonce: String, audience: String, credentialIds: List<Long>, kid: String?): String {
         checkUnlocked()
         val keys = signer.listKeys()

@@ -109,6 +109,14 @@ data class FlowStartMessage(
      * itself beyond whatever the caller does with it (privatedata, Phase 2).
      */
     @SerialName("dpop_jwk") val dpopJwk: String? = null,
+    /**
+     * Renewal only: the `dpop_key_id` this wallet returned at
+     * [FlowCompleteMessage.dpopKeyId] for the flow that issued [refreshToken] -
+     * the client-held key the token is bound to. The engine passes it back as
+     * [SignRequestParams.keyId] on every `sign_client_auth` of the renewal so
+     * this wallet signs with that same key. Takes precedence over [dpopJwk].
+     */
+    @SerialName("dpop_key_id") val dpopKeyId: String? = null,
     val timestamp: String? = null,
 )
 
@@ -163,6 +171,17 @@ data class SignResponseMessage(
      */
     @SerialName("client_attestation") val clientAttestation: String? = null,
     @SerialName("client_attestation_pop") val clientAttestationPoP: String? = null,
+    /**
+     * Response to a `sign_client_auth` sign request (go-wallet-backend#317):
+     * [dpopKeyId] is this wallet's identifier for the key that is both its WIA
+     * `cnf` key and its DPoP key, and is set whenever the action is
+     * understood, even when no proof was asked for (its absence tells the
+     * engine to fall back to an engine-held DPoP key). [dpopProof] is the
+     * RFC 9449 DPoP proof when `htm`/`htu` were given; the attestation fields
+     * above carry the WIA and a freshly signed PoP when `audience` was given.
+     */
+    @SerialName("dpop_key_id") val dpopKeyId: String? = null,
+    @SerialName("dpop_proof") val dpopProof: String? = null,
     val timestamp: String? = null,
 )
 
@@ -237,6 +256,15 @@ data class FlowCompleteMessage(
      * alongside [refreshToken] (e.g. via privatedata).
      */
     @SerialName("dpop_jwk") val dpopJwk: String? = null,
+    /**
+     * Identifier of the client-held key this flow used for DPoP via
+     * `sign_client_auth` (go-wallet-backend#317), present only alongside
+     * [refreshToken] and only when this wallet signed the DPoP proofs itself
+     * (in which case [dpopJwk] is absent: the engine never had the key).
+     * Persist with the refresh token and present back as
+     * [FlowStartMessage.dpopKeyId] on renewal.
+     */
+    @SerialName("dpop_key_id") val dpopKeyId: String? = null,
     val timestamp: String? = null,
 )
 
@@ -293,6 +321,21 @@ data class SignRequestParams(
     // direct report from zk-cred-longfellow's V8/PPID author). Null for
     // non-ZK presentations or verifiers whose request_uri never carried one.
     @SerialName("verifier_session_id") val verifierSessionId: String? = null,
+    /**
+     * `sign_client_auth` parameters (go-wallet-backend#317). [htm] and [htu],
+     * when set, ask for an RFC 9449 DPoP proof over that HTTP method and URL,
+     * with [dpopNonce] as the server-provided `nonce` claim and [ath] as the
+     * base64url(SHA-256(access_token)) claim for resource requests (absent at
+     * the token endpoint). [keyId], when set (a renewal), names the key this
+     * wallet reported as `dpop_key_id` at the original issuance and must sign
+     * with again. [audience]/[issuer] double as the attestation PoP aud/iss
+     * when the same request also needs client attestation.
+     */
+    val htm: String? = null,
+    val htu: String? = null,
+    @SerialName("dpop_nonce") val dpopNonce: String? = null,
+    val ath: String? = null,
+    @SerialName("key_id") val keyId: String? = null,
 )
 
 @Serializable

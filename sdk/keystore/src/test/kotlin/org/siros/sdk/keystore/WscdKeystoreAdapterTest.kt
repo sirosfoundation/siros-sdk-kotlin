@@ -405,6 +405,35 @@ class WscdKeystoreAdapterTest {
     }
 
     @Test
+    fun generateDPoPProofBuildsRfc9449ProofThroughSigner() = runTest {
+        val signer = createMockSigner()
+        coEvery { signer.exportPublicKey(any()) } returns realPublicKeyJwkJson().toByteArray()
+        val adapter = WscdKeystoreAdapter(signer)
+        adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+
+        val jwt = adapter.generateDPoPProof(
+            keyId = "test-key-1",
+            htm = "POST",
+            htu = "https://issuer.example.com/credential",
+            nonce = "n-1",
+            accessTokenHash = "ath-value",
+        )
+
+        val parsed = com.nimbusds.jwt.SignedJWT.parse(jwt)
+        assertEquals("dpop+jwt", parsed.header.type.toString())
+        assertEquals(com.nimbusds.jose.JWSAlgorithm.ES256, parsed.header.algorithm)
+        assertNotNull(parsed.header.jwk)
+        val claims = parsed.jwtClaimsSet
+        assertEquals("POST", claims.getClaim("htm"))
+        assertEquals("https://issuer.example.com/credential", claims.getClaim("htu"))
+        assertEquals("n-1", claims.getClaim("nonce"))
+        assertEquals("ath-value", claims.getClaim("ath"))
+        assertNotNull(claims.jwtid)
+        assertEquals(null, claims.issuer)
+        coVerify(exactly = 1) { signer.sign("test-key-1", any()) }
+    }
+
+    @Test
     fun generateKeyProofThrowsForUnknownKeyId() = runTest {
         val adapter = WscdKeystoreAdapter(createMockSigner())
         adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))

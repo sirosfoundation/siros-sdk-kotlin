@@ -1354,6 +1354,183 @@ class SirosWalletTest {
     }
 
     /**
+     * `sign_client_auth` (go-wallet-backend#317): the engine asks for a DPoP
+     * proof and a fresh attestation PoP for one request. Both must be signed
+     * with the instance key - the WIA's `cnf` key - and the reply must name
+     * that key as `dpop_key_id`, so the sender-constrained token ends up
+     * bound to the attested key.
+     */
+    @Test
+    fun signClientAuth_signsDpopAndFreshPopWithInstanceKey() = runTest(dispatcher) {
+        val server = MockWebServer()
+        server.start()
+        try {
+            // fetchAttestationChallenge's two well-known probes: no challenge_endpoint.
+            server.enqueue(MockResponse().setResponseCode(404))
+            server.enqueue(MockResponse().setResponseCode(404))
+            val asUrl = server.url("/").toString().trimEnd('/')
+
+            val signFlow = MutableSharedFlow<SignRequestMessage>()
+            val engine = mockEngineConstructor(signRequests = signFlow)
+            every {
+                engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any())
+            } just runs
+            val sessionStore = mockk<SessionStore>(relaxed = true)
+            every { sessionStore.instanceKeyId } returns "instance-key-1"
+            val keystore = mockk<KeystoreManager>(relaxed = true)
+            coEvery {
+                keystore.generateKeyProof(keyId = any(), typ = any(), issuer = any(), audience = any(), extraClaims = any())
+            } returns "pop-jwt"
+            coEvery {
+                keystore.generateDPoPProof(keyId = any(), htm = any(), htu = any(), nonce = any(), accessTokenHash = any())
+            } returns "dpop-jwt"
+            val apiClient = mockk<BackendApiClient>(relaxed = true)
+            coEvery { apiClient.requestWIAChallenge() } returns buildJsonObject { put("challenge", "chal-1") }
+            val wiaJwt = fakeJwtWithExp(System.currentTimeMillis() / 1000 + 3600)
+            coEvery { apiClient.generateWIA(pop = any(), challenge = "chal-1", clientId = any(), nativeAttestation = any()) } returns wiaJwt
+
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+                "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                "sessionStore" to sessionStore,
+                "keystore" to keystore,
+                "apiClient" to apiClient,
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+                "json" to Json { ignoreUnknownKeys = true },
+                "httpClient" to OkHttpClient(),
+            )
+            invokeConnectEngine(wallet, "app-token")
+            advanceUntilIdle()
+
+            signFlow.emit(
+                SignRequestMessage(
+                    flowId = "flow-ca",
+                    messageId = "msg-ca",
+                    action = "sign_client_auth",
+                    params = SignRequestParams(
+                        audience = asUrl,
+                        issuer = "siros-sample://callback",
+                        htm = "POST",
+                        htu = "$asUrl/token",
+                        dpopNonce = "n-1",
+                        ath = "ath-value",
+                    ),
+                )
+            )
+            repeat(10) {
+                runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(100) }
+                advanceUntilIdle()
+            }
+
+            coVerify(exactly = 1) {
+                keystore.generateDPoPProof(
+                    keyId = "instance-key-1",
+                    htm = "POST",
+                    htu = "$asUrl/token",
+                    nonce = "n-1",
+                    accessTokenHash = "ath-value",
+                )
+            }
+            // The per-issuer PoP is signed with the same instance key, aud = the AS.
+            coVerify(exactly = 1) {
+                keystore.generateKeyProof(
+                    keyId = "instance-key-1",
+                    typ = "oauth-client-attestation-pop+jwt",
+                    issuer = "siros-sample://callback",
+                    audience = asUrl,
+                    extraClaims = any(),
+                )
+            }
+            verify(exactly = 1) {
+                engine.sendSignResponse(
+                    flowId = "flow-ca",
+                    messageId = "msg-ca",
+                    clientAttestation = wiaJwt,
+                    clientAttestationPoP = "pop-jwt",
+                    dpopKeyId = "instance-key-1",
+                    dpopProof = "dpop-jwt",
+                )
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    /**
+     * A resource-request `sign_client_auth` (no audience) yields a DPoP proof
+     * only, and a renewal's `key_id` picks the key the refresh_token was bound
+     * to instead of the current instance key. No WIA round trip either way.
+     */
+    @Test
+    fun signClientAuth_dpopOnly_honoursKeyIdHint() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every {
+            engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any())
+        } just runs
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        every { sessionStore.instanceKeyId } returns "instance-key-1"
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        coEvery {
+            keystore.generateDPoPProof(keyId = any(), htm = any(), htu = any(), nonce = any(), accessTokenHash = any())
+        } returns "dpop-jwt"
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "sessionStore" to sessionStore,
+            "keystore" to keystore,
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+            "json" to Json { ignoreUnknownKeys = true },
+            "httpClient" to OkHttpClient(),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-cred",
+                messageId = "msg-cred",
+                action = "sign_client_auth",
+                params = SignRequestParams(
+                    htm = "POST",
+                    htu = "https://issuer.example.com/credential",
+                    ath = "ath-value",
+                    keyId = "old-instance-key",
+                ),
+            )
+        )
+        repeat(10) {
+            runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(100) }
+            advanceUntilIdle()
+        }
+
+        coVerify(exactly = 1) {
+            keystore.generateDPoPProof(
+                keyId = "old-instance-key",
+                htm = "POST",
+                htu = "https://issuer.example.com/credential",
+                nonce = null,
+                accessTokenHash = "ath-value",
+            )
+        }
+        coVerify(exactly = 0) { apiClient.requestWIAChallenge() }
+        coVerify(exactly = 0) { keystore.generateKeyProof(any(), any(), any(), any(), any()) }
+        verify(exactly = 1) {
+            engine.sendSignResponse(
+                flowId = "flow-cred",
+                messageId = "msg-cred",
+                clientAttestation = null,
+                clientAttestationPoP = null,
+                dpopKeyId = "old-instance-key",
+                dpopProof = "dpop-jwt",
+            )
+        }
+    }
+
+    /**
      * When requesting a backend Key Attestation, each freshly generated
      * credential-issuance key's own FIDO2/CTAP2 attestation (not the wallet's
      * identity key) must be registered with the backend individually, so the
