@@ -40,6 +40,13 @@ import uniffi.siros_wscd_manager.FfiWscdException
 import uniffi.siros_wscd_manager.FfiWscdManager
 
 /**
+ * The manager's name for a BLS12-381 Schnorr key-binding key
+ * (`Algorithm::as_str` in siros-wscd-manager), used as the SDK-side
+ * algorithm string since JOSE has none for it.
+ */
+internal const val BLS12381_G1_SCHNORR_NAME: String = "EcsdsaBls12381Bp1Sha256Sec1"
+
+/**
  * [UniFFISigner] wraps the Rust `siros-wscd-manager` UniFFI bindings
  * into the SDK's [Signer] interface.
  *
@@ -386,12 +393,18 @@ class UniFFISigner(
     private fun String.toFfiAlgorithm(): FfiAlgorithm = when (this.uppercase()) {
         "ES256" -> FfiAlgorithm.ES256
         "EDDSA", "ED25519" -> FfiAlgorithm.ED_DSA
+        // The manager's own name for it (`Algorithm::as_str`), since there
+        // is no JOSE `alg` for a BLS12-381 Schnorr key. Blind BBS key
+        // binding, COSE -65609; only the fido2 plugin serves it, and only on
+        // YubiKey 5.8 alpha firmware.
+        BLS12381_G1_SCHNORR_NAME.uppercase() -> FfiAlgorithm.BLS12381_G1_SCHNORR
         else -> throw IllegalArgumentException("Unsupported algorithm: $this")
     }
 
     private fun FfiAlgorithm.toSdkAlgorithm(): String = when (this) {
         FfiAlgorithm.ES256 -> "ES256"
         FfiAlgorithm.ED_DSA -> "EdDSA"
+        FfiAlgorithm.BLS12381_G1_SCHNORR -> BLS12381_G1_SCHNORR_NAME
     }
 
     private fun FfiKeyStorageType.toSdkKeyStorage(): String = when (this) {
