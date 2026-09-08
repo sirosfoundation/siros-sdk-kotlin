@@ -384,7 +384,10 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _r2psEnabled.value = pluginId == "r2ps"
         val manager = wallet.wscdManager ?: return
         when (pluginId) {
-            "fido2" -> registerFido2OnSigner(manager)
+            "fido2" -> {
+                registerFido2OnSigner(manager)
+                restoreFido2PluginState()
+            }
             "r2ps" -> registerR2psOnSigner(manager)
         }
         refreshWscdInfo()
@@ -659,14 +662,26 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     // same class of NPE those properties' own doc comments already warn
     // about - "$propertyName must not be null" from Kotlin's own
     // not-yet-initialized-property intrinsics check - confirmed live on a
-    // real device: buildWscdKeystore's try/catch swallowed it and silently
-    // fell back to a plugin registration with no restored key state, making
-    // every existing credential bound to a FIDO2/hardware key look like a
-    // "shadow" (key-unavailable) credential even though the key itself was
-    // never actually lost.
+    // real device: buildWscdKeystore's try/catch swallowed it and dropped
+    // the fido2 keystore from the session entirely. ([wallet] itself was
+    // the other such read, from inside [registerFido2OnSigner]; that one is
+    // gone - see its doc comment and [restoreFido2PluginState].)
     private val fido2RegisteredTransport = java.util.Collections.synchronizedMap(
         java.util.IdentityHashMap<WscdManager, Fido2TransportMode>(),
     )
+
+    /**
+     * Managers whose FIDO2 plugin currently holds the key state persisted
+     * in privatedata (restored via [restoreFido2PluginState], or freshly
+     * exported by [saveFido2PluginState]). Guarded by the same lock as
+     * [fido2RegisteredTransport]. Kept separately from that map because
+     * "registered" and "holds the saved keys" are different facts: at
+     * construction time there is no logged-in wallet to read saved state
+     * from, so every plugin starts out registered but empty, and is only
+     * caught up once the wallet becomes [WalletState.Ready].
+     */
+    private val fido2StateRestored: MutableSet<WscdManager> =
+        java.util.Collections.newSetFromMap(java.util.IdentityHashMap<WscdManager, Boolean>())
 
     // ── Wallet ──────────────────────────────────────────────────────
 
@@ -742,6 +757,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                         )
                         refreshWscdTofuMapping()
                         refreshWscdUserOverrides()
+                        restoreFido2PluginState()
                         maybeOfferWscdAutoEnroll()
                     }
                     // No usable credentials: logged out, or the keystore is
@@ -1397,25 +1413,26 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
      * Register the FIDO2 previewSign plugin on the given manager with
      * whichever transport [_fido2TransportMode] currently selects -
      * re-registering if that differs from what's currently registered (see
-     * [fido2RegisteredTransport]'s doc comment). Restores previously-
-     * enrolled keys from [SirosWallet.wscdCredentials] if any exist (see
-     * that method's doc comment - synced via privatedata, not device-local,
-     * since a FIDO2 key may have been enrolled on a different device
-     * sharing this account), so a FIDO2 key enrolled in an earlier process
-     * (or a different device) stays addressable. Callers that generate a
-     * NEW key (e.g. [enrollWscd]) must re-save via [saveFido2PluginState]
-     * afterward - this function only restores, it doesn't keep the saved
-     * state in sync going forward.
+     * [fido2RegisteredTransport]'s doc comment), or if [savedState] carries
+     * key state this manager has not been given yet.
      *
-     * Called both from a coroutine ([enrollWscd]) and synchronously from
-     * [buildWalletConfig]'s eager keystore construction (itself part of
-     * [wallet]'s own property initializer, before [wallet] exists) - the
-     * `runBlocking` covers the former; the latter self-reference is caught
-     * by [buildWscdKeystore]'s existing try/catch and degrades to a plain
-     * [WscdManager.registerFido2Plugin] call, matching that fallback's
-     * pre-existing documented behavior.
+     * Deliberately does NOT read [wallet]: it is called from
+     * [buildWalletConfig]'s eager keystore construction, which runs inside
+     * [wallet]'s own property initializer, before [wallet] exists. It used
+     * to read `wallet.wscdCredentials("fido2")` here, and on a cold start
+     * that threw an NPE which [buildWscdKeystore]'s try/catch turned into
+     * "no fido2 keystore at all" - the plugin was not registered empty, it
+     * was dropped from [WalletConfig.availableKeystores] entirely until the
+     * next wallet rebuild. Saved key state is instead restored once there is
+     * a logged-in wallet to read it from - see [restoreFido2PluginState] -
+     * and callers that already hold it (e.g. [enrollWscd]) pass it in.
+     *
+     * @param savedState the privatedata-synced key state to restore (see
+     *   [SirosWallet.wscdCredentials]), or null to register the plugin with
+     *   no keys. Callers that generate a NEW key must re-save via
+     *   [saveFido2PluginState] afterward - this function only restores.
      */
-    private fun registerFido2OnSigner(manager: WscdManager) = synchronized(fido2RegisteredTransport) {
+    private fun registerFido2OnSigner(manager: WscdManager, savedState: String? = null) = synchronized(fido2RegisteredTransport) {
         // The check-and-write on fido2RegisteredTransport must be atomic as
         // a whole, not just each individual map op (synchronizedMap already
         // makes those thread-safe on their own) - a genuine concurrent call
@@ -1423,7 +1440,8 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         // registered for this mode" result and both proceed to
         // re-register/create a fresh transport instance.
         val mode = _fido2TransportMode.value
-        if (fido2RegisteredTransport[manager] == mode) return@synchronized
+        val restoring = savedState != null && manager !in fido2StateRestored
+        if (fido2RegisteredTransport[manager] == mode && !restoring) return@synchronized
         val transport = when (mode) {
             Fido2TransportMode.AUTO -> CompositeCtap2Transport(
                 UsbCtap2Transport(activity.applicationContext),
@@ -1433,15 +1451,52 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             Fido2TransportMode.USB -> UsbCtap2Transport(activity.applicationContext)
             Fido2TransportMode.NFC -> NfcCtap2Transport(activity)
         }
-        val savedState = kotlinx.coroutines.runBlocking { wallet.wscdCredentials("fido2") }
         if (savedState != null) {
             manager.registerFido2PluginWithState(transport, savedState.toByteArray(Charsets.UTF_8))
+            fido2StateRestored.add(manager)
             Log.i(TAG, "FIDO2 previewSign plugin restored from saved state (transport=$mode)")
         } else {
             manager.registerFido2Plugin(transport)
+            // A fresh plugin instance (this is a re-registration for a new
+            // transport mode, or the very first one) holds no keys, whatever
+            // the previous instance held - so a later restore pass must
+            // treat this manager as not yet caught up.
+            fido2StateRestored.remove(manager)
             Log.i(TAG, "FIDO2 previewSign plugin registered (transport=$mode)")
         }
         fido2RegisteredTransport[manager] = mode
+    }
+
+    /**
+     * The FIDO2 key state persisted in privatedata for this account, or null
+     * if there is none (or the wallet cannot be read right now - not logged
+     * in, keystore locked). Never throws: a failed read must degrade to "no
+     * keys to restore", exactly what a fresh account looks like.
+     */
+    private suspend fun savedFido2State(): String? = try {
+        wallet.wscdCredentials("fido2")
+    } catch (e: Exception) {
+        Log.w(TAG, "Could not read saved FIDO2 plugin state", e)
+        null
+    }
+
+    /**
+     * Give every manager that has the FIDO2 plugin registered the key state
+     * persisted in privatedata, once. Called whenever the wallet becomes
+     * [WalletState.Ready] - the first moment privatedata is readable - so a
+     * FIDO2 key enrolled in an earlier process, or on another device sharing
+     * this account, is addressable in this one. Without this, every
+     * credential bound to such a key looked like a "shadow" (key-unavailable)
+     * credential after a cold start even though the key was never lost.
+     */
+    private fun restoreFido2PluginState() {
+        viewModelScope.launch {
+            val savedState = savedFido2State() ?: return@launch
+            val pending = synchronized(fido2RegisteredTransport) {
+                fido2RegisteredTransport.keys.filter { it !in fido2StateRestored }
+            }
+            pending.forEach { registerFido2OnSigner(it, savedState) }
+        }
     }
 
     /**
@@ -1460,6 +1515,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private suspend fun saveFido2PluginState(manager: WscdManager) {
         try {
             wallet.saveWscdCredentials("fido2", String(manager.exportFido2State(), Charsets.UTF_8))
+            // What this manager holds IS now the saved state; a later
+            // restore pass must not re-register it from an older copy.
+            synchronized(fido2RegisteredTransport) { fido2StateRestored.add(manager) }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to save FIDO2 plugin state", e)
         }
@@ -1510,7 +1568,10 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 if (pluginId == "r2ps") {
                     registerR2psOnSigner(manager)
                 } else if (pluginId == "fido2") {
-                    registerFido2OnSigner(manager)
+                    // With saved state, so the export after enrolment carries
+                    // the keys already held for this account, not just the
+                    // new one.
+                    registerFido2OnSigner(manager, savedFido2State())
                 }
                 val contextId = lifecycleContextId
                 val factorKind = when (pluginId) {
