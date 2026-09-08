@@ -250,7 +250,10 @@ class BackendApiClient(
     /** GET /user/session/instances — this user's wallet instances in the current tenant. */
     suspend fun listWalletInstances(): List<WalletInstance> {
         val result = get("/user/session/instances")
-        val arr = result["instances"] as? kotlinx.serialization.json.JsonArray ?: return emptyList()
+        // The backend always sends the array (empty when the user has no
+        // instances); its absence is a malformed response, not "no instances".
+        val arr = result["instances"] as? kotlinx.serialization.json.JsonArray
+            ?: throw BackendApiException(0, "Missing instances in response", "")
         return arr.map { json.decodeFromJsonElement(WalletInstance.serializer(), it) }
     }
 
@@ -266,10 +269,15 @@ class BackendApiClient(
             if (!reason.isNullOrBlank()) put("reason", kotlinx.serialization.json.JsonPrimitive(reason))
         }
         val result = put("/user/session/instances/$instanceId/status", body)
-        return WalletInstance(
-            id = (result["id"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: instanceId,
-            status = (result["status"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: status,
-        )
+        // Today the backend answers {id, status}; decode the whole object when
+        // it sends more, so callers see every field it returns.
+        return runCatching { json.decodeFromJsonElement(WalletInstance.serializer(), result) }.getOrElse {
+            WalletInstance(
+                id = (result["id"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: instanceId,
+                status = (result["status"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                    ?: throw BackendApiException(0, "Missing status in response", ""),
+            )
+        }
     }
 
     /**

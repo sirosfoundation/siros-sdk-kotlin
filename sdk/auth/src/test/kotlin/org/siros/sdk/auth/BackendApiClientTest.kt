@@ -17,6 +17,7 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import java.util.Base64
@@ -377,6 +378,32 @@ class BackendApiClientTest {
         assertEquals(WalletInstance.STATUS_SUSPENDED, instances[0].status)
         assertEquals("pk-1", instances[0].credentialId)
         assertEquals("lost phone", instances[0].statusReason)
+    }
+
+    @Test
+    fun list_wallet_instances_fails_on_malformed_response() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"unexpected":true}"""))
+        val client = newClient()
+        client.setAppToken("t")
+        try {
+            client.listWalletInstances()
+            fail("a response without the instances array must not read as 'no instances'")
+        } catch (e: BackendApiException) {
+            assertTrue(e.message!!.contains("instances"))
+        }
+    }
+
+    @Test
+    fun set_wallet_instance_status_decodes_full_object_when_returned() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"id":"jkt-1","status":"revoked","credential_id":"pk-1","status_reason":"stolen"}"""))
+        val client = newClient()
+        client.setAppToken("t")
+
+        val result = client.setWalletInstanceStatus("jkt-1", WalletInstance.STATUS_REVOKED, "stolen")
+
+        assertEquals("revoked", result.status)
+        assertEquals("pk-1", result.credentialId)
+        assertEquals("stolen", result.statusReason)
     }
 
     @Test
