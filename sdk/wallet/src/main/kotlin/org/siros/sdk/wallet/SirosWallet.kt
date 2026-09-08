@@ -142,6 +142,9 @@ private data class PendingAuthorization(
     val state: String,
 )
 
+/** Facade methods that need a live backend session throw this when there is none. */
+private const val NOT_LOGGED_IN = "Not logged in"
+
 /**
  * A randomly-generated uint32-range identifier, matching wallet-frontend's
  * `WalletStateUtils.getRandomUint32()` exactly (CSPRNG, full 1..2^32-1 range,
@@ -265,7 +268,7 @@ class SirosWallet private constructor(
      * surfaced as [org.siros.sdk.auth.BackendApiException].
      */
     suspend fun listWalletInstances(): List<WalletInstance> {
-        val client = apiClient ?: throw AuthException("Not logged in")
+        val client = apiClient ?: throw AuthException(NOT_LOGGED_IN)
         return client.listWalletInstances()
     }
 
@@ -277,7 +280,7 @@ class SirosWallet private constructor(
      * wallet - prefer [deactivateWallet] for that, which also clears local state.
      */
     suspend fun setWalletInstanceStatus(instanceId: String, status: String, reason: String? = null): WalletInstance {
-        val client = apiClient ?: throw AuthException("Not logged in")
+        val client = apiClient ?: throw AuthException(NOT_LOGGED_IN)
         return client.setWalletInstanceStatus(instanceId, status, reason)
     }
 
@@ -291,7 +294,7 @@ class SirosWallet private constructor(
      * @return how many instances the backend revoked
      */
     suspend fun deactivateWallet(reason: String? = null): Int {
-        val client = apiClient ?: throw AuthException("Not logged in")
+        val client = apiClient ?: throw AuthException(NOT_LOGGED_IN)
         val revoked = client.revokeAllWalletInstances(reason)
         Timber.i("Wallet deactivated: $revoked instance(s) revoked; forgetting local account")
         deleteAccount()

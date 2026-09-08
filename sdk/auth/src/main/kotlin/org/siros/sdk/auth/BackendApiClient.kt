@@ -19,6 +19,9 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import timber.log.Timber
 
+
+private val JSON_MEDIA_TYPE = "application/json".toMediaType()
+
 /**
  * Authenticated HTTP client for the wallet backend REST API.
  *
@@ -129,7 +132,7 @@ class BackendApiClient(
         }
         val builder = Request.Builder()
             .url("$baseUrl/user/session/refresh")
-            .post(body.toString().toRequestBody("application/json".toMediaType()))
+            .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
         addCommonHeaders(builder)
         execute(builder.build())
     }
@@ -348,7 +351,7 @@ class BackendApiClient(
     private suspend fun post(path: String, body: JsonObject): JsonObject = withContext(Dispatchers.IO) {
         val builder = Request.Builder()
             .url("$baseUrl$path")
-            .post(body.toString().toRequestBody("application/json".toMediaType()))
+            .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
         addCommonHeaders(builder)
         execute(builder.build())
     }
@@ -356,7 +359,7 @@ class BackendApiClient(
     private suspend fun put(path: String, body: JsonObject): JsonObject = withContext(Dispatchers.IO) {
         val builder = Request.Builder()
             .url("$baseUrl$path")
-            .put(body.toString().toRequestBody("application/json".toMediaType()))
+            .put(body.toString().toRequestBody(JSON_MEDIA_TYPE))
         addCommonHeaders(builder)
         execute(builder.build())
     }
