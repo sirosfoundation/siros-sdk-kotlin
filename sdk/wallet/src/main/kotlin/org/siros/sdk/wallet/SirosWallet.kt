@@ -5579,8 +5579,10 @@ class SirosWallet private constructor(
      * to [evaluateReaderTrust], called defensively when a newly-issued
      * `mso_mdoc` credential is about to be stored, before it's trusted.
      * Mirrors [evaluateReaderTrust]'s exact remote-then-local-fallback
-     * shape with a new `"mdoc-issuer-auth"` action name against go-trust's
-     * `vical` registry. Only ever called with an x5chain whose `issuerAuth`
+     * shape with a new `"mdoc-issuer-auth"` action name; go-trust answers it
+     * from whichever issuer registry the deployment has - `mdociaca` (keyed
+     * on the issuer URL the DS certificate names, see
+     * [evaluateIssuerTrustRemote]) or `vical`. Only ever called with an x5chain whose `issuerAuth`
      * COSE_Sign1 signature has ALREADY verified locally (see
      * [MdocCose.verify1]) - this method is purely the trust decision.
      *
@@ -5637,12 +5639,24 @@ class SirosWallet private constructor(
         else -> false
     }
 
+    /**
+     * The subject is the issuer's URL as its DS certificate names it (see
+     * [MdocIssuerIdentity]), not the certificate's hash: go-trust's
+     * `mdociaca` registry - the one that validates an mdoc chain against the
+     * issuer's published IACAs - keys its allowlist and its IACA fetch on
+     * that URL, and it is the identity the verifier side derives for the
+     * same certificate, so both ends ask about the same subject. A `vical`
+     * registry ignores the subject and validates the chain, so it is
+     * unaffected. Falls back to the hash only for a certificate that names
+     * no URL at all, which no registry can resolve either way.
+     */
     private suspend fun evaluateIssuerTrustRemote(x5chain: List<ByteArray>, docType: String?): TrustResult =
         evaluateMdocTrustRemote(
             x5chain,
             actionName = "mdoc-issuer-auth",
             defaultFramework = "vical",
             subjectPrefix = "issuer",
+            subjectId = MdocIssuerIdentity.fromDer(x5chain[0]),
             extraContext = docType?.let { dt -> { put("doc_type", kotlinx.serialization.json.JsonPrimitive(dt)) } },
         )
 
@@ -5673,15 +5687,25 @@ class SirosWallet private constructor(
      * hint - omitted entirely, not sent empty, when [extraContext] is
      * null), and the subject noun used in the debug log line.
      */
+    /**
+     * @param subjectId what the registry is asked about. Defaults to the
+     *   leaf certificate's SHA-256, which identifies the certificate itself
+     *   (RICAL/VICAL validate the chain and ignore it); a caller whose
+     *   registry resolves an entity by name passes that name instead.
+     *   `resource.id` always stays the certificate hash: it identifies the
+     *   key material carried in `resource.key`, not the entity.
+     */
     private suspend fun evaluateMdocTrustRemote(
         x5chain: List<ByteArray>,
         actionName: String,
         defaultFramework: String,
         subjectPrefix: String,
+        subjectId: String? = null,
         extraContext: (kotlinx.serialization.json.JsonObjectBuilder.() -> Unit)? = null,
     ): TrustResult {
         val client = apiClient ?: throw WalletException("Not connected")
-        val subjectId = sha256Hex(x5chain[0])
+        val certificateId = sha256Hex(x5chain[0])
+        val subjectId = subjectId ?: certificateId
         val x5c = kotlinx.serialization.json.buildJsonArray {
             x5chain.forEach { add(kotlinx.serialization.json.JsonPrimitive(java.util.Base64.getEncoder().encodeToString(it))) }
         }
@@ -5693,7 +5717,7 @@ class SirosWallet private constructor(
             }
             putJsonObject("resource") {
                 put("type", kotlinx.serialization.json.JsonPrimitive("x5c"))
-                put("id", kotlinx.serialization.json.JsonPrimitive(subjectId))
+                put("id", kotlinx.serialization.json.JsonPrimitive(certificateId))
                 put("key", x5c)
             }
             putJsonObject("action") {
