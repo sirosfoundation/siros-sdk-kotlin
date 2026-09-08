@@ -339,6 +339,77 @@ class BackendApiClientTest {
         return AccessToken("$header.$body.$signature")
     }
 
+    // ---- wallet instance lifecycle (SID-AUTH-06, go-wallet-backend#319) ----
+
+    @Test
+    fun generate_wia_sends_credential_id_when_given_and_omits_it_otherwise() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"wallet_instance_attestation":"wia.jwt"}"""))
+        server.enqueue(MockResponse().setBody("""{"wallet_instance_attestation":"wia.jwt"}"""))
+        val client = newClient()
+        client.setAppToken("t")
+
+        client.generateWIA(pop = "pop.jwt", challenge = "c-1", clientId = "siros://cb", credentialId = "pk-1")
+        val withId = server.takeRequest().body.readUtf8()
+        assertTrue(withId, withId.contains("\"credential_id\":\"pk-1\""))
+
+        client.generateWIA(pop = "pop.jwt", challenge = "c-2")
+        val without = server.takeRequest().body.readUtf8()
+        assertTrue(without, !without.contains("credential_id"))
+    }
+
+    @Test
+    fun list_wallet_instances_decodes_backend_shape() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"instances":[{"id":"jkt-1","tenant_id":"default","user_id":"u1","status":"suspended",
+                   "wscd_type":"native_android","credential_id":"pk-1","attestation_source":"play_integrity",
+                   "last_attested_at":"2026-09-08T10:00:00Z","status_reason":"lost phone","unknown_member":1}]}"""
+            )
+        )
+        val client = newClient()
+        client.setAppToken("t")
+
+        val instances = client.listWalletInstances()
+
+        assertEquals("/user/session/instances", server.takeRequest().path)
+        assertEquals(1, instances.size)
+        assertEquals("jkt-1", instances[0].id)
+        assertEquals(WalletInstance.STATUS_SUSPENDED, instances[0].status)
+        assertEquals("pk-1", instances[0].credentialId)
+        assertEquals("lost phone", instances[0].statusReason)
+    }
+
+    @Test
+    fun set_wallet_instance_status_puts_status_and_reason() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"id":"jkt-1","status":"suspended"}"""))
+        val client = newClient()
+        client.setAppToken("t")
+
+        val result = client.setWalletInstanceStatus("jkt-1", WalletInstance.STATUS_SUSPENDED, reason = "lost phone")
+
+        val request = server.takeRequest()
+        assertEquals("PUT", request.method)
+        assertEquals("/user/session/instances/jkt-1/status", request.path)
+        val body = request.body.readUtf8()
+        assertTrue(body, body.contains("\"status\":\"suspended\"") && body.contains("\"reason\":\"lost phone\""))
+        assertEquals("suspended", result.status)
+    }
+
+    @Test
+    fun revoke_all_wallet_instances_posts_and_returns_count() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"revoked":2}"""))
+        val client = newClient()
+        client.setAppToken("t")
+
+        val revoked = client.revokeAllWalletInstances("device stolen")
+
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals("/user/session/instances/revoke-all", request.path)
+        assertTrue(request.body.readUtf8().contains("device stolen"))
+        assertEquals(2, revoked)
+    }
+
     private fun newClient(): BackendApiClient {
         val baseUrl = server.url("/").toString().trimEnd('/')
         return BackendApiClient(baseUrl = baseUrl, tenantId = "default")

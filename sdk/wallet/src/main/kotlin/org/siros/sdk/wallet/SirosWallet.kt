@@ -36,6 +36,7 @@ import org.siros.sdk.auth.AuthProvider
 import org.siros.sdk.auth.CredentialManagerAuthProvider
 import org.siros.sdk.auth.LocalAuthProvider
 import org.siros.sdk.auth.PrfOutput
+import org.siros.sdk.auth.WalletInstance
 import org.siros.sdk.auth.WebAuthnAuthClient
 import org.siros.sdk.auth.WscdAutoEnrollHint
 import org.siros.sdk.credentials.AuthException
@@ -252,6 +253,49 @@ class SirosWallet private constructor(
             }
         )
         accountRegistry.upsertAccount(updated)
+    }
+
+    // ── Wallet instance lifecycle (SID-AUTH-06) ─────────────────────
+
+    /**
+     * This user's wallet instances in the current tenant, from the backend
+     * (`GET /user/session/instances`). One instance per installation; match an
+     * instance to a passkey via [WalletInstance.credentialId] when present.
+     * Requires a backend with go-wallet-backend#319; older backends answer 404,
+     * surfaced as [org.siros.sdk.auth.BackendApiException].
+     */
+    suspend fun listWalletInstances(): List<WalletInstance> {
+        val client = apiClient ?: throw AuthException("Not logged in")
+        return client.listWalletInstances()
+    }
+
+    /**
+     * Suspend, reactivate or revoke one of this user's wallet instances
+     * (`PUT /user/session/instances/{id}/status`). Suspension is reversible and
+     * only blocks that installation (login, attestation, sessions); revocation
+     * is terminal. Revoking the last non-revoked instance deactivates the
+     * wallet - prefer [deactivateWallet] for that, which also clears local state.
+     */
+    suspend fun setWalletInstanceStatus(instanceId: String, status: String, reason: String? = null): WalletInstance {
+        val client = apiClient ?: throw AuthException("Not logged in")
+        return client.setWalletInstanceStatus(instanceId, status, reason)
+    }
+
+    /**
+     * Deactivate this wallet: revoke every wallet instance of the user
+     * (`POST /user/session/instances/revoke-all`). The backend erases the
+     * wallet's private data and server-side credentials, and refuses every
+     * passkey of the user at login with `WALLET_REVOKED`; a new enrollment is
+     * required afterwards. The local cached account is forgotten and the
+     * wallet logged out, since the vault it decrypts no longer exists.
+     * @return how many instances the backend revoked
+     */
+    suspend fun deactivateWallet(reason: String? = null): Int {
+        val client = apiClient ?: throw AuthException("Not logged in")
+        val revoked = client.revokeAllWalletInstances(reason)
+        Timber.i("Wallet deactivated: $revoked instance(s) revoked; forgetting local account")
+        deleteAccount()
+        return revoked
     }
 
     /** Set a listener for events that require user interaction (credential picker, etc.). */
@@ -1486,6 +1530,10 @@ class SirosWallet private constructor(
                 // that flagged sub=<instance jkt> as a FAIL.
                 clientId = clientAttestationClientId(),
                 nativeAttestation = nativeAttestation,
+                // Links this instance to the passkey it logs in with, so
+                // suspending or revoking the instance also refuses login
+                // with that passkey (SID-AUTH-06, go-wallet-backend#319).
+                credentialId = sessionStore.credentialId?.takeIf { it.isNotBlank() },
             )
             cachedWia = wia
             cachedWiaExpiresAt = CredentialUtils.parseJwtPayload(wia)

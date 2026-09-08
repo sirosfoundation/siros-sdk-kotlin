@@ -8,6 +8,7 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.siros.sdk.credentials.AuthException
@@ -189,5 +190,34 @@ class AuthServerClientTest {
     fun `loginBegin throws on non-2xx response`(): Unit = runBlocking {
         server.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":"unauthorized"}"""))
         client.loginBegin()
+    }
+
+    /**
+     * SID-AUTH-06 (go-wallet-backend#319): a suspended or revoked wallet
+     * instance is a 403 with a stable code, not a retryable auth failure -
+     * the code must survive into the exception so the app can explain it.
+     */
+    @Test
+    fun `login refusal carries the AS error code`(): Unit = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(403).setBody("""{"error":"WALLET_REVOKED"}"""))
+        try {
+            client.loginFinish(challengeId = "c1", credential = buildJsonObject { })
+            fail("expected AuthException")
+        } catch (e: AuthException) {
+            assertEquals(403, e.code)
+            assertEquals("WALLET_REVOKED", e.errorCode)
+        }
+    }
+
+    @Test
+    fun `non-JSON failure body falls back to auth_failed`(): Unit = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(502).setBody("bad gateway"))
+        try {
+            client.loginBegin()
+            fail("expected AuthException")
+        } catch (e: AuthException) {
+            assertEquals(502, e.code)
+            assertEquals("auth_failed", e.errorCode)
+        }
     }
 }

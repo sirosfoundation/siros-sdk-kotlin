@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Wallet instance lifecycle (SID-AUTH-06, go-wallet-backend#319):
+  `SirosWallet.listWalletInstances()`, `setWalletInstanceStatus()` and
+  `deactivateWallet()` (revokes every instance server-side, then forgets the
+  local account), backed by the new `WalletInstance` type and
+  `BackendApiClient` methods. WIA generation now sends the logged-in passkey's
+  `credential_id` so the backend can link the instance to the passkey.
+  `AuthException.errorCode` now carries the AS's error code, so a 403
+  `WALLET_SUSPENDED` / `WALLET_REVOKED` login refusal is distinguishable
+  from a plain authentication failure.
 - Answer the engine's `sign_client_auth` sign request (go-wallet-backend#317,
   wallet-frontend#282) on both the legacy engine transport and WMP: sign the
   RFC 9449 DPoP proof and a fresh OAuth client attestation PoP for each

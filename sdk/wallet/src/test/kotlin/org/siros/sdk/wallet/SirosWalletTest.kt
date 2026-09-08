@@ -1531,6 +1531,34 @@ class SirosWalletTest {
     }
 
     /**
+     * `deactivateWallet()` (SID-AUTH-06): revoke every instance server-side,
+     * then forget the local account - the vault it decrypts no longer exists.
+     */
+    @Test
+    fun deactivateWallet_revokesAllAndForgetsLocalAccount() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery { apiClient.revokeAllWalletInstances("device stolen") } returns 2
+        val accountRegistry = mockk<AccountRegistry>(relaxed = true)
+        every { accountRegistry.activeAccountId } returns "acct-1"
+        every { accountRegistry.listLoginableAccounts() } returns emptyList()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "engineSession" to mockk<WalletEngineSession>(relaxed = true),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "sessionStore" to mockk<SessionStore>(relaxed = true),
+            "accountRegistry" to accountRegistry,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "apiClient" to apiClient,
+        )
+
+        val revoked = wallet.deactivateWallet("device stolen")
+
+        assertEquals(2, revoked)
+        coVerify(exactly = 1) { apiClient.revokeAllWalletInstances("device stolen") }
+        verify(exactly = 1) { accountRegistry.removeAccount("acct-1") }
+    }
+
+    /**
      * When requesting a backend Key Attestation, each freshly generated
      * credential-issuance key's own FIDO2/CTAP2 attestation (not the wallet's
      * identity key) must be registered with the backend individually, so the
