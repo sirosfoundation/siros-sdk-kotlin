@@ -19,6 +19,9 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import timber.log.Timber
 
+
+private val JSON_MEDIA_TYPE = "application/json".toMediaType()
+
 /**
  * Authenticated HTTP client for the wallet backend REST API.
  *
@@ -129,7 +132,7 @@ class BackendApiClient(
         }
         val builder = Request.Builder()
             .url("$baseUrl/user/session/refresh")
-            .post(body.toString().toRequestBody("application/json".toMediaType()))
+            .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
         addCommonHeaders(builder)
         execute(builder.build())
     }
@@ -212,6 +215,11 @@ class BackendApiClient(
      *   "the sub claim MUST specify client_id value of the OAuth Client";
      *   omitting this falls back to the instance identifier (jkt) server-side.
      * @param nativeAttestation optional platform attestation evidence
+     * @param credentialId base64url WebAuthn credential id of the passkey this
+     *   installation logs in with. The backend records it on the wallet
+     *   instance so that suspending or revoking the instance also refuses
+     *   login with that passkey (SID-AUTH-06, go-wallet-backend#319). Optional;
+     *   older backends ignore it.
      * @return WIA JWT string
      */
     suspend fun generateWIA(
@@ -219,6 +227,7 @@ class BackendApiClient(
         challenge: String,
         clientId: String? = null,
         nativeAttestation: JsonObject? = null,
+        credentialId: String? = null,
     ): String {
         val body = kotlinx.serialization.json.buildJsonObject {
             put("pop", kotlinx.serialization.json.JsonPrimitive(pop))
@@ -229,11 +238,63 @@ class BackendApiClient(
             if (nativeAttestation != null) {
                 put("native_attestation", nativeAttestation)
             }
+            if (!credentialId.isNullOrBlank()) {
+                put("credential_id", kotlinx.serialization.json.JsonPrimitive(credentialId))
+            }
         }
         val result = post("/wallet-provider/wia/generate", body)
         return result["wallet_instance_attestation"]?.let {
             (it as? kotlinx.serialization.json.JsonPrimitive)?.content
         } ?: throw BackendApiException(0, "Missing wallet_instance_attestation in response", "")
+    }
+
+    // ---- Wallet instance lifecycle (SID-AUTH-06, go-wallet-backend#319) ----
+
+    /** GET /user/session/instances — this user's wallet instances in the current tenant. */
+    suspend fun listWalletInstances(): List<WalletInstance> {
+        val result = get("/user/session/instances")
+        // The backend always sends the array (empty when the user has no
+        // instances); its absence is a malformed response, not "no instances".
+        val arr = result["instances"] as? kotlinx.serialization.json.JsonArray
+            ?: throw BackendApiException(0, "Missing instances in response", "")
+        return arr.map { json.decodeFromJsonElement(WalletInstance.serializer(), it) }
+    }
+
+    /**
+     * PUT /user/session/instances/{id}/status — suspend, reactivate or revoke
+     * one of this user's instances. Throws [BackendApiException] with code 404
+     * for an instance that is not the caller's and 409 for an invalid
+     * transition (e.g. reactivating a revoked instance).
+     */
+    suspend fun setWalletInstanceStatus(instanceId: String, status: String, reason: String? = null): WalletInstance {
+        val body = kotlinx.serialization.json.buildJsonObject {
+            put("status", kotlinx.serialization.json.JsonPrimitive(status))
+            if (!reason.isNullOrBlank()) put("reason", kotlinx.serialization.json.JsonPrimitive(reason))
+        }
+        val result = put("/user/session/instances/$instanceId/status", body)
+        // Today the backend answers {id, status}; decode the whole object when
+        // it sends more, so callers see every field it returns.
+        return runCatching { json.decodeFromJsonElement(WalletInstance.serializer(), result) }.getOrElse {
+            WalletInstance(
+                id = (result["id"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: instanceId,
+                status = (result["status"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                    ?: throw BackendApiException(0, "Missing status in response", ""),
+            )
+        }
+    }
+
+    /**
+     * POST /user/session/instances/revoke-all — deactivate the wallet: every
+     * instance revoked, wallet data erased server-side, new enrollment required.
+     * @return how many instances were revoked by this call
+     */
+    suspend fun revokeAllWalletInstances(reason: String? = null): Int {
+        val body = kotlinx.serialization.json.buildJsonObject {
+            if (!reason.isNullOrBlank()) put("reason", kotlinx.serialization.json.JsonPrimitive(reason))
+        }
+        val result = post("/user/session/instances/revoke-all", body)
+        return (result["revoked"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull()
+            ?: throw BackendApiException(0, "Missing revoked count in response", "")
     }
 
     /**
@@ -290,7 +351,15 @@ class BackendApiClient(
     private suspend fun post(path: String, body: JsonObject): JsonObject = withContext(Dispatchers.IO) {
         val builder = Request.Builder()
             .url("$baseUrl$path")
-            .post(body.toString().toRequestBody("application/json".toMediaType()))
+            .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+        addCommonHeaders(builder)
+        execute(builder.build())
+    }
+
+    private suspend fun put(path: String, body: JsonObject): JsonObject = withContext(Dispatchers.IO) {
+        val builder = Request.Builder()
+            .url("$baseUrl$path")
+            .put(body.toString().toRequestBody(JSON_MEDIA_TYPE))
         addCommonHeaders(builder)
         execute(builder.build())
     }

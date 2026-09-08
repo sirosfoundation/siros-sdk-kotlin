@@ -282,7 +282,13 @@ class AuthServerClient(
 
             if (!response.isSuccessful) {
                 Timber.e("AS request failed: ${response.code} — $url")
-                throw AuthException("AS request failed: ${response.code} — $path", code = response.code)
+                // Carry the AS's stable error code (e.g. WALLET_SUSPENDED /
+                // WALLET_REVOKED from a SID-AUTH-06 login refusal) so callers
+                // can tell a lifecycle refusal from a plain 401/403.
+                val errorCode = runCatching {
+                    (json.parseToJsonElement(responseBody).jsonObject["error"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                }.getOrNull()?.takeIf { it.isNotBlank() } ?: "auth_failed"
+                throw AuthException("AS request failed: ${response.code} — $path", errorCode = errorCode, code = response.code)
             }
 
             Timber.d("AS response: ${response.code} — $path")
