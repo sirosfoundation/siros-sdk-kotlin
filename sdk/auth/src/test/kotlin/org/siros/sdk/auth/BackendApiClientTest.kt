@@ -423,6 +423,19 @@ class BackendApiClientTest {
     }
 
     @Test
+    fun revoke_all_wallet_instances_fails_on_malformed_response() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"ok":true}"""))
+        val client = newClient()
+        client.setAppToken("t")
+        try {
+            client.revokeAllWalletInstances()
+            fail("a reply without the revoked count must not read as zero revoked")
+        } catch (e: BackendApiException) {
+            assertTrue(e.message!!.contains("revoked"))
+        }
+    }
+
+    @Test
     fun revoke_all_wallet_instances_posts_and_returns_count() = runBlocking {
         server.enqueue(MockResponse().setBody("""{"revoked":2}"""))
         val client = newClient()

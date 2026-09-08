@@ -290,7 +290,8 @@ class BackendApiClient(
             if (!reason.isNullOrBlank()) put("reason", kotlinx.serialization.json.JsonPrimitive(reason))
         }
         val result = post("/user/session/instances/revoke-all", body)
-        return (result["revoked"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull() ?: 0
+        return (result["revoked"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull()
+            ?: throw BackendApiException(0, "Missing revoked count in response", "")
     }
 
     /**
