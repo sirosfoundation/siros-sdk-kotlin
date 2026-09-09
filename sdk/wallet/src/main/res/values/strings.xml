@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Shown by DCAPIGetCredentialActivity while a zero-knowledge proof is
+         being generated for a Digital Credentials API request. A host app
+         localises or rewords these by defining strings with the same names. -->
+    <string name="siros_dcapi_zk_proof_status">Generating zero-knowledge proof…</string>
+    <string name="siros_dcapi_zk_proof_detail">No personal data is shared - only a cryptographic proof that you meet the request.</string>
+</resources>

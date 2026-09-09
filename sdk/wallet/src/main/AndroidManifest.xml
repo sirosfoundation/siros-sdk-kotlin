@@ -1,2 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- Digital Credentials API entry point: the OS/Credential Manager
+             starts this when the user picks one of the host app's entries in
+             a browser's credential picker. Runs in the caller's task, hence
+             the translucent theme and no recents entry. See
+             DCAPIGetCredentialActivity. -->
+        <activity
+            android:name="org.siros.sdk.wallet.dcapi.DCAPIGetCredentialActivity"
+            android:exported="true"
+            android:theme="@style/Theme.SirosSdk.DcApiHost"
+            android:excludeFromRecents="true">
+            <intent-filter>
+                <action android:name="androidx.credentials.registry.provider.action.GET_CREDENTIAL" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

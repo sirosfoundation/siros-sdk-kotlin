@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Shown by Android's NFC settings as the description of the SDK's
+         host-card-emulation service. A host app can override it by defining
+         a string with the same name. -->
+    <string name="siros_nfc_hce_description">ISO 18013-5 mdoc device engagement</string>
+</resources>

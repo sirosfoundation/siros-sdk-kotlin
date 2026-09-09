@@ -1,53 +1,51 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
-package org.siros.sdk.sample.dcapi
+package org.siros.sdk.wallet.dcapi
 
+import android.app.Activity
 import android.content.Intent
+import android.graphics.Color
 import android.os.Bundle
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
+import android.util.TypedValue
+import android.view.Gravity
+import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.TextView
 import androidx.credentials.DigitalCredential
 import androidx.credentials.ExperimentalDigitalCredentialApi
 import androidx.credentials.GetCredentialResponse
 import androidx.credentials.GetDigitalCredentialOption
 import androidx.credentials.exceptions.GetCredentialUnknownException
 import androidx.credentials.provider.PendingIntentHandler
-import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import org.siros.sdk.credentials.CredentialMatcher
 import org.siros.sdk.credentials.WalletException
-import org.siros.sdk.sample.R
-import org.siros.sdk.wallet.dcapi.DCAPIRequestParser
+import org.siros.sdk.wallet.R
 import timber.log.Timber
 
 /**
  * Near-headless Activity that receives the OS's Digital Credentials API
- * `GET_CREDENTIAL` intent when the user picks one of this app's entries
+ * `GET_CREDENTIAL` intent when the user picks one of the host app's entries
  * from a browser page's `navigator.credentials.get({digital: {...}})`
- * picker (see [DCAPIProviderRegistration]).
+ * picker (the entries [SirosCredentialRegistry.refresh] registered).
  *
- * Not necessarily launched via [org.siros.sdk.sample.MainActivity] - the OS
- * can start this directly from the credential picker, so it must not assume
- * any existing UI state. It reuses the currently-unlocked wallet session via
+ * Declared in this library's manifest, so a host app gets DC API
+ * presentation by depending on the SDK, calling [SirosCredentialRegistry.refresh]
+ * when its wallet has credentials, and keeping [WalletSessionHolder] pointed
+ * at its unlocked wallet. It declares no component of its own. The
+ * translucent theme it runs under is the SDK's `Theme.SirosSdk.DcApiHost`;
+ * a host app that wants a different look overrides that style.
+ *
+ * Not necessarily launched via the host app's own UI - the OS starts this
+ * directly from the credential picker, so it must not assume any existing UI
+ * state. It reuses the currently-unlocked wallet session via
  * [WalletSessionHolder] (see that class's doc comment for the cold-start
  * limitation) rather than performing its own login/unlock flow.
  *
@@ -57,16 +55,21 @@ import timber.log.Timber
  * just the platform glue: extract the request + verified origin from the
  * Intent, call the SDK, and hand the result back via [PendingIntentHandler].
  *
- * Shows a bare spinner rather than being fully invisible/transparent:
+ * Shows a bare spinner rather than being fully invisible:
  * [org.siros.sdk.wallet.SirosWallet.handleDCAPIRequest] does real network
  * work (trust evaluation, occasionally an engine reconnect) that can take
  * more than an instant, and a blank screen during that window reads as
  * frozen - a real test found a user swiping away what looked like a hung
  * screen, which tears down the whole host task (including the calling
- * browser, since this Activity runs in the caller's task).
+ * browser, since this Activity runs in the caller's task). Built with plain
+ * views on purpose: an SDK component must not decide the host app's UI
+ * toolkit, and this is a spinner and two lines of text.
  */
 @OptIn(ExperimentalDigitalCredentialApi::class)
-class DCAPIGetCredentialActivity : ComponentActivity() {
+class DCAPIGetCredentialActivity : Activity() {
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -95,14 +98,15 @@ class DCAPIGetCredentialActivity : ComponentActivity() {
         } catch (e: Exception) {
             false
         }
-        setContent { LoadingSpinner(isZkProof = isZkProof) }
+        setContentView(buildLoadingView(isZkProof))
 
         // The verified origin the OS/browser attests, NOT anything read from
         // the request body itself - resolved against Google Password
         // Manager's openly-published privileged browser allowlist
         // (https://www.gstatic.com/gpm-passkeys-privileged-apps/apps.json,
-        // bundled at res/raw/gpm_privileged_apps.json), the same allowlist
-        // Chrome's own passkey/DC API origin verification is checked against.
+        // bundled at res/raw/siros_gpm_privileged_apps.json), the same
+        // allowlist Chrome's own passkey/DC API origin verification is
+        // checked against.
         val origin = try {
             request.callingAppInfo.getOrigin(loadPrivilegedAllowlist())
         } catch (e: Exception) {
@@ -122,7 +126,7 @@ class DCAPIGetCredentialActivity : ComponentActivity() {
 
         Timber.d("DCAPI raw request (origin=$origin): ${digitalOption.requestJson}")
 
-        lifecycleScope.launch {
+        scope.launch {
             try {
                 val result = wallet.handleDCAPIRequest(digitalOption.requestJson, origin)
                 Timber.d("DCAPI final response: ${result.responseJson}")
@@ -151,6 +155,15 @@ class DCAPIGetCredentialActivity : ComponentActivity() {
                 finishWithError(e.message ?: "Presentation failed")
             }
         }
+    }
+
+    override fun onDestroy() {
+        // The wallet call is not cancelled when the Activity goes away
+        // mid-request: SirosWallet owns that work, and a presentation the
+        // user backed out of is reported by the OS to the caller regardless.
+        // Only this Activity's own continuation is dropped.
+        scope.cancel()
+        super.onDestroy()
     }
 
     private fun finishWithError(message: String) {
@@ -190,41 +203,51 @@ class DCAPIGetCredentialActivity : ComponentActivity() {
     }
 
     private fun loadPrivilegedAllowlist(): String =
-        resources.openRawResource(R.raw.gpm_privileged_apps).bufferedReader().use { it.readText() }
-}
+        resources.openRawResource(R.raw.siros_gpm_privileged_apps).bufferedReader().use { it.readText() }
 
-@Composable
-private fun LoadingSpinner(isZkProof: Boolean = false) {
-    Box(
-        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.4f)),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (isZkProof) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(
-                    imageVector = Icons.Filled.Lock,
-                    contentDescription = null,
-                    tint = Color.White,
-                    modifier = Modifier.padding(bottom = 12.dp),
-                )
-                CircularProgressIndicator(color = Color.White)
-                Text(
-                    text = stringResource(R.string.dcapi_zk_proof_status),
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(top = 16.dp, start = 24.dp, end = 24.dp),
-                )
-                Text(
-                    text = stringResource(R.string.dcapi_zk_proof_detail),
-                    color = Color.White.copy(alpha = 0.8f),
-                    style = MaterialTheme.typography.bodySmall,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(top = 8.dp, start = 24.dp, end = 24.dp),
-                )
-            }
-        } else {
-            CircularProgressIndicator(color = Color.White)
+    /** A dimmed full-screen scrim with a spinner; for a ZK proof, a lock glyph and two lines of explanation. */
+    private fun buildLoadingView(isZkProof: Boolean): FrameLayout {
+        val scrim = FrameLayout(this).apply {
+            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            setBackgroundColor(Color.argb(102, 0, 0, 0)) // 40% black, as before
         }
+        val column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            val pad = dp(24)
+            setPadding(pad, pad, pad, pad)
+        }
+        if (isZkProof) {
+            column.addView(
+                TextView(this).apply {
+                    // Plain-text lock glyph: no drawable dependency, and it is a
+                    // status cue, not a decoration.
+                    text = "🔒"
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 28f)
+                    gravity = Gravity.CENTER
+                    setPadding(0, 0, 0, dp(12))
+                },
+            )
+        }
+        column.addView(ProgressBar(this))
+        if (isZkProof) {
+            column.addView(statusText(R.string.siros_dcapi_zk_proof_status, 16f, alpha = 1f, topPadding = dp(16)))
+            column.addView(statusText(R.string.siros_dcapi_zk_proof_detail, 13f, alpha = 0.8f, topPadding = dp(8)))
+        }
+        scrim.addView(column, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+        return scrim
     }
+
+    private fun statusText(resId: Int, sizeSp: Float, alpha: Float, topPadding: Int): TextView =
+        TextView(this).apply {
+            setText(resId)
+            setTextColor(Color.WHITE)
+            this.alpha = alpha
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
+            gravity = Gravity.CENTER
+            setPadding(0, topPadding, 0, 0)
+        }
+
+    private fun dp(value: Int): Int =
+        TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value.toFloat(), resources.displayMetrics).toInt()
 }

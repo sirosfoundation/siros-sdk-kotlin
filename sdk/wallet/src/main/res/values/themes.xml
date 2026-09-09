@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Theme for DCAPIGetCredentialActivity: it runs inside the calling
+         browser's task while the wallet answers a Digital Credentials API
+         request, so it draws only a dimmed scrim over the caller. Based on a
+         framework theme, not AppCompat/Material, so it imposes no UI toolkit
+         on the host app. A host app overrides it by redefining this style. -->
+    <style name="Theme.SirosSdk.DcApiHost" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowDisablePreview">true</item>
+        <item name="android:windowShowWallpaper">true</item>
+    </style>
+</resources>

@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The platform components a host app needs for DC API and NFC engagement now
+  ship in the SDK and are merged into the app manifest automatically:
+  `org.siros.sdk.wallet.dcapi.DCAPIGetCredentialActivity` (the Digital
+  Credentials API `GET_CREDENTIAL` entry point, translucent theme
+  `Theme.SirosSdk.DcApiHost`, GPM privileged-app allowlist) and
+  `org.siros.sdk.keystore.mdoc.MdocHostApduService` (ISO 18013-5 §9.2.1 NFC
+  static handover, with its `host-apdu-service` descriptor). A host app
+  keeps `WalletSessionHolder` pointed at its unlocked wallet and sets
+  `ActiveEngagement.handoverSelectBytes` while an engagement is shown, and
+  declares nothing else. Both were previously sample-app code every
+  integrator would have had to copy.
+
+### Changed
+- `WalletSessionHolder` moved from the sample app to
+  `org.siros.sdk.wallet.dcapi`; `ActiveEngagement` to
+  `org.siros.sdk.keystore.mdoc`. The SDK's own strings are prefixed `siros_`
+  and can be overridden by a host app by name.
 - Wallet instance lifecycle (SID-AUTH-06, go-wallet-backend#319):
   `SirosWallet.listWalletInstances()`, `setWalletInstanceStatus()` and
   `deactivateWallet()` (revokes every instance server-side, then forgets the

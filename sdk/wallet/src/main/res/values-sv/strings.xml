@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="siros_dcapi_zk_proof_status">Genererar nollkunskapsbevis…</string>
+    <string name="siros_dcapi_zk_proof_detail">Inga personuppgifter delas - endast ett kryptografiskt bevis på att du uppfyller begäran.</string>
+</resources>

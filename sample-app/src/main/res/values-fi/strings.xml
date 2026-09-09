@@ -43,8 +43,6 @@
     <string name="presentation_consent_title">Todistuspyyntö</string>
 
     <!-- DC API loading screen -->
-    <string name="dcapi_zk_proof_status">Luodaan nollatietotodistetta…</string>
-    <string name="dcapi_zk_proof_detail">Henkilötietoja ei jaeta - vain kryptografinen todiste siitä, että täytät pyynnön vaatimukset.</string>
 
     <!-- Credential detail screen -->
     <string name="credential_detail_title">Todistuksen tiedot</string>
@@ -89,7 +87,6 @@
     <string name="credential_consumption_never_consume">Älä koskaan kuluta (oletus)</string>
     <string name="settings_presentation_history">Esityshistoria</string>
     <string name="settings_logout">Kirjaudu ulos</string>
-    <string name="nfc_hce_description">ISO 18013-5 mdoc-laitesitoutuminen</string>
 
     <!-- Presentation history -->
     <string name="history_title">Esityshistoria</string>
