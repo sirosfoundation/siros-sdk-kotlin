@@ -2110,44 +2110,13 @@ class SirosWallet private constructor(
             // handleRequestAttestation. That spares this side a second fetch
             // of a possibly single-use credential_offer_uri and a duplicate
             // authorization_servers/client_id discovery.
-            if (offerUri.startsWith("openid-credential-offer://")) {
-                // Deep-link URI with inline offer — send as "offer" so the engine
-                // extracts the credential_offer query parameter instead of HTTP-fetching.
-                engine.startIssuance(
-                    offer = offerUri,
+            when (val start = resolveIssuanceStart(offerUri)) {
+                is IssuanceStart.Offer -> engine.startIssuance(
+                    offer = start.offer,
                     redirectUri = redirectUri,
                 )
-            } else if (offerUri.startsWith("http")) {
-                // Universal-link-style offer: the credential_offer/credential_offer_uri
-                // live in the URI's own query string (e.g. an issuer's wallet-redirect
-                // page), so the URI itself is not fetchable as the offer JSON - unlike
-                // the engine's openid-credential-offer:// handling, it only strips
-                // that query param for that exact scheme, so it must be extracted here.
-                val query = try { java.net.URI(offerUri).rawQuery } catch (_: Exception) { null }
-                val params = parseQueryParams(query)
-                when {
-                    params.containsKey("credential_offer") -> {
-                        engine.startIssuance(
-                            offer = params.getValue("credential_offer"),
-                            redirectUri = redirectUri,
-                        )
-                    }
-                    params.containsKey("credential_offer_uri") -> {
-                        engine.startIssuance(
-                            credentialOfferUri = params.getValue("credential_offer_uri"),
-                            redirectUri = redirectUri,
-                        )
-                    }
-                    else -> {
-                        engine.startIssuance(
-                            credentialOfferUri = offerUri,
-                            redirectUri = redirectUri,
-                        )
-                    }
-                }
-            } else {
-                engine.startIssuance(
-                    offer = offerUri,
+                is IssuanceStart.CredentialOfferUri -> engine.startIssuance(
+                    credentialOfferUri = start.uri,
                     redirectUri = redirectUri,
                 )
             }
@@ -2194,22 +2163,18 @@ class SirosWallet private constructor(
     }
 
     /** Extract the raw `credential_offer` JSON object from any of the shapes [startIssuance] accepts. */
-    private suspend fun extractOfferJson(offerUri: String): JsonObject? {
-        return if (offerUri.startsWith("openid-credential-offer://") || offerUri.startsWith("http")) {
-            val query = try { java.net.URI(offerUri).rawQuery } catch (_: Exception) { null }
-            val params = parseQueryParams(query)
-            when {
-                params.containsKey("credential_offer") ->
-                    json.parseToJsonElement(params.getValue("credential_offer")).jsonObject
-                params.containsKey("credential_offer_uri") ->
-                    fetchOfferJson(params.getValue("credential_offer_uri"))
-                else -> null
+    private suspend fun extractOfferJson(offerUri: String): JsonObject? =
+        when (val start = resolveIssuanceStart(offerUri)) {
+            // Inline offer JSON (unpacked from a query parameter, or the raw
+            // object itself). A URI the engine is left to interpret is not
+            // JSON and yields nothing to display.
+            is IssuanceStart.Offer -> try {
+                json.parseToJsonElement(start.offer).jsonObject
+            } catch (_: Exception) {
+                null
             }
-        } else {
-            // Not a URI at all - offerUri is itself the raw offer JSON.
-            json.parseToJsonElement(offerUri).jsonObject
+            is IssuanceStart.CredentialOfferUri -> fetchOfferJson(start.uri)
         }
-    }
 
     private suspend fun fetchOfferJson(uri: String): JsonObject? = withContext(Dispatchers.IO) {
         val request = Request.Builder().url(uri).get().build()
