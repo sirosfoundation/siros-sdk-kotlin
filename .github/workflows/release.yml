@@ -74,7 +74,12 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # The version is the tag's, not gradle.properties' `sdkVersion` (which
+      # is the NEXT release's) - so a re-tag can never publish under a stale
+      # number, and a failure here fails the job: the `|| echo skipping` that
+      # used to follow this hid the fact that no publish task existed at all.
       - name: Publish SDK to GitHub Packages
-        run: ./gradlew publish -x test -x lint || echo "publish task not configured yet — skipping"
+        run: ./gradlew publish -PsdkVersion="${GITHUB_REF_NAME#v}" -x test -x lint
         env:
+          GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
