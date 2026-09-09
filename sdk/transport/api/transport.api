@@ -1,0 +1,2435 @@
+public abstract interface class org/siros/sdk/transport/CredentialNotifier {
+	public abstract fun sendCredentialNotification (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+}
+
+public final class org/siros/sdk/transport/CredentialNotifier$DefaultImpls {
+	public static synthetic fun sendCredentialNotification$default (Lorg/siros/sdk/transport/CredentialNotifier;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)V
+}
+
+public abstract interface class org/siros/sdk/transport/Transport {
+	public abstract fun connect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun disconnect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun getState ()Lkotlinx/coroutines/flow/Flow;
+	public abstract fun incoming ()Lkotlinx/coroutines/flow/Flow;
+	public abstract fun send ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/transport/TransportState : java/lang/Enum {
+	public static final field CONNECTED Lorg/siros/sdk/transport/TransportState;
+	public static final field CONNECTING Lorg/siros/sdk/transport/TransportState;
+	public static final field DISCONNECTED Lorg/siros/sdk/transport/TransportState;
+	public static final field FAILED Lorg/siros/sdk/transport/TransportState;
+	public static final field RECONNECTING Lorg/siros/sdk/transport/TransportState;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lorg/siros/sdk/transport/TransportState;
+	public static fun values ()[Lorg/siros/sdk/transport/TransportState;
+}
+
+public final class org/siros/sdk/transport/engine/CredentialMatch {
+	public static final field Companion Lorg/siros/sdk/transport/engine/CredentialMatch$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/util/List;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;)Lorg/siros/sdk/transport/engine/CredentialMatch;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/CredentialMatch;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/CredentialMatch;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAvailableClaims ()Ljava/util/List;
+	public final fun getCredentialId ()Ljava/lang/String;
+	public final fun getCredentialQueryId ()Ljava/lang/String;
+	public final fun getFormat ()Ljava/lang/String;
+	public final fun getVct ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/CredentialMatch$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/CredentialMatch$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/CredentialMatch;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/CredentialMatch;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/CredentialMatch$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/CredentialNotificationEvent {
+	public static final field ACCEPTED Ljava/lang/String;
+	public static final field FAILURE Ljava/lang/String;
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/CredentialNotificationEvent;
+}
+
+public final class org/siros/sdk/transport/engine/CredentialNotificationMessage {
+	public static final field Companion Lorg/siros/sdk/transport/engine/CredentialNotificationMessage$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/CredentialNotificationMessage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/CredentialNotificationMessage;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/CredentialNotificationMessage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEvent ()Ljava/lang/String;
+	public final fun getEventDescription ()Ljava/lang/String;
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getNotificationId ()Ljava/lang/String;
+	public final fun getTimestamp ()Ljava/lang/String;
+	public final fun getType ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/CredentialNotificationMessage$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/CredentialNotificationMessage$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/CredentialNotificationMessage;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/CredentialNotificationMessage;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/CredentialNotificationMessage$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/CredentialRef {
+	public static final field Companion Lorg/siros/sdk/transport/engine/CredentialRef$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/util/List;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;)Lorg/siros/sdk/transport/engine/CredentialRef;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/CredentialRef;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/CredentialRef;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCredentialId ()Ljava/lang/String;
+	public final fun getCredentialQueryId ()Ljava/lang/String;
+	public final fun getDisclosedClaims ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/CredentialRef$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/CredentialRef$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/CredentialRef;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/CredentialRef;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/CredentialRef$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/CredentialResult {
+	public static final field Companion Lorg/siros/sdk/transport/engine/CredentialResult$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Lkotlinx/serialization/json/JsonElement;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/CredentialResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/CredentialResult;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/CredentialResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCredential ()Ljava/lang/String;
+	public final fun getFormat ()Ljava/lang/String;
+	public final fun getNotificationId ()Ljava/lang/String;
+	public final fun getTypeMetadata ()Lkotlinx/serialization/json/JsonElement;
+	public final fun getVct ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/CredentialResult$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/CredentialResult$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/CredentialResult;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/CredentialResult;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/CredentialResult$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/EngineMessage {
+	public static final field Companion Lorg/siros/sdk/transport/engine/EngineMessage$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/EngineMessage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/EngineMessage;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/EngineMessage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getMessageId ()Ljava/lang/String;
+	public final fun getTimestamp ()Ljava/lang/String;
+	public final fun getType ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/EngineMessage$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/EngineMessage$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/EngineMessage;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/EngineMessage;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/EngineMessage$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/ErrorMessage {
+	public static final field Companion Lorg/siros/sdk/transport/engine/ErrorMessage$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/ErrorMessage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/ErrorMessage;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/ErrorMessage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCode ()Ljava/lang/String;
+	public final fun getDetails ()Ljava/lang/String;
+	public final fun getTimestamp ()Ljava/lang/String;
+	public final fun getType ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/ErrorMessage$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/ErrorMessage$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/ErrorMessage;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/ErrorMessage;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/ErrorMessage$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/FlowActionMessage {
+	public static final field Companion Lorg/siros/sdk/transport/engine/FlowActionMessage$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/FlowActionMessage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/FlowActionMessage;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/FlowActionMessage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAction ()Ljava/lang/String;
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getPayload ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getTimestamp ()Ljava/lang/String;
+	public final fun getType ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/FlowActionMessage$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/FlowActionMessage$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/FlowActionMessage;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/FlowActionMessage;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/FlowActionMessage$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/FlowCompleteMessage {
+	public static final field Companion Lorg/siros/sdk/transport/engine/FlowCompleteMessage$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component10 ()Ljava/lang/String;
+	public final fun component11 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/util/List;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Lkotlinx/serialization/json/JsonElement;
+	public final fun component6 ()Ljava/lang/String;
+	public final fun component7 ()Ljava/lang/String;
+	public final fun component8 ()Ljava/lang/String;
+	public final fun component9 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/FlowCompleteMessage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/FlowCompleteMessage;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/FlowCompleteMessage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCredentialIssuer ()Ljava/lang/String;
+	public final fun getCredentials ()Ljava/util/List;
+	public final fun getDpopJwk ()Ljava/lang/String;
+	public final fun getDpopKeyId ()Ljava/lang/String;
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getRedirectUri ()Ljava/lang/String;
+	public final fun getRefreshToken ()Ljava/lang/String;
+	public final fun getSelectedCredentialConfigurationId ()Ljava/lang/String;
+	public final fun getTimestamp ()Ljava/lang/String;
+	public final fun getType ()Ljava/lang/String;
+	public final fun getTypeMetadata ()Lkotlinx/serialization/json/JsonElement;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/FlowCompleteMessage$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/FlowCompleteMessage$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/FlowCompleteMessage;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/FlowCompleteMessage;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/FlowCompleteMessage$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/FlowError {
+	public static final field Companion Lorg/siros/sdk/transport/engine/FlowError$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)Lorg/siros/sdk/transport/engine/FlowError;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/FlowError;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/FlowError;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCode ()Ljava/lang/String;
+	public final fun getDetails ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/FlowError$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/FlowError$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/FlowError;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/FlowError;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/FlowError$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/FlowErrorMessage {
+	public static final field Companion Lorg/siros/sdk/transport/engine/FlowErrorMessage$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/FlowError;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/FlowError;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Lorg/siros/sdk/transport/engine/FlowError;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/FlowError;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/FlowErrorMessage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/FlowErrorMessage;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/FlowError;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/FlowErrorMessage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getError ()Lorg/siros/sdk/transport/engine/FlowError;
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getStep ()Ljava/lang/String;
+	public final fun getTimestamp ()Ljava/lang/String;
+	public final fun getType ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/FlowErrorMessage$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/FlowErrorMessage$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/FlowErrorMessage;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/FlowErrorMessage;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/FlowErrorMessage$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/FlowProgressMessage {
+	public static final field Companion Lorg/siros/sdk/transport/engine/FlowProgressMessage$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Lkotlinx/serialization/json/JsonElement;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/FlowProgressMessage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/FlowProgressMessage;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/FlowProgressMessage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getPayload ()Lkotlinx/serialization/json/JsonElement;
+	public final fun getStep ()Ljava/lang/String;
+	public final fun getTimestamp ()Ljava/lang/String;
+	public final fun getType ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/FlowProgressMessage$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/FlowProgressMessage$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/FlowProgressMessage;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/FlowProgressMessage;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/FlowProgressMessage$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/FlowStartMessage {
+	public static final field Companion Lorg/siros/sdk/transport/engine/FlowStartMessage$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component10 ()Ljava/lang/String;
+	public final fun component11 ()Ljava/lang/String;
+	public final fun component12 ()Ljava/lang/String;
+	public final fun component13 ()Ljava/lang/String;
+	public final fun component14 ()Ljava/lang/String;
+	public final fun component15 ()Ljava/lang/String;
+	public final fun component16 ()Ljava/lang/String;
+	public final fun component17 ()Ljava/lang/String;
+	public final fun component18 ()Ljava/lang/String;
+	public final fun component19 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Ljava/lang/String;
+	public final fun component7 ()Ljava/lang/String;
+	public final fun component8 ()Ljava/lang/String;
+	public final fun component9 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/FlowStartMessage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/FlowStartMessage;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/FlowStartMessage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAuthCode ()Ljava/lang/String;
+	public final fun getClientAttestation ()Ljava/lang/String;
+	public final fun getClientAttestationPoP ()Ljava/lang/String;
+	public final fun getCodeVerifier ()Ljava/lang/String;
+	public final fun getCredentialIssuer ()Ljava/lang/String;
+	public final fun getCredentialOfferUri ()Ljava/lang/String;
+	public final fun getDpopJwk ()Ljava/lang/String;
+	public final fun getDpopKeyId ()Ljava/lang/String;
+	public final fun getOffer ()Ljava/lang/String;
+	public final fun getProtocol ()Ljava/lang/String;
+	public final fun getRedirectUri ()Ljava/lang/String;
+	public final fun getRefreshToken ()Ljava/lang/String;
+	public final fun getReissuanceKid ()Ljava/lang/String;
+	public final fun getRequestUri ()Ljava/lang/String;
+	public final fun getRequestUriRef ()Ljava/lang/String;
+	public final fun getSelectedCredentialConfigurationId ()Ljava/lang/String;
+	public final fun getTimestamp ()Ljava/lang/String;
+	public final fun getType ()Ljava/lang/String;
+	public final fun getVct ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/FlowStartMessage$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/FlowStartMessage$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/FlowStartMessage;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/FlowStartMessage;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/FlowStartMessage$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/HandshakeCompleteMessage {
+	public static final field Companion Lorg/siros/sdk/transport/engine/HandshakeCompleteMessage$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/util/List;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/HandshakeCompleteMessage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/HandshakeCompleteMessage;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/HandshakeCompleteMessage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCapabilities ()Ljava/util/List;
+	public final fun getSessionId ()Ljava/lang/String;
+	public final fun getTimestamp ()Ljava/lang/String;
+	public final fun getType ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/HandshakeCompleteMessage$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/HandshakeCompleteMessage$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/HandshakeCompleteMessage;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/HandshakeCompleteMessage;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/HandshakeCompleteMessage$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/HandshakeMessage {
+	public static final field Companion Lorg/siros/sdk/transport/engine/HandshakeMessage$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/HandshakeMessage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/HandshakeMessage;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/HandshakeMessage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAppToken ()Ljava/lang/String;
+	public final fun getType ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/HandshakeMessage$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/HandshakeMessage$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/HandshakeMessage;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/HandshakeMessage;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/HandshakeMessage$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/MatchRequestMessage {
+	public static final field Companion Lorg/siros/sdk/transport/engine/MatchRequestMessage$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Lkotlinx/serialization/json/JsonElement;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/MatchRequestMessage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/MatchRequestMessage;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/MatchRequestMessage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDcqlQuery ()Lkotlinx/serialization/json/JsonElement;
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getTimestamp ()Ljava/lang/String;
+	public final fun getType ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/MatchRequestMessage$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/MatchRequestMessage$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/MatchRequestMessage;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/MatchRequestMessage;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/MatchRequestMessage$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/MatchResponseMessage {
+	public static final field Companion Lorg/siros/sdk/transport/engine/MatchResponseMessage$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/util/List;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/MatchResponseMessage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/MatchResponseMessage;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/MatchResponseMessage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getError ()Ljava/lang/String;
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getMatches ()Ljava/util/List;
+	public final fun getNoMatchReason ()Ljava/lang/String;
+	public final fun getTimestamp ()Ljava/lang/String;
+	public final fun getType ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/MatchResponseMessage$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/MatchResponseMessage$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/MatchResponseMessage;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/MatchResponseMessage;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/MatchResponseMessage$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/MessageTypes {
+	public static final field CREDENTIAL_NOTIFICATION Ljava/lang/String;
+	public static final field ERROR Ljava/lang/String;
+	public static final field FLOW_ACTION Ljava/lang/String;
+	public static final field FLOW_COMPLETE Ljava/lang/String;
+	public static final field FLOW_ERROR Ljava/lang/String;
+	public static final field FLOW_PROGRESS Ljava/lang/String;
+	public static final field FLOW_START Ljava/lang/String;
+	public static final field HANDSHAKE Ljava/lang/String;
+	public static final field HANDSHAKE_COMPLETE Ljava/lang/String;
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/MessageTypes;
+	public static final field MATCH_REQUEST Ljava/lang/String;
+	public static final field MATCH_RESPONSE Ljava/lang/String;
+	public static final field NOTIFICATION_ACK Ljava/lang/String;
+	public static final field PUSH Ljava/lang/String;
+	public static final field SIGN_REQUEST Ljava/lang/String;
+	public static final field SIGN_RESPONSE Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/engine/NotificationAckMessage {
+	public static final field Companion Lorg/siros/sdk/transport/engine/NotificationAckMessage$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/NotificationAckMessage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/NotificationAckMessage;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/NotificationAckMessage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getError ()Ljava/lang/String;
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getNotificationId ()Ljava/lang/String;
+	public final fun getStatus ()Ljava/lang/String;
+	public final fun getTimestamp ()Ljava/lang/String;
+	public final fun getType ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/NotificationAckMessage$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/NotificationAckMessage$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/NotificationAckMessage;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/NotificationAckMessage;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/NotificationAckMessage$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/ProofObject {
+	public static final field Companion Lorg/siros/sdk/transport/engine/ProofObject$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/ProofObject;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/ProofObject;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/ProofObject;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttestation ()Ljava/lang/String;
+	public final fun getJwt ()Ljava/lang/String;
+	public final fun getProofType ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/ProofObject$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/ProofObject$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/ProofObject;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/ProofObject;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/ProofObject$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/PushMessage {
+	public static final field Companion Lorg/siros/sdk/transport/engine/PushMessage$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/util/List;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/PushMessage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/PushMessage;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/PushMessage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCredentials ()Ljava/util/List;
+	public final fun getPushType ()Ljava/lang/String;
+	public final fun getTimestamp ()Ljava/lang/String;
+	public final fun getType ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/PushMessage$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/PushMessage$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/PushMessage;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/PushMessage;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/PushMessage$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/SignRequestMessage {
+	public static final field Companion Lorg/siros/sdk/transport/engine/SignRequestMessage$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/SignRequestParams;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/SignRequestParams;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Lorg/siros/sdk/transport/engine/SignRequestParams;
+	public final fun component6 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/SignRequestParams;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/SignRequestMessage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/SignRequestMessage;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/SignRequestParams;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/SignRequestMessage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAction ()Ljava/lang/String;
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getMessageId ()Ljava/lang/String;
+	public final fun getParams ()Lorg/siros/sdk/transport/engine/SignRequestParams;
+	public final fun getTimestamp ()Ljava/lang/String;
+	public final fun getType ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/SignRequestMessage$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/SignRequestMessage$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/SignRequestMessage;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/SignRequestMessage;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/SignRequestMessage$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/SignRequestParams {
+	public static final field Companion Lorg/siros/sdk/transport/engine/SignRequestParams$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/Integer;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/Integer;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component10 ()Ljava/lang/String;
+	public final fun component11 ()Ljava/lang/String;
+	public final fun component12 ()Ljava/lang/String;
+	public final fun component13 ()Ljava/lang/String;
+	public final fun component14 ()Ljava/lang/String;
+	public final fun component15 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun component6 ()Ljava/lang/Integer;
+	public final fun component7 ()Ljava/util/List;
+	public final fun component8 ()Ljava/lang/String;
+	public final fun component9 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/Integer;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/SignRequestParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/SignRequestParams;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/Integer;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/SignRequestParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAth ()Ljava/lang/String;
+	public final fun getAudience ()Ljava/lang/String;
+	public final fun getCount ()Ljava/lang/Integer;
+	public final fun getCredentialsToInclude ()Ljava/util/List;
+	public final fun getDpopNonce ()Ljava/lang/String;
+	public final fun getHtm ()Ljava/lang/String;
+	public final fun getHtu ()Ljava/lang/String;
+	public final fun getIssuer ()Ljava/lang/String;
+	public final fun getKeyId ()Ljava/lang/String;
+	public final fun getNonce ()Ljava/lang/String;
+	public final fun getProofType ()Ljava/lang/String;
+	public final fun getProofTypesSupported ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getResponseUri ()Ljava/lang/String;
+	public final fun getVerifierJwkThumbprint ()Ljava/lang/String;
+	public final fun getVerifierSessionId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/SignRequestParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/SignRequestParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/SignRequestParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/SignRequestParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/SignRequestParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/SignResponseMessage {
+	public static final field Companion Lorg/siros/sdk/transport/engine/SignResponseMessage$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component10 ()Ljava/lang/String;
+	public final fun component11 ()Ljava/lang/String;
+	public final fun component12 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Ljava/util/List;
+	public final fun component7 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun component8 ()Ljava/lang/String;
+	public final fun component9 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/SignResponseMessage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/SignResponseMessage;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/SignResponseMessage;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getClientAttestation ()Ljava/lang/String;
+	public final fun getClientAttestationPoP ()Ljava/lang/String;
+	public final fun getCredentialRequestExtras ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getDpopKeyId ()Ljava/lang/String;
+	public final fun getDpopProof ()Ljava/lang/String;
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getMessageId ()Ljava/lang/String;
+	public final fun getProofJwt ()Ljava/lang/String;
+	public final fun getProofs ()Ljava/util/List;
+	public final fun getTimestamp ()Ljava/lang/String;
+	public final fun getType ()Ljava/lang/String;
+	public final fun getVpToken ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/engine/SignResponseMessage$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/engine/SignResponseMessage$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/engine/SignResponseMessage;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/engine/SignResponseMessage;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/SignResponseMessage$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/engine/WalletEngineSession : org/siros/sdk/transport/CredentialNotifier {
+	public static final field Companion Lorg/siros/sdk/transport/engine/WalletEngineSession$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lokhttp3/OkHttpClient;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lokhttp3/OkHttpClient;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun awaitConnected (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun awaitConnected$default (Lorg/siros/sdk/transport/engine/WalletEngineSession;JLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun cancelFlow (Ljava/lang/String;)V
+	public final fun connect (Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function0;)V
+	public static synthetic fun connect$default (Lorg/siros/sdk/transport/engine/WalletEngineSession;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/jvm/functions/Function0;ILjava/lang/Object;)V
+	public final fun disconnect ()V
+	public final fun flowComplete ()Lkotlinx/coroutines/flow/Flow;
+	public final fun flowErrors ()Lkotlinx/coroutines/flow/Flow;
+	public final fun flowProgress ()Lkotlinx/coroutines/flow/Flow;
+	public final fun forceReconnect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun isConnected ()Z
+	public final fun matchRequests ()Lkotlinx/coroutines/flow/Flow;
+	public final fun messages ()Lkotlinx/coroutines/flow/Flow;
+	public final fun notificationAcks ()Lkotlinx/coroutines/flow/Flow;
+	public final fun pushMessages ()Lkotlinx/coroutines/flow/Flow;
+	public final fun resumeIssuance (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public static synthetic fun resumeIssuance$default (Lorg/siros/sdk/transport/engine/WalletEngineSession;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)V
+	public fun sendCredentialNotification (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public final fun sendFlowAction (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)V
+	public static synthetic fun sendFlowAction$default (Lorg/siros/sdk/transport/engine/WalletEngineSession;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)V
+	public final fun sendMatchResponse (Ljava/lang/String;Ljava/util/List;)V
+	public final fun sendSignResponse (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public static synthetic fun sendSignResponse$default (Lorg/siros/sdk/transport/engine/WalletEngineSession;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)V
+	public final fun sendTrustResult (Ljava/lang/String;ZLjava/lang/String;)V
+	public static synthetic fun sendTrustResult$default (Lorg/siros/sdk/transport/engine/WalletEngineSession;Ljava/lang/String;ZLjava/lang/String;ILjava/lang/Object;)V
+	public final fun signRequests ()Lkotlinx/coroutines/flow/Flow;
+	public final fun startIssuance (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public static synthetic fun startIssuance$default (Lorg/siros/sdk/transport/engine/WalletEngineSession;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)V
+	public final fun startPresentation (Ljava/lang/String;Ljava/lang/String;)V
+	public static synthetic fun startPresentation$default (Lorg/siros/sdk/transport/engine/WalletEngineSession;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)V
+	public final fun startRenewal (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public static synthetic fun startRenewal$default (Lorg/siros/sdk/transport/engine/WalletEngineSession;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)V
+}
+
+public final class org/siros/sdk/transport/engine/WalletEngineSession$Companion {
+}
+
+public final class org/siros/sdk/transport/engine/WalletEngineSession$State : java/lang/Enum {
+	public static final field CONNECTED Lorg/siros/sdk/transport/engine/WalletEngineSession$State;
+	public static final field CONNECTING Lorg/siros/sdk/transport/engine/WalletEngineSession$State;
+	public static final field DISCONNECTED Lorg/siros/sdk/transport/engine/WalletEngineSession$State;
+	public static final field FAILED Lorg/siros/sdk/transport/engine/WalletEngineSession$State;
+	public static final field REAUTH_REQUIRED Lorg/siros/sdk/transport/engine/WalletEngineSession$State;
+	public static final field RECONNECTING Lorg/siros/sdk/transport/engine/WalletEngineSession$State;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lorg/siros/sdk/transport/engine/WalletEngineSession$State;
+	public static fun values ()[Lorg/siros/sdk/transport/engine/WalletEngineSession$State;
+}
+
+public final class org/siros/sdk/transport/wmp/FlowActionParams {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/FlowActionParams$Companion;
+	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)V
+	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)Lorg/siros/sdk/transport/wmp/FlowActionParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/FlowActionParams;Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/FlowActionParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAction ()Ljava/lang/String;
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getParams ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getWmp ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/FlowActionParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/FlowActionParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/FlowActionParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/FlowActionParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/FlowActionParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/FlowActionResult {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/FlowActionResult$Companion;
+	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Z)V
+	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Z
+	public final fun copy (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Z)Lorg/siros/sdk/transport/wmp/FlowActionResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/FlowActionResult;Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;ZILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/FlowActionResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAccepted ()Z
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getWmp ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/FlowActionResult$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/FlowActionResult$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/FlowActionResult;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/FlowActionResult;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/FlowActionResult$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/FlowCancelParams {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/FlowCancelParams$Companion;
+	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/FlowCancelParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/FlowCancelParams;Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/FlowCancelParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getReason ()Ljava/lang/String;
+	public final fun getWmp ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/FlowCancelParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/FlowCancelParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/FlowCancelParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/FlowCancelParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/FlowCancelParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/FlowCompleteParams {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/FlowCompleteParams$Companion;
+	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)V
+	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)Lorg/siros/sdk/transport/wmp/FlowCompleteParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/FlowCompleteParams;Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/FlowCompleteParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getResult ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getWmp ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/FlowCompleteParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/FlowCompleteParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/FlowCompleteParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/FlowCompleteParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/FlowCompleteParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/FlowErrorParams {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/FlowErrorParams$Companion;
+	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;)V
+	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Lkotlinx/serialization/json/JsonElement;
+	public final fun copy (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;)Lorg/siros/sdk/transport/wmp/FlowErrorParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/FlowErrorParams;Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/FlowErrorParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCode ()Ljava/lang/String;
+	public final fun getData ()Lkotlinx/serialization/json/JsonElement;
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getMessage ()Ljava/lang/String;
+	public final fun getWmp ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/FlowErrorParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/FlowErrorParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/FlowErrorParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/FlowErrorParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/FlowErrorParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract class org/siros/sdk/transport/wmp/FlowEvent {
+}
+
+public final class org/siros/sdk/transport/wmp/FlowEvent$Action : org/siros/sdk/transport/wmp/FlowEvent {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)Lorg/siros/sdk/transport/wmp/FlowEvent$Action;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/FlowEvent$Action;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/FlowEvent$Action;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAction ()Ljava/lang/String;
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getParams ()Lkotlinx/serialization/json/JsonObject;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/FlowEvent$Cancelled : org/siros/sdk/transport/wmp/FlowEvent {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/FlowEvent$Cancelled;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/FlowEvent$Cancelled;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/FlowEvent$Cancelled;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/FlowEvent$Complete : org/siros/sdk/transport/wmp/FlowEvent {
+	public fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)Lorg/siros/sdk/transport/wmp/FlowEvent$Complete;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/FlowEvent$Complete;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/FlowEvent$Complete;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getResult ()Lkotlinx/serialization/json/JsonObject;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/FlowEvent$Error : org/siros/sdk/transport/wmp/FlowEvent {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/FlowEvent$Error;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/FlowEvent$Error;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/FlowEvent$Error;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCode ()Ljava/lang/String;
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/FlowEvent$Progress : org/siros/sdk/transport/wmp/FlowEvent {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)Lorg/siros/sdk/transport/wmp/FlowEvent$Progress;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/FlowEvent$Progress;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/FlowEvent$Progress;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getPayload ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getStep ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/FlowEvent$Started : org/siros/sdk/transport/wmp/FlowEvent {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)Lorg/siros/sdk/transport/wmp/FlowEvent$Started;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/FlowEvent$Started;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/FlowEvent$Started;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getFlowType ()Ljava/lang/String;
+	public final fun getParams ()Lkotlinx/serialization/json/JsonObject;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/FlowProgressParams {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/FlowProgressParams$Companion;
+	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)V
+	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)Lorg/siros/sdk/transport/wmp/FlowProgressParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/FlowProgressParams;Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/FlowProgressParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getPayload ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getStep ()Ljava/lang/String;
+	public final fun getWmp ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/FlowProgressParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/FlowProgressParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/FlowProgressParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/FlowProgressParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/FlowProgressParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/FlowStartParams {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/FlowStartParams$Companion;
+	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)V
+	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)Lorg/siros/sdk/transport/wmp/FlowStartParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/FlowStartParams;Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/FlowStartParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getFlowType ()Ljava/lang/String;
+	public final fun getParams ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getWmp ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/FlowStartParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/FlowStartParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/FlowStartParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/FlowStartParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/FlowStartParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/FlowStartResult {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/FlowStartResult$Companion;
+	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/FlowStartResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/FlowStartResult;Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/FlowStartResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getFlowType ()Ljava/lang/String;
+	public final fun getWmp ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/FlowStartResult$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/FlowStartResult$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/FlowStartResult;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/FlowStartResult;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/FlowStartResult$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/JsonRpcError {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/JsonRpcError$Companion;
+	public fun <init> (ILjava/lang/String;Lkotlinx/serialization/json/JsonElement;)V
+	public synthetic fun <init> (ILjava/lang/String;Lkotlinx/serialization/json/JsonElement;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()I
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Lkotlinx/serialization/json/JsonElement;
+	public final fun copy (ILjava/lang/String;Lkotlinx/serialization/json/JsonElement;)Lorg/siros/sdk/transport/wmp/JsonRpcError;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/JsonRpcError;ILjava/lang/String;Lkotlinx/serialization/json/JsonElement;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/JsonRpcError;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCode ()I
+	public final fun getData ()Lkotlinx/serialization/json/JsonElement;
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/JsonRpcError$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/JsonRpcError$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/JsonRpcError;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/JsonRpcError;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/JsonRpcError$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/JsonRpcRequest {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/JsonRpcRequest$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)Lorg/siros/sdk/transport/wmp/JsonRpcRequest;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/JsonRpcRequest;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/JsonRpcRequest;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getId ()Ljava/lang/String;
+	public final fun getJsonrpc ()Ljava/lang/String;
+	public final fun getMethod ()Ljava/lang/String;
+	public final fun getParams ()Lkotlinx/serialization/json/JsonObject;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/JsonRpcRequest$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/JsonRpcRequest$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/JsonRpcRequest;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/JsonRpcRequest;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/JsonRpcRequest$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/JsonRpcResponse {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/JsonRpcResponse$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lorg/siros/sdk/transport/wmp/JsonRpcError;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lorg/siros/sdk/transport/wmp/JsonRpcError;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun component4 ()Lorg/siros/sdk/transport/wmp/JsonRpcError;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lorg/siros/sdk/transport/wmp/JsonRpcError;)Lorg/siros/sdk/transport/wmp/JsonRpcResponse;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/JsonRpcResponse;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lorg/siros/sdk/transport/wmp/JsonRpcError;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/JsonRpcResponse;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getError ()Lorg/siros/sdk/transport/wmp/JsonRpcError;
+	public final fun getId ()Ljava/lang/String;
+	public final fun getJsonrpc ()Ljava/lang/String;
+	public final fun getResult ()Lkotlinx/serialization/json/JsonObject;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/JsonRpcResponse$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/JsonRpcResponse$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/JsonRpcResponse;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/JsonRpcResponse;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/JsonRpcResponse$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/ResolveParams {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/ResolveParams$Companion;
+	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)V
+	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)Lorg/siros/sdk/transport/wmp/ResolveParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/ResolveParams;Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/ResolveParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getIdentifier ()Ljava/lang/String;
+	public final fun getParams ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getType ()Ljava/lang/String;
+	public final fun getWmp ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/ResolveParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/ResolveParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/ResolveParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/ResolveParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/ResolveParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/ResolveResult {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/ResolveResult$Companion;
+	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)V
+	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)Lorg/siros/sdk/transport/wmp/ResolveResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/ResolveResult;Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/ResolveResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getData ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getType ()Ljava/lang/String;
+	public final fun getWmp ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/ResolveResult$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/ResolveResult$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/ResolveResult;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/ResolveResult;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/ResolveResult$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/SessionAuth {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/SessionAuth$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/SessionAuth;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/SessionAuth;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/SessionAuth;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getToken ()Ljava/lang/String;
+	public final fun getType ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/SessionAuth$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/SessionAuth$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/SessionAuth;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/SessionAuth;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/SessionAuth$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/SessionCloseParams {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/SessionCloseParams$Companion;
+	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;)V
+	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/SessionCloseParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/SessionCloseParams;Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/SessionCloseParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReason ()Ljava/lang/String;
+	public final fun getWmp ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/SessionCloseParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/SessionCloseParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/SessionCloseParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/SessionCloseParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/SessionCloseParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/SessionCreateParams {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/SessionCreateParams$Companion;
+	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lkotlinx/serialization/json/JsonObject;Ljava/lang/Integer;Lorg/siros/sdk/transport/wmp/SessionAuth;)V
+	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lkotlinx/serialization/json/JsonObject;Ljava/lang/Integer;Lorg/siros/sdk/transport/wmp/SessionAuth;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public final fun component2 ()Ljava/util/List;
+	public final fun component3 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun component4 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun component5 ()Ljava/lang/Integer;
+	public final fun component6 ()Lorg/siros/sdk/transport/wmp/SessionAuth;
+	public final fun copy (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lkotlinx/serialization/json/JsonObject;Ljava/lang/Integer;Lorg/siros/sdk/transport/wmp/SessionAuth;)Lorg/siros/sdk/transport/wmp/SessionCreateParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/SessionCreateParams;Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/util/List;Lkotlinx/serialization/json/JsonObject;Lkotlinx/serialization/json/JsonObject;Ljava/lang/Integer;Lorg/siros/sdk/transport/wmp/SessionAuth;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/SessionCreateParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAuth ()Lorg/siros/sdk/transport/wmp/SessionAuth;
+	public final fun getCapabilitiesOffered ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getParticipants ()Ljava/util/List;
+	public final fun getSecurity ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getTtl ()Ljava/lang/Integer;
+	public final fun getWmp ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/SessionCreateParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/SessionCreateParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/SessionCreateParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/SessionCreateParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/SessionCreateParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/SessionCreateResult {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/SessionCreateResult$Companion;
+	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Lkotlinx/serialization/json/JsonObject;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Lkotlinx/serialization/json/JsonObject;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public final fun component2 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun component3 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun copy (Lorg/siros/sdk/transport/wmp/WmpMeta;Lkotlinx/serialization/json/JsonObject;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/SessionCreateResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/SessionCreateResult;Lorg/siros/sdk/transport/wmp/WmpMeta;Lkotlinx/serialization/json/JsonObject;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/SessionCreateResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCapabilities ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getChallenge ()Ljava/lang/String;
+	public final fun getResumptionToken ()Ljava/lang/String;
+	public final fun getSecurity ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getWmp ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/SessionCreateResult$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/SessionCreateResult$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/SessionCreateResult;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/SessionCreateResult;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/SessionCreateResult$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/SessionResumeParams {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/SessionResumeParams$Companion;
+	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/SessionResumeParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/SessionResumeParams;Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/SessionResumeParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getLastReceivedId ()Ljava/lang/String;
+	public final fun getResumptionToken ()Ljava/lang/String;
+	public final fun getSessionId ()Ljava/lang/String;
+	public final fun getWmp ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/SessionResumeParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/SessionResumeParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/SessionResumeParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/SessionResumeParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/SessionResumeParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/SessionResumeResult {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/SessionResumeResult$Companion;
+	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;ZLjava/lang/String;Ljava/lang/Integer;)V
+	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;ZLjava/lang/String;Ljava/lang/Integer;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public final fun component2 ()Z
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/Integer;
+	public final fun copy (Lorg/siros/sdk/transport/wmp/WmpMeta;ZLjava/lang/String;Ljava/lang/Integer;)Lorg/siros/sdk/transport/wmp/SessionResumeResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/SessionResumeResult;Lorg/siros/sdk/transport/wmp/WmpMeta;ZLjava/lang/String;Ljava/lang/Integer;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/SessionResumeResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMissedMessages ()Ljava/lang/Integer;
+	public final fun getResumed ()Z
+	public final fun getResumptionToken ()Ljava/lang/String;
+	public final fun getWmp ()Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/SessionResumeResult$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/SessionResumeResult$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/SessionResumeResult;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/SessionResumeResult;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/SessionResumeResult$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/WmpCodec {
+	public fun <init> ()V
+	public fun <init> (Lkotlinx/serialization/json/Json;)V
+	public synthetic fun <init> (Lkotlinx/serialization/json/Json;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun decodeMessage ([B)Lorg/siros/sdk/transport/wmp/WmpMessage;
+	public final fun decodeRequest ([B)Lorg/siros/sdk/transport/wmp/JsonRpcRequest;
+	public final fun decodeResponse ([B)Lorg/siros/sdk/transport/wmp/JsonRpcResponse;
+	public final fun encodeNotification (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)[B
+	public final fun encodeRequest (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;)[B
+	public static synthetic fun encodeRequest$default (Lorg/siros/sdk/transport/wmp/WmpCodec;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;ILjava/lang/Object;)[B
+	public final fun getJson ()Lkotlinx/serialization/json/Json;
+}
+
+public final class org/siros/sdk/transport/wmp/WmpErrorCodes {
+	public static final field AUTH_FAILED I
+	public static final field AUTH_REQUIRED I
+	public static final field CAPABILITY_ERROR I
+	public static final field ENCRYPTION_ERROR I
+	public static final field FLOW_CANCELLED I
+	public static final field FLOW_ERROR I
+	public static final field FLOW_NOT_FOUND I
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/WmpErrorCodes;
+	public static final field INTERNAL_ERROR I
+	public static final field INVALID_PARAMS I
+	public static final field INVALID_REQUEST I
+	public static final field METHOD_NOT_FOUND I
+	public static final field PARSE_ERROR I
+	public static final field RELAY_ERROR I
+	public static final field RESOLVE_ERROR I
+	public static final field SESSION_ERROR I
+}
+
+public abstract interface class org/siros/sdk/transport/wmp/WmpFlowHandler {
+	public abstract fun getFlowTypes ()Ljava/util/List;
+	public abstract fun handleAction (Lorg/siros/sdk/transport/wmp/FlowActionParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun handleCancel (Lorg/siros/sdk/transport/wmp/FlowCancelParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun handleComplete (Lorg/siros/sdk/transport/wmp/FlowCompleteParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun handleError (Lorg/siros/sdk/transport/wmp/FlowErrorParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun handleProgress (Lorg/siros/sdk/transport/wmp/FlowProgressParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun startFlow (Lorg/siros/sdk/transport/wmp/FlowStartParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/transport/wmp/WmpHttpSseTransport : org/siros/sdk/transport/Transport {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/WmpHttpSseTransport$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lokhttp3/OkHttpClient;Ljava/util/Map;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lokhttp3/OkHttpClient;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun connect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun disconnect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public synthetic fun getState ()Lkotlinx/coroutines/flow/Flow;
+	public fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun incoming ()Lkotlinx/coroutines/flow/Flow;
+	public fun send ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/transport/wmp/WmpHttpSseTransport$Companion {
+}
+
+public abstract class org/siros/sdk/transport/wmp/WmpMessage {
+}
+
+public final class org/siros/sdk/transport/wmp/WmpMessage$Notification : org/siros/sdk/transport/wmp/WmpMessage {
+	public fun <init> (Lorg/siros/sdk/transport/wmp/JsonRpcRequest;)V
+	public final fun component1 ()Lorg/siros/sdk/transport/wmp/JsonRpcRequest;
+	public final fun copy (Lorg/siros/sdk/transport/wmp/JsonRpcRequest;)Lorg/siros/sdk/transport/wmp/WmpMessage$Notification;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/WmpMessage$Notification;Lorg/siros/sdk/transport/wmp/JsonRpcRequest;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/WmpMessage$Notification;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getNotification ()Lorg/siros/sdk/transport/wmp/JsonRpcRequest;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/WmpMessage$Request : org/siros/sdk/transport/wmp/WmpMessage {
+	public fun <init> (Lorg/siros/sdk/transport/wmp/JsonRpcRequest;)V
+	public final fun component1 ()Lorg/siros/sdk/transport/wmp/JsonRpcRequest;
+	public final fun copy (Lorg/siros/sdk/transport/wmp/JsonRpcRequest;)Lorg/siros/sdk/transport/wmp/WmpMessage$Request;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/WmpMessage$Request;Lorg/siros/sdk/transport/wmp/JsonRpcRequest;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/WmpMessage$Request;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRequest ()Lorg/siros/sdk/transport/wmp/JsonRpcRequest;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/WmpMessage$Response : org/siros/sdk/transport/wmp/WmpMessage {
+	public fun <init> (Lorg/siros/sdk/transport/wmp/JsonRpcResponse;)V
+	public final fun component1 ()Lorg/siros/sdk/transport/wmp/JsonRpcResponse;
+	public final fun copy (Lorg/siros/sdk/transport/wmp/JsonRpcResponse;)Lorg/siros/sdk/transport/wmp/WmpMessage$Response;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/WmpMessage$Response;Lorg/siros/sdk/transport/wmp/JsonRpcResponse;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/WmpMessage$Response;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getResponse ()Lorg/siros/sdk/transport/wmp/JsonRpcResponse;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/WmpMeta {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/WmpMeta$Companion;
+	public static final field WMP_VERSION Ljava/lang/String;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Boolean;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Boolean;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Ljava/lang/Boolean;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Boolean;)Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Boolean;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEncrypted ()Ljava/lang/Boolean;
+	public final fun getSender ()Ljava/lang/String;
+	public final fun getSessionId ()Ljava/lang/String;
+	public final fun getTimestamp ()Ljava/lang/String;
+	public final fun getTraceId ()Ljava/lang/String;
+	public final fun getVersion ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/WmpMeta$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/WmpMeta$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/WmpMeta;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/WmpMeta;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/WmpMeta$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract interface class org/siros/sdk/transport/wmp/WmpMethodHandler {
+	public abstract fun getMethods ()Ljava/util/List;
+	public abstract fun handleMethod (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/transport/wmp/WmpMethods {
+	public static final field CAPABILITY_UPDATE Ljava/lang/String;
+	public static final field CREDENTIAL_NOTIFICATION Ljava/lang/String;
+	public static final field FLOW_ACTION Ljava/lang/String;
+	public static final field FLOW_CANCEL Ljava/lang/String;
+	public static final field FLOW_COMPLETE Ljava/lang/String;
+	public static final field FLOW_ERROR Ljava/lang/String;
+	public static final field FLOW_PROGRESS Ljava/lang/String;
+	public static final field FLOW_START Ljava/lang/String;
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/WmpMethods;
+	public static final field MESSAGE_ACK Ljava/lang/String;
+	public static final field MESSAGE_DELIVER Ljava/lang/String;
+	public static final field RESOLVE Ljava/lang/String;
+	public static final field SESSION_AUTHENTICATE Ljava/lang/String;
+	public static final field SESSION_CLOSE Ljava/lang/String;
+	public static final field SESSION_CREATE Ljava/lang/String;
+	public static final field SESSION_RESUME Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/WmpPeer : org/siros/sdk/transport/wmp/WmpPeerContext {
+	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpSession;)V
+	public fun call (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun cancelFlow (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun cancelFlow$default (Lorg/siros/sdk/transport/wmp/WmpPeer;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun close (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun close$default (Lorg/siros/sdk/transport/wmp/WmpPeer;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun connect (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun connect$default (Lorg/siros/sdk/transport/wmp/WmpPeer;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun flowEvents ()Lkotlinx/coroutines/flow/Flow;
+	public fun getCodec ()Lorg/siros/sdk/transport/wmp/WmpCodec;
+	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun notify (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun sendCredentialNotification (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun sendCredentialNotification$default (Lorg/siros/sdk/transport/wmp/WmpPeer;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun sendFlowAction (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun sendFlowAction$default (Lorg/siros/sdk/transport/wmp/WmpPeer;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun startFlow (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun startFlow$default (Lorg/siros/sdk/transport/wmp/WmpPeer;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun use (Lorg/siros/sdk/transport/wmp/WmpProfile;)V
+}
+
+public abstract interface class org/siros/sdk/transport/wmp/WmpPeerContext {
+	public abstract fun call (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun getCodec ()Lorg/siros/sdk/transport/wmp/WmpCodec;
+	public abstract fun notify (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public abstract interface class org/siros/sdk/transport/wmp/WmpProfile {
+	public abstract fun getCapabilities ()Ljava/util/List;
+	public abstract fun getName ()Ljava/lang/String;
+	public abstract fun init (Lorg/siros/sdk/transport/wmp/WmpPeerContext;)V
+}
+
+public abstract interface class org/siros/sdk/transport/wmp/WmpResolveHandler {
+	public abstract fun getResolveTypes ()Ljava/util/List;
+	public abstract fun handleResolve (Lorg/siros/sdk/transport/wmp/ResolveParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/transport/wmp/WmpSession {
+	public fun <init> (Lorg/siros/sdk/transport/Transport;Lorg/siros/sdk/transport/wmp/WmpCodec;Lorg/siros/sdk/transport/wmp/WmpSessionConfig;)V
+	public synthetic fun <init> (Lorg/siros/sdk/transport/Transport;Lorg/siros/sdk/transport/wmp/WmpCodec;Lorg/siros/sdk/transport/wmp/WmpSessionConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun close (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun close$default (Lorg/siros/sdk/transport/wmp/WmpSession;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun create (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun create$default (Lorg/siros/sdk/transport/wmp/WmpSession;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun notifications ()Lkotlinx/coroutines/flow/Flow;
+	public final fun resume (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun sendNotification (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun sendRequest (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun sendRequest$default (Lorg/siros/sdk/transport/wmp/WmpSession;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;JLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/transport/wmp/WmpSessionConfig {
+	public fun <init> ()V
+	public fun <init> (IJIJJ)V
+	public synthetic fun <init> (IJIJJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()I
+	public final fun component2 ()J
+	public final fun component3 ()I
+	public final fun component4 ()J
+	public final fun component5 ()J
+	public final fun copy (IJIJJ)Lorg/siros/sdk/transport/wmp/WmpSessionConfig;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/WmpSessionConfig;IJIJJILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/WmpSessionConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMaxReconnectAttempts ()I
+	public final fun getReconnectBaseMs ()J
+	public final fun getReconnectMaxMs ()J
+	public final fun getRequestTimeoutMs ()J
+	public final fun getSessionTtlSeconds ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/WmpSessionException : org/siros/sdk/credentials/SirosException {
+	public fun <init> (Ljava/lang/String;Ljava/lang/Throwable;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public final class org/siros/sdk/transport/wmp/WmpSessionState : java/lang/Enum {
+	public static final field ACTIVE Lorg/siros/sdk/transport/wmp/WmpSessionState;
+	public static final field CLOSED Lorg/siros/sdk/transport/wmp/WmpSessionState;
+	public static final field CONNECTING Lorg/siros/sdk/transport/wmp/WmpSessionState;
+	public static final field FAILED Lorg/siros/sdk/transport/wmp/WmpSessionState;
+	public static final field RESUMING Lorg/siros/sdk/transport/wmp/WmpSessionState;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/WmpSessionState;
+	public static fun values ()[Lorg/siros/sdk/transport/wmp/WmpSessionState;
+}
+
+public final class org/siros/sdk/transport/wmp/WmpTimeoutException : org/siros/sdk/credentials/SirosException {
+	public fun <init> (Ljava/lang/String;)V
+}
+
+public final class org/siros/sdk/transport/wmp/WmpWebSocketTransport : org/siros/sdk/transport/Transport {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/WmpWebSocketTransport$Companion;
+	public fun <init> (Ljava/lang/String;Lokhttp3/OkHttpClient;Ljava/util/Map;)V
+	public synthetic fun <init> (Ljava/lang/String;Lokhttp3/OkHttpClient;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun connect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun disconnect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public synthetic fun getState ()Lkotlinx/coroutines/flow/Flow;
+	public fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public fun incoming ()Lkotlinx/coroutines/flow/Flow;
+	public fun send ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/transport/wmp/WmpWebSocketTransport$Companion {
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/ClientAttestation {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestation$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestation;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestation;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestation;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getClientAssertion ()Ljava/lang/String;
+	public final fun getClientAssertionPop ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/openid4x/ClientAttestation$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestation$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestation;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestation;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/ClientAttestation$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract interface class org/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider {
+	public abstract fun getAttestation (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/CredentialConfigurationSupported {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/CredentialConfigurationSupported$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun component6 ()Ljava/util/List;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/util/List;)Lorg/siros/sdk/transport/wmp/openid4x/CredentialConfigurationSupported;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/CredentialConfigurationSupported;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/CredentialConfigurationSupported;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDisplay ()Ljava/util/List;
+	public final fun getDoctype ()Ljava/lang/String;
+	public final fun getFormat ()Ljava/lang/String;
+	public final fun getProofTypesSupported ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getScope ()Ljava/lang/String;
+	public final fun getVct ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/openid4x/CredentialConfigurationSupported$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/CredentialConfigurationSupported$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/openid4x/CredentialConfigurationSupported;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/openid4x/CredentialConfigurationSupported;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/CredentialConfigurationSupported$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/CredentialDisplay {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/CredentialDisplay$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Ljava/lang/String;
+	public final fun component7 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/CredentialDisplay;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/CredentialDisplay;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/CredentialDisplay;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBackgroundColor ()Ljava/lang/String;
+	public final fun getDescription ()Ljava/lang/String;
+	public final fun getLocale ()Ljava/lang/String;
+	public final fun getLogoAltText ()Ljava/lang/String;
+	public final fun getLogoUri ()Ljava/lang/String;
+	public final fun getName ()Ljava/lang/String;
+	public final fun getTextColor ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/openid4x/CredentialDisplay$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/CredentialDisplay$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/openid4x/CredentialDisplay;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/openid4x/CredentialDisplay;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/CredentialDisplay$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/CredentialEvent {
+	public static final field ACCEPTED Ljava/lang/String;
+	public static final field FAILURE Ljava/lang/String;
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/CredentialEvent;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/CredentialFormat {
+	public static final field DC_SD_JWT Ljava/lang/String;
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/CredentialFormat;
+	public static final field JWT_VC_JSON Ljava/lang/String;
+	public static final field MSO_MDOC Ljava/lang/String;
+	public static final field VC_SD_JWT Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/CredentialMatch {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/CredentialMatch$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/util/List;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;)Lorg/siros/sdk/transport/wmp/openid4x/CredentialMatch;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/CredentialMatch;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/CredentialMatch;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCredentialId ()Ljava/lang/String;
+	public final fun getCredentialQueryId ()Ljava/lang/String;
+	public final fun getDisclosedClaims ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/openid4x/CredentialMatch$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/CredentialMatch$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/openid4x/CredentialMatch;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/openid4x/CredentialMatch;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/CredentialMatch$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/CredentialResult {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/CredentialResult$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/CredentialResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/CredentialResult;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/CredentialResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCNonce ()Ljava/lang/String;
+	public final fun getCredential ()Ljava/lang/String;
+	public final fun getFormat ()Ljava/lang/String;
+	public final fun getNotificationId ()Ljava/lang/String;
+	public final fun getVct ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/openid4x/CredentialResult$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/CredentialResult$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/openid4x/CredentialResult;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/openid4x/CredentialResult;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/CredentialResult$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/GrantType {
+	public static final field AUTHORIZATION_CODE Ljava/lang/String;
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/GrantType;
+	public static final field PRE_AUTHORIZED_CODE Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/MatchResult {
+	public fun <init> (Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lorg/siros/sdk/transport/wmp/openid4x/MatchResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/MatchResult;Ljava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/MatchResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMatches ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/OID4Action {
+	public static final field ACCEPT_OFFER Ljava/lang/String;
+	public static final field AUTHORIZE Ljava/lang/String;
+	public static final field CANCEL Ljava/lang/String;
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/OID4Action;
+	public static final field PROVIDE_TX_CODE Ljava/lang/String;
+	public static final field SELECT_CREDENTIALS Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/OID4FlowTypes {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/OID4FlowTypes;
+	public static final field OID4VCI Ljava/lang/String;
+	public static final field OID4VP Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/OpenID4xConfig {
+	public fun <init> ()V
+	public fun <init> (Lkotlin/jvm/functions/Function4;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;)V
+	public synthetic fun <init> (Lkotlin/jvm/functions/Function4;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lkotlin/jvm/functions/Function4;
+	public final fun component2 ()Lkotlin/jvm/functions/Function3;
+	public final fun component3 ()Lkotlin/jvm/functions/Function3;
+	public final fun component4 ()Lkotlin/jvm/functions/Function3;
+	public final fun component5 ()Lkotlin/jvm/functions/Function3;
+	public final fun component6 ()Lkotlin/jvm/functions/Function4;
+	public final fun component7 ()Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;
+	public final fun copy (Lkotlin/jvm/functions/Function4;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;)Lorg/siros/sdk/transport/wmp/openid4x/OpenID4xConfig;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/OpenID4xConfig;Lkotlin/jvm/functions/Function4;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function3;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/OpenID4xConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttestationProvider ()Lorg/siros/sdk/transport/wmp/openid4x/ClientAttestationProvider;
+	public final fun getOnComplete ()Lkotlin/jvm/functions/Function3;
+	public final fun getOnError ()Lkotlin/jvm/functions/Function4;
+	public final fun getOnMatchRequest ()Lkotlin/jvm/functions/Function3;
+	public final fun getOnProgress ()Lkotlin/jvm/functions/Function4;
+	public final fun getOnSignRequest ()Lkotlin/jvm/functions/Function3;
+	public final fun getOnTrustEvaluation ()Lkotlin/jvm/functions/Function3;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/OpenID4xProfile : org/siros/sdk/transport/wmp/WmpFlowHandler, org/siros/sdk/transport/wmp/WmpProfile {
+	public fun <init> ()V
+	public fun <init> (Lorg/siros/sdk/transport/wmp/openid4x/OpenID4xConfig;)V
+	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/openid4x/OpenID4xConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun getCapabilities ()Ljava/util/List;
+	public fun getFlowTypes ()Ljava/util/List;
+	public fun getName ()Ljava/lang/String;
+	public fun handleAction (Lorg/siros/sdk/transport/wmp/FlowActionParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun handleCancel (Lorg/siros/sdk/transport/wmp/FlowCancelParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun handleComplete (Lorg/siros/sdk/transport/wmp/FlowCompleteParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun handleError (Lorg/siros/sdk/transport/wmp/FlowErrorParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun handleProgress (Lorg/siros/sdk/transport/wmp/FlowProgressParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun init (Lorg/siros/sdk/transport/wmp/WmpPeerContext;)V
+	public fun startFlow (Lorg/siros/sdk/transport/wmp/FlowStartParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/ProofObject {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/ProofObject$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/ProofObject;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/ProofObject;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/ProofObject;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttestation ()Ljava/lang/String;
+	public final fun getJwt ()Ljava/lang/String;
+	public final fun getProofType ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/openid4x/ProofObject$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/ProofObject$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/openid4x/ProofObject;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/openid4x/ProofObject;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/ProofObject$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/ProofType {
+	public static final field ATTESTATION Ljava/lang/String;
+	public static final field CWT Ljava/lang/String;
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/ProofType;
+	public static final field JWT Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/SignSubFlowParams {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/SignSubFlowParams$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/Integer;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/Integer;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component10 ()Ljava/lang/String;
+	public final fun component11 ()Ljava/lang/String;
+	public final fun component12 ()Ljava/lang/String;
+	public final fun component13 ()Ljava/lang/String;
+	public final fun component14 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun component6 ()Ljava/lang/String;
+	public final fun component7 ()Ljava/lang/Integer;
+	public final fun component8 ()Ljava/util/List;
+	public final fun component9 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/Integer;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/SignSubFlowParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/SignSubFlowParams;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/Integer;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/SignSubFlowParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAction ()Ljava/lang/String;
+	public final fun getAth ()Ljava/lang/String;
+	public final fun getAudience ()Ljava/lang/String;
+	public final fun getCount ()Ljava/lang/Integer;
+	public final fun getDpopNonce ()Ljava/lang/String;
+	public final fun getHtm ()Ljava/lang/String;
+	public final fun getHtu ()Ljava/lang/String;
+	public final fun getIssuer ()Ljava/lang/String;
+	public final fun getKeyId ()Ljava/lang/String;
+	public final fun getNonce ()Ljava/lang/String;
+	public final fun getParentFlowId ()Ljava/lang/String;
+	public final fun getProofType ()Ljava/lang/String;
+	public final fun getProofTypesSupported ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getTransactionData ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/openid4x/SignSubFlowParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/SignSubFlowParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/openid4x/SignSubFlowParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/openid4x/SignSubFlowParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/SignSubFlowParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/SignSubFlowResult {
+	public fun <init> ()V
+	public fun <init> (Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Ljava/lang/String;
+	public final fun component7 ()Ljava/lang/String;
+	public final fun copy (Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/SignSubFlowResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/SignSubFlowResult;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/SignSubFlowResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getClientAttestation ()Ljava/lang/String;
+	public final fun getClientAttestationPoP ()Ljava/lang/String;
+	public final fun getCredentialRequestExtras ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getDpopKeyId ()Ljava/lang/String;
+	public final fun getDpopProof ()Ljava/lang/String;
+	public final fun getProofs ()Ljava/util/List;
+	public final fun getVpToken ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/TransactionData {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/TransactionData$Companion;
+	public fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/util/List;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/util/List;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun component3 ()Ljava/util/List;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/util/List;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/TransactionData;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/TransactionData;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/util/List;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/TransactionData;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCredentialIds ()Ljava/util/List;
+	public final fun getHashAlgorithm ()Ljava/lang/String;
+	public final fun getParams ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getType ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/openid4x/TransactionData$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/TransactionData$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/openid4x/TransactionData;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/openid4x/TransactionData;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/TransactionData$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/TrustResult {
+	public fun <init> (ZLjava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (ZLjava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Z
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (ZLjava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/TrustResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/TrustResult;ZLjava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/TrustResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFramework ()Ljava/lang/String;
+	public final fun getReason ()Ljava/lang/String;
+	public final fun getTrusted ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/VCIStep {
+	public static final field AUTHORIZATION_PENDING Ljava/lang/String;
+	public static final field AWAITING_OFFER_ACCEPTANCE Ljava/lang/String;
+	public static final field AWAITING_TX_CODE Ljava/lang/String;
+	public static final field CREDENTIAL_RECEIVED Ljava/lang/String;
+	public static final field EVALUATING_TRUST Ljava/lang/String;
+	public static final field GENERATING_PROOF Ljava/lang/String;
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/VCIStep;
+	public static final field METADATA_FETCHED Ljava/lang/String;
+	public static final field PARSING_OFFER Ljava/lang/String;
+	public static final field REQUESTING_CREDENTIAL Ljava/lang/String;
+	public static final field RESOLVING_METADATA Ljava/lang/String;
+	public static final field TRUST_EVALUATED Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/VPStep {
+	public static final field AWAITING_CONSENT Ljava/lang/String;
+	public static final field GENERATING_PRESENTATION Ljava/lang/String;
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/VPStep;
+	public static final field MATCHING_CREDENTIALS Ljava/lang/String;
+	public static final field PARSING_REQUEST Ljava/lang/String;
+	public static final field REQUEST_PARSED Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/VPTokenResult {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/VPTokenResult$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Lkotlinx/serialization/json/JsonElement;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/VPTokenResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/VPTokenResult;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/VPTokenResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPresentationSubmission ()Lkotlinx/serialization/json/JsonElement;
+	public final fun getResponseCode ()Ljava/lang/String;
+	public final fun getVpToken ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/openid4x/VPTokenResult$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/VPTokenResult$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/openid4x/VPTokenResult;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/openid4x/VPTokenResult;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/VPTokenResult$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+

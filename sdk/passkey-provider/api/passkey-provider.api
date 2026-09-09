@@ -1,0 +1,69 @@
+public final class org/siros/sdk/passkey/PasskeyEntry {
+	public static final field Companion Lorg/siros/sdk/passkey/PasskeyEntry$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()J
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)Lorg/siros/sdk/passkey/PasskeyEntry;
+	public static synthetic fun copy$default (Lorg/siros/sdk/passkey/PasskeyEntry;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JILjava/lang/Object;)Lorg/siros/sdk/passkey/PasskeyEntry;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCreatedAt ()J
+	public final fun getCredentialId ()Ljava/lang/String;
+	public final fun getRpId ()Ljava/lang/String;
+	public final fun getUserDisplayName ()Ljava/lang/String;
+	public final fun getUserHandle ()Ljava/lang/String;
+	public final fun getUserName ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/passkey/PasskeyEntry$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/passkey/PasskeyEntry$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/passkey/PasskeyEntry;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/passkey/PasskeyEntry;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/passkey/PasskeyEntry$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract interface class org/siros/sdk/passkey/PasskeyStore {
+	public abstract fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun delete (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun getAll (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun getByRpId (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun save (Lorg/siros/sdk/passkey/PasskeyEntry;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/passkey/SharedPrefsPasskeyStore : org/siros/sdk/passkey/PasskeyStore {
+	public static final field Companion Lorg/siros/sdk/passkey/SharedPrefsPasskeyStore$Companion;
+	public fun <init> (Landroid/content/Context;Lkotlinx/serialization/json/Json;)V
+	public synthetic fun <init> (Landroid/content/Context;Lkotlinx/serialization/json/Json;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun delete (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun getAll (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun getByRpId (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun save (Lorg/siros/sdk/passkey/PasskeyEntry;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/passkey/SharedPrefsPasskeyStore$Companion {
+}
+
+public abstract class org/siros/sdk/passkey/SirosCredentialProviderService : androidx/credentials/provider/CredentialProviderService {
+	public fun <init> ()V
+	protected fun createPasskeyStore ()Lorg/siros/sdk/passkey/PasskeyStore;
+	protected abstract fun getCreatePendingIntent (Landroid/content/Context;)Landroid/app/PendingIntent;
+	protected abstract fun getGetPendingIntent (Landroid/content/Context;)Landroid/app/PendingIntent;
+	public fun onBeginCreateCredentialRequest (Landroidx/credentials/provider/BeginCreateCredentialRequest;Landroid/os/CancellationSignal;Landroid/os/OutcomeReceiver;)V
+	public fun onBeginGetCredentialRequest (Landroidx/credentials/provider/BeginGetCredentialRequest;Landroid/os/CancellationSignal;Landroid/os/OutcomeReceiver;)V
+	public fun onClearCredentialStateRequest (Landroidx/credentials/provider/ProviderClearCredentialStateRequest;Landroid/os/CancellationSignal;Landroid/os/OutcomeReceiver;)V
+}
+

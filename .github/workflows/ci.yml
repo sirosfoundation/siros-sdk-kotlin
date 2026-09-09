@@ -37,6 +37,11 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Check the public API against api/*.api
+        # Fails on any signature change in a published module. An intended
+        # change is recorded with `./gradlew apiDump` and reviewed as a diff.
+        run: ./gradlew apiCheck --no-daemon
+
       - name: Run unit tests
         run: ./gradlew test -x :sample-app:testDebugUnitTest -x :sample-app:testReleaseUnitTest --no-daemon
 

@@ -7,6 +7,19 @@ plugins {
     alias(libs.plugins.kotlin.serialization) apply false
     alias(libs.plugins.kover)
     alias(libs.plugins.dokka)
+    alias(libs.plugins.binary.compatibility.validator)
+}
+
+// The public API of every published module, recorded in api/<module>.api
+// and checked on every build. Now that the modules are published artifacts
+// consumed by other apps, an accidental signature change is a consumer
+// break, not a refactor; `./gradlew apiCheck` fails on any difference and
+// `./gradlew apiDump` records an intended one, which then shows up in review
+// as a diff of the .api file. Generated UniFFI bindings are included: they
+// are in the AAR and reachable from SDK signatures, so a bindings bump that
+// changes them is a change consumers see.
+apiValidation {
+    ignoredProjects += listOf("sample-app", "bom")
 }
 
 // One version for every published artifact. `sdkVersion` in gradle.properties
