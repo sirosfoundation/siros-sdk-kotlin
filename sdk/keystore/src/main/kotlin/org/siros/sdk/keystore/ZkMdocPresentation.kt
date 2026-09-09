@@ -41,7 +41,24 @@ import org.siros.sdk.credentials.mdoc.MdocCbor
 class ZkMdocPresentation(
     /** The proof systems this device can prove with, in preference order. */
     val registry: ZkProofSystemRegistry,
+    /**
+     * Where the proof systems keep their loaded prover, if they share one -
+     * [standard] gives them one. Null when the systems were assembled by the
+     * caller without a shared residency; [releaseProvers] is then a no-op
+     * and residency is whatever each system does on its own.
+     */
+    private val residency: ZkProverResidency? = null,
 ) {
+
+    /**
+     * Drops the resident prover (a decompressed circuit or prover key, 100+
+     * MB of native memory). Call when the host loses the foreground; the next
+     * proof reloads from the on-device cache. Safe from any thread and while
+     * a proof is running - that proof completes first.
+     */
+    fun releaseProvers() {
+        residency?.release()
+    }
 
     /** Identifiers of every proof system available here - what a host advertises as its ZK capability. */
     val systemIds: List<String> get() = registry.systemIds
@@ -197,14 +214,23 @@ class ZkMdocPresentation(
     companion object {
         /**
          * The mdoc proof systems every SIROS wallet ships - Longfellow and
-         * Vega - over one circuit client. BBS is not an mdoc system and is
-         * registered by the wallet separately, where its holder state lives.
+         * Vega - over one circuit client and one shared [ZkProverResidency].
+         * BBS is not an mdoc system and is registered by the wallet
+         * separately, where its holder state lives.
          */
-        fun standard(circuitClient: ZkCircuitClient, extra: List<ZkProofSystem> = emptyList()): ZkMdocPresentation =
-            ZkMdocPresentation(
+        fun standard(circuitClient: ZkCircuitClient, extra: List<ZkProofSystem> = emptyList()): ZkMdocPresentation {
+            // One residency for both systems: whichever proves next evicts
+            // the other's prover, so the process holds one at a time.
+            val residency = ZkProverResidency()
+            return ZkMdocPresentation(
                 ZkProofSystemRegistry(
-                    listOf(LongfellowZkProofSystem(circuitClient), VegaProofSystem(circuitClient)) + extra,
+                    listOf(
+                        LongfellowZkProofSystem(circuitClient, residency = residency),
+                        VegaProofSystem(circuitClient, residency = residency),
+                    ) + extra,
                 ),
+                residency = residency,
             )
+        }
     }
 }

@@ -2,8 +2,6 @@
 package org.siros.sdk.keystore
 
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.siros.sdk.credentials.COSE_ALG_ES256
 import org.siros.sdk.credentials.CredentialDocument
@@ -53,6 +51,8 @@ import java.time.Instant
 class LongfellowZkProofSystem(
     private val zkCircuitClient: ZkCircuitClient,
     private val pseudonymDeriver: ZkPseudonymDeriver = DefaultZkPseudonymDeriver,
+    /** Where loaded provers live; share one across proof systems so the process holds one at a time. */
+    private val residency: ZkProverResidency = ZkProverResidency(),
 ) : ZkProofSystem {
 
     companion object {
@@ -90,13 +90,12 @@ class LongfellowZkProofSystem(
     )
 
     /**
-     * Cache key: (circuit id, attribute count) - a circuit is compiled for a
-     * FIXED number of attributes (e.g. `..._8_2_...` proves exactly 2), so
-     * two requests against the same circuit id but different claim counts
-     * are genuinely different prover instances, not a cache hit.
+     * Residency key: (circuit id, attribute count) - a circuit is compiled
+     * for a FIXED number of attributes (e.g. `..._8_2_...` proves exactly 2),
+     * so two requests against the same circuit id but different claim counts
+     * are genuinely different prover instances, not the same resident one.
      */
-    private val proverCache = mutableMapOf<Pair<String, Int>, MdocZkProver>()
-    private val cacheMutex = Mutex()
+    private fun residencyKey(spec: ZkSystemSpec, numAttributes: Int) = "$systemId:${spec.id}:$numAttributes"
 
     /**
      * Matches any requested spec declaring `system == "longfellow-libzk-v1"`
@@ -160,109 +159,96 @@ class LongfellowZkProofSystem(
         val namespace = mdoc.issuerSigned.nameSpaces.keys.firstOrNull()
             ?: error("mdoc credential '${mdoc.docType}' has no disclosed namespaces")
 
-        val prover = getOrInitProver(spec, effectiveClaims.size)
+        return residency.use(
+            key = residencyKey(spec, effectiveClaims.size),
+            load = { loadProver(spec, effectiveClaims.size) },
+        ) { prover ->
+            // Private witness only - see this class's doc comment for why this
+            // must be a REAL, fully-signed DeviceResponse, and why it's built
+            // with full disclosure rather than pre-filtered to requestedClaims.
+            // buildForProximity is transport-agnostic despite its name: it just
+            // takes a pre-computed session transcript directly, which is exactly
+            // what's needed here regardless of which real transport the caller
+            // is presenting over.
+            val witnessDeviceResponse = MdocDeviceResponseBuilder(credentialBytes)
+                .buildForProximity(
+                    sessionTranscript,
+                    disclosedClaims = null,
+                    signer = { data -> signer.sign(COSE_ALG_ES256, data) },
+                )
 
-        // Private witness only - see this class's doc comment for why this
-        // must be a REAL, fully-signed DeviceResponse, and why it's built
-        // with full disclosure rather than pre-filtered to requestedClaims.
-        // buildForProximity is transport-agnostic despite its name: it just
-        // takes a pre-computed session transcript directly, which is exactly
-        // what's needed here regardless of which real transport the caller
-        // is presenting over.
-        val witnessDeviceResponse = MdocDeviceResponseBuilder(credentialBytes)
-            .buildForProximity(
-                sessionTranscript,
-                disclosedClaims = null,
-                signer = { data -> signer.sign(COSE_ALG_ES256, data) },
-            )
+            // The native prover requires an exact 20-byte RFC 3339 timestamp
+            // ("YYYY-MM-DDTHH:MM:SSZ", no fractional seconds) - confirmed live
+            // ("current time is not correctly formatted, must be 20 bytes
+            // long"). Instant.now().toString() includes a variable-precision
+            // fractional-seconds component whenever it's non-zero, so it's
+            // rarely exactly 20 bytes. Truncating to whole seconds first makes
+            // Instant.toString() omit the fractional part entirely, always
+            // producing the fixed-width form the prover expects.
+            val time = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString()
 
-        // The native prover requires an exact 20-byte RFC 3339 timestamp
-        // ("YYYY-MM-DDTHH:MM:SSZ", no fractional seconds) - confirmed live
-        // ("current time is not correctly formatted, must be 20 bytes
-        // long"). Instant.now().toString() includes a variable-precision
-        // fractional-seconds component whenever it's non-zero, so it's
-        // rarely exactly 20 bytes. Truncating to whole seconds first makes
-        // Instant.toString() omit the fractional part entirely, always
-        // producing the fixed-width form the prover expects.
-        val time = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString()
+            // prove/proveWithPpid are synchronous, CPU-bound native calls -
+            // running them on whatever dispatcher the caller happens to be on
+            // (often Dispatchers.Main for a UI-triggered presentation flow)
+            // blocks the UI thread for their full duration, freezing any
+            // in-progress animation (e.g. a spinner). See VegaProofSystem's
+            // identical fix/comment for the same reasoning.
+            if (verifierIdentity == null) {
+                val proofBytes = withContext(Dispatchers.Default) {
+                    prove(
+                        prover = prover,
+                        deviceResponse = directByteBuffer(witnessDeviceResponse),
+                        namespace = namespace,
+                        requestedClaims = effectiveClaims,
+                        sessionTranscript = directByteBuffer(sessionTranscript),
+                        time = time,
+                    )
+                }
+                return@use ZkProofResult(proofBytes = proofBytes, timestamp = time)
+            }
 
-        // prove/proveWithPpid are synchronous, CPU-bound native calls -
-        // running them on whatever dispatcher the caller happens to be on
-        // (often Dispatchers.Main for a UI-triggered presentation flow)
-        // blocks the UI thread for their full duration, freezing any
-        // in-progress animation (e.g. a spinner). See VegaProofSystem's
-        // identical fix/comment for the same reasoning.
-        if (verifierIdentity == null) {
+            val verifierContext = pseudonymDeriver.deriveVerifierContext(verifierIdentity)
             val proofBytes = withContext(Dispatchers.Default) {
-                prove(
+                proveWithPpid(
                     prover = prover,
                     deviceResponse = directByteBuffer(witnessDeviceResponse),
                     namespace = namespace,
                     requestedClaims = effectiveClaims,
                     sessionTranscript = directByteBuffer(sessionTranscript),
                     time = time,
+                    verifierContext = directByteBuffer(verifierContext),
                 )
             }
-            return ZkProofResult(proofBytes = proofBytes, timestamp = time)
-        }
 
-        val verifierContext = pseudonymDeriver.deriveVerifierContext(verifierIdentity)
-        val proofBytes = withContext(Dispatchers.Default) {
-            proveWithPpid(
-                prover = prover,
-                deviceResponse = directByteBuffer(witnessDeviceResponse),
-                namespace = namespace,
-                requestedClaims = effectiveClaims,
-                sessionTranscript = directByteBuffer(sessionTranscript),
-                time = time,
-                verifierContext = directByteBuffer(verifierContext),
+            // The native API returns only proof bytes - the pseudonym itself
+            // (SHA256(pseudonym_seed || verifier_context), the same formula the
+            // circuit itself asserts) is computed locally so the caller can
+            // display/track it, mirroring the feat/longfellow-zk reference's own
+            // separate computePPID() step.
+            val seedItem = mdoc.issuerSigned.nameSpaces[namespace]
+                ?.firstOrNull { it.item.elementIdentifier == PSEUDONYM_SEED_ELEMENT }
+            val pseudonym = seedItem?.let { sha256(it.item.elementValue.GetByteString() + verifierContext) }
+
+            return@use ZkProofResult(
+                proofBytes = proofBytes,
+                pseudonym = pseudonym,
+                pseudonymOutcome = if (pseudonym != null) PseudonymOutcome.PROVIDED else PseudonymOutcome.NOT_SUPPORTED_BY_SYSTEM,
+                timestamp = time,
             )
         }
-
-        // The native API returns only proof bytes - the pseudonym itself
-        // (SHA256(pseudonym_seed || verifier_context), the same formula the
-        // circuit itself asserts) is computed locally so the caller can
-        // display/track it, mirroring the feat/longfellow-zk reference's own
-        // separate computePPID() step.
-        val seedItem = mdoc.issuerSigned.nameSpaces[namespace]
-            ?.firstOrNull { it.item.elementIdentifier == PSEUDONYM_SEED_ELEMENT }
-        val pseudonym = seedItem?.let { sha256(it.item.elementValue.GetByteString() + verifierContext) }
-
-        return ZkProofResult(
-            proofBytes = proofBytes,
-            pseudonym = pseudonym,
-            pseudonymOutcome = if (pseudonym != null) PseudonymOutcome.PROVIDED else PseudonymOutcome.NOT_SUPPORTED_BY_SYSTEM,
-            timestamp = time,
-        )
     }
 
-    private suspend fun getOrInitProver(spec: ZkSystemSpec, numAttributes: Int): MdocZkProver {
-        val cacheKey = spec.id to numAttributes
-        cacheMutex.withLock {
-            proverCache[cacheKey]?.let { return it }
-        }
-
+    private suspend fun loadProver(spec: ZkSystemSpec, numAttributes: Int): MdocZkProver {
         val descriptor = zkCircuitClient.fetchCircuit(spec.id)
             ?: error("Longfellow circuit '${spec.id}' not found in any configured zk-circuits source")
         val compressedBytes = zkCircuitClient.downloadArtifact(descriptor)
         val circuitBuffer = decompressZkCircuitArtifact(compressedBytes, descriptor)
         val circuitVersion = circuitVersionOf(descriptor)
-
-        val prover = initializeProver(
+        return initializeProver(
             circuit = circuitBuffer,
             circuitVersion = circuitVersion,
             numAttributes = numAttributes.toUByte(),
         )
-
-        cacheMutex.withLock {
-            // Another concurrent call may have raced us - keep whichever
-            // instance won, don't leak the loser (a loaded circuit is
-            // multi-hundred-MB).
-            val existing = proverCache[cacheKey]
-            if (existing != null) return existing
-            proverCache[cacheKey] = prover
-            return prover
-        }
     }
 
     private fun circuitVersionOf(descriptor: ZkCircuitDescriptor): CircuitVersion =

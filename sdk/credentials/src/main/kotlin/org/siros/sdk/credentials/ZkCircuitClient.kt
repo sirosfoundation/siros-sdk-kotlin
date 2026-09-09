@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonObject
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import timber.log.Timber
+import java.io.File
 import java.security.MessageDigest
 
 /**
@@ -159,6 +160,24 @@ class ZkCircuitClient(
     private val httpGet: (suspend (String) -> String?)? = null,
     private val httpGetBytes: (suspend (String) -> ByteArray?)? = null,
     private val httpClient: OkHttpClient = OkHttpClient(),
+    /**
+     * On-device cache of what this client fetches, or null for none.
+     *
+     * Artifacts are stored under their catalog-published SHA-256, which
+     * [downloadArtifact] verifies on every read as well as on every
+     * download, so a cached artifact is exactly as trusted as a fresh one
+     * and a corrupt file is simply re-fetched. A circuit is tens of
+     * megabytes compressed and immutable once published (its identity IS
+     * its hash), so there is nothing to expire: fetch and verify happen
+     * once per device, and the OS may evict the directory under storage
+     * pressure without any correctness consequence.
+     *
+     * Descriptors are cached too, network-first: a fetched descriptor
+     * replaces the cached copy, and the cached copy is used only when every
+     * source fails. That is what lets a proof run with no network at all -
+     * the case an ISO 18013-5 proximity presentation exists for.
+     */
+    private val cacheDir: File? = null,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -201,13 +220,23 @@ class ZkCircuitClient(
             val url = circuitUrl(source, id)
             val body = fetchRaw(url) ?: continue
             try {
-                return@withContext json.decodeFromString(ZkCircuitDescriptor.serializer(), body)
+                val descriptor = json.decodeFromString(ZkCircuitDescriptor.serializer(), body)
+                writeCached(descriptorFile(id), body.toByteArray(Charsets.UTF_8))
+                return@withContext descriptor
             } catch (e: Exception) {
                 Timber.w(e, "Failed to parse zk-circuit descriptor '$id' from $url")
             }
         }
         if (sources.isNotEmpty()) {
             Timber.w("All ${sources.size} zk-circuit source(s) failed to yield circuit '$id'")
+        }
+        readCached(descriptorFile(id))?.let { cached ->
+            try {
+                Timber.i("Using cached zk-circuit descriptor '$id' (every source failed)")
+                return@withContext json.decodeFromString(ZkCircuitDescriptor.serializer(), cached.toString(Charsets.UTF_8))
+            } catch (e: Exception) {
+                Timber.w(e, "Cached zk-circuit descriptor '$id' is unreadable")
+            }
         }
         null
     }
@@ -238,6 +267,15 @@ class ZkCircuitClient(
     suspend fun downloadArtifact(descriptor: ZkCircuitDescriptor): ByteArray = withContext(Dispatchers.IO) {
         val artifact = descriptor.artifact
             ?: throw ZkArtifactException("Circuit '${descriptor.id}' has no artifact")
+        val expectedHash = bareHex(artifact.hash)
+        val cacheFile = artifactFile(expectedHash)
+        readCached(cacheFile)?.let { cached ->
+            if (sha256Hex(cached).equals(expectedHash, ignoreCase = true)) {
+                return@withContext cached
+            }
+            Timber.w("Cached zk-circuit artifact for '${descriptor.id}' failed its hash check - discarding it")
+            cacheFile?.delete()
+        }
 
         var lastFailure: String? = null
         for (url in candidateArtifactUrls(artifact)) {
@@ -247,7 +285,7 @@ class ZkCircuitClient(
                 continue
             }
             val actualHash = sha256Hex(bytes)
-            if (!actualHash.equals(bareHex(artifact.hash), ignoreCase = true)) {
+            if (!actualHash.equals(expectedHash, ignoreCase = true)) {
                 Timber.w(
                     "zk-circuit artifact hash mismatch for '${descriptor.id}' from $url: " +
                         "expected ${artifact.hash}, got $actualHash",
@@ -255,12 +293,54 @@ class ZkCircuitClient(
                 lastFailure = "hash mismatch from $url"
                 continue
             }
+            writeCached(cacheFile, bytes)
             return@withContext bytes
         }
         throw ZkArtifactException(
             "Failed to download a hash-verified artifact for circuit '${descriptor.id}' " +
                 "from any of ${sources.size} source(s)" + (lastFailure?.let { " (last: $it)" } ?: ""),
         )
+    }
+
+    /** Whether [downloadArtifact] would be served from disk for [descriptor]. Cheap; for diagnostics and tests. */
+    fun isArtifactCached(descriptor: ZkCircuitDescriptor): Boolean =
+        descriptor.artifact?.let { artifactFile(bareHex(it.hash))?.isFile } == true
+
+    /** Removes everything cached. Artifacts are immutable, so this only ever costs a re-download. */
+    fun clearCache() {
+        cacheDir?.deleteRecursively()
+    }
+
+    private fun artifactFile(hashHex: String): File? =
+        cacheDir?.let { File(File(it, "artifacts"), hashHex.lowercase()) }
+
+    private fun descriptorFile(id: String): File? =
+        // Ids are catalog-controlled but still go through a filename-safe
+        // encoding so a hostile or odd id cannot escape the directory.
+        cacheDir?.let { File(File(it, "descriptors"), java.net.URLEncoder.encode(id, "UTF-8") + ".json") }
+
+    private fun readCached(file: File?): ByteArray? =
+        try {
+            file?.takeIf { it.isFile }?.readBytes()
+        } catch (e: Exception) {
+            Timber.w(e, "zk-circuit cache read failed for ${file?.name}")
+            null
+        }
+
+    /** Atomic: written beside the target and renamed, so a crash never leaves a truncated file to be trusted. */
+    private fun writeCached(file: File?, bytes: ByteArray) {
+        if (file == null) return
+        try {
+            file.parentFile?.mkdirs()
+            val tmp = File(file.parentFile, "${file.name}.tmp")
+            tmp.writeBytes(bytes)
+            if (!tmp.renameTo(file)) {
+                tmp.delete()
+                Timber.w("zk-circuit cache write could not move ${tmp.name} into place")
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "zk-circuit cache write failed for ${file.name}")
+        }
     }
 
     private fun manifestUrl(source: String): String = "${source.trimEnd('/')}/v1/manifest.json"

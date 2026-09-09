@@ -3,8 +3,6 @@ package org.siros.sdk.keystore
 
 import com.upokecenter.cbor.CBORObject
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.siros.sdk.credentials.CredentialDocument
 import org.siros.sdk.credentials.CredentialFormat
@@ -63,6 +61,8 @@ import java.time.temporal.ChronoUnit
  */
 class VegaProofSystem(
     private val zkCircuitClient: ZkCircuitClient,
+    /** Where the loaded prover key lives; share one across proof systems so the process holds one prover at a time. */
+    private val residency: ZkProverResidency = ZkProverResidency(),
 ) : ZkProofSystem {
 
     companion object {
@@ -120,9 +120,8 @@ class VegaProofSystem(
         CredentialTypeRef(CredentialFormat.MSO_MDOC, "eu.europa.ec.eudi.pid.1"),
     )
 
-    /** Cache key: circuit/spec id - a single prover key handle is reusable across presentations. */
-    private val proverKeyCache = mutableMapOf<String, VegaProverKey>()
-    private val cacheMutex = Mutex()
+    /** Residency key: circuit/spec id - a single prover key handle serves every presentation with that circuit. */
+    private fun residencyKey(spec: ZkSystemSpec) = "$systemId:${spec.id}"
 
     /**
      * Matches any requested spec declaring `system == systemId` for a proof
@@ -150,39 +149,43 @@ class VegaProofSystem(
         val credentialBytes = (document as? CredentialDocument.Mdoc)?.bytes
             ?: throw IllegalArgumentException("$systemId proves over mdoc only, got ${document::class.simpleName}")
         val mdoc = MdocCbor.parseStoredCredential(credentialBytes)
-        val proverKey = getOrInitProverKey(spec)
-        val (claims, ecdsaWitness, msoBody) = buildWitness(mdoc, requestedClaims)
+        return residency.use(
+            key = residencyKey(spec),
+            load = { loadProverKey(spec) },
+        ) { proverKey ->
+            val (claims, ecdsaWitness, msoBody) = buildWitness(mdoc, requestedClaims)
 
-        // prep_prove/prove are synchronous, CPU-bound native calls (~5s for
-        // this circuit) - running them on whatever dispatcher the caller
-        // happens to be on (often Dispatchers.Main for a UI-triggered
-        // presentation flow) blocks the UI thread for their full duration,
-        // freezing any in-progress animation (e.g. a spinner). Dispatchers.Default
-        // moves the blocking work off the calling thread so the coroutine
-        // genuinely suspends here instead.
-        val result = withContext(Dispatchers.Default) {
-            // Fold-and-reuse: prep_prove only runs once per credential, ever -
-            // every subsequent presentation reuses the previous prove() call's
-            // own nextState instead. See ZkProofResult.nextState's doc comment.
-            val prepStart = System.nanoTime()
-            val state = priorState ?: prepProve(proverKey, claims, ecdsaWitness, msoBody)
-            val prepMs = (System.nanoTime() - prepStart) / 1_000_000
-            val proveStart = System.nanoTime()
-            val proveResult = prove(proverKey, claims, ecdsaWitness, msoBody, state)
-            val proveMs = (System.nanoTime() - proveStart) / 1_000_000
-            Timber.i("Vega prepProve took ${prepMs}ms, prove took ${proveMs}ms")
-            proveResult
+            // prep_prove/prove are synchronous, CPU-bound native calls (~5s for
+            // this circuit) - running them on whatever dispatcher the caller
+            // happens to be on (often Dispatchers.Main for a UI-triggered
+            // presentation flow) blocks the UI thread for their full duration,
+            // freezing any in-progress animation (e.g. a spinner). Dispatchers.Default
+            // moves the blocking work off the calling thread so the coroutine
+            // genuinely suspends here instead.
+            val result = withContext(Dispatchers.Default) {
+                // Fold-and-reuse: prep_prove only runs once per credential, ever -
+                // every subsequent presentation reuses the previous prove() call's
+                // own nextState instead. See ZkProofResult.nextState's doc comment.
+                val prepStart = System.nanoTime()
+                val state = priorState ?: prepProve(proverKey, claims, ecdsaWitness, msoBody)
+                val prepMs = (System.nanoTime() - prepStart) / 1_000_000
+                val proveStart = System.nanoTime()
+                val proveResult = prove(proverKey, claims, ecdsaWitness, msoBody, state)
+                val proveMs = (System.nanoTime() - proveStart) / 1_000_000
+                Timber.i("Vega prepProve took ${prepMs}ms, prove took ${proveMs}ms")
+                proveResult
+            }
+
+            return@use ZkProofResult(
+                proofBytes = result.proofBytes,
+                nextState = result.nextState,
+                // VEGA has no pseudonym-derivation concept at all (confirmed in
+                // the handoff doc's own design research) - always report this,
+                // regardless of whether verifierIdentity was supplied, rather
+                // than silently dropping a pseudonym request.
+                pseudonymOutcome = PseudonymOutcome.NOT_SUPPORTED_BY_SYSTEM,
+            )
         }
-
-        return ZkProofResult(
-            proofBytes = result.proofBytes,
-            nextState = result.nextState,
-            // VEGA has no pseudonym-derivation concept at all (confirmed in
-            // the handoff doc's own design research) - always report this,
-            // regardless of whether verifierIdentity was supplied, rather
-            // than silently dropping a pseudonym request.
-            pseudonymOutcome = PseudonymOutcome.NOT_SUPPORTED_BY_SYSTEM,
-        )
     }
 
     /**
@@ -323,27 +326,15 @@ class VegaProofSystem(
         return padded
     }
 
-    private suspend fun getOrInitProverKey(spec: ZkSystemSpec): VegaProverKey {
-        cacheMutex.withLock {
-            proverKeyCache[spec.id]?.let { return it }
-        }
-
+    private suspend fun loadProverKey(spec: ZkSystemSpec): VegaProverKey {
         val descriptor = zkCircuitClient.fetchCircuit(spec.id)
             ?: error(
                 "Vega prover key '${spec.id}' not found in any configured zk-circuits source - " +
-                    "expected until the vega-mc catalog entries are published (see handoff doc " +
-                    "'What's NOT ready yet' #2)",
+                    "see VegaProofSystem's doc comment for the catalog gating",
             )
         val compressedBytes = zkCircuitClient.downloadArtifact(descriptor)
         val keyBuffer = decompressZkCircuitArtifact(compressedBytes, descriptor)
-        val proverKey = uniffi.zk_cred_vega.deserializeProverKey(keyBuffer)
-
-        cacheMutex.withLock {
-            val existing = proverKeyCache[spec.id]
-            if (existing != null) return existing
-            proverKeyCache[spec.id] = proverKey
-            return proverKey
-        }
+        return uniffi.zk_cred_vega.deserializeProverKey(keyBuffer)
     }
 
 }
