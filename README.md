@@ -127,7 +127,21 @@ dependencies {
 }
 ```
 
-`minSdk` must be 28 or higher and `compileSdk` 36 or higher. The DC API entry
+### Supported Android versions
+
+`minSdk` **28** (Android 9) is the SDK's floor - BiometricPrompt and
+hardware-backed key attestation start there - and `compileSdk` must be 36 or
+higher. Everything above 28 is gated at runtime, never assumed:
+
+| feature | needs | otherwise |
+|---|---|---|
+| passkey login, credentials, presentation | 28 + Google Play Services | - |
+| Digital Credentials API | 28 + a Play Services build with Credential Manager (in practice Android 14+) | picker never shows this wallet |
+| `siros-sdk-passkey-provider` (this app as a passkey *provider*) | **34** (`CredentialProviderService`) | module is inert |
+| USB CTAP2 security keys | 33 for the exported-receiver flags; works on 28+ | - |
+| user-auth-bound keys (`setUserAuthenticationParameters`) | 30 | falls back to the pre-30 API |
+
+The DC API entry
 Activity and the NFC HCE Service are declared by the SDK's own manifests and
 merged into the app; the app keeps `WalletSessionHolder` pointed at its
 unlocked wallet and calls `SirosCredentialRegistry.refresh` when it has
