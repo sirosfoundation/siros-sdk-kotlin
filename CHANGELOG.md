@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ActiveEngagement.handoverSelectBytes` while an engagement is shown, and
   declares nothing else. Both were previously sample-app code every
   integrator would have had to copy.
+- `org.siros.sdk.keystore.OkHttpR2psTransport`, the default
+  `R2psTransportProvider`, moved into the SDK from the sample app (Swift
+  counterpart: `URLSessionR2psTransport`).
 
 ### Changed
 - `WalletSessionHolder` moved from the sample app to

@@ -1,4 +1,4 @@
-package org.siros.sdk.sample
+package org.siros.sdk.keystore
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -6,12 +6,15 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import org.siros.sdk.keystore.R2psTransportProvider
 
 /**
- * OkHttp-based HTTP transport for R2PS protocol messages.
+ * OkHttp-based HTTP transport for R2PS protocol messages - the transport a
+ * host app uses unless it has a reason to route R2PS traffic through its
+ * own HTTP stack (pinning, proxying, instrumentation). Lived in the sample
+ * app until every integrator would have had to copy it; the Swift SDK's
+ * `URLSessionR2psTransport` is the counterpart.
  *
- * Implements the SDK-level [R2psTransportProvider] so the Rust R2PS client
+ * Implements [R2psTransportProvider] so the Rust R2PS client
  * can make HTTP requests through the platform's HTTP stack. Real OPAQUE
  * (RFC 9807) PAKE crypto is handled entirely in Rust (`r2ps-client`) -
  * this transport only ever moves opaque request/response bytes, same as
