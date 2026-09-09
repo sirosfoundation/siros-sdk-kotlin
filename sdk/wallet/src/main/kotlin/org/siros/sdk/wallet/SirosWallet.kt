@@ -1153,6 +1153,8 @@ class SirosWallet private constructor(
      * not be used again — create a new one with [create].
      */
     fun destroy() {
+        activity.applicationContext.unregisterComponentCallbacks(memoryPressureCallbacks)
+        zkPresentation.releaseProvers()
         engineSession?.disconnect()
         engineSession = null
         scope.launch { wmpPeer?.close() }
@@ -2762,7 +2764,16 @@ class SirosWallet private constructor(
      * Exposed publicly (unlike most of this class's internal clients) so a
      * consumer can inspect/prefetch circuits directly if it wants to.
      */
-    val zkCircuitClient: ZkCircuitClient = ZkCircuitClient(sources = config.zkCircuitUrls, httpClient = httpClient)
+    val zkCircuitClient: ZkCircuitClient = ZkCircuitClient(
+        sources = config.zkCircuitUrls,
+        httpClient = httpClient,
+        // Circuits are immutable and tens of megabytes: fetched and verified
+        // once per device, then served from disk - including with no
+        // network, which a proximity presentation has to survive. Under
+        // cacheDir rather than files: nothing here is user data, the OS may
+        // evict it under pressure, and re-downloading is the only cost.
+        cacheDir = java.io.File(activity.applicationContext.cacheDir, "siros-zk-circuits"),
+    )
 
     /**
      * The container-backed store [BbsHolderStateVault] writes, or `null`
@@ -2822,6 +2833,29 @@ class SirosWallet private constructor(
     )
 
     private val zkProofSystemRegistry: ZkProofSystemRegistry get() = zkPresentation.registry
+
+    /**
+     * Drops the resident ZK prover (100+ MB of native memory) the moment the
+     * app's UI is no longer visible, and under any memory pressure at all.
+     * TRIM_MEMORY_UI_HIDDEN is the closest Android signal to "left the
+     * foreground" that needs no lifecycle dependency; the prover is
+     * reloaded from the on-device circuit cache on the next proof. A proof
+     * in flight finishes first (see [ZkProverResidency.release]).
+     */
+    private val memoryPressureCallbacks = object : android.content.ComponentCallbacks2 {
+        override fun onTrimMemory(level: Int) {
+            if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+                zkPresentation.releaseProvers()
+            }
+        }
+
+        override fun onConfigurationChanged(newConfig: android.content.res.Configuration) = Unit
+
+        @Deprecated("Deprecated in Java")
+        override fun onLowMemory() {
+            zkPresentation.releaseProvers()
+        }
+    }.also { activity.applicationContext.registerComponentCallbacks(it) }
 
     /**
      * The zero-knowledge systems this wallet can prove with.

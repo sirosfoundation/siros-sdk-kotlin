@@ -16,6 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `resolveIssuanceStart`, shared with the offer-display lookup.
 
 ### Added
+- Circuit lifecycle for ZK proving. `ZkCircuitClient` takes a `cacheDir`
+  and keeps fetched artifacts on disk under their catalog-published SHA-256
+  (verified on every read as well as every download), and descriptors
+  network-first with the cached copy serving when every source fails - so a
+  circuit is fetched and verified once per device and a proof works with no
+  network. `ZkProverResidency` bounds the process to one loaded prover
+  (Longfellow circuit or Vega prover key, 100+ MB of native memory each):
+  `LongfellowZkProofSystem` and `VegaProofSystem` take one, `ZkMdocPresentation.standard`
+  shares one between them, and `ZkMdocPresentation.releaseProvers()` drops
+  it. `SirosWallet` wires the cache under the app's `cacheDir` and releases
+  the prover on `TRIM_MEMORY_UI_HIDDEN` / `onLowMemory`; a proof in flight
+  finishes first. Replaces the two unbounded per-system prover maps.
 - `org.siros.sdk.keystore.ZkMdocPresentation`: zero-knowledge presentation
   of a stored mdoc credential with no wallet and no Activity - resolve the
   verifier's `zk_system_type` list against the registered proof systems,

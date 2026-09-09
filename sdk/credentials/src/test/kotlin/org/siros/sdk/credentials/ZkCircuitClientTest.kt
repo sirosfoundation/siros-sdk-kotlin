@@ -330,4 +330,85 @@ class ZkCircuitClientTest {
         assertEquals("https://zk-circuits.fly.dev/v1/artifacts/sha256/$hash", calledUrl)
         assertTrue(bytes.contentEquals(downloaded))
     }
+
+    // ── on-device cache ──────────────────────────────────────────────
+
+    private fun tempCacheDir(): java.io.File =
+        java.nio.file.Files.createTempDirectory("zk-circuit-cache").toFile().also { it.deleteOnExit() }
+
+    @Test
+    fun `a verified artifact is fetched once per device and served from disk after that`() = runTest {
+        val bytes = "circuit-bytes".toByteArray()
+        val hash = sha256Hex(bytes)
+        val dir = tempCacheDir()
+        var fetches = 0
+        val client = ZkCircuitClient(
+            httpGetBytes = { url -> fetches++; if (url.endsWith("/$hash")) bytes else null },
+            cacheDir = dir,
+        )
+        val circuit = json.decodeFromString(ZkCircuitDescriptor.serializer(), circuitJson("longfellow-mdl-v1", hash = "sha256:$hash", url = "/v1/artifacts/sha256/$hash"))
+        assertTrue(!client.isArtifactCached(circuit))
+
+        assertTrue(bytes.contentEquals(client.downloadArtifact(circuit)))
+        assertEquals(1, fetches)
+        assertTrue(client.isArtifactCached(circuit))
+
+        // A second client over the same directory - a later process - never touches the network.
+        val offline = ZkCircuitClient(httpGetBytes = { fail("must be served from the cache"); null }, cacheDir = dir)
+        assertTrue(bytes.contentEquals(offline.downloadArtifact(circuit)))
+        assertEquals(1, fetches)
+    }
+
+    @Test
+    fun `a cached artifact that fails its hash check is discarded and re-fetched, never trusted`() = runTest {
+        val bytes = "circuit-bytes".toByteArray()
+        val hash = sha256Hex(bytes)
+        val dir = tempCacheDir()
+        // Poison the cache with the right name and the wrong content.
+        java.io.File(java.io.File(dir, "artifacts"), hash).apply { parentFile.mkdirs(); writeBytes("tampered".toByteArray()) }
+        var fetches = 0
+        val client = ZkCircuitClient(httpGetBytes = { fetches++; bytes }, cacheDir = dir)
+        val circuit = json.decodeFromString(ZkCircuitDescriptor.serializer(), circuitJson("longfellow-mdl-v1", hash = hash, url = "/v1/artifacts/sha256/$hash"))
+
+        assertTrue(bytes.contentEquals(client.downloadArtifact(circuit)))
+        assertEquals(1, fetches)
+        assertTrue(bytes.contentEquals(java.io.File(java.io.File(dir, "artifacts"), hash).readBytes()))
+    }
+
+    @Test
+    fun `descriptors are network-first and the cached copy serves only when every source fails`() = runTest {
+        val dir = tempCacheDir()
+        val online = ZkCircuitClient(
+            sources = listOf("https://a.example"),
+            httpGet = { url -> if (url == "https://a.example/v1/circuits/longfellow-mdl-v1.json") circuitJson("longfellow-mdl-v1") else null },
+            cacheDir = dir,
+        )
+        assertEquals("longfellow-mdl-v1", online.fetchCircuit("longfellow-mdl-v1")?.id)
+
+        val offline = ZkCircuitClient(sources = listOf("https://a.example"), httpGet = { null }, cacheDir = dir)
+        assertEquals("longfellow-mdl-v1", offline.fetchCircuit("longfellow-mdl-v1")?.id)
+        assertNull(offline.fetchCircuit("never-fetched"))
+
+        // A fresher descriptor from the network replaces the cached one.
+        val updated = ZkCircuitClient(
+            sources = listOf("https://a.example"),
+            httpGet = { circuitJson("longfellow-mdl-v1").replace("\"status\": \"active\"", "\"status\": \"deprecated\"") },
+            cacheDir = dir,
+        )
+        assertEquals("deprecated", updated.fetchCircuit("longfellow-mdl-v1")?.status)
+        assertEquals("deprecated", offline.fetchCircuit("longfellow-mdl-v1")?.status)
+    }
+
+    @Test
+    fun `without a cache directory nothing is written and every call fetches`() = runTest {
+        val bytes = "circuit-bytes".toByteArray()
+        val hash = sha256Hex(bytes)
+        var fetches = 0
+        val client = ZkCircuitClient(httpGetBytes = { fetches++; bytes })
+        val circuit = json.decodeFromString(ZkCircuitDescriptor.serializer(), circuitJson("longfellow-mdl-v1", hash = hash, url = "/v1/artifacts/sha256/$hash"))
+        client.downloadArtifact(circuit)
+        client.downloadArtifact(circuit)
+        assertEquals(2, fetches)
+        assertTrue(!client.isArtifactCached(circuit))
+    }
 }
