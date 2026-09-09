@@ -41,13 +41,15 @@ import java.util.UUID
  * the reverse, regardless of which side - mdoc or reader - holds the GATT
  * client/server role for a given transaction).
  *
- * UNVERIFIED ON REAL HARDWARE beyond compiling - there is no second BLE
- * GATT-server test tool available yet (siros-verifier-cli's `siros-verify read`,
- * https://github.com/sirosfoundation/siros-verifier-cli, uses `bleak`, which is
- * central/client-only on every platform, the same role this class plays - it
- * cannot stand in as a peripheral to test against).
- * Needs testing against either a real ISO 18013-5 reader or a purpose-built
- * BlueZ-peripheral test script before relying on it.
+ * Verified against real ISO 18013-5 readers in this role at the Geneva 2026
+ * interop event (30-31 August 2026; e.g. com.ingenutec.sigil_id, see the
+ * STATE_END grace-delay note below), with transport fixes landing through
+ * 7 September 2026. What is still true: there is no local GATT-server test
+ * tool for regression runs - siros-verifier-cli's `siros-verify read`
+ * (https://github.com/sirosfoundation/siros-verifier-cli) uses `bleak`,
+ * which is central/client-only on every platform, the same role this class
+ * plays - so exercising this path again needs a real reader or a
+ * purpose-built BlueZ-peripheral script.
  */
 class BleCentralClient(
     private val context: Context,
