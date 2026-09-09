@@ -1,0 +1,245 @@
+public final class org/siros/sdk/flow/FlowClient : org/siros/sdk/transport/CredentialNotifier {
+	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpSession;Lorg/siros/sdk/keystore/KeystoreManager;Lorg/siros/sdk/auth/BackendApiClient;ZLkotlinx/serialization/json/Json;)V
+	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/WmpSession;Lorg/siros/sdk/keystore/KeystoreManager;Lorg/siros/sdk/auth/BackendApiClient;ZLkotlinx/serialization/json/Json;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun events ()Lkotlinx/coroutines/flow/Flow;
+	public final fun respondToMatchRequest (Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/flow/MatchResponse;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun respondToSignRequest (Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/flow/SignResponse;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun sendAction (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun sendAction$default (Lorg/siros/sdk/flow/FlowClient;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public fun sendCredentialNotification (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public final fun start ()V
+	public final fun startIssuance (Lorg/siros/sdk/flow/OID4VCIFlowParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun startPresentation (Lorg/siros/sdk/flow/OID4VPFlowParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public abstract class org/siros/sdk/flow/FlowEvent {
+}
+
+public final class org/siros/sdk/flow/FlowEvent$Complete : org/siros/sdk/flow/FlowEvent {
+	public fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)Lorg/siros/sdk/flow/FlowEvent$Complete;
+	public static synthetic fun copy$default (Lorg/siros/sdk/flow/FlowEvent$Complete;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lorg/siros/sdk/flow/FlowEvent$Complete;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getResult ()Lkotlinx/serialization/json/JsonObject;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/flow/FlowEvent$Error : org/siros/sdk/flow/FlowEvent {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/flow/FlowEvent$Error;
+	public static synthetic fun copy$default (Lorg/siros/sdk/flow/FlowEvent$Error;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/flow/FlowEvent$Error;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCode ()Ljava/lang/String;
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/flow/FlowEvent$MatchRequest : org/siros/sdk/flow/FlowEvent {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)Lorg/siros/sdk/flow/FlowEvent$MatchRequest;
+	public static synthetic fun copy$default (Lorg/siros/sdk/flow/FlowEvent$MatchRequest;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lorg/siros/sdk/flow/FlowEvent$MatchRequest;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDcqlQuery ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getMessageId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/flow/FlowEvent$Progress : org/siros/sdk/flow/FlowEvent {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)Lorg/siros/sdk/flow/FlowEvent$Progress;
+	public static synthetic fun copy$default (Lorg/siros/sdk/flow/FlowEvent$Progress;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lorg/siros/sdk/flow/FlowEvent$Progress;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getPayload ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getStep ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/flow/FlowEvent$SignRequest : org/siros/sdk/flow/FlowEvent {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/flow/SignAction;Lorg/siros/sdk/flow/SignParams;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Lorg/siros/sdk/flow/SignAction;
+	public final fun component4 ()Lorg/siros/sdk/flow/SignParams;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/flow/SignAction;Lorg/siros/sdk/flow/SignParams;)Lorg/siros/sdk/flow/FlowEvent$SignRequest;
+	public static synthetic fun copy$default (Lorg/siros/sdk/flow/FlowEvent$SignRequest;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/flow/SignAction;Lorg/siros/sdk/flow/SignParams;ILjava/lang/Object;)Lorg/siros/sdk/flow/FlowEvent$SignRequest;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAction ()Lorg/siros/sdk/flow/SignAction;
+	public final fun getFlowId ()Ljava/lang/String;
+	public final fun getMessageId ()Ljava/lang/String;
+	public final fun getParams ()Lorg/siros/sdk/flow/SignParams;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/flow/FlowStepCatalog {
+	public static final field INSTANCE Lorg/siros/sdk/flow/FlowStepCatalog;
+	public final fun flowStepProgress (Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Float;
+	public final fun getIssuanceSteps ()Ljava/util/List;
+	public final fun getPresentationSteps ()Ljava/util/List;
+	public final fun getProximitySteps ()Ljava/util/List;
+}
+
+public final class org/siros/sdk/flow/MatchResponse {
+	public static final field Companion Lorg/siros/sdk/flow/MatchResponse$Companion;
+	public fun <init> (Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lorg/siros/sdk/flow/MatchResponse;
+	public static synthetic fun copy$default (Lorg/siros/sdk/flow/MatchResponse;Ljava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/flow/MatchResponse;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCredentialIds ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/flow/MatchResponse$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/flow/MatchResponse$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/flow/MatchResponse;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/flow/MatchResponse;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/flow/MatchResponse$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/flow/OID4VCIFlowParams {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;)Lorg/siros/sdk/flow/OID4VCIFlowParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/flow/OID4VCIFlowParams;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/flow/OID4VCIFlowParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCredentialOffer ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getCredentialOfferUri ()Ljava/lang/String;
+	public final fun getIssuerUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/flow/OID4VPFlowParams {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)V
+	public synthetic fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)Lorg/siros/sdk/flow/OID4VPFlowParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/flow/OID4VPFlowParams;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lorg/siros/sdk/flow/OID4VPFlowParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRequest ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getRequestUri ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/flow/SignAction : java/lang/Enum {
+	public static final field GENERATE_PROOF Lorg/siros/sdk/flow/SignAction;
+	public static final field SIGN_PRESENTATION Lorg/siros/sdk/flow/SignAction;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lorg/siros/sdk/flow/SignAction;
+	public static fun values ()[Lorg/siros/sdk/flow/SignAction;
+}
+
+public final class org/siros/sdk/flow/SignParams {
+	public static final field Companion Lorg/siros/sdk/flow/SignParams$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/Integer;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun component7 ()Ljava/util/List;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/util/List;)Lorg/siros/sdk/flow/SignParams;
+	public static synthetic fun copy$default (Lorg/siros/sdk/flow/SignParams;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Integer;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/flow/SignParams;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAudience ()Ljava/lang/String;
+	public final fun getCount ()Ljava/lang/Integer;
+	public final fun getCredentialsToInclude ()Ljava/util/List;
+	public final fun getIssuer ()Ljava/lang/String;
+	public final fun getNonce ()Ljava/lang/String;
+	public final fun getProofTypesSupported ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getResponseUri ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/flow/SignParams$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/flow/SignParams$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/flow/SignParams;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/flow/SignParams;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/flow/SignParams$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/flow/SignResponse {
+	public static final field Companion Lorg/siros/sdk/flow/SignResponse$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/util/List;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/flow/SignResponse;
+	public static synthetic fun copy$default (Lorg/siros/sdk/flow/SignResponse;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/flow/SignResponse;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttestation ()Ljava/lang/String;
+	public final fun getProofJwt ()Ljava/lang/String;
+	public final fun getProofType ()Ljava/lang/String;
+	public final fun getProofs ()Ljava/util/List;
+	public final fun getVpToken ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/flow/SignResponse$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/flow/SignResponse$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/flow/SignResponse;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/flow/SignResponse;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/flow/SignResponse$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+

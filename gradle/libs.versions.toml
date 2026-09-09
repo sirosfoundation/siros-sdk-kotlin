@@ -24,6 +24,7 @@ timber = "5.0.1"
 detekt = "1.23.7"
 kover = "0.8.3"
 dokka = "2.0.0"
+binary-compatibility-validator = "0.18.2"
 camerax = "1.4.1"
 mlkit-barcode = "17.3.0"
 zxing-core = "3.5.3"
@@ -86,4 +87,5 @@ kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }
+binary-compatibility-validator = { id = "org.jetbrains.kotlinx.binary-compatibility-validator", version.ref = "binary-compatibility-validator" }
 dokka = { id = "org.jetbrains.dokka", version.ref = "dokka" }

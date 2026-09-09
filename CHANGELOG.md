@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it. `SirosWallet.zkPresentation` exposes the wallet's instance, and both of
   the wallet's ZK paths (DC API and `sign_presentation`) now go through it.
   The assembly used to be a private method of `SirosWallet`.
+- Public-API dumps (`sdk/<module>/api/<module>.api`, Kotlin
+  binary-compatibility-validator) for every published module, checked by
+  `apiCheck` in CI. An intended signature change is recorded with `apiDump`
+  and reviewed as a diff.
 - Maven publication. Every `:sdk:` module publishes `org.siros:siros-sdk-<module>`
   (AAR, sources, POM with BSD-2-Clause/scm metadata, Gradle module metadata)
   plus `org.siros:siros-sdk-bom`, to GitHub Packages on each release tag;

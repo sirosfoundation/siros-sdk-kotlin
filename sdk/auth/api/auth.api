@@ -1,0 +1,557 @@
+public final class org/siros/sdk/auth/AccessToken {
+	public static final field Companion Lorg/siros/sdk/auth/AccessToken$Companion;
+	public fun <init> (Ljava/lang/String;)V
+	public final fun getAcr ()Lorg/siros/sdk/auth/Acr;
+	public final fun getAud ()Ljava/lang/String;
+	public final fun getExpiresAtMillis ()J
+	public final fun getRaw ()Ljava/lang/String;
+	public final fun getSub ()Ljava/lang/String;
+	public final fun getTac ()Ljava/util/Set;
+	public final fun getTenantId ()Ljava/lang/String;
+	public final fun isExpired ()Z
+	public final fun token ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/AccessToken$Companion {
+}
+
+public final class org/siros/sdk/auth/Acr : java/lang/Enum {
+	public static final field Companion Lorg/siros/sdk/auth/Acr$Companion;
+	public static final field OIDC Lorg/siros/sdk/auth/Acr;
+	public static final field PASSKEY Lorg/siros/sdk/auth/Acr;
+	public static final field UNKNOWN Lorg/siros/sdk/auth/Acr;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public final fun getValue ()Ljava/lang/String;
+	public static fun valueOf (Ljava/lang/String;)Lorg/siros/sdk/auth/Acr;
+	public static fun values ()[Lorg/siros/sdk/auth/Acr;
+}
+
+public final class org/siros/sdk/auth/Acr$Companion {
+	public final fun fromValue (Ljava/lang/String;)Lorg/siros/sdk/auth/Acr;
+}
+
+public final class org/siros/sdk/auth/AllowCredential {
+	public fun <init> ([BLjava/lang/String;)V
+	public synthetic fun <init> ([BLjava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()[B
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy ([BLjava/lang/String;)Lorg/siros/sdk/auth/AllowCredential;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/AllowCredential;[BLjava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/AllowCredential;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getId ()[B
+	public final fun getType ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class org/siros/sdk/auth/AuthProvider {
+	public abstract fun authenticate (Lorg/siros/sdk/auth/AuthenticateOptions;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun getPrfOutput ([B[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun register (Lorg/siros/sdk/auth/RegisterOptions;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/auth/AuthServerClient {
+	public static final field Companion Lorg/siros/sdk/auth/AuthServerClient$Companion;
+	public fun <init> (Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/Json;)V
+	public synthetic fun <init> (Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/Json;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lokhttp3/OkHttpClient;Lkotlinx/serialization/json/Json;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lokhttp3/OkHttpClient;Lkotlinx/serialization/json/Json;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun loginBegin (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun loginBegin$default (Lorg/siros/sdk/auth/AuthServerClient;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun loginFinish (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun loginFinish$default (Lorg/siros/sdk/auth/AuthServerClient;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun logout (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun registerBegin (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun registerBegin$default (Lorg/siros/sdk/auth/AuthServerClient;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun registerFinish (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun registerFinish$default (Lorg/siros/sdk/auth/AuthServerClient;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun requestAccessToken (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun requestAccessToken$default (Lorg/siros/sdk/auth/AuthServerClient;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun requestAnonymousToken (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun requestAnonymousToken$default (Lorg/siros/sdk/auth/AuthServerClient;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/auth/AuthServerClient$Companion {
+}
+
+public final class org/siros/sdk/auth/AuthSession {
+	public static final field Companion Lorg/siros/sdk/auth/AuthSession$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Ljava/lang/String;
+	public final fun component7 ()Ljava/lang/String;
+	public final fun component8 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/auth/AuthSession;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/AuthSession;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/AuthSession;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAppToken ()Ljava/lang/String;
+	public final fun getDid ()Ljava/lang/String;
+	public final fun getDisplayName ()Ljava/lang/String;
+	public final fun getPrivateData ()Ljava/lang/String;
+	public final fun getRefreshToken ()Ljava/lang/String;
+	public final fun getTenantId ()Ljava/lang/String;
+	public final fun getUsername ()Ljava/lang/String;
+	public final fun getUuid ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/auth/AuthSession$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/auth/AuthSession$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/auth/AuthSession;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/auth/AuthSession;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/auth/AuthSession$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/auth/AuthTokens {
+	public static final field Companion Lorg/siros/sdk/auth/AuthTokens$Companion;
+	public static final field TOKEN_ANONYMOUS Ljava/lang/String;
+	public static final field TOKEN_BACKEND Ljava/lang/String;
+	public fun <init> (Lorg/siros/sdk/auth/AuthServerClient;Ljava/lang/String;)V
+	public synthetic fun <init> (Lorg/siros/sdk/auth/AuthServerClient;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun ensureAnonymousToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun ensureBackendToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun ensureToken (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun forceRefreshToken (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getOnSessionRejected ()Lkotlin/jvm/functions/Function0;
+	public final fun registerTokenRejection (Ljava/lang/String;)V
+	public final fun setOnSessionRejected (Lkotlin/jvm/functions/Function0;)V
+}
+
+public final class org/siros/sdk/auth/AuthTokens$Companion {
+	public final fun getMANIFEST ()Ljava/util/Map;
+}
+
+public final class org/siros/sdk/auth/AuthenticateOptions {
+	public fun <init> (Ljava/lang/String;[BLjava/util/List;Ljava/lang/String;[BLjava/util/List;)V
+	public synthetic fun <init> (Ljava/lang/String;[BLjava/util/List;Ljava/lang/String;[BLjava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()[B
+	public final fun component3 ()Ljava/util/List;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()[B
+	public final fun component6 ()Ljava/util/List;
+	public final fun copy (Ljava/lang/String;[BLjava/util/List;Ljava/lang/String;[BLjava/util/List;)Lorg/siros/sdk/auth/AuthenticateOptions;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/AuthenticateOptions;Ljava/lang/String;[BLjava/util/List;Ljava/lang/String;[BLjava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/auth/AuthenticateOptions;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAllowCredentials ()Ljava/util/List;
+	public final fun getChallenge ()[B
+	public final fun getPrfSalt ()[B
+	public final fun getPrfSaltsByCredential ()Ljava/util/List;
+	public final fun getRpId ()Ljava/lang/String;
+	public final fun getUserVerification ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/AuthenticateResult {
+	public fun <init> ([B[B[B[B[BLorg/siros/sdk/auth/PrfOutput;)V
+	public synthetic fun <init> ([B[B[B[B[BLorg/siros/sdk/auth/PrfOutput;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()[B
+	public final fun component2 ()[B
+	public final fun component3 ()[B
+	public final fun component4 ()[B
+	public final fun component5 ()[B
+	public final fun component6 ()Lorg/siros/sdk/auth/PrfOutput;
+	public final fun copy ([B[B[B[B[BLorg/siros/sdk/auth/PrfOutput;)Lorg/siros/sdk/auth/AuthenticateResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/AuthenticateResult;[B[B[B[B[BLorg/siros/sdk/auth/PrfOutput;ILjava/lang/Object;)Lorg/siros/sdk/auth/AuthenticateResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAuthenticatorData ()[B
+	public final fun getClientDataJSON ()[B
+	public final fun getCredentialId ()[B
+	public final fun getPrfOutput ()Lorg/siros/sdk/auth/PrfOutput;
+	public final fun getSignature ()[B
+	public final fun getUserHandle ()[B
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/AuthenticatorSelection {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/auth/AuthenticatorSelection;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/AuthenticatorSelection;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/AuthenticatorSelection;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAuthenticatorAttachment ()Ljava/lang/String;
+	public final fun getResidentKey ()Ljava/lang/String;
+	public final fun getUserVerification ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/BackendApiClient {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lokhttp3/OkHttpClient;Lkotlinx/serialization/json/Json;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lokhttp3/OkHttpClient;Lkotlinx/serialization/json/Json;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun deleteCredential (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun evaluateTrust (Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun generateWIA (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun generateWIA$default (Lorg/siros/sdk/auth/BackendApiClient;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun getAccountInfo (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getCredential (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getCredentials (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getIssuerMetadata (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getIssuers (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getPrivateData (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getTenantConfig (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getVerifiers (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun healthCheck (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun listWalletInstances (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun refreshSession (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun registerFido2Attestation (Ljava/lang/String;[B[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun requestKeyAttestation (Ljava/util/List;Ljava/lang/String;Lorg/siros/sdk/credentials/SignerSecurityProperties;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun requestKeyAttestation$default (Lorg/siros/sdk/auth/BackendApiClient;Ljava/util/List;Ljava/lang/String;Lorg/siros/sdk/credentials/SignerSecurityProperties;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun requestWIAChallenge (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun resolveIssuer (Ljava/lang/String;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun resolveIssuer$default (Lorg/siros/sdk/auth/BackendApiClient;Ljava/lang/String;Ljava/util/List;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun revokeAllWalletInstances (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun revokeAllWalletInstances$default (Lorg/siros/sdk/auth/BackendApiClient;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun setAppToken (Ljava/lang/String;)V
+	public final fun setAuthTokens (Lorg/siros/sdk/auth/AuthTokens;)V
+	public final fun setWalletInstanceStatus (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun setWalletInstanceStatus$default (Lorg/siros/sdk/auth/BackendApiClient;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun storeCredential (Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun updatePrivateData (Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/auth/CredentialManagerAuthProvider : org/siros/sdk/auth/AuthProvider, org/siros/sdk/auth/WscdAutoEnrollHint {
+	public static final field Companion Lorg/siros/sdk/auth/CredentialManagerAuthProvider$Companion;
+	public fun <init> (Landroid/content/Context;)V
+	public fun authenticate (Lorg/siros/sdk/auth/AuthenticateOptions;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun getHintedWscdPluginId ()Ljava/lang/String;
+	public final fun getLastAuthenticatorAttachment ()Ljava/lang/String;
+	public final fun getLastCredentialId ()[B
+	public final fun getLastPrfOutput ()Lorg/siros/sdk/auth/PrfOutput;
+	public fun getPrfOutput ([B[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun register (Lorg/siros/sdk/auth/RegisterOptions;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun suggestsWscdCapableDevice ()Z
+}
+
+public final class org/siros/sdk/auth/CredentialManagerAuthProvider$Companion {
+}
+
+public final class org/siros/sdk/auth/InMemoryCookieJar : okhttp3/CookieJar {
+	public fun <init> ()V
+	public final fun clear ()V
+	public fun loadForRequest (Lokhttp3/HttpUrl;)Ljava/util/List;
+	public fun saveFromResponse (Lokhttp3/HttpUrl;Ljava/util/List;)V
+}
+
+public final class org/siros/sdk/auth/LocalAuthProvider : org/siros/sdk/auth/AuthProvider {
+	public static final field Companion Lorg/siros/sdk/auth/LocalAuthProvider$Companion;
+	public fun <init> (Landroid/content/Context;Z)V
+	public synthetic fun <init> (Landroid/content/Context;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun authenticate (Lorg/siros/sdk/auth/AuthenticateOptions;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getLastCredentialId ()[B
+	public final fun getLastPrfOutput ()Lorg/siros/sdk/auth/PrfOutput;
+	public fun getPrfOutput ([B[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun register (Lorg/siros/sdk/auth/RegisterOptions;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun rollbackLastRegistration ()V
+	public final fun setLastPrfOutput (Lorg/siros/sdk/auth/PrfOutput;)V
+}
+
+public final class org/siros/sdk/auth/LocalAuthProvider$Companion {
+	public final fun computeAndroidOrigin (Landroid/content/Context;)Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/LoginFinishResult {
+	public static final field Companion Lorg/siros/sdk/auth/LoginFinishResult$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/auth/LoginFinishResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/LoginFinishResult;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/LoginFinishResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDisplayName ()Ljava/lang/String;
+	public final fun getTenantDisplayName ()Ljava/lang/String;
+	public final fun getTenantId ()Ljava/lang/String;
+	public final fun getUuid ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/auth/LoginFinishResult$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/auth/LoginFinishResult$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/auth/LoginFinishResult;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/auth/LoginFinishResult;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/auth/LoginFinishResult$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/auth/PersistentCookieJar : okhttp3/CookieJar {
+	public static final field Companion Lorg/siros/sdk/auth/PersistentCookieJar$Companion;
+	public fun <init> (Landroid/content/Context;)V
+	public final fun clear ()V
+	public fun loadForRequest (Lokhttp3/HttpUrl;)Ljava/util/List;
+	public fun saveFromResponse (Lokhttp3/HttpUrl;Ljava/util/List;)V
+}
+
+public final class org/siros/sdk/auth/PersistentCookieJar$Companion {
+}
+
+public final class org/siros/sdk/auth/PrfOutput {
+	public fun <init> ([B[B)V
+	public synthetic fun <init> ([B[BILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()[B
+	public final fun component2 ()[B
+	public final fun copy ([B[B)Lorg/siros/sdk/auth/PrfOutput;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/PrfOutput;[B[BILjava/lang/Object;)Lorg/siros/sdk/auth/PrfOutput;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFirst ()[B
+	public final fun getSecond ()[B
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/RegisterFinishResult {
+	public static final field Companion Lorg/siros/sdk/auth/RegisterFinishResult$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/auth/RegisterFinishResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/RegisterFinishResult;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/RegisterFinishResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDisplayName ()Ljava/lang/String;
+	public final fun getTenantDisplayName ()Ljava/lang/String;
+	public final fun getTenantId ()Ljava/lang/String;
+	public final fun getUuid ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/auth/RegisterFinishResult$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/auth/RegisterFinishResult$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/auth/RegisterFinishResult;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/auth/RegisterFinishResult;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/auth/RegisterFinishResult$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/auth/RegisterOptions {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;[BLjava/lang/String;Lorg/siros/sdk/auth/AuthenticatorSelection;[B)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;[BLjava/lang/String;Lorg/siros/sdk/auth/AuthenticatorSelection;[BILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()[B
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()[B
+	public final fun component7 ()Ljava/lang/String;
+	public final fun component8 ()Lorg/siros/sdk/auth/AuthenticatorSelection;
+	public final fun component9 ()[B
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;[BLjava/lang/String;Lorg/siros/sdk/auth/AuthenticatorSelection;[B)Lorg/siros/sdk/auth/RegisterOptions;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/RegisterOptions;Ljava/lang/String;Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;[BLjava/lang/String;Lorg/siros/sdk/auth/AuthenticatorSelection;[BILjava/lang/Object;)Lorg/siros/sdk/auth/RegisterOptions;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttestation ()Ljava/lang/String;
+	public final fun getAuthenticatorSelection ()Lorg/siros/sdk/auth/AuthenticatorSelection;
+	public final fun getChallenge ()[B
+	public final fun getPrfSalt ()[B
+	public final fun getRpId ()Ljava/lang/String;
+	public final fun getRpName ()Ljava/lang/String;
+	public final fun getUserDisplayName ()Ljava/lang/String;
+	public final fun getUserId ()[B
+	public final fun getUserName ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/RegisterResult {
+	public fun <init> ([B[B[BLorg/siros/sdk/auth/PrfOutput;)V
+	public synthetic fun <init> ([B[B[BLorg/siros/sdk/auth/PrfOutput;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()[B
+	public final fun component2 ()[B
+	public final fun component3 ()[B
+	public final fun component4 ()Lorg/siros/sdk/auth/PrfOutput;
+	public final fun copy ([B[B[BLorg/siros/sdk/auth/PrfOutput;)Lorg/siros/sdk/auth/RegisterResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/RegisterResult;[B[B[BLorg/siros/sdk/auth/PrfOutput;ILjava/lang/Object;)Lorg/siros/sdk/auth/RegisterResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttestationObject ()[B
+	public final fun getClientDataJSON ()[B
+	public final fun getCredentialId ()[B
+	public final fun getPrfOutput ()Lorg/siros/sdk/auth/PrfOutput;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/TacPermission : java/lang/Enum {
+	public static final field ADMIN Lorg/siros/sdk/auth/TacPermission;
+	public static final field Companion Lorg/siros/sdk/auth/TacPermission$Companion;
+	public static final field DELEGATE Lorg/siros/sdk/auth/TacPermission;
+	public static final field DELETE Lorg/siros/sdk/auth/TacPermission;
+	public static final field INSERT Lorg/siros/sdk/auth/TacPermission;
+	public static final field LIST Lorg/siros/sdk/auth/TacPermission;
+	public static final field READ Lorg/siros/sdk/auth/TacPermission;
+	public static final field WRITE Lorg/siros/sdk/auth/TacPermission;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public final fun getFlag ()C
+	public static fun valueOf (Ljava/lang/String;)Lorg/siros/sdk/auth/TacPermission;
+	public static fun values ()[Lorg/siros/sdk/auth/TacPermission;
+}
+
+public final class org/siros/sdk/auth/TacPermission$Companion {
+	public final fun parse (Ljava/lang/String;)Ljava/util/Set;
+}
+
+public final class org/siros/sdk/auth/TaggedBinary {
+	public static final field INSTANCE Lorg/siros/sdk/auth/TaggedBinary;
+	public final fun decode (Lkotlinx/serialization/json/JsonElement;)Lkotlinx/serialization/json/JsonElement;
+	public final fun extractBase64Url (Lkotlinx/serialization/json/JsonElement;)Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/TokenKind {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Z
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)Lorg/siros/sdk/auth/TokenKind;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/TokenKind;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZILjava/lang/Object;)Lorg/siros/sdk/auth/TokenKind;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAnonymous ()Z
+	public final fun getAud ()Ljava/lang/String;
+	public final fun getName ()Ljava/lang/String;
+	public final fun getTac ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/TokenResponse {
+	public static final field Companion Lorg/siros/sdk/auth/TokenResponse$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;I)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()I
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;I)Lorg/siros/sdk/auth/TokenResponse;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/TokenResponse;Ljava/lang/String;Ljava/lang/String;IILjava/lang/Object;)Lorg/siros/sdk/auth/TokenResponse;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAccessToken ()Ljava/lang/String;
+	public final fun getExpiresIn ()I
+	public final fun getTokenType ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/auth/TokenResponse$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/auth/TokenResponse$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/auth/TokenResponse;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/auth/TokenResponse;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/auth/TokenResponse$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/auth/WalletInstance {
+	public static final field Companion Lorg/siros/sdk/auth/WalletInstance$Companion;
+	public static final field STATUS_ACTIVE Ljava/lang/String;
+	public static final field STATUS_REVOKED Ljava/lang/String;
+	public static final field STATUS_SUSPENDED Ljava/lang/String;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component10 ()Ljava/lang/String;
+	public final fun component11 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Ljava/lang/String;
+	public final fun component7 ()Ljava/lang/String;
+	public final fun component8 ()Ljava/lang/String;
+	public final fun component9 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/auth/WalletInstance;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/WalletInstance;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/WalletInstance;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttestationSource ()Ljava/lang/String;
+	public final fun getCreatedAt ()Ljava/lang/String;
+	public final fun getCredentialId ()Ljava/lang/String;
+	public final fun getId ()Ljava/lang/String;
+	public final fun getLastAttestedAt ()Ljava/lang/String;
+	public final fun getStatus ()Ljava/lang/String;
+	public final fun getStatusReason ()Ljava/lang/String;
+	public final fun getTenantId ()Ljava/lang/String;
+	public final fun getUpdatedAt ()Ljava/lang/String;
+	public final fun getUserId ()Ljava/lang/String;
+	public final fun getWscdType ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/auth/WalletInstance$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/auth/WalletInstance$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/auth/WalletInstance;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/auth/WalletInstance;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/auth/WalletInstance$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/auth/WebAuthnAuthClient {
+	public static final field Companion Lorg/siros/sdk/auth/WebAuthnAuthClient$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/auth/AuthProvider;Lokhttp3/OkHttpClient;Lkotlinx/serialization/json/Json;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/auth/AuthProvider;Lokhttp3/OkHttpClient;Lkotlinx/serialization/json/Json;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun login ([BLjava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun login$default (Lorg/siros/sdk/auth/WebAuthnAuthClient;[BLjava/util/List;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun register (Ljava/lang/String;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun register$default (Lorg/siros/sdk/auth/WebAuthnAuthClient;Ljava/lang/String;[BLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/auth/WebAuthnAuthClient$Companion {
+	public final fun decodeBase64Url (Ljava/lang/String;)[B
+	public final fun encodeBase64Url ([B)Ljava/lang/String;
+}
+
+public abstract interface class org/siros/sdk/auth/WscdAutoEnrollHint {
+	public abstract fun getHintedWscdPluginId ()Ljava/lang/String;
+	public abstract fun suggestsWscdCapableDevice ()Z
+}
+

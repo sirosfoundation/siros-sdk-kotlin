@@ -151,6 +151,10 @@ declare itself: the deep-link schemes it handles (`openid-credential-offer`,
 authorization-callback scheme, the permissions it uses (camera, Bluetooth,
 NFC), and its passkey relying-party assets on the backend side.
 
+The public API of every module is recorded in `sdk/<module>/api/<module>.api`
+and checked by `./gradlew apiCheck` in CI; an intended change is committed with
+`./gradlew apiDump` and reviewed as a diff of that file.
+
 To build against an unreleased checkout, `./gradlew publishToMavenLocal
 -PsdkVersion=<anything>` installs the same artifacts into `~/.m2`, resolvable
 with `mavenLocal()`.
