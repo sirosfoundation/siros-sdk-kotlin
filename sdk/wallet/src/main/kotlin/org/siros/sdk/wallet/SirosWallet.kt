@@ -62,7 +62,6 @@ import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.Vctm
 import org.siros.sdk.credentials.ZkCircuitClient
 import org.siros.sdk.credentials.COSE_ALG_ES256
-import org.siros.sdk.credentials.CredentialDocument
 import org.siros.sdk.credentials.CredentialFormat
 import org.siros.sdk.credentials.CredentialTypeRef
 import org.siros.sdk.credentials.ZkProofSystemRegistry
@@ -81,10 +80,7 @@ import org.siros.sdk.keystore.KeypairInfo
 import org.siros.sdk.keystore.KeystoreManager
 import org.siros.sdk.keystore.LongfellowZkProofSystem
 import org.siros.sdk.keystore.MdocDeviceResponseBuilder
-// VegaProofSystem: LOCAL ONLY, DO NOT PUSH/MERGE this line to origin/main -
-// see VegaProofSystem.kt's own doc comment for why (zk-cred-vega only
-// resolves via mavenLocal right now).
-import org.siros.sdk.keystore.VegaProofSystem
+import org.siros.sdk.keystore.ZkMdocPresentation
 import org.siros.sdk.keystore.WscdKeystoreAdapter
 import org.siros.sdk.keystore.WscdManager
 import org.siros.sdk.wallet.dcapi.DCAPIRequest
@@ -2387,22 +2383,6 @@ class SirosWallet private constructor(
                 // signing key happens to be resolvable, even though nothing
                 // in that flow ever needs one.
                 val kid = cred.kid ?: keystore.listKeys().firstOrNull()?.keyId
-                val docType = MdocCbor.parseStoredCredential(credBytes).docType
-                // A circuit is compiled for a fixed attribute count, so the
-                // verifier's zk_system_type list must be matched against how
-                // many claims are actually being disclosed here - see
-                // ZkProofSystem.matchingSpec's doc comment. disclosedClaims
-                // already includes "pairwise_pseudonym" whenever a pseudonym
-                // is being requested (see wantsPseudonym below), so this
-                // count already equals generateProof's own effectiveClaims.size.
-                val (system, spec) = zkProofSystemRegistry.resolve(
-                    CredentialTypeRef(CredentialFormat.MSO_MDOC, docType),
-                    matchResult.zkSystemTypes.orEmpty(),
-                    disclosedClaims?.size ?: 0,
-                )
-                    ?: throw WalletException(
-                        "No registered ZK proof system satisfies the verifier's zk_system_type for $docType"
-                    )
                 // Only bind a pseudonym when the verifier actually asked for
                 // one - passing a non-null VerifierIdentity unconditionally
                 // would make generateProof auto-add and disclose
@@ -2419,31 +2399,30 @@ class SirosWallet private constructor(
                     nonce = request.nonce,
                     encryptionPublicJwkThumbprint = encryptionThumbprint,
                 )
-                val result = system.generateProof(
-                    spec = spec,
-                    document = CredentialDocument.Mdoc(credBytes),
-                    sessionTranscript = sessionTranscript,
-                    requestedClaims = disclosedClaims ?: emptyList(),
-                    verifierIdentity = verifierIdentity,
-                    signer = { algorithm, data ->
-                        require(algorithm == COSE_ALG_ES256) {
-                            "This keystore signs ES256 only, proof system asked for COSE alg $algorithm"
-                        }
-                        keystore.sign(
-                            requireNotNull(kid) { "No signing key available for credential $id - cannot generate a ZK proof for it" },
-                            data,
-                        )
-                    },
-                )
-                val deviceResponse = buildZkPresentationToken(
-                    credBytes = credBytes,
-                    docType = docType,
-                    spec = spec,
-                    disclosedClaimNames = disclosedClaims ?: emptyList(),
-                    result = result,
-                )
+                val presented = try {
+                    zkPresentation.present(
+                        ZkMdocPresentation.Request(
+                            credentialBytes = credBytes,
+                            requestedSystems = matchResult.zkSystemTypes.orEmpty(),
+                            sessionTranscript = sessionTranscript,
+                            requestedClaims = disclosedClaims ?: emptyList(),
+                            verifierIdentity = verifierIdentity,
+                        ),
+                        signer = { algorithm, data ->
+                            require(algorithm == COSE_ALG_ES256) {
+                                "This keystore signs ES256 only, proof system asked for COSE alg $algorithm"
+                            }
+                            keystore.sign(
+                                requireNotNull(kid) { "No signing key available for credential $id - cannot generate a ZK proof for it" },
+                                data,
+                            )
+                        },
+                    )
+                } catch (e: ZkMdocPresentation.NoMatchingProofSystem) {
+                    throw WalletException(e.message ?: "No registered ZK proof system satisfies the request")
+                }
                 android.util.Base64.encodeToString(
-                    deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+                    presented.deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
                 )
             } else if (cred.format == "mso_mdoc") {
                 val credBytes = android.util.Base64.decode(
@@ -2814,40 +2793,35 @@ class SirosWallet private constructor(
     }
 
     /**
-     * Every ZK proof system this wallet can satisfy a verifier's
-     * `"mso_mdoc_zk"` DCQL request with - see [handleDCAPIRequest]'s
-     * `mso_mdoc_zk` branch, the only current caller. [ZkProofSystemRegistry]
-     * tries each system in order via [ZkProofSystem.matchingSpec] until one
-     * claims the request, so ordering only matters when two systems could
-     * both match the same spec (not the case today - Vega and Longfellow
-     * declare disjoint `system` ids).
-     *
-     * VegaProofSystem: LOCAL ONLY, DO NOT PUSH/MERGE this line to
-     * origin/main - see its own doc comment for current gating (crate's own
-     * expert review running in parallel with this session's testing, not a
-     * blocker to local/self-hosted use; `go-zk-circuits` catalog entries
-     * still `--unpublished`; a genuinely open on-device heap constraint).
+     * ZK presentation of mdoc credentials - every proof system this wallet
+     * can satisfy a verifier's `"mso_mdoc_zk"` DCQL request with, assembled
+     * once here and usable without this wallet: see [ZkMdocPresentation] for
+     * why the assembly is a public type of its own. The registry tries each
+     * system in order via [ZkProofSystem.matchingSpec] until one claims the
+     * request, so ordering only matters when two systems could both match
+     * the same spec (not the case today - Vega and Longfellow declare
+     * disjoint `system` ids). BBS is registered alongside because its
+     * holder state lives in this wallet's keystore - only when the
+     * deployment declares BBS credential types (see
+     * [WalletConfig.bbsCredentialTypes]); the set is a constructor argument
+     * rather than something derived from what is stored because the
+     * issuance half needs it before any credential of that type exists.
      */
-    private val zkProofSystemRegistry: ZkProofSystemRegistry =
-        ZkProofSystemRegistry(
-            buildList {
-                add(LongfellowZkProofSystem(zkCircuitClient))
-                add(VegaProofSystem(zkCircuitClient))
-                // Registered only when the deployment declares BBS credential
-                // types (see [WalletConfig.bbsCredentialTypes]). The set is
-                // a constructor argument rather than something derived from
-                // what is stored because the issuance half needs it before
-                // any credential of that type exists.
-                if (config.bbsCredentialTypes.isNotEmpty()) {
-                    add(
-                        org.siros.sdk.credentials.BbsProofSystem(
-                            holderState = bbsHolderStateStore,
-                            supportedVcts = config.bbsCredentialTypes,
-                        ),
-                    )
-                }
-            },
-        )
+    val zkPresentation: ZkMdocPresentation = ZkMdocPresentation.standard(
+        circuitClient = zkCircuitClient,
+        extra = buildList {
+            if (config.bbsCredentialTypes.isNotEmpty()) {
+                add(
+                    org.siros.sdk.credentials.BbsProofSystem(
+                        holderState = bbsHolderStateStore,
+                        supportedVcts = config.bbsCredentialTypes,
+                    ),
+                )
+            }
+        },
+    )
+
+    private val zkProofSystemRegistry: ZkProofSystemRegistry get() = zkPresentation.registry
 
     /**
      * The zero-knowledge systems this wallet can prove with.
@@ -3067,72 +3041,6 @@ class SirosWallet private constructor(
             throw IllegalStateException(
                 "a key binding key was committed without a signer to prove possession of it",
             )
-    }
-
-    /**
-     * Wraps a raw ZK [result] into the full `{version, status, zkDocuments:
-     * [...]}` DeviceResponse-shaped CBOR structure multipaz's own
-     * `DeviceResponseParser` requires (confirmed via direct source read -
-     * see [MdocDeviceResponseBuilder.buildZkDeviceResponse]'s doc comment).
-     * Bare [result].proofBytes alone is not a valid `vp_token` entry - a
-     * verifier that understands this format silently shows nothing for one,
-     * since its parser never finds a `documents` or `zkDocuments` key at all.
-     * Shared by both ZK call sites ([handleDCAPIRequest] and the
-     * `sign_presentation` handler below) since the wrapping logic is
-     * identical regardless of transport.
-     */
-    private fun buildZkPresentationToken(
-        credBytes: ByteArray,
-        docType: String,
-        spec: org.siros.sdk.credentials.ZkSystemSpec,
-        disclosedClaimNames: List<String>,
-        result: org.siros.sdk.credentials.ZkProofResult,
-    ): ByteArray {
-        val document = MdocCbor.parseStoredCredential(credBytes)
-        val namespace = document.issuerSigned.nameSpaces.keys.firstOrNull()
-            ?: error("mdoc credential '$docType' has no disclosed namespaces")
-        val storedItems = document.issuerSigned.nameSpaces[namespace].orEmpty()
-
-        val disclosedClaims = linkedMapOf<String, com.upokecenter.cbor.CBORObject>()
-        val digestIds = linkedMapOf<String, UInt>()
-        val issuerSignedItemBytes = linkedMapOf<String, ByteArray>()
-        disclosedClaimNames.forEach { claimName ->
-            if (claimName == LongfellowZkProofSystem.PSEUDONYM_CLAIM) {
-                result.pseudonym?.let {
-                    disclosedClaims[claimName] = com.upokecenter.cbor.CBORObject.FromObject(it)
-                }
-            } else {
-                storedItems.firstOrNull { it.item.elementIdentifier == claimName }?.let {
-                    disclosedClaims[claimName] = it.item.elementValue
-                    digestIds[claimName] = it.item.digestId.toUInt()
-                    issuerSignedItemBytes[claimName] = it.original.EncodeToBytes()
-                }
-            }
-        }
-
-        // Vega-only (see MdocDeviceResponseBuilder.buildZkDeviceResponse's
-        // doc comment on claimSlotDigestIds): storedItems is already in the
-        // credential's own document order - the same order
-        // VegaProofSystem.buildWitness assigns to FfiClaim slots - so its
-        // digestIds, in this order, ARE the verifier-facing slot list.
-        val claimSlotDigestIds = if (spec.system == org.siros.sdk.keystore.VegaProofSystem.SYSTEM_ID) {
-            storedItems.map { it.item.digestId.toUInt() }
-        } else {
-            null
-        }
-
-        return MdocDeviceResponseBuilder.buildZkDeviceResponse(
-            proofBytes = result.proofBytes,
-            zkSystemId = spec.id,
-            docType = docType,
-            timestamp = result.timestamp,
-            namespace = namespace,
-            disclosedClaims = disclosedClaims,
-            issuerAuth = document.issuerSigned.issuerAuth,
-            digestIds = digestIds,
-            issuerSignedItemBytes = issuerSignedItemBytes,
-            claimSlotDigestIds = claimSlotDigestIds,
-        )
     }
 
     /** Stores trust evaluation results keyed by flow ID for use in credential selection UI. */
@@ -4548,18 +4456,6 @@ class SirosWallet private constructor(
                                         // Resolved lazily (checked only inside the signer lambda) -
                                         // see handleDCAPIRequest's identical comment for why.
                                         val kid = cred.kid ?: keystore.listKeys().firstOrNull()?.keyId
-                                        val docType = MdocCbor.parseStoredCredential(credBytes).docType
-                                        // See handleDCAPIRequest's identical comment: a circuit is
-                                        // compiled for a fixed attribute count, so matching must
-                                        // account for how many claims are actually being disclosed.
-                                        val (system, spec) = zkProofSystemRegistry.resolve(
-                                            CredentialTypeRef(CredentialFormat.MSO_MDOC, docType),
-                                            matchResult.zkSystemTypes.orEmpty(),
-                                            ref.disclosedClaims?.size ?: 0,
-                                        )
-                                            ?: throw WalletException(
-                                                "No registered ZK proof system satisfies the verifier's zk_system_type for $docType"
-                                            )
                                         // Only bind a pseudonym when actually disclosed for this
                                         // query - see handleDCAPIRequest's identical comment.
                                         val wantsPseudonym = ref.disclosedClaims?.contains(LongfellowZkProofSystem.PSEUDONYM_CLAIM) == true
@@ -4585,7 +4481,7 @@ class SirosWallet private constructor(
                                             responseUri = params?.responseUri ?: "",
                                             verifierJwkThumbprint = params?.verifierJwkThumbprint,
                                         )
-                                        Timber.d("sign_presentation: generating ZK proof, system=${system.systemId} wantsPseudonym=$wantsPseudonym verifierIdentity=$verifierIdentity")
+                                        Timber.d("sign_presentation: generating ZK proof, wantsPseudonym=$wantsPseudonym verifierIdentity=$verifierIdentity")
                                         // ZK proof generation is a multi-second native compute
                                         // with no intermediate progress signal from the engine (the
                                         // last real server step was "credential_selection", and the
@@ -4600,32 +4496,31 @@ class SirosWallet private constructor(
                                         (_state.value as? WalletState.FlowActive)
                                             ?.takeIf { it.flowId == msg.flowId }
                                             ?.let { _state.value = it.copy(status = "computing_proof") }
-                                        val result = system.generateProof(
-                                            spec = spec,
-                                            document = CredentialDocument.Mdoc(credBytes),
-                                            sessionTranscript = sessionTranscript,
-                                            requestedClaims = ref.disclosedClaims ?: emptyList(),
-                                            verifierIdentity = verifierIdentity,
-                                            signer = { algorithm, data ->
-                                                require(algorithm == COSE_ALG_ES256) {
-                                                    "This keystore signs ES256 only, proof system asked for COSE alg $algorithm"
-                                                }
-                                                keystore.sign(
-                                                    requireNotNull(kid) { "No signing key available for credential ${cred.id} - cannot generate a ZK proof for it" },
-                                                    data,
-                                                )
-                                            },
-                                        )
-                                        Timber.d("sign_presentation: ZK proof generated, pseudonymOutcome=${result.pseudonymOutcome} proofBytes.size=${result.proofBytes.size}")
-                                        val zkDeviceResponse = buildZkPresentationToken(
-                                            credBytes = credBytes,
-                                            docType = docType,
-                                            spec = spec,
-                                            disclosedClaimNames = ref.disclosedClaims ?: emptyList(),
-                                            result = result,
-                                        )
+                                        val presented = try {
+                                            zkPresentation.present(
+                                                ZkMdocPresentation.Request(
+                                                    credentialBytes = credBytes,
+                                                    requestedSystems = matchResult.zkSystemTypes.orEmpty(),
+                                                    sessionTranscript = sessionTranscript,
+                                                    requestedClaims = ref.disclosedClaims ?: emptyList(),
+                                                    verifierIdentity = verifierIdentity,
+                                                ),
+                                                signer = { algorithm, data ->
+                                                    require(algorithm == COSE_ALG_ES256) {
+                                                        "This keystore signs ES256 only, proof system asked for COSE alg $algorithm"
+                                                    }
+                                                    keystore.sign(
+                                                        requireNotNull(kid) { "No signing key available for credential ${cred.id} - cannot generate a ZK proof for it" },
+                                                        data,
+                                                    )
+                                                },
+                                            )
+                                        } catch (e: ZkMdocPresentation.NoMatchingProofSystem) {
+                                            throw WalletException(e.message ?: "No registered ZK proof system satisfies the request")
+                                        }
+                                        Timber.d("sign_presentation: ZK proof generated, system=${presented.system.systemId} pseudonymOutcome=${presented.proof.pseudonymOutcome} proofBytes.size=${presented.proof.proofBytes.size}")
                                         android.util.Base64.encodeToString(
-                                            zkDeviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+                                            presented.deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
                                         )
                                     } else if (cred.format == "mso_mdoc") {
                                         // mDoc DeviceResponse (ISO 18013-5)

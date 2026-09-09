@@ -16,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `resolveIssuanceStart`, shared with the offer-display lookup.
 
 ### Added
+- `org.siros.sdk.keystore.ZkMdocPresentation`: zero-knowledge presentation
+  of a stored mdoc credential with no wallet and no Activity - resolve the
+  verifier's `zk_system_type` list against the registered proof systems,
+  run the prover, and assemble the `zkDocuments` DeviceResponse CBOR. Takes
+  credential bytes, a session transcript, requested claims, an optional
+  verifier identity and a `ZkWitnessSigner`; the device key never enters
+  it. `SirosWallet.zkPresentation` exposes the wallet's instance, and both of
+  the wallet's ZK paths (DC API and `sign_presentation`) now go through it.
+  The assembly used to be a private method of `SirosWallet`.
 - Maven publication. Every `:sdk:` module publishes `org.siros:siros-sdk-<module>`
   (AAR, sources, POM with BSD-2-Clause/scm metadata, Gradle module metadata)
   plus `org.siros:siros-sdk-bom`, to GitHub Packages on each release tag;
