@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `startIssuance(offerUri)` unpacks `credential_offer` / `credential_offer_uri`
+  from any scheme (`haip-vci://`, an upper-cased scheme from a QR code, an
+  issuer's `https://` redirect page), not only from `https://` - the engine
+  itself only unpacks lowercase `openid-credential-offer://`, so a `haip-vci`
+  link previously reached it as the raw offer. The decision is the new
+  `resolveIssuanceStart`, shared with the offer-display lookup.
+
 ### Added
 - The platform components a host app needs for DC API and NFC engagement now
   ship in the SDK and are merged into the app manifest automatically:
