@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `resolveIssuanceStart`, shared with the offer-display lookup.
 
 ### Added
+- Maven publication. Every `:sdk:` module publishes `org.siros:siros-sdk-<module>`
+  (AAR, sources, POM with BSD-2-Clause/scm metadata, Gradle module metadata)
+  plus `org.siros:siros-sdk-bom`, to GitHub Packages on each release tag;
+  `publishToMavenLocal` works for local consumers. The version is
+  `sdkVersion` in `gradle.properties`, overridden from the tag in CI. The
+  release workflow's publish step used to be a no-op (`|| echo skipping`)
+  and now fails loudly instead.
 - The platform components a host app needs for DC API and NFC engagement now
   ship in the SDK and are merged into the app manifest automatically:
   `org.siros.sdk.wallet.dcapi.DCAPIGetCredentialActivity` (the Digital
@@ -30,12 +37,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `org.siros.sdk.keystore.OkHttpR2psTransport`, the default
   `R2psTransportProvider`, moved into the SDK from the sample app (Swift
   counterpart: `URLSessionR2psTransport`).
-
-### Changed
-- `WalletSessionHolder` moved from the sample app to
-  `org.siros.sdk.wallet.dcapi`; `ActiveEngagement` to
-  `org.siros.sdk.keystore.mdoc`. The SDK's own strings are prefixed `siros_`
-  and can be overridden by a host app by name.
 - Wallet instance lifecycle (SID-AUTH-06, go-wallet-backend#319):
   `SirosWallet.listWalletInstances()`, `setWalletInstanceStatus()` and
   `deactivateWallet()` (revokes every instance server-side, then forgets the
@@ -45,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AuthException.errorCode` now carries the AS's error code, so a 403
   `WALLET_SUSPENDED` / `WALLET_REVOKED` login refusal is distinguishable
   from a plain authentication failure.
+
 - Answer the engine's `sign_client_auth` sign request (go-wallet-backend#317,
   wallet-frontend#282) on both the legacy engine transport and WMP: sign the
   RFC 9449 DPoP proof and a fresh OAuth client attestation PoP for each
@@ -57,6 +59,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`CredentialRefreshTokenEntry.dpopKeyId`) and presented back on renewal.
   The WMP sign sub-flow also answers `request_attestation` now. Requires a
   backend with go-wallet-backend#318; older backends never send the action.
+
+### Changed
+- `WalletSessionHolder` moved from the sample app to
+  `org.siros.sdk.wallet.dcapi`; `ActiveEngagement` to
+  `org.siros.sdk.keystore.mdoc`. The SDK's own strings are prefixed `siros_`
+  and can be overridden by a host app by name.
 
 ## [0.11.0]
 

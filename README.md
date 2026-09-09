@@ -86,6 +86,75 @@ Debug builds expose a gear icon on the login screen for configuring:
 
 Controlled by `SHOW_PRE_LOGIN_SETTINGS` build config (true in debug, false in release).
 
+## Adding the SDK to an app
+
+Every module is published as `org.siros:siros-sdk-<module>` with a BOM, to
+GitHub Packages, on each release tag. GitHub Packages requires an
+authenticated token even to read public packages, so a consumer configures the
+SDK's repository and the repositories of its native dependencies with a
+personal access token that has `read:packages`:
+
+```kotlin
+// settings.gradle.kts
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+        listOf(
+            "siros-sdk-kotlin",     // the SDK itself
+            "siros-wscd-manager",   // WSCD key management (UniFFI)
+            "siros-dc-matcher",     // DC API matcher + DCQL engine
+            "zk-cred-longfellow", "zk-cred-vega", "zk-cred-bbs", // ZK proof systems
+        ).forEach { repo ->
+            maven {
+                url = uri("https://maven.pkg.github.com/sirosfoundation/$repo")
+                credentials {
+                    username = providers.gradleProperty("gpr.user").orNull
+                    password = providers.gradleProperty("gpr.key").orNull
+                }
+            }
+        }
+    }
+}
+```
+
+```kotlin
+// app/build.gradle.kts
+dependencies {
+    implementation(platform("org.siros:siros-sdk-bom:0.13.0"))
+    implementation("org.siros:siros-sdk-wallet")          // the facade; pulls in every other module
+    // implementation("org.siros:siros-sdk-passkey-provider") // only if the app is also a passkey provider (API 34+)
+}
+```
+
+### Supported Android versions
+
+`minSdk` **28** (Android 9) is the SDK's floor - BiometricPrompt and
+hardware-backed key attestation start there - and `compileSdk` must be 36 or
+higher. Everything above 28 is gated at runtime, never assumed:
+
+| feature | needs | otherwise |
+|---|---|---|
+| passkey login, credentials, presentation | 28 + Google Play Services | - |
+| Digital Credentials API | 28 + a Play Services build with Credential Manager (in practice Android 14+) | picker never shows this wallet |
+| `siros-sdk-passkey-provider` (this app as a passkey *provider*) | **34** (`CredentialProviderService`) | module is inert |
+| USB CTAP2 security keys | 33 for the exported-receiver flags; works on 28+ | - |
+| user-auth-bound keys (`setUserAuthenticationParameters`) | 30 | falls back to the pre-30 API |
+
+The DC API entry
+Activity and the NFC HCE Service are declared by the SDK's own manifests and
+merged into the app; the app keeps `WalletSessionHolder` pointed at its
+unlocked wallet and calls `SirosCredentialRegistry.refresh` when it has
+credentials (see the sample app's `WalletViewModel`). What the app must still
+declare itself: the deep-link schemes it handles (`openid-credential-offer`,
+`openid4vp`, `mdoc-openid4vp`, `haip`, `haip-vp`, `haip-vci`) plus its own
+authorization-callback scheme, the permissions it uses (camera, Bluetooth,
+NFC), and its passkey relying-party assets on the backend side.
+
+To build against an unreleased checkout, `./gradlew publishToMavenLocal
+-PsdkVersion=<anything>` installs the same artifacts into `~/.m2`, resolvable
+with `mavenLocal()`.
+
 ## Quick Start
 
 ```kotlin
