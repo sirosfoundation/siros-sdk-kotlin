@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="siros_dcapi_zk_proof_status">Gerando prova de conhecimento zero…</string>
+    <string name="siros_dcapi_zk_proof_detail">Nenhum dado pessoal é compartilhado - apenas uma prova criptográfica de que você atende à solicitação.</string>
+</resources>

@@ -43,8 +43,6 @@
     <string name="presentation_consent_title">Αίτημα Πιστοποιητικού</string>
 
     <!-- DC API loading screen -->
-    <string name="dcapi_zk_proof_status">Δημιουργία απόδειξης μηδενικής γνώσης…</string>
-    <string name="dcapi_zk_proof_detail">Δεν κοινοποιούνται προσωπικά δεδομένα - μόνο μια κρυπτογραφική απόδειξη ότι πληροίτε το αίτημα.</string>
 
     <!-- Credential detail screen -->
     <string name="credential_detail_title">Λεπτομέρειες Πιστοποιητικού</string>
@@ -89,7 +87,6 @@
     <string name="credential_consumption_never_consume">Ποτέ μην καταναλώνεις (προεπιλογή)</string>
     <string name="settings_presentation_history">Ιστορικό Παρουσιάσεων</string>
     <string name="settings_logout">Αποσύνδεση</string>
-    <string name="nfc_hce_description">Δέσμευση συσκευής mdoc ISO 18013-5</string>
 
     <!-- Presentation history -->
     <string name="history_title">Ιστορικό Παρουσιάσεων</string>

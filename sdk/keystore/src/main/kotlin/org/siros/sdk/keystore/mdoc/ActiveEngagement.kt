@@ -1,5 +1,5 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
-package org.siros.sdk.sample.proximity
+package org.siros.sdk.keystore.mdoc
 
 /**
  * Holds the NFC Handover Select bytes for the currently-displayed device
@@ -7,10 +7,12 @@ package org.siros.sdk.sample.proximity
  * platform instantiates and drives independently of app UI lifecycle (HCE
  * services can't be constructor-injected with per-session state).
  *
- * Set when `ProximityEngagementScreen` is shown, cleared when it's
- * dismissed - a reader tapping the device outside an active engagement
- * session gets [MdocHostApduService]'s "file not found" response rather
- * than a stale engagement.
+ * Set by the host app when its engagement screen is shown (to the bytes
+ * [NfcHandoverSelect.build] returns), cleared when it's dismissed - a reader
+ * tapping the device outside an active engagement session gets
+ * [MdocHostApduService]'s "file not found" response rather than a stale
+ * engagement. Process-wide by necessity: the platform instantiates the HCE
+ * service itself, so this is the only channel from the app's session to it.
  */
 object ActiveEngagement {
     @Volatile

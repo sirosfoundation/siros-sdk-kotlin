@@ -6,3 +6,18 @@ file_filter  = sample-app/src/main/res/values-<lang>/strings.xml
 source_file  = sample-app/src/main/res/values/strings.xml
 source_lang  = en
 type         = ANDROID
+
+# SDK-owned UI strings (components a host app gets by depending on the SDK,
+# e.g. the DC API loading screen and the NFC HCE service description) live in
+# the library modules, not the sample app, so they need their own resources.
+[o:sirosfoundation:p:siros-wallet-android:r:sdk-wallet-strings-xml]
+file_filter  = sdk/wallet/src/main/res/values-<lang>/strings.xml
+source_file  = sdk/wallet/src/main/res/values/strings.xml
+source_lang  = en
+type         = ANDROID
+
+[o:sirosfoundation:p:siros-wallet-android:r:sdk-keystore-strings-xml]
+file_filter  = sdk/keystore/src/main/res/values-<lang>/strings.xml
+source_file  = sdk/keystore/src/main/res/values/strings.xml
+source_lang  = en
+type         = ANDROID

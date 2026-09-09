@@ -43,8 +43,6 @@
     <string name="presentation_consent_title">Intygsförfrågan</string>
 
     <!-- DC API loading screen -->
-    <string name="dcapi_zk_proof_status">Genererar nollkunskapsbevis…</string>
-    <string name="dcapi_zk_proof_detail">Inga personuppgifter delas - endast ett kryptografiskt bevis på att du uppfyller begäran.</string>
 
     <!-- Credential detail screen -->
     <string name="credential_detail_title">Intygsinformation</string>
@@ -89,7 +87,6 @@
     <string name="credential_consumption_never_consume">Förbruka aldrig (standard)</string>
     <string name="settings_presentation_history">Presentationshistorik</string>
     <string name="settings_logout">Logga ut</string>
-    <string name="nfc_hce_description">ISO 18013-5 mdoc-enhetsengagemang</string>
 
     <!-- Presentation history -->
     <string name="history_title">Presentationshistorik</string>

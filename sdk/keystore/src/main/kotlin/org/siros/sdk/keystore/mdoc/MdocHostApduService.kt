@@ -1,5 +1,5 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
-package org.siros.sdk.sample.proximity
+package org.siros.sdk.keystore.mdoc
 
 import android.nfc.cardemulation.HostApduService
 import android.os.Bundle
@@ -15,9 +15,11 @@ import timber.log.Timber
  * file) and READ BINARY. No Negotiated Handover, no write support - this
  * document only requires Static Handover (§9.2.1).
  *
- * Real hardware validation (a physical reader tapping a physical Android
- * device) is still pending - see the proximity presentation plan's
- * feasibility notes on needing a reference mdoc reader.
+ * Declared in this library's manifest (with `siros_mdoc_apduservice.xml`),
+ * so a host app gets NFC engagement by depending on the SDK and setting
+ * [ActiveEngagement.handoverSelectBytes]; it declares nothing itself. Only
+ * the `android.permission.NFC` permission and `uses-feature nfc.hce` belong
+ * to the app, and the latter is merged from here as not-required.
  */
 class MdocHostApduService : HostApduService() {
 

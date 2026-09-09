@@ -71,7 +71,7 @@ import org.siros.sdk.keystore.mdoc.NfcHandoverSelect
 import org.siros.sdk.keystore.mdoc.ProximityConsentResult
 import org.siros.sdk.keystore.mdoc.ReaderTrustResult
 import org.siros.sdk.keystore.mdoc.RequestProximityConsent
-import org.siros.sdk.sample.proximity.ActiveEngagement
+import org.siros.sdk.keystore.mdoc.ActiveEngagement
 
 /**
  * ISO 18013-5 §8.2/§9.2 device engagement, shown as a QR code (§8.2.2.3),

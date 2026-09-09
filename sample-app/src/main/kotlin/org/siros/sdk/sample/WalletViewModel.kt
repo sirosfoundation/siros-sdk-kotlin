@@ -25,7 +25,8 @@ import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.Ts11CredentialDiscovery
 import org.siros.sdk.credentials.Ts11DiscoveredCredential
 
-import org.siros.sdk.sample.dcapi.WalletSessionHolder
+import org.siros.sdk.keystore.OkHttpR2psTransport
+import org.siros.sdk.wallet.dcapi.WalletSessionHolder
 import org.siros.sdk.wallet.dcapi.SirosCredentialRegistry
 import org.siros.sdk.credentials.PresentationRecord
 import org.siros.sdk.credentials.SirosException

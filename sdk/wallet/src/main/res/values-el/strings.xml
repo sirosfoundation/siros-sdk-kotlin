@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="siros_dcapi_zk_proof_status">Δημιουργία απόδειξης μηδενικής γνώσης…</string>
+    <string name="siros_dcapi_zk_proof_detail">Δεν κοινοποιούνται προσωπικά δεδομένα - μόνο μια κρυπτογραφική απόδειξη ότι πληροίτε το αίτημα.</string>
+</resources>

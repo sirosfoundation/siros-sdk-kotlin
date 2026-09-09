@@ -49,8 +49,6 @@
     <string name="presentation_consent_title">Credential Request</string>
 
     <!-- DC API loading screen -->
-    <string name="dcapi_zk_proof_status">Generating zero-knowledge proof…</string>
-    <string name="dcapi_zk_proof_detail">No personal data is shared - only a cryptographic proof that you meet the request.</string>
 
     <!-- Credential detail screen -->
     <string name="credential_detail_title">Credential Details</string>
@@ -95,7 +93,6 @@
     <string name="credential_consumption_never_consume">Never consume (default)</string>
     <string name="settings_presentation_history">Presentation History</string>
     <string name="settings_logout">Log Out</string>
-    <string name="nfc_hce_description">ISO 18013-5 mdoc device engagement</string>
 
     <!-- Presentation history -->
     <string name="history_title">Presentation History</string>

@@ -1,2 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Merged into the host app's manifest as not-required: the SDK works
+         without NFC (QR engagement, DC API), the app must still install on
+         devices without it. -->
+    <uses-feature android:name="android.hardware.nfc.hce" android:required="false" />
+
+    <application>
+        <!-- ISO 18013-5 §9.2.1 NFC static handover: emulates an NFC Forum
+             Type 4 Tag serving the current device engagement. Exported and
+             bound only by the NFC stack (BIND_NFC_SERVICE), as every HCE
+             service must be. See MdocHostApduService. -->
+        <service
+            android:name="org.siros.sdk.keystore.mdoc.MdocHostApduService"
+            android:exported="true"
+            android:permission="android.permission.BIND_NFC_SERVICE">
+            <intent-filter>
+                <action android:name="android.nfc.cardemulation.action.HOST_APDU_SERVICE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.nfc.cardemulation.host_apdu_service"
+                android:resource="@xml/siros_mdoc_apduservice" />
+        </service>
+    </application>
+
+</manifest>

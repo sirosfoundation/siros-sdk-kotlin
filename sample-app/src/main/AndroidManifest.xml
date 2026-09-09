@@ -23,7 +23,6 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="30" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
-    <uses-feature android:name="android.hardware.nfc.hce" android:required="false" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
 
     <application
@@ -103,37 +102,10 @@
                 android:resource="@xml/usb_device_filter" />
         </activity>
 
-        <!-- W3C Digital Credentials API provider entry point - launched
-             directly by the OS/Credential Manager when the user picks one
-             of this app's registered entries from a browser page's
-             navigator.credentials.get({digital:...}) picker (see
-             org.siros.sdk.sample.dcapi.DCAPIProviderRegistration). No
-             launcher/theme - this is a headless, background-capable
-             Activity, not user-facing UI. -->
-        <activity
-            android:name=".dcapi.DCAPIGetCredentialActivity"
-            android:exported="true"
-            android:theme="@style/Theme.SirosSDKSample.Transparent"
-            android:excludeFromRecents="true">
-            <intent-filter>
-                <action android:name="androidx.credentials.registry.provider.action.GET_CREDENTIAL" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-        </activity>
-
-        <!-- ISO 18013-5 §9.2.1 NFC static handover: emulates an NFC Forum
-             Type 4 Tag serving the current device engagement. -->
-        <service
-            android:name=".proximity.MdocHostApduService"
-            android:exported="true"
-            android:permission="android.permission.BIND_NFC_SERVICE">
-            <intent-filter>
-                <action android:name="android.nfc.cardemulation.action.HOST_APDU_SERVICE" />
-            </intent-filter>
-            <meta-data
-                android:name="android.nfc.cardemulation.host_apdu_service"
-                android:resource="@xml/apduservice" />
-        </service>
+        <!-- The Digital Credentials API entry Activity and the ISO 18013-5
+             NFC host-card-emulation Service are declared by the SDK's own
+             library manifests (sdk/wallet, sdk/keystore) and merged in here;
+             a host app declares nothing for them. -->
 
     </application>
 

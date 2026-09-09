@@ -35,6 +35,8 @@ dependencies {
     implementation(libs.nimbus.jose.jwt)
     implementation(libs.play.integrity)
     implementation(libs.timber)
+    // OkHttpR2psTransport, the default R2psTransportProvider.
+    implementation(libs.okhttp)
 
     // siros-wscd-manager UniFFI bindings (AAR from local maven or CI artifact).
     // The AAR is built by `make aar` in the siros-wscd-manager crate.
