@@ -267,9 +267,10 @@ def gen_swift(spec: dict) -> str:
     out.append("    }")
     out.append("")
     out.append("    private func offer<P: BridgeCapabilityParams>(_ params: P) throws {")
+    out.append("        // Re-decode through the codec's own AnyCodable so the map holds")
+    out.append("        // plain JSON values whatever the parameter struct's shape.")
     out.append("        let data = try JSONEncoder().encode(params)")
-    out.append("        let object = try JSONSerialization.jsonObject(with: data)")
-    out.append("        offered[P.capabilityId] = AnyCodable(object)")
+    out.append("        offered[P.capabilityId] = try JSONDecoder().decode(AnyCodable.self, from: data)")
     out.append("    }")
     out.append("")
     for c in caps:
