@@ -75,7 +75,7 @@ The pieces, and what each needs from the host:
 | keystore | `MdocProximitySession` | a `Context` for the BLE transports; callbacks for credentials, consent, device signature, reader trust | a complete ISO 18013-5 session over BLE (central or peripheral), NFC static handover via `MdocHostApduService` |
 | auth | `CredentialManagerAuthProvider(context)` | a `Context` | passkey registration/assertion with PRF; security keys over the SDK's CTAP2 transports |
 | auth | `AuthServerClient(baseUrl, tenantId)` | nothing | the passkey challenge/response conversation with the auth server, if you use SIROS's |
-| credentials | `CredentialMatcher`, `MdocCbor`, `SdJwtParts`, `MdocIssuerIdentity`, `VctmFetcher` | nothing | parsing, DCQL matching, display metadata, issuer identity for trust evaluation |
+| credentials | `CredentialMatcher`, `MdocCbor`, `SdJwtParts`, `VctmFetcher` | nothing | parsing, DCQL matching, display metadata |
 | credentials | `ZkCircuitClient` | a cache dir | circuit catalog client with hash-verified disk cache |
 
 A wrapper app that hosts the web wallet and takes ZK proving and proximity
@@ -145,6 +145,10 @@ container was sealed with - see the account registry pattern in
 - **Private-data sync with go-wallet-backend.** `SirosWallet.fetchPrivateData`
   / the ETag-based writer are facade concerns. Low-level hosts move the
   container themselves (a web-view host: the page already syncs it).
+- **Issuer identity for trust evaluation.** `MdocIssuerIdentity` (issuer URL
+  from the IACA certificate's SAN, the subject id the PDP expects) currently
+  lives in `sdk:wallet`; a low-level host evaluating issuer trust derives it
+  itself until it moves down to `credentials`.
 - **Account bookkeeping.** `AccountRegistry`, session stores and the
   login-after-logout salt handling are facade-level; the low-level API takes
   PRF output and container bytes as inputs and does not remember them.
