@@ -1,0 +1,165 @@
+name: Publish an artifact to Maven Central
+description: >-
+  Signs one Maven artifact (an AAR or JAR plus its POM) with the SIROS SDK
+  signing key, completes the POM with the metadata Central requires, adds
+  sources and javadoc jars, and uploads the bundle to the Central Portal
+  publisher API. Used by the SDK's native crates (siros-wscd-manager,
+  zk-cred-*, siros-dc-matcher), whose release workflows publish a single
+  hand-rolled POM + AAR; the SDK itself publishes through Gradle/Nmcp.
+inputs:
+  group-id:
+    description: Maven groupId (must be a namespace verified for the Central account)
+    default: org.siros
+  artifact-id:
+    description: Maven artifactId
+    required: true
+  version:
+    description: Version to publish
+    required: true
+  file:
+    description: Path to the main artifact (.aar or .jar)
+    required: true
+  pom:
+    description: Path to the POM. Missing Central-required elements are added.
+    required: true
+  sources-dir:
+    description: >-
+      Directory whose contents become the -sources.jar (the crate's source tree
+      at the released tag). Central requires the file; this makes it truthful.
+    required: true
+  name:
+    description: Human-readable project name for the POM
+    required: true
+  description:
+    description: One-line description for the POM
+    required: true
+  url:
+    description: Project URL (also used for scm)
+    required: true
+  license-name:
+    description: SPDX id of the license
+    default: BSD-2-Clause
+  license-url:
+    description: License URL
+    default: https://opensource.org/licenses/BSD-2-Clause
+  publishing-type:
+    description: AUTOMATIC publishes once validated; USER_MANAGED waits in the portal
+    default: AUTOMATIC
+  central-username:
+    description: Central Portal user token name
+    required: true
+  central-password:
+    description: Central Portal user token secret
+    required: true
+  signing-key:
+    description: ASCII-armored private key
+    required: true
+  signing-password:
+    description: Passphrase for the signing key
+    required: true
+outputs:
+  deployment-id:
+    description: Central Portal deployment id
+    value: ${{ steps.upload.outputs.deployment-id }}
+runs:
+  using: composite
+  steps:
+    - name: Assemble bundle
+      shell: bash
+      env:
+        GROUP: ${{ inputs.group-id }}
+        ARTIFACT: ${{ inputs.artifact-id }}
+        VERSION: ${{ inputs.version }}
+        FILE: ${{ inputs.file }}
+        POM: ${{ inputs.pom }}
+        SOURCES_DIR: ${{ inputs.sources-dir }}
+        POM_NAME: ${{ inputs.name }}
+        POM_DESCRIPTION: ${{ inputs.description }}
+        POM_URL: ${{ inputs.url }}
+        LICENSE_NAME: ${{ inputs.license-name }}
+        LICENSE_URL: ${{ inputs.license-url }}
+      run: |
+        set -euo pipefail
+        work="$RUNNER_TEMP/central-$ARTIFACT-$VERSION"
+        dir="$work/bundle/${GROUP//.//}/$ARTIFACT/$VERSION"
+        mkdir -p "$dir"
+        ext="${FILE##*.}"
+        base="$ARTIFACT-$VERSION"
+        cp "$FILE" "$dir/$base.$ext"
+
+        # Complete the POM: Central rejects a POM without name, description,
+        # url, licenses, developers and scm. Keep whatever the crate already
+        # declares (packaging, dependencies).
+        python3 "$GITHUB_ACTION_PATH/complete-pom.py" "$POM" "$dir/$base.pom"
+
+        # Sources: the released source tree. Javadoc: Central requires the
+        # file; the API reference for a UniFFI crate is its README + docs.
+        (cd "$SOURCES_DIR" && zip -qr "$dir/$base-sources.jar" . -x '.git/*' 'target/*' '*.aar' '*.xcframework/*')
+        jdoc="$work/javadoc"
+        mkdir -p "$jdoc"
+        {
+          echo "# $POM_NAME $VERSION"
+          echo
+          echo "API documentation for this artifact lives with its source:"
+          echo "$POM_URL"
+          echo
+          echo "This jar exists because Maven Central requires a -javadoc artifact."
+        } > "$jdoc/README.md"
+        (cd "$jdoc" && zip -qr "$dir/$base-javadoc.jar" .)
+
+        echo "bundle=$work/bundle" >> "$GITHUB_ENV"
+        echo "dir=$dir" >> "$GITHUB_ENV"
+        ls -la "$dir"
+
+    - name: Sign and checksum
+      shell: bash
+      env:
+        SIGNING_KEY: ${{ inputs.signing-key }}
+        SIGNING_PASSWORD: ${{ inputs.signing-password }}
+      run: |
+        set -euo pipefail
+        export GNUPGHOME
+        GNUPGHOME="$(mktemp -d)"
+        printf '%s' "$SIGNING_KEY" | gpg --batch --import
+        cd "$dir"
+        for f in *; do
+          case "$f" in *.asc|*.md5|*.sha1) continue;; esac
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$SIGNING_PASSWORD" --armor --detach-sign "$f"
+          md5sum "$f" | cut -d' ' -f1 > "$f.md5"
+          sha1sum "$f" | cut -d' ' -f1 > "$f.sha1"
+        done
+        rm -rf "$GNUPGHOME"
+        ls -la
+
+    - name: Upload to the Central Portal
+      id: upload
+      shell: bash
+      env:
+        CENTRAL_USERNAME: ${{ inputs.central-username }}
+        CENTRAL_PASSWORD: ${{ inputs.central-password }}
+        PUBLISHING_TYPE: ${{ inputs.publishing-type }}
+        ARTIFACT: ${{ inputs.artifact-id }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        zip="$RUNNER_TEMP/$ARTIFACT-$VERSION-bundle.zip"
+        (cd "$bundle" && zip -qr "$zip" .)
+        auth="Bearer $(printf '%s:%s' "$CENTRAL_USERNAME" "$CENTRAL_PASSWORD" | base64 -w0)"
+        id=$(curl -sS --fail -H "Authorization: $auth" \
+          -F "bundle=@$zip" \
+          "https://central.sonatype.com/api/v1/publisher/upload?name=$ARTIFACT-$VERSION&publishingType=$PUBLISHING_TYPE")
+        echo "deployment-id=$id" >> "$GITHUB_OUTPUT"
+        echo "Deployment $id uploaded; waiting for validation"
+        for _ in $(seq 1 120); do
+          status=$(curl -sS --fail -X POST -H "Authorization: $auth" "https://central.sonatype.com/api/v1/publisher/status?id=$id")
+          state=$(printf '%s' "$status" | python3 -c 'import json,sys; print(json.load(sys.stdin)["deploymentState"])')
+          echo "  $state"
+          case "$state" in
+            FAILED) printf '%s\n' "$status" | python3 -m json.tool; exit 1;;
+            VALIDATED) if [ "$PUBLISHING_TYPE" = USER_MANAGED ]; then echo "Waiting in the portal for Publish"; exit 0; fi;;
+            PUBLISHING|PUBLISHED) echo "Central accepted $ARTIFACT $VERSION ($state)"; exit 0;;
+          esac
+          sleep 5
+        done
+        echo "Timed out waiting for Central validation of $id"
+        exit 1

@@ -132,7 +132,10 @@ fun MavenPom.sirosPom(pomName: String, pomDescription: String) {
  *
  * Maven Central is not a repository here: it is fed by Nmcp (see
  * settings.gradle.kts), which aggregates every module's publication into one
- * Central Portal deployment - `publishAggregationToCentralPortal`.
+ * Central Portal deployment - `publishAggregationToCentralPortal`. The native
+ * crates reach Central through .github/actions/central-publish instead (their
+ * release workflows, plus central-backfill-native.yml for versions released
+ * before that step existed).
  */
 fun RepositoryHandler.sirosRepositories() {
     maven {
