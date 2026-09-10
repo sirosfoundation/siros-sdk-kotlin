@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-09-10
+
+First release published to **Maven Central** as `org.siros:siros-sdk-*` with
+`org.siros:siros-sdk-bom` - the first public SDK release. Otherwise identical
+to 0.13.0.
+
 ### Added
 - Publication to **Maven Central** on each release tag, via the Central Portal
   publisher API (Nmcp): all eight modules plus the BOM as one signed
