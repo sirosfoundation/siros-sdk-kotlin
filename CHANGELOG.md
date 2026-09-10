@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `.github/actions/central-publish`: signs and uploads one AAR + POM to the
+  Central Portal, completing the POM with Central's required metadata and
+  attaching sources/javadoc jars. For the SDK's native crate dependencies
+  (siros-wscd-manager, siros-dc-matcher, zk-cred-*), which publish a
+  hand-rolled POM rather than through Gradle; `central-backfill-native.yml`
+  republishes already-released versions from GitHub Packages, so a consumer
+  of the SDK needs only `mavenCentral()`.
+
 ### Changed
 - Maven Central deployments publish automatically once validated
   (`publishingType = AUTOMATIC`); 0.14.0 was published by hand from the portal.

@@ -1,0 +1,118 @@
+name: Backfill native AARs to Maven Central
+
+# Re-runnable publication of the SDK's native crate AARs that were released
+# to GitHub Packages before their release workflows published to Central.
+# Downloads each AAR + POM from GitHub Packages, takes the sources from the
+# crate's release tag, and pushes a signed bundle through
+# .github/actions/central-publish. Central rejects a version that already
+# exists, so re-running with an already-published coordinate fails loudly
+# for that matrix entry only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      coordinates:
+        description: Space-separated repo:artifact:version triples
+        required: true
+        default: >-
+          siros-wscd-manager:siros-wscd-manager:0.8.1
+          siros-wscd-manager:siros-wscd-manager:0.8.3
+          siros-dc-matcher:siros-dc-matcher:0.6.2
+          zk-cred-longfellow:zk-cred-longfellow:0.1.1
+          zk-cred-vega:zk-cred-vega:0.0.5
+          zk-cred-bbs:zk-cred-bbs:0.0.6
+          zk-cred-bbs:zk-cred-bbs:0.0.7
+      publishing-type:
+        description: AUTOMATIC or USER_MANAGED
+        default: AUTOMATIC
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - id: plan
+        env:
+          COORDINATES: ${{ inputs.coordinates }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          items = []
+          for triple in os.environ["COORDINATES"].split():
+              repo, artifact, version = triple.split(":")
+              items.append({"repo": repo, "artifact": artifact, "version": version})
+          print("matrix=" + json.dumps({"include": items}))
+          PY
+
+  publish:
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    name: ${{ matrix.artifact }} ${{ matrix.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch AAR and POM from GitHub Packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ matrix.repo }}
+          ARTIFACT: ${{ matrix.artifact }}
+          VERSION: ${{ matrix.version }}
+        run: |
+          set -euo pipefail
+          base="https://maven.pkg.github.com/sirosfoundation/$REPO/org/siros/$ARTIFACT/$VERSION/$ARTIFACT-$VERSION"
+          mkdir -p dist
+          curl -sSL --fail -u "x:$GH_TOKEN" -o "dist/$ARTIFACT-$VERSION.aar" "$base.aar"
+          curl -sSL --fail -u "x:$GH_TOKEN" -o "dist/$ARTIFACT-$VERSION.pom" "$base.pom"
+          ls -la dist
+
+      - name: Fetch sources at the release tag
+        uses: actions/checkout@v4
+        with:
+          repository: sirosfoundation/${{ matrix.repo }}
+          ref: v${{ matrix.version }}
+          path: crate-src
+
+      - name: Crate metadata
+        id: meta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ matrix.repo }}
+        run: |
+          set -euo pipefail
+          desc=$(gh api "repos/sirosfoundation/$REPO" --jq .description)
+          lic=$(gh api "repos/sirosfoundation/$REPO" --jq .license.spdx_id)
+          case "$lic" in
+            MPL-2.0) lic_url="https://www.mozilla.org/en-US/MPL/2.0/";;
+            *) lic_url="https://opensource.org/licenses/$lic";;
+          esac
+          {
+            echo "description=$desc"
+            echo "license=$lic"
+            echo "license-url=$lic_url"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/central-publish
+        with:
+          artifact-id: ${{ matrix.artifact }}
+          version: ${{ matrix.version }}
+          file: dist/${{ matrix.artifact }}-${{ matrix.version }}.aar
+          pom: dist/${{ matrix.artifact }}-${{ matrix.version }}.pom
+          sources-dir: crate-src
+          name: ${{ matrix.artifact }}
+          description: ${{ steps.meta.outputs.description }}
+          url: https://github.com/sirosfoundation/${{ matrix.repo }}
+          license-name: ${{ steps.meta.outputs.license }}
+          license-url: ${{ steps.meta.outputs.license-url }}
+          publishing-type: ${{ inputs.publishing-type }}
+          central-username: ${{ secrets.CENTRAL_USERNAME }}
+          central-password: ${{ secrets.CENTRAL_PASSWORD }}
+          signing-key: ${{ secrets.SIGNING_KEY }}
+          signing-password: ${{ secrets.SIGNING_PASSWORD }}
