@@ -106,10 +106,11 @@ TypeScript - see [`spec/README.md`](spec/README.md).
 ## Adding the SDK to an app
 
 Every module is published as `org.siros:siros-sdk-<module>` with a BOM, on
-each release tag, to **Maven Central** (from 0.14.0) and to GitHub Packages.
-Until the SDK's native dependencies are on Central too, a consumer still needs
-their GitHub Packages repositories, which require an authenticated token even
-to read public packages - a personal access token with `read:packages`:
+each release tag, to **Maven Central** (from 0.14.0; GitHub Packages continues
+in parallel). The SDK's native dependencies - `siros-wscd-manager`,
+`siros-dc-matcher`, `zk-cred-longfellow`, `zk-cred-vega`, `zk-cred-bbs` - are
+on Central as well, so `mavenCentral()` alone resolves everything; no
+repository block and no token:
 
 ```kotlin
 // settings.gradle.kts
@@ -117,20 +118,6 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        listOf(
-            // "siros-sdk-kotlin" is no longer needed here: the SDK itself is on Maven Central.
-            "siros-wscd-manager",   // WSCD key management (UniFFI)
-            "siros-dc-matcher",     // DC API matcher + DCQL engine
-            "zk-cred-longfellow", "zk-cred-vega", "zk-cred-bbs", // ZK proof systems
-        ).forEach { repo ->
-            maven {
-                url = uri("https://maven.pkg.github.com/sirosfoundation/$repo")
-                credentials {
-                    username = providers.gradleProperty("gpr.user").orNull
-                    password = providers.gradleProperty("gpr.key").orNull
-                }
-            }
-        }
     }
 }
 ```
@@ -138,9 +125,23 @@ dependencyResolutionManagement {
 ```kotlin
 // app/build.gradle.kts
 dependencies {
-    implementation(platform("org.siros:siros-sdk-bom:0.13.0"))
-    implementation("org.siros:siros-sdk-wallet")          // the facade; pulls in every other module
+    implementation(platform("org.siros:siros-sdk-bom:0.14.0"))
+    implementation("org.siros:siros-sdk-wallet")          // the orchestrated API; pulls in every other module
+    // or, flow-free: siros-sdk-keystore, siros-sdk-auth, siros-sdk-credentials - see docs/TWO-APIS.md
     // implementation("org.siros:siros-sdk-passkey-provider") // only if the app is also a passkey provider (API 34+)
+}
+```
+
+To consume from GitHub Packages instead (for example an unreleased build of a
+native crate), add its repository with a `read:packages` token:
+
+```kotlin
+maven {
+    url = uri("https://maven.pkg.github.com/sirosfoundation/<repo>")
+    credentials {
+        username = providers.gradleProperty("gpr.user").orNull
+        password = providers.gradleProperty("gpr.key").orNull
+    }
 }
 ```
 

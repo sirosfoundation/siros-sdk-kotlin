@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Swift for siros-sdk-swift, and into TypeScript attached to each release
   for the frontend's bridge contract package. CI fails if the generated
   files drift from the spec. See `spec/README.md`.
+- README: consuming the SDK now needs only `mavenCentral()` - the five native
+  crate AARs are on Central as of 2026-09-10 (backfilled; their release
+  workflows publish there on every tag).
 - `docs/TWO-APIS.md`: the SDK's two entry points - the orchestrated API
   (`SirosWallet`) and the low-level, flow-free composition of keystore, auth
   and credentials for hosts that run the OID4VCI/OID4VP flows themselves -
