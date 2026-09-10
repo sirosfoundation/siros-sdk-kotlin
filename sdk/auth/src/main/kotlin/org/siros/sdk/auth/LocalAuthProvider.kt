@@ -312,11 +312,20 @@ class LocalAuthProvider(
     }
 
     /**
-     * Compute a PRF output using HMAC-SHA-256 keyed by the credential's private key material.
+     * Software PRF for this dev/test provider: HMAC-SHA-256 keyed with the
+     * credential ID plus [PRF_KEY_MATERIAL], over the salt.
      *
      * Since we can't export the private key from Android KeyStore, we use the
      * credential ID as HMAC key material combined with the salt. This gives a
-     * deterministic, credential-bound pseudorandom output.
+     * deterministic, credential-bound pseudorandom output - not a secret one
+     * (a credential ID is public), which is why this provider is dev/test
+     * only and why the production [CredentialManagerAuthProvider] fails
+     * closed rather than falling back to anything like it.
+     *
+     * Documented divergence from the Swift SDK's `LocalAuthProvider`, which
+     * keys the same HMAC with the credential ID alone. Neither provider's
+     * credentials roam, so a container sealed by one is never presented to
+     * the other; reconciling would only re-key existing dev wallets.
      */
     private fun computePrf(credentialId: ByteArray, salt: ByteArray): PrfOutput {
         val hmac = Mac.getInstance("HmacSHA256")
