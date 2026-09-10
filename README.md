@@ -86,6 +86,14 @@ Debug builds expose a gear icon on the login screen for configuring:
 
 Controlled by `SHOW_PRE_LOGIN_SETTINGS` build config (true in debug, false in release).
 
+## Native bridge capability vocabulary
+
+Wrapper apps that host the SIROS web wallet in a WebView advertise what they
+can do natively through one versioned capability descriptor. Its vocabulary is
+defined once in [`spec/bridge-capabilities.json`](spec/bridge-capabilities.json)
+and generated into Kotlin (`org.siros.sdk.transport.bridge`), Swift and
+TypeScript - see [`spec/README.md`](spec/README.md).
+
 ## Adding the SDK to an app
 
 Every module is published as `org.siros:siros-sdk-<module>` with a BOM, on
