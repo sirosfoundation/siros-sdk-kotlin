@@ -88,11 +88,11 @@ Controlled by `SHOW_PRE_LOGIN_SETTINGS` build config (true in debug, false in re
 
 ## Adding the SDK to an app
 
-Every module is published as `org.siros:siros-sdk-<module>` with a BOM, to
-GitHub Packages, on each release tag. GitHub Packages requires an
-authenticated token even to read public packages, so a consumer configures the
-SDK's repository and the repositories of its native dependencies with a
-personal access token that has `read:packages`:
+Every module is published as `org.siros:siros-sdk-<module>` with a BOM, on
+each release tag, to **Maven Central** (from 0.14.0) and to GitHub Packages.
+Until the SDK's native dependencies are on Central too, a consumer still needs
+their GitHub Packages repositories, which require an authenticated token even
+to read public packages - a personal access token with `read:packages`:
 
 ```kotlin
 // settings.gradle.kts
@@ -101,7 +101,7 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
         listOf(
-            "siros-sdk-kotlin",     // the SDK itself
+            // "siros-sdk-kotlin" is no longer needed here: the SDK itself is on Maven Central.
             "siros-wscd-manager",   // WSCD key management (UniFFI)
             "siros-dc-matcher",     // DC API matcher + DCQL engine
             "zk-cred-longfellow", "zk-cred-vega", "zk-cred-bbs", // ZK proof systems
