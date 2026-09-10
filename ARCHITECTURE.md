@@ -33,6 +33,15 @@
 └───────────────────────────────────┘
 ```
 
+## Two APIs
+
+`sdk:wallet` is a facade, not the only entry point. Hosts that already run
+the OID4VCI/OID4VP flows (a web-view wrapper around the SIROS web wallet, an
+app with its own protocol client) compose `sdk:keystore`, `sdk:auth` and
+`sdk:credentials` directly and never construct `SirosWallet` - which is what
+pulls `sdk:flow` and the engine conversation in. Both are supported and
+covered by the API dump; see [docs/TWO-APIS.md](docs/TWO-APIS.md).
+
 ## Module Responsibilities
 
 ### sdk:transport

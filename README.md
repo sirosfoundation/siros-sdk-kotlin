@@ -86,6 +86,15 @@ Debug builds expose a gear icon on the login screen for configuring:
 
 Controlled by `SHOW_PRE_LOGIN_SETTINGS` build config (true in debug, false in release).
 
+## Two APIs: orchestrated and low-level
+
+`SirosWallet` runs the whole wallet for you (issuance, presentation, the engine
+conversation). Hosts that already run those flows - a web-view wrapper around
+the SIROS web wallet, an app with its own protocol client - use the modules
+underneath directly: keystore, auth and credentials, without `flow` or the
+facade. Both are supported; [docs/TWO-APIS.md](docs/TWO-APIS.md) explains the
+split and shows the low-level composition.
+
 ## Native bridge capability vocabulary
 
 Wrapper apps that host the SIROS web wallet in a WebView advertise what they
