@@ -48,6 +48,10 @@ jobs:
           done
           # Sample APK
           find sample-app -name "*.apk" -path "*/debug/*" -exec cp {} "release-artifacts/siros-sample-app-${VERSION}.apk" \;
+          # Bridge capability vocabulary: the spec and its TypeScript, for the
+          # frontend's bridge contract package to pin by SDK version.
+          cp spec/bridge-capabilities.json "release-artifacts/bridge-capabilities-${VERSION}.json"
+          cp spec/generated/bridge-capabilities.ts "release-artifacts/bridge-capabilities-${VERSION}.ts"
           ls -la release-artifacts/
 
       - name: Create GitHub Release

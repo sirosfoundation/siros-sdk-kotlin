@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Bridge capability vocabulary** (`spec/bridge-capabilities.json`): the
+  capability descriptor a web-view wrapper app advertises to the page it
+  hosts, shaped like WMP's capability map. Generated into
+  `org.siros.sdk.transport.bridge` (`BridgeCapabilityId`, one parameters
+  class per capability, `BridgeDescriptor`, `BridgeDescriptorBuilder`), into
+  Swift for siros-sdk-swift, and into TypeScript attached to each release
+  for the frontend's bridge contract package. CI fails if the generated
+  files drift from the spec. See `spec/README.md`.
 - `.github/actions/central-publish`: signs and uploads one AAR + POM to the
   Central Portal, completing the POM with Central's required metadata and
   attaching sources/javadoc jars. For the SDK's native crate dependencies

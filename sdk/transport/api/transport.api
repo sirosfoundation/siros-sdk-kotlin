@@ -25,6 +25,464 @@ public final class org/siros/sdk/transport/TransportState : java/lang/Enum {
 	public static fun values ()[Lorg/siros/sdk/transport/TransportState;
 }
 
+public final class org/siros/sdk/transport/bridge/AuthCapability {
+	public static final field Companion Lorg/siros/sdk/transport/bridge/AuthCapability$Companion;
+	public fun <init> ()V
+}
+
+public synthetic class org/siros/sdk/transport/bridge/AuthCapability$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/bridge/AuthCapability$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/bridge/AuthCapability;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/bridge/AuthCapability;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/AuthCapability$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/BridgeCapabilityId {
+	public static final field AUTH Ljava/lang/String;
+	public static final field CREDENTIALS Ljava/lang/String;
+	public static final field DC_API Ljava/lang/String;
+	public static final field ENGINE Ljava/lang/String;
+	public static final field IDV_PHYSICAL_ID Ljava/lang/String;
+	public static final field INSTANCE Lorg/siros/sdk/transport/bridge/BridgeCapabilityId;
+	public static final field KEYS Ljava/lang/String;
+	public static final field OIDC Ljava/lang/String;
+	public static final field PROXIMITY_BYTE_PIPE Ljava/lang/String;
+	public static final field PROXIMITY_SESSION Ljava/lang/String;
+	public static final field WEBAUTHN Ljava/lang/String;
+	public static final field ZK Ljava/lang/String;
+	public final fun getALL ()Ljava/util/List;
+	public final fun getDEPRECATED ()Ljava/util/Map;
+}
+
+public final class org/siros/sdk/transport/bridge/BridgeDescriptor {
+	public static final field Companion Lorg/siros/sdk/transport/bridge/BridgeDescriptor$Companion;
+	public fun <init> (Lorg/siros/sdk/transport/bridge/BridgeMeta;ILjava/lang/String;Lorg/siros/sdk/transport/bridge/BridgeHost;Lkotlinx/serialization/json/JsonObject;)V
+	public synthetic fun <init> (Lorg/siros/sdk/transport/bridge/BridgeMeta;ILjava/lang/String;Lorg/siros/sdk/transport/bridge/BridgeHost;Lkotlinx/serialization/json/JsonObject;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lorg/siros/sdk/transport/bridge/BridgeMeta;
+	public final fun component2 ()I
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Lorg/siros/sdk/transport/bridge/BridgeHost;
+	public final fun component5 ()Lkotlinx/serialization/json/JsonObject;
+	public final fun copy (Lorg/siros/sdk/transport/bridge/BridgeMeta;ILjava/lang/String;Lorg/siros/sdk/transport/bridge/BridgeHost;Lkotlinx/serialization/json/JsonObject;)Lorg/siros/sdk/transport/bridge/BridgeDescriptor;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/bridge/BridgeDescriptor;Lorg/siros/sdk/transport/bridge/BridgeMeta;ILjava/lang/String;Lorg/siros/sdk/transport/bridge/BridgeHost;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/BridgeDescriptor;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBridge ()Lorg/siros/sdk/transport/bridge/BridgeMeta;
+	public final fun getCapabilities ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getHost ()Lorg/siros/sdk/transport/bridge/BridgeHost;
+	public final fun getPlatform ()Ljava/lang/String;
+	public final fun getVocabulary ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/bridge/BridgeDescriptor$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/bridge/BridgeDescriptor$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/bridge/BridgeDescriptor;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/bridge/BridgeDescriptor;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/BridgeDescriptor$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/BridgeDescriptorBuilder {
+	public fun <init> (Ljava/lang/String;Lorg/siros/sdk/transport/bridge/BridgeHost;)V
+	public final fun auth (Lorg/siros/sdk/transport/bridge/AuthCapability;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+	public static synthetic fun auth$default (Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;Lorg/siros/sdk/transport/bridge/AuthCapability;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+	public final fun build ()Lorg/siros/sdk/transport/bridge/BridgeDescriptor;
+	public final fun credentials (Lorg/siros/sdk/transport/bridge/CredentialsCapability;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+	public static synthetic fun credentials$default (Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;Lorg/siros/sdk/transport/bridge/CredentialsCapability;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+	public final fun dcApi (Lorg/siros/sdk/transport/bridge/DcApiCapability;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+	public static synthetic fun dcApi$default (Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;Lorg/siros/sdk/transport/bridge/DcApiCapability;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+	public final fun encode ()Ljava/lang/String;
+	public final fun engine (Lorg/siros/sdk/transport/bridge/EngineCapability;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+	public static synthetic fun engine$default (Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;Lorg/siros/sdk/transport/bridge/EngineCapability;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+	public final fun idvPhysicalId (Lorg/siros/sdk/transport/bridge/IdvPhysicalIdCapability;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+	public static synthetic fun idvPhysicalId$default (Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;Lorg/siros/sdk/transport/bridge/IdvPhysicalIdCapability;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+	public final fun keys (Lorg/siros/sdk/transport/bridge/KeysCapability;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+	public static synthetic fun keys$default (Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;Lorg/siros/sdk/transport/bridge/KeysCapability;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+	public final fun oidc (Lorg/siros/sdk/transport/bridge/OidcCapability;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+	public static synthetic fun oidc$default (Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;Lorg/siros/sdk/transport/bridge/OidcCapability;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+	public final fun proximityBytePipe (Lorg/siros/sdk/transport/bridge/ProximityBytePipeCapability;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+	public static synthetic fun proximityBytePipe$default (Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;Lorg/siros/sdk/transport/bridge/ProximityBytePipeCapability;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+	public final fun proximitySession (Lorg/siros/sdk/transport/bridge/ProximitySessionCapability;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+	public static synthetic fun proximitySession$default (Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;Lorg/siros/sdk/transport/bridge/ProximitySessionCapability;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+	public final fun webauthn (Lorg/siros/sdk/transport/bridge/WebauthnCapability;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+	public static synthetic fun webauthn$default (Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;Lorg/siros/sdk/transport/bridge/WebauthnCapability;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+	public final fun zk (Lorg/siros/sdk/transport/bridge/ZkCapability;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+	public static synthetic fun zk$default (Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;Lorg/siros/sdk/transport/bridge/ZkCapability;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/BridgeDescriptorBuilder;
+}
+
+public final class org/siros/sdk/transport/bridge/BridgeHost {
+	public static final field Companion Lorg/siros/sdk/transport/bridge/BridgeHost$Companion;
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/bridge/BridgeHost;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/bridge/BridgeHost;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/BridgeHost;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getName ()Ljava/lang/String;
+	public final fun getSdkVersion ()Ljava/lang/String;
+	public final fun getVersion ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/bridge/BridgeHost$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/bridge/BridgeHost$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/bridge/BridgeHost;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/bridge/BridgeHost;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/BridgeHost$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/BridgeMeta {
+	public static final field Companion Lorg/siros/sdk/transport/bridge/BridgeMeta$Companion;
+	public fun <init> ()V
+	public fun <init> (I)V
+	public synthetic fun <init> (IILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()I
+	public final fun copy (I)Lorg/siros/sdk/transport/bridge/BridgeMeta;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/bridge/BridgeMeta;IILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/BridgeMeta;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getVersion ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/bridge/BridgeMeta$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/bridge/BridgeMeta$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/bridge/BridgeMeta;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/bridge/BridgeMeta;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/BridgeMeta$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/BridgeVocabulary {
+	public static final field DESCRIPTOR_VERSION I
+	public static final field INSTANCE Lorg/siros/sdk/transport/bridge/BridgeVocabulary;
+	public static final field VERSION I
+}
+
+public final class org/siros/sdk/transport/bridge/CredentialsCapability {
+	public static final field Companion Lorg/siros/sdk/transport/bridge/CredentialsCapability$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lorg/siros/sdk/transport/bridge/CredentialsCapability;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/bridge/CredentialsCapability;Ljava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/CredentialsCapability;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFormats ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/bridge/CredentialsCapability$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/bridge/CredentialsCapability$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/bridge/CredentialsCapability;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/bridge/CredentialsCapability;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/CredentialsCapability$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/DcApiCapability {
+	public static final field Companion Lorg/siros/sdk/transport/bridge/DcApiCapability$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/util/List;
+	public final fun copy (Ljava/lang/String;Ljava/util/List;)Lorg/siros/sdk/transport/bridge/DcApiCapability;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/bridge/DcApiCapability;Ljava/lang/String;Ljava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/DcApiCapability;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFormats ()Ljava/util/List;
+	public final fun getMatcherVersion ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/bridge/DcApiCapability$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/bridge/DcApiCapability$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/bridge/DcApiCapability;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/bridge/DcApiCapability;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/DcApiCapability$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/EngineCapability {
+	public static final field Companion Lorg/siros/sdk/transport/bridge/EngineCapability$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lorg/siros/sdk/transport/bridge/EngineCapability;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/bridge/EngineCapability;Ljava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/EngineCapability;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getWmpCapabilities ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/bridge/EngineCapability$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/bridge/EngineCapability$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/bridge/EngineCapability;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/bridge/EngineCapability;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/EngineCapability$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/IdvPhysicalIdCapability {
+	public static final field Companion Lorg/siros/sdk/transport/bridge/IdvPhysicalIdCapability$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/transport/bridge/IdvPhysicalIdCapability;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/bridge/IdvPhysicalIdCapability;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/IdvPhysicalIdCapability;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getProvider ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/bridge/IdvPhysicalIdCapability$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/bridge/IdvPhysicalIdCapability$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/bridge/IdvPhysicalIdCapability;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/bridge/IdvPhysicalIdCapability;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/IdvPhysicalIdCapability$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/KeysCapability {
+	public static final field Companion Lorg/siros/sdk/transport/bridge/KeysCapability$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lorg/siros/sdk/transport/bridge/KeysCapability;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/bridge/KeysCapability;Ljava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/KeysCapability;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getWscdPlugins ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/bridge/KeysCapability$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/bridge/KeysCapability$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/bridge/KeysCapability;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/bridge/KeysCapability;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/KeysCapability$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/OidcCapability {
+	public static final field Companion Lorg/siros/sdk/transport/bridge/OidcCapability$Companion;
+	public fun <init> ()V
+}
+
+public synthetic class org/siros/sdk/transport/bridge/OidcCapability$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/bridge/OidcCapability$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/bridge/OidcCapability;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/bridge/OidcCapability;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/OidcCapability$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/ProximityBytePipeCapability {
+	public static final field Companion Lorg/siros/sdk/transport/bridge/ProximityBytePipeCapability$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lorg/siros/sdk/transport/bridge/ProximityBytePipeCapability;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/bridge/ProximityBytePipeCapability;Ljava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/ProximityBytePipeCapability;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRoles ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/bridge/ProximityBytePipeCapability$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/bridge/ProximityBytePipeCapability$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/bridge/ProximityBytePipeCapability;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/bridge/ProximityBytePipeCapability;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/ProximityBytePipeCapability$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/ProximitySessionCapability {
+	public static final field Companion Lorg/siros/sdk/transport/bridge/ProximitySessionCapability$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/util/List;Ljava/lang/Boolean;Ljava/lang/Boolean;)V
+	public synthetic fun <init> (Ljava/util/List;Ljava/lang/Boolean;Ljava/lang/Boolean;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Ljava/lang/Boolean;
+	public final fun component3 ()Ljava/lang/Boolean;
+	public final fun copy (Ljava/util/List;Ljava/lang/Boolean;Ljava/lang/Boolean;)Lorg/siros/sdk/transport/bridge/ProximitySessionCapability;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/bridge/ProximitySessionCapability;Ljava/util/List;Ljava/lang/Boolean;Ljava/lang/Boolean;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/ProximitySessionCapability;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getNfcStaticHandover ()Ljava/lang/Boolean;
+	public final fun getReaderAuth ()Ljava/lang/Boolean;
+	public final fun getTransports ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/bridge/ProximitySessionCapability$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/bridge/ProximitySessionCapability$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/bridge/ProximitySessionCapability;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/bridge/ProximitySessionCapability;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/ProximitySessionCapability$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/WebauthnCapability {
+	public static final field Companion Lorg/siros/sdk/transport/bridge/WebauthnCapability$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/Boolean;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/lang/Boolean;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/Boolean;
+	public final fun component2 ()Ljava/util/List;
+	public final fun copy (Ljava/lang/Boolean;Ljava/util/List;)Lorg/siros/sdk/transport/bridge/WebauthnCapability;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/bridge/WebauthnCapability;Ljava/lang/Boolean;Ljava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/WebauthnCapability;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPrf ()Ljava/lang/Boolean;
+	public final fun getSecurityKeyTransports ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/bridge/WebauthnCapability$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/bridge/WebauthnCapability$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/bridge/WebauthnCapability;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/bridge/WebauthnCapability;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/WebauthnCapability$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/ZkCapability {
+	public static final field Companion Lorg/siros/sdk/transport/bridge/ZkCapability$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/util/List;Ljava/lang/Boolean;)V
+	public synthetic fun <init> (Ljava/util/List;Ljava/lang/Boolean;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Ljava/lang/Boolean;
+	public final fun copy (Ljava/util/List;Ljava/lang/Boolean;)Lorg/siros/sdk/transport/bridge/ZkCapability;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/bridge/ZkCapability;Ljava/util/List;Ljava/lang/Boolean;ILjava/lang/Object;)Lorg/siros/sdk/transport/bridge/ZkCapability;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCircuitCache ()Ljava/lang/Boolean;
+	public final fun getSystems ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/bridge/ZkCapability$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/bridge/ZkCapability$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/bridge/ZkCapability;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/bridge/ZkCapability;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/bridge/ZkCapability$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
 public final class org/siros/sdk/transport/engine/CredentialMatch {
 	public static final field Companion Lorg/siros/sdk/transport/engine/CredentialMatch$Companion;
 	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;)V
