@@ -86,8 +86,8 @@ jobs:
 
       # Maven Central, via the Central Portal publisher API (Nmcp, see
       # settings.gradle.kts): every module plus the BOM in ONE deployment,
-      # signed with the org's SDK signing key. USER_MANAGED for now - the
-      # deployment waits in the portal for a human to press Publish.
+      # signed with the org's SDK signing key. AUTOMATIC: published as soon
+      # as Central's validation passes, no portal step.
       - name: Publish SDK to Maven Central
         run: ./gradlew nmcpPublishAggregationToCentralPortal -PsdkVersion="${GITHUB_REF_NAME#v}" -x test -x lint
         env:

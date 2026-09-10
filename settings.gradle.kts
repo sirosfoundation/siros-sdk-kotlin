@@ -22,10 +22,12 @@ nmcpSettings {
         // is isolated and cannot serialize a provider.
         username = System.getenv("CENTRAL_USERNAME") ?: ""
         password = System.getenv("CENTRAL_PASSWORD") ?: ""
-        // USER_MANAGED: the deployment waits in the portal for a human to
-        // press Publish. Switch to AUTOMATIC once a release has been checked
-        // there end to end.
-        publishingType = "USER_MANAGED"
+        // AUTOMATIC: a deployment that passes Central's validation is
+        // published without a human in the portal. 0.14.0 went through as
+        // USER_MANAGED and was inspected and published by hand first. A
+        // published version is immutable: a bad tag cannot be recalled, only
+        // superseded.
+        publishingType = "AUTOMATIC"
         publicationName = "siros-sdk-kotlin"
     }
 }
