@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-10
+
+First release published to Maven (GitHub Packages) as `org.siros:siros-sdk-*`
+with `org.siros:siros-sdk-bom`. The 0.12.0 tag (2026-09-07) never rolled this
+section, so some entries below shipped in 0.12.0 already; everything since
+0.11.0 is here.
+
 ### Fixed
 - `startIssuance(offerUri)` unpacks `credential_offer` / `credential_offer_uri`
   from any scheme (`haip-vci://`, an upper-cased scheme from a QR code, an
