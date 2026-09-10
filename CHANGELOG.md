@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Publication to **Maven Central** on each release tag, via the Central Portal
+  publisher API (Nmcp): all eight modules plus the BOM as one signed
+  deployment. Artifacts are signed with the SIROS Foundation SDK signing key
+  (`1877CD169960F999CB7B138AB3BA2844F54BCB99`, on keyserver.ubuntu.com and
+  keys.openpgp.org). Each artifact gains a `-javadoc` jar (a pointer to the
+  Dokka reference; Central requires the file). GitHub Packages publication
+  continues unchanged.
+
 ## [0.13.0] - 2026-09-10
 
 First release published to Maven (GitHub Packages) as `org.siros:siros-sdk-*`

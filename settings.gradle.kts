@@ -6,6 +6,30 @@ pluginManagement {
     }
 }
 
+plugins {
+    // Maven Central publishing through the Central Portal publisher API.
+    // Nmcp takes the publications the root build's `maven-publish`
+    // convention creates (see build.gradle.kts) and uploads them as ONE
+    // deployment, so a release either lands whole or not at all. It does not
+    // create publications itself.
+    id("com.gradleup.nmcp.settings") version "1.6.2"
+}
+
+nmcpSettings {
+    centralPortal {
+        // Central Portal user token (not a login), as org-level Actions secrets.
+        // Plain values, not providers: the settings plugin's lifecycle action
+        // is isolated and cannot serialize a provider.
+        username = System.getenv("CENTRAL_USERNAME") ?: ""
+        password = System.getenv("CENTRAL_PASSWORD") ?: ""
+        // USER_MANAGED: the deployment waits in the portal for a human to
+        // press Publish. Switch to AUTOMATIC once a release has been checked
+        // there end to end.
+        publishingType = "USER_MANAGED"
+        publicationName = "siros-sdk-kotlin"
+    }
+}
+
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
