@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-09-16
+
+First release whose native crate dependencies are all on Maven Central, so
+`mavenCentral()` alone resolves the SDK; and the first to ship the bridge
+capability vocabulary (`bridge-capabilities-0.15.0.{json,ts}` attached).
+
 ### Added
 - **Bridge capability vocabulary** (`spec/bridge-capabilities.json`): the
   capability descriptor a web-view wrapper app advertises to the page it
