@@ -62,11 +62,25 @@ fun classifyDeepLink(uriString: String, redirectScheme: String): DeepLinkType {
         val params = parseQueryParams(jUri.rawQuery)
         val code = params["code"]
         val state = params["state"]
-        return if (code != null && state != null) {
-            DeepLinkType.AuthCallback(code = code, state = state)
-        } else {
-            DeepLinkType.Unknown
+        if (code != null && state != null) {
+            return DeepLinkType.AuthCallback(code = code, state = state)
         }
+        // An issuer that requires a presentation before it will issue - a
+        // company credential that must be authorised by presenting a PID, say -
+        // sends the OpenID4VP request to the redirect_uri the wallet gave it,
+        // which is this same callback. It arrives with the request rather than
+        // an authorization code, and used to be discarded here, leaving the
+        // issuance parked at the authorization step until it timed out.
+        //
+        // Same rule as the https case below, and the request is normalised to
+        // the wallet-scheme form the presentation flow parses; the parameters
+        // are not trusted any further for arriving on this URI than they would
+        // be on any other - the request object is fetched and verified exactly
+        // as it is for openid4vp://.
+        if (params.containsKey("request_uri") || params.containsKey("client_id")) {
+            return DeepLinkType.PresentationRequest(uri = "openid4vp://?" + (jUri.rawQuery ?: ""))
+        }
+        return DeepLinkType.Unknown
     }
 
     // 2. OID4VCI: openid-credential-offer://...
