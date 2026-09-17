@@ -508,7 +508,13 @@ class SirosWallet private constructor(
      * account the attempt was scoped to - so fall back to it.
      */
     private fun forgetRefusedAccount() {
-        val accountId = accountRegistry.activeAccountId ?: sessionStore.activeAccountId
+        // In order of authority: the account the refused ceremony actually
+        // resolved to ([attemptedAccountId]), the registry's active account,
+        // then the session scope - which is the right answer for a resume or
+        // an unlock, and the wrong one right after a logout.
+        val accountId = attemptedAccountId
+            ?: accountRegistry.activeAccountId
+            ?: sessionStore.activeAccountId
         if (accountId != null) forgetAccount(accountId) else logout()
     }
 
@@ -777,6 +783,7 @@ class SirosWallet private constructor(
         // this device once this login resolves.
         cachedWia = null
         cachedWiaExpiresAt = 0
+        attemptedAccountId = null
         try {
             ensureAuthMode()
             if (accountId != null) {
@@ -856,11 +863,27 @@ class SirosWallet private constructor(
      * PRF output from [loginCandidates] ends up wasted.
      */
     private fun scopeSessionStoreToCredential(credId: ByteArray) {
-        val credIdB64url = b64UrlEncode(credId)
-        accountRegistry.listAccounts()
-            .find { acc -> acc.passkeys.any { it.credentialId == credIdB64url } }
-            ?.let { sessionStore.activeAccountId = it.accountId }
+        accountForCredential(credId)?.let { sessionStore.activeAccountId = it }
     }
+
+    /** The cached account whose passkey list contains [credId], if any. */
+    private fun accountForCredential(credId: ByteArray): String? {
+        val credIdB64url = b64UrlEncode(credId)
+        return accountRegistry.listAccounts()
+            .find { acc -> acc.passkeys.any { it.credentialId == credIdB64url } }
+            ?.accountId
+    }
+
+    /**
+     * The account the passkey ceremony now in flight resolved to, set as soon
+     * as it is known. The only authority on which account a lifecycle refusal
+     * is about: after a [logout] the registry has no active account and
+     * [SessionStore.activeAccountId] still names the PREVIOUS one, so trusting
+     * the session scope at a refused login would forget the wrong account and
+     * leave the revoked one on the login screen. Null while the refusal could
+     * still come from a step before any passkey was chosen.
+     */
+    private var attemptedAccountId: String? = null
 
     private suspend fun newAsLogin(accountId: String?) {
         val prfCandidates = loginCandidates(accountId)
@@ -908,6 +931,7 @@ class SirosWallet private constructor(
 
         val credId = extractLastCredentialId()
             ?: throw WalletException("No credential ID after login")
+        attemptedAccountId = accountForCredential(credId)
         scopeSessionStoreToCredential(credId)
         val prfOutput = extractLastPrfOutput()
             ?: throw WalletException("PRF not supported by authenticator — cannot decrypt wallet data")
@@ -924,6 +948,7 @@ class SirosWallet private constructor(
 
         val credId = extractLastCredentialId()
             ?: throw WalletException("No credential ID after login")
+        attemptedAccountId = accountForCredential(credId)
         scopeSessionStoreToCredential(credId)
         val prfOutput = extractLastPrfOutput()
             ?: throw WalletException("PRF not supported by authenticator — cannot decrypt wallet data")
@@ -1357,6 +1382,14 @@ class SirosWallet private constructor(
                     })
                 }
                 authServerClient.loginFinish(challengeId = challengeId, credential = credentialJson)
+
+                // Same reason as finishLogin's identical assignment: this is
+                // also a completed passkey ceremony, and a session resumed
+                // from an older SDK (or one whose stored id went stale) would
+                // otherwise reach WIA generation with no `credential_id` to
+                // bind the instance to. The store is already scoped to the
+                // resumed account here.
+                sessionStore.credentialId = b64UrlEncode(result.credentialId)
 
                 extractLastPrfOutput()
                     ?: throw WalletException("PRF not available from authenticator")
