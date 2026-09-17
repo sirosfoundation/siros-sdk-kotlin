@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The self-driven re-login no longer reuses a cut-off token.**
+  `AuthServerClient` caches access tokens independently of `AuthTokens`, so
+  clearing the latter left the pre-cut-off token to be served from that cache
+  and refused with `401` on first use. The re-login now calls the new
+  `AuthServerClient.clearTokenCache()`, which drops cached tokens without
+  ending the session the way `logout()` would.
+
 ### Added
 - **Wallet instance lifecycle: the SDK now speaks the whole protocol**
   (SID-AUTH-06, go-wallet-backend#319). The backend grew a token cut-off, an
@@ -42,6 +50,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     suspending it.
   - Optional `WalletEventListener.onWalletLifecycleBlocked(reason, message)`,
     with a no-op default.
+  - **Security: the instance key now survives a logout.**
+    `SessionStore.clearAccount()` deleted `instanceKeyId`, so the next login
+    minted a new key and registered a **new, active** backend wallet instance.
+    A *suspended* installation could therefore walk away from its own
+    suspension simply by logging out and back in. Only `clearAll()` (a factory
+    reset) drops it now.
+  - A session generation makes the self-driven re-login happen once per
+    *session* rather than once per call (late 401s from requests issued before
+    the cut-off can no longer each start another), refuses it when there is no
+    session left to replace, and aborts it when the caller logged out or
+    destroyed the wallet while the old session was being torn down.
+  - A lifecycle block tears the session down locally instead of calling
+    `logout()`: the unawaited `DELETE /auth/session` could otherwise land
+    after the retry the app makes once a suspended instance is reactivated,
+    invalidating the session that retry had just established.
 
 - **Sample app: a Devices screen and a blocked-wallet login screen.**
   Settings → Devices lists this account's wallet instances (this-device badge,
@@ -54,6 +77,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Transifex source `assets/i18n/en.json`.
 
 ### Changed
+- **Correction: `WALLET_REVOKED` no longer forgets the cached account.** The
+  design assumed that code meant the wallet had been deactivated and erased.
+  It does not: the backend returns it for the login gate of a *single* revoked
+  instance too, and only deactivates the wallet when the **last** non-revoked
+  instance is revoked - the user's other devices keep logging in either way,
+  and only the human-readable `message` distinguishes the two. Forgetting the
+  account on a per-instance revocation destroyed the other passkeys that still
+  worked. Both refusal reasons now end the session, keep the cached account,
+  and show the backend's own message; re-enrollment is the user's call.
+  `deactivateWallet` is the one place that still forgets the account, where
+  the caller asked for it and the outcome is unambiguous.
 - **Source-breaking: `WalletState` has a new subclass.**
   `WalletState.LifecycleBlocked` means an exhaustive `when` over `WalletState`
   no longer compiles without a branch for it (the sample app needed one). Add

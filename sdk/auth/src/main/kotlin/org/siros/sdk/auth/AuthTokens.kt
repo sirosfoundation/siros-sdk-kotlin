@@ -58,6 +58,15 @@ class AuthTokens(
      * Ensure a valid token of the given kind is available.
      * Returns a cached token if still valid, otherwise requests a new one.
      */
+    /**
+     * The network request runs **inside** [mutex], deliberately: [clear] takes
+     * the same lock, so a clear cannot interleave between the await and the
+     * store. Releasing the lock across the await would let a token minted
+     * before a lifecycle cut-off be cached after the clear that cut-off
+     * triggered - handing the replacement session a token the backend has
+     * already refused (SID-AUTH-06). Pinned by
+     * `AuthTokensTest.clear_during_an_in_flight_request_leaves_no_token_cached`.
+     */
     suspend fun ensureToken(name: String): AccessToken = mutex.withLock {
         val kind = MANIFEST[name]
             ?: throw AuthException("Unknown token kind: $name")

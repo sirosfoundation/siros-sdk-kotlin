@@ -156,6 +156,31 @@ class AuthServerClientTest {
         assert(body.contains("\"tenant_id\":\"test-tenant\""))
     }
 
+    /**
+     * A token minted before a wallet lifecycle cut-off is refused with 401
+     * however fresh it looks, so the SDK's re-login must not be served one out
+     * of cache. [AuthServerClient.clearTokenCache] drops them without ending
+     * the session the way `logout()` would.
+     */
+    @Test
+    fun `clearTokenCache forces the next request to mint again`() = runBlocking {
+        val exp = (System.currentTimeMillis() / 1000) + 3600
+        val jwt = buildJwt("""{"sub":"u","aud":"wallet-backend","tenant_id":"t1","tac":"rwlid","acr":"urn:siros:acr:passkey","exp":$exp}""")
+        repeat(2) {
+            server.enqueue(MockResponse()
+                .setBody("""{"access_token":"$jwt","token_type":"Bearer","expires_in":3600}""")
+                .setHeader("Content-Type", "application/json"))
+        }
+
+        client.requestAccessToken("wallet-backend", "rwlid")
+        client.requestAccessToken("wallet-backend", "rwlid")
+        assertEquals("the second call is served from cache", 1, server.requestCount)
+
+        client.clearTokenCache()
+        client.requestAccessToken("wallet-backend", "rwlid")
+        assertEquals("after clearTokenCache the token is minted again", 2, server.requestCount)
+    }
+
     @Test
     fun `requestAccessToken caches token`() = runBlocking {
         val exp = (System.currentTimeMillis() / 1000) + 3600
