@@ -176,4 +176,42 @@
     <string name="cancel">Cancelar</string>
     <string name="ok">OK</string>
     <string name="user_fallback_name">Usuário</string>
+
+    <!-- Devices / wallet instance lifecycle (SID-AUTH-06) -->
+    <string name="devices_title">Dispositivos</string>
+    <string name="devices_description">As instalações da carteira registadas nesta conta. Suspender uma bloqueia-a até ser reativada; remover uma é permanente.</string>
+    <string name="devices_manage_button">Gerir dispositivos</string>
+    <string name="devices_empty">Ainda não há instâncias de carteira registadas. Uma é registada quando esta instalação obtém pela primeira vez uma atestação de instância de carteira.</string>
+    <string name="devices_refresh">Atualizar</string>
+    <string name="devices_this_device">Este dispositivo</string>
+    <string name="devices_instance_id">ID da instância</string>
+    <string name="devices_wscd_type">Armazenamento de chaves</string>
+    <string name="devices_last_attested">Última atestação</string>
+    <string name="devices_status_reason">Motivo</string>
+    <string name="devices_status_active">Ativo</string>
+    <string name="devices_status_suspended">Suspenso</string>
+    <string name="devices_status_revoked">Removido</string>
+    <string name="devices_status_unknown">Desconhecido</string>
+    <string name="devices_suspend">Suspender</string>
+    <string name="devices_reactivate">Reativar</string>
+    <string name="devices_remove">Remover</string>
+    <string name="devices_cancel">Cancelar</string>
+    <string name="devices_suspend_self_warning">Suspender este dispositivo termina a sessão até ser reativado a partir de outro dispositivo ou pelo seu fornecedor.</string>
+    <string name="devices_remove_confirm_title">Remover este dispositivo?</string>
+    <string name="devices_remove_confirm_message">%1$s será removido permanentemente e nunca poderá ser reativado. Remover o último dispositivo desativa a carteira e apaga os seus dados.</string>
+    <string name="devices_deactivate_title">Desativar carteira</string>
+    <string name="devices_deactivate_description">Remove todos os dispositivos e apaga os dados desta carteira no servidor. É necessário um novo registo depois.</string>
+    <string name="devices_deactivate_button">Desativar carteira</string>
+    <string name="devices_deactivate_confirm_title">Desativar esta carteira?</string>
+    <string name="devices_deactivate_confirm_message">Isto não pode ser anulado. Escreva %1$s para confirmar.</string>
+    <string name="devices_deactivate_confirm_word">DESATIVAR</string>
+    <string name="devices_reason_optional">Motivo (opcional)</string>
+    <string name="devices_deactivate_complete">Carteira desativada: %1$d dispositivo(s) removido(s) e os dados no servidor apagados.</string>
+    <string name="devices_deactivate_incomplete">Carteira desativada: %1$d dispositivo(s) removido(s), mas o servidor não conseguiu terminar de apagar os dados. O seu fornecedor tem de o concluir.</string>
+    <string name="wallet_blocked_suspended_title">Este dispositivo está suspenso</string>
+    <string name="wallet_blocked_suspended_message">Reative-o a partir de outro dos seus dispositivos ou contacte o fornecedor da sua carteira. As suas credenciais estão intactas.</string>
+    <string name="wallet_blocked_retry">Tentar novamente</string>
+    <string name="wallet_blocked_revoked_title">Esta carteira foi desativada</string>
+    <string name="wallet_blocked_revoked_message">Os seus dados foram apagados no servidor e esta passkey já não pode iniciar sessão. Registe-se novamente para começar de novo.</string>
+    <string name="wallet_blocked_enroll_again">Registar novamente</string>
 </resources>

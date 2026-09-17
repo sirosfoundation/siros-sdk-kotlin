@@ -66,6 +66,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     after the retry the app makes once a suspended instance is reactivated,
     invalidating the session that retry had just established.
 
+- **Sample app: a Devices screen and a blocked-wallet login screen.**
+  Settings → Devices lists this account's wallet instances (this-device badge,
+  status, key storage, last attested, reason) with per-row Suspend /
+  Reactivate / Remove and a footer that deactivates the wallet behind a typed
+  confirmation, reporting whether the backend confirmed the erasure. The login
+  screen renders `WalletState.LifecycleBlocked` as its own screen - suspended
+  explains and offers a retry, revoked explains and offers a fresh enrollment -
+  instead of a generic error. Strings in `res/values*/strings.xml` and the
+  Transifex source `assets/i18n/en.json`.
+
 ### Changed
 - **Correction: `WALLET_REVOKED` no longer forgets the cached account.** The
   design assumed that code meant the wallet had been deactivated and erased.

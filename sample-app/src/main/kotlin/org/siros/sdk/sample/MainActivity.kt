@@ -348,6 +348,25 @@ fun WalletScreen(viewModel: WalletViewModel) {
         AutoEnrollOfferDialog(pluginId = pluginId, onRespond = viewModel::respondToAutoEnrollOffer)
     }
 
+    // The wallet instance this installation logs in with is suspended, or the
+    // wallet was deactivated and its data erased (SID-AUTH-06). Not an error
+    // to retry: only someone else - another device, the provider - can lift
+    // it, so this gets its own screen rather than the login screen's
+    // "Welcome back" with a passkey that will be refused again.
+    (walletState as? WalletState.LifecycleBlocked)?.let { blocked ->
+        WalletBlockedScreen(
+            reason = blocked.reason,
+            message = blocked.message,
+            onRetry = { viewModel.login() },
+            // The account is already forgotten by the time a revoked wallet
+            // reaches here; logging out is what puts the app back on the
+            // login/register screen where a new enrollment starts.
+            onEnrollAgain = viewModel::disconnect,
+            isLoading = isLoading,
+        )
+        return
+    }
+
     // Not logged in → show login screen (no app chrome)
     if (walletState is WalletState.Disconnected || walletState is WalletState.Connecting) {
         val cachedAccounts = (walletState as? WalletState.Disconnected)?.cachedAccounts ?: emptyList()
@@ -396,6 +415,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
 
     // WSCA developer sub-screen state (read here so it's available in the `when` below)
     val showWscaDeveloper by viewModel.showWscaDeveloper.collectAsState()
+    val showDevices by viewModel.showDevices.collectAsState()
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
 
     // Measured height of the custom bottom tab bar Row below, so the shared
@@ -443,6 +463,20 @@ fun WalletScreen(viewModel: WalletViewModel) {
             showHistory -> PresentationHistoryScreen(
                 history = presentationHistory,
                 onBack = viewModel::closeHistory,
+            )
+
+            // Settings → Devices: this user's wallet instances (SID-AUTH-06).
+            showDevices -> DevicesScreen(
+                instances = viewModel.walletInstances.collectAsState().value,
+                loading = viewModel.devicesLoading.collectAsState().value,
+                busyInstanceId = viewModel.devicesBusyInstanceId.collectAsState().value,
+                deactivating = viewModel.deactivating.collectAsState().value,
+                deactivationOutcome = viewModel.deactivationOutcome.collectAsState().value,
+                errorMessage = viewModel.devicesError.collectAsState().value,
+                onBack = viewModel::closeDevices,
+                onRefresh = viewModel::refreshDevices,
+                onSetStatus = viewModel::setWalletInstanceStatus,
+                onDeactivateWallet = viewModel::deactivateWallet,
             )
 
             // Consolidated WSCD settings sub-screen (one tab per plugin -
@@ -611,6 +645,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onDeleteAccount = viewModel::deleteAccount,
                             onShowHistory = viewModel::openHistory,
                             onShowWscdSettings = viewModel::openWscaDeveloper,
+                            onShowDevices = viewModel::openDevices,
                             onForgetAccount = viewModel::forgetAccount,
                             passkeys = viewModel.listPasskeys(),
                             onRenamePasskey = viewModel::renamePasskey,
@@ -1363,6 +1398,7 @@ fun SettingsTab(
     onDeleteAccount: () -> Unit,
     onShowHistory: () -> Unit,
     onShowWscdSettings: () -> Unit,
+    onShowDevices: () -> Unit = {},
     onForgetAccount: ((String) -> Unit)? = null,
     passkeys: List<org.siros.sdk.wallet.CachedPasskey> = emptyList(),
     onRenamePasskey: ((String, String) -> Unit)? = null,
@@ -1610,6 +1646,40 @@ fun SettingsTab(
                     shape = RoundedCornerShape(12.dp),
                 ) {
                     Text("WSCD Settings")
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Devices (wallet instances, SID-AUTH-06) - one entry point into the
+        // Devices sub-screen, which owns the list and the two actions; this
+        // card stays a link, like the WSCD one above.
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().padding(20.dp)) {
+                Text(
+                    stringResource(R.string.devices_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    stringResource(R.string.devices_description),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = onShowDevices,
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Text(stringResource(R.string.devices_manage_button))
                 }
             }
         }
