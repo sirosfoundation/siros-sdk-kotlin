@@ -8,6 +8,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayOutputStream
+import java.util.Base64
 import java.util.zip.Deflater
 
 class TokenStatusListTest {
@@ -53,6 +54,19 @@ class TokenStatusListTest {
         assertNull(TokenStatusList.readStatusAtIndex(byteArrayOf(0x00), 1, 8))
         assertNull(TokenStatusList.readStatusAtIndex(byteArrayOf(0x00), 8, 1))
         assertNull(TokenStatusList.readStatusAtIndex(byteArrayOf(0x00), 1, -1))
+    }
+
+    @Test
+    fun `an illegal entry width is reported as such, not as a missing index`() = kotlinx.coroutines.runBlocking {
+        // "Index 1 is outside the status list" would send whoever is debugging
+        // the issuer looking in entirely the wrong place.
+        val client = TokenStatusListClient(
+            httpGet = { _, _ -> statusListToken(bits = 3) },
+            resolveIssuerKey = { _, _ -> issuerKey.toPublicJWK() },
+        )
+        val resolution = client.resolve(TokenStatusList.Reference(1, "https://x.example"))
+        val reason = (resolution as TokenStatusList.Resolution.Unavailable).reason
+        assertTrue(reason, reason.contains("entry width of 3 bits"))
     }
 
     @Test
@@ -115,6 +129,30 @@ class TokenStatusListTest {
     }
 
     private fun claims(json: String) = Json.parseToJsonElement(json) as JsonObject
+
+    /** The issuer key these tests sign their Status List Tokens with. */
+    private val issuerKey: com.nimbusds.jose.jwk.ECKey by lazy {
+        com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256).generate()
+    }
+
+    /**
+     * A properly signed Status List Token declaring [bits] as its entry width.
+     *
+     * Really signed, because the reader verifies the signature before it looks
+     * at the list - an unsigned shell never reaches the width check.
+     */
+    private fun statusListToken(bits: Int): String {
+        val claims = com.nimbusds.jwt.JWTClaimsSet.Builder()
+            .issuer("https://issuer.example")
+            .claim("status_list", mapOf("bits" to bits, "lst" to "eJw="))
+            .build()
+        val header = com.nimbusds.jose.JWSHeader.Builder(com.nimbusds.jose.JWSAlgorithm.ES256)
+            .type(com.nimbusds.jose.JOSEObjectType("statuslist+jwt"))
+            .build()
+        return com.nimbusds.jwt.SignedJWT(header, claims)
+            .also { it.sign(com.nimbusds.jose.crypto.ECDSASigner(issuerKey)) }
+            .serialize()
+    }
 
     private fun deflate(data: ByteArray, nowrap: Boolean): ByteArray {
         val deflater = Deflater(Deflater.DEFAULT_COMPRESSION, nowrap)

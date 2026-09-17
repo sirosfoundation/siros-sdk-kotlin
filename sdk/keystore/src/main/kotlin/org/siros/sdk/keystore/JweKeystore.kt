@@ -591,11 +591,18 @@ class JweKeystore(
         holderBinding: HolderBinding?,
     ): String = mutex.withLock {
         requireUnlocked()
-        val key = keys.values.firstOrNull()
-            ?: run {
+        // `freshKey` means batch issuance: each credential in the batch must
+        // be bound to its own key, or every copy shares one holder key and
+        // presenting them is linkable. Honouring it also keeps the recorded
+        // per-credential `kid` meaningful.
+        val key = if (freshKey) {
+            registerNewKey()
+        } else {
+            keys.values.firstOrNull() ?: run {
                 Timber.i("No keys available, generating a new key for proof")
                 registerNewKey()
             }
+        }
 
         Timber.d("generateProof: building claims for audience=$audience")
         // DIIP requires the `jwt` proof type to carry the Holder's did:jwk as

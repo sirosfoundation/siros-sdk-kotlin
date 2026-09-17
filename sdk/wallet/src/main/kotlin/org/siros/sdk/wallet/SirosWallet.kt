@@ -1625,10 +1625,23 @@ class SirosWallet private constructor(
     fun interopProfileFor(issuer: String?): InteropProfile {
         if (issuer == null) return config.interopProfile
         return config.issuerInteropProfiles.entries
-            .filter { issuer.startsWith(it.key) }
+            .filter { matchesIssuer(issuer, it.key) }
             .maxByOrNull { it.key.length }
             ?.value
             ?: config.interopProfile
+    }
+
+    /**
+     * Whether [issuer] is [configured] or a path under it.
+     *
+     * A bare `startsWith` would also match `https://issuer.example.evil`
+     * against an override for `https://issuer.example` - a different domain
+     * entirely, handed another issuer's configuration. The boundary has to be
+     * a path separator.
+     */
+    private fun matchesIssuer(issuer: String, configured: String): Boolean {
+        val base = configured.trimEnd('/')
+        return issuer == base || issuer == configured || issuer.startsWith("$base/")
     }
 
     /**
@@ -1652,6 +1665,14 @@ class SirosWallet private constructor(
      * know about issuers.
      */
     fun holderBindingFor(issuer: String?): HolderBinding {
+        // An explicit per-Issuer override comes first. It exists precisely for
+        // an Issuer whose metadata advertises the wrong thing, so letting the
+        // metadata win would leave it with nothing to override.
+        issuerOverrideFor(issuer)?.let { override ->
+            Timber.d("Holder binding for ${issuer ?: "the active issuer"}: ${override.holderBinding} (configured override)")
+            return override.holderBinding
+        }
+
         val advertised = activeOffer
             ?.takeIf { issuer == null || it.credentialIssuerIdentifier == issuer }
             ?.cryptographicBindingMethodsSupported
@@ -1659,19 +1680,31 @@ class SirosWallet private constructor(
             Timber.d("Holder binding for ${issuer ?: "the active issuer"}: $negotiated (advertised: $advertised)")
             return negotiated
         }
-        return interopProfileFor(issuer).holderBinding
+        return config.interopProfile.holderBinding
+    }
+
+    /** The configured override for [issuer], if a specific one was set. */
+    private fun issuerOverrideFor(issuer: String?): InteropProfile? {
+        if (issuer == null) return null
+        return config.issuerInteropProfiles.entries
+            .filter { matchesIssuer(issuer, it.key) }
+            .maxByOrNull { it.key.length }
+            ?.value
     }
 
     /**
-     * Resolves the DID methods the active [diipProfile] requires, for
-     * Issuer and Verifier identities. `did:jwk` resolves offline; `did:web`
-     * goes over HTTPS with no wallet credentials attached, since it targets
-     * arbitrary third-party domains (the same reason [fetchTypeMetadataUrl]
-     * gates its headers).
+     * Resolves the DIDs this wallet encounters, for Issuer and Verifier
+     * identities.
+     *
+     * `did:jwk` resolves offline - the key is the identifier. Everything else
+     * goes to the backend, which delegates to go-trust: which document is
+     * authoritative for an identifier is a trust decision, and it belongs to
+     * the deployment's trust registry rather than to this wallet fetching
+     * whatever a domain serves.
      */
     val didResolver: DidResolver = DidResolver(
         profile = config.diipProfile,
-        httpGet = { url -> fetchPublicUrl(url, emptyMap()) },
+        delegate = { did -> apiClient?.resolveDid(did) },
     )
 
     /**
@@ -1722,10 +1755,19 @@ class SirosWallet private constructor(
     }
 
     /**
-     * Fetch a URL that belongs to a third party - an issuer's status list, a
-     * `did:web` document. These carry NO wallet credentials: attaching this
-     * wallet's bearer token or tenant id to a request at an arbitrary domain
-     * would leak them (see [fetchTypeMetadataUrl] for the same rule).
+     * Fetch a URL that belongs to a third party - an issuer's Status List
+     * Token, named by a URI inside the credential itself.
+     *
+     * Only documents whose location the credential already states, never DID
+     * resolution: which document is authoritative for an identifier is
+     * go-trust's decision (see [didResolver]). The Status List Token's own
+     * signing key is still resolved through that path, so fetching the list
+     * is not a trust decision - an unverifiable one is reported as an
+     * unavailable status, not as a valid credential.
+     *
+     * These carry NO wallet credentials: attaching this wallet's bearer token
+     * or tenant id to a request at an arbitrary domain would leak them (see
+     * [fetchTypeMetadataUrl] for the same rule).
      */
     private suspend fun fetchPublicUrl(url: String, headers: Map<String, String> = emptyMap()): String? =
         withContext(Dispatchers.IO) {
@@ -1748,6 +1790,7 @@ class SirosWallet private constructor(
      * by anything else carries its own `x5c` or goes unverified (which the
      * reader reports as an unavailable status, never as a valid one).
      */
+    @Suppress("unused") // referenced through the TokenStatusListClient below
     private suspend fun resolveIssuerSigningKey(issuer: String, kid: String?): com.nimbusds.jose.jwk.JWK? {
         val document = didResolver.resolve(issuer).documentOrNull ?: return null
         val jwk = document.findPublicKey(kid, DidRelationship.ASSERTION_METHOD) ?: return null
@@ -3457,7 +3500,12 @@ class SirosWallet private constructor(
     private val sessionStore = SessionStore(activity)
     private val accountRegistry = AccountRegistry(activity)
     private val authProvider = createAuthProvider(activity, config)
-    private val keystore: KeystoreManager = config.keystore ?: JweKeystore()
+    // The profile has to reach the default keystore, or a wallet configured
+    // for DIIP generates keys with no did:jwk identity and then silently falls
+    // back to a HAIP-shaped proof - the configuration would look applied and
+    // do nothing. A host-supplied keystore carries its own profile.
+    private val keystore: KeystoreManager =
+        config.keystore ?: JweKeystore(profile = config.interopProfile)
 
     /**
      * WSCD hardware-key lifecycle (enroll/rotate/destroy) and
@@ -4607,7 +4655,13 @@ class SirosWallet private constructor(
             val headerPart = jwt.substringBefore(".")
             val padded = headerPart + "=".repeat((4 - headerPart.length % 4) % 4)
             val headerJson = String(java.util.Base64.getUrlDecoder().decode(padded), Charsets.UTF_8)
-            Json.parseToJsonElement(headerJson).jsonObject["jwk"]?.jsonObject?.get("kid")?.jsonPrimitive?.contentOrNull
+            val header = Json.parseToJsonElement(headerJson).jsonObject
+            // A DIIP proof names the key with a `kid` header and carries no
+            // `jwk` at all; a HAIP one embeds the key, with its id inside.
+            // Reading only the latter silently loses the binding for every
+            // DIIP-issued credential.
+            header["kid"]?.jsonPrimitive?.contentOrNull
+                ?: header["jwk"]?.jsonObject?.get("kid")?.jsonPrimitive?.contentOrNull
         } catch (e: Exception) {
             Timber.w(e, "Failed to extract kid from proof JWT header")
             null

@@ -3130,6 +3130,50 @@ class SirosWalletTest {
         return "${encoder.encodeToString(header.toByteArray())}.${encoder.encodeToString(payload.toByteArray())}.sig"
     }
 
+    /** The DIIP counterpart of [fakeProofJwt]: the key is named by a `kid` header, not embedded. */
+    private fun fakeDiipProofJwt(kid: String): String {
+        val encoder = java.util.Base64.getUrlEncoder().withoutPadding()
+        val header = """{"typ":"openid4vci-proof+jwt","alg":"ES256","kid":"$kid"}"""
+        val payload = """{"aud":"aud-1","nonce":"nonce-1","iss":"${kid.substringBefore('#')}"}"""
+        return "${encoder.encodeToString(header.toByteArray())}.${encoder.encodeToString(payload.toByteArray())}.sig"
+    }
+
+    /**
+     * The same failure mode as the test below, for the OTHER proof shape: a
+     * DIIP proof carries no `jwk` header at all, so reading the key id only
+     * out of an embedded `jwk` silently leaves `StoredCredential.kid` null for
+     * every DIIP-issued credential.
+     */
+    @Test
+    fun connectEngine_signRequest_recordsAttestedKeyIdFromDiipKidHeader() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val keystore = mockk<KeystoreManager>()
+        val kid = "did:jwk:eyJrdHkiOiJFQyJ9#0"
+        coEvery {
+            keystore.generateProof(audience = "aud-1", nonce = "nonce-1", freshKey = any(), holderBinding = any())
+        } returns fakeDiipProofJwt(kid)
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to keystore,
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sign",
+                action = "generate_proof",
+                params = SignRequestParams(audience = "aud-1", nonce = "nonce-1"),
+            )
+        )
+        advanceUntilIdle()
+
+        assertEquals(listOf(kid), getField(wallet, "activeAttestedKeyIds"))
+    }
+
     /**
      * Real bug found via live proximity-presentation testing: [KeystoreManager.generateProof]
      * never returned which key it used, so [SirosWallet.activeAttestedKeyIds] stayed null for

@@ -510,13 +510,17 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     val diipProfile: org.siros.sdk.credentials.interop.DiipProfile get() = wallet.diipProfile
 
     private fun refreshCredentialStatuses() {
+        // Evaluating a credential's status parses it (CBOR, for an mdoc) and
+        // can fetch and verify the issuer's status list, so it runs off the
+        // main dispatcher; only the result is published back to the UI.
         viewModelScope.launch {
-            _credentialStatuses.value = runCatching { wallet.refreshCredentialStatuses() }
-                .getOrElse {
-                    Log.w(TAG, "Could not refresh credential statuses", it)
-                    return@launch
-                }
-                .filterValues { status -> status != CredentialStatus.VALID }
+            val statuses = withContext(Dispatchers.Default) {
+                runCatching { wallet.refreshCredentialStatuses() }
+            }.getOrElse {
+                Log.w(TAG, "Could not refresh credential statuses", it)
+                return@launch
+            }
+            _credentialStatuses.value = statuses.filterValues { it != CredentialStatus.VALID }
         }
     }
 

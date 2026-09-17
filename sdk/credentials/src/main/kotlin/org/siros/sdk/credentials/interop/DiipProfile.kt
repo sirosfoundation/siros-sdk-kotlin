@@ -70,6 +70,11 @@ enum class DiipProfile(
             // Future Directions: "A near-future version of DIIP will probably
             // require support for did:webvh instead of did:web." Resolving
             // both is strictly more interoperable than resolving either.
+            //
+            // Whether a given method actually resolves is go-trust's answer,
+            // not this SDK's - see [DidResolver]. This set says what the
+            // profile requires of a compliant deployment, which is what an
+            // interop report should cite.
             V6 -> setOf(DidMethod.JWK, DidMethod.WEB, DidMethod.WEBVH)
         }
 
