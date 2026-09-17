@@ -68,6 +68,8 @@ import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.Vctm
 import org.siros.sdk.credentials.ZkCircuitClient
+import org.siros.sdk.credentials.interop.AuthorizationDetail
+import org.siros.sdk.credentials.interop.AuthorizationDetails
 import org.siros.sdk.credentials.interop.CredentialStatus
 import org.siros.sdk.credentials.interop.HolderBinding
 import org.siros.sdk.credentials.interop.InteropProfile
@@ -1613,6 +1615,24 @@ class SirosWallet private constructor(
     val diipProfile: DiipProfile get() = config.diipProfile
 
     /**
+     * The OID4VCI `authorization_details` to start this issuance with, from
+     * the offer already resolved into [activeOffer].
+     *
+     * DIIP requires a Wallet to be able to ask for a credential configuration
+     * this way as well as by `scope`. This SDK never builds the Authorization
+     * Request - the engine does, for every transport - so the wallet states
+     * the intent and the engine forwards it (see
+     * `FlowStartMessage.authorizationDetails`). wallet-frontend makes the same
+     * split for the same reason, and the two have to agree: same engine, same
+     * issuers.
+     *
+     * Null when the offer could not be resolved, which leaves the `scope` path
+     * exactly as it was.
+     */
+    private fun authorizationDetailsForActiveOffer(): List<AuthorizationDetail>? =
+        AuthorizationDetails.build(activeOffer?.credentialConfigurationId)
+
+    /**
      * The interoperability profile this wallet speaks with [issuer] when
      * nothing else decides - see [InteropProfile].
      *
@@ -2826,6 +2846,7 @@ class SirosWallet private constructor(
             engine.startIssuance(
                 offer = credentialOffer.toString(),
                 redirectUri = config.redirectUri.ifBlank { null },
+                authorizationDetails = authorizationDetailsForActiveOffer(),
             )
         } catch (e: Exception) {
             // The flow was never registered server-side (no flow ID was ever
@@ -2937,10 +2958,12 @@ class SirosWallet private constructor(
                 is IssuanceStart.Offer -> engine.startIssuance(
                     offer = start.offer,
                     redirectUri = redirectUri,
+                    authorizationDetails = authorizationDetailsForActiveOffer(),
                 )
                 is IssuanceStart.CredentialOfferUri -> engine.startIssuance(
                     credentialOfferUri = start.uri,
                     redirectUri = redirectUri,
+                    authorizationDetails = authorizationDetailsForActiveOffer(),
                 )
             }
         } catch (e: Exception) {

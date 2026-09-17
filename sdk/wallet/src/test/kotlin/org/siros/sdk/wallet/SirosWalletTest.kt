@@ -825,6 +825,7 @@ class SirosWalletTest {
                 },
                 credentialOfferUri = null,
                 redirectUri = "siros-sample://callback",
+                authorizationDetails = any(),
             )
         }
     }
@@ -1049,7 +1050,14 @@ class SirosWalletTest {
             assertEquals("Mobile Driving License", activeOffer?.credentialName)
             assertEquals(issuerUrl, activeOffer?.credentialIssuerIdentifier)
             assertEquals("org.iso.18013.5.1.mDL", activeOffer?.credentialConfigurationId)
-            verify(exactly = 1) { engine.startIssuance(offer = offerJson, credentialOfferUri = null, redirectUri = "siros-sample://callback") }
+            verify(exactly = 1) {
+            engine.startIssuance(
+                offer = offerJson,
+                credentialOfferUri = null,
+                redirectUri = "siros-sample://callback",
+                authorizationDetails = any(),
+            )
+        }
         } finally {
             server.shutdown()
         }
@@ -1103,7 +1111,14 @@ class SirosWalletTest {
         advanceUntilIdle()
 
         assertEquals(null, getField(wallet, "activeOffer"))
-        verify(exactly = 1) { engine.startIssuance(offer = offerJson, credentialOfferUri = null, redirectUri = "siros-sample://callback") }
+        verify(exactly = 1) {
+            engine.startIssuance(
+                offer = offerJson,
+                credentialOfferUri = null,
+                redirectUri = "siros-sample://callback",
+                authorizationDetails = any(),
+            )
+        }
     }
 
     /**
@@ -1147,7 +1162,14 @@ class SirosWalletTest {
         wallet.startIssuance(offerJson)
         advanceUntilIdle()
 
-        verify(exactly = 2) { engine.startIssuance(offer = offerJson, credentialOfferUri = null, redirectUri = "siros-sample://callback") }
+        verify(exactly = 2) {
+            engine.startIssuance(
+                offer = offerJson,
+                credentialOfferUri = null,
+                redirectUri = "siros-sample://callback",
+                authorizationDetails = any(),
+            )
+        }
     }
 
     /**
@@ -1262,6 +1284,7 @@ class SirosWalletTest {
                     redirectUri = "siros-sample://callback",
                     clientAttestation = null,
                     clientAttestationPoP = null,
+                    authorizationDetails = any(),
                 )
             }
             coVerify(exactly = 0) { apiClient.requestWIAChallenge() }
@@ -3010,7 +3033,7 @@ class SirosWalletTest {
         coEvery { keystore.exportEncryptedContainer() } returns """{"prfKeys":[],"jwe":"updated-jwe"}""".toByteArray()
         coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
         val engine = mockEngineConstructor(flowComplete = completeFlow)
-        every { engine.startIssuance(any(), any(), any(), any(), any()) } just runs
+        every { engine.startIssuance(any(), any(), any(), any(), any(), any()) } just runs
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
