@@ -73,6 +73,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from a revoked one for the user. (Binary-incompatible for direct
   constructor callers; source-compatible.)
 
+## [0.17.0] - 2026-09-17
+
 ### Fixed
 - **A presentation the wallet cannot satisfy now fails immediately instead of
   stalling** (go-wallet-backend#335). The WMP transport's match handler
