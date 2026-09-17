@@ -424,6 +424,13 @@ class SirosWallet private constructor(
         credentialNotifier = null
         apiClient = null
         authTokens.clear()
+        // Lock the key material too, the way logout() does. The session is
+        // already gone server-side; if the replacement login then fails (a
+        // cancelled passkey ceremony, no network, or a lifecycle refusal) the
+        // wallet must not be left holding an unlocked keystore whose
+        // credentials are still signable. A successful login() unlocks it
+        // again as part of its normal path.
+        keystore.lock()
         login(accountRegistry.activeAccountId ?: sessionStore.activeAccountId)
     }
 
