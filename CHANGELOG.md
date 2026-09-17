@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Wallet instance lifecycle: the SDK now speaks the whole protocol**
+  (SID-AUTH-06, go-wallet-backend#319). The backend grew a token cut-off, an
+  erasure retry and a passkey-ownership check on top of the instance API the
+  SDK already called; the client side of each of those is here.
+  - `WalletState.LifecycleBlocked(reason, message, cachedAccounts)` - a
+    blocked wallet is a state, not an error. Entered from `login()`,
+    `unlockKeystore()`, `resumeSession()` and from the SDK's own re-login
+    whenever the authorization server answers `403` with `WALLET_SUSPENDED`
+    or `WALLET_REVOKED`. A suspended instance keeps its cached account (it
+    can be reactivated elsewhere); a revoked one forgets it, because its
+    server-side data is erased and that passkey can never log in to this
+    tenant again.
+  - **One self-driven re-login after a token cut-off.** Any lifecycle change
+    refuses every token issued before it, so the reauthentication signal now
+    drops the tokens, API client and engine session and attempts `login()`
+    exactly once - never in a loop. A lifecycle `403` there goes straight to
+    `LifecycleBlocked`, a success continues as a normal login, anything else
+    is the existing error path. `WalletEventListener.onReauthenticationRequired`
+    still fires first for hosts that drive their own prompt.
+  - A successful `setWalletInstanceStatus` write re-logs in the same way, so
+    suspending *this* device's own instance lands in
+    `LifecycleBlocked(SUSPENDED)` rather than surfacing later as a stray 401.
+  - `409 ERASURE_INCOMPLETE` is retried per the protocol: five attempts, 1 s →
+    8 s, identical body. A `401` after such a `409` is the acting token being
+    dropped with the erased key material and counts as complete.
+  - `403 CREDENTIAL_NOT_OWNED` at WIA generation retries the request once
+    without `credential_id` and clears the stale id, with a warning. The first
+    link recorded for an instance wins, so the SDK never guesses another one.
+  - `WalletInstance.isThisDevice` and `SirosWallet.thisInstanceId` - the
+    instance-key JWK thumbprint the SDK already sends as `wallet_instance_id`
+    - so a Devices screen can mark this installation and warn before
+    suspending it.
+  - Optional `WalletEventListener.onWalletLifecycleBlocked(reason, message)`,
+    with a no-op default.
+
+### Changed
+- **`SirosWallet.deactivateWallet` and `BackendApiClient.revokeAllWalletInstances`
+  return `DeactivationOutcome(revoked, complete)`** instead of a bare count.
+  The revocations stand even when the backend's erasure cascade did not
+  finish, so the local account is forgotten either way and `complete` is what
+  the app tells the user (an incomplete erasure leaves residual server-side
+  data for an administrator to clean up).
+- **`setWalletInstanceStatus` takes a typed `WalletInstanceStatus`** on both
+  `SirosWallet` and `BackendApiClient`. The `status: String` overload is
+  deprecated and kept for one release; it rejects a value the backend would
+  refuse instead of sending it.
+- `AuthException` carries the server's user-facing `serverMessage` separately
+  from its developer-facing `message` - it is what tells a suspended wallet
+  from a revoked one for the user. (Binary-incompatible for direct
+  constructor callers; source-compatible.)
+
 ### Fixed
 - **A presentation the wallet cannot satisfy now fails immediately instead of
   stalling** (go-wallet-backend#335). The WMP transport's match handler

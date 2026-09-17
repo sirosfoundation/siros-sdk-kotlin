@@ -153,4 +153,22 @@ interface WalletEventListener {
     fun onReauthenticationRequired() {
         // Default: no-op. Host apps override to route to a login screen.
     }
+
+    /**
+     * The backend refuses this installation because of its wallet instance's
+     * lifecycle (SID-AUTH-06): the instance was suspended, or the wallet was
+     * deactivated and its data erased. Fired when [SirosWallet] enters
+     * [WalletState.LifecycleBlocked] - from a login, a keystore unlock, a
+     * session resume, or the SDK's own single re-login after a token cut-off.
+     *
+     * Unlike [onReauthenticationRequired] this is not "prompt again": another
+     * login attempt with the same passkey is refused the same way until
+     * someone else reactivates the instance
+     * ([WalletLifecycleRefusal.SUSPENDED]) and never succeeds at all
+     * ([WalletLifecycleRefusal.REVOKED]). Apps that already render
+     * [WalletState.LifecycleBlocked] need not implement this.
+     */
+    fun onWalletLifecycleBlocked(reason: org.siros.sdk.auth.WalletLifecycleRefusal, message: String?) {
+        // Default: no-op. The state change is the primary signal.
+    }
 }

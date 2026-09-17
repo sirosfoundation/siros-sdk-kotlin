@@ -55,6 +55,13 @@ class AuthException(
     errorCode: String = "auth_failed",
     /** HTTP status code when the failure came from an AS/Backend HTTP response. */
     val code: Int? = null,
+    /**
+     * The server's own user-facing explanation (`message` in the error body),
+     * when it sent one - e.g. the text a SID-AUTH-06 `WALLET_SUSPENDED` /
+     * `WALLET_REVOKED` refusal carries to tell the two cases apart for the
+     * user. [message] stays the developer-facing diagnostic.
+     */
+    val serverMessage: String? = null,
 ) : SirosException(message, cause, errorCode)
 
 /** Raised when keystore operations fail (locked, corrupt container, decryption error). */

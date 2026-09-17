@@ -36,7 +36,12 @@ import org.siros.sdk.auth.AuthProvider
 import org.siros.sdk.auth.CredentialManagerAuthProvider
 import org.siros.sdk.auth.LocalAuthProvider
 import org.siros.sdk.auth.PrfOutput
+import org.siros.sdk.auth.DeactivationOutcome
+import org.siros.sdk.auth.ERROR_CREDENTIAL_NOT_OWNED
 import org.siros.sdk.auth.WalletInstance
+import org.siros.sdk.auth.WalletInstanceStatus
+import org.siros.sdk.auth.WalletLifecycleRefusal
+import org.siros.sdk.auth.apiErrorCode
 import org.siros.sdk.auth.WebAuthnAuthClient
 import org.siros.sdk.auth.WscdAutoEnrollHint
 import org.siros.sdk.credentials.AuthException
@@ -274,8 +279,27 @@ class SirosWallet private constructor(
      */
     suspend fun listWalletInstances(): List<WalletInstance> {
         val client = apiClient ?: throw AuthException(NOT_LOGGED_IN)
-        return client.listWalletInstances()
+        // Best-effort: [thisInstanceId] reads the WIA this session already
+        // holds, so fetch one when there is none yet rather than returning a
+        // list in which no row can be marked "this device". A failure here
+        // must not fail the listing - ensureWalletInstanceAttestation()
+        // already swallows its own errors and returns null.
+        if (thisInstanceId == null) ensureWalletInstanceAttestation()
+        val self = thisInstanceId
+        return client.listWalletInstances().map {
+            it.copy(isThisDevice = self != null && it.id == self)
+        }
     }
+
+    /**
+     * This installation's wallet instance id: the JWK thumbprint of its
+     * instance key, which is what the backend registers an instance under and
+     * what this SDK already sends as `wallet_instance_id`. Null until this
+     * session has obtained a Wallet Instance Attestation (the value is read
+     * from its `cnf.jkt`); [listWalletInstances] fetches one if needed, so
+     * reading this right after it is the reliable order.
+     */
+    val thisInstanceId: String? get() = instanceKeyThumbprint()
 
     /**
      * Suspend, reactivate or revoke one of this user's wallet instances
@@ -283,11 +307,45 @@ class SirosWallet private constructor(
      * only blocks that installation (login, attestation, sessions); revocation
      * is terminal. Revoking the last non-revoked instance deactivates the
      * wallet - prefer [deactivateWallet] for that, which also clears local state.
+     *
+     * Any change away from `active` cuts off every bearer token issued before
+     * it, including this session's (the acting token survives only for the
+     * request that made the change, and may not mint new ones), so this
+     * re-logs in once afterwards - see [WalletState.LifecycleBlocked].
+     * Suspending *this* device's own instance therefore ends in
+     * `LifecycleBlocked(SUSPENDED)`, which is the truthful state; confirm
+     * with the user before calling it for [WalletInstance.isThisDevice].
      */
-    suspend fun setWalletInstanceStatus(instanceId: String, status: String, reason: String? = null): WalletInstance {
+    suspend fun setWalletInstanceStatus(
+        instanceId: String,
+        status: WalletInstanceStatus,
+        reason: String? = null,
+    ): WalletInstance {
         val client = apiClient ?: throw AuthException(NOT_LOGGED_IN)
-        return client.setWalletInstanceStatus(instanceId, status, reason)
+        val updated = client.setWalletInstanceStatus(instanceId, status, reason)
+        // Every status write records a cut-off, and the acting token's
+        // exemption from it does not reach POST /auth/token or an engine flow
+        // start - so this session is done either way. Re-login once instead of
+        // letting the next issuance or presentation discover it as a 401.
+        reloginAfterLifecycleChange()
+        return updated
     }
+
+    /**
+     * Deprecated string form of [setWalletInstanceStatus]. Kept for one
+     * release so callers built against SDK 0.16 keep compiling.
+     */
+    @Deprecated(
+        "Use the WalletInstanceStatus overload",
+        ReplaceWith("setWalletInstanceStatus(instanceId, WalletInstanceStatus.fromWire(status)!!, reason)"),
+    )
+    suspend fun setWalletInstanceStatus(instanceId: String, status: String, reason: String? = null): WalletInstance =
+        setWalletInstanceStatus(
+            instanceId,
+            WalletInstanceStatus.fromWire(status)
+                ?: throw IllegalArgumentException("Unknown wallet instance status: $status"),
+            reason,
+        )
 
     /**
      * Deactivate this wallet: revoke every wallet instance of the user
@@ -295,15 +353,159 @@ class SirosWallet private constructor(
      * wallet's private data and server-side credentials, and refuses every
      * passkey of the user at login with `WALLET_REVOKED`; a new enrollment is
      * required afterwards. The local cached account is forgotten and the
-     * wallet logged out, since the vault it decrypts no longer exists.
-     * @return how many instances the backend revoked
+     * wallet logged out, since the vault it decrypts no longer exists - in
+     * both outcomes, since the revocations stand even when the erasure
+     * cascade did not finish.
+     *
+     * Unlike [setWalletInstanceStatus] this does not re-login: there is
+     * nothing left to log in to.
+     *
+     * @return how many instances the backend revoked and whether it confirmed
+     *   the erasure ([DeactivationOutcome.complete]); an incomplete erasure
+     *   leaves residual server-side data for an administrator to clean up.
      */
-    suspend fun deactivateWallet(reason: String? = null): Int {
+    suspend fun deactivateWallet(reason: String? = null): DeactivationOutcome {
         val client = apiClient ?: throw AuthException(NOT_LOGGED_IN)
-        val revoked = client.revokeAllWalletInstances(reason)
-        Timber.i("Wallet deactivated: $revoked instance(s) revoked; forgetting local account")
+        val outcome = client.revokeAllWalletInstances(reason)
+        if (outcome.complete) {
+            Timber.i("Wallet deactivated: ${outcome.revoked} instance(s) revoked; forgetting local account")
+        } else {
+            Timber.w(
+                "Wallet deactivated with an unfinished erasure: ${outcome.revoked} instance(s) revoked, " +
+                    "residual server-side data must be cleaned up by an administrator; forgetting local account anyway"
+            )
+        }
         deleteAccount()
-        return revoked
+        return outcome
+    }
+
+    // ── Lifecycle refusals and the cut-off re-login (SID-AUTH-06) ───
+
+    /**
+     * True while the SDK's own single re-login (after a token cut-off or a
+     * lifecycle write) is running - the guard that makes it happen exactly
+     * once, so the 401s that re-login itself may provoke cannot start another.
+     */
+    @Volatile
+    private var reloginInProgress: Boolean = false
+
+    @Synchronized
+    private fun beginSelfDrivenRelogin(): Boolean {
+        if (reloginInProgress) return false
+        reloginInProgress = true
+        return true
+    }
+
+    @Synchronized
+    private fun endSelfDrivenRelogin() {
+        reloginInProgress = false
+    }
+
+    /**
+     * Drop everything the backend's lifecycle cut-off just invalidated - the
+     * cached tokens, the API client built on them and the engine WebSocket,
+     * which the backend re-checks at every flow start - and log in once.
+     * [login] itself routes the outcome: a lifecycle `403` to
+     * [WalletState.LifecycleBlocked], a success to [WalletState.Ready], and
+     * anything else to [WalletState.Error].
+     */
+    private suspend fun reloginAfterCutOff() {
+        engineStateJob?.cancel()
+        engineStateJob = null
+        engineSession?.disconnect()
+        engineSession = null
+        apiClient = null
+        authTokens.clear()
+        login(accountRegistry.activeAccountId ?: sessionStore.activeAccountId)
+    }
+
+    /** [reloginAfterCutOff] under the once-only guard, never throwing at the caller. */
+    private suspend fun reloginAfterLifecycleChange() {
+        if (!beginSelfDrivenRelogin()) {
+            Timber.d("Re-login already in progress — not starting another")
+            return
+        }
+        try {
+            reloginAfterCutOff()
+        } catch (e: Exception) {
+            // login() has already put the failure in the state; this call
+            // must not turn a lifecycle write that succeeded into a throw.
+            Timber.w(e, "Re-login after a wallet lifecycle change failed")
+        } finally {
+            endSelfDrivenRelogin()
+        }
+    }
+
+    /**
+     * The lifecycle refusal [error] (or one of its causes) reports, or null
+     * when it is not one. The AS carries the code as
+     * [AuthException.errorCode]; the causes are walked because login paths
+     * wrap failures in [WalletException].
+     */
+    private fun lifecycleRefusalOf(error: Throwable?): WalletLifecycleRefusal? {
+        var current = error
+        var depth = 0
+        while (current != null && depth++ < 8) {
+            val refusal = (current as? AuthException)?.let { WalletLifecycleRefusal.fromErrorCode(it.errorCode) }
+            if (refusal != null) return refusal
+            current = current.cause
+        }
+        return null
+    }
+
+    /** The server's user-facing explanation carried by [error], if any. */
+    private fun lifecycleMessageOf(error: Throwable?): String? {
+        var current = error
+        var depth = 0
+        while (current != null && depth++ < 8) {
+            (current as? AuthException)?.serverMessage?.let { return it }
+            current = current.cause
+        }
+        return null
+    }
+
+    /**
+     * Enter [WalletState.LifecycleBlocked]. A suspended instance keeps its
+     * cached account (it can be reactivated elsewhere, after which the same
+     * passkey logs in again); a revoked one forgets it, because its
+     * server-side data is erased and that passkey can never log in to this
+     * tenant again - leaving it on the login screen would only offer the user
+     * a door that is bricked shut.
+     */
+    private fun enterLifecycleBlocked(reason: WalletLifecycleRefusal, message: String?) {
+        Timber.w("Wallet lifecycle refusal: $reason — ${message ?: "(no message from the backend)"}")
+        when (reason) {
+            WalletLifecycleRefusal.REVOKED -> forgetRefusedAccount()
+            WalletLifecycleRefusal.SUSPENDED -> logout()
+        }
+        _state.value = WalletState.LifecycleBlocked(
+            reason = reason,
+            message = message,
+            cachedAccounts = accountRegistry.listLoginableAccounts(),
+        )
+        scope.launch { eventListener?.onWalletLifecycleBlocked(reason, message) }
+    }
+
+    /**
+     * Forget the account the refused login was for. After a failed login
+     * [AccountRegistry.activeAccountId] may already be null (nothing was
+     * established), while [SessionStore.activeAccountId] still names the
+     * account the attempt was scoped to - so fall back to it.
+     */
+    private fun forgetRefusedAccount() {
+        val accountId = accountRegistry.activeAccountId ?: sessionStore.activeAccountId
+        if (accountId != null) forgetAccount(accountId) else logout()
+    }
+
+    /**
+     * Route [error] into [WalletState.LifecycleBlocked] when it is a
+     * SID-AUTH-06 refusal. Returns true when it handled the error, so callers
+     * can leave their own error handling untouched for everything else.
+     */
+    private fun handleLifecycleRefusal(error: Throwable?): Boolean {
+        val reason = lifecycleRefusalOf(error) ?: return false
+        enterLifecycleBlocked(reason, lifecycleMessageOf(error))
+        return true
     }
 
     /** Set a listener for events that require user interaction (credential picker, etc.). */
@@ -562,9 +764,14 @@ class SirosWallet private constructor(
                 else -> newAsLogin(accountId)
             }
         } catch (e: SirosException) {
+            // A SID-AUTH-06 refusal is a state, not an error: this passkey's
+            // wallet instance is suspended or the wallet was deactivated, and
+            // retrying the same login changes nothing until someone else acts.
+            if (handleLifecycleRefusal(e)) return
             Timber.e(e, "Login failed")
             _state.value = WalletState.Error(e.message ?: "Login failed")
         } catch (e: Exception) {
+            if (handleLifecycleRefusal(e)) return
             Timber.e(e, "Login failed")
             _state.value = WalletState.Error(e.message ?: "Login failed")
             throw WalletException("Login failed", e)
@@ -1018,6 +1225,7 @@ class SirosWallet private constructor(
                 try {
                     authTokens.ensureBackendToken()
                 } catch (e: AuthException) {
+                    if (handleLifecycleRefusal(e)) return
                     Timber.i("Session cookie expired, need re-login")
                     sessionStore.clear()
                     apiClient = null
@@ -1049,9 +1257,11 @@ class SirosWallet private constructor(
                 Timber.i("Session resumed for user $userId (no private data)")
             }
         } catch (e: SirosException) {
+            if (handleLifecycleRefusal(e)) return
             Timber.e(e, "Session resume failed")
             _state.value = disconnectedState()
         } catch (e: Exception) {
+            if (handleLifecycleRefusal(e)) return
             Timber.e(e, "Session resume failed")
             _state.value = disconnectedState()
         }
@@ -1143,12 +1353,15 @@ class SirosWallet private constructor(
             Timber.e(e, "Keystore unlock failed: corrupt container")
             _state.value = WalletState.Error(e.message ?: "Keystore unlock failed")
         } catch (e: AuthException) {
+            if (handleLifecycleRefusal(e)) return
             Timber.e(e, "Keystore unlock failed: authentication error")
             _state.value = WalletState.Error(e.message ?: "Authentication failed")
         } catch (e: SirosException) {
+            if (handleLifecycleRefusal(e)) return
             Timber.e(e, "Keystore unlock failed")
             _state.value = WalletState.Error(e.message ?: "Keystore unlock failed")
         } catch (e: Exception) {
+            if (handleLifecycleRefusal(e)) return
             Timber.e(e, "Keystore unlock failed")
             _state.value = WalletState.Error(e.message ?: "Keystore unlock failed")
         }
@@ -1531,20 +1744,44 @@ class SirosWallet private constructor(
                     null
                 }
             }
-            val wia = client.generateWIA(
-                pop = pop,
-                challenge = challenge,
-                // draft-ietf-oauth-attestation-based-client-auth-10: "the sub
-                // claim MUST specify client_id value of the OAuth Client" -
-                // confirmed via a real geneva2026.mdoc.online conformance run
-                // that flagged sub=<instance jkt> as a FAIL.
-                clientId = clientAttestationClientId(),
-                nativeAttestation = nativeAttestation,
-                // Links this instance to the passkey it logs in with, so
-                // suspending or revoking the instance also refuses login
-                // with that passkey (SID-AUTH-06, go-wallet-backend#319).
-                credentialId = sessionStore.credentialId?.takeIf { it.isNotBlank() },
-            )
+            // draft-ietf-oauth-attestation-based-client-auth-10: "the sub
+            // claim MUST specify client_id value of the OAuth Client" -
+            // confirmed via a real geneva2026.mdoc.online conformance run
+            // that flagged sub=<instance jkt> as a FAIL.
+            val clientId = clientAttestationClientId()
+            // Links this instance to the passkey it logs in with, so
+            // suspending or revoking the instance also refuses login with
+            // that passkey (SID-AUTH-06, go-wallet-backend#319).
+            val linkedCredentialId = sessionStore.credentialId?.takeIf { it.isNotBlank() }
+            val wia = try {
+                client.generateWIA(
+                    pop = pop,
+                    challenge = challenge,
+                    clientId = clientId,
+                    nativeAttestation = nativeAttestation,
+                    credentialId = linkedCredentialId,
+                )
+            } catch (e: BackendApiException) {
+                // The passkey this session recorded is not one of the
+                // caller's own (a session store carried over from another
+                // account, a passkey deleted server-side). The first link
+                // recorded for an instance wins, so never guess a different
+                // id - drop the stale one and let the instance be attested
+                // without a passkey link rather than losing the attestation.
+                if (e.code != 403 || e.apiErrorCode() != ERROR_CREDENTIAL_NOT_OWNED || linkedCredentialId == null) throw e
+                Timber.w(
+                    "Backend refused the recorded passkey link (CREDENTIAL_NOT_OWNED) — " +
+                        "clearing it and retrying the attestation without it"
+                )
+                sessionStore.credentialId = null
+                client.generateWIA(
+                    pop = pop,
+                    challenge = challenge,
+                    clientId = clientId,
+                    nativeAttestation = nativeAttestation,
+                    credentialId = null,
+                )
+            }
             cachedWia = wia
             cachedWiaExpiresAt = CredentialUtils.parseJwtPayload(wia)
                 ?.get("exp")?.jsonPrimitive?.longOrNull ?: (now + 300)
@@ -1582,7 +1819,22 @@ class SirosWallet private constructor(
         val payload = CredentialUtils.parseJwtPayload(wia) ?: return null
         val source = payload["attestation_source"]?.jsonPrimitive?.contentOrNull
         if (source !in nativeAttestationSources) return null
-        return payload["cnf"]?.jsonObject?.get("jkt")?.jsonPrimitive?.contentOrNull
+        return instanceKeyThumbprint()
+    }
+
+    /**
+     * The JWK thumbprint of this installation's instance key - the id the
+     * backend registers this wallet instance under, and the value
+     * [currentWalletInstanceId] sends as `wallet_instance_id`. Read from the
+     * `cnf.jkt` of the WIA this session already holds rather than recomputed,
+     * so it is exactly the id the backend knows. Null when no unexpired WIA
+     * has been obtained yet. Exposed as [thisInstanceId].
+     */
+    private fun instanceKeyThumbprint(): String? {
+        val now = System.currentTimeMillis() / 1000
+        val wia = cachedWia?.takeIf { cachedWiaExpiresAt - now > 60 } ?: return null
+        return CredentialUtils.parseJwtPayload(wia)
+            ?.get("cnf")?.jsonObject?.get("jkt")?.jsonPrimitive?.contentOrNull
     }
 
     /**
@@ -3415,9 +3667,29 @@ class SirosWallet private constructor(
      */
     private fun handleReauthenticationRequired() {
         Timber.w("Re-authentication required — session/token refresh failed")
+        if (!beginSelfDrivenRelogin()) {
+            Timber.d("Re-login already in progress — ignoring repeat re-authentication signal")
+            return
+        }
         scope.launch {
-            eventListener?.onReauthenticationRequired()
-            logout()
+            try {
+                // The host hook stays: apps that drive their own prompt still
+                // get told, and it fires before the SDK's attempt so a host
+                // that routes to its login screen sees the same ordering as
+                // before this change.
+                eventListener?.onReauthenticationRequired()
+                // A cut-off (SID-AUTH-06) looks exactly like an expired
+                // session from here; the difference only shows in the login
+                // that follows, which is refused with WALLET_SUSPENDED /
+                // WALLET_REVOKED. Attempt it once - never in a loop - so the
+                // state machine converges without host code.
+                reloginAfterCutOff()
+            } catch (e: Exception) {
+                Timber.e(e, "Self-driven re-login after a session cut-off failed")
+                if (_state.value !is WalletState.LifecycleBlocked) logout()
+            } finally {
+                endSelfDrivenRelogin()
+            }
         }
     }
 

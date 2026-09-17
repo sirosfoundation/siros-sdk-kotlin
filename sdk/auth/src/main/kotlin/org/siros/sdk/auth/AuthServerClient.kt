@@ -285,10 +285,21 @@ class AuthServerClient(
                 // Carry the AS's stable error code (e.g. WALLET_SUSPENDED /
                 // WALLET_REVOKED from a SID-AUTH-06 login refusal) so callers
                 // can tell a lifecycle refusal from a plain 401/403.
-                val errorCode = runCatching {
-                    (json.parseToJsonElement(responseBody).jsonObject["error"] as? kotlinx.serialization.json.JsonPrimitive)?.content
-                }.getOrNull()?.takeIf { it.isNotBlank() } ?: "auth_failed"
-                throw AuthException("AS request failed: ${response.code} — $path", errorCode = errorCode, code = response.code)
+                val errorBody = runCatching { json.parseToJsonElement(responseBody).jsonObject }.getOrNull()
+                val errorCode = (errorBody?.get("error") as? kotlinx.serialization.json.JsonPrimitive)
+                    ?.content?.takeIf { it.isNotBlank() } ?: "auth_failed"
+                // The AS also sends a user-facing `message` - for a lifecycle
+                // refusal it is what tells a suspended wallet from a revoked
+                // one for the user - so carry it separately from the
+                // developer-facing diagnostic below.
+                val serverMessage = (errorBody?.get("message") as? kotlinx.serialization.json.JsonPrimitive)
+                    ?.content?.takeIf { it.isNotBlank() }
+                throw AuthException(
+                    "AS request failed: ${response.code} — $path",
+                    errorCode = errorCode,
+                    code = response.code,
+                    serverMessage = serverMessage,
+                )
             }
 
             Timber.d("AS response: ${response.code} — $path")

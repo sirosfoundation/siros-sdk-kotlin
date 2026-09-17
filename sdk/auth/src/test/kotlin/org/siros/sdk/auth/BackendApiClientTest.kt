@@ -399,7 +399,7 @@ class BackendApiClientTest {
         val client = newClient()
         client.setAppToken("t")
 
-        val result = client.setWalletInstanceStatus("jkt-1", WalletInstance.STATUS_REVOKED, "stolen")
+        val result = client.setWalletInstanceStatus("jkt-1", WalletInstanceStatus.REVOKED, "stolen")
 
         assertEquals("revoked", result.status)
         assertEquals("pk-1", result.credentialId)
@@ -412,7 +412,7 @@ class BackendApiClientTest {
         val client = newClient()
         client.setAppToken("t")
 
-        val result = client.setWalletInstanceStatus("jkt-1", WalletInstance.STATUS_SUSPENDED, reason = "lost phone")
+        val result = client.setWalletInstanceStatus("jkt-1", WalletInstanceStatus.SUSPENDED, reason = "lost phone")
 
         val request = server.takeRequest()
         assertEquals("PUT", request.method)
@@ -441,17 +441,160 @@ class BackendApiClientTest {
         val client = newClient()
         client.setAppToken("t")
 
-        val revoked = client.revokeAllWalletInstances("device stolen")
+        val outcome = client.revokeAllWalletInstances("device stolen")
 
         val request = server.takeRequest()
         assertEquals("POST", request.method)
         assertEquals("/user/session/instances/revoke-all", request.path)
         assertTrue(request.body.readUtf8().contains("device stolen"))
-        assertEquals(2, revoked)
+        assertEquals(2, outcome.revoked)
+        assertTrue(outcome.complete)
     }
+
+    // ---- 409 ERASURE_INCOMPLETE retry protocol (SID-AUTH-06) ----
+
+    /**
+     * The backend records the revocations before it erases, so a 409 means
+     * "the status stands, re-run the erasure" - the client repeats the
+     * identical request until it gets a 200. The repeat answers
+     * `{"revoked": 0}` (nothing left to revoke), so the count reported to the
+     * caller must be the one from the first answer, not the last.
+     */
+    @Test
+    fun revoke_all_repeats_the_request_until_the_erasure_completes() = runBlocking {
+        server.enqueue(erasureIncomplete("""{"error":"ERASURE_INCOMPLETE","revoked":2}"""))
+        server.enqueue(MockResponse().setBody("""{"revoked":0}"""))
+        val client = newClient()
+        client.setAppToken("t")
+
+        val outcome = client.revokeAllWalletInstances("device stolen")
+
+        assertEquals(2, server.requestCount)
+        val first = server.takeRequest()
+        val second = server.takeRequest()
+        // "repeating the identical request re-runs the erasure" - same body.
+        assertEquals(first.path, second.path)
+        assertEquals(first.body.readUtf8(), second.body.readUtf8())
+        assertEquals(2, outcome.revoked)
+        assertTrue(outcome.complete)
+    }
+
+    /**
+     * Five attempts, then stop: the wallet is deactivated either way, so the
+     * caller is told the erasure is unfinished (residual data for an
+     * administrator) rather than being handed an exception for a change that
+     * did take effect.
+     */
+    @Test
+    fun revoke_all_reports_incomplete_after_the_retry_budget() = runBlocking {
+        repeat(5) { server.enqueue(erasureIncomplete("""{"error":"ERASURE_INCOMPLETE","revoked":2}""")) }
+        val client = newClient()
+        client.setAppToken("t")
+
+        val outcome = client.revokeAllWalletInstances()
+
+        assertEquals(5, server.requestCount)
+        assertEquals(2, outcome.revoked)
+        assertEquals(false, outcome.complete)
+    }
+
+    /**
+     * The acting token's exemption from the lifecycle cut-off ends with the
+     * key material. A 401 after a 409 is therefore the erasure having reached
+     * the keys - the wallet is deactivated, which is exactly "complete".
+     */
+    @Test
+    fun revoke_all_treats_a_401_after_the_409_as_a_completed_erasure() = runBlocking {
+        server.enqueue(erasureIncomplete("""{"error":"ERASURE_INCOMPLETE","revoked":3}"""))
+        server.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":"unauthorized"}"""))
+        val client = newClient()
+        client.setAppToken("t")
+
+        val outcome = client.revokeAllWalletInstances()
+
+        assertEquals(2, server.requestCount)
+        assertEquals(3, outcome.revoked)
+        assertTrue(outcome.complete)
+    }
+
+    /** A 401 that was never preceded by a 409 is an ordinary auth failure. */
+    @Test
+    fun revoke_all_still_fails_on_a_plain_401() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":"unauthorized"}"""))
+        val client = newClient()
+        client.setAppToken("t")
+
+        try {
+            client.revokeAllWalletInstances()
+            fail("a 401 with no preceding ERASURE_INCOMPLETE must not read as a completed erasure")
+        } catch (e: BackendApiException) {
+            assertEquals(401, e.code)
+        }
+        assertEquals(1, server.requestCount)
+    }
+
+    /** A 409 that is not ERASURE_INCOMPLETE (invalid transition) is not retried. */
+    @Test
+    fun set_wallet_instance_status_does_not_retry_an_invalid_transition() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"invalid status transition"}"""))
+        val client = newClient()
+        client.setAppToken("t")
+
+        try {
+            client.setWalletInstanceStatus("jkt-1", WalletInstanceStatus.ACTIVE)
+            fail("an invalid transition must surface, not be retried")
+        } catch (e: BackendApiException) {
+            assertEquals(409, e.code)
+        }
+        assertEquals(1, server.requestCount)
+    }
+
+    /**
+     * Revoking the last instance runs the same erasure cascade, so the status
+     * write retries on the same budget and reports the status that was
+     * recorded even when the cascade never finished.
+     */
+    @Test
+    fun set_wallet_instance_status_retries_the_erasure_and_keeps_the_recorded_status() = runBlocking {
+        repeat(5) {
+            server.enqueue(erasureIncomplete("""{"error":"ERASURE_INCOMPLETE","id":"jkt-1","status":"revoked"}"""))
+        }
+        val client = newClient()
+        client.setAppToken("t")
+
+        val result = client.setWalletInstanceStatus("jkt-1", WalletInstanceStatus.REVOKED, "stolen")
+
+        assertEquals(5, server.requestCount)
+        assertEquals("jkt-1", result.id)
+        assertEquals("revoked", result.status)
+        assertEquals(WalletInstanceStatus.REVOKED, result.statusEnum)
+    }
+
+    @Test
+    fun deprecated_string_status_rejects_a_value_the_backend_would_refuse() = runBlocking {
+        val client = newClient()
+        client.setAppToken("t")
+        try {
+            @Suppress("DEPRECATION")
+            client.setWalletInstanceStatus("jkt-1", "disabled")
+            fail("an unknown status must be rejected locally, not sent")
+        } catch (e: IllegalArgumentException) {
+            assertTrue(e.message!!.contains("disabled"))
+        }
+        assertEquals(0, server.requestCount)
+    }
+
+    private fun erasureIncomplete(body: String) =
+        MockResponse().setResponseCode(409).setBody(body)
 
     private fun newClient(): BackendApiClient {
         val baseUrl = server.url("/").toString().trimEnd('/')
-        return BackendApiClient(baseUrl = baseUrl, tenantId = "default")
+        // No waiting between erasure retries in tests; the production default
+        // is 1 s → 8 s (see BackendApiClient.erasureRetryDelaysMs).
+        return BackendApiClient(
+            baseUrl = baseUrl,
+            tenantId = "default",
+            erasureRetryDelaysMs = listOf(0, 0, 0, 0),
+        )
     }
 }

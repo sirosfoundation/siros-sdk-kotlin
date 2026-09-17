@@ -156,4 +156,20 @@ class AuthTokensTest {
 
         assertFalse(rejected)
     }
+
+    /**
+     * Pins the backend token's Token Access Control string against what the
+     * wallet instance lifecycle endpoints require (SID-AUTH-06,
+     * go-wallet-backend#319): `l` to list instances, `w` to suspend or
+     * reactivate one, `d` to revoke one or to deactivate the wallet. The SDK
+     * mints `rwlid` and so needs no new token kind - this test is what keeps
+     * a future narrowing of the TAC from silently breaking the Devices screen.
+     */
+    @Test
+    fun backend_token_tac_covers_the_wallet_instance_lifecycle_endpoints() {
+        val tac = AuthTokens.MANIFEST.getValue(AuthTokens.TOKEN_BACKEND).tac
+        assertTrue("list instances needs 'l' in $tac", tac.contains("l"))
+        assertTrue("suspend/reactivate needs 'w' in $tac", tac.contains("w"))
+        assertTrue("revoke and revoke-all need 'd' in $tac", tac.contains("d"))
+    }
 }
