@@ -5,6 +5,8 @@ import android.app.Activity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -419,6 +421,15 @@ class SirosWallet private constructor(
     private var reloginDoneForGeneration: Boolean = false
 
     /**
+     * Set by [destroy]. The state is left untouched there (a destroyed wallet
+     * is not a logged-out one), so without this a re-authentication signal
+     * from a coroutine still unwinding could pass the guard and log back in
+     * after the host tore the wallet down.
+     */
+    @Volatile
+    private var isDestroyed: Boolean = false
+
+    /**
      * Claims the right to run the SDK's own re-login, at most once per
      * session. Refuses when one is already running, when one has already been
      * run for this session generation (late 401s from requests issued before
@@ -431,6 +442,7 @@ class SirosWallet private constructor(
      */
     @Synchronized
     private fun beginSelfDrivenRelogin(): Int? {
+        if (isDestroyed) return null
         if (reloginInProgress) return null
         if (reloginDoneForGeneration) return null
         if (!hasReplaceableSession()) return null
@@ -443,8 +455,14 @@ class SirosWallet private constructor(
     private fun hasReplaceableSession(): Boolean = when (_state.value) {
         is WalletState.Ready,
         is WalletState.FlowActive,
-        is WalletState.KeystoreLocked,
-        is WalletState.Connecting -> true
+        is WalletState.KeystoreLocked -> true
+        // Deliberately NOT Connecting: that is also where the initial [login]
+        // and [resumeSession] sit before their own session setup finishes, and
+        // a 401 from /auth/token fires onSessionRejected immediately. Treating
+        // it as replaceable would let a second WebAuthn ceremony start
+        // underneath the first and race its state, its API client and its
+        // keystore. There is no session to replace until one is established.
+        is WalletState.Connecting,
         is WalletState.Disconnected,
         is WalletState.Error,
         is WalletState.LifecycleBlocked -> false
@@ -510,6 +528,16 @@ class SirosWallet private constructor(
             return
         }
         login(accountRegistry.activeAccountId ?: sessionStore.activeAccountId)
+        // The check above cannot be atomic with the call - [login] is a long
+        // suspending operation and [logout]/[destroy] are synchronous and can
+        // land anywhere inside it. So undo rather than prevent: a session
+        // established after the user ended the one it was replacing is torn
+        // down again here, which is the outcome they asked for.
+        if ((sessionGeneration != generation + 1 || isDestroyed) && _state.value is WalletState.Ready) {
+            Timber.i("Self-driven re-login undone: the session it replaced was ended while it ran")
+            endSessionLocally()
+            _state.value = disconnectedState()
+        }
     }
 
     /** [reloginAfterCutOff] under the once-only guard, never throwing at the caller. */
@@ -1540,7 +1568,10 @@ class SirosWallet private constructor(
     fun destroy() {
         // Same reason as logout()'s: a self-driven re-login still suspended in
         // the old session's teardown must not log back in after the host has
-        // torn this wallet down.
+        // torn this wallet down. The flag is what stops a *later* signal - the
+        // state is deliberately left as it was (a destroyed wallet is not a
+        // logged-out one), so it would otherwise still look replaceable.
+        isDestroyed = true
         bumpSessionGeneration()
         activity.applicationContext.unregisterComponentCallbacks(memoryPressureCallbacks)
         zkPresentation.releaseProvers()
@@ -1846,10 +1877,25 @@ class SirosWallet private constructor(
      */
     private suspend fun ensureInstanceKeyId(): String {
         sessionStore.instanceKeyId?.let { return it }
-        val keyId = keystore.generateKey("ES256")
-        sessionStore.instanceKeyId = keyId
-        return keyId
+        // First use has to be serialised. Two callers arriving together - an
+        // engine `request_attestation` and a Devices listing, say - would
+        // otherwise each generate an ES256 key and each persist it, and
+        // whichever lost the race would already have published a WIA for a key
+        // the store no longer names. The instance id the backend knows would
+        // then disagree with the one this wallet proves, breaking later PoPs
+        // and [WalletInstance.isThisDevice].
+        return instanceKeyMutex.withLock {
+            // Re-check: a caller that was waiting here may have persisted one.
+            sessionStore.instanceKeyId ?: run {
+                val keyId = keystore.generateKey("ES256")
+                sessionStore.instanceKeyId = keyId
+                keyId
+            }
+        }
     }
+
+    /** Serialises first-use instance-key creation; see [ensureInstanceKeyId]. */
+    private val instanceKeyMutex = Mutex()
 
     /**
      * Obtain (fetching + caching, refreshing before expiry) a Wallet Instance
@@ -1868,6 +1914,9 @@ class SirosWallet private constructor(
         cachedWia?.let { wia -> if (cachedWiaExpiresAt - now > 60) return wia }
         return try {
             val client = apiClient ?: return null
+            // The session this attestation is being fetched for; see where it
+            // is published below.
+            val generation = sessionGeneration
             val keyId = ensureInstanceKeyId()
             val challengeResponse = client.requestWIAChallenge()
             val challenge = challengeResponse["challenge"]?.jsonPrimitive?.contentOrNull
@@ -1949,9 +1998,18 @@ class SirosWallet private constructor(
                     credentialId = null,
                 )
             }
-            cachedWia = wia
-            cachedWiaExpiresAt = CredentialUtils.parseJwtPayload(wia)
-                ?.get("exp")?.jsonPrimitive?.longOrNull ?: (now + 300)
+            // Only publish a WIA that still belongs to the session that asked
+            // for it. This function suspends several times, and a logout,
+            // account switch or new login landing in that window resets the
+            // cache; storing afterwards would make [thisInstanceId] and
+            // currentWalletInstanceId() answer with the PREVIOUS account's
+            // thumbprint for the new session. The caller still gets its own
+            // result - it is only the cache that is refused.
+            if (sessionGeneration == generation) {
+                cachedWia = wia
+                cachedWiaExpiresAt = CredentialUtils.parseJwtPayload(wia)
+                    ?.get("exp")?.jsonPrimitive?.longOrNull ?: (now + 300)
+            }
             wia
         } catch (e: Exception) {
             Timber.w(e, "Failed to obtain Wallet Instance Attestation")
