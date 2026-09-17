@@ -247,6 +247,21 @@ class AuthServerClient(
     /**
      * End the current session.
      */
+    /**
+     * Drop every cached access token without touching the server session.
+     *
+     * [logout] clears this cache too, but it ends the session first, so it is
+     * the wrong tool when the session must survive: after a wallet lifecycle
+     * cut-off the SDK re-logs in, and a token minted before the cut-off is
+     * refused with 401 however fresh it looks. Clearing here keeps the next
+     * [requestAccessToken] from serving that stale token out of cache.
+     */
+    suspend fun clearTokenCache() {
+        pendingTokenMutex.withLock {
+            pendingTokenRequests.clear()
+        }
+    }
+
     suspend fun logout(): Unit = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url("$baseUrl/auth/session")
