@@ -5,6 +5,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
+import org.siros.sdk.credentials.diip.DiipProfile
 import org.siros.sdk.credentials.CredentialStore
 import org.siros.sdk.credentials.ZkCircuitClient
 import org.siros.sdk.keystore.KeystoreManager
@@ -135,6 +136,22 @@ data class WalletConfig(
      * both issuable and presentable.
      */
     val bbsCredentialTypes: Set<String> = emptySet(),
+    /**
+     * The DIIP profile version this wallet targets - see [DiipProfile].
+     *
+     * Defaults to the newest this SDK implements. Each version is additive
+     * over the one before, so the default does not drop support for an
+     * ecosystem still on an older release; pin an older one only when a
+     * deployment needs the wire details of that release exactly.
+     */
+    val diipProfile: DiipProfile = DiipProfile.LATEST,
+    /**
+     * Leeway, in seconds, applied when checking a credential's validity
+     * window and a Status List Token's own lifetime - so a credential is not
+     * shown as expired because of a few seconds of clock skew. Matches the
+     * tolerance wallet-frontend applies to signature verification.
+     */
+    val clockToleranceSeconds: Long = 60,
     /**
      * PEM-encoded RICAL (Reader Identity CA List, ISO/IEC 18013-5 second
      * edition Annex F) root certificate(s) for [SirosWallet.evaluateReaderTrust]'s
