@@ -11,32 +11,44 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import org.siros.sdk.credentials.diip.DidRelationship
-import org.siros.sdk.credentials.diip.resolveDidJwk
+import org.siros.sdk.credentials.interop.DidRelationship
+import org.siros.sdk.credentials.interop.HolderBinding
+import org.siros.sdk.credentials.interop.InteropProfile
+import org.siros.sdk.credentials.interop.resolveDidJwk
 import java.util.Base64
 
 /**
- * The DIIP holder-binding half of the keystore: `did:jwk` key naming, the
- * `jwt` proof shape, and looking a key up by whichever identifier a
- * credential happens to name it with.
+ * The holder-binding half of the keystore, where HAIP and DIIP part company:
+ * `did:jwk` key naming, the two `jwt` proof shapes, and looking a key up by
+ * whichever identifier a credential happens to name it with.
  */
-class DiipHolderBindingTest {
+class HolderBindingTest {
 
     private val prfOutput = ByteArray(32) { it.toByte() }
     private val hkdfSalt = ByteArray(32) { (it + 0x10).toByte() }
     private val hkdfInfo = "SIROS Wallet PRF".toByteArray(Charsets.UTF_8)
 
-    private suspend fun unlocked(version: DidKeyVersion = DidKeyVersion.JWK): JweKeystore =
-        JweKeystore(didKeyVersion = version).also { it.unlock(prfOutput, ByteArray(0), hkdfSalt, hkdfInfo) }
+    private suspend fun unlocked(profile: InteropProfile = InteropProfile.DIIP): JweKeystore =
+        JweKeystore(profile = profile).also { it.unlock(prfOutput, ByteArray(0), hkdfSalt, hkdfInfo) }
 
     // ── key naming ──────────────────────────────────────────────────
 
     @Test
-    fun `a wallet is did jwk out of the box`() = runTest {
+    fun `each profile names keys the way its holder binding needs`() {
+        assertEquals(DidKeyVersion.JWK, DidKeyVersion.forProfile(InteropProfile.DIIP))
+        assertEquals(DidKeyVersion.P256_PUB, DidKeyVersion.forProfile(InteropProfile.HAIP))
         assertEquals(DidKeyVersion.JWK, DidKeyVersion.fromValue(null))
-        assertEquals(DidKeyVersion.JWK, DidKeyVersion.fromValue("something-unknown"))
         assertEquals(DidKeyVersion.P256_PUB, DidKeyVersion.fromValue("p256-pub"))
         assertEquals(DidKeyVersion.JWK_JCS_PUB, DidKeyVersion.fromValue("jwk_jcs-pub"))
+    }
+
+    @Test
+    fun `a wallet speaks HAIP unless told otherwise`() {
+        // Adding DIIP support must not change the proof shape every existing
+        // SIROS ID issuer already accepts.
+        assertEquals(InteropProfile.HAIP, InteropProfile.DEFAULT)
+        assertEquals(HolderBinding.EMBEDDED_JWK, InteropProfile.HAIP.holderBinding)
+        assertEquals(HolderBinding.DID_JWK, InteropProfile.DIIP.holderBinding)
     }
 
     @Test
@@ -52,8 +64,8 @@ class DiipHolderBindingTest {
     }
 
     @Test
-    fun `the legacy did key versions keep naming keys by thumbprint`() = runTest {
-        val keystore = unlocked(DidKeyVersion.P256_PUB)
+    fun `a HAIP wallet keeps naming keys by thumbprint`() = runTest {
+        val keystore = unlocked(InteropProfile.HAIP)
         val kid = keystore.generateKey()
         assertFalse(kid.startsWith("did:"))
     }
@@ -64,9 +76,9 @@ class DiipHolderBindingTest {
         val kid = keystore.generateKey()
         val container = keystore.exportEncryptedContainer()
 
-        // A wallet reconfigured for a legacy version must not re-identify a
+        // A wallet reconfigured for the other profile must not re-identify a
         // key that credentials are already bound to.
-        val reloaded = JweKeystore(didKeyVersion = DidKeyVersion.P256_PUB)
+        val reloaded = JweKeystore(profile = InteropProfile.HAIP)
         reloaded.unlock(prfOutput, container, hkdfSalt, hkdfInfo)
         assertEquals(listOf(kid), reloaded.listKeys().map { it.keyId })
         assertEquals(kid.substringBefore('#'), reloaded.didForKid(kid))
@@ -102,14 +114,80 @@ class DiipHolderBindingTest {
     }
 
     @Test
-    fun `without a DID the proof still carries the key in the header`() = runTest {
-        // A non-DIIP issuer has nothing to resolve, so the legacy form is the
+    fun `a HAIP proof carries the key in the header`() = runTest {
+        // A HAIP issuer does not resolve DIDs, so the embedded form is the
         // only one it can verify.
-        val keystore = unlocked(DidKeyVersion.P256_PUB)
+        val keystore = unlocked(InteropProfile.HAIP)
         keystore.generateKey()
         val proof = SignedJWT.parse(keystore.generateProof("https://issuer.example", "nonce"))
         assertNotNull(proof.header.jwk)
         assertNull(proof.jwtClaimsSet.issuer)
+    }
+
+    @Test
+    fun `one wallet sends each issuer the proof shape it can verify`() = runTest {
+        // The whole point of the per-issuance choice: a DIIP-configured wallet
+        // must still be able to talk to a HAIP issuer, and the reverse.
+        val diipWallet = unlocked(InteropProfile.DIIP)
+        val kid = diipWallet.generateKey()
+
+        val toHaipIssuer = SignedJWT.parse(
+            diipWallet.generateProof("https://haip.example", "nonce", holderBinding = HolderBinding.EMBEDDED_JWK),
+        )
+        assertNotNull("a HAIP issuer gets the key it can verify", toHaipIssuer.header.jwk)
+        assertNull(toHaipIssuer.header.keyID)
+
+        val toDiipIssuer = SignedJWT.parse(
+            diipWallet.generateProof("https://diip.example", "nonce", holderBinding = HolderBinding.DID_JWK),
+        )
+        assertEquals(kid, toDiipIssuer.header.keyID)
+        assertNull(toDiipIssuer.header.jwk)
+    }
+
+    @Test
+    fun `a HAIP wallet cannot be forced into a DID proof it has no DID for`() = runTest {
+        // Asking for DID_JWK when the key was never named by one must not
+        // emit a `kid` that resolves to nothing - it falls back to the form
+        // that is actually verifiable.
+        val keystore = unlocked(InteropProfile.HAIP)
+        keystore.generateKey()
+        val proof = SignedJWT.parse(
+            keystore.generateProof("https://issuer.example", "nonce", holderBinding = HolderBinding.DID_JWK),
+        )
+        assertNotNull(proof.header.jwk)
+        assertNull(proof.jwtClaimsSet.issuer)
+    }
+
+    @Test
+    fun `one wallet presents a HAIP credential and a DIIP credential correctly`() = runTest {
+        // Presentation is where the two profiles have to coexist without any
+        // configuration at all: the credential's own `cnf` says how its key is
+        // named, so the same wallet answers both without being told which is
+        // which.
+        val keystore = unlocked(InteropProfile.DIIP)
+        val diipKid = keystore.generateKey()
+        val haipKid = keystore.generateKey()
+        val haipJwk = ECKey.parse(keystore.exportKeypairJwks()[haipKid]!!).toPublicJWK()
+
+        val diipCredential = sdJwt("""{"vct":"urn:example:diip","cnf":{"kid":"$diipKid"}}""")
+        val haipCredential = sdJwt("""{"vct":"urn:example:haip","cnf":{"jwk":${haipJwk.toJSONString()}}}""")
+
+        val diipKb = SignedJWT.parse(
+            keystore.signVpToken(diipCredential, null, "nonce", "https://verifier.example")
+                .substringAfterLast('~'),
+        )
+        assertEquals(diipKid, diipKb.header.keyID)
+        assertNull(diipKb.header.jwk)
+
+        val haipKb = SignedJWT.parse(
+            keystore.signVpToken(haipCredential, null, "nonce", "https://verifier.example")
+                .substringAfterLast('~'),
+        )
+        assertNotNull(haipKb.header.jwk)
+        assertTrue(
+            "the HAIP credential is signed by the key it is bound to, not the DIIP one",
+            haipKb.verify(com.nimbusds.jose.crypto.ECDSAVerifier(haipJwk)),
+        )
     }
 
     // ── presenting what the wallet already holds ────────────────────

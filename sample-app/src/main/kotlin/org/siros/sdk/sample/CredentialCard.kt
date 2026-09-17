@@ -86,7 +86,7 @@ import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.CredentialWithInstances
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.credentials.SvgTemplateRenderer
-import org.siros.sdk.credentials.diip.CredentialStatus
+import org.siros.sdk.credentials.interop.CredentialStatus
 import timber.log.Timber
 import kotlin.math.roundToInt
 

@@ -1,6 +1,6 @@
 public final class org/siros/sdk/flow/FlowClient : org/siros/sdk/transport/CredentialNotifier {
-	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpSession;Lorg/siros/sdk/keystore/KeystoreManager;Lorg/siros/sdk/auth/BackendApiClient;ZLkotlinx/serialization/json/Json;)V
-	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/WmpSession;Lorg/siros/sdk/keystore/KeystoreManager;Lorg/siros/sdk/auth/BackendApiClient;ZLkotlinx/serialization/json/Json;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpSession;Lorg/siros/sdk/keystore/KeystoreManager;Lorg/siros/sdk/auth/BackendApiClient;ZLkotlinx/serialization/json/Json;Lkotlin/jvm/functions/Function1;)V
+	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/WmpSession;Lorg/siros/sdk/keystore/KeystoreManager;Lorg/siros/sdk/auth/BackendApiClient;ZLkotlinx/serialization/json/Json;Lkotlin/jvm/functions/Function1;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun events ()Lkotlinx/coroutines/flow/Flow;
 	public final fun respondToMatchRequest (Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/flow/MatchResponse;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun respondToSignRequest (Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/flow/SignResponse;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;

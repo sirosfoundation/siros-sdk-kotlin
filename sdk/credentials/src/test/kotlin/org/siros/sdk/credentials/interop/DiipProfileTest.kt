@@ -1,4 +1,4 @@
-package org.siros.sdk.credentials.diip
+package org.siros.sdk.credentials.interop
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

@@ -14,6 +14,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.siros.sdk.auth.BackendApiClient
+import org.siros.sdk.credentials.interop.HolderBinding
 import org.siros.sdk.keystore.KeystoreManager
 import org.siros.sdk.transport.CredentialNotifier
 import org.siros.sdk.transport.wmp.WmpMeta
@@ -38,6 +39,15 @@ class FlowClient(
     private val apiClient: BackendApiClient? = null,
     private val autoSign: Boolean = true,
     private val json: Json = Json { ignoreUnknownKeys = true },
+    /**
+     * How the Holder's key should be named in an OID4VCI proof to a given
+     * credential issuer - the one thing HAIP and DIIP genuinely disagree
+     * about, and a per-issuance choice. Null (the default) leaves it to the
+     * keystore's own profile, which is right whenever a host has no
+     * per-issuer configuration; `SirosWallet` supplies one that consults
+     * `WalletConfig.issuerInteropProfiles`.
+     */
+    private val holderBindingFor: ((issuer: String?) -> HolderBinding)? = null,
 ) : CredentialNotifier {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val _events = Channel<FlowEvent>(Channel.BUFFERED)
@@ -215,6 +225,10 @@ class FlowClient(
                             val proof = keystore.generateProof(
                                 audience = signParams.audience ?: "",
                                 nonce = signParams.nonce ?: "",
+                                // `audience` is the credential issuer, which
+                                // is what decides the proof's holder-binding
+                                // shape.
+                                holderBinding = holderBindingFor?.invoke(signParams.audience),
                             )
                             SignResponse(proofJwt = proof, proofType = "jwt")
                         }

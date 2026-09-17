@@ -5,7 +5,8 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
-import org.siros.sdk.credentials.diip.DiipProfile
+import org.siros.sdk.credentials.interop.DiipProfile
+import org.siros.sdk.credentials.interop.InteropProfile
 import org.siros.sdk.credentials.CredentialStore
 import org.siros.sdk.credentials.ZkCircuitClient
 import org.siros.sdk.keystore.KeystoreManager
@@ -137,7 +138,27 @@ data class WalletConfig(
      */
     val bbsCredentialTypes: Set<String> = emptySet(),
     /**
-     * The DIIP profile version this wallet targets - see [DiipProfile].
+     * The interoperability profile this wallet speaks when nothing more
+     * specific is known - see [InteropProfile]. Both HAIP and DIIP are
+     * implemented and a wallet holds credentials from both; this decides only
+     * which shape an OID4VCI proof takes when the Issuer has not been
+     * classified. Presentation always follows the credential's own `cnf`, so
+     * this never affects a credential the wallet already holds.
+     */
+    val interopProfile: InteropProfile = InteropProfile.DEFAULT,
+    /**
+     * Per-Issuer overrides of [interopProfile], keyed by credential issuer
+     * identifier (the `credential_issuer` URL, matched by prefix so a path
+     * under it counts).
+     *
+     * A wallet talking to both a HAIP and a DIIP Issuer needs this: OID4VCI
+     * allows only one of `jwk` and `kid` in a proof header, so the choice is
+     * per issuance and there is no shape both Issuers accept.
+     */
+    val issuerInteropProfiles: Map<String, InteropProfile> = emptyMap(),
+    /**
+     * The DIIP profile version this wallet targets when it speaks
+     * [InteropProfile.DIIP] - see [DiipProfile].
      *
      * Defaults to the newest this SDK implements. Each version is additive
      * over the one before, so the default does not drop support for an

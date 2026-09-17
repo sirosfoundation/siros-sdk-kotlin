@@ -1,5 +1,5 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
-package org.siros.sdk.credentials.diip
+package org.siros.sdk.credentials.interop
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -299,11 +299,18 @@ fun parseDidDocument(root: JsonObject): DidDocument {
     fun relationship(name: String): List<String> =
         (root[name] as? JsonArray)?.mapNotNull { register(it) } ?: emptyList()
 
+    // Both relationships are resolved BEFORE the document is built: an
+    // inlined verification method is registered as a side effect of reading
+    // the relationship that carries it, so `methods` must not be read until
+    // both have run.
+    val authentication = relationship("authentication")
+    val assertionMethod = relationship("assertionMethod")
+
     return DidDocument(
         id = id,
-        verificationMethods = methods,
-        authentication = relationship("authentication"),
-        assertionMethod = relationship("assertionMethod"),
+        verificationMethods = methods.toMap(),
+        authentication = authentication,
+        assertionMethod = assertionMethod,
     )
 }
 
@@ -313,11 +320,18 @@ fun parseDidDocument(root: JsonObject): DidDocument {
  *
  * `d` and the other private members must never reach a DID; `ext` and
  * `key_ops` are WebCrypto bookkeeping rather than part of the key.
+ *
+ * The order is lexicographic, which is not an arbitrary choice: it is both
+ * RFC 7638's canonicalization and what wallet-frontend ends up emitting (it
+ * stringifies a WebCrypto `exportKey("jwk")` result, which comes back
+ * alphabetically ordered, with `ext`/`key_ops` destructured away). The same
+ * key has to produce the same DID on every client that reads the shared
+ * `privatedata` container, so this has to match rather than merely be stable.
  */
 internal fun canonicalPublicJwk(jwk: JsonObject): JsonObject {
-    val order = listOf("kty", "crv", "x", "y", "e", "n", "alg", "use")
+    val identifying = setOf("kty", "crv", "x", "y", "e", "n", "alg", "use")
     return buildJsonObject {
-        for (member in order) {
+        for (member in jwk.keys.filter { it in identifying }.sorted()) {
             jwk[member]?.let { put(member, it) }
         }
     }

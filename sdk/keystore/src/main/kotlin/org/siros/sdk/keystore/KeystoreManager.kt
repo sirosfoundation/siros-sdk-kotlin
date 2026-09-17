@@ -1,5 +1,7 @@
 package org.siros.sdk.keystore
 
+import org.siros.sdk.credentials.interop.HolderBinding
+
 /**
  * Manages encrypted credential key storage.
  *
@@ -56,11 +58,26 @@ interface KeystoreManager {
 
     /**
      * Generate a proof JWT for credential issuance (c_nonce binding).
+     *
      * @param audience the credential issuer URL
      * @param nonce the c_nonce value from the issuer
+     * @param holderBinding how to name the Holder's key - see
+     *   [HolderBinding]. This is the one place HAIP and DIIP genuinely
+     *   disagree, and OID4VCI allows only one of `jwk` and `kid` in a proof
+     *   header, so it has to be decided per issuance: an Issuer that does not
+     *   resolve DIDs cannot verify a DIIP-shaped proof, and a DIIP
+     *   conformance suite will not accept a HAIP-shaped one. Null (the
+     *   default) uses whatever profile this keystore was built for, which is
+     *   the right answer whenever the caller has nothing more specific to go
+     *   on.
      * @return the signed proof JWT
      */
-    suspend fun generateProof(audience: String, nonce: String, freshKey: Boolean = false): String
+    suspend fun generateProof(
+        audience: String,
+        nonce: String,
+        freshKey: Boolean = false,
+        holderBinding: HolderBinding? = null,
+    ): String
 
     /**
      * Sign a verifiable presentation for OID4VP.

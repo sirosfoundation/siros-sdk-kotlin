@@ -1,4 +1,4 @@
-package org.siros.sdk.credentials.diip
+package org.siros.sdk.credentials.interop
 
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
