@@ -116,17 +116,30 @@ class VctmFetcher(
      * of the parsed form - which would differ in key order and whitespace and
      * hash to something else entirely.
      */
+    /**
+     * @param expectedIntegrity the `vct#integrity` an issued credential pinned,
+     *        when there is one. Resolution is then directed by it rather than
+     *        merely checked against it afterwards: a cached document that does
+     *        not hash to it is not used, and each source is tried until one
+     *        produces the document the issuer actually signed over.
+     */
     suspend fun fetchDocument(
         issuerUrl: String,
         scope: String,
         vct: String? = null,
         registryUrl: String? = null,
-    ): VctmDocument? = cached.fetch(listOf(issuerUrl, scope, vct, registryUrl)) {
+        expectedIntegrity: String? = null,
+    ): VctmDocument? = cached.fetch(
+        keyParts = listOf(issuerUrl, scope, vct, registryUrl),
+        accept = expectedIntegrity?.let { expected ->
+            { doc: VctmDocument -> Integrity.matches(doc.raw.toByteArray(Charsets.UTF_8), expected) }
+        },
+    ) {
         // Only the network hop needs IO; cache reads that answer without it
         // (the common case after the first launch) stay on the caller's
         // dispatcher, and a background revalidation launched by the cache
         // layer picks up IO here too rather than needing its own.
-        withContext(Dispatchers.IO) { fetchUncached(issuerUrl, scope, vct, registryUrl) }
+        withContext(Dispatchers.IO) { fetchUncached(issuerUrl, scope, vct, registryUrl, expectedIntegrity) }
     }
 
     /**
@@ -139,30 +152,39 @@ class VctmFetcher(
         scope: String,
         vct: String?,
         registryUrl: String?,
+        expectedIntegrity: String? = null,
     ): String? {
+        // With an expectation, a source that answers with the wrong document is
+        // no better than one that does not answer: keep going rather than
+        // settle for the first parseable body.
+        fun String.satisfiesExpectation(): Boolean =
+            expectedIntegrity == null || Integrity.matches(toByteArray(Charsets.UTF_8), expectedIntegrity)
         // Strategy 1: go-wallet-backend's credential-type registry service
         // (authoritative, TS11-backed, cached - matches wallet-frontend's
         // reference behavior of always querying VCT_REGISTRY_URL first).
         if (registryUrl != null && vct != null) {
             val encodedVct = java.net.URLEncoder.encode(vct, "UTF-8")
             val registryLookupUrl = "${registryUrl.trimEnd('/')}/type-metadata?vct=$encodedVct"
-            fetchFromUrl(registryLookupUrl)?.let { return it }
+            fetchFromUrl(registryLookupUrl)?.takeIf { it.satisfiesExpectation() }?.let { return it }
         }
 
         // Strategy 2: issuer-hosted type-metadata endpoint
         val baseUrl = issuerUrl.trimEnd('/')
         val typeMetadataUrl = "$baseUrl/type-metadata/$scope"
-        fetchFromUrl(typeMetadataUrl)?.let { return it }
+        fetchFromUrl(typeMetadataUrl)?.takeIf { it.satisfiesExpectation() }?.let { return it }
 
         // Strategy 3: well-known VCT resolution
         if (vct != null) {
             val wellKnownUrl = resolveWellKnownUrl(vct)
             if (wellKnownUrl != null) {
-                fetchFromUrl(wellKnownUrl)?.let { return it }
+                fetchFromUrl(wellKnownUrl)?.takeIf { it.satisfiesExpectation() }?.let { return it }
             }
         }
 
-        Timber.d("No VCTM found for scope=$scope vct=$vct")
+        Timber.d(
+            "No VCTM found for scope=$scope vct=$vct" +
+                if (expectedIntegrity != null) " matching the issuer's vct#integrity" else "",
+        )
         return null
     }
 
