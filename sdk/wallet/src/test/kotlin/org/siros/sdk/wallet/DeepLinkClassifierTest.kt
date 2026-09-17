@@ -115,4 +115,47 @@ class DeepLinkClassifierTest {
         val result = classifyDeepLink("not a uri at all with spaces", redirectScheme)
         assertTrue(result is DeepLinkType.Unknown)
     }
+
+    /**
+     * Presentation-during-issuance: an issuer that will not issue until the
+     * holder presents something (a company credential authorised by a PID)
+     * sends the OpenID4VP request to the redirect_uri the wallet gave it,
+     * which is the same callback the authorization code arrives on.
+     *
+     * The regression: this was classified Unknown and dropped, and the
+     * issuance sat at the authorization step until it timed out. Seen on a
+     * device as "Ignoring non-wallet URI: siros-sample://callback".
+     */
+    @Test
+    fun `presentation request delivered to the oauth callback is recognised`() {
+        val result = classifyDeepLink(
+            "siros-sample://callback?client_id=x509_san_dns%3Aissuer.example" +
+                "&request_uri=https%3A%2F%2Fissuer.example%2Fverification%2Frequest-object%3Fid%3Dabc",
+            redirectScheme,
+        )
+        assertTrue(result is DeepLinkType.PresentationRequest)
+        val uri = (result as DeepLinkType.PresentationRequest).uri
+        // Normalised to the wallet-scheme form the presentation flow parses.
+        assertTrue(uri.startsWith("openid4vp://?"))
+        assertTrue(uri.contains("request_uri="))
+        assertTrue(uri.contains("client_id="))
+    }
+
+    @Test
+    fun `an authorization code on the callback is still an auth callback`() {
+        // The new branch must not shadow the ordinary case, including when a
+        // client_id rides along with the code.
+        val result = classifyDeepLink(
+            "siros-sample://callback?code=abc&state=xyz&client_id=e2e-test-client",
+            redirectScheme,
+        )
+        assertTrue(result is DeepLinkType.AuthCallback)
+        assertEquals("abc", (result as DeepLinkType.AuthCallback).code)
+    }
+
+    @Test
+    fun `a bare callback with neither code nor request is still unknown`() {
+        val result = classifyDeepLink("siros-sample://callback", redirectScheme)
+        assertEquals(DeepLinkType.Unknown, result)
+    }
 }
