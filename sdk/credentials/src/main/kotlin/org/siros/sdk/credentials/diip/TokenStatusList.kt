@@ -1,0 +1,303 @@
+// Copyright 2026 SIROS Foundation. BSD 2-Clause License.
+package org.siros.sdk.credentials.diip
+
+import com.nimbusds.jose.JWSAlgorithm
+import com.nimbusds.jose.crypto.ECDSAVerifier
+import com.nimbusds.jose.crypto.RSASSAVerifier
+import com.nimbusds.jose.jwk.ECKey
+import com.nimbusds.jose.jwk.JWK
+import com.nimbusds.jose.jwk.RSAKey
+import com.nimbusds.jwt.SignedJWT
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import timber.log.Timber
+import java.io.ByteArrayOutputStream
+import java.security.cert.CertificateFactory
+import java.security.interfaces.ECPublicKey
+import java.security.interfaces.RSAPublicKey
+import java.util.Base64
+import java.util.zip.Inflater
+
+/**
+ * IETF Token Status List - the revocation mechanism DIIP requires.
+ *
+ * A credential carries a `status.status_list` reference: an index plus the URI
+ * of a Status List Token. That token is a JWS (`typ: statuslist+jwt`) whose
+ * payload holds a zlib-compressed bit array; the bits at the credential's
+ * index encode its status.
+ *
+ * @see <a href="https://datatracker.ietf.org/doc/draft-ietf-oauth-status-list/15/">draft-ietf-oauth-status-list-15</a>
+ */
+object TokenStatusList {
+
+    /** Status values registered by the Token Status List draft. */
+    object Status {
+        const val VALID = 0x00
+        const val INVALID = 0x01
+        const val SUSPENDED = 0x02
+    }
+
+    /** The `status.status_list` object embedded in a credential. */
+    data class Reference(val idx: Int, val uri: String)
+
+    /** What a status lookup produced. */
+    sealed class Resolution {
+        /** The status bits found at the credential's index. */
+        data class Found(val status: Int) : Resolution()
+
+        /**
+         * The status could not be established - typically an unreachable
+         * list. A caller must treat this as a warning, not a revocation: a
+         * wallet that hid every credential whose status endpoint is down
+         * would be unusable offline.
+         */
+        data class Unavailable(val reason: String) : Resolution()
+    }
+
+    /**
+     * A fetched status list, remembered so one list is fetched once per
+     * session rather than once per credential that points at it.
+     *
+     * @param ttlSeconds the token's own `ttl`; 0 or absent means the entry is
+     *        kept for the lifetime of the cache.
+     */
+    data class CacheEntry(
+        val fetchedAtMillis: Long,
+        val ttlSeconds: Long,
+        val bits: Int,
+        val list: ByteArray,
+    ) {
+        // ByteArray needs these spelled out for a data class to compare by value.
+        override fun equals(other: Any?): Boolean =
+            this === other || (other is CacheEntry &&
+                fetchedAtMillis == other.fetchedAtMillis &&
+                ttlSeconds == other.ttlSeconds &&
+                bits == other.bits &&
+                list.contentEquals(other.list))
+
+        override fun hashCode(): Int =
+            (((fetchedAtMillis.hashCode() * 31 + ttlSeconds.hashCode()) * 31) + bits) * 31 + list.contentHashCode()
+    }
+
+    /** Read the Status List reference out of a credential's claims, if it has one. */
+    fun extractReference(claims: JsonObject): Reference? {
+        val statusList = (claims["status"] as? JsonObject)?.get("status_list") as? JsonObject ?: return null
+        val idx = statusList["idx"]?.jsonPrimitive?.intOrNull ?: return null
+        val uri = statusList["uri"]?.jsonPrimitive?.contentOrNull ?: return null
+        if (idx < 0 || uri.isEmpty()) return null
+        return Reference(idx, uri)
+    }
+
+    /**
+     * Read the status at [idx] from a decompressed status list.
+     *
+     * Entries are packed [bits] at a time, least significant bits first
+     * within each byte. Returns null when [bits] is not a legal width or the
+     * index lies past the end of the list.
+     */
+    fun readStatusAtIndex(list: ByteArray, bits: Int, idx: Int): Int? {
+        if (bits !in setOf(1, 2, 4, 8)) return null
+        if (idx < 0) return null
+        val entriesPerByte = 8 / bits
+        val byteIndex = idx / entriesPerByte
+        if (byteIndex >= list.size) return null
+        val shift = (idx % entriesPerByte) * bits
+        val mask = (1 shl bits) - 1
+        return (list[byteIndex].toInt() and 0xFF shr shift) and mask
+    }
+
+    /**
+     * Inflate the zlib-compressed `lst` member.
+     *
+     * The draft says DEFLATE with a zlib wrapper; a few issuers emit raw
+     * DEFLATE instead, so a failed zlib pass is retried without the wrapper
+     * rather than reported as a corrupt list.
+     */
+    fun inflate(compressed: ByteArray): ByteArray? {
+        for (nowrap in listOf(false, true)) {
+            val inflater = Inflater(nowrap)
+            try {
+                inflater.setInput(compressed)
+                val out = ByteArrayOutputStream(compressed.size * 4)
+                val buffer = ByteArray(8192)
+                while (!inflater.finished()) {
+                    val n = inflater.inflate(buffer)
+                    if (n == 0) {
+                        if (inflater.needsInput() || inflater.needsDictionary()) break
+                    }
+                    out.write(buffer, 0, n)
+                }
+                if (inflater.finished()) return out.toByteArray()
+            } catch (e: java.util.zip.DataFormatException) {
+                Timber.d(e, "Status list did not inflate with nowrap=$nowrap")
+            } finally {
+                inflater.end()
+            }
+        }
+        return null
+    }
+}
+
+/**
+ * Fetches, verifies and reads Status List Tokens.
+ *
+ * Holds the per-session cache, so construct one per wallet session and share
+ * it across credentials: a list covering ten thousand credentials is fetched
+ * once, not once per credential that points into it.
+ *
+ * @param httpGet fetches a URL, returning the body or null - the same
+ *        injection point as [org.siros.sdk.credentials.VctmFetcher], so a
+ *        host's own client, pinning and caching apply here too.
+ * @param resolveIssuerKey resolves an issuer's signing key when the Status
+ *        List Token's header carries no `x5c`. Given the token's issuer
+ *        identifier and the header `kid`. A DID-identified issuer is handled
+ *        by [DidResolver]; anything else is the host's to answer.
+ * @param nowMillis time source, overridable for deterministic tests.
+ */
+class TokenStatusListClient(
+    private val httpGet: suspend (String, Map<String, String>) -> String?,
+    private val resolveIssuerKey: (suspend (issuer: String, kid: String?) -> JWK?)? = null,
+    private val nowMillis: () -> Long = { System.currentTimeMillis() },
+) {
+    private val cache = mutableMapOf<String, TokenStatusList.CacheEntry>()
+
+    /**
+     * Look up one credential's entry.
+     *
+     * @param expectedIssuer the issuer of the credential being checked. The
+     *        Status List Token's `iss` must match it - otherwise anyone able
+     *        to serve a URL could publish a status list for someone else's
+     *        credentials. Null skips the check, which is only safe when the
+     *        caller has no issuer to compare against.
+     * @param clockToleranceSeconds leeway applied to the token's own `exp`
+     *        and `nbf`, matching the tolerance used for signature checks.
+     */
+    suspend fun resolve(
+        reference: TokenStatusList.Reference,
+        expectedIssuer: String? = null,
+        clockToleranceSeconds: Long = 0,
+    ): TokenStatusList.Resolution {
+        cache[reference.uri]?.let { entry ->
+            val fresh = entry.ttlSeconds <= 0 || nowMillis() - entry.fetchedAtMillis < entry.ttlSeconds * 1000
+            if (fresh) {
+                return TokenStatusList.readStatusAtIndex(entry.list, entry.bits, reference.idx)
+                    ?.let { TokenStatusList.Resolution.Found(it) }
+                    ?: TokenStatusList.Resolution.Unavailable(
+                        "Index ${reference.idx} is outside the cached status list",
+                    )
+            }
+        }
+
+        val token = runCatching {
+            httpGet(reference.uri, mapOf("Accept" to "application/statuslist+jwt"))
+        }.getOrNull()?.trim()
+            ?: return TokenStatusList.Resolution.Unavailable("Could not fetch the status list at ${reference.uri}")
+
+        val jwt = runCatching { SignedJWT.parse(token) }.getOrNull()
+            ?: return TokenStatusList.Resolution.Unavailable("Status list at ${reference.uri} is not a JWS")
+
+        // §5.1: the token is typed so it cannot be confused with any other
+        // JWS the same issuer signs.
+        val typ = jwt.header.type?.toString()
+        if (typ != "statuslist+jwt") {
+            return TokenStatusList.Resolution.Unavailable("Unexpected Status List Token typ: $typ")
+        }
+
+        val claims = runCatching { jwt.jwtClaimsSet }.getOrNull()
+            ?: return TokenStatusList.Resolution.Unavailable("Status List Token has no claims")
+
+        val issuer = claims.issuer
+        if (expectedIssuer != null && issuer != expectedIssuer) {
+            return TokenStatusList.Resolution.Unavailable(
+                "Status List Token was issued by $issuer, expected $expectedIssuer",
+            )
+        }
+        // §5.1: `sub` binds the token to the URI it was served from.
+        val subject = claims.subject
+        if (subject != null && subject != reference.uri) {
+            return TokenStatusList.Resolution.Unavailable(
+                "Status List Token subject $subject does not match ${reference.uri}",
+            )
+        }
+
+        val verified = runCatching { verifySignature(jwt, issuer) }.getOrElse { e ->
+            return TokenStatusList.Resolution.Unavailable("Status List Token signature check failed: ${e.message}")
+        }
+        if (!verified) {
+            return TokenStatusList.Resolution.Unavailable("Status List Token signature is not valid")
+        }
+
+        val now = nowMillis()
+        val toleranceMillis = clockToleranceSeconds * 1000
+        claims.expirationTime?.let {
+            if (it.time + toleranceMillis < now) {
+                return TokenStatusList.Resolution.Unavailable("Status List Token expired at $it")
+            }
+        }
+        claims.notBeforeTime?.let {
+            if (it.time - toleranceMillis > now) {
+                return TokenStatusList.Resolution.Unavailable("Status List Token is not valid before $it")
+            }
+        }
+
+        @Suppress("UNCHECKED_CAST")
+        val statusList = claims.getClaim("status_list") as? Map<String, Any?>
+            ?: return TokenStatusList.Resolution.Unavailable("Status List Token has no status_list claim")
+        val bits = (statusList["bits"] as? Number)?.toInt()
+            ?: return TokenStatusList.Resolution.Unavailable("Status List Token declares no entry width")
+        val lst = statusList["lst"] as? String
+            ?: return TokenStatusList.Resolution.Unavailable("Status List Token carries no list")
+
+        val inflated = runCatching { Base64.getUrlDecoder().decode(lst) }.getOrNull()
+            ?.let { TokenStatusList.inflate(it) }
+            ?: return TokenStatusList.Resolution.Unavailable("Status list could not be decompressed")
+
+        val ttl = (statusList["ttl"] as? Number)?.toLong() ?: (claims.getClaim("ttl") as? Number)?.toLong() ?: 0L
+        cache[reference.uri] = TokenStatusList.CacheEntry(now, ttl, bits, inflated)
+
+        return TokenStatusList.readStatusAtIndex(inflated, bits, reference.idx)
+            ?.let { TokenStatusList.Resolution.Found(it) }
+            ?: TokenStatusList.Resolution.Unavailable("Index ${reference.idx} is outside the status list")
+    }
+
+    /**
+     * Verify the token's signature with whichever key it names: the leaf of
+     * an `x5c` chain, else the issuer's published key.
+     *
+     * An `x5c` chain is trusted here only for the key it carries - whether
+     * that certificate chains to anything is the host's trust decision, made
+     * against the same issuer trust list every other issuer artefact goes
+     * through, not a decision this reader can make.
+     */
+    private suspend fun verifySignature(jwt: SignedJWT, issuer: String?): Boolean {
+        val x5c = jwt.header.x509CertChain
+        val key: JWK? = when {
+            !x5c.isNullOrEmpty() -> {
+                val bytes = Base64.getDecoder().decode(x5c.first().toString())
+                val cert = CertificateFactory.getInstance("X.509")
+                    .generateCertificate(bytes.inputStream()) as java.security.cert.X509Certificate
+                when (val pub = cert.publicKey) {
+                    is ECPublicKey -> ECKey.Builder(com.nimbusds.jose.jwk.Curve.P_256, pub).build()
+                    is RSAPublicKey -> RSAKey.Builder(pub).build()
+                    else -> null
+                }
+            }
+            issuer != null && resolveIssuerKey != null ->
+                resolveIssuerKey.invoke(issuer, jwt.header.keyID)
+            else -> null
+        }
+        if (key == null) {
+            throw IllegalStateException("no signing key available for the Status List Token")
+        }
+        val verifier = when {
+            key is ECKey -> ECDSAVerifier(key.toECPublicKey())
+            key is RSAKey -> RSASSAVerifier(key.toRSAPublicKey())
+            else -> throw IllegalStateException("unsupported Status List Token key type ${key.keyType}")
+        }
+        require(jwt.header.algorithm != JWSAlgorithm.NONE) { "unsecured Status List Token" }
+        return jwt.verify(verifier)
+    }
+}
