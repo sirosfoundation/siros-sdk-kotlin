@@ -1831,19 +1831,50 @@ class SirosWallet private constructor(
      * `vct#integrity` is not making a claim about its metadata, so there is
      * nothing to disagree with.
      */
-    private fun verifyVctIntegrity(format: String, payload: JsonObject): String? {
+    private suspend fun verifyVctIntegrity(format: String, payload: JsonObject): String? {
         if (format == "mso_mdoc") return null
         val expected = payload["vct#integrity"]?.jsonPrimitive?.contentOrNull ?: return null
+
         val document = activeVctmDocument
-        if (document == null) {
-            // The issuer pinned metadata the wallet never resolved. Nothing was
-            // applied, so nothing was tampered with - but say so, because a
-            // credential asking to be checked and not being checked is exactly
-            // the state this method exists to make visible.
-            Timber.w("Credential pinned vct#integrity but no type metadata was resolved to check it against")
+        if (document != null && Integrity.matches(document.raw.toByteArray(Charsets.UTF_8), expected)) return null
+
+        // What was resolved before issuance is not what the issuer signed over
+        // - or nothing was resolved at all. Both are ordinary: the document may
+        // have been cached before the issuer changed it, or fetched from a
+        // source serving a different copy, and a cached failure can outlive the
+        // fix for it. So resolve again, this time directed by the pin, and let
+        // the credential through if the issuer's own document can still be
+        // found. Only a wallet that cannot find it anywhere refuses.
+        val resolved = try {
+            activeOffer?.let { offer ->
+                vctmFetcher.fetchDocument(
+                    issuerUrl = offer.credentialIssuerIdentifier,
+                    scope = offer.credentialConfigurationId,
+                    vct = offer.vct,
+                    registryUrl = registryUrl,
+                    expectedIntegrity = expected,
+                )
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "Re-resolving type metadata against the issuer's vct#integrity failed")
+            null
+        }
+
+        if (resolved != null) {
+            Timber.i("Type metadata re-resolved to the document the issuer pinned")
+            activeVctmDocument = resolved
+            activeVctm = resolved.vctm
             return null
         }
-        if (Integrity.matches(document.raw.toByteArray(Charsets.UTF_8), expected)) return null
+
+        if (document == null) {
+            // Nothing was applied, so nothing was tampered with - but say so,
+            // because a credential asking to be checked and not being checked
+            // is exactly the state this method exists to make visible.
+            Timber.w("Credential pinned vct#integrity but no type metadata could be resolved to check it against")
+            return null
+        }
+
         Timber.e("Type metadata for '${document.vctm.vct}' does not match the issuer's vct#integrity")
         return "The issuer's type metadata does not match what it published"
     }
@@ -2457,6 +2488,11 @@ class SirosWallet private constructor(
                 vctmFetcher.fetchDocument(
                     issuerUrl = offer.credentialIssuerIdentifier,
                     scope = offer.credentialConfigurationId,
+                    // The offer names the type, and the registry strategy needs
+                    // it: without a vct the fetcher can only ask the issuer's
+                    // own endpoint, so an issuer that resolves its types from a
+                    // registry and does not republish them resolved to nothing.
+                    vct = offer.vct,
                     registryUrl = registryUrl,
                 )
             } catch (e: Exception) {

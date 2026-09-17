@@ -2,6 +2,7 @@ package org.siros.sdk.wallet
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -10,8 +11,10 @@ import org.siros.sdk.credentials.Vctm
 import org.siros.sdk.credentials.VctmDocument
 import java.security.MessageDigest
 import java.util.Base64
+import kotlin.reflect.full.callSuspend
 import kotlin.reflect.full.declaredMemberFunctions
 import kotlin.reflect.jvm.isAccessible
+import kotlinx.coroutines.test.runTest
 
 /**
  * The wallet's two checks on a credential as it arrives.
@@ -46,6 +49,17 @@ class IssuedTypeVerificationTest {
         m.isAccessible = true
         return try {
             m.call(w, *args)
+        } catch (e: java.lang.reflect.InvocationTargetException) {
+            throw e.cause ?: e
+        }
+    }
+
+    /** The suspend counterpart of [call], for checks that may re-resolve. */
+    private suspend fun callSuspending(w: SirosWallet, name: String, vararg args: Any?): Any? {
+        val m = SirosWallet::class.declaredMemberFunctions.first { it.name == name }
+        m.isAccessible = true
+        return try {
+            m.callSuspend(w, *args)
         } catch (e: java.lang.reflect.InvocationTargetException) {
             throw e.cause ?: e
         }
@@ -175,45 +189,101 @@ class IssuedTypeVerificationTest {
         )
 
     @Test
-    fun acceptsTypeMetadataMatchingTheIssuersDigest() {
+    fun acceptsTypeMetadataMatchingTheIssuersDigest() = runTest {
         val w = wallet()
         val doc = vctmDocument("urn:eudi:pid:1")
         setField(w, "activeVctmDocument", doc)
         val raw = sdJwt("urn:eudi:pid:1", digestOf(doc.raw))
-        assertNull(call(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw)))
+        assertNull(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw)))
     }
 
     @Test
-    fun refusesTypeMetadataTheIssuerDidNotPin() {
+    fun refusesTypeMetadataTheIssuerDidNotPin() = runTest {
         // A registry serving altered metadata for a type the issuer is
         // legitimately entitled to issue.
         val w = wallet()
         setField(w, "activeVctmDocument", vctmDocument("urn:eudi:pid:1"))
         val raw = sdJwt("urn:eudi:pid:1", digestOf("""{"vct":"urn:eudi:pid:1","claims":[]}"""))
-        assertNotNull(call(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw)))
+        assertNotNull(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw)))
     }
 
     @Test
-    fun acceptsACredentialThatPinsNothing() {
+    fun acceptsACredentialThatPinsNothing() = runTest {
         val w = wallet()
         setField(w, "activeVctmDocument", vctmDocument("urn:eudi:pid:1"))
-        assertNull(call(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(sdJwt("urn:eudi:pid:1"))))
+        assertNull(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(sdJwt("urn:eudi:pid:1"))))
     }
 
     @Test
-    fun acceptsWhenNoMetadataWasResolvedToCheck() {
+    fun acceptsWhenNoMetadataWasResolvedToCheck() = runTest {
         // Nothing was applied, so nothing was tampered with.
         val w = wallet()
         setField(w, "activeVctmDocument", null)
         val raw = sdJwt("urn:eudi:pid:1", digestOf("""{"vct":"urn:eudi:pid:1"}"""))
-        assertNull(call(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw)))
+        assertNull(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw)))
     }
 
     @Test
-    fun mdocCarriesNoVctIntegrity() {
+    fun reResolvesRatherThanRefusingWhenTheResolvedDocumentIsStale() = runTest {
+        // The state a device was actually found in: metadata cached before the
+        // issuer changed it, so the digest disagrees. The document the issuer
+        // pinned is still out there, so the credential must be accepted after
+        // resolving again rather than refused.
+        val current = """{"vct":"urn:eudi:pid:1","name":"PID"}"""
+        val w = wallet()
+        setField(w, "activeVctmDocument", vctmDocument("urn:eudi:pid:1"))
+        setField(w, "config", WalletConfig(backendUrl = "https://backend.example"))
+        setField(
+            w,
+            "activeOffer",
+            org.siros.sdk.credentials.CredentialOffer(
+                credentialConfigurationId = "pid_1_8",
+                credentialIssuerIdentifier = "https://issuer.example",
+                credentialName = "PID",
+                issuerName = "Issuer",
+                vct = "urn:eudi:pid:1",
+            ),
+        )
+        setField(w, "vctmFetcher", org.siros.sdk.credentials.VctmFetcher(httpGet = { current }))
+
+        val raw = sdJwt("urn:eudi:pid:1", digestOf(current))
+        assertNull(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw)))
+
+        // And the re-resolved document is what the credential is stored with.
+        val field = SirosWallet::class.java.getDeclaredField("activeVctmDocument")
+        field.isAccessible = true
+        assertEquals(current, (field.get(w) as VctmDocument).raw)
+    }
+
+    @Test
+    fun refusesWhenNoSourceHasTheDocumentTheIssuerPinned() = runTest {
+        // Re-resolution is not a way around the check: when nothing serves the
+        // pinned document, the credential is still refused.
+        val w = wallet()
+        setField(w, "activeVctmDocument", vctmDocument("urn:eudi:pid:1"))
+        setField(w, "config", WalletConfig(backendUrl = "https://backend.example"))
+        setField(
+            w,
+            "activeOffer",
+            org.siros.sdk.credentials.CredentialOffer(
+                credentialConfigurationId = "pid_1_8",
+                credentialIssuerIdentifier = "https://issuer.example",
+                credentialName = "PID",
+                issuerName = "Issuer",
+                vct = "urn:eudi:pid:1",
+            ),
+        )
+        setField(w, "vctmFetcher", org.siros.sdk.credentials.VctmFetcher(httpGet = { """{"vct":"urn:eudi:pid:1","name":"something else"}""" }))
+
+        val raw = sdJwt("urn:eudi:pid:1", digestOf("""{"vct":"urn:eudi:pid:1","name":"PID"}"""))
+        assertNotNull(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw)))
+    }
+
+    @Test
+    fun mdocCarriesNoVctIntegrity() = runTest {
         val w = wallet()
         setField(w, "activeVctmDocument", vctmDocument("urn:eudi:pid:1"))
         val raw = sdJwt("urn:eudi:pid:1", digestOf("wrong"))
-        assertNull(call(w, "verifyVctIntegrity", "mso_mdoc", payloadOf(raw)))
+        assertNull(callSuspending(w, "verifyVctIntegrity", "mso_mdoc", payloadOf(raw)))
     }
 }

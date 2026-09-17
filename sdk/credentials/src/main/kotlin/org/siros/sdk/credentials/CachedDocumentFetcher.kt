@@ -72,13 +72,26 @@ internal class CachedDocumentFetcher<T : Any>(
      * Resolve the document identified by [keyParts], calling [fetchBody] for
      * the network only when the caches say so. [fetchBody] returns the raw
      * response body of whichever resolution strategy succeeded, or null.
+     *
+     * [accept] lets a caller state what it needs of the document - a digest it
+     * must hash to, say. A cached value that fails it is not a hit, however
+     * fresh the cache thinks it is, and a negative entry's retained body
+     * cannot satisfy it either: the caller is telling us the answer we have is
+     * the wrong one, which is also reason enough to ignore the retry window
+     * and go ask again. Without it a wallet can keep checking new credentials
+     * against a document cached before the issuer changed it - for as long as
+     * the backoff lasts, and no server-side fix can reach it.
      */
-    suspend fun fetch(keyParts: List<String?>, fetchBody: suspend () -> String?): T? {
+    suspend fun fetch(
+        keyParts: List<String?>,
+        accept: ((T) -> Boolean)? = null,
+        fetchBody: suspend () -> String?,
+    ): T? {
         val key = fetchCacheKey(namespace, *keyParts.toTypedArray())
         val now = nowMillis()
 
         mutex.withLock { memory[key] }?.let { entry ->
-            if (entry.expiresAtMillis > now) return entry.value
+            if (entry.expiresAtMillis > now && (accept == null || accept(entry.value))) return entry.value
         }
 
         val cache = persistentCache ?: return fetchAndRemember(key, null, fetchBody)
@@ -88,7 +101,7 @@ internal class CachedDocumentFetcher<T : Any>(
             val age = now - persisted.fetchedAtMillis
             when (persisted.status) {
                 FetchCacheStatus.HIT -> {
-                    val parsed = persisted.body?.let(parse)
+                    val parsed = persisted.body?.let(parse)?.takeIf { accept == null || accept(it) }
                     if (parsed != null && age < hardTtlMillis) {
                         remember(key, parsed, now)
                         if (age >= freshTtlMillis) revalidateInBackground(key, persisted, fetchBody)
@@ -99,13 +112,17 @@ internal class CachedDocumentFetcher<T : Any>(
                     // old entry so a failure can still serve its body.
                 }
                 FetchCacheStatus.MISS -> {
-                    if (now < persisted.nextRetryAtMillis) {
+                    val retained = persisted.body?.let(parse)?.takeIf { accept == null || accept(it) }
+                    // A caller with an expectation the retained body fails gets
+                    // the network instead of the backoff: its answer is known
+                    // wrong, so waiting out the window cannot help it.
+                    if (now < persisted.nextRetryAtMillis && (accept == null || retained != null)) {
                         // Not due. The whole point: no network, no waiting.
                         Timber.d(
                             "$namespace: negative-cached, next retry in " +
                                 "${(persisted.nextRetryAtMillis - now) / 1000}s for $key",
                         )
-                        return persisted.body?.let(parse)?.also { remember(key, it, now) }
+                        return retained?.also { remember(key, it, now) }
                     }
                 }
             }
