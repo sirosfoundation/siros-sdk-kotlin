@@ -14,6 +14,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.siros.sdk.auth.BackendApiClient
+import kotlinx.serialization.json.encodeToJsonElement
 import org.siros.sdk.credentials.interop.HolderBinding
 import org.siros.sdk.keystore.KeystoreManager
 import org.siros.sdk.transport.CredentialNotifier
@@ -76,6 +77,15 @@ class FlowClient(
             put("flow_id", flowId)
             params.credentialOfferUri?.let { put("credential_offer_uri", it) }
             params.issuerUrl?.let { put("issuer_url", it) }
+            // DIIP requires the Wallet to ask for a credential configuration by
+            // `authorization_details`. The engine builds the Authorization
+            // Request, so the wallet states the intent here and the engine
+            // forwards it. Omitted entirely when absent - an empty value is not
+            // the same as not asking. Wire name matches go-wallet-backend's
+            // FlowStartMessage and wallet-frontend's flow_start exactly.
+            params.authorizationDetails?.takeIf { it.isNotEmpty() }?.let {
+                put("authorization_details", json.encodeToJsonElement(it))
+            }
             put("wmp", json.encodeToJsonElement(WmpMeta.serializer(), WmpMeta()))
         }
         session.sendRequest("wmp.flow.start", flowParams)

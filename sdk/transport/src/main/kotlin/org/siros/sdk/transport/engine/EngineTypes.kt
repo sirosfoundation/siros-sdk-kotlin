@@ -5,6 +5,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import org.siros.sdk.credentials.interop.AuthorizationDetail
 
 /** Message types used in the wallet backend engine WebSocket protocol. */
 object MessageTypes {
@@ -57,6 +58,20 @@ data class FlowStartMessage(
     @SerialName("redirect_uri") val redirectUri: String? = null,
     @SerialName("auth_code") val authCode: String? = null,
     @SerialName("code_verifier") val codeVerifier: String? = null,
+    /**
+     * OID4VCI `authorization_details` (1.0 §5.1.1) for the Authorization
+     * Request. DIIP requires a Wallet to be able to ask for a credential
+     * configuration this way as well as by `scope`.
+     *
+     * The engine builds the Authorization Request, so the wallet cannot add
+     * the parameter itself - it states the intent here and the engine forwards
+     * it. Null omits the field entirely, which the engine reads as "do not ask
+     * this way", leaving the `scope` path unchanged. Wire name and shape match
+     * go-wallet-backend's `FlowStartMessage.AuthorizationDetails` and
+     * wallet-frontend's `flow_start` exactly.
+     */
+    @SerialName("authorization_details")
+    val authorizationDetails: List<AuthorizationDetail>? = null,
     /**
      * OAuth Client Attestation (draft-ietf-oauth-attestation-based-client-auth-04
      * §3.1): a Wallet Instance Attestation JWT (`typ: oauth-client-attestation+jwt`)
