@@ -497,17 +497,32 @@ class WalletEngineSession(
      * @param features optional protocol features to declare (see
      *   [FlowStartMessage.features]); `null` declares nothing, which is what
      *   every caller did before `transaction_data` support existed.
+     *
+     * [requestUriMethod] is OpenID4VP 1.0 §5.10's `request_uri_method`, and
+     * only has to be passed when [requestUriRef] was extracted from the
+     * authorization request here rather than handed to the backend whole in
+     * [requestUri] - see [FlowStartMessage.requestUriMethod].
+     *
+     * [walletMetadata] says what this wallet can present. It defaults to
+     * [WalletMetadata.DEFAULT] and is sent on every flow start: whether it
+     * gets used is the backend's call (it only goes to the verifier on a
+     * `request_uri_method=post` request), and the SDK cannot tell at this
+     * point, since for a whole [requestUri] it has not looked inside.
      */
     fun startPresentation(
         requestUri: String? = null,
         requestUriRef: String? = null,
         features: List<String>? = null,
+        requestUriMethod: String? = null,
+        walletMetadata: JsonObject? = WalletMetadata.DEFAULT,
     ) {
         send(FlowStartMessage.serializer(), FlowStartMessage(
             protocol = "oid4vp",
             requestUri = requestUri,
             requestUriRef = requestUriRef,
             features = features,
+            requestUriMethod = requestUriMethod,
+            walletMetadata = walletMetadata,
         ))
     }
 
