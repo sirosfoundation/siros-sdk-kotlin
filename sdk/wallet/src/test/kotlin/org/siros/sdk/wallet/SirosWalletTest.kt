@@ -4907,6 +4907,38 @@ class SirosWalletTest {
     }
 
     /**
+     * [SirosWallet.destroy] leaves the state alone - a destroyed wallet is not
+     * a logged-out one - so the generation bump on its own would still let a
+     * re-authentication signal from a coroutine still unwinding pass the guard
+     * and log back in after the host tore the wallet down. Connecting is not
+     * replaceable either: that is where the *initial* login sits.
+     */
+    @Test
+    fun no_self_driven_relogin_after_destroy_or_while_connecting() = runTest(dispatcher) {
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+
+        val connecting = lifecycleWallet(
+            MutableStateFlow(WalletState.Connecting), lifecycleAccountRegistry(), authServerClient,
+            fields = arrayOf("authTokens" to mockk<AuthTokens>(relaxed = true)),
+        )
+        invokePrivate(connecting, "handleReauthenticationRequired")
+        advanceUntilIdle()
+
+        val destroyed = lifecycleWallet(
+            MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            lifecycleAccountRegistry(), authServerClient,
+            fields = arrayOf(
+                "authTokens" to mockk<AuthTokens>(relaxed = true),
+                "isDestroyed" to true,
+            ),
+        )
+        invokePrivate(destroyed, "handleReauthenticationRequired")
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { authServerClient.loginBegin() }
+    }
+
+    /**
      * Exactly once, never a loop: the 401s the re-login's own requests may
      * provoke re-enter the same signal, and must not start a second attempt.
      */

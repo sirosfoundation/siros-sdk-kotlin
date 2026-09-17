@@ -173,10 +173,17 @@ interface WalletEventListener {
      *
      * Unlike [onReauthenticationRequired] this is not "prompt again": another
      * login attempt with the same passkey is refused the same way until
-     * someone else reactivates the instance
-     * ([WalletLifecycleRefusal.SUSPENDED]) and never succeeds at all
-     * ([WalletLifecycleRefusal.REVOKED]). Apps that already render
-     * [WalletState.LifecycleBlocked] need not implement this.
+     * someone else acts. `SUSPENDED` is lifted by reactivating the instance
+     * from another device; `REVOKED` is terminal *for this installation's
+     * instance* and needs a fresh enrollment.
+     *
+     * `REVOKED` does **not** imply the wallet was deactivated and erased: the
+     * backend answers with it for a single revoked instance too, while the
+     * account's other passkeys and devices keep working. Nothing local is
+     * discarded on either reason - the message is the only thing that
+     * distinguishes the cases, and it is written for the user - so do not
+     * treat this callback as licence to drop account state. Apps that already
+     * render [WalletState.LifecycleBlocked] need not implement this.
      */
     fun onWalletLifecycleBlocked(reason: org.siros.sdk.auth.WalletLifecycleRefusal, message: String?) {
         // Default: no-op. The state change is the primary signal.

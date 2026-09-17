@@ -61,12 +61,20 @@ sealed class WalletState {
      * token cut-off, whenever the authorization server answers `403` with
      * `WALLET_SUSPENDED` / `WALLET_REVOKED`.
      *
-     * On [WalletLifecycleRefusal.REVOKED] the cached account for this tenant
-     * has already been forgotten (its server-side data is gone and its
-     * passkey can never log in again), so [cachedAccounts] no longer lists
-     * it and the app should offer a fresh enrollment. On
-     * [WalletLifecycleRefusal.SUSPENDED] nothing local is lost and a later
-     * [SirosWallet.login] succeeds once the instance is reactivated.
+     * **Neither reason forgets anything local**, and [cachedAccounts] still
+     * lists this account. `REVOKED` is *not* proof the wallet was erased: the
+     * backend answers with it for the login gate of a single revoked instance
+     * as well, and only deactivates the wallet when the last non-revoked
+     * instance is revoked - the user's other devices keep working either way.
+     * Only [message], which is written for the user, tells the two apart, so
+     * the SDK shows it rather than guessing.
+     *
+     * What an app should offer: for `SUSPENDED`, a retry - a later
+     * [SirosWallet.login] succeeds once the instance is reactivated from
+     * another device. For `REVOKED`, a fresh enrollment, which is the way
+     * forward in both the per-instance and the deactivated case.
+     * [SirosWallet.deactivateWallet] is the only thing that forgets the
+     * cached account.
      */
     data class LifecycleBlocked(
         val reason: WalletLifecycleRefusal,
