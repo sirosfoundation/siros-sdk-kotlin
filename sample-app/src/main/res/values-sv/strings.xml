@@ -214,4 +214,13 @@
     <string name="wallet_blocked_revoked_title">Den här plånboken avaktiverades</string>
     <string name="wallet_blocked_revoked_message">Dess data raderades på servern och den här passkey-nyckeln kan inte längre logga in. Registrera dig igen för att börja om.</string>
     <string name="wallet_blocked_enroll_again">Registrera igen</string>
+    <string name="credential_status_expired">Utgånget</string>
+    <string name="credential_status_not_yet_valid">Inte giltigt än</string>
+    <string name="credential_status_revoked">Återkallat</string>
+    <string name="credential_status_suspended">Spärrat</string>
+    <string name="credential_status_expired_detail">Det här intyget har gått ut</string>
+    <string name="credential_status_not_yet_valid_detail">Det här intyget är inte giltigt än</string>
+    <string name="credential_status_revoked_detail">Det här intyget har återkallats av utfärdaren</string>
+    <string name="credential_status_suspended_detail">Det här intyget har spärrats tillfälligt av utfärdaren</string>
+    <string name="settings_diip_profile">DIIP-profil</string>
 </resources>

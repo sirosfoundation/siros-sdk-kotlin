@@ -457,6 +457,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                 onBack = viewModel::closeCredentialDetail,
                 onDelete = { viewModel.deleteCredential(selectedCredential!!.id) },
                 onRenew = { viewModel.renewCredential(selectedCredential!!) },
+                credentialStatus = viewModel.credentialStatuses.collectAsState().value[selectedCredential!!.id],
             )
 
             // Presentation history sub-screen
@@ -639,6 +640,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             backendUrl = viewModel.backendUrl.collectAsState().value,
                             tenantId = viewModel.tenantId.collectAsState().value,
                             useWmpProtocol = useWmpProtocol,
+                            diipProfile = viewModel.diipProfile,
                             zkCircuitUrls = viewModel.zkCircuitUrls.collectAsState().value,
                             presentationCount = presentationHistory.size,
                             onDisconnect = viewModel::disconnect,
@@ -672,6 +674,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onDeleteCredential = { viewModel.deleteCredential(it.id) },
                             onAddCredential = viewModel::openAddCredential,
                             availableKeyIds = credentialsTabAvailableKeyIds,
+                            credentialStatuses = viewModel.credentialStatuses.collectAsState().value,
                         )
                     }
                 }
@@ -1136,6 +1139,13 @@ fun CredentialsTab(
     onAddCredential: () -> Unit,
     modifier: Modifier = Modifier,
     availableKeyIds: Set<String> = emptySet(),
+    /**
+     * Why a credential cannot currently be used, by credential id - the SDK's
+     * run of DIIP's Validity and Revocation Algorithm (see
+     * `WalletViewModel.credentialStatuses`). Credentials absent from the map
+     * are usable.
+     */
+    credentialStatuses: Map<Long, org.siros.sdk.credentials.diip.CredentialStatus> = emptyMap(),
 ) {
     // One entry per batch (see StoredCredential.batchId) instead of one per
     // issued copy - mirrors wallet-frontend's fetchVcData grouping so a
@@ -1283,6 +1293,7 @@ fun CredentialsTab(
                         onLongClick = { actionMenuFor = entry.credential },
                         onRenewClick = { onRenewCredential(entry.credential) },
                         onDeleteClick = { pendingDeleteFor = entry.credential },
+                        credentialStatus = credentialStatuses[entry.credential.id],
                     )
                 }
                 if (visibleCount < grouped.size) {
@@ -1392,6 +1403,12 @@ fun SettingsTab(
     backendUrl: String,
     tenantId: String,
     useWmpProtocol: Boolean,
+    /**
+     * The DIIP release this wallet's wire behaviour follows. A build-time
+     * choice (`WalletConfig.diipProfile`), so it is shown, not offered.
+     */
+    diipProfile: org.siros.sdk.credentials.diip.DiipProfile =
+        org.siros.sdk.credentials.diip.DiipProfile.LATEST,
     zkCircuitUrls: List<String> = listOf(org.siros.sdk.credentials.ZkCircuitClient.DEFAULT_ZK_CIRCUIT_URL),
     presentationCount: Int,
     onDisconnect: () -> Unit,
@@ -1457,6 +1474,11 @@ fun SettingsTab(
                 SettingsRow(stringResource(R.string.settings_credentials_stored), state.credentials.size.toString())
                 SettingsRow(stringResource(R.string.settings_app_version), BuildConfig.VERSION_NAME)
                 SettingsRow("Transport", if (useWmpProtocol) "WMP (JSON-RPC 2.0)" else "Legacy")
+                // Which DIIP release this wallet's wire behaviour follows -
+                // holder identifiers, proof shape, client_id spelling. A
+                // build-time choice (WalletConfig.diipProfile), so it is shown
+                // rather than offered.
+                SettingsRow(stringResource(R.string.settings_diip_profile), diipProfile.version.uppercase())
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),

@@ -65,6 +65,7 @@ import org.siros.sdk.credentials.CredentialInstance
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.credentials.SvgTemplateRenderer
+import org.siros.sdk.credentials.diip.CredentialStatus
 import timber.log.Timber
 
 /**
@@ -113,6 +114,17 @@ fun CredentialCard(
      * if null, same as [onRenewClick].
      */
     onDeleteClick: (() -> Unit)? = null,
+    /**
+     * Why this credential cannot currently be used, from the SDK's run of
+     * DIIP's Validity and Revocation Algorithm (see
+     * `SirosWallet.refreshCredentialStatuses`). Null - the default - means it
+     * can be used, or that no evaluation has run yet.
+     *
+     * The card renders it and computes none of it: establishing revocation
+     * means fetching the issuer's Token Status List, which belongs in the
+     * SDK, not in a Compose render.
+     */
+    credentialStatus: CredentialStatus? = null,
 ) {
     // Null when the caller doesn't have batch/usage data on hand (see
     // [instances]'s doc comment) - only gates the greyed-out/Renew state
@@ -375,24 +387,31 @@ fun CredentialCard(
             }
             }
 
-            // Expired ribbon overlay - bottom-right, matching wallet-frontend's
+            // Status ribbon overlay - bottom-right, matching wallet-frontend's
             // ExpiredRibbon (CredentialImage.jsx renders it opposite the
             // usages/copy-count ribbon so the two never collide).
+            //
+            // Falls back to the credential's own `exp` when the SDK has not
+            // evaluated this credential yet, so a card rendered before the
+            // first refresh still says "expired" rather than nothing.
             // expiresAt is a JWT `exp` claim - always epoch SECONDS, not millis.
-            val isExpired = credential.expiresAt?.let { it * 1000L < System.currentTimeMillis() } ?: false
-            if (isExpired) {
+            val status = credentialStatus
+                ?: CredentialStatus.EXPIRED.takeIf {
+                    credential.expiresAt?.let { exp -> exp * 1000L < System.currentTimeMillis() } == true
+                }
+            if (status != null && !status.isUsable) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .padding(8.dp)
                         .background(
-                            color = MaterialTheme.colorScheme.error,
+                            color = status.ribbonColor(),
                             shape = RoundedCornerShape(4.dp),
                         )
                         .padding(horizontal = 6.dp, vertical = 2.dp),
                 ) {
                     Text(
-                        text = "EXPIRED",
+                        text = stringResource(status.labelRes()).uppercase(),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onError,
                         fontWeight = FontWeight.Bold,

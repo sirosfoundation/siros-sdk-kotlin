@@ -33,6 +33,7 @@ import org.siros.sdk.credentials.SirosException
 import org.siros.sdk.credentials.ZkCircuitClient
 import org.siros.sdk.credentials.SignerSecurityProperties
 import org.siros.sdk.credentials.StoredCredential
+import org.siros.sdk.credentials.diip.CredentialStatus
 import org.siros.sdk.keystore.ActivateLifecycleRequest
 import org.siros.sdk.keystore.AuthProvider
 import org.siros.sdk.keystore.CompositeCtap2Transport
@@ -492,6 +493,33 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _selectedCredential = MutableStateFlow<StoredCredential?>(null)
     val selectedCredential: StateFlow<StoredCredential?> = _selectedCredential
 
+    /**
+     * Why each held credential cannot currently be used, by credential id -
+     * the outcome of DIIP's Validity and Revocation Algorithm, which the SDK
+     * runs (see `SirosWallet.refreshCredentialStatuses`). Credentials absent
+     * from the map are usable.
+     *
+     * Held here rather than computed per card: evaluating it can fetch the
+     * issuer's Token Status List, which is not something a Compose render
+     * should do.
+     */
+    private val _credentialStatuses = MutableStateFlow<Map<Long, CredentialStatus>>(emptyMap())
+    val credentialStatuses: StateFlow<Map<Long, CredentialStatus>> = _credentialStatuses
+
+    /** The DIIP release this wallet's wire behaviour follows - see [WalletConfig.diipProfile]. */
+    val diipProfile: org.siros.sdk.credentials.diip.DiipProfile get() = wallet.diipProfile
+
+    private fun refreshCredentialStatuses() {
+        viewModelScope.launch {
+            _credentialStatuses.value = runCatching { wallet.refreshCredentialStatuses() }
+                .getOrElse {
+                    Log.w(TAG, "Could not refresh credential statuses", it)
+                    return@launch
+                }
+                .filterValues { status -> status != CredentialStatus.VALID }
+        }
+    }
+
     // ── Presentation history ────────────────────────────────────────
 
     private val _presentationHistory = MutableStateFlow<List<PresentationRecord>>(emptyList())
@@ -756,6 +784,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                                 .map { SirosCredentialRegistry.ZkSystem(it, emptyMap()) },
                             useStockMatcher = BuildConfig.STOCK_DC_MATCHER,
                         )
+                        refreshCredentialStatuses()
                         refreshWscdTofuMapping()
                         refreshWscdUserOverrides()
                         restoreFido2PluginState()
@@ -772,6 +801,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     is WalletState.LifecycleBlocked -> {
                         WalletSessionHolder.update(null)
                         SirosCredentialRegistry.clear(activity)
+                        _credentialStatuses.value = emptyMap()
                     }
 
                     // Transient, and deliberately left alone. `Connecting` is

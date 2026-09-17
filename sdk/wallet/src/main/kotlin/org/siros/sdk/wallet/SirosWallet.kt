@@ -68,6 +68,12 @@ import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.Vctm
 import org.siros.sdk.credentials.ZkCircuitClient
+import org.siros.sdk.credentials.diip.CredentialStatus
+import org.siros.sdk.credentials.diip.CredentialStatusEvaluator
+import org.siros.sdk.credentials.diip.DidRelationship
+import org.siros.sdk.credentials.diip.DidResolver
+import org.siros.sdk.credentials.diip.DiipProfile
+import org.siros.sdk.credentials.diip.TokenStatusListClient
 import org.siros.sdk.credentials.COSE_ALG_ES256
 import org.siros.sdk.credentials.CredentialFormat
 import org.siros.sdk.credentials.CredentialTypeRef
@@ -1595,6 +1601,104 @@ class SirosWallet private constructor(
         apiClient = null
         supervisorJob.cancel()
         Timber.i("Wallet instance destroyed")
+    }
+
+    /**
+     * The DIIP profile this wallet targets - see [DiipProfile]. Read from
+     * [WalletConfig.diipProfile]; defaults to the newest this SDK implements.
+     */
+    val diipProfile: DiipProfile get() = config.diipProfile
+
+    /**
+     * Resolves the DID methods the active [diipProfile] requires, for
+     * Issuer and Verifier identities. `did:jwk` resolves offline; `did:web`
+     * goes over HTTPS with no wallet credentials attached, since it targets
+     * arbitrary third-party domains (the same reason [fetchTypeMetadataUrl]
+     * gates its headers).
+     */
+    val didResolver: DidResolver = DidResolver(
+        profile = config.diipProfile,
+        httpGet = { url -> fetchPublicUrl(url, emptyMap()) },
+    )
+
+    /**
+     * Runs DIIP's Validity and Revocation Algorithm. One per wallet
+     * instance, so the Token Status List it fetches is fetched once and
+     * shared by every credential pointing into it.
+     */
+    private val credentialStatusEvaluator = CredentialStatusEvaluator(
+        statusListClient = TokenStatusListClient(
+            httpGet = ::fetchPublicUrl,
+            resolveIssuerKey = ::resolveIssuerSigningKey,
+        ),
+        clockToleranceSeconds = config.clockToleranceSeconds,
+    )
+
+    /** Cached statuses, so a UI can read one without re-running the algorithm per frame. */
+    private val credentialStatuses = java.util.concurrent.ConcurrentHashMap<Long, CredentialStatus>()
+
+    /**
+     * Evaluate one credential's status - its validity window, then the
+     * issuer's Token Status List.
+     *
+     * The result is cached; [refreshCredentialStatuses] re-runs it. A status
+     * list that cannot be reached leaves the credential [CredentialStatus.VALID]
+     * rather than hiding it, which is what keeps the wallet usable offline.
+     */
+    suspend fun credentialStatus(credential: StoredCredential): CredentialStatus {
+        val claims = CredentialUtils.validityClaims(credential)
+            ?: return CredentialStatus.VALID
+        val status = credentialStatusEvaluator.evaluate(claims)
+        credentialStatuses[credential.id] = status
+        return status
+    }
+
+    /**
+     * The last known status of a credential, without network access or
+     * re-evaluation - for synchronous call sites such as a Compose render.
+     * [CredentialStatus.VALID] until [refreshCredentialStatuses] has run.
+     */
+    fun cachedCredentialStatus(credentialId: Long): CredentialStatus =
+        credentialStatuses[credentialId] ?: CredentialStatus.VALID
+
+    /** Re-evaluate every held credential, and return the statuses by credential id. */
+    suspend fun refreshCredentialStatuses(): Map<Long, CredentialStatus> {
+        val statuses = credentialStore.getAll().associate { it.id to credentialStatus(it) }
+        credentialStatuses.keys.retainAll(statuses.keys)
+        return statuses
+    }
+
+    /**
+     * Fetch a URL that belongs to a third party - an issuer's status list, a
+     * `did:web` document. These carry NO wallet credentials: attaching this
+     * wallet's bearer token or tenant id to a request at an arbitrary domain
+     * would leak them (see [fetchTypeMetadataUrl] for the same rule).
+     */
+    private suspend fun fetchPublicUrl(url: String, headers: Map<String, String> = emptyMap()): String? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val builder = Request.Builder().url(url).get()
+                headers.forEach { (name, value) -> builder.header(name, value) }
+                httpClient.newCall(builder.build()).execute().use { response ->
+                    if (response.isSuccessful) response.body?.string() else null
+                }
+            }.getOrElse {
+                Timber.d(it, "Could not fetch $url")
+                null
+            }
+        }
+
+    /**
+     * The signing key an issuer publishes, for verifying a Status List Token
+     * it signed. Only DID-identified issuers are answered here - DIIP
+     * identifies Issuers by `did:jwk` or `did:web`, and a status list signed
+     * by anything else carries its own `x5c` or goes unverified (which the
+     * reader reports as an unavailable status, never as a valid one).
+     */
+    private suspend fun resolveIssuerSigningKey(issuer: String, kid: String?): com.nimbusds.jose.jwk.JWK? {
+        val document = didResolver.resolve(issuer).documentOrNull ?: return null
+        val jwk = document.findPublicKey(kid, DidRelationship.ASSERTION_METHOD) ?: return null
+        return runCatching { com.nimbusds.jose.jwk.JWK.parse(jwk.toString()) }.getOrNull()
     }
 
     /**

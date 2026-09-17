@@ -420,6 +420,59 @@ object CredentialUtils {
      * advertised type, so an issuer that advertises one type and issues another
      * would have every one of those decisions made about the wrong credential.
      */
+    /**
+     * The claims DIIP's Validity and Revocation Algorithm reads - the
+     * validity window and the Token Status List reference - normalised to one
+     * JSON shape across credential formats.
+     *
+     * For the JWT-based formats these are simply the credential's own claims.
+     * An mdoc keeps them somewhere else entirely: the validity window lives
+     * in the MSO's `validityInfo`, and the status reference (where an issuer
+     * publishes one) in the MSO's `status`. Returning them under the same
+     * names is what lets one evaluator serve every format.
+     */
+    fun validityClaims(credential: StoredCredential): JsonObject? = try {
+        if (credential.format == "mso_mdoc") {
+            mdocValidityClaims(credential)
+        } else {
+            parseJwtPayload(credential.raw)
+        }
+    } catch (e: Exception) {
+        Timber.w(e, "Could not read validity claims from credential ${credential.id}")
+        null
+    }
+
+    private fun mdocValidityClaims(credential: StoredCredential): JsonObject? {
+        val document = parseMdocDocument(credential) ?: return null
+        val mso = MdocCbor.decodeMso(document.issuerSigned.issuerAuth)
+        return kotlinx.serialization.json.buildJsonObject {
+            mso["validityInfo"]?.let { validity ->
+                // ISO 18013-5 encodes these as tdate (a tag-0 RFC 3339
+                // string), which is the same lexical form the VCDM uses for
+                // validFrom/validUntil - so no conversion is needed, only
+                // untagging.
+                validity["validFrom"]?.let { put("validFrom", JsonPrimitive(it.Untag().AsString())) }
+                validity["validUntil"]?.let { put("validUntil", JsonPrimitive(it.Untag().AsString())) }
+            }
+            mso["status"]?.let { status ->
+                status["status_list"]?.let { statusList ->
+                    put(
+                        "status",
+                        kotlinx.serialization.json.buildJsonObject {
+                            put(
+                                "status_list",
+                                kotlinx.serialization.json.buildJsonObject {
+                                    statusList["idx"]?.let { put("idx", JsonPrimitive(it.AsInt32())) }
+                                    statusList["uri"]?.let { put("uri", JsonPrimitive(it.AsString())) }
+                                },
+                            )
+                        },
+                    )
+                }
+            }
+        }.takeIf { it.isNotEmpty() }
+    }
+
     fun declaredType(format: String, raw: String): String? = try {
         if (format == "mso_mdoc") {
             MdocCbor.parseStoredCredential(Base64.getUrlDecoder().decode(padBase64(raw)))?.docType

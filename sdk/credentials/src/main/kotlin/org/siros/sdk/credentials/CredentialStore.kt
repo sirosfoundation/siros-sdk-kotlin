@@ -4,6 +4,8 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 
 /** Supported verifiable credential formats. */
 enum class CredentialFormat(val value: String) {
@@ -24,6 +26,56 @@ enum class CredentialFormat(val value: String) {
      * path, claim display.
      */
     JWP("jwp"),
+
+    /**
+     * A W3C VCDM 2.0 credential secured with SD-JWT (VC-JOSE-COSE §3.2.1),
+     * required by the DIIP profile alongside SD-JWT VC.
+     *
+     * VC-JOSE-COSE gives these the same `vc+sd-jwt` JWT `typ` as the older
+     * [SD_JWT_VC], so the wire value cannot tell them apart - the payload
+     * does, and [detect] is what does the telling. The envelope, holder
+     * binding and signature checks are identical; only the claim vocabulary
+     * differs, which is why this is a format rather than a separate
+     * credential family.
+     */
+    W3C_VCDM_SDJWT("vc+sd-jwt"),
+    ;
+
+    companion object {
+        /**
+         * Identify a raw credential's format.
+         *
+         * The JWT `typ` header settles everything except the two formats
+         * that share `vc+sd-jwt`; those are told apart by payload shape - a
+         * `vct` means SD-JWT VC, a JSON-LD `@context` without a `vct` means
+         * W3C VCDM 2.0. Returns null when the credential is not a JWS at all
+         * (an mdoc, say), since this reads only the JOSE shape.
+         */
+        fun detect(raw: String): CredentialFormat? {
+            val jwt = raw.substringBefore('~')
+            val segments = jwt.split('.')
+            if (segments.size < 2) return null
+            val header = decodeSegment(segments[0]) ?: return null
+            when (header["typ"]?.jsonPrimitive?.contentOrNull) {
+                "dc+sd-jwt" -> return DC_SD_JWT
+                "JWT", "jwt_vc_json" -> return JWT_VC_JSON
+            }
+            val payload = decodeSegment(segments[1]) ?: return null
+            return if (payload["vct"] == null && payload["@context"] != null) {
+                W3C_VCDM_SDJWT
+            } else {
+                SD_JWT_VC
+            }
+        }
+
+        private fun decodeSegment(segment: String): JsonObject? = try {
+            val padded = segment.padEnd((segment.length + 3) / 4 * 4, '=')
+            val decoded = java.util.Base64.getUrlDecoder().decode(padded).toString(Charsets.UTF_8)
+            kotlinx.serialization.json.Json.parseToJsonElement(decoded) as? JsonObject
+        } catch (e: Exception) {
+            null
+        }
+    }
 }
 
 /** A stored verifiable credential with parsed metadata. */
