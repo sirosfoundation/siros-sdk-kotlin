@@ -186,7 +186,12 @@ class AuthServerClient(
     suspend fun requestAccessToken(aud: String, tac: String? = null): AccessToken {
         val key = "$tenantId::$aud::${tac ?: ""}"
 
-        // Check cache and perform network under same lock to prevent concurrent duplicate requests.
+        // Check cache and perform network under same lock to prevent concurrent
+        // duplicate requests - and, just as importantly, so that a
+        // [clearTokenCache] taking the same lock cannot interleave between the
+        // await and the store. Releasing it across the await would let a token
+        // minted before a lifecycle cut-off be cached after the clear that
+        // cut-off triggered (SID-AUTH-06).
         return pendingTokenMutex.withLock {
             pendingTokenRequests[key]?.let { cached ->
                 if (!cached.isExpired()) return@withLock cached

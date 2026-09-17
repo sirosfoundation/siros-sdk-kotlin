@@ -535,8 +535,11 @@ class SirosWalletTest {
         advanceUntilIdle()
 
         verify(exactly = 1) { listener.onReauthenticationRequired() }
-        verify(exactly = 1) { engine.disconnect() }
-        verify(exactly = 1) { keystore.lock() }
+        verify(atLeast = 1) { engine.disconnect() }
+        // The SDK now attempts one self-driven re-login before giving up (see
+        // handleReauthenticationRequired), and both that attempt's teardown
+        // and the logout it falls back to lock the keystore.
+        verify(atLeast = 1) { keystore.lock() }
         assertEquals(WalletState.Disconnected(), wallet.state.value)
     }
 
@@ -4723,20 +4726,21 @@ class SirosWalletTest {
     }
 
     /**
-     * `WALLET_REVOKED` means the wallet was deactivated and its server-side
-     * data erased - that passkey can never log in to this tenant again, so
-     * the cached account is forgotten rather than left on the login screen as
-     * a door that is bricked shut.
+     * `WALLET_REVOKED` does **not** mean the wallet was erased: the backend
+     * returns it for the login gate of a single revoked instance too, and the
+     * user's other devices keep working. Only the human-readable message tells
+     * the two apart, so the SDK keeps the cached account - forgetting it on a
+     * per-instance revocation would destroy the other passkeys that still work.
      */
     @Test
-    fun login_refused_as_revoked_forgets_the_cached_account() = runTest(dispatcher) {
+    fun login_refused_as_revoked_keeps_the_cached_account() = runTest(dispatcher) {
         val accountRegistry = lifecycleAccountRegistry()
         val authServerClient = mockk<AuthServerClient>(relaxed = true)
         coEvery { authServerClient.loginBegin() } throws AuthException(
             "AS request failed: 403 — /auth/login/begin",
             errorCode = "WALLET_REVOKED",
             code = 403,
-            serverMessage = "This wallet was deactivated and its data erased",
+            serverMessage = "This device was removed",
         )
         val stateFlow = MutableStateFlow<WalletState>(WalletState.Disconnected())
         val wallet = lifecycleWallet(stateFlow, accountRegistry, authServerClient)
@@ -4746,42 +4750,46 @@ class SirosWalletTest {
 
         val blocked = stateFlow.value as WalletState.LifecycleBlocked
         assertEquals(WalletLifecycleRefusal.REVOKED, blocked.reason)
-        verify(exactly = 1) { accountRegistry.removeAccount("default:user-1") }
+        assertEquals("This device was removed", blocked.message)
+        assertEquals(1, blocked.cachedAccounts.size)
+        verify(exactly = 0) { accountRegistry.removeAccount(any()) }
     }
 
     /**
-     * After a logout the registry has no active account and the session store
-     * still names the previous one, so the account a refused login is about
-     * can only come from the ceremony that was refused - which is what
-     * [SirosWallet.attemptedAccountId] records.
+     * A suspended instance is reactivated from another device and the app
+     * retries [SirosWallet.login], which reuses the same AS session cookie. An
+     * unawaited `DELETE /auth/session` scheduled by the block could land after
+     * that retry's `loginFinish` and invalidate the session it had just
+     * established - so the blocked path tears down locally and never asks the
+     * AS to end a session the backend has already refused.
      */
     @Test
-    fun revoked_refusal_forgets_the_account_the_ceremony_resolved_to() = runTest(dispatcher) {
-        val accountRegistry = lifecycleAccountRegistry()
-        // As after a logout: no active account, but the session store still
-        // points at the account of the session that ended.
-        every { accountRegistry.activeAccountId } returns null
-        val sessionStore = mockk<SessionStore>(relaxed = true)
-        every { sessionStore.activeAccountId } returns "default:user-1"
-        val stateFlow = MutableStateFlow<WalletState>(WalletState.Disconnected())
+    fun a_lifecycle_block_does_not_end_the_server_session() = runTest(dispatcher) {
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(
+            WalletState.Ready(userId = "user-1", displayName = "Alice")
+        )
         val wallet = lifecycleWallet(
-            stateFlow, accountRegistry, mockk<AuthServerClient>(relaxed = true),
-            fields = arrayOf("sessionStore" to sessionStore, "attemptedAccountId" to "default:user-2"),
+            stateFlow, lifecycleAccountRegistry(), authServerClient,
+            fields = arrayOf("authTokens" to mockk<AuthTokens>(relaxed = true)),
         )
 
-        val handled = invokePrivateBoolean(
+        invokePrivateBoolean(
             wallet, "handleLifecycleRefusal",
             AuthException(
-                "AS request failed: 403 — /auth/login/finish",
-                errorCode = "WALLET_REVOKED",
+                "AS request failed: 403 — /auth/login/begin",
+                errorCode = "WALLET_SUSPENDED",
                 code = 403,
             ),
         )
         advanceUntilIdle()
 
-        assertTrue(handled)
-        verify(exactly = 1) { accountRegistry.removeAccount("default:user-2") }
-        verify(exactly = 0) { accountRegistry.removeAccount("default:user-1") }
+        coVerify(exactly = 0) { authServerClient.logout() }
+
+        // The contrast: an explicit logout does end the server session.
+        wallet.logout()
+        advanceUntilIdle()
+        coVerify(exactly = 1) { authServerClient.logout() }
     }
 
     /** Any other login failure keeps the existing error path. */
@@ -4841,6 +4849,61 @@ class SirosWalletTest {
         val blocked = stateFlow.value as WalletState.LifecycleBlocked
         assertEquals(WalletLifecycleRefusal.SUSPENDED, blocked.reason)
         assertEquals("Suspended by your provider", blocked.message)
+    }
+
+    /**
+     * Once per session, not once per call. Requests issued before a cut-off
+     * complete long after it - still holding the same [AuthTokens] - and each
+     * of their 401s re-enters the signal, so releasing the in-progress flag
+     * must not re-open the door for the same session. Only a new session may
+     * be cut off again.
+     */
+    @Test
+    fun a_late_401_from_the_session_already_handled_does_not_start_a_second_relogin() = runTest(dispatcher) {
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+        coEvery { authServerClient.loginBegin() } throws AuthException(
+            "AS request failed: 403 — /auth/login/begin",
+            errorCode = "WALLET_SUSPENDED",
+            code = 403,
+        )
+        val stateFlow = MutableStateFlow<WalletState>(
+            WalletState.Ready(userId = "user-1", displayName = "Alice")
+        )
+        val wallet = lifecycleWallet(
+            stateFlow, lifecycleAccountRegistry(), authServerClient,
+            fields = arrayOf("authTokens" to mockk<AuthTokens>(relaxed = true)),
+        )
+
+        invokePrivate(wallet, "handleReauthenticationRequired")
+        advanceUntilIdle()
+        // The first attempt has finished; a pre-cut-off request's 401 lands now.
+        invokePrivate(wallet, "handleReauthenticationRequired")
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { authServerClient.loginBegin() }
+    }
+
+    /**
+     * There is nothing to replace once the session is gone, and a silent
+     * WebAuthn prompt after an explicit logout would be the wrong answer.
+     */
+    @Test
+    fun no_self_driven_relogin_without_a_session_to_replace() = runTest(dispatcher) {
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+        for (state in listOf(
+            WalletState.Disconnected(),
+            WalletState.Error("boom"),
+            WalletState.LifecycleBlocked(WalletLifecycleRefusal.SUSPENDED, null),
+        )) {
+            val wallet = lifecycleWallet(
+                MutableStateFlow(state), lifecycleAccountRegistry(), authServerClient,
+                fields = arrayOf("authTokens" to mockk<AuthTokens>(relaxed = true)),
+            )
+            invokePrivate(wallet, "handleReauthenticationRequired")
+            advanceUntilIdle()
+        }
+
+        coVerify(exactly = 0) { authServerClient.loginBegin() }
     }
 
     /**

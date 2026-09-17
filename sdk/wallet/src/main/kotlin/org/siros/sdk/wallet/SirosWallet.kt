@@ -389,11 +389,75 @@ class SirosWallet private constructor(
     @Volatile
     private var reloginInProgress: Boolean = false
 
+    /**
+     * Which session this wallet currently holds. Bumped whenever one ends
+     * ([logout], [destroy]) or a new one is established (a successful
+     * [login]/[register]).
+     *
+     * It is what makes the self-driven re-login *once per session* rather than
+     * once per call: requests issued before a cut-off complete long after it,
+     * still holding the same [AuthTokens], and each of their 401s re-enters
+     * [handleReauthenticationRequired]. Without a generation, every one of
+     * those arriving after [endSelfDrivenRelogin] would start another
+     * re-login. It also lets [reloginAfterCutOff] notice that the caller
+     * logged out or destroyed the wallet while it was tearing the old session
+     * down, instead of resurrecting a session the user ended.
+     */
+    @Volatile
+    private var sessionGeneration: Int = 0
+
+    /**
+     * Whether a self-driven re-login has already been run for the current
+     * [sessionGeneration]. Cleared by [bumpSessionGeneration].
+     *
+     * A boolean rather than "the generation it was last run for": the tests
+     * build this class with `Unsafe.allocateInstance`, which skips field
+     * initializers, so a sentinel like `-1` would come up equal to a
+     * zero-valued generation and refuse every re-login.
+     */
+    @Volatile
+    private var reloginDoneForGeneration: Boolean = false
+
+    /**
+     * Claims the right to run the SDK's own re-login, at most once per
+     * session. Refuses when one is already running, when one has already been
+     * run for this session generation (late 401s from requests issued before
+     * the cut-off), or when the wallet no longer believes it has a session to
+     * replace - after a logout, an error or a lifecycle block, a silent
+     * WebAuthn prompt is never the right answer.
+     *
+     * @return the session generation the re-login is replacing, or null when
+     *   it must not run.
+     */
     @Synchronized
-    private fun beginSelfDrivenRelogin(): Boolean {
-        if (reloginInProgress) return false
+    private fun beginSelfDrivenRelogin(): Int? {
+        if (reloginInProgress) return null
+        if (reloginDoneForGeneration) return null
+        if (!hasReplaceableSession()) return null
+        reloginDoneForGeneration = true
         reloginInProgress = true
-        return true
+        return sessionGeneration
+    }
+
+    /** Whether the current state describes a session worth replacing. */
+    private fun hasReplaceableSession(): Boolean = when (_state.value) {
+        is WalletState.Ready,
+        is WalletState.FlowActive,
+        is WalletState.KeystoreLocked,
+        is WalletState.Connecting -> true
+        is WalletState.Disconnected,
+        is WalletState.Error,
+        is WalletState.LifecycleBlocked -> false
+    }
+
+    /**
+     * Ends the current session generation. Call whenever a session ends or is
+     * replaced.
+     */
+    @Synchronized
+    private fun bumpSessionGeneration() {
+        sessionGeneration += 1
+        reloginDoneForGeneration = false
     }
 
     @Synchronized
@@ -409,7 +473,7 @@ class SirosWallet private constructor(
      * [WalletState.LifecycleBlocked], a success to [WalletState.Ready], and
      * anything else to [WalletState.Error].
      */
-    private suspend fun reloginAfterCutOff() {
+    private suspend fun reloginAfterCutOff(generation: Int) {
         engineStateJob?.cancel()
         engineStateJob = null
         engineSession?.disconnect()
@@ -437,17 +501,26 @@ class SirosWallet private constructor(
         // credentials are still signable. A successful login() unlocks it
         // again as part of its normal path.
         keystore.lock()
+        // The teardown above suspends (the WMP peer's close, the token-cache
+        // clears), and the caller may have logged out or destroyed the wallet
+        // in the meantime. Logging back in then would resurrect a session the
+        // user explicitly ended - and race the asynchronous AS logout.
+        if (sessionGeneration != generation) {
+            Timber.i("Self-driven re-login abandoned: the session it was replacing is already gone")
+            return
+        }
         login(accountRegistry.activeAccountId ?: sessionStore.activeAccountId)
     }
 
     /** [reloginAfterCutOff] under the once-only guard, never throwing at the caller. */
     private suspend fun reloginAfterLifecycleChange() {
-        if (!beginSelfDrivenRelogin()) {
-            Timber.d("Re-login already in progress — not starting another")
+        val generation = beginSelfDrivenRelogin()
+        if (generation == null) {
+            Timber.d("Re-login not started: one already ran for this session, or there is none to replace")
             return
         }
         try {
-            reloginAfterCutOff()
+            reloginAfterCutOff(generation)
         } catch (e: Exception) {
             // login() has already put the failure in the state; this call
             // must not turn a lifecycle write that succeeded into a throw.
@@ -486,42 +559,36 @@ class SirosWallet private constructor(
     }
 
     /**
-     * Enter [WalletState.LifecycleBlocked]. A suspended instance keeps its
-     * cached account (it can be reactivated elsewhere, after which the same
-     * passkey logs in again); a revoked one forgets it, because its
-     * server-side data is erased and that passkey can never log in to this
-     * tenant again - leaving it on the login screen would only offer the user
-     * a door that is bricked shut.
+     * Enter [WalletState.LifecycleBlocked].
+     *
+     * Neither reason touches the cached account. `WALLET_REVOKED` does **not**
+     * mean the wallet was erased: the backend returns it for the login gate of
+     * a single revoked instance too, and only deactivates the wallet when the
+     * *last* non-revoked instance is revoked - the user's other devices keep
+     * logging in either way. Only the human-readable `message` tells the two
+     * apart, and guessing from it would be worse than not knowing: forgetting
+     * the account on a per-instance revocation destroys the other passkeys
+     * that still work. So the SDK keeps everything, shows the backend's own
+     * explanation, and leaves re-enrollment to the user.
+     *
+     * [deactivateWallet] is the one place that still forgets the account -
+     * there the caller asked for it and the outcome is unambiguous.
      */
     private fun enterLifecycleBlocked(reason: WalletLifecycleRefusal, message: String?) {
         Timber.w("Wallet lifecycle refusal: $reason — ${message ?: "(no message from the backend)"}")
-        when (reason) {
-            WalletLifecycleRefusal.REVOKED -> forgetRefusedAccount()
-            WalletLifecycleRefusal.SUSPENDED -> logout()
-        }
+        // End the session either way - nothing this installation holds can be
+        // used until someone else acts - but keep the account (see this
+        // function's doc comment for why REVOKED is not licence to forget it),
+        // and do not schedule the remote DELETE: a retry after the instance is
+        // reactivated reuses the same AS session cookie, and the DELETE could
+        // land after its loginFinish. See [endSessionLocally].
+        endSessionLocally()
         _state.value = WalletState.LifecycleBlocked(
             reason = reason,
             message = message,
             cachedAccounts = accountRegistry.listLoginableAccounts(),
         )
         scope.launch { eventListener?.onWalletLifecycleBlocked(reason, message) }
-    }
-
-    /**
-     * Forget the account the refused login was for. After a failed login
-     * [AccountRegistry.activeAccountId] may already be null (nothing was
-     * established), while [SessionStore.activeAccountId] still names the
-     * account the attempt was scoped to - so fall back to it.
-     */
-    private fun forgetRefusedAccount() {
-        // In order of authority: the account the refused ceremony actually
-        // resolved to ([attemptedAccountId]), the registry's active account,
-        // then the session scope - which is the right answer for a resume or
-        // an unlock, and the wrong one right after a logout.
-        val accountId = attemptedAccountId
-            ?: accountRegistry.activeAccountId
-            ?: sessionStore.activeAccountId
-        if (accountId != null) forgetAccount(accountId) else logout()
     }
 
     /**
@@ -755,6 +822,8 @@ class SirosWallet private constructor(
         // Connect engine with anonymous token (new AS) or app token (legacy AS)
         connectEngineWithToken()
 
+        // A new session: see [sessionGeneration].
+        bumpSessionGeneration()
         _state.value = WalletState.Ready(
             userId = userId,
             displayName = displayName ?: givenDisplayName,
@@ -789,7 +858,6 @@ class SirosWallet private constructor(
         // this device once this login resolves.
         cachedWia = null
         cachedWiaExpiresAt = 0
-        attemptedAccountId = null
         try {
             ensureAuthMode()
             if (accountId != null) {
@@ -880,17 +948,6 @@ class SirosWallet private constructor(
             ?.accountId
     }
 
-    /**
-     * The account the passkey ceremony now in flight resolved to, set as soon
-     * as it is known. The only authority on which account a lifecycle refusal
-     * is about: after a [logout] the registry has no active account and
-     * [SessionStore.activeAccountId] still names the PREVIOUS one, so trusting
-     * the session scope at a refused login would forget the wrong account and
-     * leave the revoked one on the login screen. Null while the refusal could
-     * still come from a step before any passkey was chosen.
-     */
-    private var attemptedAccountId: String? = null
-
     private suspend fun newAsLogin(accountId: String?) {
         val prfCandidates = loginCandidates(accountId)
 
@@ -937,7 +994,6 @@ class SirosWallet private constructor(
 
         val credId = extractLastCredentialId()
             ?: throw WalletException("No credential ID after login")
-        attemptedAccountId = accountForCredential(credId)
         scopeSessionStoreToCredential(credId)
         val prfOutput = extractLastPrfOutput()
             ?: throw WalletException("PRF not supported by authenticator — cannot decrypt wallet data")
@@ -954,7 +1010,6 @@ class SirosWallet private constructor(
 
         val credId = extractLastCredentialId()
             ?: throw WalletException("No credential ID after login")
-        attemptedAccountId = accountForCredential(credId)
         scopeSessionStoreToCredential(credId)
         val prfOutput = extractLastPrfOutput()
             ?: throw WalletException("PRF not supported by authenticator — cannot decrypt wallet data")
@@ -998,6 +1053,10 @@ class SirosWallet private constructor(
         // Connect engine with anonymous token (new AS) or app token (legacy AS)
         connectEngineWithToken()
 
+        // A new session: a cut-off met on THIS one deserves its own
+        // self-driven re-login, and the 401s of the session it replaced no
+        // longer do. See [sessionGeneration].
+        bumpSessionGeneration()
         _state.value = WalletState.Ready(
             userId = userId,
             displayName = displayName,
@@ -1203,6 +1262,38 @@ class SirosWallet private constructor(
      * and clear session data.
      */
     fun logout() {
+        endSessionLocally()
+        // Ending the server session too is what makes this a logout rather
+        // than a local teardown. Fire-and-forget is safe *here* because the
+        // wallet then sits on the login screen: any login that follows is a
+        // deliberate user action far removed from this DELETE. It is NOT safe
+        // on the lifecycle-blocked path, where the app may retry within
+        // milliseconds - see [endSessionLocally].
+        scope.launch {
+            try {
+                authServerClient.logout()
+            } catch (e: Exception) {
+                Timber.w(e, "AS logout failed (non-fatal)")
+            }
+        }
+        _state.value = disconnectedState()
+        Timber.i("Logged out")
+    }
+
+    /**
+     * Everything [logout] does except ending the server session: drop the
+     * engine, the WMP peer, the API client, the cached tokens, the keystore
+     * and the account-scoped session, and end this session's generation.
+     *
+     * The lifecycle-blocked path uses this rather than [logout]. A suspended
+     * instance is reactivated from another device and the app then retries
+     * [login], which reuses the same AS session cookie - an unawaited
+     * `DELETE /auth/session` from the block could land *after* that
+     * `loginFinish` and invalidate the session the retry had just
+     * established. There is also nothing to end: the backend has already
+     * refused this installation.
+     */
+    private fun endSessionLocally() {
         engineStateJob?.cancel()
         engineStateJob = null
         engineSession?.disconnect()
@@ -1221,16 +1312,18 @@ class SirosWallet private constructor(
         // account's thumbprint for the next one. It is cheap to reissue.
         cachedWia = null
         cachedWiaExpiresAt = 0
+        // This session is over: a 401 still in flight from it must not be
+        // taken for a cut-off worth re-logging in from, and a self-driven
+        // re-login suspended in the old session's teardown must abandon
+        // rather than resurrect what the user just ended.
+        bumpSessionGeneration()
         scope.launch {
             try {
                 authTokens.clear()
-                authServerClient.logout()
             } catch (e: Exception) {
-                Timber.w(e, "AS logout failed (non-fatal)")
+                Timber.w(e, "Clearing cached tokens failed (non-fatal)")
             }
         }
-        _state.value = disconnectedState()
-        Timber.i("Logged out")
     }
 
     /**
@@ -1445,6 +1538,10 @@ class SirosWallet private constructor(
      * not be used again — create a new one with [create].
      */
     fun destroy() {
+        // Same reason as logout()'s: a self-driven re-login still suspended in
+        // the old session's teardown must not log back in after the host has
+        // torn this wallet down.
+        bumpSessionGeneration()
         activity.applicationContext.unregisterComponentCallbacks(memoryPressureCallbacks)
         zkPresentation.releaseProvers()
         engineSession?.disconnect()
@@ -3737,8 +3834,9 @@ class SirosWallet private constructor(
      */
     private fun handleReauthenticationRequired() {
         Timber.w("Re-authentication required — session/token refresh failed")
-        if (!beginSelfDrivenRelogin()) {
-            Timber.d("Re-login already in progress — ignoring repeat re-authentication signal")
+        val generation = beginSelfDrivenRelogin()
+        if (generation == null) {
+            Timber.d("Ignoring re-authentication signal: one re-login already ran for this session, or there is none to replace")
             return
         }
         scope.launch {
@@ -3753,7 +3851,7 @@ class SirosWallet private constructor(
                 // that follows, which is refused with WALLET_SUSPENDED /
                 // WALLET_REVOKED. Attempt it once - never in a loop - so the
                 // state machine converges without host code.
-                reloginAfterCutOff()
+                reloginAfterCutOff(generation)
             } catch (e: Exception) {
                 Timber.e(e, "Self-driven re-login after a session cut-off failed")
                 if (_state.value !is WalletState.LifecycleBlocked) logout()

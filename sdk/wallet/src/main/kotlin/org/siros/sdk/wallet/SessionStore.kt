@@ -118,10 +118,17 @@ internal class SessionStore(context: Context) {
      * backend's Wallet Instance Attestation tracks/revokes instances by this
      * key's JWK thumbprint, so a different key each time would silently
      * register a new "instance" on every flow.
+     *
+     * Account-scoped, but deliberately **survives [clearAccount]**: a logout
+     * must not change which wallet instance this installation is. Clearing it
+     * would mint a new key, and therefore a new backend instance, at the next
+     * login - which would silently hand a suspended or revoked installation a
+     * fresh, unblocked identity just by logging out and back in
+     * (SID-AUTH-06). Only [clearAll] (a factory reset) removes it.
      */
     var instanceKeyId: String?
-        get() = getString("instance_key_id")
-        set(value) = putString("instance_key_id", value)
+        get() = getString(KEY_INSTANCE_KEY_ID)
+        set(value) = putString(KEY_INSTANCE_KEY_ID, value)
 
     // ── Private data ────────────────────────────────────────────────
 
@@ -176,10 +183,14 @@ internal class SessionStore(context: Context) {
     fun clearAccount() {
         val id = activeAccountId ?: return
         val prefix = "$id/"
+        // The instance key is the exception: see [instanceKeyId]'s doc comment
+        // - it identifies this installation to the backend's wallet instance
+        // lifecycle, and a logout must not change that identity.
+        val keep = "$id/$KEY_INSTANCE_KEY_ID"
         val editor = prefs.edit()
-        prefs.all.keys.filter { it.startsWith(prefix) }.forEach { editor.remove(it) }
+        prefs.all.keys.filter { it.startsWith(prefix) && it != keep }.forEach { editor.remove(it) }
         editor.apply()
-        Timber.d("Session store cleared for account: $id")
+        Timber.d("Session store cleared for account: $id (instance key kept)")
     }
 
     /** Clear all accounts' session data (factory reset). */
@@ -191,4 +202,8 @@ internal class SessionStore(context: Context) {
 
     /** Legacy alias for [clearAccount] — clears the active account only. */
     fun clear() = clearAccount()
+
+    private companion object {
+        const val KEY_INSTANCE_KEY_ID = "instance_key_id"
+    }
 }
