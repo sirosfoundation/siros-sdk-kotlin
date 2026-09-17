@@ -1831,12 +1831,15 @@ class SirosWallet private constructor(
      * `vct#integrity` is not making a claim about its metadata, so there is
      * nothing to disagree with.
      */
-    private suspend fun verifyVctIntegrity(format: String, payload: JsonObject): String? {
-        if (format == "mso_mdoc") return null
-        val expected = payload["vct#integrity"]?.jsonPrimitive?.contentOrNull ?: return null
+    private suspend fun verifyVctIntegrity(format: String, payload: JsonObject): VctIntegrityCheck {
+        if (format == "mso_mdoc") return VctIntegrityCheck.ACCEPTED
+        val expected = payload["vct#integrity"]?.jsonPrimitive?.contentOrNull
+            ?: return VctIntegrityCheck.ACCEPTED
 
         val document = activeVctmDocument
-        if (document != null && Integrity.matches(document.raw.toByteArray(Charsets.UTF_8), expected)) return null
+        if (document != null && Integrity.matches(document.raw.toByteArray(Charsets.UTF_8), expected)) {
+            return VctIntegrityCheck.ACCEPTED
+        }
 
         // What was resolved before issuance is not what the issuer signed over
         // - or nothing was resolved at all. Both are ordinary: the document may
@@ -1862,9 +1865,7 @@ class SirosWallet private constructor(
 
         if (resolved != null) {
             Timber.i("Type metadata re-resolved to the document the issuer pinned")
-            activeVctmDocument = resolved
-            activeVctm = resolved.vctm
-            return null
+            return VctIntegrityCheck(refreshed = resolved)
         }
 
         if (document == null) {
@@ -1872,11 +1873,35 @@ class SirosWallet private constructor(
             // because a credential asking to be checked and not being checked
             // is exactly the state this method exists to make visible.
             Timber.w("Credential pinned vct#integrity but no type metadata could be resolved to check it against")
-            return null
+            return VctIntegrityCheck.ACCEPTED
         }
 
         Timber.e("Type metadata for '${document.vctm.vct}' does not match the issuer's vct#integrity")
-        return "The issuer's type metadata does not match what it published"
+        return VctIntegrityCheck(reason = "The issuer's type metadata does not match what it published")
+    }
+
+    /**
+     * What [verifyVctIntegrity] decided: a refusal [reason], or the document a
+     * re-resolution settled on when one happened.
+     *
+     * The refreshed document is handed back rather than written into
+     * [activeVctm]/[activeVctmDocument] on the way past. [verifyVctIntegrity]
+     * suspends on the network, and [resetIssuanceGuards] - which a cancelled
+     * flow or a logout calls - clears those fields and lets a new issuance
+     * populate them in the meantime. A write there would then be the *old*
+     * flow overwriting the new flow's metadata with its own pinned document.
+     * The caller applies it to the one credential it is storing, which is the
+     * only thing the re-resolution was ever about: it answers "is THIS
+     * credential's pinned document findable", not "what should the wallet now
+     * believe about the flow".
+     */
+    private data class VctIntegrityCheck(
+        val reason: String? = null,
+        val refreshed: org.siros.sdk.credentials.VctmDocument? = null,
+    ) {
+        companion object {
+            val ACCEPTED = VctIntegrityCheck()
+        }
     }
 
     /**
@@ -5741,14 +5766,19 @@ class SirosWallet private constructor(
                         storeFailureReason = reason
                         return@forEachIndexed
                     }
-                    verifyVctIntegrity(cred.format, payload)?.let { reason ->
+                    val integrity = verifyVctIntegrity(cred.format, payload)
+                    integrity.reason?.let { reason ->
                         storeFailureReason = reason
                         return@forEachIndexed
                     }
                     val metadata = activeOffer?.let { offer ->
                         CredentialUtils.buildMetadata(
                             offer = offer,
-                            vctm = activeVctm,
+                            // The re-resolved document when the check found one,
+                            // scoped to this credential rather than read back
+                            // from shared issuance state that a cancelled or
+                            // superseded flow may have replaced meanwhile.
+                            vctm = integrity.refreshed?.vctm ?: activeVctm,
                             rawCredential = cred.credential,
                         )
                     }

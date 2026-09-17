@@ -194,7 +194,7 @@ class IssuedTypeVerificationTest {
         val doc = vctmDocument("urn:eudi:pid:1")
         setField(w, "activeVctmDocument", doc)
         val raw = sdJwt("urn:eudi:pid:1", digestOf(doc.raw))
-        assertNull(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw)))
+        assertNull(refusalReason(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw))))
     }
 
     @Test
@@ -204,14 +204,14 @@ class IssuedTypeVerificationTest {
         val w = wallet()
         setField(w, "activeVctmDocument", vctmDocument("urn:eudi:pid:1"))
         val raw = sdJwt("urn:eudi:pid:1", digestOf("""{"vct":"urn:eudi:pid:1","claims":[]}"""))
-        assertNotNull(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw)))
+        assertNotNull(refusalReason(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw))))
     }
 
     @Test
     fun acceptsACredentialThatPinsNothing() = runTest {
         val w = wallet()
         setField(w, "activeVctmDocument", vctmDocument("urn:eudi:pid:1"))
-        assertNull(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(sdJwt("urn:eudi:pid:1"))))
+        assertNull(refusalReason(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(sdJwt("urn:eudi:pid:1")))))
     }
 
     @Test
@@ -220,7 +220,7 @@ class IssuedTypeVerificationTest {
         val w = wallet()
         setField(w, "activeVctmDocument", null)
         val raw = sdJwt("urn:eudi:pid:1", digestOf("""{"vct":"urn:eudi:pid:1"}"""))
-        assertNull(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw)))
+        assertNull(refusalReason(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw))))
     }
 
     @Test
@@ -231,7 +231,9 @@ class IssuedTypeVerificationTest {
         // resolving again rather than refused.
         val current = """{"vct":"urn:eudi:pid:1","name":"PID"}"""
         val w = wallet()
-        setField(w, "activeVctmDocument", vctmDocument("urn:eudi:pid:1"))
+        val staleDocument = vctmDocument("urn:eudi:pid:1")
+        val stale = staleDocument.raw
+        setField(w, "activeVctmDocument", staleDocument)
         setField(w, "config", WalletConfig(backendUrl = "https://backend.example"))
         setField(
             w,
@@ -247,13 +249,30 @@ class IssuedTypeVerificationTest {
         setField(w, "vctmFetcher", org.siros.sdk.credentials.VctmFetcher(httpGet = { current }))
 
         val raw = sdJwt("urn:eudi:pid:1", digestOf(current))
-        assertNull(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw)))
+        val outcome = callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw))
 
-        // And the re-resolved document is what the credential is stored with.
+        assertNull(refusalReason(outcome))
+        // And the re-resolved document is handed back, so the credential is
+        // stored with it.
+        assertEquals(current, (refreshedDocument(outcome) as VctmDocument).raw)
+        // Deliberately NOT written into the wallet's shared issuance state: it
+        // suspends on the network, and a cancelled or superseded flow may have
+        // replaced that state meanwhile - see VctIntegrityCheck's doc comment.
         val field = SirosWallet::class.java.getDeclaredField("activeVctmDocument")
         field.isAccessible = true
-        assertEquals(current, (field.get(w) as VctmDocument).raw)
+        assertEquals(stale, (field.get(w) as VctmDocument).raw)
     }
+
+    /** [SirosWallet.VctIntegrityCheck] is private; read its members by name. */
+    private fun member(outcome: Any?, name: String): Any? {
+        val f = outcome!!.javaClass.getDeclaredField(name)
+        f.isAccessible = true
+        return f.get(outcome)
+    }
+
+    private fun refusalReason(outcome: Any?): String? = member(outcome, "reason") as String?
+
+    private fun refreshedDocument(outcome: Any?): Any? = member(outcome, "refreshed")
 
     @Test
     fun refusesWhenNoSourceHasTheDocumentTheIssuerPinned() = runTest {
@@ -276,7 +295,7 @@ class IssuedTypeVerificationTest {
         setField(w, "vctmFetcher", org.siros.sdk.credentials.VctmFetcher(httpGet = { """{"vct":"urn:eudi:pid:1","name":"something else"}""" }))
 
         val raw = sdJwt("urn:eudi:pid:1", digestOf("""{"vct":"urn:eudi:pid:1","name":"PID"}"""))
-        assertNotNull(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw)))
+        assertNotNull(refusalReason(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw))))
     }
 
     @Test
@@ -284,6 +303,6 @@ class IssuedTypeVerificationTest {
         val w = wallet()
         setField(w, "activeVctmDocument", vctmDocument("urn:eudi:pid:1"))
         val raw = sdJwt("urn:eudi:pid:1", digestOf("wrong"))
-        assertNull(callSuspending(w, "verifyVctIntegrity", "mso_mdoc", payloadOf(raw)))
+        assertNull(refusalReason(callSuspending(w, "verifyVctIntegrity", "mso_mdoc", payloadOf(raw))))
     }
 }
