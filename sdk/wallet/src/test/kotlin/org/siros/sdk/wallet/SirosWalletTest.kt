@@ -4749,6 +4749,41 @@ class SirosWalletTest {
         verify(exactly = 1) { accountRegistry.removeAccount("default:user-1") }
     }
 
+    /**
+     * After a logout the registry has no active account and the session store
+     * still names the previous one, so the account a refused login is about
+     * can only come from the ceremony that was refused - which is what
+     * [SirosWallet.attemptedAccountId] records.
+     */
+    @Test
+    fun revoked_refusal_forgets_the_account_the_ceremony_resolved_to() = runTest(dispatcher) {
+        val accountRegistry = lifecycleAccountRegistry()
+        // As after a logout: no active account, but the session store still
+        // points at the account of the session that ended.
+        every { accountRegistry.activeAccountId } returns null
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        every { sessionStore.activeAccountId } returns "default:user-1"
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Disconnected())
+        val wallet = lifecycleWallet(
+            stateFlow, accountRegistry, mockk<AuthServerClient>(relaxed = true),
+            fields = arrayOf("sessionStore" to sessionStore, "attemptedAccountId" to "default:user-2"),
+        )
+
+        val handled = invokePrivateBoolean(
+            wallet, "handleLifecycleRefusal",
+            AuthException(
+                "AS request failed: 403 — /auth/login/finish",
+                errorCode = "WALLET_REVOKED",
+                code = 403,
+            ),
+        )
+        advanceUntilIdle()
+
+        assertTrue(handled)
+        verify(exactly = 1) { accountRegistry.removeAccount("default:user-2") }
+        verify(exactly = 0) { accountRegistry.removeAccount("default:user-1") }
+    }
+
     /** Any other login failure keeps the existing error path. */
     @Test
     fun login_failure_that_is_not_a_lifecycle_refusal_still_becomes_an_error() = runTest(dispatcher) {
@@ -5074,6 +5109,12 @@ class SirosWalletTest {
         Class.forName("org.siros.sdk.wallet.SirosWallet\$AuthMode")
             .enumConstants
             .first { (it as Enum<*>).name == "NEW_AS" }
+
+    private fun invokePrivateBoolean(target: Any, name: String, arg: Throwable?): Boolean {
+        val method = target.javaClass.getDeclaredMethod(name, Throwable::class.java)
+        method.isAccessible = true
+        return method.invoke(target, arg) as Boolean
+    }
 
     private fun invokePrivate(target: Any, name: String) {
         val method = target.javaClass.getDeclaredMethod(name)
