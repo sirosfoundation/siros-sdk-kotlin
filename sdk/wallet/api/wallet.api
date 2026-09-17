@@ -346,6 +346,7 @@ public final class org/siros/sdk/wallet/SirosWallet {
 	public final fun getPresentationHistory ()Ljava/util/List;
 	public final fun getRenewThresholds ()Ljava/util/Map;
 	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
+	public final fun getThisInstanceId ()Ljava/lang/String;
 	public final fun getWscdManager ()Lorg/siros/sdk/keystore/WscdManager;
 	public final fun getZkCircuitClient ()Lorg/siros/sdk/credentials/ZkCircuitClient;
 	public final fun getZkPresentation ()Lorg/siros/sdk/keystore/ZkMdocPresentation;
@@ -371,7 +372,9 @@ public final class org/siros/sdk/wallet/SirosWallet {
 	public final fun setRenewThresholds (Ljava/util/Map;)V
 	public final fun setUserOverride (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
 	public final fun setWalletInstanceStatus (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun setWalletInstanceStatus (Ljava/lang/String;Lorg/siros/sdk/auth/WalletInstanceStatus;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun setWalletInstanceStatus$default (Lorg/siros/sdk/wallet/SirosWallet;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static synthetic fun setWalletInstanceStatus$default (Lorg/siros/sdk/wallet/SirosWallet;Ljava/lang/String;Lorg/siros/sdk/auth/WalletInstanceStatus;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun signMdocPresentationForProximity (JLjava/util/List;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun startIssuance (Ljava/lang/String;Lorg/siros/sdk/wallet/ZkIssuanceInput;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun startIssuance$default (Lorg/siros/sdk/wallet/SirosWallet;Ljava/lang/String;Lorg/siros/sdk/wallet/ZkIssuanceInput;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
@@ -556,6 +559,7 @@ public abstract interface class org/siros/sdk/wallet/WalletEventListener {
 	public abstract fun onFlowError (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
 	public abstract fun onReauthenticationRequired ()V
 	public abstract fun onTxCodeRequired (Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+	public abstract fun onWalletLifecycleBlocked (Lorg/siros/sdk/auth/WalletLifecycleRefusal;Ljava/lang/String;)V
 }
 
 public final class org/siros/sdk/wallet/WalletEventListener$DefaultImpls {
@@ -569,6 +573,7 @@ public final class org/siros/sdk/wallet/WalletEventListener$DefaultImpls {
 	public static synthetic fun onFlowError$default (Lorg/siros/sdk/wallet/WalletEventListener;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)V
 	public static fun onReauthenticationRequired (Lorg/siros/sdk/wallet/WalletEventListener;)V
 	public static fun onTxCodeRequired (Lorg/siros/sdk/wallet/WalletEventListener;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+	public static fun onWalletLifecycleBlocked (Lorg/siros/sdk/wallet/WalletEventListener;Lorg/siros/sdk/auth/WalletLifecycleRefusal;Ljava/lang/String;)V
 }
 
 public abstract class org/siros/sdk/wallet/WalletState {
@@ -636,6 +641,22 @@ public final class org/siros/sdk/wallet/WalletState$KeystoreLocked : org/siros/s
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getDisplayName ()Ljava/lang/String;
 	public final fun getUserId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/wallet/WalletState$LifecycleBlocked : org/siros/sdk/wallet/WalletState {
+	public fun <init> (Lorg/siros/sdk/auth/WalletLifecycleRefusal;Ljava/lang/String;Ljava/util/List;)V
+	public synthetic fun <init> (Lorg/siros/sdk/auth/WalletLifecycleRefusal;Ljava/lang/String;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Lorg/siros/sdk/auth/WalletLifecycleRefusal;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/util/List;
+	public final fun copy (Lorg/siros/sdk/auth/WalletLifecycleRefusal;Ljava/lang/String;Ljava/util/List;)Lorg/siros/sdk/wallet/WalletState$LifecycleBlocked;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/WalletState$LifecycleBlocked;Lorg/siros/sdk/auth/WalletLifecycleRefusal;Ljava/lang/String;Ljava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/wallet/WalletState$LifecycleBlocked;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCachedAccounts ()Ljava/util/List;
+	public final fun getMessage ()Ljava/lang/String;
+	public final fun getReason ()Lorg/siros/sdk/auth/WalletLifecycleRefusal;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }

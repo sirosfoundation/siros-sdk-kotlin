@@ -1,6 +1,7 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.wallet
 
+import org.siros.sdk.auth.WalletLifecycleRefusal
 import org.siros.sdk.credentials.StoredCredential
 
 /**
@@ -46,6 +47,41 @@ sealed class WalletState {
         val flowType: String,
         val status: String,
         val credentials: List<StoredCredential> = emptyList(),
+    ) : WalletState()
+
+    /**
+     * The backend refuses this installation because of its wallet instance's
+     * lifecycle (SID-AUTH-06): the instance is suspended, or the wallet has
+     * been deactivated and its data erased. Terminal for this session - it is
+     * not an error to retry or dismiss, but a condition that only someone
+     * else (another device, the provider) can lift.
+     *
+     * Entered from [SirosWallet.login], [SirosWallet.unlockKeystore],
+     * [SirosWallet.resumeSession] and from the SDK's own re-login after a
+     * token cut-off, whenever the authorization server answers `403` with
+     * `WALLET_SUSPENDED` / `WALLET_REVOKED`.
+     *
+     * **Neither reason forgets anything local**, and [cachedAccounts] still
+     * lists this account. `REVOKED` is *not* proof the wallet was erased: the
+     * backend answers with it for the login gate of a single revoked instance
+     * as well, and only deactivates the wallet when the last non-revoked
+     * instance is revoked - the user's other devices keep working either way.
+     * Only [message], which is written for the user, tells the two apart, so
+     * the SDK shows it rather than guessing.
+     *
+     * What an app should offer: for `SUSPENDED`, a retry - a later
+     * [SirosWallet.login] succeeds once the instance is reactivated from
+     * another device. For `REVOKED`, a fresh enrollment, which is the way
+     * forward in both the per-instance and the deactivated case.
+     * [SirosWallet.deactivateWallet] is the only thing that forgets the
+     * cached account.
+     */
+    data class LifecycleBlocked(
+        val reason: WalletLifecycleRefusal,
+        /** The backend's user-facing explanation, when it sent one. */
+        val message: String?,
+        /** Cached accounts that can still be logged into. */
+        val cachedAccounts: List<CachedAccount> = emptyList(),
     ) : WalletState()
 
     /** An error occurred. The app should show the message and offer retry / logout. */

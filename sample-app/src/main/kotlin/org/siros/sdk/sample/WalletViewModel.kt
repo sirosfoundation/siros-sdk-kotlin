@@ -761,11 +761,15 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                         restoreFido2PluginState()
                         maybeOfferWscdAutoEnroll()
                     }
-                    // No usable credentials: logged out, or the keystore is
-                    // locked and nothing can be signed until PRF unlock.
+                    // No usable credentials: logged out, the keystore is
+                    // locked and nothing can be signed until PRF unlock, or
+                    // this wallet instance is suspended/revoked (SID-AUTH-06),
+                    // which is a logged-out wallet that cannot log back in.
                     // Offering an entry we cannot honour walks the user through
                     // a consent screen and then fails.
-                    is WalletState.Disconnected, is WalletState.KeystoreLocked -> {
+                    is WalletState.Disconnected,
+                    is WalletState.KeystoreLocked,
+                    is WalletState.LifecycleBlocked -> {
                         WalletSessionHolder.update(null)
                         SirosCredentialRegistry.clear(activity)
                     }

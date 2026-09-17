@@ -149,8 +149,43 @@ interface WalletEventListener {
      * specific flow's failure, session otherwise fine), this means the whole
      * session is gone - route the user to the login screen rather than
      * surfacing a generic error message.
+     *
+     * Since SID-AUTH-06 the SDK attempts exactly one login itself right after
+     * this fires: a lifecycle cut-off is indistinguishable from an expired
+     * session until that login is refused with `WALLET_SUSPENDED` /
+     * `WALLET_REVOKED`, which is what turns it into
+     * [WalletState.LifecycleBlocked] rather than an endless reauth loop. So an
+     * implementation should show its login/progress screen and wait for the
+     * state to change - it must NOT call [SirosWallet.login] itself, or two
+     * WebAuthn ceremonies race on the session store, the wallet state and the
+     * engine session.
      */
     fun onReauthenticationRequired() {
         // Default: no-op. Host apps override to route to a login screen.
+    }
+
+    /**
+     * The backend refuses this installation because of its wallet instance's
+     * lifecycle (SID-AUTH-06): the instance was suspended, or the wallet was
+     * deactivated and its data erased. Fired when [SirosWallet] enters
+     * [WalletState.LifecycleBlocked] - from a login, a keystore unlock, a
+     * session resume, or the SDK's own single re-login after a token cut-off.
+     *
+     * Unlike [onReauthenticationRequired] this is not "prompt again": another
+     * login attempt with the same passkey is refused the same way until
+     * someone else acts. `SUSPENDED` is lifted by reactivating the instance
+     * from another device; `REVOKED` is terminal *for this installation's
+     * instance* and needs a fresh enrollment.
+     *
+     * `REVOKED` does **not** imply the wallet was deactivated and erased: the
+     * backend answers with it for a single revoked instance too, while the
+     * account's other passkeys and devices keep working. Nothing local is
+     * discarded on either reason - the message is the only thing that
+     * distinguishes the cases, and it is written for the user - so do not
+     * treat this callback as licence to drop account state. Apps that already
+     * render [WalletState.LifecycleBlocked] need not implement this.
+     */
+    fun onWalletLifecycleBlocked(reason: org.siros.sdk.auth.WalletLifecycleRefusal, message: String?) {
+        // Default: no-op. The state change is the primary signal.
     }
 }

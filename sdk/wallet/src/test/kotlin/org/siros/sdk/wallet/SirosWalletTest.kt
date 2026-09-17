@@ -49,7 +49,14 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.siros.sdk.auth.AuthServerClient
+import org.siros.sdk.auth.AuthTokens
 import org.siros.sdk.auth.BackendApiClient
+import org.siros.sdk.auth.DeactivationOutcome
+import org.siros.sdk.auth.WalletInstance
+import org.siros.sdk.auth.WalletInstanceStatus
+import org.siros.sdk.auth.WalletLifecycleRefusal
+import org.siros.sdk.credentials.AuthException
 import org.siros.sdk.credentials.BackendApiException
 import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialMatcher
@@ -528,8 +535,11 @@ class SirosWalletTest {
         advanceUntilIdle()
 
         verify(exactly = 1) { listener.onReauthenticationRequired() }
-        verify(exactly = 1) { engine.disconnect() }
-        verify(exactly = 1) { keystore.lock() }
+        verify(atLeast = 1) { engine.disconnect() }
+        // The SDK now attempts one self-driven re-login before giving up (see
+        // handleReauthenticationRequired), and both that attempt's teardown
+        // and the logout it falls back to lock the keystore.
+        verify(atLeast = 1) { keystore.lock() }
         assertEquals(WalletState.Disconnected(), wallet.state.value)
     }
 
@@ -1537,7 +1547,8 @@ class SirosWalletTest {
     @Test
     fun deactivateWallet_revokesAllAndForgetsLocalAccount() = runTest(dispatcher) {
         val apiClient = mockk<BackendApiClient>(relaxed = true)
-        coEvery { apiClient.revokeAllWalletInstances("device stolen") } returns 2
+        coEvery { apiClient.revokeAllWalletInstances("device stolen") } returns
+            DeactivationOutcome(revoked = 2, complete = true)
         val accountRegistry = mockk<AccountRegistry>(relaxed = true)
         every { accountRegistry.activeAccountId } returns "acct-1"
         every { accountRegistry.listLoginableAccounts() } returns emptyList()
@@ -1551,9 +1562,10 @@ class SirosWalletTest {
             "apiClient" to apiClient,
         )
 
-        val revoked = wallet.deactivateWallet("device stolen")
+        val outcome = wallet.deactivateWallet("device stolen")
 
-        assertEquals(2, revoked)
+        assertEquals(2, outcome.revoked)
+        assertTrue(outcome.complete)
         coVerify(exactly = 1) { apiClient.revokeAllWalletInstances("device stolen") }
         verify(exactly = 1) { accountRegistry.removeAccount("acct-1") }
     }
@@ -4678,6 +4690,532 @@ class SirosWalletTest {
         // Initial value + one re-emission.
         assertEquals(2, emissions)
         collector.cancel()
+    }
+
+
+    // ── Wallet instance lifecycle (SID-AUTH-06, go-wallet-backend#319) ──
+
+    /**
+     * A login refused with `403 WALLET_SUSPENDED` is a state, not an error:
+     * the instance can be reactivated from another device, so the cached
+     * account stays on the login screen and nothing local is lost.
+     */
+    @Test
+    fun login_refused_as_suspended_enters_the_blocked_state_and_keeps_the_account() = runTest(dispatcher) {
+        val accountRegistry = lifecycleAccountRegistry()
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+        coEvery { authServerClient.loginBegin() } throws AuthException(
+            "AS request failed: 403 — /auth/login/finish",
+            errorCode = "WALLET_SUSPENDED",
+            code = 403,
+            serverMessage = "This device is suspended",
+        )
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Disconnected())
+        val listener = RecordingLifecycleListener()
+        val wallet = lifecycleWallet(stateFlow, accountRegistry, authServerClient, listener)
+
+        wallet.login()
+        advanceUntilIdle()
+
+        val blocked = stateFlow.value as WalletState.LifecycleBlocked
+        assertEquals(WalletLifecycleRefusal.SUSPENDED, blocked.reason)
+        assertEquals("This device is suspended", blocked.message)
+        assertEquals(1, blocked.cachedAccounts.size)
+        verify(exactly = 0) { accountRegistry.removeAccount(any()) }
+        assertEquals(WalletLifecycleRefusal.SUSPENDED to "This device is suspended", listener.blocked)
+    }
+
+    /**
+     * `WALLET_REVOKED` does **not** mean the wallet was erased: the backend
+     * returns it for the login gate of a single revoked instance too, and the
+     * user's other devices keep working. Only the human-readable message tells
+     * the two apart, so the SDK keeps the cached account - forgetting it on a
+     * per-instance revocation would destroy the other passkeys that still work.
+     */
+    @Test
+    fun login_refused_as_revoked_keeps_the_cached_account() = runTest(dispatcher) {
+        val accountRegistry = lifecycleAccountRegistry()
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+        coEvery { authServerClient.loginBegin() } throws AuthException(
+            "AS request failed: 403 — /auth/login/begin",
+            errorCode = "WALLET_REVOKED",
+            code = 403,
+            serverMessage = "This device was removed",
+        )
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Disconnected())
+        val wallet = lifecycleWallet(stateFlow, accountRegistry, authServerClient)
+
+        wallet.login()
+        advanceUntilIdle()
+
+        val blocked = stateFlow.value as WalletState.LifecycleBlocked
+        assertEquals(WalletLifecycleRefusal.REVOKED, blocked.reason)
+        assertEquals("This device was removed", blocked.message)
+        assertEquals(1, blocked.cachedAccounts.size)
+        verify(exactly = 0) { accountRegistry.removeAccount(any()) }
+    }
+
+    /**
+     * A suspended instance is reactivated from another device and the app
+     * retries [SirosWallet.login], which reuses the same AS session cookie. An
+     * unawaited `DELETE /auth/session` scheduled by the block could land after
+     * that retry's `loginFinish` and invalidate the session it had just
+     * established - so the blocked path tears down locally and never asks the
+     * AS to end a session the backend has already refused.
+     */
+    @Test
+    fun a_lifecycle_block_does_not_end_the_server_session() = runTest(dispatcher) {
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(
+            WalletState.Ready(userId = "user-1", displayName = "Alice")
+        )
+        val wallet = lifecycleWallet(
+            stateFlow, lifecycleAccountRegistry(), authServerClient,
+            fields = arrayOf("authTokens" to mockk<AuthTokens>(relaxed = true)),
+        )
+
+        invokePrivateBoolean(
+            wallet, "handleLifecycleRefusal",
+            AuthException(
+                "AS request failed: 403 — /auth/login/begin",
+                errorCode = "WALLET_SUSPENDED",
+                code = 403,
+            ),
+        )
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { authServerClient.logout() }
+
+        // The contrast: an explicit logout does end the server session.
+        wallet.logout()
+        advanceUntilIdle()
+        coVerify(exactly = 1) { authServerClient.logout() }
+    }
+
+    /** Any other login failure keeps the existing error path. */
+    @Test
+    fun login_failure_that_is_not_a_lifecycle_refusal_still_becomes_an_error() = runTest(dispatcher) {
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+        coEvery { authServerClient.loginBegin() } throws AuthException(
+            "AS request failed: 401 — /auth/login/begin",
+            errorCode = "auth_failed",
+            code = 401,
+        )
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Disconnected())
+        val wallet = lifecycleWallet(stateFlow, lifecycleAccountRegistry(), authServerClient)
+
+        wallet.login()
+        advanceUntilIdle()
+
+        assertTrue(stateFlow.value.toString(), stateFlow.value is WalletState.Error)
+    }
+
+    /**
+     * The token cut-off: after a lifecycle change made elsewhere every request
+     * is refused with 401, the SDK's reauthentication signal fires, and the
+     * SDK itself attempts exactly one login - which the AS refuses with the
+     * lifecycle code. The host's own hook still fires, so apps that drive
+     * their own prompt see no change in ordering.
+     */
+    @Test
+    fun reauthentication_signal_drives_one_relogin_that_lands_in_the_blocked_state() = runTest(dispatcher) {
+        val accountRegistry = lifecycleAccountRegistry()
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+        coEvery { authServerClient.loginBegin() } throws AuthException(
+            "AS request failed: 403 — /auth/login/begin",
+            errorCode = "WALLET_SUSPENDED",
+            code = 403,
+            serverMessage = "Suspended by your provider",
+        )
+        val stateFlow = MutableStateFlow<WalletState>(
+            WalletState.Ready(userId = "user-1", displayName = "Alice")
+        )
+        val listener = RecordingLifecycleListener()
+        val authTokens = mockk<AuthTokens>(relaxed = true)
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val wallet = lifecycleWallet(
+            stateFlow, accountRegistry, authServerClient, listener,
+            "authTokens" to authTokens,
+            "engineSession" to engine,
+        )
+
+        invokePrivate(wallet, "handleReauthenticationRequired")
+        advanceUntilIdle()
+
+        assertTrue(listener.reauthenticationRequired)
+        coVerify(atLeast = 1) { authTokens.clear() }
+        verify(exactly = 1) { engine.disconnect() }
+        coVerify(exactly = 1) { authServerClient.loginBegin() }
+        val blocked = stateFlow.value as WalletState.LifecycleBlocked
+        assertEquals(WalletLifecycleRefusal.SUSPENDED, blocked.reason)
+        assertEquals("Suspended by your provider", blocked.message)
+    }
+
+    /**
+     * Once per session, not once per call. Requests issued before a cut-off
+     * complete long after it - still holding the same [AuthTokens] - and each
+     * of their 401s re-enters the signal, so releasing the in-progress flag
+     * must not re-open the door for the same session. Only a new session may
+     * be cut off again.
+     */
+    @Test
+    fun a_late_401_from_the_session_already_handled_does_not_start_a_second_relogin() = runTest(dispatcher) {
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+        coEvery { authServerClient.loginBegin() } throws AuthException(
+            "AS request failed: 403 — /auth/login/begin",
+            errorCode = "WALLET_SUSPENDED",
+            code = 403,
+        )
+        val stateFlow = MutableStateFlow<WalletState>(
+            WalletState.Ready(userId = "user-1", displayName = "Alice")
+        )
+        val wallet = lifecycleWallet(
+            stateFlow, lifecycleAccountRegistry(), authServerClient,
+            fields = arrayOf("authTokens" to mockk<AuthTokens>(relaxed = true)),
+        )
+
+        invokePrivate(wallet, "handleReauthenticationRequired")
+        advanceUntilIdle()
+        // The first attempt has finished; a pre-cut-off request's 401 lands now.
+        invokePrivate(wallet, "handleReauthenticationRequired")
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { authServerClient.loginBegin() }
+    }
+
+    /**
+     * There is nothing to replace once the session is gone, and a silent
+     * WebAuthn prompt after an explicit logout would be the wrong answer.
+     */
+    @Test
+    fun no_self_driven_relogin_without_a_session_to_replace() = runTest(dispatcher) {
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+        for (state in listOf(
+            WalletState.Disconnected(),
+            WalletState.Error("boom"),
+            WalletState.LifecycleBlocked(WalletLifecycleRefusal.SUSPENDED, null),
+        )) {
+            val wallet = lifecycleWallet(
+                MutableStateFlow(state), lifecycleAccountRegistry(), authServerClient,
+                fields = arrayOf("authTokens" to mockk<AuthTokens>(relaxed = true)),
+            )
+            invokePrivate(wallet, "handleReauthenticationRequired")
+            advanceUntilIdle()
+        }
+
+        coVerify(exactly = 0) { authServerClient.loginBegin() }
+    }
+
+    /**
+     * [SirosWallet.destroy] leaves the state alone - a destroyed wallet is not
+     * a logged-out one - so the generation bump on its own would still let a
+     * re-authentication signal from a coroutine still unwinding pass the guard
+     * and log back in after the host tore the wallet down. Connecting is not
+     * replaceable either: that is where the *initial* login sits.
+     */
+    @Test
+    fun no_self_driven_relogin_after_destroy_or_while_connecting() = runTest(dispatcher) {
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+
+        val connecting = lifecycleWallet(
+            MutableStateFlow(WalletState.Connecting), lifecycleAccountRegistry(), authServerClient,
+            fields = arrayOf("authTokens" to mockk<AuthTokens>(relaxed = true)),
+        )
+        invokePrivate(connecting, "handleReauthenticationRequired")
+        advanceUntilIdle()
+
+        val destroyed = lifecycleWallet(
+            MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            lifecycleAccountRegistry(), authServerClient,
+            fields = arrayOf(
+                "authTokens" to mockk<AuthTokens>(relaxed = true),
+                "isDestroyed" to true,
+            ),
+        )
+        invokePrivate(destroyed, "handleReauthenticationRequired")
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { authServerClient.loginBegin() }
+    }
+
+    /**
+     * Exactly once, never a loop: the 401s the re-login's own requests may
+     * provoke re-enter the same signal, and must not start a second attempt.
+     */
+    @Test
+    fun a_repeated_reauthentication_signal_does_not_start_a_second_relogin() = runTest(dispatcher) {
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+        coEvery { authServerClient.loginBegin() } throws AuthException(
+            "AS request failed: 403 — /auth/login/begin",
+            errorCode = "WALLET_REVOKED",
+            code = 403,
+        )
+        val stateFlow = MutableStateFlow<WalletState>(
+            WalletState.Ready(userId = "user-1", displayName = "Alice")
+        )
+        val wallet = lifecycleWallet(
+            stateFlow, lifecycleAccountRegistry(), authServerClient,
+            fields = arrayOf("authTokens" to mockk<AuthTokens>(relaxed = true)),
+        )
+
+        invokePrivate(wallet, "handleReauthenticationRequired")
+        invokePrivate(wallet, "handleReauthenticationRequired")
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { authServerClient.loginBegin() }
+    }
+
+    /**
+     * Every status write records a cut-off, and the acting token's exemption
+     * does not reach `POST /auth/token` or an engine flow start - so the
+     * facade re-logs in rather than letting the next flow discover it as a
+     * 401. Suspending this device's own instance therefore ends in
+     * LifecycleBlocked(SUSPENDED), which is the truthful state.
+     */
+    @Test
+    fun suspending_this_device_relogins_and_lands_in_the_blocked_state() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery {
+            apiClient.setWalletInstanceStatus("jkt-self", WalletInstanceStatus.SUSPENDED, "lost phone")
+        } returns WalletInstance(id = "jkt-self", status = "suspended")
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+        coEvery { authServerClient.loginBegin() } throws AuthException(
+            "AS request failed: 403 — /auth/login/begin",
+            errorCode = "WALLET_SUSPENDED",
+            code = 403,
+            serverMessage = "This device is suspended",
+        )
+        val stateFlow = MutableStateFlow<WalletState>(
+            WalletState.Ready(userId = "user-1", displayName = "Alice")
+        )
+        val authTokens = mockk<AuthTokens>(relaxed = true)
+        val wallet = lifecycleWallet(
+            stateFlow, lifecycleAccountRegistry(), authServerClient,
+            fields = arrayOf("apiClient" to apiClient, "authTokens" to authTokens),
+        )
+
+        val updated = wallet.setWalletInstanceStatus("jkt-self", WalletInstanceStatus.SUSPENDED, "lost phone")
+        advanceUntilIdle()
+
+        assertEquals("suspended", updated.status)
+        assertEquals(WalletInstanceStatus.SUSPENDED, updated.statusEnum)
+        coVerify(atLeast = 1) { authTokens.clear() }
+        coVerify(exactly = 1) { authServerClient.loginBegin() }
+        assertEquals(
+            WalletLifecycleRefusal.SUSPENDED,
+            (stateFlow.value as WalletState.LifecycleBlocked).reason,
+        )
+    }
+
+    /**
+     * deactivateWallet reports what the backend actually did and forgets the
+     * local account - the vault it decrypts no longer exists. It does not
+     * re-login: there is nothing left to log in to.
+     */
+    @Test
+    fun deactivate_wallet_returns_the_outcome_and_forgets_the_account() = runTest(dispatcher) {
+        val accountRegistry = lifecycleAccountRegistry()
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery { apiClient.revokeAllWalletInstances("device stolen") } returns
+            DeactivationOutcome(revoked = 2, complete = true)
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(
+            WalletState.Ready(userId = "user-1", displayName = "Alice")
+        )
+        val wallet = lifecycleWallet(
+            stateFlow, accountRegistry, authServerClient,
+            fields = arrayOf("apiClient" to apiClient, "authTokens" to mockk<AuthTokens>(relaxed = true)),
+        )
+
+        val outcome = wallet.deactivateWallet("device stolen")
+        advanceUntilIdle()
+
+        assertEquals(2, outcome.revoked)
+        assertTrue(outcome.complete)
+        verify(exactly = 1) { accountRegistry.removeAccount("default:user-1") }
+        coVerify(exactly = 0) { authServerClient.loginBegin() }
+    }
+
+    /**
+     * An erasure the backend could not finish still deactivated the wallet -
+     * the revocations stand and the keys are gone or going - so the local
+     * account is forgotten either way; `complete` is only what the app tells
+     * the user.
+     */
+    @Test
+    fun deactivate_wallet_forgets_the_account_even_when_the_erasure_is_incomplete() = runTest(dispatcher) {
+        val accountRegistry = lifecycleAccountRegistry()
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery { apiClient.revokeAllWalletInstances(null) } returns
+            DeactivationOutcome(revoked = 2, complete = false)
+        val stateFlow = MutableStateFlow<WalletState>(
+            WalletState.Ready(userId = "user-1", displayName = "Alice")
+        )
+        val wallet = lifecycleWallet(
+            stateFlow, accountRegistry, mockk<AuthServerClient>(relaxed = true),
+            fields = arrayOf("apiClient" to apiClient, "authTokens" to mockk<AuthTokens>(relaxed = true)),
+        )
+
+        val outcome = wallet.deactivateWallet()
+        advanceUntilIdle()
+
+        assertEquals(false, outcome.complete)
+        verify(exactly = 1) { accountRegistry.removeAccount("default:user-1") }
+    }
+
+    /**
+     * The facade marks the row that is this installation by comparing the
+     * backend's instance ids to the instance-key thumbprint it already sends
+     * as `wallet_instance_id` (the WIA's `cnf.jkt`).
+     */
+    @Test
+    fun list_wallet_instances_marks_this_device_from_the_instance_key_thumbprint() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery { apiClient.listWalletInstances() } returns listOf(
+            WalletInstance(id = "jkt-self", status = "active"),
+            WalletInstance(id = "jkt-other", status = "suspended"),
+        )
+        val wallet = lifecycleWallet(
+            MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            lifecycleAccountRegistry(),
+            mockk<AuthServerClient>(relaxed = true),
+            fields = arrayOf("apiClient" to apiClient),
+        )
+        setField(wallet, "cachedWia", fakeWiaJwt(System.currentTimeMillis() / 1000 + 3600, jkt = "jkt-self", attestationSource = null))
+        setField(wallet, "cachedWiaExpiresAt", System.currentTimeMillis() / 1000 + 3600)
+
+        val instances = wallet.listWalletInstances()
+
+        assertEquals("jkt-self", wallet.thisInstanceId)
+        assertTrue(instances.first { it.id == "jkt-self" }.isThisDevice)
+        assertEquals(false, instances.first { it.id == "jkt-other" }.isThisDevice)
+        // The thumbprint was already known, so no attestation round trip.
+        coVerify(exactly = 0) { apiClient.requestWIAChallenge() }
+    }
+
+    /**
+     * A `credential_id` the backend refuses as not the caller's own would,
+     * if the SDK gave up, leave this instance with no attestation at all -
+     * and the first link recorded for an instance wins, so guessing another
+     * id could lock the real passkey out of the per-device gate for good.
+     * Retry once without the link and drop the stale id.
+     */
+    @Test
+    fun wia_generation_retries_without_the_passkey_link_when_the_backend_refuses_it() = runTest(dispatcher) {
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        every { sessionStore.instanceKeyId } returns "instance-key-1"
+        every { sessionStore.credentialId } returns "stale-passkey"
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        coEvery {
+            keystore.generateKeyProof(keyId = any(), typ = any(), issuer = any(), audience = any(), extraClaims = any())
+        } returns "pop-jwt"
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery { apiClient.requestWIAChallenge() } returns buildJsonObject { put("challenge", "chal-1") }
+        coEvery {
+            apiClient.generateWIA(any(), "chal-1", any(), any(), "stale-passkey")
+        } throws BackendApiException(403, "API request failed: 403", """{"error":"CREDENTIAL_NOT_OWNED"}""")
+        val wiaJwt = fakeWiaJwt(System.currentTimeMillis() / 1000 + 3600, jkt = "jkt-self", attestationSource = null)
+        coEvery { apiClient.generateWIA(any(), "chal-1", any(), any(), null) } returns wiaJwt
+
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "sessionStore" to sessionStore,
+            "keystore" to keystore,
+            "apiClient" to apiClient,
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                redirectUri = "siros-sample://callback",
+            ),
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "ensureWalletInstanceAttestation" }
+        method.isAccessible = true
+        val wia = kotlinx.coroutines.runBlocking { method.callSuspend(wallet) }
+
+        assertEquals(wiaJwt, wia)
+        verify(exactly = 1) { sessionStore.credentialId = null }
+        coVerify(exactly = 1) { apiClient.generateWIA(any(), "chal-1", any(), any(), "stale-passkey") }
+        coVerify(exactly = 1) { apiClient.generateWIA(any(), "chal-1", any(), any(), null) }
+    }
+
+    /** A listener that records the lifecycle callbacks under test. */
+    private class RecordingLifecycleListener : WalletEventListener {
+        var reauthenticationRequired = false
+        var blocked: Pair<WalletLifecycleRefusal, String?>? = null
+        override suspend fun onCredentialSelectionRequired(request: PresentationRequest): List<Long> = emptyList()
+        override fun onReauthenticationRequired() { reauthenticationRequired = true }
+        override fun onWalletLifecycleBlocked(reason: WalletLifecycleRefusal, message: String?) {
+            blocked = reason to message
+        }
+    }
+
+    private fun lifecycleAccountRegistry(): AccountRegistry {
+        val account = CachedAccount(
+            userId = "user-1",
+            tenantId = "default",
+            displayName = "Alice",
+            backendUrl = "https://wallet.example.com",
+            passkeys = listOf(CachedPasskey(credentialId = "cred-1", prfSalt = "c2FsdA==")),
+        )
+        val registry = mockk<AccountRegistry>(relaxed = true)
+        every { registry.listAccounts() } returns listOf(account)
+        every { registry.listLoginableAccounts() } returns listOf(account)
+        every { registry.findAccount(any()) } returns account
+        every { registry.activeAccountId } returns "default:user-1"
+        return registry
+    }
+
+    /**
+     * A wallet wired for the lifecycle paths: NEW_AS mode (so `login()` goes
+     * straight to the AS instead of probing for the legacy backend) and every
+     * collaborator those paths touch.
+     */
+    private fun lifecycleWallet(
+        stateFlow: MutableStateFlow<WalletState>,
+        accountRegistry: AccountRegistry,
+        authServerClient: AuthServerClient,
+        listener: WalletEventListener? = null,
+        vararg fields: Pair<String, Any?>,
+    ): SirosWallet {
+        val values = mutableMapOf<String, Any?>(
+            "_state" to stateFlow,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "accountRegistry" to accountRegistry,
+            "authServerClient" to authServerClient,
+            "sessionStore" to mockk<SessionStore>(relaxed = true),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                redirectUri = "siros-sample://callback",
+            ),
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+        if (listener != null) values["eventListener"] = listener
+        fields.forEach { (name, value) -> values[name] = value }
+        val wallet = newWallet(*values.toList().toTypedArray())
+        setField(wallet, "authMode", authModeNewAs())
+        return wallet
+    }
+
+    /** `SirosWallet.AuthMode.NEW_AS` — a private nested enum. */
+    private fun authModeNewAs(): Any =
+        Class.forName("org.siros.sdk.wallet.SirosWallet\$AuthMode")
+            .enumConstants
+            .first { (it as Enum<*>).name == "NEW_AS" }
+
+    /** [SirosWallet.handleLifecycleRefusal] is a private suspend function. */
+    private suspend fun invokePrivateBoolean(target: Any, name: String, arg: Throwable?): Boolean {
+        val method = target::class.declaredMemberFunctions.first { it.name == name }
+        method.isAccessible = true
+        return method.callSuspend(target, arg) as Boolean
+    }
+
+    private fun invokePrivate(target: Any, name: String) {
+        val method = target.javaClass.getDeclaredMethod(name)
+        method.isAccessible = true
+        method.invoke(target)
     }
 
     private fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {

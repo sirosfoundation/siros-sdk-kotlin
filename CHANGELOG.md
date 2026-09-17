@@ -7,6 +7,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The self-driven re-login no longer reuses a cut-off token.**
+  `AuthServerClient` caches access tokens independently of `AuthTokens`, so
+  clearing the latter left the pre-cut-off token to be served from that cache
+  and refused with `401` on first use. The re-login now calls the new
+  `AuthServerClient.clearTokenCache()`, which drops cached tokens without
+  ending the session the way `logout()` would.
+
+### Added
+- **Wallet instance lifecycle: the SDK now speaks the whole protocol**
+  (SID-AUTH-06, go-wallet-backend#319). The backend grew a token cut-off, an
+  erasure retry and a passkey-ownership check on top of the instance API the
+  SDK already called; the client side of each of those is here.
+  - `WalletState.LifecycleBlocked(reason, message, cachedAccounts)` - a
+    blocked wallet is a state, not an error. Entered from `login()`,
+    `unlockKeystore()`, `resumeSession()` and from the SDK's own re-login
+    whenever the authorization server answers `403` with `WALLET_SUSPENDED`
+    or `WALLET_REVOKED`. Neither reason discards anything local - see the
+    correction under **Changed** for why `WALLET_REVOKED` is not proof the
+    wallet was erased - and the state carries the backend's own message so
+    the app can tell the user which case it is.
+  - **One self-driven re-login after a token cut-off.** Any lifecycle change
+    refuses every token issued before it, so the reauthentication signal now
+    drops the tokens, API client and engine session and attempts `login()`
+    exactly once - never in a loop. A lifecycle `403` there goes straight to
+    `LifecycleBlocked`, a success continues as a normal login, anything else
+    is the existing error path. `WalletEventListener.onReauthenticationRequired`
+    still fires first for hosts that drive their own prompt.
+  - A successful `setWalletInstanceStatus` write re-logs in the same way, so
+    suspending *this* device's own instance lands in
+    `LifecycleBlocked(SUSPENDED)` rather than surfacing later as a stray 401.
+  - `409 ERASURE_INCOMPLETE` is retried per the protocol: five attempts, 1 s →
+    8 s, identical body. A `401` after such a `409` is the acting token being
+    dropped with the erased key material and counts as complete.
+  - `403 CREDENTIAL_NOT_OWNED` at WIA generation retries the request once
+    without `credential_id` and clears the stale id, with a warning. The first
+    link recorded for an instance wins, so the SDK never guesses another one.
+  - `WalletInstance.isThisDevice` and `SirosWallet.thisInstanceId` - the
+    instance-key JWK thumbprint the SDK already sends as `wallet_instance_id`
+    - so a Devices screen can mark this installation and warn before
+    suspending it.
+  - Optional `WalletEventListener.onWalletLifecycleBlocked(reason, message)`,
+    with a no-op default.
+  - **Security: the instance key now survives a logout.**
+    `SessionStore.clearAccount()` deleted `instanceKeyId`, so the next login
+    minted a new key and registered a **new, active** backend wallet instance.
+    A *suspended* installation could therefore walk away from its own
+    suspension simply by logging out and back in. Only `clearAll()` (a factory
+    reset) drops it now.
+  - A session generation makes the self-driven re-login happen once per
+    *session* rather than once per call (late 401s from requests issued before
+    the cut-off can no longer each start another), refuses it when there is no
+    session left to replace, and aborts it when the caller logged out or
+    destroyed the wallet while the old session was being torn down.
+  - A lifecycle block tears the session down locally instead of calling
+    `logout()`: the unawaited `DELETE /auth/session` could otherwise land
+    after the retry the app makes once a suspended instance is reactivated,
+    invalidating the session that retry had just established.
+
+### Changed
+- **Correction: `WALLET_REVOKED` no longer forgets the cached account.** The
+  design assumed that code meant the wallet had been deactivated and erased.
+  It does not: the backend returns it for the login gate of a *single* revoked
+  instance too, and only deactivates the wallet when the **last** non-revoked
+  instance is revoked - the user's other devices keep logging in either way,
+  and only the human-readable `message` distinguishes the two. Forgetting the
+  account on a per-instance revocation destroyed the other passkeys that still
+  worked. Both refusal reasons now end the session, keep the cached account,
+  and show the backend's own message; re-enrollment is the user's call.
+  `deactivateWallet` is the one place that still forgets the account, where
+  the caller asked for it and the outcome is unambiguous.
+- **Source-breaking: `WalletState` has a new subclass.**
+  `WalletState.LifecycleBlocked` means an exhaustive `when` over `WalletState`
+  no longer compiles without a branch for it (the sample app needed one). Add
+  a branch, or an `else`, when upgrading.
+- **`SirosWallet.deactivateWallet` and `BackendApiClient.revokeAllWalletInstances`
+  return `DeactivationOutcome(revoked, complete)`** instead of a bare count.
+  The revocations stand even when the backend's erasure cascade did not
+  finish, so the local account is forgotten either way and `complete` is what
+  the app tells the user (an incomplete erasure leaves residual server-side
+  data for an administrator to clean up).
+- **`setWalletInstanceStatus` takes a typed `WalletInstanceStatus`** on both
+  `SirosWallet` and `BackendApiClient`. The `status: String` overload is
+  deprecated and kept for one release; it rejects a value the backend would
+  refuse instead of sending it.
+- `AuthException` carries the server's user-facing `serverMessage` separately
+  from its developer-facing `message` - it is what tells a suspended wallet
+  from a revoked one for the user. (Binary-incompatible for direct
+  constructor callers; source-compatible.)
+
 ## [0.17.0] - 2026-09-17
 
 ### Fixed

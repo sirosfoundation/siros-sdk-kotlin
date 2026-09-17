@@ -186,7 +186,12 @@ class AuthServerClient(
     suspend fun requestAccessToken(aud: String, tac: String? = null): AccessToken {
         val key = "$tenantId::$aud::${tac ?: ""}"
 
-        // Check cache and perform network under same lock to prevent concurrent duplicate requests.
+        // Check cache and perform network under same lock to prevent concurrent
+        // duplicate requests - and, just as importantly, so that a
+        // [clearTokenCache] taking the same lock cannot interleave between the
+        // await and the store. Releasing it across the await would let a token
+        // minted before a lifecycle cut-off be cached after the clear that
+        // cut-off triggered (SID-AUTH-06).
         return pendingTokenMutex.withLock {
             pendingTokenRequests[key]?.let { cached ->
                 if (!cached.isExpired()) return@withLock cached
@@ -247,6 +252,21 @@ class AuthServerClient(
     /**
      * End the current session.
      */
+    /**
+     * Drop every cached access token without touching the server session.
+     *
+     * [logout] clears this cache too, but it ends the session first, so it is
+     * the wrong tool when the session must survive: after a wallet lifecycle
+     * cut-off the SDK re-logs in, and a token minted before the cut-off is
+     * refused with 401 however fresh it looks. Clearing here keeps the next
+     * [requestAccessToken] from serving that stale token out of cache.
+     */
+    suspend fun clearTokenCache() {
+        pendingTokenMutex.withLock {
+            pendingTokenRequests.clear()
+        }
+    }
+
     suspend fun logout(): Unit = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url("$baseUrl/auth/session")
@@ -285,10 +305,21 @@ class AuthServerClient(
                 // Carry the AS's stable error code (e.g. WALLET_SUSPENDED /
                 // WALLET_REVOKED from a SID-AUTH-06 login refusal) so callers
                 // can tell a lifecycle refusal from a plain 401/403.
-                val errorCode = runCatching {
-                    (json.parseToJsonElement(responseBody).jsonObject["error"] as? kotlinx.serialization.json.JsonPrimitive)?.content
-                }.getOrNull()?.takeIf { it.isNotBlank() } ?: "auth_failed"
-                throw AuthException("AS request failed: ${response.code} — $path", errorCode = errorCode, code = response.code)
+                val errorBody = runCatching { json.parseToJsonElement(responseBody).jsonObject }.getOrNull()
+                val errorCode = (errorBody?.get("error") as? kotlinx.serialization.json.JsonPrimitive)
+                    ?.content?.takeIf { it.isNotBlank() } ?: "auth_failed"
+                // The AS also sends a user-facing `message` - for a lifecycle
+                // refusal it is what tells a suspended wallet from a revoked
+                // one for the user - so carry it separately from the
+                // developer-facing diagnostic below.
+                val serverMessage = (errorBody?.get("message") as? kotlinx.serialization.json.JsonPrimitive)
+                    ?.content?.takeIf { it.isNotBlank() }
+                throw AuthException(
+                    "AS request failed: ${response.code} — $path",
+                    errorCode = errorCode,
+                    code = response.code,
+                    serverMessage = serverMessage,
+                )
             }
 
             Timber.d("AS response: ${response.code} — $path")
