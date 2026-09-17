@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- `siros-wscd-manager` 0.8.1 -> 0.9.1: key ids minted by the softkey and
+  FIDO2 plugins are now RFC 7638 JWK thumbprints (existing ids keep
+  resolving); FIDO2 plugin state restored via `registerFido2PluginWithState`
+  now rebinds its keys to the plugin, so they no longer fall through to the
+  default plugin after a restart.
+
 ## [0.15.0] - 2026-09-16
 
 First release whose native crate dependencies are all on Maven Central, so
