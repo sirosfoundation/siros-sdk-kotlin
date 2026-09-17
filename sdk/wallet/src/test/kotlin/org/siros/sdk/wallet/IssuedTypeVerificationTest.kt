@@ -55,6 +55,13 @@ class IssuedTypeVerificationTest {
     }
 
     /** The suspend counterpart of [call], for checks that may re-resolve. */
+    /** Reads a private field, so a test can pass what the flow would snapshot. */
+    private fun field(w: SirosWallet, name: String): Any? {
+        val f = SirosWallet::class.java.getDeclaredField(name)
+        f.isAccessible = true
+        return f.get(w)
+    }
+
     private suspend fun callSuspending(w: SirosWallet, name: String, vararg args: Any?): Any? {
         val m = SirosWallet::class.declaredMemberFunctions.first { it.name == name }
         m.isAccessible = true
@@ -194,7 +201,7 @@ class IssuedTypeVerificationTest {
         val doc = vctmDocument("urn:eudi:pid:1")
         setField(w, "activeVctmDocument", doc)
         val raw = sdJwt("urn:eudi:pid:1", digestOf(doc.raw))
-        assertNull(refusalReason(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw))))
+        assertNull(refusalReason(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw), field(w, "activeOffer"), field(w, "activeVctmDocument"))))
     }
 
     @Test
@@ -204,14 +211,14 @@ class IssuedTypeVerificationTest {
         val w = wallet()
         setField(w, "activeVctmDocument", vctmDocument("urn:eudi:pid:1"))
         val raw = sdJwt("urn:eudi:pid:1", digestOf("""{"vct":"urn:eudi:pid:1","claims":[]}"""))
-        assertNotNull(refusalReason(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw))))
+        assertNotNull(refusalReason(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw), field(w, "activeOffer"), field(w, "activeVctmDocument"))))
     }
 
     @Test
     fun acceptsACredentialThatPinsNothing() = runTest {
         val w = wallet()
         setField(w, "activeVctmDocument", vctmDocument("urn:eudi:pid:1"))
-        assertNull(refusalReason(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(sdJwt("urn:eudi:pid:1")))))
+        assertNull(refusalReason(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(sdJwt("urn:eudi:pid:1")), field(w, "activeOffer"), field(w, "activeVctmDocument"))))
     }
 
     @Test
@@ -220,7 +227,7 @@ class IssuedTypeVerificationTest {
         val w = wallet()
         setField(w, "activeVctmDocument", null)
         val raw = sdJwt("urn:eudi:pid:1", digestOf("""{"vct":"urn:eudi:pid:1"}"""))
-        assertNull(refusalReason(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw))))
+        assertNull(refusalReason(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw), field(w, "activeOffer"), field(w, "activeVctmDocument"))))
     }
 
     @Test
@@ -249,7 +256,7 @@ class IssuedTypeVerificationTest {
         setField(w, "vctmFetcher", org.siros.sdk.credentials.VctmFetcher(httpGet = { current }))
 
         val raw = sdJwt("urn:eudi:pid:1", digestOf(current))
-        val outcome = callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw))
+        val outcome = callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw), field(w, "activeOffer"), field(w, "activeVctmDocument"))
 
         assertNull(refusalReason(outcome))
         // And the re-resolved document is handed back, so the credential is
@@ -295,7 +302,7 @@ class IssuedTypeVerificationTest {
         setField(w, "vctmFetcher", org.siros.sdk.credentials.VctmFetcher(httpGet = { """{"vct":"urn:eudi:pid:1","name":"something else"}""" }))
 
         val raw = sdJwt("urn:eudi:pid:1", digestOf("""{"vct":"urn:eudi:pid:1","name":"PID"}"""))
-        assertNotNull(refusalReason(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw))))
+        assertNotNull(refusalReason(callSuspending(w, "verifyVctIntegrity", "dc+sd-jwt", payloadOf(raw), field(w, "activeOffer"), field(w, "activeVctmDocument"))))
     }
 
     @Test
@@ -303,6 +310,6 @@ class IssuedTypeVerificationTest {
         val w = wallet()
         setField(w, "activeVctmDocument", vctmDocument("urn:eudi:pid:1"))
         val raw = sdJwt("urn:eudi:pid:1", digestOf("wrong"))
-        assertNull(refusalReason(callSuspending(w, "verifyVctIntegrity", "mso_mdoc", payloadOf(raw))))
+        assertNull(refusalReason(callSuspending(w, "verifyVctIntegrity", "mso_mdoc", payloadOf(raw), field(w, "activeOffer"), field(w, "activeVctmDocument"))))
     }
 }

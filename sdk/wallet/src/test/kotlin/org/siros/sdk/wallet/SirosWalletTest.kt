@@ -5218,6 +5218,100 @@ class SirosWalletTest {
         method.invoke(target)
     }
 
+    /**
+     * The behaviour that actually matters, end to end: a credential accepted
+     * *because* the `vct#integrity` heal found the issuer's document must be
+     * **stored described by that document**, not by the stale one the flow had
+     * resolved before issuance.
+     *
+     * Checking only what `verifyVctIntegrity` returns would pass even if the
+     * flow-completion path ignored it and built the metadata from
+     * `activeVctm` - which is precisely the regression this guards, and the
+     * shape the bug in #191 took in the first place.
+     */
+    @Test
+    fun flowComplete_stores_the_credential_described_by_the_healed_document() = runTest(dispatcher) {
+        val issuersDocument =
+            """{"vct":"urn:eudi:pid:1","display":[{"locale":"en-US","name":"PID"}]}"""
+        val staleDocument =
+            """{"vct":"urn:eudi:pid:1","display":[{"locale":"en-US","name":"PID (old)"}]}"""
+        val pin = "sha256-" + java.util.Base64.getEncoder().encodeToString(
+            java.security.MessageDigest.getInstance("SHA-256").digest(issuersDocument.toByteArray()),
+        )
+        val payload = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(
+            """{"vct":"urn:eudi:pid:1","vct#integrity":"$pin","exp":9999999999}"""
+                .toByteArray(Charsets.UTF_8),
+        )
+        val credential = "eyJhbGciOiJub25lIn0.$payload."
+
+        val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
+        val store = FakeCredentialStore(mutableListOf())
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns true
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+        mockEngineConstructor(flowComplete = completeFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.FlowActive(
+                    userId = "user-1",
+                    displayName = "Alice",
+                    flowId = "flow-heal",
+                    flowType = "issuance",
+                    status = "in_progress",
+                    credentials = emptyList(),
+                )
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to mockk<SessionStore>(relaxed = true),
+            "apiClient" to apiClient,
+            // What the flow resolved before issuance: the stale document.
+            "activeVctmDocument" to org.siros.sdk.credentials.VctmDocument(
+                raw = staleDocument,
+                vctm = Json { ignoreUnknownKeys = true }
+                    .decodeFromString(org.siros.sdk.credentials.Vctm.serializer(), staleDocument),
+            ),
+            "activeVctm" to Json { ignoreUnknownKeys = true }
+                .decodeFromString(org.siros.sdk.credentials.Vctm.serializer(), staleDocument),
+            "activeOffer" to org.siros.sdk.credentials.CredentialOffer(
+                credentialConfigurationId = "pid_1",
+                credentialIssuerIdentifier = "https://issuer.example",
+                credentialName = "PID from the offer",
+                issuerName = "Issuer",
+                vct = "urn:eudi:pid:1",
+            ),
+            // Every source serves the document the issuer actually signed over.
+            "vctmFetcher" to org.siros.sdk.credentials.VctmFetcher(httpGet = { issuersDocument }),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        completeFlow.emit(
+            FlowCompleteMessage(
+                flowId = "flow-heal",
+                credentials = listOf(CredentialResult(format = "dc+sd-jwt", credential = credential)),
+            )
+        )
+        // The re-resolution hops to Dispatchers.IO, which the test scheduler
+        // does not control, so advanceUntilIdle() alone can return before it -
+        // same wait as requestAttestation_includesNativeAttestation's.
+        repeat(20) {
+            runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(50) }
+            advanceUntilIdle()
+        }
+
+        val stored = store.getAll()
+        assertEquals("the credential is accepted: the pinned document was found", 1, stored.size)
+        assertEquals(
+            "stored with the document the issuer pinned, not the stale one it would have been named by",
+            "PID",
+            stored.first().metadata?.name,
+        )
+    }
+
     private fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {
         val wallet = allocateInstance(SirosWallet::class.java) as SirosWallet
         val values = fields.toMap(mutableMapOf())
