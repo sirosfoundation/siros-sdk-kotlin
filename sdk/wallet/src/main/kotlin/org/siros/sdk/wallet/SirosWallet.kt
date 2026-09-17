@@ -88,6 +88,7 @@ import org.siros.sdk.wallet.dcapi.DCAPIRequestParser
 import org.siros.sdk.transport.CredentialNotifier
 import org.siros.sdk.transport.engine.CredentialMatch
 import org.siros.sdk.transport.engine.CredentialNotificationEvent
+import org.siros.sdk.transport.engine.FlowError
 import org.siros.sdk.transport.engine.ProofObject
 import org.siros.sdk.transport.engine.SignRequestMessage
 import org.siros.sdk.transport.engine.WalletEngineSession
@@ -140,6 +141,14 @@ private data class PendingAuthorization(
 
 /** Facade methods that need a live backend session throw this when there is none. */
 private const val NOT_LOGGED_IN = "Not logged in"
+
+/**
+ * The engine's error code for a presentation this wallet cannot satisfy
+ * (go-wallet-backend `ErrCodeNoMatchingCredential`). Its `details` carry
+ * `requested_types` (what the verifier asked for) and `no_match_reason` (what
+ * this wallet reported).
+ */
+private const val ERROR_NO_MATCHING_CREDENTIAL = "NO_MATCHING_CREDENTIAL"
 
 /**
  * A randomly-generated uint32-range identifier, matching wallet-frontend's
@@ -4281,21 +4290,105 @@ class SirosWallet private constructor(
         }
     }
 
+    /**
+     * Answer the engine's credential-matching request on the WMP transport.
+     *
+     * This used to ignore `dcql_query` entirely and report every stored
+     * credential as a match, so a wallet holding an mDL and no PID claimed a
+     * full match set for a PID request - and any decision the engine keyed on
+     * that answer would have been wrong for every wallet holding at least one
+     * credential of any type. It now runs the same [CredentialMatcher] the
+     * legacy transport and the DC API path use.
+     *
+     * An empty result carries [org.siros.sdk.transport.wmp.openid4x.MatchResult.noMatchReason],
+     * which the profile relays as `credentials_matched` so the engine can end
+     * the flow at once (go-wallet-backend#336) rather than let it sit at
+     * credential selection until the five-minute user-interaction timeout.
+     */
     private suspend fun handleWmpMatchRequest(
         flowId: String,
         payload: kotlinx.serialization.json.JsonObject?,
     ): org.siros.sdk.transport.wmp.openid4x.MatchResult {
         val allCreds = credentialStore.getAll()
-        val matches = allCreds.map { cred ->
-            org.siros.sdk.transport.wmp.openid4x.CredentialMatch(
-                // WMP wire protocol keeps credential_id as a string - see
-                // the other CredentialMatch construction site's comment.
-                credentialId = cred.id.toString(),
-                credentialQueryId = null,
-                disclosedClaims = null,
+        // `as? JsonObject`, not `.jsonObject`: a non-DCQL request shape has
+        // this key relayed as JSON `null` rather than omitted, and
+        // `.jsonObject` throws on that - the same crash #150 fixed in the
+        // legacy transport's credential_selection handler.
+        val dcqlQuery = payload?.get("dcql_query") as? JsonObject
+        if (dcqlQuery == null) {
+            // No query to match against: every credential is still a
+            // candidate, which is what this handler always answered. The bug
+            // was answering that for a real query too.
+            Timber.w("WMP match request for flow $flowId carries no dcql_query; offering every stored credential")
+            return org.siros.sdk.transport.wmp.openid4x.MatchResult(
+                matches = allCreds.map { cred ->
+                    org.siros.sdk.transport.wmp.openid4x.CredentialMatch(
+                        // WMP wire protocol keeps credential_id as a string -
+                        // see the other CredentialMatch construction site's
+                        // comment.
+                        credentialId = cred.id.toString(),
+                        credentialQueryId = null,
+                        disclosedClaims = null,
+                    )
+                },
             )
         }
-        return org.siros.sdk.transport.wmp.openid4x.MatchResult(matches = matches)
+
+        val matchResults = CredentialMatcher.match(dcqlQuery, allCreds)
+        // The query each candidate is answered under - first match wins, the
+        // same rule the other two transports apply.
+        val matchResultByCredentialId = buildMap {
+            for (r in matchResults) for (c in r.candidates) putIfAbsent(c.id, r)
+        }
+        val matches = matchResultByCredentialId.map { (credentialId, result) ->
+            org.siros.sdk.transport.wmp.openid4x.CredentialMatch(
+                credentialId = credentialId.toString(),
+                credentialQueryId = result.queryId,
+                // Each requestedClaims entry is a full DCQL claim path; only
+                // its last segment is the disclosable element id (see the
+                // legacy consent payload's identical mapNotNull).
+                disclosedClaims = result.requestedClaims.mapNotNull { it.lastOrNull() }.distinct()
+                    .takeIf { it.isNotEmpty() },
+            )
+        }
+        if (matches.isNotEmpty()) {
+            return org.siros.sdk.transport.wmp.openid4x.MatchResult(matches = matches)
+        }
+        val reason = noMatchReason(dcqlQuery, allCreds.size)
+        Timber.i("WMP match request for flow $flowId matched nothing: $reason")
+        return org.siros.sdk.transport.wmp.openid4x.MatchResult(
+            matches = emptyList(),
+            noMatchReason = reason,
+        )
+    }
+
+    /**
+     * This wallet's own account of why local DCQL matching came up empty,
+     * sent alongside an empty match set and surfaced to the app in the
+     * engine's `NO_MATCHING_CREDENTIAL` error details.
+     *
+     * The engine's message already names the credential types the verifier
+     * asked for; this says what the wallet had to compare them against, which
+     * is the part only the wallet knows.
+     *
+     * @param exhaustedOnly true when credentials of the requested type are
+     *   held but every copy has already been presented - a different problem
+     *   from holding none at all, and a different thing to tell the user.
+     */
+    private fun noMatchReason(
+        dcqlQuery: JsonObject?,
+        storedCredentialCount: Int,
+        exhaustedOnly: Boolean = false,
+    ): String {
+        val requested = dcqlQuery?.let { CredentialMatcher.requestedCredentialTypes(it) }.orEmpty()
+        val asked = if (requested.isEmpty()) "" else " (requested: ${requested.joinToString(", ")})"
+        return if (exhaustedOnly) {
+            "Every stored credential matching this request$asked has already been presented - " +
+                "it must be renewed before it can be presented again"
+        } else {
+            "This wallet holds no credential matching the request$asked; " +
+                "$storedCredentialCount credential(s) stored"
+        }
     }
 
     private suspend fun handleWmpTrustEvaluation(
@@ -4674,8 +4767,20 @@ class SirosWallet private constructor(
                         .keys
                     val isZk: (StoredCredential) -> Boolean = { it.id in zkRequestedIds }
 
+                    if (candidates.isEmpty()) {
+                        // Nothing to ask the user about. Answering with an
+                        // empty match_response alone leaves the engine waiting
+                        // on consent/decline that will never come, so say so
+                        // in the action it acts on too (#336).
+                        val reason = noMatchReason(dcqlQuery, allCreds.size)
+                        Timber.i("Match request for flow ${msg.flowId} matched nothing: $reason")
+                        engine.sendMatchResponse(msg.flowId, emptyList(), reason)
+                        engine.sendCredentialsMatched(msg.flowId, emptyList(), reason)
+                        return@collect
+                    }
+
                     // Let the app filter further via user selection
-                    val selectedIds = if (listener != null && candidates.isNotEmpty()) {
+                    val selectedIds = if (listener != null) {
                         listener.onCredentialSelectionRequired(
                             PresentationRequest(
                                 verifierName = null,
@@ -5215,6 +5320,9 @@ class SirosWallet private constructor(
                 pendingMatchResultsByFlow.remove(fid)
                 val redirectUri = msg.error.details?.get("redirect_uri")?.jsonPrimitive?.contentOrNull
                 eventListener?.onFlowError(fid, msg.error.message, redirectUri)
+                if (msg.error.code == ERROR_NO_MATCHING_CREDENTIAL) {
+                    reportNoMatchingCredential(fid, msg.error)
+                }
                 // See the flow_complete handler's matching reset: without
                 // this, an issuance that fails via an engine-reported error
                 // (rather than completing or failing client-side through
@@ -5888,7 +5996,32 @@ class SirosWallet private constructor(
                 pendingMatchResultsByFlow[flowId] = matchResults
 
                 val listener = eventListener
-                val selectedIds = if (listener != null && candidates.isNotEmpty()) {
+                // Hoisted: the decline branch below needs to tell "holds
+                // nothing of this type" apart from "holds it, but every copy
+                // is spent", and the defense-in-depth check further down
+                // needs the same list.
+                val eligible = eligibleInstances(candidates, isZk)
+                // Only where nobody is asked anything: with a listener and
+                // something to show, an empty answer really is the user
+                // declining, and is reported as one below.
+                if (candidates.isEmpty() || (listener == null && eligible.isEmpty())) {
+                    // The honest answer, and the one that ends the flow now:
+                    // a decline would tell the verifier the user refused, but
+                    // the user was never asked, and saying nothing leaves the
+                    // flow parked until the engine's five-minute
+                    // user-interaction timeout reports a generic FLOW_TIMEOUT.
+                    // The engine replies with NO_MATCHING_CREDENTIAL, naming
+                    // the types the verifier asked for (#336).
+                    val reason = noMatchReason(
+                        dcqlQuery,
+                        allCreds.size,
+                        exhaustedOnly = candidates.isNotEmpty(),
+                    )
+                    Timber.i("Credential selection for flow $flowId matched nothing: $reason")
+                    engine.sendCredentialsMatched(flowId, emptyList(), reason)
+                    return@launch
+                }
+                val selectedIds = if (listener != null) {
                     listener.onCredentialSelectionRequired(
                         PresentationRequest(
                             verifierName = verifierName,
@@ -5907,11 +6040,12 @@ class SirosWallet private constructor(
                         )
                     )
                 } else {
-                    eligibleInstances(candidates, isZk).map { it.id }
+                    eligible.map { it.id }
                 }
 
                 if (selectedIds.isEmpty()) {
-                    // User declined
+                    // A genuine decline: the user was shown credentials that
+                    // could have answered this request and chose none.
                     val declinePayload = kotlinx.serialization.json.buildJsonObject {
                         put("reason", kotlinx.serialization.json.JsonPrimitive("user_declined"))
                     }
@@ -5922,7 +6056,7 @@ class SirosWallet private constructor(
                 // The app is trusted to only return IDs it was offered, but
                 // shouldn't be the only thing enforcing consumption -
                 // re-validate here too (defense in depth).
-                val eligibleIds = eligibleInstances(candidates, isZk).map { it.id }.toSet()
+                val eligibleIds = eligible.map { it.id }.toSet()
                 if (selectedIds.any { it !in eligibleIds }) {
                     throw WalletException("Selected credential has no eligible copies remaining - renew it to get more")
                 }
@@ -5998,6 +6132,58 @@ class SirosWallet private constructor(
                 engine.sendFlowAction(flowId, "decline", declinePayload)
             }
         }
+    }
+
+    /**
+     * Follow up an engine `NO_MATCHING_CREDENTIAL` error (#336).
+     *
+     * The presentation itself is already reported to the app by the caller,
+     * with the engine's message naming the credential types the verifier
+     * asked for. What is left is the issuance that asked for the
+     * presentation in the first place: vc's `auth_provider: openid4vp` sends
+     * the wallet through a verifier as part of issuing (an EU Company
+     * Certificate that requires a PID, say), and that issuance flow is parked
+     * on `authorization_required` waiting for the browser to come back with a
+     * code that now never will.
+     *
+     * Only the app's half of that can be settled here. The engine's OID4VCI
+     * handler waits on `authorization_complete` alone and silently drops any
+     * other action for the flow (`Session.WaitForActionWithTimeout`), so
+     * there is nothing the SDK can send that would end the parked flow early
+     * - it dies on its own user-interaction timeout. Telling the app at least
+     * takes the user off a "finish this in your browser" screen that has
+     * nothing left to finish.
+     *
+     * Deliberately conservative: it acts only when exactly one authorization
+     * is parked, since nothing in the protocol links a presentation flow to
+     * the issuance that triggered it, and guessing wrong would report a
+     * failure for an issuance the user may still be completing.
+     */
+    private fun reportNoMatchingCredential(presentationFlowId: String, error: FlowError) {
+        // Every read type-checked rather than coerced: this runs inside the
+        // flowErrors collector, where a throw would take the collector down
+        // for the rest of the session.
+        val requestedTypes = (error.details?.get("requested_types") as? kotlinx.serialization.json.JsonArray)
+            ?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull }.orEmpty()
+        Timber.i(
+            "Presentation %s cannot be satisfied: requested=%s walletReason=%s",
+            presentationFlowId,
+            requestedTypes,
+            (error.details?.get("no_match_reason") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull,
+        )
+
+        val parked = pendingAuthorizations.keys.filter { it != presentationFlowId }
+        if (parked.size != 1) {
+            if (parked.size > 1) {
+                Timber.w("%d authorizations parked; not guessing which one this presentation belonged to", parked.size)
+            }
+            return
+        }
+        val parentFlowId = parked.single()
+        pendingAuthorizations.remove(parentFlowId)
+        terminatedFlowIds.add(parentFlowId)
+        Timber.i("Issuance flow $parentFlowId required this presentation; reporting it as failed too")
+        eventListener?.onFlowError(parentFlowId, error.message)
     }
 
     private fun saveSession(

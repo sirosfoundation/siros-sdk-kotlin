@@ -61,6 +61,15 @@ object OID4Action {
     const val AUTHORIZE = "authorize"
     const val SELECT_CREDENTIALS = "select_credentials"
     const val CANCEL = "cancel"
+
+    /**
+     * Report the outcome of the wallet's own DCQL matching
+     * (go-wallet-backend#336, `ActionCredentialsMatched`). An empty match set
+     * ends the presentation at once with `NO_MATCHING_CREDENTIAL` instead of
+     * leaving it to the engine's five-minute user-interaction timeout; a
+     * non-empty one is informational.
+     */
+    const val CREDENTIALS_MATCHED = "credentials_matched"
 }
 
 // ---------------------------------------------------------------------------
@@ -270,6 +279,12 @@ data class ProofObject(
 /** Result of a credential matching request. */
 data class MatchResult(
     val matches: List<CredentialMatch>,
+    /**
+     * Why [matches] is empty - the wallet's own account, which the engine
+     * relays in the `NO_MATCHING_CREDENTIAL` error it reports back. Null
+     * whenever something matched.
+     */
+    val noMatchReason: String? = null,
 )
 
 @Serializable
@@ -394,6 +409,14 @@ class OpenID4xProfile(
         try {
             val result = handler.invoke(flowId, payload)
             sendMatchResponse(flowId, result)
+            if (result.matches.isEmpty()) {
+                // The engine's OID4VP flow delegates matching to the client
+                // and then waits for consent/decline - it never reads a
+                // match_response, so on its own the answer above leaves the
+                // presentation stalled until the user-interaction timeout.
+                // credentials_matched is the action it does act on.
+                sendCredentialsMatched(flowId, result)
+            }
         } catch (e: Exception) {
             Timber.e(e, "Match request handler failed")
             sendFlowError(flowId, "MATCH_ERROR", e.message)
@@ -450,6 +473,25 @@ class OpenID4xProfile(
                 ListSerializer(CredentialMatch.serializer()),
                 result.matches,
             ))
+            // Carried on the wire under the same name the legacy transport's
+            // MatchResponseMessage uses. It was dropped here, so a wallet
+            // that knew why it had nothing to offer could not say so.
+            result.noMatchReason?.let { put("no_match_reason", JsonPrimitive(it)) }
+        }
+        ctx.notify(WmpMethods.FLOW_ACTION, params)
+    }
+
+    private suspend fun sendCredentialsMatched(flowId: String, result: MatchResult) {
+        val ctx = peer ?: return
+        val params = buildJsonObject {
+            put("wmp", ctx.codec.json.encodeToJsonElement(WmpMeta.serializer(), WmpMeta()))
+            put("flow_id", JsonPrimitive(flowId))
+            put("action", JsonPrimitive(OID4Action.CREDENTIALS_MATCHED))
+            put("matches", ctx.codec.json.encodeToJsonElement(
+                ListSerializer(CredentialMatch.serializer()),
+                result.matches,
+            ))
+            result.noMatchReason?.let { put("no_match_reason", JsonPrimitive(it)) }
         }
         ctx.notify(WmpMethods.FLOW_ACTION, params)
     }

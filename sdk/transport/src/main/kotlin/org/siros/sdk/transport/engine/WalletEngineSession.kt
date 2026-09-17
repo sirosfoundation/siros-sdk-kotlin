@@ -511,12 +511,55 @@ class WalletEngineSession(
         ))
     }
 
-    /** Send a credential matching response back to the server. */
-    fun sendMatchResponse(flowId: String, matches: List<CredentialMatch>) {
+    /**
+     * Send a credential matching response back to the server.
+     *
+     * [noMatchReason] is the wallet's own account of why [matches] is empty.
+     * [MatchResponseMessage] has always declared the field and nothing ever
+     * populated it, so the reason never left the device.
+     */
+    fun sendMatchResponse(
+        flowId: String,
+        matches: List<CredentialMatch>,
+        noMatchReason: String? = null,
+    ) {
         send(MatchResponseMessage.serializer(), MatchResponseMessage(
             flowId = flowId,
             matches = matches,
+            noMatchReason = noMatchReason,
         ))
+    }
+
+    /**
+     * Report the outcome of this wallet's own DCQL matching for a
+     * presentation the engine asked it to answer (go-wallet-backend#336).
+     *
+     * An empty [matches] ends the flow immediately with
+     * `NO_MATCHING_CREDENTIAL`, naming the credential types the query asked
+     * for. That is the answer a wallet holding nothing the verifier wants
+     * never had: `decline` reports `access_denied` / "User declined the
+     * request" to the verifier though the user was never asked, and saying
+     * nothing stalls the flow until the engine's five-minute
+     * user-interaction timeout - which is what a wallet missing the PID an
+     * issuer demands used to hit.
+     *
+     * A non-empty [matches] is informational: the engine goes on waiting for
+     * `consent`/`decline` exactly as before, so sending this before the
+     * consent UI has an answer changes nothing for that case.
+     */
+    fun sendCredentialsMatched(
+        flowId: String,
+        matches: List<CredentialMatch>,
+        noMatchReason: String? = null,
+    ) {
+        val payload = kotlinx.serialization.json.buildJsonObject {
+            put("matches", json.encodeToJsonElement(
+                kotlinx.serialization.builtins.ListSerializer(CredentialMatch.serializer()),
+                matches,
+            ))
+            noMatchReason?.let { put("no_match_reason", kotlinx.serialization.json.JsonPrimitive(it)) }
+        }
+        sendFlowAction(flowId = flowId, action = "credentials_matched", payload = payload)
     }
 
     /** Send a trust evaluation result back to the server. */

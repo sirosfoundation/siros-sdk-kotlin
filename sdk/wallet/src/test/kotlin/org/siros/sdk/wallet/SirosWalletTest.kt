@@ -3610,6 +3610,234 @@ class SirosWalletTest {
         assertTrue(wallet.presentationHistory.single().zkProof)
     }
 
+    /**
+     * A wallet with nothing the verifier asked for must say so, not sit
+     * silent (the engine then reports a generic FLOW_TIMEOUT five minutes
+     * later) and not decline (which tells the verifier the user refused a
+     * request they were never shown). go-wallet-backend#335/#336.
+     */
+    @Test
+    fun credentialSelection_with_nothing_matching_reports_credentials_matched_not_a_decline() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val store = FakeCredentialStore(
+            mutableListOf(
+                StoredCredential(
+                    id = 1L,
+                    format = "mso_mdoc",
+                    raw = "raw-mdl",
+                    metadata = CredentialMetadata(name = "Driving Licence", doctype = "org.iso.18013.5.1.mDL"),
+                    batchId = 1L,
+                    instanceId = 0,
+                ),
+            )
+        )
+        val engine = mockEngineConstructor(progressFlow = progressFlow)
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.Ready(userId = "user-1", displayName = "Alice", credentials = store.getAll())
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "lastTrustResults" to mutableMapOf<String, Any?>(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "flow-nomatch",
+                step = "credential_selection",
+                payload = buildJsonObject {
+                    putJsonObject("dcql_query") {
+                        putJsonArray("credentials") {
+                            add(buildJsonObject {
+                                put("id", "q-pid")
+                                put("format", "dc+sd-jwt")
+                                putJsonObject("meta") {
+                                    putJsonArray("vct_values") { add(JsonPrimitive("urn:eu.europa.ec.eudi:pid:1")) }
+                                }
+                            })
+                        }
+                    }
+                },
+            )
+        )
+        advanceUntilIdle()
+
+        verify(exactly = 1) {
+            engine.sendCredentialsMatched(
+                "flow-nomatch",
+                emptyList(),
+                match<String> { it.contains("urn:eu.europa.ec.eudi:pid:1") },
+            )
+        }
+        verify(exactly = 0) { engine.sendFlowAction("flow-nomatch", "decline", any()) }
+        // The user is never asked to consent to a request nothing can answer.
+        coVerify(exactly = 0) { listener.onCredentialSelectionRequired(any()) }
+    }
+
+    @Test
+    fun matchRequest_with_nothing_matching_reports_credentials_matched_with_a_reason() = runTest(dispatcher) {
+        val matchFlow = MutableSharedFlow<MatchRequestMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val store = FakeCredentialStore(
+            mutableListOf(
+                StoredCredential(
+                    id = 1L,
+                    format = "dc+sd-jwt",
+                    raw = "raw-1",
+                    metadata = CredentialMetadata(name = "Loyalty Card", vct = "urn:example:loyalty"),
+                    batchId = 1L,
+                    instanceId = 0,
+                ),
+            )
+        )
+        val engine = mockEngineConstructor(matchRequests = matchFlow)
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.Ready(userId = "user-1", displayName = "Alice", credentials = store.getAll())
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+        val pidQuery = buildJsonObject {
+            put("credentials", JsonArray(listOf(buildJsonObject {
+                put("id", "q-pid")
+                put("format", "dc+sd-jwt")
+                put("meta", buildJsonObject {
+                    put("vct_values", JsonArray(listOf(JsonPrimitive("urn:eu.europa.ec.eudi:pid:1"))))
+                })
+            })))
+        }
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        matchFlow.emit(MatchRequestMessage(flowId = "flow-nm", dcqlQuery = pidQuery))
+        advanceUntilIdle()
+
+        verify(exactly = 1) {
+            engine.sendMatchResponse(
+                "flow-nm",
+                emptyList(),
+                match<String> { it.contains("urn:eu.europa.ec.eudi:pid:1") },
+            )
+        }
+        verify(exactly = 1) {
+            engine.sendCredentialsMatched("flow-nm", emptyList(), any())
+        }
+        coVerify(exactly = 0) { listener.onCredentialSelectionRequired(any()) }
+    }
+
+    /**
+     * The WMP transport's match handler used to answer every request with
+     * every stored credential, ignoring the DCQL query entirely.
+     */
+    @Test
+    fun wmpMatchRequest_answers_only_with_credentials_the_query_asked_for() = runBlocking {
+        val store = FakeCredentialStore(
+            mutableListOf(
+                StoredCredential(
+                    id = 1L,
+                    format = "dc+sd-jwt",
+                    raw = "raw-pid",
+                    metadata = CredentialMetadata(name = "PID", vct = "urn:eu.europa.ec.eudi:pid:1"),
+                    batchId = 1L,
+                    instanceId = 0,
+                ),
+                StoredCredential(
+                    id = 2L,
+                    format = "dc+sd-jwt",
+                    raw = "raw-loyalty",
+                    metadata = CredentialMetadata(name = "Loyalty Card", vct = "urn:example:loyalty"),
+                    batchId = 2L,
+                    instanceId = 0,
+                ),
+            )
+        )
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+        )
+
+        val pidResult = invokeWmpMatchRequest(wallet, "flow-wmp", vctQueryPayload("urn:eu.europa.ec.eudi:pid:1"))
+        assertEquals(listOf("1"), pidResult.matches.map { it.credentialId })
+        assertEquals(listOf("q-vct"), pidResult.matches.map { it.credentialQueryId })
+        assertNull(pidResult.noMatchReason)
+
+        val missingResult = invokeWmpMatchRequest(wallet, "flow-wmp", vctQueryPayload("urn:example:absent"))
+        assertTrue(missingResult.matches.isEmpty())
+        assertTrue(
+            "The reason must name what was asked for: ${missingResult.noMatchReason}",
+            missingResult.noMatchReason!!.contains("urn:example:absent"),
+        )
+    }
+
+    /**
+     * An issuance that sent the wallet through a verifier (vc's
+     * `auth_provider: openid4vp`) is parked on `authorization_required` when
+     * that presentation fails - nothing will ever come back for it.
+     */
+    @Test
+    fun noMatchingCredential_error_also_fails_the_issuance_that_was_waiting_on_it() = runTest(dispatcher) {
+        val errorFlow = MutableSharedFlow<FlowErrorMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val store = FakeCredentialStore(mutableListOf())
+        val engine = mockEngineConstructor(flowErrors = errorFlow)
+        val pendingAuthorizations = mutableMapOf<String, Any?>("flow-issuance" to "resume-context")
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.Ready(userId = "user-1", displayName = "Alice")
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "eventListener" to listener,
+            "pendingAuthorizations" to pendingAuthorizations,
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        errorFlow.emit(
+            FlowErrorMessage(
+                flowId = "flow-vp",
+                error = FlowError(
+                    code = "NO_MATCHING_CREDENTIAL",
+                    message = "This request needs a credential you do not have: urn:eu.europa.ec.eudi:pid:1",
+                    details = buildJsonObject {
+                        put("requested_types", JsonArray(listOf(JsonPrimitive("urn:eu.europa.ec.eudi:pid:1"))))
+                        put("no_match_reason", "This wallet holds no credential matching the request")
+                    },
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        verify(exactly = 1) {
+            listener.onFlowError("flow-vp", "This request needs a credential you do not have: urn:eu.europa.ec.eudi:pid:1", null)
+        }
+        verify(exactly = 1) {
+            listener.onFlowError("flow-issuance", "This request needs a credential you do not have: urn:eu.europa.ec.eudi:pid:1", null)
+        }
+        assertTrue("The parked resume context is dead once its presentation failed", pendingAuthorizations.isEmpty())
+    }
+
     // ── DC API (Digital Credentials API) ─────────────────────────────
 
     @Test
@@ -4548,6 +4776,33 @@ class SirosWalletTest {
         }
     }
 
+    /** DCQL asking for one SD-JWT VC type, as the engine relays it over WMP. */
+    private fun vctQueryPayload(vct: String): JsonObject = buildJsonObject {
+        putJsonObject("dcql_query") {
+            putJsonArray("credentials") {
+                add(buildJsonObject {
+                    put("id", "q-vct")
+                    put("format", "dc+sd-jwt")
+                    putJsonObject("meta") {
+                        putJsonArray("vct_values") { add(JsonPrimitive(vct)) }
+                    }
+                })
+            }
+        }
+    }
+
+    private fun invokeWmpMatchRequest(
+        wallet: SirosWallet,
+        flowId: String,
+        payload: JsonObject,
+    ): org.siros.sdk.transport.wmp.openid4x.MatchResult {
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "handleWmpMatchRequest" }
+        method.isAccessible = true
+        return kotlinx.coroutines.runBlocking {
+            method.callSuspend(wallet, flowId, payload)
+        } as org.siros.sdk.transport.wmp.openid4x.MatchResult
+    }
+
     private fun mockEngineConstructor(
         signRequests: MutableSharedFlow<SignRequestMessage> = MutableSharedFlow(),
         matchRequests: MutableSharedFlow<MatchRequestMessage> = MutableSharedFlow(),
@@ -4561,7 +4816,9 @@ class SirosWalletTest {
         coEvery { engine.forceReconnect() } just runs
         every { engine.state } returns MutableStateFlow(WalletEngineSession.State.CONNECTED)
         every { engine.sendSignResponse(any(), any(), any(), any()) } just runs
-        every { engine.sendMatchResponse(any(), any()) } just runs
+        every { engine.sendMatchResponse(any(), any(), any()) } just runs
+        every { engine.sendCredentialsMatched(any(), any(), any()) } just runs
+        every { engine.sendFlowAction(any(), any(), any()) } just runs
         every { engine.signRequests() } returns signRequests
         every { engine.matchRequests() } returns matchRequests
         every { engine.flowProgress() } returns progressFlow
