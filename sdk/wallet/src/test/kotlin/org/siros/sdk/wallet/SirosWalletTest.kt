@@ -3162,6 +3162,11 @@ class SirosWalletTest {
         assertEquals("userinfo, not the host", InteropProfile.HAIP, profileFor("https://issuer.example@evil.com/x"))
         assertEquals("a different scheme", InteropProfile.HAIP, profileFor("http://issuer.example"))
         assertEquals("a sibling path", InteropProfile.HAIP, profileFor("https://issuer.example.co/x"))
+        // An explicit default port addresses the same issuer, so the override
+        // must still apply - URI.getPort() reporting -1 for the implicit form
+        // is a detail of the parser, not a different host.
+        assertEquals(InteropProfile.DIIP, profileFor("https://issuer.example:443/oid4vci"))
+        assertEquals("a non-default port", InteropProfile.HAIP, profileFor("https://issuer.example:8443"))
     }
 
     /** The DIIP counterpart of [fakeProofJwt]: the key is named by a `kid` header, not embedded. */

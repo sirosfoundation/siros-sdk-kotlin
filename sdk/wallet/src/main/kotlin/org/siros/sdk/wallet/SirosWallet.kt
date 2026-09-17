@@ -1647,13 +1647,25 @@ class SirosWallet private constructor(
      * a legitimate `credential_issuer` has none, and accepting one only
      * reopens the trick above.
      */
+    /** The port a URI actually addresses: the explicit one, else the scheme's default. */
+    private fun effectivePort(uri: java.net.URI): Int = when {
+        uri.port != -1 -> uri.port
+        uri.scheme.equals("https", ignoreCase = true) -> 443
+        uri.scheme.equals("http", ignoreCase = true) -> 80
+        else -> -1
+    }
+
     private fun matchesIssuer(issuer: String, configured: String): Boolean = try {
         val a = java.net.URI(issuer).normalize()
         val b = java.net.URI(configured).normalize()
         val sameOrigin = a.userInfo == null && b.userInfo == null &&
             a.scheme.equals(b.scheme, ignoreCase = true) &&
             a.host.equals(b.host, ignoreCase = true) &&
-            a.port == b.port
+            // Effective ports, not the literal ones: URI.getPort() is -1 when
+            // the port is implicit, so comparing directly makes
+            // `https://issuer.example` and `https://issuer.example:443` look
+            // like different issuers and silently drops the override.
+            effectivePort(a) == effectivePort(b)
         if (!sameOrigin) {
             false
         } else {
