@@ -190,6 +190,33 @@ class HolderBindingTest {
         )
     }
 
+    @Test
+    fun `a batch issuance binds each credential to its own key`() = runTest {
+        // freshKey is what OID4VCI batch issuance means: without it every copy
+        // in the batch shares one holder key, and presenting them is linkable.
+        val keystore = unlocked(InteropProfile.DIIP)
+        val kids = (1..3).map {
+            SignedJWT.parse(
+                keystore.generateProof("https://issuer.example", "nonce", freshKey = true),
+            ).header.keyID
+        }
+        assertEquals("each proof names a different key", 3, kids.toSet().size)
+        assertEquals(3, keystore.listKeys().size)
+    }
+
+    @Test
+    fun `without freshKey the wallet reuses the key it has`() = runTest {
+        val keystore = unlocked(InteropProfile.DIIP)
+        val kid = keystore.generateKey()
+        repeat(2) {
+            assertEquals(
+                kid,
+                SignedJWT.parse(keystore.generateProof("https://issuer.example", "nonce")).header.keyID,
+            )
+        }
+        assertEquals(1, keystore.listKeys().size)
+    }
+
     // ── presenting what the wallet already holds ────────────────────
 
     @Test

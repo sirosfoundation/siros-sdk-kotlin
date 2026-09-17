@@ -5,6 +5,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -68,6 +69,32 @@ class DidTest {
     }
 
     @Test
+    fun `optional JWK members do not change the identifier`() {
+        // A key that also carries `alg`, `use` or a `kid` is the same key, and
+        // must get the same DID - otherwise one client's did:jwk stops
+        // matching another's for the same key pair in the shared container.
+        val annotated = Json.parseToJsonElement(
+            """{"kty":"EC","crv":"P-256",
+                "x":"acbIQiuMs3i8_uszEjJ2tpTtRM4EU3yz91PH6CdH2V0",
+                "y":"_KcyLj9vWMptnmKtm46GqDz8wf74I5LKgrl2GzH3nSE",
+                "alg":"ES256","use":"sig","kid":"whatever"}""",
+        ) as JsonObject
+        assertEquals(createDidJwk(p256Jwk), createDidJwk(annotated))
+    }
+
+    @Test
+    fun `the identifier holds exactly the thumbprint members`() {
+        // RFC 7638's required set for the key type, so the mapping from key to
+        // DID is one-to-one.
+        val encoded = createDidJwk(p256Jwk).removePrefix("did:jwk:")
+        val decoded = String(Base64.getUrlDecoder().decode(encoded), Charsets.UTF_8)
+        assertEquals(
+            """{"crv":"P-256","kty":"EC","x":"${p256Jwk["x"]!!.jsonPrimitive.content}","y":"${p256Jwk["y"]!!.jsonPrimitive.content}"}""",
+            decoded,
+        )
+    }
+
+    @Test
     fun `member order does not change the identifier`() {
         val reordered = Json.parseToJsonElement(
             """{"y":"_KcyLj9vWMptnmKtm46GqDz8wf74I5LKgrl2GzH3nSE",
@@ -83,78 +110,83 @@ class DidTest {
         assertTrue(resolveDidJwk("did:web:example.com") is DidResolution.Failed)
     }
 
-    // ── did:web ─────────────────────────────────────────────────────
+    // ── delegated resolution ────────────────────────────────────────
+    //
+    // Everything that is not did:jwk is a trust decision - which document is
+    // authoritative for an identifier - and belongs to go-trust, reached
+    // through the backend. These tests pin that the SDK delegates rather than
+    // fetching, because fetching is exactly the bug.
 
     @Test
-    fun `a bare did web resolves to the well-known path`() {
-        assertEquals(
-            "https://example.com/.well-known/did.json",
-            DidResolver.didWebToUrl("did:web:example.com"),
-        )
-    }
-
-    @Test
-    fun `path segments of a did web become URL path segments`() {
-        assertEquals(
-            "https://example.com/issuers/1/did.json",
-            DidResolver.didWebToUrl("did:web:example.com:issuers:1"),
-        )
-    }
-
-    @Test
-    fun `a percent-encoded port is decoded back into the host`() {
-        assertEquals(
-            "https://example.com:8443/.well-known/did.json",
-            DidResolver.didWebToUrl("did:web:example.com%3A8443"),
-        )
-    }
-
-    @Test
-    fun `a document served for a different subject is rejected`() = runBlocking {
-        // Otherwise any domain could serve a document for any DID.
-        val resolver = DidResolver(httpGet = { """{"id":"did:web:evil.example"}""" })
-        val result = resolver.resolve("did:web:example.com")
-        assertTrue(result is DidResolution.Failed)
-    }
-
-    @Test
-    fun `a did web document resolves its assertionMethod key`() = runBlocking {
-        val body = """
-            {
-              "id": "did:web:issuer.example",
-              "verificationMethod": [{
-                "id": "did:web:issuer.example#key-1",
-                "type": "JsonWebKey2020",
-                "controller": "did:web:issuer.example",
-                "publicKeyJwk": {"kty":"EC","crv":"P-256","x":"aa","y":"bb"}
-              }],
-              "assertionMethod": ["did:web:issuer.example#key-1"]
-            }
-        """.trimIndent()
-        val resolver = DidResolver(httpGet = { body })
+    fun `a did web is resolved through the delegate, not fetched`() = runBlocking {
+        var asked: String? = null
+        val resolver = DidResolver(delegate = { did ->
+            asked = did
+            Json.parseToJsonElement(
+                """
+                {
+                  "id": "did:web:issuer.example",
+                  "verificationMethod": [{
+                    "id": "did:web:issuer.example#key-1",
+                    "type": "JsonWebKey2020",
+                    "controller": "did:web:issuer.example",
+                    "publicKeyJwk": {"kty":"EC","crv":"P-256","x":"aa","y":"bb"}
+                  }],
+                  "assertionMethod": ["did:web:issuer.example#key-1"]
+                }
+                """.trimIndent(),
+            ) as JsonObject
+        })
         val document = resolver.resolve("did:web:issuer.example").documentOrNull
-        assertNotNull(document)
+        assertEquals("did:web:issuer.example", asked)
         val key = document!!.findPublicKey("did:web:issuer.example#key-1", DidRelationship.ASSERTION_METHOD)
         assertEquals("aa", key!!["x"]!!.jsonPrimitive.content)
     }
 
     @Test
-    fun `an unreachable did web is a failure, not an empty document`() = runBlocking {
-        val resolver = DidResolver(httpGet = { null })
+    fun `a wallet with no resolution authority does not resolve a did web itself`() = runBlocking {
+        // Failing is the point: the alternative is the SDK deciding which host
+        // to believe, which is go-trust's decision, not the wallet's.
+        val resolver = DidResolver(delegate = null)
+        val result = resolver.resolve("did:web:example.com")
+        assertTrue(result is DidResolution.Failed)
+    }
+
+    @Test
+    fun `a document naming a different subject is rejected`() = runBlocking {
+        // Whoever returned it, it is not this DID's document.
+        val resolver = DidResolver(delegate = {
+            Json.parseToJsonElement("""{"id":"did:web:evil.example"}""") as JsonObject
+        })
         assertTrue(resolver.resolve("did:web:example.com") is DidResolution.Failed)
     }
 
-    // ── did:webvh ───────────────────────────────────────────────────
+    @Test
+    fun `a delegate that cannot resolve is a failure, not an empty document`() = runBlocking {
+        val resolver = DidResolver(delegate = { null })
+        assertTrue(resolver.resolve("did:web:example.com") is DidResolution.Failed)
+    }
 
     @Test
-    fun `did webvh fails closed rather than serving an unverified document`() = runBlocking {
-        // Its whole value over did:web is the verifiable log; a resolver that
-        // skipped the proof chain would offer did:web trust while looking
-        // like more.
-        val resolver = DidResolver(profile = DiipProfile.V6, httpGet = { "{}" })
-        val result = resolver.resolve("did:webvh:scid:example.com")
-        assertTrue(result is DidResolution.Failed)
-        assertTrue(DidMethod.WEBVH in resolver.requiredMethods)
+    fun `did jwk never reaches the delegate`() = runBlocking {
+        // It resolves offline: the key is the identifier, so a round trip
+        // would add a dependency and a failure mode for a known answer.
+        var called = false
+        val resolver = DidResolver(delegate = { called = true; null })
+        val did = createDidJwk(p256Jwk)
+        assertNotNull(resolver.resolve(did).documentOrNull)
+        assertFalse("did:jwk must not be delegated", called)
+    }
+
+    @Test
+    fun `did webvh is delegated like any other network method`() = runBlocking {
+        // A DIIP v6 Future Direction. The SDK does not special-case it: go-trust
+        // either resolves it or does not.
+        var asked: String? = null
+        val resolver = DidResolver(profile = DiipProfile.V6, delegate = { asked = it; null })
+        resolver.resolve("did:webvh:scid:example.com")
+        assertEquals("did:webvh:scid:example.com", asked)
+        assertTrue(DidMethod.WEBVH in DidResolver(profile = DiipProfile.V6).requiredMethods)
     }
 
     // ── documents and cnf ───────────────────────────────────────────
