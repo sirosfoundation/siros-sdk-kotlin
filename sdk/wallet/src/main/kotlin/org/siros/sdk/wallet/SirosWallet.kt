@@ -337,7 +337,7 @@ class SirosWallet private constructor(
      */
     @Deprecated(
         "Use the WalletInstanceStatus overload",
-        ReplaceWith("setWalletInstanceStatus(instanceId, WalletInstanceStatus.fromWire(status)!!, reason)"),
+        ReplaceWith("setWalletInstanceStatus(instanceId, requireNotNull(WalletInstanceStatus.fromWire(status)), reason)"),
     )
     suspend fun setWalletInstanceStatus(instanceId: String, status: String, reason: String? = null): WalletInstance =
         setWalletInstanceStatus(
@@ -414,6 +414,14 @@ class SirosWallet private constructor(
         engineStateJob = null
         engineSession?.disconnect()
         engineSession = null
+        // The WMP transport holds its own live WebSocket, and the backend
+        // re-checks the cut-off at every flow start - leaving it connected
+        // would keep a socket authenticated by a token the backend has already
+        // stopped accepting, and the next connect would overwrite the
+        // reference without ever closing it.
+        wmpPeer?.close()
+        wmpPeer = null
+        credentialNotifier = null
         apiClient = null
         authTokens.clear()
         login(accountRegistry.activeAccountId ?: sessionStore.activeAccountId)
@@ -543,6 +551,11 @@ class SirosWallet private constructor(
             "displayName must be 1-256 characters"
         }
         _state.value = WalletState.Connecting
+        // See logout()'s identical reset: this enrollment gets its own
+        // instance key, so any WIA still cached from an earlier account must
+        // not be what identifies this device afterwards.
+        cachedWia = null
+        cachedWiaExpiresAt = 0
         try {
             ensureAuthMode()
             when (authMode) {
@@ -752,6 +765,11 @@ class SirosWallet private constructor(
      */
     suspend fun login(accountId: String? = null) {
         _state.value = WalletState.Connecting
+        // See logout()'s identical reset: a WIA still cached from another
+        // account (or from before a re-enrollment) must not be what identifies
+        // this device once this login resolves.
+        cachedWia = null
+        cachedWiaExpiresAt = 0
         try {
             ensureAuthMode()
             if (accountId != null) {
@@ -1159,6 +1177,12 @@ class SirosWallet private constructor(
         accountRegistry.activeAccountId = null
         apiClient = null
         legacyAppToken = null
+        // The WIA cache is wallet-wide but the instance key it attests is
+        // account-scoped, so a WIA kept across a logout would answer
+        // [thisInstanceId] (and `wallet_instance_id`) with the PREVIOUS
+        // account's thumbprint for the next one. It is cheap to reissue.
+        cachedWia = null
+        cachedWiaExpiresAt = 0
         scope.launch {
             try {
                 authTokens.clear()

@@ -37,15 +37,21 @@ class BackendApiClient(
     private val tenantId: String = "default",
     private val httpClient: OkHttpClient = OkHttpClient(),
     private val json: Json = Json { ignoreUnknownKeys = true },
+) {
     /**
      * Waits between the attempts of a `409 ERASURE_INCOMPLETE` retry (see
      * [revokeAllWalletInstances]). One more attempt is made than there are
      * entries here, so the default is five attempts over about 15 s - long
      * enough for a transient backend failure to clear, short enough that the
-     * OS will not suspend the app mid-loop. Tests pass zeros.
+     * OS will not suspend the app mid-loop.
+     *
+     * Deliberately a property rather than a constructor parameter: adding one
+     * would change this class's JVM constructor signature and break already
+     * compiled consumers, for something only the tests (which lower it to
+     * zeros) ever set.
      */
-    private val erasureRetryDelaysMs: List<Long> = listOf(1_000, 2_000, 4_000, 8_000),
-) {
+    internal var erasureRetryDelaysMs: List<Long> = listOf(1_000, 2_000, 4_000, 8_000)
+
     private var appToken: String? = null
     private var authTokens: AuthTokens? = null
 
@@ -307,7 +313,7 @@ class BackendApiClient(
      */
     @Deprecated(
         "Use the WalletInstanceStatus overload",
-        ReplaceWith("setWalletInstanceStatus(instanceId, WalletInstanceStatus.fromWire(status)!!, reason)"),
+        ReplaceWith("setWalletInstanceStatus(instanceId, requireNotNull(WalletInstanceStatus.fromWire(status)), reason)"),
     )
     suspend fun setWalletInstanceStatus(instanceId: String, status: String, reason: String? = null): WalletInstance =
         setWalletInstanceStatus(

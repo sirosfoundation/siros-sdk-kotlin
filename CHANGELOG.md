@@ -54,6 +54,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Transifex source `assets/i18n/en.json`.
 
 ### Changed
+- **Source-breaking: `WalletState` has a new subclass.**
+  `WalletState.LifecycleBlocked` means an exhaustive `when` over `WalletState`
+  no longer compiles without a branch for it (the sample app needed one). Add
+  a branch, or an `else`, when upgrading.
 - **`SirosWallet.deactivateWallet` and `BackendApiClient.revokeAllWalletInstances`
   return `DeactivationOutcome(revoked, complete)`** instead of a bare count.
   The revocations stand even when the backend's erasure cascade did not
