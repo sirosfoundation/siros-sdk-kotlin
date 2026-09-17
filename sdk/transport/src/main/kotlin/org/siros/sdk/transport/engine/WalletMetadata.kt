@@ -29,6 +29,15 @@ object WalletMetadata {
      * (`dc+sd-jwt`) and the legacy (`vc+sd-jwt`) identifier, and ISO mdoc.
      * ES256 throughout - it is what every WSCD this SDK drives produces,
      * from the platform keystore to a remote signer over R2PS.
+     *
+     * The two formats are spelled as OpenID4VP 1.0 Annex B defines them,
+     * which is not the same shape twice: SD-JWT VC takes `sd-jwt_alg_values`
+     * and `kb-jwt_alg_values` with JOSE names, mdoc takes
+     * `issuerauth_alg_values` and `deviceauth_alg_values` with COSE algorithm
+     * identifiers. `-7` is the ES256 `MdocCose` writes into the COSE header,
+     * `-9` the same algorithm named fully-specified; a verifier matching
+     * either way finds us. No `DeviceMac` value is offered because this SDK
+     * only ever produces a `DeviceSignature`.
      */
     val DEFAULT: JsonObject = buildJsonObject {
         putJsonObject("vp_formats_supported") {
@@ -41,7 +50,8 @@ object WalletMetadata {
                 putJsonArray("kb-jwt_alg_values") { add("ES256") }
             }
             putJsonObject("mso_mdoc") {
-                putJsonArray("alg_values") { add("ES256") }
+                putJsonArray("issuerauth_alg_values") { add(-7); add(-9) }
+                putJsonArray("deviceauth_alg_values") { add(-7); add(-9) }
             }
         }
     }
