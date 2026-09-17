@@ -441,8 +441,10 @@ class WalletEngineSessionTest {
         session.connect("app-token")
 
         session.startPresentation(
+            requestUri = null,
             requestUriRef = "https://verifier.example.com/request-object/42",
             requestUriMethod = "post",
+            walletMetadata = WalletMetadata.DEFAULT,
         )
 
         verify(exactly = 1) {
@@ -467,6 +469,8 @@ class WalletEngineSessionTest {
 
         session.startPresentation(
             requestUri = "https://verifier.example.com/request",
+            requestUriRef = null,
+            requestUriMethod = null,
             walletMetadata = null,
         )
 
@@ -475,6 +479,28 @@ class WalletEngineSessionTest {
                 text.contains("\"protocol\":\"oid4vp\"") &&
                     text.contains("\"wallet_metadata\":null") &&
                     !text.contains("vp_formats_supported")
+            })
+        }
+    }
+
+    // The two-argument entry point is preserved for binary compatibility, so
+    // it has to keep behaving like the SDK's own default: metadata attached,
+    // no request_uri_method.
+    @Test
+    fun start_presentation_two_argument_overload_still_sends_the_default_metadata() {
+        val session = WalletEngineSession(
+            baseUrl = "https://wallet.example.com",
+            tenantId = "tenant-42",
+            client = client,
+        )
+        session.connect("app-token")
+
+        session.startPresentation("https://verifier.example.com/request", null)
+
+        verify(exactly = 1) {
+            webSocket.send(match<String> { text ->
+                text.contains("\"wallet_metadata\":{\"vp_formats_supported\":") &&
+                    text.contains("\"request_uri_method\":null")
             })
         }
     }

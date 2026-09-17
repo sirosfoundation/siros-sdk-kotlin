@@ -53,25 +53,6 @@ data class FlowStartMessage(
     @SerialName("credential_offer_uri") val credentialOfferUri: String? = null,
     @SerialName("request_uri") val requestUri: String? = null,
     @SerialName("request_uri_ref") val requestUriRef: String? = null,
-    /**
-     * OpenID4VP 1.0 §5.10's `request_uri_method`, for the verifier that wants
-     * the wallet to POST to its request URI rather than GET it.
-     *
-     * Only needed when [requestUriRef] was extracted from the authorization
-     * request by the client: the parameter travels next to `request_uri` in
-     * that same URI, so extracting one without the other loses it. When
-     * [requestUri] carries the whole authorization request the backend reads
-     * the parameter from there and this field is redundant (and ignored - the
-     * URI wins). Absent or `"get"` is RFC 9101's GET.
-     */
-    @SerialName("request_uri_method") val requestUriMethod: String? = null,
-    /**
-     * What this wallet can present, sent as `wallet_metadata` when the
-     * backend POSTs to the request URI - see [WalletMetadata]. Defaulted by
-     * [WalletEngineSession.startPresentation]; the backend substitutes a
-     * guess of its own when it is absent.
-     */
-    @SerialName("wallet_metadata") val walletMetadata: JsonObject? = null,
     val vct: String? = null,
     @SerialName("redirect_uri") val redirectUri: String? = null,
     @SerialName("auth_code") val authCode: String? = null,
@@ -137,6 +118,33 @@ data class FlowStartMessage(
      */
     @SerialName("dpop_key_id") val dpopKeyId: String? = null,
     val timestamp: String? = null,
+    /**
+     * OpenID4VP 1.0 §5.10's `request_uri_method`, for the verifier that wants
+     * the wallet to POST to its request URI rather than GET it.
+     *
+     * Only needed when [requestUriRef] was extracted from the authorization
+     * request by the client: the parameter travels next to `request_uri` in
+     * that same URI, so extracting one without the other loses it. When
+     * [requestUri] carries the whole authorization request the backend reads
+     * the parameter from there and this field is redundant (and ignored - the
+     * URI wins). Absent or `"get"` is RFC 9101's GET.
+     *
+     * Declared last rather than beside [requestUriRef], where it belongs by
+     * subject: every parameter of this data class is positional, so a field
+     * put anywhere but the end renumbers the `componentN` functions of a
+     * published type. Landing before [timestamp] would have given
+     * `component19` this field's value in place of the timestamp's - same
+     * type, so nothing would fail to compile and a destructuring caller would
+     * simply read the wrong one.
+     */
+    @SerialName("request_uri_method") val requestUriMethod: String? = null,
+    /**
+     * What this wallet can present, sent as `wallet_metadata` when the
+     * backend POSTs to the request URI - see [WalletMetadata]. Defaulted by
+     * [WalletEngineSession.startPresentation]; the backend substitutes a
+     * guess of its own when it is absent.
+     */
+    @SerialName("wallet_metadata") val walletMetadata: JsonObject? = null,
 )
 
 @Serializable
