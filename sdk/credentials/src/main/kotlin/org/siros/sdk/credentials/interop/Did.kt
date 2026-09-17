@@ -24,6 +24,7 @@ enum class DidMethod(val methodName: String) {
     /**
      * `did:webvh` - `did:web` plus a verifiable, append-only history of the
      * document. A DIIP Future Direction, not yet required by any release.
+     * Resolved (or not) by go-trust like any other network method.
      */
     WEBVH("webvh"),
 
@@ -70,18 +71,25 @@ data class DidDocument(
      * only thing a verifier can do when the credential or proof did not name
      * one - unambiguous for `did:jwk`, which has exactly one.
      */
+    /**
+     * @param relationship which verification relationship the key must be
+     *   authorized for. A key absent from that relationship is not returned,
+     *   even when the document has no other keys - see the body.
+     */
     fun findPublicKey(kid: String?, relationship: DidRelationship): JsonObject? {
         val ids = when (relationship) {
             DidRelationship.AUTHENTICATION -> authentication
             DidRelationship.ASSERTION_METHOD -> assertionMethod
             DidRelationship.ANY -> verificationMethods.keys.toList()
         }
-        val candidates = ids.ifEmpty {
-            // A document that lists no relationship at all still resolves:
-            // DID Core lets a method's verification methods be used for any
-            // purpose unless the document narrows it.
-            if (relationship == DidRelationship.ANY) emptyList() else verificationMethods.keys.toList()
-        }
+        // No fallback to "every verification method" for a NAMED relationship.
+        // A key the controller did not place in `assertionMethod` is not
+        // authorized to assert, and treating an empty relationship as "all
+        // keys" would let an Issuer's DID document sign credentials with a key
+        // it only published for, say, key agreement. Fail closed; [ANY] is the
+        // one caller that legitimately means "whichever key this document has"
+        // (resolving a did:jwk back to its own key).
+        val candidates = ids
         val match = when {
             kid == null -> candidates.firstOrNull()
             // A `kid` may be the absolute DID URL or just the fragment.
@@ -119,92 +127,77 @@ sealed class DidResolution {
 }
 
 /**
- * Resolves the DID methods DIIP requires.
+ * How a DID that needs resolving is resolved.
  *
- * `did:jwk` resolves offline - the key *is* the identifier - so it needs no
- * network and cannot fail for connectivity reasons. `did:web` is an HTTPS
- * fetch. `did:webvh` is recognised but deliberately not resolved: see
- * [resolveWebvh].
+ * Deliberately an interface this SDK does not implement for the network
+ * methods. DID method resolution is a trust decision - which document is
+ * authoritative for an identifier - and in SIROS that lives in go-trust,
+ * reached through go-wallet-backend's engine. A wallet that fetched
+ * `did:web` documents itself would be making that decision locally, with its
+ * own idea of which hosts to believe, and silently diverging from whatever
+ * the deployment's trust registry says.
  *
- * @param profile decides which methods are in scope; a method outside the
- *        profile still resolves if this SDK can, since DIIP explicitly does
- *        not forbid identifiers it does not require.
- * @param httpGet fetches a URL, returning the body or null. Injected so a
- *        host can supply its own client, pinning and caching - matching
- *        [org.siros.sdk.credentials.VctmFetcher].
+ * `SirosWallet` supplies an implementation backed by the backend's
+ * `/v1/resolve`; a host composing the lower-level modules supplies its own.
+ *
+ * @return the resolved DID document as JSON, or null if it could not be
+ *   resolved. Null is a failure, never an empty success - see [DidResolution].
+ */
+fun interface DidResolutionDelegate {
+    suspend fun resolve(did: String): JsonObject?
+}
+
+/**
+ * Resolves the DIDs a wallet encounters.
+ *
+ * `did:jwk` is resolved here, locally and offline: the key *is* the
+ * identifier, so there is no document to fetch, nobody to ask, and no trust
+ * decision to delegate - the same reason wallet-frontend resolves it locally
+ * too. Every other method is handed to [delegate], which routes it to
+ * go-trust. This split is the whole design: the SDK answers only the question
+ * that has an arithmetic answer, and never the one that needs a trust
+ * registry.
+ *
+ * @param profile decides which methods a compliant wallet must be able to
+ *   resolve; a method outside it is still delegated, since DIIP explicitly
+ *   does not forbid identifiers it does not require.
+ * @param delegate resolves everything except `did:jwk`. Null means a wallet
+ *   with no resolution authority configured: `did:jwk` still works, and
+ *   anything else fails rather than being fetched directly.
  */
 class DidResolver(
     private val profile: DiipProfile = DiipProfile.LATEST,
-    private val httpGet: suspend (String) -> String?,
+    private val delegate: DidResolutionDelegate? = null,
 ) {
-    private val json = Json { ignoreUnknownKeys = true }
+    /** Resolve any DID this wallet can. */
+    suspend fun resolve(did: String): DidResolution {
+        val method = DidMethod.of(did)
+            ?: return DidResolution.Failed(did, "Not a DID, or an unsupported DID method: $did")
 
-    /** Resolve any DID this SDK supports. */
-    suspend fun resolve(did: String): DidResolution = when (DidMethod.of(did)) {
-        DidMethod.JWK -> resolveDidJwk(did)
-        DidMethod.WEB -> resolveWeb(did)
-        DidMethod.WEBVH -> resolveWebvh(did)
-        DidMethod.KEY -> DidResolution.Failed(did, "did:key resolution is not implemented")
-        null -> DidResolution.Failed(did, "Not a DID, or an unsupported DID method: $did")
+        // did:jwk carries its own key. Sending it to a resolution service
+        // would add a network round trip, a dependency, and a failure mode,
+        // for an answer that is already in the identifier.
+        if (method == DidMethod.JWK) return resolveDidJwk(did)
+
+        val resolver = delegate
+            ?: return DidResolution.Failed(
+                did,
+                "No DID resolution delegate configured; ${method.methodName} resolution is the backend's to perform",
+            )
+        val document = runCatching { resolver.resolve(did) }.getOrNull()
+            ?: return DidResolution.Failed(did, "Could not resolve $did")
+        val parsed = runCatching { parseDidDocument(document) }.getOrNull()
+            ?: return DidResolution.Failed(did, "Resolution of $did did not return a DID document")
+        if (parsed.id != did) {
+            // A document naming a different subject is not this DID's
+            // document, whoever returned it.
+            return DidResolution.Failed(did, "Resolved document declares id '${parsed.id}'")
+        }
+        return DidResolution.Resolved(parsed)
     }
 
     /** The methods [profile] requires a compliant wallet to resolve. */
     val requiredMethods: Set<DidMethod> get() = profile.resolvableDidMethods
-
-    private suspend fun resolveWeb(did: String): DidResolution {
-        val url = didWebToUrl(did) ?: return DidResolution.Failed(did, "Malformed did:web identifier")
-        val body = runCatching { httpGet(url) }.getOrNull()
-            ?: return DidResolution.Failed(did, "Could not fetch DID document from $url")
-        val document = runCatching { parseDidDocument(json.parseToJsonElement(body).jsonObject) }.getOrNull()
-            ?: return DidResolution.Failed(did, "DID document at $url is not a DID document")
-        if (document.id != did) {
-            // A document that names a different subject would let any domain
-            // serve a document for any DID.
-            return DidResolution.Failed(did, "DID document at $url declares id '${document.id}'")
-        }
-        return DidResolution.Resolved(document)
-    }
-
-    /**
-     * `did:webvh` is not resolved.
-     *
-     * Its whole value over `did:web` is that the document's history is
-     * verifiable: every log entry carries a Data Integrity proof and a hash
-     * linking it to its predecessor, and a resolver that skips those checks
-     * offers exactly the trust of `did:web` while looking like more. Failing
-     * here is the safe default - a caller sees an unresolved DID rather than
-     * an unverified document. The method is listed in [DiipProfile.V6]'s
-     * [DiipProfile.resolvableDidMethods] so that gap is visible rather than
-     * silent.
-     */
-    private fun resolveWebvh(did: String): DidResolution = DidResolution.Failed(
-        did,
-        "did:webvh resolution requires verifying the DID log's proof chain, which is not yet implemented",
-    )
-
-    companion object {
-        /**
-         * Map a `did:web` identifier to the URL its document is served from.
-         *
-         * `did:web:example.com` -> `https://example.com/.well-known/did.json`;
-         * `did:web:example.com:a:b` -> `https://example.com/a/b/did.json`. A
-         * port is percent-encoded in the DID (`example.com%3A8443`).
-         */
-        fun didWebToUrl(did: String): String? {
-            if (!did.startsWith("did:web:")) return null
-            val idPart = did.removePrefix("did:web:").substringBefore('#').substringBefore('?')
-            if (idPart.isEmpty()) return null
-            val segments = idPart.split(':').map { URLDecoder.decode(it, "UTF-8") }
-            val host = segments.first()
-            if (host.isEmpty()) return null
-            val path = segments.drop(1)
-            return if (path.isEmpty()) {
-                "https://$host/.well-known/did.json"
-            } else {
-                "https://$host/${path.joinToString("/")}/did.json"
-            }
-        }
-    }
 }
 
 /**
@@ -318,20 +311,32 @@ fun parseDidDocument(root: JsonObject): DidDocument {
  * Strip a JWK down to the members that identify the public key, in a fixed
  * order, so that the same key always yields the same `did:jwk`.
  *
- * `d` and the other private members must never reach a DID; `ext` and
- * `key_ops` are WebCrypto bookkeeping rather than part of the key.
+ * The members kept are exactly RFC 7638's required ones for the key type -
+ * the same set a JWK thumbprint is computed over. That is what makes the
+ * mapping one-to-one: a key that also carries `alg`, `use`, `kid` or WebCrypto
+ * bookkeeping (`ext`, `key_ops`) must not get a different DID from the same
+ * key without them, or one wallet's `did:jwk` stops matching another's for the
+ * same key pair. Private members never reach a DID at all.
  *
- * The order is lexicographic, which is not an arbitrary choice: it is both
- * RFC 7638's canonicalization and what wallet-frontend ends up emitting (it
- * stringifies a WebCrypto `exportKey("jwk")` result, which comes back
+ * The order is lexicographic, which is not an arbitrary choice either: it is
+ * both RFC 7638's canonicalization and what wallet-frontend ends up emitting
+ * (it stringifies a WebCrypto `exportKey("jwk")` result, which comes back
  * alphabetically ordered, with `ext`/`key_ops` destructured away). The same
  * key has to produce the same DID on every client that reads the shared
  * `privatedata` container, so this has to match rather than merely be stable.
  */
 internal fun canonicalPublicJwk(jwk: JsonObject): JsonObject {
-    val identifying = setOf("kty", "crv", "x", "y", "e", "n", "alg", "use")
+    val required = when (jwk["kty"]?.jsonPrimitive?.contentOrNull) {
+        "EC" -> listOf("crv", "kty", "x", "y")
+        "OKP" -> listOf("crv", "kty", "x")
+        "RSA" -> listOf("e", "kty", "n")
+        "oct" -> listOf("k", "kty")
+        // An unknown key type has no defined required set; keeping only what
+        // is certainly part of every JWK is safer than guessing a wider one.
+        else -> listOf("kty")
+    }
     return buildJsonObject {
-        for (member in jwk.keys.filter { it in identifying }.sorted()) {
+        for (member in required) {
             jwk[member]?.let { put(member, it) }
         }
     }

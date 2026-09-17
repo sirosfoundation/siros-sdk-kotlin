@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import timber.log.Timber
 
 /** Supported verifiable credential formats. */
 enum class CredentialFormat(val value: String) {
@@ -56,9 +57,19 @@ enum class CredentialFormat(val value: String) {
             val segments = jwt.split('.')
             if (segments.size < 2) return null
             val header = decodeSegment(segments[0]) ?: return null
-            when (header["typ"]?.jsonPrimitive?.contentOrNull) {
+            when (val typ = header["typ"]?.jsonPrimitive?.contentOrNull) {
                 "dc+sd-jwt" -> return DC_SD_JWT
                 "JWT", "jwt_vc_json" -> return JWT_VC_JSON
+                // Only `vc+sd-jwt` is ambiguous between the two SD-JWT
+                // formats, so only it goes on to the payload check. An absent
+                // typ is tolerated because issuers predating SD-JWT VC's typ
+                // requirement omit it; any OTHER typ is some unrelated JWT and
+                // is not this function's to classify.
+                "vc+sd-jwt", null -> Unit
+                else -> {
+                    Timber.d("Not a credential this SDK recognises: typ=$typ")
+                    return null
+                }
             }
             val payload = decodeSegment(segments[1]) ?: return null
             return if (payload["vct"] == null && payload["@context"] != null) {
