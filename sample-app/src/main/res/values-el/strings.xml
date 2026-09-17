@@ -176,4 +176,42 @@
     <string name="cancel">Ακύρωση</string>
     <string name="ok">OK</string>
     <string name="user_fallback_name">Χρήστης</string>
+
+    <!-- Devices / wallet instance lifecycle (SID-AUTH-06) -->
+    <string name="devices_title">Συσκευές</string>
+    <string name="devices_description">Οι εγκαταστάσεις πορτοφολιού που είναι καταχωρισμένες σε αυτόν τον λογαριασμό. Η αναστολή μιας συσκευής την αποκλείει μέχρι να επανενεργοποιηθεί· η αφαίρεση είναι οριστική.</string>
+    <string name="devices_manage_button">Διαχείριση συσκευών</string>
+    <string name="devices_empty">Δεν υπάρχουν ακόμη καταχωρισμένες παρουσίες πορτοφολιού. Μία καταχωρείται την πρώτη φορά που αυτή η εγκατάσταση λαμβάνει βεβαίωση παρουσίας πορτοφολιού.</string>
+    <string name="devices_refresh">Ανανέωση</string>
+    <string name="devices_this_device">Αυτή η συσκευή</string>
+    <string name="devices_instance_id">Αναγνωριστικό παρουσίας</string>
+    <string name="devices_wscd_type">Αποθήκευση κλειδιών</string>
+    <string name="devices_last_attested">Τελευταία βεβαίωση</string>
+    <string name="devices_status_reason">Αιτία</string>
+    <string name="devices_status_active">Ενεργή</string>
+    <string name="devices_status_suspended">Σε αναστολή</string>
+    <string name="devices_status_revoked">Αφαιρέθηκε</string>
+    <string name="devices_status_unknown">Άγνωστη</string>
+    <string name="devices_suspend">Αναστολή</string>
+    <string name="devices_reactivate">Επανενεργοποίηση</string>
+    <string name="devices_remove">Αφαίρεση</string>
+    <string name="devices_cancel">Ακύρωση</string>
+    <string name="devices_suspend_self_warning">Η αναστολή αυτής της συσκευής την αποσυνδέει μέχρι να επανενεργοποιηθεί από άλλη συσκευή ή από τον πάροχό σας.</string>
+    <string name="devices_remove_confirm_title">Αφαίρεση αυτής της συσκευής;</string>
+    <string name="devices_remove_confirm_message">Το %1$s θα αφαιρεθεί οριστικά και δεν θα μπορεί ποτέ να επανενεργοποιηθεί. Η αφαίρεση της τελευταίας συσκευής απενεργοποιεί το πορτοφόλι και διαγράφει τα δεδομένα του.</string>
+    <string name="devices_deactivate_title">Απενεργοποίηση πορτοφολιού</string>
+    <string name="devices_deactivate_description">Αφαιρεί όλες τις συσκευές και διαγράφει τα δεδομένα αυτού του πορτοφολιού στον διακομιστή. Στη συνέχεια απαιτείται νέα εγγραφή.</string>
+    <string name="devices_deactivate_button">Απενεργοποίηση πορτοφολιού</string>
+    <string name="devices_deactivate_confirm_title">Απενεργοποίηση αυτού του πορτοφολιού;</string>
+    <string name="devices_deactivate_confirm_message">Αυτό δεν αναιρείται. Πληκτρολογήστε %1$s για επιβεβαίωση.</string>
+    <string name="devices_deactivate_confirm_word">ΑΠΕΝΕΡΓΟΠΟΙΗΣΗ</string>
+    <string name="devices_reason_optional">Αιτία (προαιρετικό)</string>
+    <string name="devices_deactivate_complete">Το πορτοφόλι απενεργοποιήθηκε: %1$d συσκευή(-ές) αφαιρέθηκαν και τα δεδομένα στον διακομιστή διαγράφηκαν.</string>
+    <string name="devices_deactivate_incomplete">Το πορτοφόλι απενεργοποιήθηκε: %1$d συσκευή(-ές) αφαιρέθηκαν, αλλά ο διακομιστής δεν ολοκλήρωσε τη διαγραφή των δεδομένων. Ο πάροχός σας πρέπει να την ολοκληρώσει.</string>
+    <string name="wallet_blocked_suspended_title">Αυτή η συσκευή είναι σε αναστολή</string>
+    <string name="wallet_blocked_suspended_message">Επανενεργοποιήστε την από κάποια άλλη συσκευή σας ή επικοινωνήστε με τον πάροχο του πορτοφολιού σας. Τα διαπιστευτήριά σας παραμένουν άθικτα.</string>
+    <string name="wallet_blocked_retry">Δοκιμάστε ξανά</string>
+    <string name="wallet_blocked_revoked_title">Αυτό το πορτοφόλι απενεργοποιήθηκε</string>
+    <string name="wallet_blocked_revoked_message">Τα δεδομένα του διαγράφηκαν στον διακομιστή και αυτό το passkey δεν μπορεί πλέον να συνδεθεί. Εγγραφείτε ξανά για να ξεκινήσετε από την αρχή.</string>
+    <string name="wallet_blocked_enroll_again">Νέα εγγραφή</string>
 </resources>

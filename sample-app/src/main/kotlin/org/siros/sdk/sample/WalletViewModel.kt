@@ -1622,6 +1622,115 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         }
     }
 
+    // ── Devices screen state (wallet instance lifecycle, SID-AUTH-06) ──
+
+    private val _showDevices = MutableStateFlow(false)
+    val showDevices: StateFlow<Boolean> = _showDevices
+
+    private val _walletInstances = MutableStateFlow<List<org.siros.sdk.auth.WalletInstance>>(emptyList())
+    val walletInstances: StateFlow<List<org.siros.sdk.auth.WalletInstance>> = _walletInstances
+
+    private val _devicesLoading = MutableStateFlow(false)
+    val devicesLoading: StateFlow<Boolean> = _devicesLoading
+
+    /** The instance whose status write is in flight, so its row can show a spinner. */
+    private val _devicesBusyInstanceId = MutableStateFlow<String?>(null)
+    val devicesBusyInstanceId: StateFlow<String?> = _devicesBusyInstanceId
+
+    private val _devicesError = MutableStateFlow<String?>(null)
+    val devicesError: StateFlow<String?> = _devicesError
+
+    private val _deactivating = MutableStateFlow(false)
+    val deactivating: StateFlow<Boolean> = _deactivating
+
+    /**
+     * What the last `deactivateWallet` call reported. Kept so the screen can
+     * say whether the backend confirmed the erasure - an incomplete one still
+     * deactivated the wallet, but leaves residual server-side data for an
+     * administrator, and the user should be told which of the two happened.
+     */
+    private val _deactivationOutcome = MutableStateFlow<org.siros.sdk.auth.DeactivationOutcome?>(null)
+    val deactivationOutcome: StateFlow<org.siros.sdk.auth.DeactivationOutcome?> = _deactivationOutcome
+
+    fun openDevices() {
+        _showDevices.value = true
+        _deactivationOutcome.value = null
+        refreshDevices()
+    }
+
+    fun closeDevices() {
+        _showDevices.value = false
+        _devicesError.value = null
+    }
+
+    fun refreshDevices() {
+        viewModelScope.launch {
+            _devicesLoading.value = true
+            _devicesError.value = null
+            try {
+                _walletInstances.value = wallet.listWalletInstances()
+            } catch (e: Exception) {
+                Log.w(TAG, "listWalletInstances failed", e)
+                _devicesError.value = localizedErrorMessage(e)
+            } finally {
+                _devicesLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * Suspend, reactivate or revoke one instance. The SDK re-logs in after the
+     * write (the change cuts this session's tokens off), so when the target is
+     * this device the wallet may land in [WalletState.LifecycleBlocked] and
+     * this screen disappears behind the blocked login screen - which is the
+     * truthful outcome, not an error to report here.
+     */
+    fun setWalletInstanceStatus(
+        instanceId: String,
+        status: org.siros.sdk.auth.WalletInstanceStatus,
+        reason: String? = null,
+    ) {
+        viewModelScope.launch {
+            _devicesBusyInstanceId.value = instanceId
+            _devicesError.value = null
+            try {
+                wallet.setWalletInstanceStatus(instanceId, status, reason)
+                refreshDevices()
+            } catch (e: Exception) {
+                Log.w(TAG, "setWalletInstanceStatus failed", e)
+                _devicesError.value = localizedErrorMessage(e)
+            } finally {
+                _devicesBusyInstanceId.value = null
+            }
+        }
+    }
+
+    /**
+     * Deactivate the wallet. The SDK forgets the local account in both
+     * outcomes (the revocations stand even when the erasure cascade did not
+     * finish), so this screen closes either way and the result is kept only to
+     * be shown once before it does.
+     */
+    fun deactivateWallet(reason: String? = null) {
+        viewModelScope.launch {
+            _deactivating.value = true
+            _devicesError.value = null
+            try {
+                val outcome = wallet.deactivateWallet(reason)
+                _deactivationOutcome.value = outcome
+                _walletInstances.value = emptyList()
+                _showAddCredential.value = false
+                _availableCredentials.value = emptyList()
+                _showDevices.value = false
+            } catch (e: Exception) {
+                Log.e(TAG, "deactivateWallet failed", e)
+                _devicesError.value = localizedErrorMessage(e)
+            } finally {
+                _deactivating.value = false
+            }
+        }
+    }
+
     // ── WSCA developer screen state ─────────────────────────────────
 
     private val _showWscaDeveloper = MutableStateFlow(false)

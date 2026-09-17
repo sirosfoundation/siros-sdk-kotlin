@@ -176,4 +176,42 @@
     <string name="cancel">Peruuta</string>
     <string name="ok">OK</string>
     <string name="user_fallback_name">Käyttäjä</string>
+
+    <!-- Devices / wallet instance lifecycle (SID-AUTH-06) -->
+    <string name="devices_title">Laitteet</string>
+    <string name="devices_description">Tähän tiliin rekisteröidyt lompakkoasennukset. Keskeytys estää asennuksen käytön, kunnes se aktivoidaan uudelleen; poistaminen on pysyvää.</string>
+    <string name="devices_manage_button">Hallitse laitteita</string>
+    <string name="devices_empty">Lompakkoinstansseja ei ole vielä rekisteröity. Instanssi rekisteröidään, kun tämä asennus hankkii ensimmäisen kerran lompakkoinstanssin todistuksen.</string>
+    <string name="devices_refresh">Päivitä</string>
+    <string name="devices_this_device">Tämä laite</string>
+    <string name="devices_instance_id">Instanssitunnus</string>
+    <string name="devices_wscd_type">Avainten säilytys</string>
+    <string name="devices_last_attested">Viimeksi todennettu</string>
+    <string name="devices_status_reason">Syy</string>
+    <string name="devices_status_active">Aktiivinen</string>
+    <string name="devices_status_suspended">Keskeytetty</string>
+    <string name="devices_status_revoked">Poistettu</string>
+    <string name="devices_status_unknown">Tuntematon</string>
+    <string name="devices_suspend">Keskeytä</string>
+    <string name="devices_reactivate">Aktivoi uudelleen</string>
+    <string name="devices_remove">Poista</string>
+    <string name="devices_cancel">Peruuta</string>
+    <string name="devices_suspend_self_warning">Tämän laitteen keskeyttäminen kirjaa sen ulos, kunnes se aktivoidaan uudelleen toiselta laitteelta tai palveluntarjoajasi toimesta.</string>
+    <string name="devices_remove_confirm_title">Poistetaanko tämä laite?</string>
+    <string name="devices_remove_confirm_message">%1$s poistetaan pysyvästi eikä sitä voi koskaan aktivoida uudelleen. Viimeisen laitteen poistaminen deaktivoi lompakon ja poistaa sen tiedot.</string>
+    <string name="devices_deactivate_title">Deaktivoi lompakko</string>
+    <string name="devices_deactivate_description">Poistaa kaikki laitteet ja pyyhkii tämän lompakon tiedot palvelimelta. Tämän jälkeen vaaditaan uusi rekisteröinti.</string>
+    <string name="devices_deactivate_button">Deaktivoi lompakko</string>
+    <string name="devices_deactivate_confirm_title">Deaktivoidaanko tämä lompakko?</string>
+    <string name="devices_deactivate_confirm_message">Tätä ei voi kumota. Vahvista kirjoittamalla %1$s.</string>
+    <string name="devices_deactivate_confirm_word">DEAKTIVOI</string>
+    <string name="devices_reason_optional">Syy (valinnainen)</string>
+    <string name="devices_deactivate_complete">Lompakko deaktivoitu: %1$d laitetta poistettu ja palvelimen tiedot pyyhitty.</string>
+    <string name="devices_deactivate_incomplete">Lompakko deaktivoitu: %1$d laitetta poistettu, mutta palvelin ei saanut tietojen pyyhintää valmiiksi. Palveluntarjoajasi on viimeisteltävä se.</string>
+    <string name="wallet_blocked_suspended_title">Tämä laite on keskeytetty</string>
+    <string name="wallet_blocked_suspended_message">Aktivoi se uudelleen joltakin toiselta laitteeltasi tai ota yhteyttä lompakkopalvelusi tarjoajaan. Todistuksesi ovat koskemattomia.</string>
+    <string name="wallet_blocked_retry">Yritä uudelleen</string>
+    <string name="wallet_blocked_revoked_title">Tämä lompakko deaktivoitiin</string>
+    <string name="wallet_blocked_revoked_message">Sen tiedot pyyhittiin palvelimelta, eikä tämä pääsyavain voi enää kirjautua sisään. Aloita alusta rekisteröitymällä uudelleen.</string>
+    <string name="wallet_blocked_enroll_again">Rekisteröidy uudelleen</string>
 </resources>

@@ -176,4 +176,42 @@
     <string name="cancel">Avbryt</string>
     <string name="ok">OK</string>
     <string name="user_fallback_name">Användare</string>
+
+    <!-- Devices / wallet instance lifecycle (SID-AUTH-06) -->
+    <string name="devices_title">Enheter</string>
+    <string name="devices_description">De plånboksinstallationer som är registrerade för det här kontot. Att pausa en blockerar den tills den återaktiveras; att ta bort en är permanent.</string>
+    <string name="devices_manage_button">Hantera enheter</string>
+    <string name="devices_empty">Inga plånboksinstanser är registrerade ännu. En registreras första gången installationen hämtar ett intyg för plånboksinstansen.</string>
+    <string name="devices_refresh">Uppdatera</string>
+    <string name="devices_this_device">Den här enheten</string>
+    <string name="devices_instance_id">Instans-ID</string>
+    <string name="devices_wscd_type">Nyckellagring</string>
+    <string name="devices_last_attested">Senast attesterad</string>
+    <string name="devices_status_reason">Orsak</string>
+    <string name="devices_status_active">Aktiv</string>
+    <string name="devices_status_suspended">Pausad</string>
+    <string name="devices_status_revoked">Borttagen</string>
+    <string name="devices_status_unknown">Okänd</string>
+    <string name="devices_suspend">Pausa</string>
+    <string name="devices_reactivate">Återaktivera</string>
+    <string name="devices_remove">Ta bort</string>
+    <string name="devices_cancel">Avbryt</string>
+    <string name="devices_suspend_self_warning">Om du pausar den här enheten loggas den ut tills den återaktiveras från en annan enhet eller av din leverantör.</string>
+    <string name="devices_remove_confirm_title">Ta bort den här enheten?</string>
+    <string name="devices_remove_confirm_message">%1$s tas bort permanent och kan aldrig återaktiveras. Att ta bort den sista enheten avaktiverar plånboken och raderar dess data.</string>
+    <string name="devices_deactivate_title">Avaktivera plånboken</string>
+    <string name="devices_deactivate_description">Tar bort alla enheter och raderar plånbokens data på servern. En ny registrering krävs därefter.</string>
+    <string name="devices_deactivate_button">Avaktivera plånboken</string>
+    <string name="devices_deactivate_confirm_title">Avaktivera den här plånboken?</string>
+    <string name="devices_deactivate_confirm_message">Detta kan inte ångras. Skriv %1$s för att bekräfta.</string>
+    <string name="devices_deactivate_confirm_word">AVAKTIVERA</string>
+    <string name="devices_reason_optional">Orsak (valfritt)</string>
+    <string name="devices_deactivate_complete">Plånboken avaktiverad: %1$d enhet(er) borttagna och serverdata raderade.</string>
+    <string name="devices_deactivate_incomplete">Plånboken avaktiverad: %1$d enhet(er) borttagna, men servern kunde inte radera all data. Din leverantör måste slutföra det.</string>
+    <string name="wallet_blocked_suspended_title">Den här enheten är pausad</string>
+    <string name="wallet_blocked_suspended_message">Återaktivera den från någon av dina andra enheter, eller kontakta din plånboksleverantör. Dina intyg är orörda.</string>
+    <string name="wallet_blocked_retry">Försök igen</string>
+    <string name="wallet_blocked_revoked_title">Den här plånboken avaktiverades</string>
+    <string name="wallet_blocked_revoked_message">Dess data raderades på servern och den här passkey-nyckeln kan inte längre logga in. Registrera dig igen för att börja om.</string>
+    <string name="wallet_blocked_enroll_again">Registrera igen</string>
 </resources>
