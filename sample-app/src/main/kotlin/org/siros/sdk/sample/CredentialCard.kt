@@ -65,7 +65,7 @@ import org.siros.sdk.credentials.CredentialInstance
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.credentials.SvgTemplateRenderer
-import org.siros.sdk.credentials.diip.CredentialStatus
+import org.siros.sdk.credentials.interop.CredentialStatus
 import timber.log.Timber
 
 /**

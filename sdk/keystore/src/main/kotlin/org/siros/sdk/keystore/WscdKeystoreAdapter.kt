@@ -5,10 +5,12 @@ import com.nimbusds.jose.JWSHeader
 import com.nimbusds.jwt.JWTClaimsSet
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
-import org.siros.sdk.credentials.diip.DidRelationship
-import org.siros.sdk.credentials.diip.createDidJwk
-import org.siros.sdk.credentials.diip.didJwkKeyId
-import org.siros.sdk.credentials.diip.resolveDidJwk
+import org.siros.sdk.credentials.interop.DidRelationship
+import org.siros.sdk.credentials.interop.HolderBinding
+import org.siros.sdk.credentials.interop.InteropProfile
+import org.siros.sdk.credentials.interop.createDidJwk
+import org.siros.sdk.credentials.interop.didJwkKeyId
+import org.siros.sdk.credentials.interop.resolveDidJwk
 import timber.log.Timber
 import java.security.MessageDigest
 import java.util.Base64
@@ -78,15 +80,15 @@ class WscdKeystoreAdapter private constructor(
      */
     private val credentialsKeystore: JweKeystore,
     /**
-     * How this wallet names its holder keys - see [DidKeyVersion]. Unlike
-     * [JweKeystore], the key ids themselves come from the WSCD (which assigns
-     * RFC 7638 thumbprints) and are not changed by this setting; what it
-     * controls is the identifier presented to Issuers and Verifiers. A
-     * `did:jwk` carries the public key inside the identifier, so a `cnf.kid`
-     * naming one can always be mapped back to the WSCD key that signs for it
-     * - see [resolveSignerKey].
+     * The interoperability profile this keystore signs for - see
+     * [InteropProfile]. Unlike [JweKeystore], the key ids themselves come from
+     * the WSCD (which assigns RFC 7638 thumbprints) and are not changed by
+     * this setting; what it controls is the identifier presented to Issuers.
+     * A `did:jwk` carries the public key inside the identifier, so a
+     * `cnf.kid` naming one can always be mapped back to the WSCD key that
+     * signs for it - see [resolveSignerKey].
      */
-    private val didKeyVersion: DidKeyVersion = DidKeyVersion.JWK,
+    private val profile: InteropProfile = InteropProfile.DEFAULT,
 ) : KeystoreManager,
     WscdManager,
     // Extension state has to land in the same blob the credentials do, or
@@ -96,8 +98,8 @@ class WscdKeystoreAdapter private constructor(
 
     constructor(signer: Signer) : this(signer, JweKeystore())
 
-    constructor(signer: Signer, didKeyVersion: DidKeyVersion) :
-        this(signer, JweKeystore(didKeyVersion = didKeyVersion), didKeyVersion)
+    constructor(signer: Signer, profile: InteropProfile) :
+        this(signer, JweKeystore(profile = profile), profile)
 
     /**
      * Non-null only when [signer] is itself WSCD-backed (i.e. a
@@ -218,7 +220,12 @@ class WscdKeystoreAdapter private constructor(
         return signer.sign(keyId, payload)
     }
 
-    override suspend fun generateProof(audience: String, nonce: String, freshKey: Boolean): String {
+    override suspend fun generateProof(
+        audience: String,
+        nonce: String,
+        freshKey: Boolean,
+        holderBinding: HolderBinding?,
+    ): String {
         checkUnlocked()
         var keys = signer.listKeys()
         if (keys.isEmpty() || freshKey) {
@@ -236,11 +243,13 @@ class WscdKeystoreAdapter private constructor(
         val pubKeyJson = String(signer.exportPublicKey(key.keyId), Charsets.UTF_8)
 
         // DIIP requires the `jwt` proof type to carry the Holder's did:jwk as
-        // `iss` and to name the key with a `kid` from that DID document,
-        // instead of embedding the key in the header. The DID is derived from
-        // the public key rather than stored: a did:jwk *is* its key, so it
-        // needs no bookkeeping and cannot drift out of sync with the WSCD.
-        val did = holderDidFor(pubKeyJson)
+        // `iss` and to name the key with a `kid` from that DID document; HAIP
+        // carries the key in the header instead. The caller may know which
+        // this issuer speaks; when it does not, this keystore's own profile
+        // decides. The DID is derived from the public key rather than stored:
+        // a did:jwk *is* its key, so it needs no bookkeeping and cannot drift
+        // out of sync with the WSCD.
+        val did = holderDidFor(pubKeyJson, holderBinding ?: profile.holderBinding)
 
         val headerBuilder = JWSHeader.Builder(jwsAlgorithm(key.algorithm))
             .type(com.nimbusds.jose.JOSEObjectType("openid4vci-proof+jwt"))
@@ -751,12 +760,12 @@ class WscdKeystoreAdapter private constructor(
     }
 
     /**
-     * The `did:jwk` for a public key, when this wallet identifies its holder
-     * keys that way. Null under the legacy `did:key` versions, where the
-     * proof embeds the key instead of naming it.
+     * The `did:jwk` for a public key, when this issuance identifies the
+     * holder that way. Null for [HolderBinding.EMBEDDED_JWK], where the proof
+     * carries the key instead of naming it.
      */
-    private fun holderDidFor(publicKeyJson: String): String? {
-        if (!didKeyVersion.namesKeysByDidUrl) return null
+    private fun holderDidFor(publicKeyJson: String, binding: HolderBinding): String? {
+        if (binding != HolderBinding.DID_JWK) return null
         return runCatching {
             createDidJwk(Json.parseToJsonElement(publicKeyJson) as kotlinx.serialization.json.JsonObject)
         }.getOrElse {

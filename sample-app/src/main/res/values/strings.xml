@@ -57,6 +57,7 @@
     <string name="credential_detail_tab_raw">Raw</string>
     <string name="credential_detail_issuer">Issuer</string>
     <string name="credential_detail_format">Format</string>
+    <string name="credential_detail_holder_binding">Holder binding</string>
     <string name="credential_detail_type">Type</string>
     <string name="credential_detail_issued">Issued</string>
     <string name="credential_detail_expires">Expires</string>
@@ -92,7 +93,7 @@
     <string name="settings_tenant_id">Tenant</string>
     <string name="settings_credentials_stored">Credentials stored</string>
     <string name="settings_app_version">App version</string>
-    <string name="settings_diip_profile">DIIP profile</string>
+    <string name="settings_interop_profiles">Interop profiles</string>
     <string name="settings_credential_details">Credential details</string>
     <string name="settings_credential_details_description">Show raw claims and signed credential data when tapping a credential</string>
     <string name="settings_diagnostic_messages">Diagnostic messages</string>

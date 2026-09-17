@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.siros.sdk.credentials.interop.HolderBinding
 import org.siros.sdk.credentials.mdoc.DocumentMdoc
 import org.siros.sdk.credentials.mdoc.MdocCbor
 import timber.log.Timber
@@ -420,6 +421,29 @@ object CredentialUtils {
      * advertised type, so an issuer that advertises one type and issues another
      * would have every one of those decisions made about the wrong credential.
      */
+    /**
+     * How this credential names the Holder key it is bound to - which is also
+     * which interoperability profile it was issued under.
+     *
+     * A `cnf.kid` naming a DID verification method is DIIP; a `cnf.jwk`
+     * carrying the key is HAIP. An mdoc always carries the device key by
+     * value, so it is the HAIP form by construction. Null when the credential
+     * has no holder binding at all.
+     *
+     * Nothing in the wallet needs to be told this - signing follows the `cnf`
+     * directly (see `KeystoreManager.signVpToken`) - but it is what a person
+     * debugging a wallet that talks to both ecosystems wants to see.
+     */
+    fun holderBinding(credential: StoredCredential): HolderBinding? {
+        if (credential.format == "mso_mdoc") return HolderBinding.EMBEDDED_JWK
+        val cnf = parseJwtPayload(credential.raw)?.get("cnf") as? JsonObject ?: return null
+        return when {
+            cnf["kid"] != null -> HolderBinding.DID_JWK
+            cnf["jwk"] != null -> HolderBinding.EMBEDDED_JWK
+            else -> null
+        }
+    }
+
     /**
      * The claims DIIP's Validity and Revocation Algorithm reads - the
      * validity window and the Token Status List reference - normalised to one

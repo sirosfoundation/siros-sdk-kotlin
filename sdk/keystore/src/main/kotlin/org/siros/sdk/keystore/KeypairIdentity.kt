@@ -4,8 +4,9 @@ package org.siros.sdk.keystore
 import com.nimbusds.jose.jwk.JWK
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import org.siros.sdk.credentials.diip.createDidJwk
-import org.siros.sdk.credentials.diip.didJwkKeyId
+import org.siros.sdk.credentials.interop.InteropProfile
+import org.siros.sdk.credentials.interop.createDidJwk
+import org.siros.sdk.credentials.interop.didJwkKeyId
 import timber.log.Timber
 
 /**
@@ -46,9 +47,23 @@ enum class DidKeyVersion(val value: String) {
 
     companion object {
         /**
+         * How a wallet speaking [profile] names its keys.
+         *
+         * DIIP identifies a Holder by `did:jwk`, so its keys are named by the
+         * DID URL. HAIP identifies the Holder by the key itself, so there is
+         * no DID to name one with and the JWK thumbprint - what this SDK has
+         * always used - stands.
+         */
+        fun forProfile(profile: InteropProfile): DidKeyVersion = when (profile) {
+            InteropProfile.DIIP -> JWK
+            InteropProfile.HAIP -> P256_PUB
+        }
+
+        /**
          * Parse the value as written in configuration. Unknown or absent
-         * values fall back to [JWK], so a wallet is DIIP-compliant out of
-         * the box rather than silently dropping to a legacy identifier.
+         * values fall back to [JWK], the DIIP identifier, rather than
+         * silently dropping to a legacy one - a caller that wants the HAIP
+         * naming asks for it through [forProfile].
          */
         fun fromValue(value: String?): DidKeyVersion {
             val match = entries.firstOrNull { it.value.equals(value?.trim(), ignoreCase = true) }
@@ -120,7 +135,7 @@ fun keypairMatchesKid(storedKid: String, publicKey: JWK, kid: String): Boolean {
  * null when the credential has no holder binding at all.
  */
 fun resolveCnfKid(cnf: JsonObject?): String? =
-    org.siros.sdk.credentials.diip.resolveCnfKid(cnf) { jwk ->
+    org.siros.sdk.credentials.interop.resolveCnfKid(cnf) { jwk ->
         JWK.parse(jwk.toString()).computeThumbprint().toString()
     }
 

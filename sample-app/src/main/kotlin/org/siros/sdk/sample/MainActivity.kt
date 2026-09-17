@@ -1145,7 +1145,7 @@ fun CredentialsTab(
      * `WalletViewModel.credentialStatuses`). Credentials absent from the map
      * are usable.
      */
-    credentialStatuses: Map<Long, org.siros.sdk.credentials.diip.CredentialStatus> = emptyMap(),
+    credentialStatuses: Map<Long, org.siros.sdk.credentials.interop.CredentialStatus> = emptyMap(),
 ) {
     // One entry per batch (see StoredCredential.batchId) instead of one per
     // issued copy - mirrors wallet-frontend's fetchVcData grouping so a
@@ -1407,8 +1407,8 @@ fun SettingsTab(
      * The DIIP release this wallet's wire behaviour follows. A build-time
      * choice (`WalletConfig.diipProfile`), so it is shown, not offered.
      */
-    diipProfile: org.siros.sdk.credentials.diip.DiipProfile =
-        org.siros.sdk.credentials.diip.DiipProfile.LATEST,
+    diipProfile: org.siros.sdk.credentials.interop.DiipProfile =
+        org.siros.sdk.credentials.interop.DiipProfile.LATEST,
     zkCircuitUrls: List<String> = listOf(org.siros.sdk.credentials.ZkCircuitClient.DEFAULT_ZK_CIRCUIT_URL),
     presentationCount: Int,
     onDisconnect: () -> Unit,
@@ -1474,11 +1474,16 @@ fun SettingsTab(
                 SettingsRow(stringResource(R.string.settings_credentials_stored), state.credentials.size.toString())
                 SettingsRow(stringResource(R.string.settings_app_version), BuildConfig.VERSION_NAME)
                 SettingsRow("Transport", if (useWmpProtocol) "WMP (JSON-RPC 2.0)" else "Legacy")
-                // Which DIIP release this wallet's wire behaviour follows -
-                // holder identifiers, proof shape, client_id spelling. A
-                // build-time choice (WalletConfig.diipProfile), so it is shown
-                // rather than offered.
-                SettingsRow(stringResource(R.string.settings_diip_profile), diipProfile.version.uppercase())
+                // Which interoperability profiles this wallet can speak.
+                // Deliberately a fact, not a control: which one is used is
+                // negotiated per issuer from its advertised
+                // `cryptographic_binding_methods_supported`, so there is
+                // nothing here for a user to choose (and no way they could
+                // reasonably know the answer for an issuer they just scanned).
+                SettingsRow(
+                    stringResource(R.string.settings_interop_profiles),
+                    "HAIP \u00b7 DIIP ${diipProfile.version.uppercase()}",
+                )
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),

@@ -1,6 +1,9 @@
 package org.siros.sdk.keystore
 
 import org.siros.sdk.credentials.KeystoreException
+import org.siros.sdk.credentials.interop.HolderBinding
+import org.siros.sdk.credentials.interop.didJwkKeyId
+import org.siros.sdk.credentials.interop.InteropProfile
 import com.nimbusds.jose.EncryptionMethod
 import com.nimbusds.jose.JWEAlgorithm
 import com.nimbusds.jose.JWEHeader
@@ -72,14 +75,21 @@ data class CredentialRefreshTokenEntry(
 class JweKeystore(
     private val json: Json = Json { ignoreUnknownKeys = true },
     /**
-     * How a newly generated key pair is named - see [DidKeyVersion]. Defaults
-     * to `did:jwk`, which is what DIIP requires of a Holder; the `did:key`
-     * versions stay selectable for a wallet whose existing credentials are
-     * bound to one. Keys already in the container keep whatever id they were
-     * stored with regardless of this setting, so changing it never orphans
-     * a credential.
+     * The interoperability profile this keystore signs for - see
+     * [InteropProfile]. It decides how a new key pair is named and, unless a
+     * caller overrides it per issuance, how the Holder's key is named in an
+     * OID4VCI proof. Defaults to HAIP, which is what this SDK has always
+     * sent.
      */
-    private val didKeyVersion: DidKeyVersion = DidKeyVersion.JWK,
+    private val profile: InteropProfile = InteropProfile.DEFAULT,
+    /**
+     * How a newly generated key pair is named - see [DidKeyVersion]. Follows
+     * [profile] unless a wallet needs something else: a `did:jwk` for DIIP, a
+     * JWK thumbprint for HAIP. Keys already in the container keep whatever id
+     * they were stored with regardless of this setting, so changing it never
+     * orphans a credential.
+     */
+    private val didKeyVersion: DidKeyVersion = DidKeyVersion.forProfile(profile),
 ) : KeystoreManager, ExtensionStore {
 
     private val mutex = Mutex()
@@ -574,7 +584,12 @@ class JweKeystore(
         jwsObject.serialize().toByteArray(Charsets.UTF_8)
     }
 
-    override suspend fun generateProof(audience: String, nonce: String, freshKey: Boolean): String = mutex.withLock {
+    override suspend fun generateProof(
+        audience: String,
+        nonce: String,
+        freshKey: Boolean,
+        holderBinding: HolderBinding?,
+    ): String = mutex.withLock {
         requireUnlocked()
         val key = keys.values.firstOrNull()
             ?: run {
@@ -584,11 +599,20 @@ class JweKeystore(
 
         Timber.d("generateProof: building claims for audience=$audience")
         // DIIP requires the `jwt` proof type to carry the Holder's did:jwk as
-        // `iss` and to name the key with a `kid` from the DID document,
-        // rather than embedding the key in the header. Without a DID there is
-        // nothing to name, so the key travels in the header as before - which
-        // is also what a non-DIIP issuer expects.
-        val did = keyDids[key.keyID]?.takeIf { didKeyVersion.namesKeysByDidUrl }
+        // `iss` and to name the key with a `kid` from the DID document; HAIP
+        // carries the key in the header instead. The caller may know which
+        // this issuer speaks; when it does not, this keystore's own profile
+        // decides. Either way a key with no DID has nothing to name, so it
+        // falls back to the embedded form rather than emitting a `kid` that
+        // resolves to nothing.
+        val binding = holderBinding ?: profile.holderBinding
+        // Only a `did:jwk` can be named this way: it resolves offline, and
+        // this key's own id is its verification method. A key carrying a
+        // `did:key` (the pre-DIIP identifier) has a DID but no `kid` an
+        // Issuer could resolve, so it takes the embedded form even when
+        // DID_JWK was asked for.
+        val did = keyDids[key.keyID]
+            ?.takeIf { binding == HolderBinding.DID_JWK && it.startsWith("did:jwk:") && key.keyID == didJwkKeyId(it) }
         val claimsBuilder = JWTClaimsSet.Builder()
             .audience(audience)
             .issueTime(Date())

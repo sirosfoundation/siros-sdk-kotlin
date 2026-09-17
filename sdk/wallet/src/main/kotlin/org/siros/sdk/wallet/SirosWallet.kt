@@ -68,12 +68,14 @@ import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.Vctm
 import org.siros.sdk.credentials.ZkCircuitClient
-import org.siros.sdk.credentials.diip.CredentialStatus
-import org.siros.sdk.credentials.diip.CredentialStatusEvaluator
-import org.siros.sdk.credentials.diip.DidRelationship
-import org.siros.sdk.credentials.diip.DidResolver
-import org.siros.sdk.credentials.diip.DiipProfile
-import org.siros.sdk.credentials.diip.TokenStatusListClient
+import org.siros.sdk.credentials.interop.CredentialStatus
+import org.siros.sdk.credentials.interop.HolderBinding
+import org.siros.sdk.credentials.interop.InteropProfile
+import org.siros.sdk.credentials.interop.CredentialStatusEvaluator
+import org.siros.sdk.credentials.interop.DidRelationship
+import org.siros.sdk.credentials.interop.DidResolver
+import org.siros.sdk.credentials.interop.DiipProfile
+import org.siros.sdk.credentials.interop.TokenStatusListClient
 import org.siros.sdk.credentials.COSE_ALG_ES256
 import org.siros.sdk.credentials.CredentialFormat
 import org.siros.sdk.credentials.CredentialTypeRef
@@ -1604,10 +1606,61 @@ class SirosWallet private constructor(
     }
 
     /**
-     * The DIIP profile this wallet targets - see [DiipProfile]. Read from
+     * The DIIP profile version this wallet targets when it speaks
+     * [InteropProfile.DIIP] - see [DiipProfile]. Read from
      * [WalletConfig.diipProfile]; defaults to the newest this SDK implements.
      */
     val diipProfile: DiipProfile get() = config.diipProfile
+
+    /**
+     * The interoperability profile this wallet speaks with [issuer] when
+     * nothing else decides - see [InteropProfile].
+     *
+     * A per-Issuer override wins over the wallet-wide default. The match is
+     * by prefix so that a `credential_issuer` with a path under a configured
+     * base counts, and the longest configured prefix wins so a specific entry
+     * is not shadowed by a broader one. This is an escape hatch for an Issuer
+     * whose metadata is wrong, not the normal path: see [holderBindingFor].
+     */
+    fun interopProfileFor(issuer: String?): InteropProfile {
+        if (issuer == null) return config.interopProfile
+        return config.issuerInteropProfiles.entries
+            .filter { issuer.startsWith(it.key) }
+            .maxByOrNull { it.key.length }
+            ?.value
+            ?: config.interopProfile
+    }
+
+    /**
+     * How the Holder's key should be named in an OID4VCI proof to [issuer] -
+     * the one thing HAIP and DIIP genuinely disagree about, and something
+     * OID4VCI makes a per-issuance choice.
+     *
+     * **Negotiated, not configured.** The Issuer's own
+     * `cryptographic_binding_methods_supported` for the configuration being
+     * issued says which identifier it can verify, so a wallet holding
+     * credentials from a HAIP ecosystem and a DIIP ecosystem shapes each
+     * proof to its Issuer without anyone choosing a profile. A user cannot
+     * reasonably be asked which of two interoperability profiles an issuer
+     * they just scanned belongs to, and does not have to be.
+     *
+     * The configured profile is only the fallback, for an Issuer that
+     * advertises nothing usable - and [config]'s per-Issuer override the
+     * escape hatch above that, for one that advertises the wrong thing.
+     *
+     * Handed to [KeystoreManager.generateProof] so the keystore never has to
+     * know about issuers.
+     */
+    fun holderBindingFor(issuer: String?): HolderBinding {
+        val advertised = activeOffer
+            ?.takeIf { issuer == null || it.credentialIssuerIdentifier == issuer }
+            ?.cryptographicBindingMethodsSupported
+        HolderBinding.negotiate(advertised)?.let { negotiated ->
+            Timber.d("Holder binding for ${issuer ?: "the active issuer"}: $negotiated (advertised: $advertised)")
+            return negotiated
+        }
+        return interopProfileFor(issuer).holderBinding
+    }
 
     /**
      * Resolves the DID methods the active [diipProfile] requires, for
@@ -2570,6 +2623,7 @@ class SirosWallet private constructor(
                 ?: issuerDisplay?.textColor,
             logoUri = credDisplay?.logo?.uri,
             issuerLogoUri = issuerDisplay?.logo?.uri,
+            cryptographicBindingMethodsSupported = config.cryptographicBindingMethodsSupported.orEmpty(),
         )
     }
 
@@ -4621,6 +4675,10 @@ class SirosWallet private constructor(
                         audience = audience,
                         nonce = nonce,
                         freshKey = count > 1,
+                        // `audience` is the credential issuer, which is what
+                        // decides whether this proof names the holder key by
+                        // did:jwk (DIIP) or carries it (HAIP).
+                        holderBinding = holderBindingFor(audience),
                     )
                     val keyId = extractProofKeyId(proofJwt)
                     GeneratedProofData(proofType = "jwt", jwt = proofJwt, attestedKeyIds = keyId?.let { listOf(it) })

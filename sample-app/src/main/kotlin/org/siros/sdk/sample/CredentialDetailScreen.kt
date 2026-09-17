@@ -58,7 +58,8 @@ import coil.compose.AsyncImage
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.DisplayClaim
-import org.siros.sdk.credentials.diip.CredentialStatus
+import org.siros.sdk.credentials.interop.CredentialStatus
+import org.siros.sdk.credentials.interop.HolderBinding
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -271,6 +272,19 @@ private fun InfoTab(credential: StoredCredential) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 DetailRow(stringResource(R.string.credential_detail_issuer), meta?.issuer?.name ?: "-")
                 DetailRow(stringResource(R.string.credential_detail_format), credential.format)
+                // Which interoperability profile this credential was issued
+                // under, read off its own holder binding. Informational: the
+                // wallet needs no setting to present it correctly, and this is
+                // simply what a dual-ecosystem wallet is hard to debug without.
+                CredentialUtils.holderBinding(credential)?.let { binding ->
+                    DetailRow(
+                        stringResource(R.string.credential_detail_holder_binding),
+                        when (binding) {
+                            HolderBinding.DID_JWK -> "DIIP (cnf.kid)"
+                            HolderBinding.EMBEDDED_JWK -> "HAIP (cnf.jwk)"
+                        },
+                    )
+                }
                 val typeId = meta?.vct ?: meta?.doctype
                 if (typeId != null) {
                     DetailRow(stringResource(R.string.credential_detail_type), typeId)

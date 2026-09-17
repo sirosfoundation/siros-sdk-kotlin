@@ -33,7 +33,7 @@ import org.siros.sdk.credentials.SirosException
 import org.siros.sdk.credentials.ZkCircuitClient
 import org.siros.sdk.credentials.SignerSecurityProperties
 import org.siros.sdk.credentials.StoredCredential
-import org.siros.sdk.credentials.diip.CredentialStatus
+import org.siros.sdk.credentials.interop.CredentialStatus
 import org.siros.sdk.keystore.ActivateLifecycleRequest
 import org.siros.sdk.keystore.AuthProvider
 import org.siros.sdk.keystore.CompositeCtap2Transport
@@ -507,7 +507,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     val credentialStatuses: StateFlow<Map<Long, CredentialStatus>> = _credentialStatuses
 
     /** The DIIP release this wallet's wire behaviour follows - see [WalletConfig.diipProfile]. */
-    val diipProfile: org.siros.sdk.credentials.diip.DiipProfile get() = wallet.diipProfile
+    val diipProfile: org.siros.sdk.credentials.interop.DiipProfile get() = wallet.diipProfile
 
     private fun refreshCredentialStatuses() {
         viewModelScope.launch {

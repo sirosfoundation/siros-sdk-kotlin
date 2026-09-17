@@ -222,5 +222,6 @@
     <string name="credential_status_not_yet_valid_detail">Det här intyget är inte giltigt än</string>
     <string name="credential_status_revoked_detail">Det här intyget har återkallats av utfärdaren</string>
     <string name="credential_status_suspended_detail">Det här intyget har spärrats tillfälligt av utfärdaren</string>
-    <string name="settings_diip_profile">DIIP-profil</string>
+    <string name="settings_interop_profiles">Interop-profiler</string>
+    <string name="credential_detail_holder_binding">Innehavarbindning</string>
 </resources>

@@ -222,5 +222,6 @@
     <string name="credential_status_not_yet_valid_detail">Tämä todistus ei ole vielä voimassa</string>
     <string name="credential_status_revoked_detail">Myöntäjä on peruuttanut tämän todistuksen</string>
     <string name="credential_status_suspended_detail">Myöntäjä on keskeyttänyt tämän todistuksen väliaikaisesti</string>
-    <string name="settings_diip_profile">DIIP-profiili</string>
+    <string name="settings_interop_profiles">Yhteentoimivuusprofiilit</string>
+    <string name="credential_detail_holder_binding">Haltijan sidonta</string>
 </resources>

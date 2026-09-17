@@ -15,7 +15,7 @@ package org.siros.sdk.wallet
  * `redirect_uri:https://...`, `openid_federation:https://...`. DIIP requires
  * the `did` scheme, which is why the prefixed spelling has to parse, but a
  * wallet has to read both to talk to both generations of Verifier - see
- * [org.siros.sdk.credentials.diip.DiipProfile.clientIdStyle] for which one a
+ * [org.siros.sdk.credentials.interop.DiipProfile.clientIdStyle] for which one a
  * given profile version says a compliant Verifier sends.
  */
 sealed class ClientIdScheme {
