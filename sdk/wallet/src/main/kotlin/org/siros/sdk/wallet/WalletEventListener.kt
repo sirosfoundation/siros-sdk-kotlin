@@ -149,6 +149,16 @@ interface WalletEventListener {
      * specific flow's failure, session otherwise fine), this means the whole
      * session is gone - route the user to the login screen rather than
      * surfacing a generic error message.
+     *
+     * Since SID-AUTH-06 the SDK attempts exactly one login itself right after
+     * this fires: a lifecycle cut-off is indistinguishable from an expired
+     * session until that login is refused with `WALLET_SUSPENDED` /
+     * `WALLET_REVOKED`, which is what turns it into
+     * [WalletState.LifecycleBlocked] rather than an endless reauth loop. So an
+     * implementation should show its login/progress screen and wait for the
+     * state to change - it must NOT call [SirosWallet.login] itself, or two
+     * WebAuthn ceremonies race on the session store, the wallet state and the
+     * engine session.
      */
     fun onReauthenticationRequired() {
         // Default: no-op. Host apps override to route to a login screen.

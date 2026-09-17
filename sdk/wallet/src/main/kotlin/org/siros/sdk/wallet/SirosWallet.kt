@@ -337,7 +337,7 @@ class SirosWallet private constructor(
      */
     @Deprecated(
         "Use the WalletInstanceStatus overload",
-        ReplaceWith("setWalletInstanceStatus(instanceId, WalletInstanceStatus.fromWire(status)!!, reason)"),
+        ReplaceWith("setWalletInstanceStatus(instanceId, requireNotNull(WalletInstanceStatus.fromWire(status)), reason)"),
     )
     suspend fun setWalletInstanceStatus(instanceId: String, status: String, reason: String? = null): WalletInstance =
         setWalletInstanceStatus(
@@ -414,6 +414,14 @@ class SirosWallet private constructor(
         engineStateJob = null
         engineSession?.disconnect()
         engineSession = null
+        // The WMP transport holds its own live WebSocket, and the backend
+        // re-checks the cut-off at every flow start - leaving it connected
+        // would keep a socket authenticated by a token the backend has already
+        // stopped accepting, and the next connect would overwrite the
+        // reference without ever closing it.
+        wmpPeer?.close()
+        wmpPeer = null
+        credentialNotifier = null
         apiClient = null
         authTokens.clear()
         login(accountRegistry.activeAccountId ?: sessionStore.activeAccountId)

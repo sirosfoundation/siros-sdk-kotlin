@@ -591,10 +591,7 @@ class BackendApiClientTest {
         val baseUrl = server.url("/").toString().trimEnd('/')
         // No waiting between erasure retries in tests; the production default
         // is 1 s → 8 s (see BackendApiClient.erasureRetryDelaysMs).
-        return BackendApiClient(
-            baseUrl = baseUrl,
-            tenantId = "default",
-            erasureRetryDelaysMs = listOf(0, 0, 0, 0),
-        )
+        return BackendApiClient(baseUrl = baseUrl, tenantId = "default")
+            .apply { erasureRetryDelaysMs = listOf(0, 0, 0, 0) }
     }
 }
