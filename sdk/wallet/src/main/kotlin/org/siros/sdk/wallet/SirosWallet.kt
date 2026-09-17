@@ -602,7 +602,7 @@ class SirosWallet private constructor(
      * [deactivateWallet] is the one place that still forgets the account -
      * there the caller asked for it and the outcome is unambiguous.
      */
-    private fun enterLifecycleBlocked(reason: WalletLifecycleRefusal, message: String?) {
+    private suspend fun enterLifecycleBlocked(reason: WalletLifecycleRefusal, message: String?) {
         Timber.w("Wallet lifecycle refusal: $reason — ${message ?: "(no message from the backend)"}")
         // End the session either way - nothing this installation holds can be
         // used until someone else acts - but keep the account (see this
@@ -611,6 +611,17 @@ class SirosWallet private constructor(
         // reactivated reuses the same AS session cookie, and the DELETE could
         // land after its loginFinish. See [endSessionLocally].
         endSessionLocally()
+        // [endSessionLocally] clears [AuthTokens], but [AuthServerClient] keeps
+        // its own cache: a backend token minted just before the 403 arrived
+        // (during the private-data fetch or the engine connect) would otherwise
+        // be served straight back to the retry without the AS ever being asked,
+        // and it is already cut off. Awaited here, so it cannot race the retry
+        // the app may make the moment this state is published.
+        try {
+            authServerClient.clearTokenCache()
+        } catch (e: Exception) {
+            Timber.w(e, "Clearing the AS token cache failed (non-fatal)")
+        }
         _state.value = WalletState.LifecycleBlocked(
             reason = reason,
             message = message,
@@ -624,7 +635,7 @@ class SirosWallet private constructor(
      * SID-AUTH-06 refusal. Returns true when it handled the error, so callers
      * can leave their own error handling untouched for everything else.
      */
-    private fun handleLifecycleRefusal(error: Throwable?): Boolean {
+    private suspend fun handleLifecycleRefusal(error: Throwable?): Boolean {
         val reason = lifecycleRefusalOf(error) ?: return false
         enterLifecycleBlocked(reason, lifecycleMessageOf(error))
         return true
@@ -1884,10 +1895,19 @@ class SirosWallet private constructor(
         // the store no longer names. The instance id the backend knows would
         // then disagree with the one this wallet proves, breaking later PoPs
         // and [WalletInstance.isThisDevice].
+        // The account it is for is captured first: [SessionStore.instanceKeyId]
+        // is account-scoped, so a logout/login that switches accounts while a
+        // generation is in flight must not let it persist the old account's
+        // key into the new account's scope - that would attest the new account
+        // under the wrong lifecycle identity.
+        val account = sessionStore.activeAccountId
         return instanceKeyMutex.withLock {
             // Re-check: a caller that was waiting here may have persisted one.
             sessionStore.instanceKeyId ?: run {
                 val keyId = keystore.generateKey("ES256")
+                if (sessionStore.activeAccountId != account) {
+                    throw WalletException("Account changed while generating the wallet instance key")
+                }
                 sessionStore.instanceKeyId = keyId
                 keyId
             }

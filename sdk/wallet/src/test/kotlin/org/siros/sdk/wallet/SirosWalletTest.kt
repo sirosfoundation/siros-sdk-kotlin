@@ -5205,10 +5205,11 @@ class SirosWalletTest {
             .enumConstants
             .first { (it as Enum<*>).name == "NEW_AS" }
 
-    private fun invokePrivateBoolean(target: Any, name: String, arg: Throwable?): Boolean {
-        val method = target.javaClass.getDeclaredMethod(name, Throwable::class.java)
+    /** [SirosWallet.handleLifecycleRefusal] is a private suspend function. */
+    private suspend fun invokePrivateBoolean(target: Any, name: String, arg: Throwable?): Boolean {
+        val method = target::class.declaredMemberFunctions.first { it.name == name }
         method.isAccessible = true
-        return method.invoke(target, arg) as Boolean
+        return method.callSuspend(target, arg) as Boolean
     }
 
     private fun invokePrivate(target: Any, name: String) {
