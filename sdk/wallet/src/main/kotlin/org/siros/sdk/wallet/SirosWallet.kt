@@ -2185,6 +2185,13 @@ class SirosWallet private constructor(
     /**
      * Start a credential presentation flow.
      *
+     * The URI is handed to the backend whole, so a verifier asking for
+     * OpenID4VP 1.0 §5.10's `request_uri_method=post` is honoured without
+     * anything extra here: the parameter travels inside [requestUri] and the
+     * engine acts on it. Pre-parsing the URI and passing only its
+     * `request_uri` would lose that - see
+     * [WalletEngineSession.startPresentation][org.siros.sdk.transport.engine.WalletEngineSession.startPresentation].
+     *
      * @param requestUri the OID4VP request URI.
      */
     suspend fun startPresentation(requestUri: String) {
