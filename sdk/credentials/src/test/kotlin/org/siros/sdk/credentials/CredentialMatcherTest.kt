@@ -692,4 +692,62 @@ class CredentialMatcherTest {
 
         assertTrue(matches.isEmpty())
     }
+
+    // ── requestedCredentialTypes ─────────────────────────────────────
+
+    @Test
+    fun requestedCredentialTypes_namesVctAndDoctypeValues() {
+        val query = json.parseToJsonElement(
+            """{"credentials":[
+                 {"id":"pid","format":"dc+sd-jwt","meta":{"vct_values":["urn:eu.europa.ec.eudi:pid:1"]}},
+                 {"id":"mdl","format":"mso_mdoc","meta":{"doctype_value":"org.iso.18013.5.1.mDL"}}
+               ]}"""
+        ).jsonObject
+
+        assertEquals(
+            listOf("urn:eu.europa.ec.eudi:pid:1", "org.iso.18013.5.1.mDL"),
+            CredentialMatcher.requestedCredentialTypes(query),
+        )
+    }
+
+    @Test
+    fun requestedCredentialTypes_dedupesAndReadsPluralDoctypeValues() {
+        val query = json.parseToJsonElement(
+            """{"credentials":[
+                 {"id":"a","meta":{"vct_values":["urn:example:pid","urn:example:pid"]}},
+                 {"id":"b","meta":{"doctype_values":["org.iso.18013.5.1.mDL"],"vct_values":["urn:example:pid"]}}
+               ]}"""
+        ).jsonObject
+
+        assertEquals(
+            listOf("urn:example:pid", "org.iso.18013.5.1.mDL"),
+            CredentialMatcher.requestedCredentialTypes(query),
+        )
+    }
+
+    @Test
+    fun requestedCredentialTypes_fallsBackToTheQueryIdWhenNothingIsConstrained() {
+        val query = json.parseToJsonElement(
+            """{"credentials":[{"id":"any-credential","format":"dc+sd-jwt"}]}"""
+        ).jsonObject
+
+        assertEquals(listOf("any-credential"), CredentialMatcher.requestedCredentialTypes(query))
+    }
+
+    @Test
+    fun requestedCredentialTypes_toleratesQueriesItCannotRead() {
+        // JSON null where a string belongs, a non-object entry, and no
+        // credentials array at all: a verifier's request must never crash
+        // the wallet's attempt to explain what it is missing.
+        assertTrue(
+            CredentialMatcher.requestedCredentialTypes(
+                json.parseToJsonElement("""{"credentials":["not-an-object",{"id":null,"meta":{"vct_values":[null]}}]}""").jsonObject
+            ).isEmpty()
+        )
+        assertTrue(
+            CredentialMatcher.requestedCredentialTypes(
+                json.parseToJsonElement("""{"nonsense":true}""").jsonObject
+            ).isEmpty()
+        )
+    }
 }

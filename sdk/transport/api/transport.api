@@ -1378,9 +1378,12 @@ public final class org/siros/sdk/transport/engine/WalletEngineSession : org/siro
 	public final fun resumeIssuance (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
 	public static synthetic fun resumeIssuance$default (Lorg/siros/sdk/transport/engine/WalletEngineSession;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)V
 	public fun sendCredentialNotification (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public final fun sendCredentialsMatched (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;)V
+	public static synthetic fun sendCredentialsMatched$default (Lorg/siros/sdk/transport/engine/WalletEngineSession;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;ILjava/lang/Object;)V
 	public final fun sendFlowAction (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;)V
 	public static synthetic fun sendFlowAction$default (Lorg/siros/sdk/transport/engine/WalletEngineSession;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;ILjava/lang/Object;)V
-	public final fun sendMatchResponse (Ljava/lang/String;Ljava/util/List;)V
+	public final fun sendMatchResponse (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;)V
+	public static synthetic fun sendMatchResponse$default (Lorg/siros/sdk/transport/engine/WalletEngineSession;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;ILjava/lang/Object;)V
 	public final fun sendSignResponse (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
 	public static synthetic fun sendSignResponse$default (Lorg/siros/sdk/transport/engine/WalletEngineSession;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)V
 	public final fun sendTrustResult (Ljava/lang/String;ZLjava/lang/String;)V
@@ -2599,12 +2602,15 @@ public final class org/siros/sdk/transport/wmp/openid4x/GrantType {
 }
 
 public final class org/siros/sdk/transport/wmp/openid4x/MatchResult {
-	public fun <init> (Ljava/util/List;)V
+	public fun <init> (Ljava/util/List;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/util/List;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/util/List;
-	public final fun copy (Ljava/util/List;)Lorg/siros/sdk/transport/wmp/openid4x/MatchResult;
-	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/MatchResult;Ljava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/MatchResult;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/util/List;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/MatchResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/MatchResult;Ljava/util/List;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/MatchResult;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getMatches ()Ljava/util/List;
+	public final fun getNoMatchReason ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -2613,6 +2619,7 @@ public final class org/siros/sdk/transport/wmp/openid4x/OID4Action {
 	public static final field ACCEPT_OFFER Ljava/lang/String;
 	public static final field AUTHORIZE Ljava/lang/String;
 	public static final field CANCEL Ljava/lang/String;
+	public static final field CREDENTIALS_MATCHED Ljava/lang/String;
 	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/OID4Action;
 	public static final field PROVIDE_TX_CODE Ljava/lang/String;
 	public static final field SELECT_CREDENTIALS Ljava/lang/String;

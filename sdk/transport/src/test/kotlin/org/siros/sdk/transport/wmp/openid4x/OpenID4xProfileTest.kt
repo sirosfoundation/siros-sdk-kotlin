@@ -3,6 +3,7 @@ package org.siros.sdk.transport.wmp.openid4x
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.buildJsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -187,6 +188,68 @@ class OpenID4xProfileTest {
         )
 
         assertTrue("onMatchRequest should be called for MATCHING_CREDENTIALS step", called)
+    }
+
+    @Test
+    fun emptyMatchSetIsAlsoReportedAsCredentialsMatchedWithItsReason() = runBlocking {
+        val profile = OpenID4xProfile(
+            OpenID4xConfig(
+                onMatchRequest = { _, _ ->
+                    MatchResult(
+                        matches = emptyList(),
+                        noMatchReason = "This wallet holds no credential matching the request",
+                    )
+                }
+            )
+        )
+        val ctx = FakePeerContext()
+        profile.init(ctx)
+
+        profile.handleProgress(
+            FlowProgressParams(wmp = WmpMeta(), flowId = "f-nomatch", step = "match_request")
+        )
+
+        val actions = ctx.notifications.filter { it.first == WmpMethods.FLOW_ACTION }.mapNotNull { it.second }
+        val matchResponse = actions.first { it["action"] == JsonPrimitive("match_response") }
+        assertEquals(
+            JsonPrimitive("This wallet holds no credential matching the request"),
+            matchResponse["no_match_reason"],
+        )
+        // The engine's OID4VP flow never reads a match_response; this is the
+        // action it acts on, and without it the presentation stalls until the
+        // user-interaction timeout.
+        val credentialsMatched = actions.firstOrNull {
+            it["action"] == JsonPrimitive(OID4Action.CREDENTIALS_MATCHED)
+        }
+        assertNotNull("Expected a credentials_matched action for an empty match set", credentialsMatched)
+        assertEquals(
+            JsonPrimitive("This wallet holds no credential matching the request"),
+            credentialsMatched!!["no_match_reason"],
+        )
+        assertEquals(0, credentialsMatched["matches"]!!.jsonArray.size)
+    }
+
+    @Test
+    fun aNonEmptyMatchSetIsNotReportedAsCredentialsMatched() = runBlocking {
+        val profile = OpenID4xProfile(
+            OpenID4xConfig(
+                onMatchRequest = { _, _ ->
+                    MatchResult(matches = listOf(CredentialMatch(credentialId = "cred-1")))
+                }
+            )
+        )
+        val ctx = FakePeerContext()
+        profile.init(ctx)
+
+        profile.handleProgress(
+            FlowProgressParams(wmp = WmpMeta(), flowId = "f-match", step = "match_request")
+        )
+
+        val actions = ctx.notifications.filter { it.first == WmpMethods.FLOW_ACTION }.mapNotNull { it.second }
+        assertTrue(
+            "A wallet with something to offer must not report an empty match set",
+            actions.none { it["action"] == JsonPrimitive(OID4Action.CREDENTIALS_MATCHED) },
+        )
     }
 
     @Test

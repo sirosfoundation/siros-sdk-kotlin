@@ -610,6 +610,56 @@ class WalletEngineSessionTest {
     }
 
     @Test
+    fun send_match_response_carries_the_reason_nothing_matched() {
+        val session = WalletEngineSession(
+            baseUrl = "https://wallet.example.com",
+            tenantId = "tenant-42",
+            client = client,
+        )
+        session.connect("app-token")
+
+        session.sendMatchResponse(
+            flowId = "flow-89",
+            matches = emptyList(),
+            noMatchReason = "This wallet holds no credential matching the request",
+        )
+
+        verify(exactly = 1) {
+            webSocket.send(match<String> { text ->
+                text.contains("\"type\":\"match_response\"") &&
+                    text.contains("\"matches\":[]") &&
+                    text.contains("\"no_match_reason\":\"This wallet holds no credential matching the request\"")
+            })
+        }
+    }
+
+    @Test
+    fun send_credentials_matched_reports_an_empty_match_set_as_a_flow_action() {
+        val session = WalletEngineSession(
+            baseUrl = "https://wallet.example.com",
+            tenantId = "tenant-42",
+            client = client,
+        )
+        session.connect("app-token")
+
+        session.sendCredentialsMatched(
+            flowId = "flow-90",
+            matches = emptyList(),
+            noMatchReason = "no PID stored",
+        )
+
+        verify(exactly = 1) {
+            webSocket.send(match<String> { text ->
+                text.contains("\"type\":\"flow_action\"") &&
+                    text.contains("\"flow_id\":\"flow-90\"") &&
+                    text.contains("\"action\":\"credentials_matched\"") &&
+                    text.contains("\"matches\":[]") &&
+                    text.contains("\"no_match_reason\":\"no PID stored\"")
+            })
+        }
+    }
+
+    @Test
     fun disconnect_closes_socket_and_resets_state() {
         val session = WalletEngineSession(
             baseUrl = "https://wallet.example.com",

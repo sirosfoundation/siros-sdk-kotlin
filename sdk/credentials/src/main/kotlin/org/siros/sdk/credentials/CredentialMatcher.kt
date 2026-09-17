@@ -4,6 +4,7 @@ package org.siros.sdk.credentials
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
@@ -263,6 +264,42 @@ object CredentialMatcher {
      */
     fun matchMdocDocType(credentials: List<StoredCredential>, docType: String): List<StoredCredential> {
         return credentials.filter { it.format == "mso_mdoc" && CredentialUtils.parseMdocDocument(it)?.docType == docType }
+    }
+
+    /**
+     * The credential types a DCQL query asks for, in query order and
+     * de-duplicated: `meta.vct_values` for SD-JWT VCs, `meta.doctype_value`
+     * (and the plural `doctype_values` some verifiers send) for mdocs, and
+     * the credential query's own `id` for a query that constrains neither.
+     *
+     * Lets the wallet say what is missing when nothing matched, rather than
+     * only that nothing did. Deliberately the same rule
+     * go-wallet-backend's `requestedCredentialTypes` applies, so the
+     * wallet's reason and the engine's error name the same things.
+     * Best-effort: a query shape neither side understands yields no names,
+     * and every read is type-checked rather than coerced - a verifier that
+     * sends JSON `null` where a string belongs must not crash matching (see
+     * [matchDcql]'s callers for the same lesson learned the hard way).
+     */
+    fun requestedCredentialTypes(dcqlQuery: JsonObject): List<String> {
+        val queries = dcqlQuery["credentials"] as? JsonArray ?: return emptyList()
+        val types = LinkedHashSet<String>()
+        for (element in queries) {
+            val query = element as? JsonObject ?: continue
+            val meta = query["meta"] as? JsonObject
+            val vctValues = (meta?.get("vct_values") as? JsonArray)
+                ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+            val doctypeValues = listOfNotNull((meta?.get("doctype_value") as? JsonPrimitive)?.contentOrNull) +
+                (meta?.get("doctype_values") as? JsonArray)
+                    ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+            if (vctValues.isEmpty() && doctypeValues.isEmpty()) {
+                (query["id"] as? JsonPrimitive)?.contentOrNull?.let { types.add(it) }
+            } else {
+                types.addAll(vctValues)
+                types.addAll(doctypeValues)
+            }
+        }
+        return types.toList()
     }
 
     /**

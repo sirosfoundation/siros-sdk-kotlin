@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A presentation the wallet cannot satisfy now fails immediately instead of
+  stalling** (go-wallet-backend#335). The WMP transport's match handler
+  ignored the verifier's DCQL query and answered with every stored
+  credential, so a wallet holding an mDL and no PID claimed a full match set
+  for a PID request; it now runs the same `CredentialMatcher` as the other
+  transports. When nothing matches, the wallet sends the engine's
+  `credentials_matched` action with an empty match set and a reason, which
+  ends the flow at once with `NO_MATCHING_CREDENTIAL` naming the credential
+  types the verifier asked for - instead of sitting at credential selection
+  until the five-minute user-interaction timeout, or reporting a decline the
+  user never made. Needs go-wallet-backend#336 on the engine side; against
+  an older engine the extra action is ignored and behaviour is unchanged.
+- `no_match_reason` is carried on the wire by both transports
+  (`WalletEngineSession.sendMatchResponse` gained the parameter; the WMP
+  profile dropped the field entirely).
+- An issuance parked on `authorization_required` because it required a
+  presentation that then failed this way is reported to the app as failed
+  too, rather than silently waiting out its own timeout.
+
+### Added
+- `CredentialMatcher.requestedCredentialTypes` - the credential types a DCQL
+  query asks for (`vct_values`/`doctype_value`), for explaining what is
+  missing.
+- `WalletEngineSession.sendCredentialsMatched`.
+
 ## [0.16.0] - 2026-09-17
 
 ### Changed
