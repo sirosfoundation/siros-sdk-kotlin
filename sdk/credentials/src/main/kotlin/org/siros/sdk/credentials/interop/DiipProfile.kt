@@ -1,4 +1,4 @@
-package org.siros.sdk.credentials.diip
+package org.siros.sdk.credentials.interop
 
 /**
  * Which DIIP profile version a wallet targets.

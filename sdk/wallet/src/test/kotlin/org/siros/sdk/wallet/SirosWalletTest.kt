@@ -68,6 +68,7 @@ import org.siros.sdk.credentials.NetworkException
 import org.siros.sdk.credentials.PresentationRecord
 import org.siros.sdk.credentials.SignerSecurityProperties
 import org.siros.sdk.credentials.StoredCredential
+import org.siros.sdk.credentials.interop.HolderBinding
 import org.siros.sdk.credentials.WalletException
 import org.siros.sdk.keystore.AttestationChain
 import org.siros.sdk.keystore.KeyInfo
@@ -2804,7 +2805,7 @@ class SirosWalletTest {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val defaultKeystore = mockk<KeystoreManager>(relaxed = true)
         val fido2Keystore = mockk<KeystoreManager>()
-        coEvery { fido2Keystore.generateProof(audience = any(), nonce = any(), freshKey = any()) } returns "fido2-signed-proof-jwt"
+        coEvery { fido2Keystore.generateProof(audience = any(), nonce = any(), freshKey = any(), holderBinding = any()) } returns "fido2-signed-proof-jwt"
         val engine = mockEngineConstructor(signRequests = signFlow)
         val config = WalletConfig(
             backendUrl = "https://wallet.example.com",
@@ -2849,8 +2850,14 @@ class SirosWalletTest {
         )
         advanceUntilIdle()
 
-        coVerify(exactly = 1) { fido2Keystore.generateProof(audience = "https://issuer.example.com", nonce = "nonce-1", freshKey = false) }
-        coVerify(exactly = 0) { defaultKeystore.generateProof(any(), any(), any()) }
+        coVerify(exactly = 1) {
+            fido2Keystore.generateProof(
+                audience = "https://issuer.example.com", nonce = "nonce-1", freshKey = false,
+                // HAIP is the wallet default, so the proof carries the key.
+                holderBinding = HolderBinding.EMBEDDED_JWK,
+            )
+        }
+        coVerify(exactly = 0) { defaultKeystore.generateProof(any(), any(), any(), any()) }
     }
 
     /**
@@ -4030,7 +4037,7 @@ class SirosWalletTest {
     fun connectEngine_signRequest_generates_proof_and_sends_response() = runTest(dispatcher) {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val keystore = mockk<KeystoreManager>()
-        coEvery { keystore.generateProof(audience = "aud-1", nonce = "nonce-1") } returns "proof-jwt"
+        coEvery { keystore.generateProof(audience = "aud-1", nonce = "nonce-1", freshKey = any(), holderBinding = any()) } returns "proof-jwt"
         val engine = mockEngineConstructor(signRequests = signFlow)
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
@@ -4050,7 +4057,7 @@ class SirosWalletTest {
         )
         advanceUntilIdle()
 
-        coVerify(exactly = 1) { keystore.generateProof(audience = "aud-1", nonce = "nonce-1") }
+        coVerify(exactly = 1) { keystore.generateProof(audience = "aud-1", nonce = "nonce-1", freshKey = false, holderBinding = HolderBinding.EMBEDDED_JWK) }
         verify(exactly = 1) {
             engine.sendSignResponse(
                 "flow-sign",
@@ -4080,7 +4087,7 @@ class SirosWalletTest {
     fun connectEngine_signRequest_singleProof_recordsAttestedKeyIdFromJwtHeader() = runTest(dispatcher) {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val keystore = mockk<KeystoreManager>()
-        coEvery { keystore.generateProof(audience = "aud-1", nonce = "nonce-1") } returns fakeProofJwt("sw-0")
+        coEvery { keystore.generateProof(audience = "aud-1", nonce = "nonce-1", freshKey = any(), holderBinding = any()) } returns fakeProofJwt("sw-0")
         val engine = mockEngineConstructor(signRequests = signFlow)
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
@@ -4114,7 +4121,7 @@ class SirosWalletTest {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val keystore = mockk<KeystoreManager>()
         coEvery {
-            keystore.generateProof(audience = "aud-1", nonce = "nonce-1", freshKey = true)
+            keystore.generateProof(audience = "aud-1", nonce = "nonce-1", freshKey = true, holderBinding = any())
         } returnsMany listOf(fakeProofJwt("sw-0"), fakeProofJwt("sw-1"), fakeProofJwt("sw-2"))
         val engine = mockEngineConstructor(signRequests = signFlow)
         val wallet = newWallet(
@@ -4173,7 +4180,7 @@ class SirosWalletTest {
         // proof type" if it does), and must produce exactly ONE proof
         // covering the whole batch, not one per credential.
         coVerify(exactly = 1) { keystore.generateKeyAttestation(nonce = "nonce-1", count = 5) }
-        coVerify(exactly = 0) { keystore.generateProof(any(), any(), any()) }
+        coVerify(exactly = 0) { keystore.generateProof(any(), any(), any(), any()) }
         verify(exactly = 1) {
             engine.sendSignResponse(
                 "flow-sign",
@@ -4392,7 +4399,7 @@ class SirosWalletTest {
     fun connectEngine_signRequest_prefers_jwt_when_both_proof_types_supported() = runTest(dispatcher) {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val keystore = mockk<KeystoreManager>()
-        coEvery { keystore.generateProof(audience = "aud-1", nonce = "nonce-1") } returns "proof-jwt"
+        coEvery { keystore.generateProof(audience = "aud-1", nonce = "nonce-1", freshKey = any(), holderBinding = any()) } returns "proof-jwt"
         val engine = mockEngineConstructor(signRequests = signFlow)
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
@@ -4421,7 +4428,7 @@ class SirosWalletTest {
 
         // Existing issuers (ours included) that already support jwt must see
         // no behavior change from adding attestation support.
-        coVerify(exactly = 1) { keystore.generateProof(audience = "aud-1", nonce = "nonce-1") }
+        coVerify(exactly = 1) { keystore.generateProof(audience = "aud-1", nonce = "nonce-1", freshKey = false, holderBinding = HolderBinding.EMBEDDED_JWK) }
         coVerify(exactly = 0) { keystore.generateKeyAttestation(any(), any()) }
     }
 

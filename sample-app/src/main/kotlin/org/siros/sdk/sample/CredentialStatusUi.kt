@@ -5,7 +5,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.graphics.Color
-import org.siros.sdk.credentials.diip.CredentialStatus
+import org.siros.sdk.credentials.interop.CredentialStatus
 
 /**
  * How a [CredentialStatus] is shown.

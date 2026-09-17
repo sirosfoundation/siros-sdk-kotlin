@@ -1,5 +1,5 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
-package org.siros.sdk.credentials.diip
+package org.siros.sdk.credentials.interop
 
 import com.nimbusds.jose.JWSAlgorithm
 import com.nimbusds.jose.crypto.ECDSAVerifier
