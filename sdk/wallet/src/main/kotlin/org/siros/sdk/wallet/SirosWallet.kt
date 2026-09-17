@@ -1634,14 +1634,36 @@ class SirosWallet private constructor(
     /**
      * Whether [issuer] is [configured] or a path under it.
      *
-     * A bare `startsWith` would also match `https://issuer.example.evil`
-     * against an override for `https://issuer.example` - a different domain
-     * entirely, handed another issuer's configuration. The boundary has to be
-     * a path separator.
+     * Compared as URLs, not as strings. A string prefix test matches
+     * `https://issuer.example.evil` against an override for
+     * `https://issuer.example` - a different domain handed another issuer's
+     * configuration - and `https://issuer.example@evil.com/x` too, where the
+     * part that looks like the configured issuer is only userinfo and the real
+     * host is someone else's. Both are the same bug wearing different clothes:
+     * whoever controls the matched string controls which profile is used.
+     *
+     * So: scheme, host and port must be equal, the path must be the configured
+     * one or a segment under it, and a URL carrying userinfo never matches -
+     * a legitimate `credential_issuer` has none, and accepting one only
+     * reopens the trick above.
      */
-    private fun matchesIssuer(issuer: String, configured: String): Boolean {
-        val base = configured.trimEnd('/')
-        return issuer == base || issuer == configured || issuer.startsWith("$base/")
+    private fun matchesIssuer(issuer: String, configured: String): Boolean = try {
+        val a = java.net.URI(issuer).normalize()
+        val b = java.net.URI(configured).normalize()
+        val sameOrigin = a.userInfo == null && b.userInfo == null &&
+            a.scheme.equals(b.scheme, ignoreCase = true) &&
+            a.host.equals(b.host, ignoreCase = true) &&
+            a.port == b.port
+        if (!sameOrigin) {
+            false
+        } else {
+            val base = b.path.orEmpty().trimEnd('/')
+            val path = a.path.orEmpty().trimEnd('/')
+            path == base || (base.isEmpty() && path.isNotEmpty()) || path.startsWith("$base/")
+        }
+    } catch (e: Exception) {
+        Timber.w(e, "Ignoring an unparseable issuer override")
+        false
     }
 
     /**
@@ -1774,7 +1796,7 @@ class SirosWallet private constructor(
             runCatching {
                 val builder = Request.Builder().url(url).get()
                 headers.forEach { (name, value) -> builder.header(name, value) }
-                httpClient.newCall(builder.build()).execute().use { response ->
+                thirdPartyHttpClient.newCall(builder.build()).execute().use { response ->
                     if (response.isSuccessful) response.body?.string() else null
                 }
             }.getOrElse {
@@ -1782,6 +1804,25 @@ class SirosWallet private constructor(
                 null
             }
         }
+
+    /**
+     * The client third-party fetches go out on: [httpClient] with its cookie
+     * jar and any authenticators removed.
+     *
+     * Not attaching an `Authorization` header is not enough on its own to say
+     * a request carries no wallet credentials. The shared client holds an
+     * [org.siros.sdk.auth.InMemoryCookieJar], and a cookie set by one of this
+     * wallet's own hosts would ride along to a third-party domain that
+     * happens to match - a credential leak that no call site can see, because
+     * nothing at the call site mentions cookies.
+     */
+    private val thirdPartyHttpClient: OkHttpClient by lazy {
+        httpClient.newBuilder()
+            .cookieJar(okhttp3.CookieJar.NO_COOKIES)
+            .authenticator(okhttp3.Authenticator.NONE)
+            .cache(null)
+            .build()
+    }
 
     /**
      * The signing key an issuer publishes, for verifying a Status List Token

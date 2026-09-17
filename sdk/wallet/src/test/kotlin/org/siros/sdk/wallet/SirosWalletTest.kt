@@ -67,6 +67,7 @@ import org.siros.sdk.credentials.PresentationRecord
 import org.siros.sdk.credentials.SignerSecurityProperties
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.credentials.interop.HolderBinding
+import org.siros.sdk.credentials.interop.InteropProfile
 import org.siros.sdk.credentials.WalletException
 import org.siros.sdk.keystore.AttestationChain
 import org.siros.sdk.keystore.KeyInfo
@@ -3128,6 +3129,39 @@ class SirosWalletTest {
         val header = """{"typ":"openid4vci-proof+jwt","alg":"ES256","jwk":{"kty":"EC","crv":"P-256","kid":"$kid","x":"eA","y":"eQ"}}"""
         val payload = """{"aud":"aud-1","nonce":"nonce-1"}"""
         return "${encoder.encodeToString(header.toByteArray())}.${encoder.encodeToString(payload.toByteArray())}.sig"
+    }
+
+    /**
+     * A configured per-issuer override must apply to that issuer and nothing
+     * that merely looks like it. A raw string prefix matches
+     * `https://issuer.example.evil` (a different domain) and
+     * `https://issuer.example@evil.com/x` (where the familiar-looking part is
+     * only userinfo), either of which hands one issuer's configuration to
+     * somebody else.
+     */
+    @Test
+    fun interopProfileFor_matchesOnOriginAndPathBoundary_notRawStringPrefix() = runTest(dispatcher) {
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                interopProfile = InteropProfile.HAIP,
+                issuerInteropProfiles = mapOf("https://issuer.example" to InteropProfile.DIIP),
+            ),
+        )
+        val profileFor = { issuer: String? ->
+            SirosWallet::class.java.getDeclaredMethod("interopProfileFor", String::class.java)
+                .apply { isAccessible = true }
+                .invoke(wallet, issuer) as InteropProfile
+        }
+
+        assertEquals(InteropProfile.DIIP, profileFor("https://issuer.example"))
+        assertEquals(InteropProfile.DIIP, profileFor("https://issuer.example/oid4vci"))
+        assertEquals("a different domain", InteropProfile.HAIP, profileFor("https://issuer.example.evil"))
+        assertEquals("userinfo, not the host", InteropProfile.HAIP, profileFor("https://issuer.example@evil.com/x"))
+        assertEquals("a different scheme", InteropProfile.HAIP, profileFor("http://issuer.example"))
+        assertEquals("a sibling path", InteropProfile.HAIP, profileFor("https://issuer.example.co/x"))
     }
 
     /** The DIIP counterpart of [fakeProofJwt]: the key is named by a `kid` header, not embedded. */
