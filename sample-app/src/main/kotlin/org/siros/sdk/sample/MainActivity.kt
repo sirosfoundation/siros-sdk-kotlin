@@ -362,6 +362,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
             // reaches here; logging out is what puts the app back on the
             // login/register screen where a new enrollment starts.
             onEnrollAgain = viewModel::disconnect,
+            isLoading = isLoading,
         )
         return
     }

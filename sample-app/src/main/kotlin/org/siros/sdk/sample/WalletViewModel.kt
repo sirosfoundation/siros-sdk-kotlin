@@ -1064,6 +1064,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         wallet.logout()
         _showAddCredential.value = false
         _availableCredentials.value = emptyList()
+        // Navigation state must not survive the session it belongs to: left
+        // set, the Devices sub-screen would be what the next login renders
+        // instead of the wallet tabs.
+        _showDevices.value = false
+        _walletInstances.value = emptyList()
     }
 
     /** Delete the current account - also removes it from the cached "Welcome back" list. */
@@ -1071,6 +1076,8 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         wallet.deleteAccount()
         _showAddCredential.value = false
         _availableCredentials.value = emptyList()
+        _showDevices.value = false
+        _walletInstances.value = emptyList()
     }
 
     // ── Account & Passkey management ────────────────────────────────
@@ -1664,17 +1671,27 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     }
 
     fun refreshDevices() {
-        viewModelScope.launch {
-            _devicesLoading.value = true
-            _devicesError.value = null
-            try {
-                _walletInstances.value = wallet.listWalletInstances()
-            } catch (e: Exception) {
-                Log.w(TAG, "listWalletInstances failed", e)
-                _devicesError.value = localizedErrorMessage(e)
-            } finally {
-                _devicesLoading.value = false
-            }
+        viewModelScope.launch { loadDevices() }
+    }
+
+    /**
+     * The listing itself. Suspending rather than launching, so a caller that
+     * must not re-enable its buttons until the list is current (see
+     * [setWalletInstanceStatus]) can await it in the same coroutine - a
+     * fire-and-forget refresh would let a second status write start against a
+     * list still showing the pre-write state, and the two refreshes could then
+     * land out of order.
+     */
+    private suspend fun loadDevices() {
+        _devicesLoading.value = true
+        _devicesError.value = null
+        try {
+            _walletInstances.value = wallet.listWalletInstances()
+        } catch (e: Exception) {
+            Log.w(TAG, "listWalletInstances failed", e)
+            _devicesError.value = localizedErrorMessage(e)
+        } finally {
+            _devicesLoading.value = false
         }
     }
 
@@ -1695,7 +1712,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             _devicesError.value = null
             try {
                 wallet.setWalletInstanceStatus(instanceId, status, reason)
-                refreshDevices()
+                loadDevices()
             } catch (e: Exception) {
                 Log.w(TAG, "setWalletInstanceStatus failed", e)
                 _devicesError.value = localizedErrorMessage(e)
@@ -1722,6 +1739,19 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 _showAddCredential.value = false
                 _availableCredentials.value = emptyList()
                 _showDevices.value = false
+                // deactivateWallet also forgets the account and logs out, so
+                // this screen is gone by the next recomposition. Report the
+                // outcome through the app-wide banner instead, which the login
+                // screen renders too - otherwise a user who deactivated with
+                // an unfinished erasure would never learn that their provider
+                // still has cleanup to do.
+                if (outcome.complete) {
+                    _infoMessage.value =
+                        activity.getString(R.string.devices_deactivate_complete, outcome.revoked)
+                } else {
+                    _errorMessage.value =
+                        activity.getString(R.string.devices_deactivate_incomplete, outcome.revoked)
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "deactivateWallet failed", e)
                 _devicesError.value = localizedErrorMessage(e)

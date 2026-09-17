@@ -220,7 +220,13 @@ private fun DeviceRow(
                         // Revoked is terminal: nothing to offer but the record.
                         else -> Unit
                     }
-                    if (instance.statusEnum != WalletInstanceStatus.REVOKED) {
+                    // Only for a status this SDK understands: a value a newer
+                    // backend introduced is not "not revoked, so removable" -
+                    // offering a terminal transition for a state we cannot
+                    // reason about is exactly the guess not to make.
+                    if (instance.statusEnum == WalletInstanceStatus.ACTIVE ||
+                        instance.statusEnum == WalletInstanceStatus.SUSPENDED
+                    ) {
                         OutlinedButton(
                             onClick = { confirmRemove = true },
                             enabled = enabled,
@@ -427,6 +433,8 @@ fun WalletBlockedScreen(
     message: String?,
     onRetry: () -> Unit,
     onEnrollAgain: () -> Unit,
+    /** A login is already in flight; the single action here must not start a second. */
+    isLoading: Boolean = false,
 ) {
     val suspended = reason == org.siros.sdk.auth.WalletLifecycleRefusal.SUSPENDED
     Column(
@@ -458,6 +466,7 @@ fun WalletBlockedScreen(
         Spacer(Modifier.height(32.dp))
         Button(
             onClick = if (suspended) onRetry else onEnrollAgain,
+            enabled = !isLoading,
             modifier = Modifier.fillMaxWidth().height(48.dp),
             shape = RoundedCornerShape(12.dp),
         ) {
