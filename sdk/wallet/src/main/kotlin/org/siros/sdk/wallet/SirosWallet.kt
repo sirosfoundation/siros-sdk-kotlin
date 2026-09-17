@@ -1831,12 +1831,19 @@ class SirosWallet private constructor(
      * `vct#integrity` is not making a claim about its metadata, so there is
      * nothing to disagree with.
      */
-    private suspend fun verifyVctIntegrity(format: String, payload: JsonObject): String? {
-        if (format == "mso_mdoc") return null
-        val expected = payload["vct#integrity"]?.jsonPrimitive?.contentOrNull ?: return null
+    private suspend fun verifyVctIntegrity(
+        format: String,
+        payload: JsonObject,
+        offer: org.siros.sdk.credentials.CredentialOffer?,
+        document: org.siros.sdk.credentials.VctmDocument?,
+    ): VctIntegrityCheck {
+        if (format == "mso_mdoc") return VctIntegrityCheck.ACCEPTED
+        val expected = payload["vct#integrity"]?.jsonPrimitive?.contentOrNull
+            ?: return VctIntegrityCheck.ACCEPTED
 
-        val document = activeVctmDocument
-        if (document != null && Integrity.matches(document.raw.toByteArray(Charsets.UTF_8), expected)) return null
+        if (document != null && Integrity.matches(document.raw.toByteArray(Charsets.UTF_8), expected)) {
+            return VctIntegrityCheck.ACCEPTED
+        }
 
         // What was resolved before issuance is not what the issuer signed over
         // - or nothing was resolved at all. Both are ordinary: the document may
@@ -1846,7 +1853,7 @@ class SirosWallet private constructor(
         // the credential through if the issuer's own document can still be
         // found. Only a wallet that cannot find it anywhere refuses.
         val resolved = try {
-            activeOffer?.let { offer ->
+            offer?.let { offer ->
                 vctmFetcher.fetchDocument(
                     issuerUrl = offer.credentialIssuerIdentifier,
                     scope = offer.credentialConfigurationId,
@@ -1862,9 +1869,7 @@ class SirosWallet private constructor(
 
         if (resolved != null) {
             Timber.i("Type metadata re-resolved to the document the issuer pinned")
-            activeVctmDocument = resolved
-            activeVctm = resolved.vctm
-            return null
+            return VctIntegrityCheck(refreshed = resolved)
         }
 
         if (document == null) {
@@ -1872,11 +1877,35 @@ class SirosWallet private constructor(
             // because a credential asking to be checked and not being checked
             // is exactly the state this method exists to make visible.
             Timber.w("Credential pinned vct#integrity but no type metadata could be resolved to check it against")
-            return null
+            return VctIntegrityCheck.ACCEPTED
         }
 
         Timber.e("Type metadata for '${document.vctm.vct}' does not match the issuer's vct#integrity")
-        return "The issuer's type metadata does not match what it published"
+        return VctIntegrityCheck(reason = "The issuer's type metadata does not match what it published")
+    }
+
+    /**
+     * What [verifyVctIntegrity] decided: a refusal [reason], or the document a
+     * re-resolution settled on when one happened.
+     *
+     * The refreshed document is handed back rather than written into
+     * [activeVctm]/[activeVctmDocument] on the way past. [verifyVctIntegrity]
+     * suspends on the network, and [resetIssuanceGuards] - which a cancelled
+     * flow or a logout calls - clears those fields and lets a new issuance
+     * populate them in the meantime. A write there would then be the *old*
+     * flow overwriting the new flow's metadata with its own pinned document.
+     * The caller applies it to the one credential it is storing, which is the
+     * only thing the re-resolution was ever about: it answers "is THIS
+     * credential's pinned document findable", not "what should the wallet now
+     * believe about the flow".
+     */
+    private data class VctIntegrityCheck(
+        val reason: String? = null,
+        val refreshed: org.siros.sdk.credentials.VctmDocument? = null,
+    ) {
+        companion object {
+            val ACCEPTED = VctIntegrityCheck()
+        }
     }
 
     /**
@@ -5564,6 +5593,16 @@ class SirosWallet private constructor(
                 pendingRenewalSourceBatchId = null
 
                 // Store any new credentials from the flow result
+                // Snapshot the issuance state this completion belongs to,
+                // before anything below suspends. resetIssuanceGuards() - which
+                // a cancelled flow or a logout calls - clears these fields, and
+                // a new issuance repopulates them; reading them again after a
+                // suspension point would let this completion store its
+                // credentials described by, and attributed to, a different
+                // flow's offer.
+                val flowOffer = activeOffer
+                val flowVctm = activeVctm
+                val flowVctmDocument = activeVctmDocument
                 msg.credentials?.forEachIndexed { index, cred ->
                     if (cred.format == "mso_mdoc") {
                         // mso_mdoc credentials are base64url-encoded CBOR (a
@@ -5598,7 +5637,7 @@ class SirosWallet private constructor(
                                     "trusted=${issuerTrust.trusted} reason=${issuerTrust.reason}",
                             )
                         }
-                        val metadata = activeOffer?.let { offer ->
+                        val metadata = flowOffer?.let { offer ->
                             val mddlSchema = try {
                                 mddlSchemaFetcher.fetch(
                                     issuerUrl = offer.credentialIssuerIdentifier,
@@ -5621,8 +5660,8 @@ class SirosWallet private constructor(
                             raw = cred.credential,
                             metadata = metadata,
                             notificationId = cred.notificationId,
-                            credentialIssuerIdentifier = activeOffer?.credentialIssuerIdentifier,
-                            credentialConfigurationId = activeOffer?.credentialConfigurationId,
+                            credentialIssuerIdentifier = flowOffer?.credentialIssuerIdentifier,
+                            credentialConfigurationId = flowOffer?.credentialConfigurationId,
                             batchId = batchId,
                             instanceId = index,
                             kid = activeAttestedKeyIds?.getOrNull(index),
@@ -5672,16 +5711,16 @@ class SirosWallet private constructor(
                             id = credentialId,
                             format = cred.format,
                             raw = cred.credential,
-                            metadata = activeOffer?.let { offer ->
+                            metadata = flowOffer?.let { offer ->
                                 CredentialUtils.buildMetadata(
                                     offer = offer,
-                                    vctm = activeVctm,
+                                    vctm = flowVctm,
                                     rawCredential = cred.credential,
                                 )
                             },
                             notificationId = cred.notificationId,
-                            credentialIssuerIdentifier = activeOffer?.credentialIssuerIdentifier,
-                            credentialConfigurationId = activeOffer?.credentialConfigurationId,
+                            credentialIssuerIdentifier = flowOffer?.credentialIssuerIdentifier,
+                            credentialConfigurationId = flowOffer?.credentialConfigurationId,
                             batchId = batchId,
                             instanceId = index,
                             // Deliberately not activeAttestedKeyIds: a BBS
@@ -5741,14 +5780,19 @@ class SirosWallet private constructor(
                         storeFailureReason = reason
                         return@forEachIndexed
                     }
-                    verifyVctIntegrity(cred.format, payload)?.let { reason ->
+                    val integrity = verifyVctIntegrity(cred.format, payload, flowOffer, flowVctmDocument)
+                    integrity.reason?.let { reason ->
                         storeFailureReason = reason
                         return@forEachIndexed
                     }
-                    val metadata = activeOffer?.let { offer ->
+                    val metadata = flowOffer?.let { offer ->
                         CredentialUtils.buildMetadata(
                             offer = offer,
-                            vctm = activeVctm,
+                            // The re-resolved document when the check found one,
+                            // scoped to this credential rather than read back
+                            // from shared issuance state that a cancelled or
+                            // superseded flow may have replaced meanwhile.
+                            vctm = integrity.refreshed?.vctm ?: flowVctm,
                             rawCredential = cred.credential,
                         )
                     }
@@ -5760,8 +5804,8 @@ class SirosWallet private constructor(
                         issuedAt = payload["iat"]?.jsonPrimitive?.longOrNull,
                         expiresAt = exp,
                         notificationId = cred.notificationId,
-                        credentialIssuerIdentifier = activeOffer?.credentialIssuerIdentifier,
-                        credentialConfigurationId = activeOffer?.credentialConfigurationId,
+                        credentialIssuerIdentifier = flowOffer?.credentialIssuerIdentifier,
+                        credentialConfigurationId = flowOffer?.credentialConfigurationId,
                         batchId = batchId,
                         instanceId = index,
                         kid = activeAttestedKeyIds?.getOrNull(index),
@@ -5788,7 +5832,7 @@ class SirosWallet private constructor(
                 // can use it later, including after an app restart or on a
                 // different device sharing this account.
                 msg.refreshToken?.let { token ->
-                    activeOffer?.let { offer ->
+                    flowOffer?.let { offer ->
                         setCredentialRefreshToken(
                             batchId,
                             CredentialRefreshTokenEntry(
