@@ -14,12 +14,11 @@ class KeystoreManagerTest {
             override fun lock() {}
             override suspend fun generateKey(algorithm: String) = "key-1"
             override suspend fun sign(keyId: String, payload: ByteArray, algorithm: String) = ByteArray(0)
-            override suspend fun generateProof(
-                audience: String,
-                nonce: String,
-                freshKey: Boolean,
-                holderBinding: org.siros.sdk.credentials.interop.HolderBinding?,
-            ) = ""
+            // The three-argument form is the requirement; the holder-binding
+            // overload is defaulted, which is what keeps a keystore written
+            // before DIIP compiling. Implementing only that one is exactly
+            // what such a keystore looks like.
+            override suspend fun generateProof(audience: String, nonce: String, freshKey: Boolean) = ""
             override suspend fun signPresentation(nonce: String, audience: String, credentialIds: List<Long>, kid: String?) = ""
             override suspend fun signVpToken(credential: String, disclosedClaims: List<String>?, nonce: String, audience: String, kid: String?) = ""
             override suspend fun exportEncryptedContainer() = ByteArray(0)
