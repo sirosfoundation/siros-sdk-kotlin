@@ -76,4 +76,23 @@ class InteropProfileTest {
         assertEquals("jwk", HolderBinding.EMBEDDED_JWK.bindingMethod)
         assertEquals("did:jwk", HolderBinding.DID_JWK.bindingMethod)
     }
+    @Test
+    fun `a real DIIP issuer's advertised methods negotiate the DID binding`() {
+        // Verbatim from https://nl.gov.issuer.dev.eduwallet.nl's
+        // .well-known/openid-credential-issuer (PID, dc+sd-jwt), reached
+        // through the eduwallet demo launcher. It advertises no `jwk` at all,
+        // so a wallet that defaults to HAIP still has to send this issuer the
+        // DIIP proof shape - which is the whole point of negotiating rather
+        // than configuring.
+        assertEquals(
+            HolderBinding.DID_JWK,
+            HolderBinding.negotiate(listOf("did:jwk", "did:key")),
+        )
+        // And the substring trap: "jwk" must be matched as a whole value, not
+        // found inside "did:jwk".
+        assertEquals(HolderBinding.DID_JWK, HolderBinding.negotiate(listOf("did:jwk")))
+        assertEquals(HolderBinding.EMBEDDED_JWK, HolderBinding.negotiate(listOf("jwk", "did:jwk")))
+        // A DID method that is not did:jwk names nothing this Holder can use.
+        assertNull(HolderBinding.negotiate(listOf("did:key")))
+    }
 }
