@@ -245,4 +245,35 @@ class DidTest {
         assertNull(DidMethod.of("https://example.com"))
         assertNull(DidMethod.of("did:unknown:x"))
     }
+
+    @Test
+    fun `a method name is read even when this SDK does not know it`() {
+        assertEquals("unknown", DidMethod.methodName("did:unknown:x"))
+        assertEquals("ebsi", DidMethod.methodName("did:ebsi:zABC"))
+        assertNull(DidMethod.methodName("https://example.com"))
+        // `did:<method>:<id>` - neither half may be missing.
+        assertNull(DidMethod.methodName("did:web"))
+        assertNull(DidMethod.methodName("did:web:"))
+        assertNull(DidMethod.methodName("did::x"))
+    }
+
+    @Test
+    fun `a method this SDK does not know is still go-trust's to resolve`() = runBlocking {
+        // Enumerating methods here would make the SDK the authority on which
+        // of them exist. It is not: go-trust is, and a method it learns about
+        // must not need an SDK release.
+        var asked: String? = null
+        val resolver = DidResolver(delegate = { did -> asked = did; null })
+        resolver.resolve("did:ebsi:zABC")
+        assertEquals("did:ebsi:zABC", asked)
+    }
+
+    @Test
+    fun `something that is not a DID is not delegated`() = runBlocking {
+        var asked: String? = null
+        val resolver = DidResolver(delegate = { did -> asked = did; null })
+        val result = resolver.resolve("https://issuer.example")
+        assertNull(asked)
+        assertTrue(result is DidResolution.Failed)
+    }
 }

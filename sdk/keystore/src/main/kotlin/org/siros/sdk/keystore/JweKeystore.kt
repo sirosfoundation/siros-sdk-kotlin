@@ -1,6 +1,7 @@
 package org.siros.sdk.keystore
 
 import org.siros.sdk.credentials.KeystoreException
+import org.siros.sdk.credentials.interop.createDidJwk
 import org.siros.sdk.credentials.interop.HolderBinding
 import org.siros.sdk.credentials.interop.didJwkKeyId
 import org.siros.sdk.credentials.interop.InteropProfile
@@ -606,20 +607,32 @@ class JweKeystore(
 
         Timber.d("generateProof: building claims for audience=$audience")
         // DIIP requires the `jwt` proof type to carry the Holder's did:jwk as
-        // `iss` and to name the key with a `kid` from the DID document; HAIP
+        // `iss` and to name the key with a `kid` from that DID document; HAIP
         // carries the key in the header instead. The caller may know which
         // this issuer speaks; when it does not, this keystore's own profile
-        // decides. Either way a key with no DID has nothing to name, so it
-        // falls back to the embedded form rather than emitting a `kid` that
-        // resolves to nothing.
+        // decides.
+        //
+        // The DID is derived from the key rather than read from [keyDids],
+        // exactly as WscdKeystoreAdapter does it. A did:jwk *is* its public
+        // key, so any key pair has one whether or not it was created under
+        // [DidKeyVersion.JWK]. Requiring a stored did:jwk here made the whole
+        // negotiation inert for the default wallet: the key version follows
+        // the interop profile, which defaults to HAIP, so a negotiated
+        // DID_JWK could never be satisfied and every proof fell back to the
+        // HAIP shape that a DIIP-only Issuer rejects. What a key was
+        // *created* as is a storage question; how this issuance names its
+        // holder is not.
+        //
+        // For a keystore already on [DidKeyVersion.JWK] this is the same
+        // value it stored - createDidJwk is deterministic over the canonical
+        // public JWK - so nothing changes there.
         val binding = holderBinding ?: profile.holderBinding
-        // Only a `did:jwk` can be named this way: it resolves offline, and
-        // this key's own id is its verification method. A key carrying a
-        // `did:key` (the pre-DIIP identifier) has a DID but no `kid` an
-        // Issuer could resolve, so it takes the embedded form even when
-        // DID_JWK was asked for.
-        val did = keyDids[key.keyID]
-            ?.takeIf { binding == HolderBinding.DID_JWK && it.startsWith("did:jwk:") && key.keyID == didJwkKeyId(it) }
+        val publicJwk = key.toPublicJWK()
+        val did = if (binding == HolderBinding.DID_JWK) {
+            runCatching { createDidJwk(publicJwk.toJSONString()) }.getOrNull()
+        } else {
+            null
+        }
         val claimsBuilder = JWTClaimsSet.Builder()
             .audience(audience)
             .issueTime(Date())
@@ -630,9 +643,9 @@ class JweKeystore(
         val headerBuilder = JWSHeader.Builder(JWSAlgorithm.ES256)
             .type(com.nimbusds.jose.JOSEObjectType("openid4vci-proof+jwt"))
         if (did != null) {
-            headerBuilder.keyID(key.keyID)
+            headerBuilder.keyID(didJwkKeyId(did))
         } else {
-            headerBuilder.jwk(key.toPublicJWK())
+            headerBuilder.jwk(publicJwk)
         }
         val header = headerBuilder.build()
 

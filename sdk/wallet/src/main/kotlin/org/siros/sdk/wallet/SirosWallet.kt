@@ -1826,6 +1826,10 @@ class SirosWallet private constructor(
      */
     private suspend fun fetchPublicUrl(url: String, headers: Map<String, String> = emptyMap()): String? =
         withContext(Dispatchers.IO) {
+            if (!isPublicFetchAllowed(url)) {
+                Timber.d("Refusing to fetch $url: third-party fetches are HTTPS only")
+                return@withContext null
+            }
             runCatching {
                 val builder = Request.Builder().url(url).get()
                 headers.forEach { (name, value) -> builder.header(name, value) }
@@ -7255,6 +7259,19 @@ class SirosWallet private constructor(
  * Top-level rather than a member because it is pure: no wallet state is
  * involved, and it is the part worth testing directly.
  */
+/**
+ * Whether a third-party URL may be fetched at all.
+ *
+ * Everything reached this way - a Status List Token, an issuer's metadata, the
+ * `jwks_uri` it points at - is used to decide whether a credential is still
+ * valid and which key says so. Over plaintext, anyone on the path can answer
+ * those questions instead of the issuer: serve a status list that says
+ * "valid", or a JWKS holding their own key. An issuer identifier is an HTTPS
+ * URL to begin with, so this rejects nothing a well-formed deployment does.
+ */
+internal fun isPublicFetchAllowed(url: String): Boolean =
+    runCatching { java.net.URI(url).scheme?.lowercase() }.getOrNull() == "https"
+
 internal fun selectIssuerKey(
     keys: List<com.nimbusds.jose.jwk.JWK>,
     kid: String?,

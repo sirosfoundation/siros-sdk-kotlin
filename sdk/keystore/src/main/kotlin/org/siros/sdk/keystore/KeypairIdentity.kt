@@ -6,6 +6,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import org.siros.sdk.credentials.interop.InteropProfile
 import org.siros.sdk.credentials.interop.createDidJwk
+import org.siros.sdk.credentials.interop.DidRelationship
+import org.siros.sdk.credentials.interop.resolveDidJwk
 import org.siros.sdk.credentials.interop.didJwkKeyId
 import timber.log.Timber
 
@@ -116,14 +118,38 @@ fun deriveKeypairIdentity(
  */
 fun keypairMatchesKid(storedKid: String, publicJwkJson: String, kid: String): Boolean {
     if (storedKid == kid) return true
-    return runCatching { JWK.parse(publicJwkJson).computeThumbprint().toString() }
-        .getOrNull() == kid
+    val thumbprint = runCatching { JWK.parse(publicJwkJson).computeThumbprint().toString() }.getOrNull()
+    return matchesThumbprint(thumbprint, kid)
 }
 
 /** [keypairMatchesKid] for a key already parsed into a Nimbus [JWK]. */
 fun keypairMatchesKid(storedKid: String, publicKey: JWK, kid: String): Boolean {
     if (storedKid == kid) return true
-    return runCatching { publicKey.toPublicJWK().computeThumbprint().toString() }.getOrNull() == kid
+    val thumbprint = runCatching { publicKey.toPublicJWK().computeThumbprint().toString() }.getOrNull()
+    return matchesThumbprint(thumbprint, kid)
+}
+
+private fun matchesThumbprint(thumbprint: String?, kid: String): Boolean {
+    if (thumbprint == null) return false
+    if (thumbprint == kid) return true
+    // A `did:jwk` embeds the key it names, so comparing the two is an exact
+    // answer rather than a guess: a credential bound to `did:jwk:...#0` is
+    // bound to this key pair exactly when the embedded key is this one. This
+    // is what lets a wallet whose keys are named by thumbprint still present a
+    // credential it was issued under DIIP.
+    return thumbprintOfDidJwk(kid) == thumbprint
+}
+
+/**
+ * The JWK thumbprint of the key a `did:jwk` - or a verification method of one
+ * - embeds, or null when [kid] is not one.
+ */
+fun thumbprintOfDidJwk(kid: String): String? {
+    if (!kid.startsWith("did:jwk:")) return null
+    val did = kid.substringBefore('#')
+    val key = resolveDidJwk(did).documentOrNull?.findPublicKey(kid = null, relationship = DidRelationship.ANY)
+        ?: return null
+    return runCatching { JWK.parse(key.toString()).computeThumbprint().toString() }.getOrNull()
 }
 
 /**

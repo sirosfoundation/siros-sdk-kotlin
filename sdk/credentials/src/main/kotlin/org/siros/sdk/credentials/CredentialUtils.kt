@@ -486,7 +486,19 @@ object CredentialUtils {
                             put(
                                 "status_list",
                                 kotlinx.serialization.json.buildJsonObject {
-                                    statusList["idx"]?.let { put("idx", JsonPrimitive(it.AsInt32())) }
+                                    // `idx` comes from the credential, which
+                                    // is not this wallet's to trust before it
+                                    // has been verified. AsInt32 throws past
+                                    // Int.MAX_VALUE, which would otherwise
+                                    // discard the whole credential's validity
+                                    // claims. A status list with that many
+                                    // entries does not exist, so an index that
+                                    // will not convert is simply not read,
+                                    // leaving the reference incomplete and the
+                                    // status unavailable.
+                                    statusList["idx"]
+                                        ?.let { runCatching { it.AsInt32() }.getOrNull() }
+                                        ?.let { put("idx", JsonPrimitive(it)) }
                                     statusList["uri"]?.let { put("uri", JsonPrimitive(it.AsString())) }
                                 },
                             )
