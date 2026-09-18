@@ -42,4 +42,58 @@ class IssuanceStartTest {
     fun `credential_offer wins over credential_offer_uri`() {
         assertEquals(IssuanceStart.Offer("{}"), resolveIssuanceStart("haip-vci://?credential_offer_uri=https%3A%2F%2Fx&credential_offer=%7B%7D"))
     }
+
+    /**
+     * An offer URI may leave out the authority - RFC 3986 allows it, and the
+     * OpenID4VCI credential offer's authority is empty either way, so issuers
+     * emit both spellings. [java.net.URI] calls the authority-less one
+     * *opaque* and then reports no query at all, which hid every parameter
+     * and sent the whole URI to the engine as if it were the offer JSON.
+     * Issuance then failed on the very first character.
+     */
+    @Test
+    fun `an offer uri with no authority still yields its offer`() {
+        assertEquals(
+            IssuanceStart.Offer(offerJson),
+            resolveIssuanceStart("openid-credential-offer:?credential_offer=" + enc(offerJson)),
+        )
+    }
+
+    @Test
+    fun `an offer uri with no authority still yields its offer uri`() {
+        assertEquals(
+            IssuanceStart.CredentialOfferUri("https://issuer.example/offers/1"),
+            resolveIssuanceStart("openid-credential-offer:?credential_offer_uri=https%3A%2F%2Fissuer.example%2Foffers%2F1"),
+        )
+    }
+
+    /** Both spellings must resolve identically - that is the whole point. */
+    @Test
+    fun `both spellings of an offer uri agree`() {
+        val query = "?credential_offer=" + enc(offerJson)
+        assertEquals(
+            resolveIssuanceStart("openid-credential-offer://$query"),
+            resolveIssuanceStart("openid-credential-offer:$query"),
+        )
+    }
+
+    /** A fragment is not part of the query, even on an opaque URI. */
+    @Test
+    fun `a fragment is not swallowed into the last parameter`() {
+        assertEquals(
+            IssuanceStart.Offer("{}"),
+            resolveIssuanceStart("openid-credential-offer:?credential_offer=%7B%7D#frag"),
+        )
+    }
+
+    /** An opaque URI carrying no query at all is still left for the engine. */
+    @Test
+    fun `an opaque uri without a query is left for the engine`() {
+        assertEquals(
+            IssuanceStart.Offer("openid-credential-offer:"),
+            resolveIssuanceStart("openid-credential-offer:"),
+        )
+    }
+
+    private fun enc(s: String): String = java.net.URLEncoder.encode(s, "UTF-8")
 }
