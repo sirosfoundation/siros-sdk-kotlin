@@ -4805,11 +4805,22 @@ class SirosWalletTest {
         val listener = RecordingLifecycleListener()
         val wallet = lifecycleWallet(
             stateFlow, accountRegistry, authServerClient, listener,
-            // The ceremony resolved to this account before the AS was asked.
-            fields = arrayOf("loginRefusalAccountId" to "default:user-1"),
+            fields = arrayOf("authTokens" to mockk<AuthTokens>(relaxed = true)),
         )
 
-        wallet.login()
+        // The account the refused operation was for, as its caller captured it
+        // when that operation started.
+        invokePrivateBoolean(
+            wallet, "handleLifecycleRefusal",
+            AuthException(
+                "AS request failed: 403 \u2014 /auth/login/finish",
+                errorCode = "WALLET_REVOKED",
+                code = 403,
+                serverMessage = "This wallet has been deactivated; a new enrollment is required",
+                serverScope = "wallet",
+            ),
+            "default:user-1",
+        )
         advanceUntilIdle()
 
         val blocked = stateFlow.value as WalletState.LifecycleBlocked
@@ -4842,10 +4853,20 @@ class SirosWalletTest {
         val stateFlow = MutableStateFlow<WalletState>(WalletState.Disconnected())
         val wallet = lifecycleWallet(
             stateFlow, accountRegistry, authServerClient,
-            fields = arrayOf("loginRefusalAccountId" to "default:user-2"),
+            fields = arrayOf("authTokens" to mockk<AuthTokens>(relaxed = true)),
         )
 
-        wallet.login()
+        // The ceremony was answered by a different account than the active one.
+        invokePrivateBoolean(
+            wallet, "handleLifecycleRefusal",
+            AuthException(
+                "AS request failed: 403 \u2014 /auth/login/finish",
+                errorCode = "WALLET_REVOKED",
+                code = 403,
+                serverScope = "wallet",
+            ),
+            "default:user-2",
+        )
         advanceUntilIdle()
 
         verify(exactly = 1) { accountRegistry.removeAccount("default:user-2") }
@@ -4856,6 +4877,11 @@ class SirosWalletTest {
      * When nothing says which account a deactivation was about, forgetting
      * anything would be a guess at the user's expense. The block still
      * happens; every cached account stays.
+     *
+     * End to end on purpose: this login is refused at `loginBegin`, before any
+     * WebAuthn ceremony ran, so nothing recorded who answered. Reaching for
+     * the authenticator's last credential here would name an account from a
+     * *previous* login and delete it.
      */
     @Test
     fun a_deactivation_that_names_no_account_forgets_nothing() = runTest(dispatcher) {

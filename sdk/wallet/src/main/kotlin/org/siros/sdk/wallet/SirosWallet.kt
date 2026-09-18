@@ -394,20 +394,24 @@ class SirosWallet private constructor(
     private var reloginInProgress: Boolean = false
 
     /**
-     * The cached account whose passkey answered the WebAuthn ceremony of the
-     * login currently running, once that is known.
+     * The cached account whose passkey answered one login's WebAuthn ceremony,
+     * once that is known.
      *
      * A lifecycle refusal has to name the account it is about before anything
      * local may be forgotten, and the account active before a login is not it:
      * a login offers every account's passkeys at once (see [loginCandidates]),
      * so which wallet was refused is decided by the credential the
-     * authenticator returns, not by whoever was signed in before. Set the
-     * moment the ceremony resolves - which is before the server is asked, and
-     * therefore before it can refuse - and cleared when the login ends. Null
-     * means the refusal names no account, and then nothing is forgotten.
+     * authenticator returns, not by whoever was signed in before.
+     *
+     * One instance per [login] call, never a field on the wallet: two logins
+     * running at once would otherwise overwrite each other's answer, and the
+     * loser could forget an account the refusal was never about. Null means
+     * the refusal names no account, and then nothing is forgotten.
      */
-    @Volatile
-    private var loginRefusalAccountId: String? = null
+    private class RefusedAccount {
+        @Volatile
+        var id: String? = null
+    }
 
     /**
      * Which session this wallet currently holds. Bumped whenever one ends
@@ -969,6 +973,9 @@ class SirosWallet private constructor(
      *   discoverable-credential ceremony completes.
      */
     suspend fun login(accountId: String? = null) {
+        // Scoped to this attempt so concurrent logins cannot answer for one
+        // another; see [RefusedAccount].
+        val refused = RefusedAccount()
         _state.value = WalletState.Connecting
         // See logout()'s identical reset: a WIA still cached from another
         // account (or from before a re-enrollment) must not be what identifies
@@ -983,39 +990,24 @@ class SirosWallet private constructor(
                 restoreActiveAccountForLogin()
             }
             when (authMode) {
-                AuthMode.LEGACY_AS -> legacyLogin(accountId)
-                else -> newAsLogin(accountId)
+                AuthMode.LEGACY_AS -> legacyLogin(accountId, refused)
+                else -> newAsLogin(accountId, refused)
             }
         } catch (e: SirosException) {
             // A SID-AUTH-06 refusal is a state, not an error: this passkey's
             // wallet instance is suspended or revoked, or the wallet was
             // deactivated, and retrying the same login changes nothing until
             // someone else acts.
-            if (handleLifecycleRefusal(e, refusedLoginAccount())) return
+            if (handleLifecycleRefusal(e, refused.id)) return
             Timber.e(e, "Login failed")
             _state.value = WalletState.Error(e.message ?: "Login failed")
         } catch (e: Exception) {
-            if (handleLifecycleRefusal(e, refusedLoginAccount())) return
+            if (handleLifecycleRefusal(e, refused.id)) return
             Timber.e(e, "Login failed")
             _state.value = WalletState.Error(e.message ?: "Login failed")
             throw WalletException("Login failed", e)
-        } finally {
-            loginRefusalAccountId = null
         }
     }
-
-    /**
-     * The account a refused login was for, or null when this SDK cannot say.
-     *
-     * [loginRefusalAccountId] answers it on the AS path, where the ceremony
-     * and the server call are separate steps. The legacy path performs both
-     * inside one call, so there the credential the authenticator last returned
-     * is the only record of who answered - sound here because the backend
-     * checks the lifecycle gate *after* verifying the assertion, so a
-     * lifecycle refusal always implies this attempt's ceremony ran.
-     */
-    private fun refusedLoginAccount(): String? =
-        loginRefusalAccountId ?: extractLastCredentialId()?.let { accountForCredential(it) }
 
     /**
      * Ensure [sessionStore] has *some* account scoped before login, purely so
@@ -1081,7 +1073,7 @@ class SirosWallet private constructor(
             ?.accountId
     }
 
-    private suspend fun newAsLogin(accountId: String?) {
+    private suspend fun newAsLogin(accountId: String?, refused: RefusedAccount) {
         val prfCandidates = loginCandidates(accountId)
 
         // Step 1: Get challenge from AS
@@ -1109,8 +1101,9 @@ class SirosWallet private constructor(
 
         // Which cached account just answered. Recorded before the AS is asked,
         // because the AS's answer may be a lifecycle refusal that has to say
-        // whose wallet it was about. See [loginRefusalAccountId].
-        loginRefusalAccountId = accountForCredential(result.credentialId)
+        // whose wallet it was about. Nothing sets it if the ceremony never
+        // ran, and then a refusal names no account. See [RefusedAccount].
+        refused.id = accountForCredential(result.credentialId)
 
         // Step 3: Complete login with AS
         val credentialJson = kotlinx.serialization.json.buildJsonObject {
@@ -1141,9 +1134,22 @@ class SirosWallet private constructor(
         finishLogin(session.uuid, session.displayName, credId, prfOutput)
     }
 
-    private suspend fun legacyLogin(accountId: String?) {
+    private suspend fun legacyLogin(accountId: String?, refused: RefusedAccount) {
         val prfCandidates = loginCandidates(accountId)
-        val session = legacyAuthClient.login(prfSaltsByCredential = prfCandidates.ifEmpty { null })
+        // The legacy client performs the ceremony and the finish inside one
+        // call, so unlike [newAsLogin] there is no point between them at which
+        // to record who answered. On failure the credential the provider last
+        // returned is the only record there is. Sound for the one use it has:
+        // the backend runs the lifecycle gate only after verifying the
+        // assertion, so a lifecycle refusal always implies this attempt's
+        // ceremony ran, and a refusal is the only thing [RefusedAccount] is
+        // read for.
+        val session = try {
+            legacyAuthClient.login(prfSaltsByCredential = prfCandidates.ifEmpty { null })
+        } catch (e: Throwable) {
+            extractLastCredentialId()?.let { refused.id = accountForCredential(it) }
+            throw e
+        }
         Timber.i("Legacy login successful: ${session.uuid}")
 
         val credId = extractLastCredentialId()

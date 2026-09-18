@@ -182,7 +182,23 @@ class WebAuthnAuthClient(
 
         if (!response.isSuccessful) {
             Timber.e("Auth request failed: ${response.code} — $url\nbody: $responseBody")
-            throw AuthException("Auth request failed: ${response.code} — $path\nbody: $responseBody", code = response.code)
+            // Carry the wallet API's stable error code, refusal scope and
+            // user-facing message. The legacy login finishes here rather than
+            // at the AS, so without these a SID-AUTH-06 refusal met on this
+            // path is indistinguishable from any other 4xx and never reaches
+            // WalletState.LifecycleBlocked. Same body shape as the AS sends:
+            // {"error": ..., "scope": ..., "message": ...}.
+            val errorBody = runCatching { json.parseToJsonElement(responseBody).jsonObject }.getOrNull()
+            fun field(name: String): String? =
+                (errorBody?.get(name) as? kotlinx.serialization.json.JsonPrimitive)
+                    ?.content?.takeIf { it.isNotBlank() }
+            throw AuthException(
+                "Auth request failed: ${response.code} — $path\nbody: $responseBody",
+                errorCode = field("error") ?: "auth_failed",
+                code = response.code,
+                serverMessage = field("message"),
+                serverScope = field("scope"),
+            )
         }
 
         Timber.d("Auth response: ${response.code} — $path")

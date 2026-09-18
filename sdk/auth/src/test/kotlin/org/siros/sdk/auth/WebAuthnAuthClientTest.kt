@@ -193,6 +193,55 @@ class WebAuthnAuthClientTest {
         assertEquals("eyJmb28iOiJiYXIifQ", session.privateData)
     }
 
+    /**
+     * The legacy login finishes at the wallet API rather than at the
+     * authorization server, so a SID-AUTH-06 refusal met there arrives through
+     * this client. Discarding the body's `error` and `scope` - as this client
+     * did until the refusal-scope work - makes a refusal indistinguishable
+     * from any other 4xx, and a deactivated wallet is then never recognised on
+     * the legacy path at all.
+     */
+    @Test
+    fun a_lifecycle_refusal_carries_its_code_scope_and_message() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                """
+                {
+                  "challengeId": "login-ch-1",
+                  "getOptions": {
+                    "publicKey": {
+                      "rpId": "example.com",
+                      "challenge": "Y2hhbGxlbmdl"
+                    }
+                  }
+                }
+                """.trimIndent()
+            )
+        )
+        server.enqueue(
+            MockResponse().setResponseCode(403).setBody(
+                """{"error":"WALLET_REVOKED","scope":"wallet","message":"This wallet has been deactivated"}"""
+            )
+        )
+
+        val fakeProvider = FakeAuthProvider(
+            registerResult = defaultRegisterResult(),
+            authenticateResult = defaultAuthenticateResult(),
+        )
+        val baseUrl = server.url("/").toString().trimEnd('/')
+        val client = WebAuthnAuthClient(baseUrl = baseUrl, authProvider = fakeProvider)
+
+        val e = assertThrows(AuthException::class.java) { runBlocking { client.login() } }
+        assertEquals(403, e.code)
+        assertEquals("WALLET_REVOKED", e.errorCode)
+        assertEquals("wallet", e.serverScope)
+        assertEquals("This wallet has been deactivated", e.serverMessage)
+        assertEquals(
+            WalletLifecycleRefusal.DEACTIVATED,
+            WalletLifecycleRefusal.fromRefusal(e.errorCode, e.serverScope),
+        )
+    }
+
     @Test
     fun register_throws_when_public_key_missing() = runBlocking {
         server.enqueue(

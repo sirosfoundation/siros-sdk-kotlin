@@ -49,7 +49,7 @@ class NetworkException(
 ) : SirosException(message, cause, errorCode)
 
 /** Raised when authentication or authorization fails (401, token expired, WebAuthn error). */
-class AuthException(
+class AuthException @JvmOverloads constructor(
     message: String,
     cause: Throwable? = null,
     errorCode: String = "auth_failed",
@@ -73,6 +73,11 @@ class AuthException(
      */
     val serverScope: String? = null,
 ) : SirosException(message, cause, errorCode)
+// @JvmOverloads keeps every shorter JVM constructor descriptor alive as
+// parameters are appended. Kotlin's default arguments alone do not: adding
+// serverScope replaced the five-argument constructor outright, and an
+// already-compiled consumer of this published module would have met a
+// NoSuchMethodError rather than a recompile.
 
 /** Raised when keystore operations fail (locked, corrupt container, decryption error). */
 class KeystoreException(

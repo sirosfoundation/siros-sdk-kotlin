@@ -67,8 +67,14 @@ sealed class WalletState {
      * because revoking one wallet unit leaves the user's other devices,
      * passkeys and keys untouched. `DEACTIVATED` is the whole wallet - every
      * instance revoked and the server-side data erased - and is the one case
-     * where the cached account is dropped, so [cachedAccounts] no longer
-     * lists it.
+     * where a cached account may be dropped: the account the refused
+     * operation was for, which [cachedAccounts] then no longer lists.
+     *
+     * When nothing identifies that account - a login can offer several
+     * accounts' passkeys at once and be refused before this SDK learns which
+     * one answered - every cached account is kept rather than guessed at. So
+     * `DEACTIVATED` means at most one account was forgotten, never that one
+     * certainly was; read [cachedAccounts] for what actually remains.
      *
      * A backend that does not send the refusal's `scope` yet never produces
      * `DEACTIVATED`; its `WALLET_REVOKED` reads as `REVOKED` and nothing

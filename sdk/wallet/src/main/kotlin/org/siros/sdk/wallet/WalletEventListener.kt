@@ -182,10 +182,14 @@ interface WalletEventListener {
      * `REVOKED` does **not** imply the wallet was deactivated and erased - it
      * is the per-instance case, and the account's other passkeys and devices
      * keep working - so nothing local is discarded for it. `DEACTIVATED` is
-     * the refusal that says the wallet itself is gone, and the SDK has already
-     * forgotten the cached account by the time this fires. Neither is licence
-     * for an app to drop further state of its own. Apps that already render
-     * [WalletState.LifecycleBlocked] need not implement this.
+     * the refusal that says the wallet itself is gone, and by the time this
+     * fires the SDK has already forgotten the cached account it was about -
+     * or, when nothing identified that account, has deliberately kept every
+     * one rather than guess. Read
+     * [WalletState.LifecycleBlocked.cachedAccounts] for what actually
+     * remains; neither reason is licence for an app to drop further state of
+     * its own. Apps that already render [WalletState.LifecycleBlocked] need
+     * not implement this.
      */
     fun onWalletLifecycleBlocked(reason: org.siros.sdk.auth.WalletLifecycleRefusal, message: String?) {
         // Default: no-op. The state change is the primary signal.
