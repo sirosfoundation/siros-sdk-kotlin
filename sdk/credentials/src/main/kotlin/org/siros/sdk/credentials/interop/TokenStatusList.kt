@@ -168,10 +168,12 @@ object TokenStatusList {
  * @param httpGet fetches a URL, returning the body or null - the same
  *        injection point as [org.siros.sdk.credentials.VctmFetcher], so a
  *        host's own client, pinning and caching apply here too.
- * @param resolveIssuerKey resolves an issuer's signing key when the Status
- *        List Token's header carries no `x5c`. Given the token's issuer
- *        identifier and the header `kid`. A DID-identified issuer is handled
- *        by [DidResolver]; anything else is the host's to answer.
+ * @param resolveIssuerKey resolves the Status List Token's signing key, given
+ *        the token's issuer identifier and its header `kid`. Key resolution is
+ *        always delegated this way: a certificate chain in the token header is
+ *        deliberately not honoured - see [verifySignature] for why. A
+ *        DID-identified issuer is answered through [DidResolver]; anything
+ *        else is the host's to answer.
  * @param nowMillis time source, overridable for deterministic tests.
  */
 class TokenStatusListClient(

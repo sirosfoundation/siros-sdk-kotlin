@@ -14,6 +14,8 @@ import org.junit.Test
 import org.siros.sdk.credentials.interop.DidRelationship
 import org.siros.sdk.credentials.interop.HolderBinding
 import org.siros.sdk.credentials.interop.InteropProfile
+import org.siros.sdk.credentials.interop.createDidJwk
+import org.siros.sdk.credentials.interop.didJwkKeyId
 import org.siros.sdk.credentials.interop.resolveDidJwk
 import java.util.Base64
 
@@ -145,17 +147,23 @@ class HolderBindingTest {
     }
 
     @Test
-    fun `a HAIP wallet cannot be forced into a DID proof it has no DID for`() = runTest {
-        // Asking for DID_JWK when the key was never named by one must not
-        // emit a `kid` that resolves to nothing - it falls back to the form
-        // that is actually verifiable.
-        val keystore = unlocked(InteropProfile.HAIP)
+    fun `a DIIP wallet still emits a HAIP proof when that is what was negotiated`() = runTest {
+        // The mirror of the case above: the binding the caller asks for wins
+        // over what the keystore's own profile would have chosen, in both
+        // directions. A key named by a DID URL still has to be embeddable,
+        // since a HAIP issuer resolves no DIDs at all.
+        val keystore = unlocked(InteropProfile.DIIP)
         keystore.generateKey()
         val proof = SignedJWT.parse(
-            keystore.generateProof("https://issuer.example", "nonce", holderBinding = HolderBinding.DID_JWK),
+            keystore.generateProof(
+                "https://issuer.example",
+                "nonce",
+                holderBinding = HolderBinding.EMBEDDED_JWK,
+            ),
         )
-        assertNotNull(proof.header.jwk)
-        assertNull(proof.jwtClaimsSet.issuer)
+        assertNotNull("a HAIP proof carries the key", proof.header.jwk)
+        assertNull("and names neither a kid", proof.header.keyID)
+        assertNull("nor an iss", proof.jwtClaimsSet.issuer)
     }
 
     @Test
@@ -299,5 +307,63 @@ class HolderBindingTest {
     private fun sdJwt(payload: String): String {
         fun b64(s: String) = Base64.getUrlEncoder().withoutPadding().encodeToString(s.toByteArray(Charsets.UTF_8))
         return "${b64("""{"alg":"ES256","typ":"dc+sd-jwt"}""")}.${b64(payload)}.sig~"
+    }
+    // ── negotiation must work on a HAIP-shaped keystore ──────────────
+
+    @Test
+    fun `a HAIP keystore can still produce a DIIP proof`() = runTest {
+        // The default wallet is HAIP, so its keys are named by thumbprint and
+        // carry a did:key. If that decided the proof shape, negotiating DIIP
+        // with an issuer could never be satisfied and the whole per-issuer
+        // negotiation would be inert for every wallet that ships.
+        val keystore = unlocked(profile = InteropProfile.HAIP)
+        val kid = keystore.generateKey()
+        assertFalse("a HAIP keystore names keys by thumbprint", kid.startsWith("did:jwk:"))
+
+        val proof = SignedJWT.parse(
+            keystore.generateProof("https://issuer.example", "n-1", holderBinding = HolderBinding.DID_JWK),
+        )
+        val did = proof.jwtClaimsSet.issuer
+        assertNotNull("a DIIP proof names the holder with iss", did)
+        assertTrue(did.startsWith("did:jwk:"))
+        assertNull("a DIIP proof names the key, it does not embed it", proof.header.jwk)
+        assertEquals("$did#0", proof.header.keyID)
+
+        // And it is this key that the DID names.
+        val resolved = resolveDidJwk(did).documentOrNull
+            ?.findPublicKey(kid = null, relationship = DidRelationship.ANY)
+        assertNotNull(resolved)
+        assertTrue(proof.verify(com.nimbusds.jose.crypto.ECDSAVerifier(ECKey.parse(resolved.toString()))))
+    }
+
+    @Test
+    fun `a credential bound to a did jwk finds the thumbprint-named key that signs for it`() = runTest {
+        // The issuer binds cnf.kid to the did:jwk from the proof above, but
+        // the wallet stored that key under its thumbprint. Without matching
+        // the two, the credential could never be presented.
+        val keystore = unlocked(profile = InteropProfile.HAIP)
+        val storedKid = keystore.generateKey()
+        val publicJwk = ECKey.parse(keystore.exportKeypairJwks()[storedKid]!!).toPublicJWK()
+        val did = createDidJwk(publicJwk.toJSONString())
+
+        assertTrue(keypairMatchesKid(storedKid, publicJwk, didJwkKeyId(did)))
+        assertTrue(keypairMatchesKid(storedKid, publicJwk, did))
+        assertEquals(storedKid, thumbprintOfDidJwk(didJwkKeyId(did)))
+    }
+
+    @Test
+    fun `a did jwk naming some other key is not a match`() = runTest {
+        val keystore = unlocked(profile = InteropProfile.HAIP)
+        val storedKid = keystore.generateKey()
+        val publicJwk = ECKey.parse(keystore.exportKeypairJwks()[storedKid]!!).toPublicJWK()
+
+        val otherKid = keystore.generateKey()
+        val otherDid = createDidJwk(
+            ECKey.parse(keystore.exportKeypairJwks()[otherKid]!!).toPublicJWK().toJSONString(),
+        )
+
+        assertFalse(keypairMatchesKid(storedKid, publicJwk, didJwkKeyId(otherDid)))
+        assertNull(thumbprintOfDidJwk("did:web:issuer.example"))
+        assertNull(thumbprintOfDidJwk("not-a-did"))
     }
 }
