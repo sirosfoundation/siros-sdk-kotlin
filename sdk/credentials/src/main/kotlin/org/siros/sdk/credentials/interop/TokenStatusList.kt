@@ -295,7 +295,11 @@ class TokenStatusListClient(
         @Suppress("UNCHECKED_CAST")
         val statusList = claims.getClaim("status_list") as? Map<String, Any?>
             ?: return TokenStatusList.Resolution.Unavailable("Status List Token has no status_list claim")
-        val bits = (statusList["bits"] as? Number)?.toInt()
+        // Exactly, not `toInt()`: that truncates, so a published width of 1.5
+        // would be read as 1 and pass the check below. `bits` decides how the
+        // list is carved up, so a wrong width reads the wrong credential's
+        // status.
+        val bits = exactEntryWidth(statusList["bits"])
             ?: return TokenStatusList.Resolution.Unavailable("Status List Token declares no entry width")
         // Checked here rather than left to readStatusAtIndex, which can only
         // report "no status at this index" - a misleading thing to tell
@@ -325,6 +329,25 @@ class TokenStatusListClient(
         return TokenStatusList.readStatusAtIndex(inflated, bits, reference.idx)
             ?.let { TokenStatusList.Resolution.Found(it) }
             ?: TokenStatusList.Resolution.Unavailable("Index ${reference.idx} is outside the status list")
+    }
+
+    /**
+     * `bits` as an exact non-negative Int, or null when it is not an integer.
+     *
+     * The value comes from the Status List Token, which is not this wallet's
+     * to trust before it has been verified - and a truncated width is worse
+     * than a rejected one, since it still passes the legal-width check and
+     * then reads the list wrongly.
+     */
+    internal fun exactEntryWidth(value: Any?): Int? = when (value) {
+        is Int -> value
+        is Long -> value.toInt().takeIf { it.toLong() == value }
+        is Short, is Byte -> (value as Number).toInt()
+        // BigInteger.intValueExact is API 31 and this SDK's minSdk is 28, so
+        // the round trip through Int does the same job.
+        is java.math.BigInteger -> value.toInt().takeIf { java.math.BigInteger.valueOf(it.toLong()) == value }
+        is Number -> value.toDouble().takeIf { it == Math.floor(it) && !it.isInfinite() }?.toInt()
+        else -> null
     }
 
     /**
