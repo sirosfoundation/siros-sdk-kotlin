@@ -4766,6 +4766,7 @@ class SirosWalletTest {
         val authServerClient = mockk<AuthServerClient>(relaxed = true)
         coEvery { authServerClient.loginBegin() } throws AuthException(
             "AS request failed: 403 \u2014 /auth/login/begin",
+            cause = null,
             errorCode = "WALLET_REVOKED",
             code = 403,
             serverMessage = "This wallet instance has been revoked",
@@ -4796,6 +4797,7 @@ class SirosWalletTest {
         val authServerClient = mockk<AuthServerClient>(relaxed = true)
         coEvery { authServerClient.loginBegin() } throws AuthException(
             "AS request failed: 403 \u2014 /auth/login/finish",
+            cause = null,
             errorCode = "WALLET_REVOKED",
             code = 403,
             serverMessage = "This wallet has been deactivated; a new enrollment is required",
@@ -4814,6 +4816,7 @@ class SirosWalletTest {
             wallet, "handleLifecycleRefusal",
             AuthException(
                 "AS request failed: 403 \u2014 /auth/login/finish",
+                cause = null,
                 errorCode = "WALLET_REVOKED",
                 code = 403,
                 serverMessage = "This wallet has been deactivated; a new enrollment is required",
@@ -4846,8 +4849,10 @@ class SirosWalletTest {
         val authServerClient = mockk<AuthServerClient>(relaxed = true)
         coEvery { authServerClient.loginBegin() } throws AuthException(
             "AS request failed: 403 \u2014 /auth/login/finish",
+            cause = null,
             errorCode = "WALLET_REVOKED",
             code = 403,
+            serverMessage = null,
             serverScope = "wallet",
         )
         val stateFlow = MutableStateFlow<WalletState>(WalletState.Disconnected())
@@ -4861,8 +4866,10 @@ class SirosWalletTest {
             wallet, "handleLifecycleRefusal",
             AuthException(
                 "AS request failed: 403 \u2014 /auth/login/finish",
+                cause = null,
                 errorCode = "WALLET_REVOKED",
                 code = 403,
+                serverMessage = null,
                 serverScope = "wallet",
             ),
             "default:user-2",
@@ -4889,8 +4896,10 @@ class SirosWalletTest {
         val authServerClient = mockk<AuthServerClient>(relaxed = true)
         coEvery { authServerClient.loginBegin() } throws AuthException(
             "AS request failed: 403 \u2014 /auth/login/begin",
+            cause = null,
             errorCode = "WALLET_REVOKED",
             code = 403,
+            serverMessage = null,
             serverScope = "wallet",
         )
         val stateFlow = MutableStateFlow<WalletState>(WalletState.Disconnected())
@@ -4945,6 +4954,7 @@ class SirosWalletTest {
         val authServerClient = mockk<AuthServerClient>(relaxed = true)
         coEvery { authServerClient.loginBegin() } throws AuthException(
             "AS request failed: 403 \u2014 /auth/login/begin",
+            cause = null,
             errorCode = "WALLET_REVOKED",
             code = 403,
             serverMessage = "Refused",
@@ -4972,6 +4982,7 @@ class SirosWalletTest {
         val authServerClient = mockk<AuthServerClient>(relaxed = true)
         coEvery { authServerClient.loginBegin() } throws AuthException(
             "AS request failed: 403 \u2014 /auth/login/begin",
+            cause = null,
             errorCode = "WALLET_SUSPENDED",
             code = 403,
             serverMessage = "Suspended",

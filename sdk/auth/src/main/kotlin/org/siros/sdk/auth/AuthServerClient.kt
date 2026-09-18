@@ -322,7 +322,8 @@ class AuthServerClient(
                 val serverScope = (errorBody?.get("scope") as? kotlinx.serialization.json.JsonPrimitive)
                     ?.content?.takeIf { it.isNotBlank() }
                 throw AuthException(
-                    "AS request failed: ${response.code} — $path",
+                    message = "AS request failed: ${response.code} — $path",
+                    cause = null,
                     errorCode = errorCode,
                     code = response.code,
                     serverMessage = serverMessage,

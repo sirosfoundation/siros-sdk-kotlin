@@ -62,6 +62,8 @@ class AuthException @JvmOverloads constructor(
      * user. [message] stays the developer-facing diagnostic.
      */
     val serverMessage: String? = null,
+) : SirosException(message, cause, errorCode) {
+
     /**
      * The `scope` of a SID-AUTH-06 lifecycle refusal (`instance` or `wallet`),
      * when the server sent one. It is the only machine-readable way to tell a
@@ -71,13 +73,33 @@ class AuthException @JvmOverloads constructor(
      * backend that does not send it yet, which must be read as the
      * per-instance case.
      */
-    val serverScope: String? = null,
-) : SirosException(message, cause, errorCode)
-// @JvmOverloads keeps every shorter JVM constructor descriptor alive as
-// parameters are appended. Kotlin's default arguments alone do not: adding
-// serverScope replaced the five-argument constructor outright, and an
-// already-compiled consumer of this published module would have met a
-// NoSuchMethodError rather than a recompile.
+    var serverScope: String? = null
+        private set
+
+    /**
+     * As the primary constructor, plus [serverScope].
+     *
+     * Deliberately a *secondary* constructor taking every parameter with no
+     * defaults, rather than a sixth parameter on the primary one. Appending to
+     * the primary constructor would have broken this published module twice
+     * over: it removes the five-argument JVM descriptor that Java callers
+     * bind to, and it renumbers the synthetic descriptor that Kotlin callers
+     * bind to when they rely on default arguments. Either leaves an
+     * already-compiled consumer with a NoSuchMethodError instead of a
+     * recompile. Having no defaults of its own, this overload adds a
+     * descriptor without disturbing any existing one.
+     */
+    constructor(
+        message: String,
+        cause: Throwable?,
+        errorCode: String,
+        code: Int?,
+        serverMessage: String?,
+        serverScope: String?,
+    ) : this(message, cause, errorCode, code, serverMessage) {
+        this.serverScope = serverScope
+    }
+}
 
 /** Raised when keystore operations fail (locked, corrupt container, decryption error). */
 class KeystoreException(

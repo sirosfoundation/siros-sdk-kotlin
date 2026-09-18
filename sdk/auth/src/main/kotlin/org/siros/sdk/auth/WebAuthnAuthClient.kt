@@ -106,10 +106,15 @@ class WebAuthnAuthClient(
      *   salt) for a discoverable-credential login where multiple accounts or
      *   passkeys are candidates - see [AuthenticateOptions.prfSaltsByCredential].
      *   Takes priority over [prfSalt] when non-empty.
+     * @param onCredentialResolved invoked with the credential id the
+     *   authenticator returned, as soon as the ceremony resolves and before
+     *   the backend is asked. Lets a caller attribute a later refusal to the
+     *   passkey that actually answered *this* attempt.
      */
     suspend fun login(
         prfSalt: ByteArray? = null,
         prfSaltsByCredential: List<Pair<ByteArray, ByteArray>>? = null,
+        onCredentialResolved: ((ByteArray) -> Unit)? = null,
     ): AuthSession = withContext(Dispatchers.IO) {
         // Step 1: Get login challenge
         val challengeResponse = post("/user/login-webauthn-begin", buildJsonObject {})
@@ -135,6 +140,13 @@ class WebAuthnAuthClient(
                 prfSaltsByCredential = prfSaltsByCredential,
             )
         )
+
+        // Which passkey answered, reported before the backend is asked and so
+        // before it can refuse. A caller that has to attribute a refusal to an
+        // account cannot read it off this client afterwards: the provider's
+        // last-credential field is shared, and a concurrent login would
+        // overwrite it between this ceremony and its refusal.
+        onCredentialResolved?.invoke(result.credentialId)
 
         // Step 3: Complete login with backend
         val credential = buildJsonObject {
@@ -193,7 +205,8 @@ class WebAuthnAuthClient(
                 (errorBody?.get(name) as? kotlinx.serialization.json.JsonPrimitive)
                     ?.content?.takeIf { it.isNotBlank() }
             throw AuthException(
-                "Auth request failed: ${response.code} — $path\nbody: $responseBody",
+                message = "Auth request failed: ${response.code} — $path\nbody: $responseBody",
+                cause = null,
                 errorCode = field("error") ?: "auth_failed",
                 code = response.code,
                 serverMessage = field("message"),

@@ -1137,19 +1137,15 @@ class SirosWallet private constructor(
     private suspend fun legacyLogin(accountId: String?, refused: RefusedAccount) {
         val prfCandidates = loginCandidates(accountId)
         // The legacy client performs the ceremony and the finish inside one
-        // call, so unlike [newAsLogin] there is no point between them at which
-        // to record who answered. On failure the credential the provider last
-        // returned is the only record there is. Sound for the one use it has:
-        // the backend runs the lifecycle gate only after verifying the
-        // assertion, so a lifecycle refusal always implies this attempt's
-        // ceremony ran, and a refusal is the only thing [RefusedAccount] is
-        // read for.
-        val session = try {
-            legacyAuthClient.login(prfSaltsByCredential = prfCandidates.ifEmpty { null })
-        } catch (e: Throwable) {
-            extractLastCredentialId()?.let { refused.id = accountForCredential(it) }
-            throw e
-        }
+        // call, so it reports the credential itself the moment the ceremony
+        // resolves. Reading the provider's last-credential field afterwards
+        // would not do: it is shared mutable state, so a concurrent login
+        // could overwrite it between this ceremony and this refusal, and the
+        // account this names is the one a deactivation deletes.
+        val session = legacyAuthClient.login(
+            prfSaltsByCredential = prfCandidates.ifEmpty { null },
+            onCredentialResolved = { credId -> refused.id = accountForCredential(credId) },
+        )
         Timber.i("Legacy login successful: ${session.uuid}")
 
         val credId = extractLastCredentialId()
