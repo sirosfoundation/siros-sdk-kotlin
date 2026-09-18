@@ -74,6 +74,7 @@ import org.siros.sdk.credentials.interop.CredentialStatus
 import org.siros.sdk.credentials.interop.HolderBinding
 import org.siros.sdk.credentials.interop.InteropProfile
 import org.siros.sdk.credentials.interop.CredentialStatusEvaluator
+import org.siros.sdk.credentials.interop.DidMethod
 import org.siros.sdk.credentials.interop.DidRelationship
 import org.siros.sdk.credentials.interop.DidResolver
 import org.siros.sdk.credentials.interop.DiipProfile
@@ -1863,11 +1864,62 @@ class SirosWallet private constructor(
      * by anything else carries its own `x5c` or goes unverified (which the
      * reader reports as an unavailable status, never as a valid one).
      */
+    /**
+     * The signing key an HTTPS-identified Issuer publishes, from its SD-JWT VC
+     * issuer metadata (`jwks`, or `jwks_uri`).
+     *
+     * Most Issuers are identified by an HTTPS URL rather than a DID, so
+     * without this the Token Status List could never be verified for them and
+     * every revocation check would degrade to "unavailable" - which this SDK
+     * deliberately treats as usable, so revocation would silently never apply.
+     *
+     * This is not a trust decision and does not pretend to be one. The path is
+     * derived from the Issuer's own identifier, so there is no choice of
+     * authority to make - unlike DID method resolution, which is go-trust's
+     * (see [didResolver]). Whether this Issuer is trusted at all is answered
+     * by the issuer trust list, the same as for the credential itself; all
+     * this does is obtain the key that Issuer publishes under its own name.
+     *
+     * The well-known suffix moves with the profile: SD-JWT VC renamed it
+     * between drafts, so it comes from [DiipProfile.sdJwtVcIssuerMetadataPath]
+     * rather than being hardcoded. Both spellings are tried, since an issuer
+     * pinned to the other draft is common.
+     */
+    private suspend fun resolveHttpsIssuerSigningKey(issuer: String, kid: String?): com.nimbusds.jose.jwk.JWK? {
+        if (!issuer.startsWith("https://")) return null
+        val base = issuer.trimEnd('/')
+        val paths = linkedSetOf(
+            config.diipProfile.sdJwtVcIssuerMetadataPath,
+            "/.well-known/jwt-vc-issuer",
+            "/.well-known/vc-issuer",
+        )
+        for (path in paths) {
+            val body = fetchPublicUrl("$base$path") ?: continue
+            val keys = runCatching { issuerJwks(body) }.getOrNull() ?: continue
+            selectIssuerKey(keys, kid)?.let { return it }
+        }
+        return null
+    }
+
+    /** The JWK set an SD-JWT VC issuer metadata document points at, inline or by reference. */
+    private suspend fun issuerJwks(metadataBody: String): List<com.nimbusds.jose.jwk.JWK>? {
+        val metadata = json.parseToJsonElement(metadataBody).jsonObject
+        (metadata["jwks"] as? JsonObject)?.let { inline ->
+            return com.nimbusds.jose.jwk.JWKSet.parse(inline.toString()).keys
+        }
+        val uri = metadata["jwks_uri"]?.jsonPrimitive?.contentOrNull ?: return null
+        val body = fetchPublicUrl(uri) ?: return null
+        return com.nimbusds.jose.jwk.JWKSet.parse(body).keys
+    }
+
     @Suppress("unused") // referenced through the TokenStatusListClient below
     private suspend fun resolveIssuerSigningKey(issuer: String, kid: String?): com.nimbusds.jose.jwk.JWK? {
-        val document = didResolver.resolve(issuer).documentOrNull ?: return null
-        val jwk = document.findPublicKey(kid, DidRelationship.ASSERTION_METHOD) ?: return null
-        return runCatching { com.nimbusds.jose.jwk.JWK.parse(jwk.toString()) }.getOrNull()
+        if (DidMethod.of(issuer) != null) {
+            val document = didResolver.resolve(issuer).documentOrNull ?: return null
+            val jwk = document.findPublicKey(kid, DidRelationship.ASSERTION_METHOD) ?: return null
+            return runCatching { com.nimbusds.jose.jwk.JWK.parse(jwk.toString()) }.getOrNull()
+        }
+        return resolveHttpsIssuerSigningKey(issuer, kid)
     }
 
     /**
@@ -7190,3 +7242,24 @@ class SirosWallet private constructor(
     }
 }
 
+/**
+ * Pick the key a Status List Token's `kid` names, or the only usable one when
+ * it named none.
+ *
+ * A set with several keys and no `kid` is ambiguous, and guessing there would
+ * mean accepting a signature from whichever key happened to be first. A key
+ * carrying private material is not something an Issuer publishes for
+ * verification, so a misconfigured JWKS does not get one treated as a
+ * verification key.
+ *
+ * Top-level rather than a member because it is pure: no wallet state is
+ * involved, and it is the part worth testing directly.
+ */
+internal fun selectIssuerKey(
+    keys: List<com.nimbusds.jose.jwk.JWK>,
+    kid: String?,
+): com.nimbusds.jose.jwk.JWK? {
+    val usable = keys.filter { !it.isPrivate }
+    if (kid != null) return usable.firstOrNull { it.keyID == kid }
+    return usable.singleOrNull()
+}
