@@ -166,4 +166,23 @@ class TokenStatusListTest {
         deflater.end()
         return out.toByteArray()
     }
+    @Test
+    fun `an entry width is read exactly or not at all`() {
+        // `bits` decides how the list is carved up, and it comes from the
+        // Status List Token - not this wallet's to trust before verification.
+        // Truncating 1.5 to 1 is worse than rejecting it: it passes the
+        // legal-width check and then reads the wrong credential's status.
+        val client = TokenStatusListClient(httpGet = { _, _ -> null })
+        assertEquals(1, client.exactEntryWidth(1))
+        assertEquals(8, client.exactEntryWidth(8L))
+        assertEquals(2, client.exactEntryWidth(2.0))
+        assertEquals(4, client.exactEntryWidth(java.math.BigInteger.valueOf(4)))
+
+        assertNull(client.exactEntryWidth(1.5))
+        assertNull(client.exactEntryWidth(Double.NaN))
+        assertNull(client.exactEntryWidth(Double.POSITIVE_INFINITY))
+        assertNull(client.exactEntryWidth("8"))
+        assertNull(client.exactEntryWidth(null))
+        assertNull(client.exactEntryWidth(Long.MAX_VALUE))
+    }
 }
