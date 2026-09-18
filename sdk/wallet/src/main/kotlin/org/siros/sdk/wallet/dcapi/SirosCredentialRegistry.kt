@@ -71,6 +71,9 @@ object SirosCredentialRegistry {
     /** Matches the `intentAction` the wallet's DC API activity declares. */
     const val REGISTRY_ID = "org.siros.sdk.wallet.dcapi.registry"
 
+    /** `credential_format` of an ISO mdoc, the only format with an MSO to parse. */
+    private const val MDOC_FORMAT = "mso_mdoc"
+
     /** Asset path of the matcher, shipped inside the `siros-dc-matcher` AAR. */
     private const val MATCHER_ASSET = "matcher.wasm"
 
@@ -404,14 +407,7 @@ object SirosCredentialRegistry {
                 FfiCredential(
                     id = cred.id.toString(),
                     format = cred.format,
-                    // The real docType, parsed from the credential's own MSO -
-                    // not issuer metadata, which is only populated when the
-                    // issuer happens to expose a SIROS-internal schema
-                    // endpoint. A standards-conformant third-party issuer has
-                    // no reason to, and relying on it leaves every such
-                    // credential unmatchable while looking perfectly valid.
-                    doctype = CredentialUtils.parseMdocDocument(cred)?.docType
-                        ?: cred.metadata?.doctype,
+                    doctype = docTypeFor(cred),
                     vct = cred.metadata?.vct,
                     title = cred.metadata?.name ?: cred.format,
                     subtitle = cred.metadata?.issuer?.name ?: "",
@@ -441,6 +437,30 @@ object SirosCredentialRegistry {
     }
 
     /**
+     * The docType a registry entry carries.
+     *
+     * For an mdoc this is read from the credential's own MSO rather than from
+     * issuer metadata, which is only populated when the issuer happens to
+     * expose a SIROS-internal schema endpoint. A standards-conformant
+     * third-party issuer has no reason to, and relying on it leaves every such
+     * credential unmatchable while looking perfectly valid.
+     *
+     * Only an mdoc has an MSO, though. An SD-JWT's raw value is a compact
+     * serialization, and its `.` separators are not base64url, so handing it
+     * to [CredentialUtils.parseMdocDocument] throws - caught there, but logged
+     * at warn with a full stack trace, once per SD-JWT credential per refresh,
+     * and the registry refreshes on every credential change and every flow.
+     * The guard lives here rather than inside `parseMdocDocument` because that
+     * warning is worth keeping for a *genuine* mdoc that fails to parse.
+     */
+    internal fun docTypeFor(cred: StoredCredential): String? =
+        if (cred.format.equals(MDOC_FORMAT, ignoreCase = true)) {
+            CredentialUtils.parseMdocDocument(cred)?.docType ?: cred.metadata?.doctype
+        } else {
+            cred.metadata?.doctype
+        }
+
+    /**
      * Split a display-claim key into the path components DCQL matches against.
      *
      * mdoc element identifiers never contain dots while namespaces routinely
@@ -448,7 +468,7 @@ object SirosCredentialRegistry {
      * whole - their claim keys are not dotted paths.
      */
     internal fun splitClaimKey(format: String, key: String): List<String> =
-        if (format.equals("mso_mdoc", ignoreCase = true) && key.contains('.')) {
+        if (format.equals(MDOC_FORMAT, ignoreCase = true) && key.contains('.')) {
             listOf(key.substringBeforeLast('.'), key.substringAfterLast('.'))
         } else {
             listOf(key)
