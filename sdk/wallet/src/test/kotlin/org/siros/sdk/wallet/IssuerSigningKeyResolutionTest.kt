@@ -5,7 +5,9 @@ import com.nimbusds.jose.jwk.ECKey
 import com.nimbusds.jose.jwk.JWK
 import com.nimbusds.jose.jwk.gen.ECKeyGenerator
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -62,5 +64,19 @@ class IssuerSigningKeyResolutionTest {
     fun `an empty key set yields nothing`() {
         assertNull(selectIssuerKey(emptyList(), null))
         assertNull(selectIssuerKey(emptyList(), "a"))
+    }
+
+    @Test
+    fun `a plaintext URL is never fetched`() {
+        // Over plaintext anyone on the path can answer "is this credential
+        // still valid" and "which key says so" in the issuer's place.
+        assertTrue(isPublicFetchAllowed("https://issuer.example/statuslists/1"))
+        assertTrue(isPublicFetchAllowed("HTTPS://issuer.example/statuslists/1"))
+        assertFalse(isPublicFetchAllowed("http://issuer.example/statuslists/1"))
+        assertFalse(isPublicFetchAllowed("HTTP://issuer.example/statuslists/1"))
+        assertFalse(isPublicFetchAllowed("ftp://issuer.example/statuslists/1"))
+        assertFalse(isPublicFetchAllowed("file:///etc/passwd"))
+        assertFalse(isPublicFetchAllowed("not a url at all"))
+        assertFalse(isPublicFetchAllowed(""))
     }
 }

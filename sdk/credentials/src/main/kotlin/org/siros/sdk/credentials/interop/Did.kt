@@ -39,9 +39,27 @@ enum class DidMethod(val methodName: String) {
     companion object {
         /** The method of a DID string, or null if it is not a DID or the method is unknown. */
         fun of(did: String): DidMethod? {
+            val name = methodName(did) ?: return null
+            return entries.firstOrNull { it.methodName == name }
+        }
+
+        /**
+         * The method name of any syntactically valid DID, named here or not.
+         *
+         * Which DID methods actually resolve is go-trust's answer, not this
+         * SDK's. [of] only says whether this SDK knows a method by name -
+         * which is what a profile's list of required methods is about - and
+         * must not be used to decide what may be delegated.
+         */
+        fun methodName(did: String): String? {
             if (!did.startsWith("did:")) return null
-            val method = did.removePrefix("did:").substringBefore(':')
-            return entries.firstOrNull { it.methodName == method }
+            val rest = did.removePrefix("did:")
+            val method = rest.substringBefore(':')
+            // A DID is `did:<method>:<id>`; a method with no identifier after
+            // it is not one.
+            if (method.isEmpty() || method.length == rest.length) return null
+            if (rest.substring(method.length + 1).isEmpty()) return null
+            return method
         }
     }
 }
@@ -159,8 +177,11 @@ fun interface DidResolutionDelegate {
  * registry.
  *
  * @param profile decides which methods a compliant wallet must be able to
- *   resolve; a method outside it is still delegated, since DIIP explicitly
- *   does not forbid identifiers it does not require.
+ *   resolve, which is what [requiredMethods] reports. It does not restrict
+ *   what gets resolved: a method outside it - or one this SDK does not know by
+ *   name at all - is still delegated, since DIIP explicitly does not forbid
+ *   identifiers it does not require, and which methods resolve is go-trust's
+ *   answer rather than this SDK's.
  * @param delegate resolves everything except `did:jwk`. Null means a wallet
  *   with no resolution authority configured: `did:jwk` still works, and
  *   anything else fails rather than being fetched directly.
@@ -171,18 +192,22 @@ class DidResolver(
 ) {
     /** Resolve any DID this wallet can. */
     suspend fun resolve(did: String): DidResolution {
-        val method = DidMethod.of(did)
-            ?: return DidResolution.Failed(did, "Not a DID, or an unsupported DID method: $did")
+        // Any syntactically valid DID is resolvable as far as this SDK is
+        // concerned. Enumerating the methods here would make the SDK the
+        // authority on which of them exist, and it is not: go-trust is, and a
+        // method it learns about must not need an SDK release.
+        val method = DidMethod.methodName(did)
+            ?: return DidResolution.Failed(did, "Not a DID: $did")
 
         // did:jwk carries its own key. Sending it to a resolution service
         // would add a network round trip, a dependency, and a failure mode,
         // for an answer that is already in the identifier.
-        if (method == DidMethod.JWK) return resolveDidJwk(did)
+        if (method == DidMethod.JWK.methodName) return resolveDidJwk(did)
 
         val resolver = delegate
             ?: return DidResolution.Failed(
                 did,
-                "No DID resolution delegate configured; ${method.methodName} resolution is the backend's to perform",
+                "No DID resolution delegate configured; $method resolution is the backend's to perform",
             )
         val document = runCatching { resolver.resolve(did) }.getOrNull()
             ?: return DidResolution.Failed(did, "Could not resolve $did")
