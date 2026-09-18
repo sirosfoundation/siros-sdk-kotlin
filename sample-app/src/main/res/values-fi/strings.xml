@@ -211,7 +211,9 @@
     <string name="wallet_blocked_suspended_title">Tämä laite on keskeytetty</string>
     <string name="wallet_blocked_suspended_message">Aktivoi se uudelleen joltakin toiselta laitteeltasi tai ota yhteyttä lompakkopalvelusi tarjoajaan. Todistuksesi ovat koskemattomia.</string>
     <string name="wallet_blocked_retry">Yritä uudelleen</string>
-    <string name="wallet_blocked_revoked_title">Tämä lompakko deaktivoitiin</string>
-    <string name="wallet_blocked_revoked_message">Sen tiedot pyyhittiin palvelimelta, eikä tämä pääsyavain voi enää kirjautua sisään. Aloita alusta rekisteröitymällä uudelleen.</string>
+    <string name="wallet_blocked_revoked_title">Tämä laite peruutettiin</string>
+    <string name="wallet_blocked_revoked_message">Sitä ei voi enää käyttää tämän lompakon kanssa. Muut laitteesi säilyttävät oman tilansa, eikä niihin vaikuteta. Rekisteröi tämä laite uudelleen aloittaaksesi alusta.</string>
+    <string name="wallet_blocked_deactivated_title">Tämä lompakko deaktivoitiin</string>
+    <string name="wallet_blocked_deactivated_message">Kaikki laitteet peruutettiin ja lompakon tiedot pyyhittiin palvelimelta, joten tämä pääsyavain ei voi enää kirjautua sisään. Aloita alusta rekisteröitymällä uudelleen.</string>
     <string name="wallet_blocked_enroll_again">Rekisteröidy uudelleen</string>
 </resources>

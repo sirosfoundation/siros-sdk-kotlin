@@ -314,11 +314,20 @@ class AuthServerClient(
                 // developer-facing diagnostic below.
                 val serverMessage = (errorBody?.get("message") as? kotlinx.serialization.json.JsonPrimitive)
                     ?.content?.takeIf { it.isNotBlank() }
+                // `scope` says whether a lifecycle refusal is about this one
+                // wallet instance or the whole wallet. The codes cannot carry
+                // it - WALLET_REVOKED has meant both since the first release -
+                // and it is what decides whether anything local may be
+                // forgotten, so it must never be inferred from the message.
+                val serverScope = (errorBody?.get("scope") as? kotlinx.serialization.json.JsonPrimitive)
+                    ?.content?.takeIf { it.isNotBlank() }
                 throw AuthException(
-                    "AS request failed: ${response.code} — $path",
+                    message = "AS request failed: ${response.code} — $path",
+                    cause = null,
                     errorCode = errorCode,
                     code = response.code,
                     serverMessage = serverMessage,
+                    serverScope = serverScope,
                 )
             }
 

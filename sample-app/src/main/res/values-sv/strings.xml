@@ -211,7 +211,9 @@
     <string name="wallet_blocked_suspended_title">Den här enheten är pausad</string>
     <string name="wallet_blocked_suspended_message">Återaktivera den från någon av dina andra enheter, eller kontakta din plånboksleverantör. Dina intyg är orörda.</string>
     <string name="wallet_blocked_retry">Försök igen</string>
-    <string name="wallet_blocked_revoked_title">Den här plånboken avaktiverades</string>
-    <string name="wallet_blocked_revoked_message">Dess data raderades på servern och den här passkey-nyckeln kan inte längre logga in. Registrera dig igen för att börja om.</string>
+    <string name="wallet_blocked_revoked_title">Den här enheten återkallades</string>
+    <string name="wallet_blocked_revoked_message">Den kan inte längre användas med den här plånboken. Dina andra enheter behåller sin egen status och påverkas inte. Registrera den här enheten igen för att börja om.</string>
+    <string name="wallet_blocked_deactivated_title">Den här plånboken avaktiverades</string>
+    <string name="wallet_blocked_deactivated_message">Alla enheter återkallades och plånbokens data raderades på servern, så den här passkey-nyckeln kan inte längre logga in. Registrera dig igen för att börja om.</string>
     <string name="wallet_blocked_enroll_again">Registrera igen</string>
 </resources>

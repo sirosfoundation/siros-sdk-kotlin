@@ -61,20 +61,30 @@ sealed class WalletState {
      * token cut-off, whenever the authorization server answers `403` with
      * `WALLET_SUSPENDED` / `WALLET_REVOKED`.
      *
-     * **Neither reason forgets anything local**, and [cachedAccounts] still
-     * lists this account. `REVOKED` is *not* proof the wallet was erased: the
-     * backend answers with it for the login gate of a single revoked instance
-     * as well, and only deactivates the wallet when the last non-revoked
-     * instance is revoked - the user's other devices keep working either way.
-     * Only [message], which is written for the user, tells the two apart, so
-     * the SDK shows it rather than guessing.
+     * **How far it reaches is [reason], and only [reason].** `SUSPENDED` and
+     * `REVOKED` are about this installation's wallet instance alone: nothing
+     * local is forgotten and [cachedAccounts] still lists this account,
+     * because revoking one wallet unit leaves the user's other devices,
+     * passkeys and keys untouched. `DEACTIVATED` is the whole wallet - every
+     * instance revoked and the server-side data erased - and is the one case
+     * where a cached account may be dropped: the account the refused
+     * operation was for, which [cachedAccounts] then no longer lists.
+     *
+     * When nothing identifies that account - a login can offer several
+     * accounts' passkeys at once and be refused before this SDK learns which
+     * one answered - every cached account is kept rather than guessed at. So
+     * `DEACTIVATED` means at most one account was forgotten, never that one
+     * certainly was; read [cachedAccounts] for what actually remains.
+     *
+     * A backend that does not send the refusal's `scope` yet never produces
+     * `DEACTIVATED`; its `WALLET_REVOKED` reads as `REVOKED` and nothing
+     * local is lost.
      *
      * What an app should offer: for `SUSPENDED`, a retry - a later
      * [SirosWallet.login] succeeds once the instance is reactivated from
-     * another device. For `REVOKED`, a fresh enrollment, which is the way
-     * forward in both the per-instance and the deactivated case.
-     * [SirosWallet.deactivateWallet] is the only thing that forgets the
-     * cached account.
+     * another device. For `REVOKED` and `DEACTIVATED`, a fresh enrollment.
+     * [message] is written for the user and says which device or wallet the
+     * refusal was about; show it rather than composing your own.
      */
     data class LifecycleBlocked(
         val reason: WalletLifecycleRefusal,

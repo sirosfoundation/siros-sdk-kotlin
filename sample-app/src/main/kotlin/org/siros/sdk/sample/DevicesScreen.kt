@@ -425,7 +425,14 @@ private fun deviceLabel(instance: WalletInstance): String {
  * backend refuses this installation and no amount of retrying the same login
  * changes that until someone else acts. A suspended instance can be
  * reactivated from another device, so the offer is to try again later; a
- * revoked wallet is gone, and the only way forward is a new enrollment.
+ * revoked instance and a deactivated wallet are both terminal, and the only
+ * way forward is a new enrollment.
+ *
+ * The three are told apart because they mean different things to the user: a
+ * revoked instance leaves their other devices and credentials alone, while a
+ * deactivated wallet has had its server-side data erased. Saying the second
+ * when the first happened would tell the user their credentials are gone when
+ * they are not.
  */
 @Composable
 fun WalletBlockedScreen(
@@ -437,15 +444,24 @@ fun WalletBlockedScreen(
     isLoading: Boolean = false,
 ) {
     val suspended = reason == org.siros.sdk.auth.WalletLifecycleRefusal.SUSPENDED
+    val deactivated = reason == org.siros.sdk.auth.WalletLifecycleRefusal.DEACTIVATED
+    val titleRes = when {
+        suspended -> R.string.wallet_blocked_suspended_title
+        deactivated -> R.string.wallet_blocked_deactivated_title
+        else -> R.string.wallet_blocked_revoked_title
+    }
+    val messageRes = when {
+        suspended -> R.string.wallet_blocked_suspended_message
+        deactivated -> R.string.wallet_blocked_deactivated_message
+        else -> R.string.wallet_blocked_revoked_message
+    }
     Column(
         modifier = Modifier.fillMaxSize().padding(32.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            stringResource(
-                if (suspended) R.string.wallet_blocked_suspended_title else R.string.wallet_blocked_revoked_title
-            ),
+            stringResource(titleRes),
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.SemiBold,
         )
@@ -453,13 +469,7 @@ fun WalletBlockedScreen(
         Text(
             // The backend's own text when it sent one - it is written for the
             // user and may say more than we can (who suspended it, and why).
-            message ?: stringResource(
-                if (suspended) {
-                    R.string.wallet_blocked_suspended_message
-                } else {
-                    R.string.wallet_blocked_revoked_message
-                }
-            ),
+            message ?: stringResource(messageRes),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
