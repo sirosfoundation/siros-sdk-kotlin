@@ -8,6 +8,7 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
@@ -231,6 +232,54 @@ class AuthServerClientTest {
         } catch (e: AuthException) {
             assertEquals(403, e.code)
             assertEquals("WALLET_REVOKED", e.errorCode)
+        }
+    }
+
+    /**
+     * The refusal's `scope` is the only machine-readable way to tell a revoked
+     * wallet instance from a deactivated wallet, because both answer with
+     * `WALLET_REVOKED`. It decides whether the SDK may forget local state, so
+     * it has to survive into the exception rather than be inferred from the
+     * message.
+     */
+    @Test
+    fun `login refusal carries the AS refusal scope`(): Unit = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(403).setBody(
+                """{"error":"WALLET_REVOKED","scope":"wallet","message":"This wallet has been deactivated"}"""
+            )
+        )
+        try {
+            client.loginFinish(challengeId = "c1", credential = buildJsonObject { })
+            fail("expected AuthException")
+        } catch (e: AuthException) {
+            assertEquals("WALLET_REVOKED", e.errorCode)
+            assertEquals("wallet", e.serverScope)
+            assertEquals("This wallet has been deactivated", e.serverMessage)
+            assertEquals(
+                WalletLifecycleRefusal.DEACTIVATED,
+                WalletLifecycleRefusal.fromRefusal(e.errorCode, e.serverScope),
+            )
+        }
+    }
+
+    /**
+     * A backend that does not send `scope` yet - which is every deployment
+     * until the lifecycle work ships - must leave it null, so the refusal
+     * keeps the conservative per-instance reading.
+     */
+    @Test
+    fun `a refusal without a scope leaves it null`(): Unit = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(403).setBody("""{"error":"WALLET_REVOKED"}"""))
+        try {
+            client.loginFinish(challengeId = "c1", credential = buildJsonObject { })
+            fail("expected AuthException")
+        } catch (e: AuthException) {
+            assertNull(e.serverScope)
+            assertEquals(
+                WalletLifecycleRefusal.REVOKED,
+                WalletLifecycleRefusal.fromRefusal(e.errorCode, e.serverScope),
+            )
         }
     }
 

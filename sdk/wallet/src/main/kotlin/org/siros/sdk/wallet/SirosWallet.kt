@@ -561,14 +561,20 @@ class SirosWallet private constructor(
     /**
      * The lifecycle refusal [error] (or one of its causes) reports, or null
      * when it is not one. The AS carries the code as
-     * [AuthException.errorCode]; the causes are walked because login paths
+     * [AuthException.errorCode] and how far it reaches as
+     * [AuthException.serverScope]; the causes are walked because login paths
      * wrap failures in [WalletException].
+     *
+     * Both are read from the *same* exception, so a refusal never borrows the
+     * scope of an unrelated one further down the chain.
      */
     private fun lifecycleRefusalOf(error: Throwable?): WalletLifecycleRefusal? {
         var current = error
         var depth = 0
         while (current != null && depth++ < 8) {
-            val refusal = (current as? AuthException)?.let { WalletLifecycleRefusal.fromErrorCode(it.errorCode) }
+            val refusal = (current as? AuthException)?.let {
+                WalletLifecycleRefusal.fromRefusal(it.errorCode, it.serverScope)
+            }
             if (refusal != null) return refusal
             current = current.cause
         }
@@ -589,21 +595,32 @@ class SirosWallet private constructor(
     /**
      * Enter [WalletState.LifecycleBlocked].
      *
-     * Neither reason touches the cached account. `WALLET_REVOKED` does **not**
-     * mean the wallet was erased: the backend returns it for the login gate of
-     * a single revoked instance too, and only deactivates the wallet when the
-     * *last* non-revoked instance is revoked - the user's other devices keep
-     * logging in either way. Only the human-readable `message` tells the two
-     * apart, and guessing from it would be worse than not knowing: forgetting
-     * the account on a per-instance revocation destroys the other passkeys
-     * that still work. So the SDK keeps everything, shows the backend's own
-     * explanation, and leaves re-enrollment to the user.
+     * What survives depends on how far the refusal reaches, which the backend
+     * says in the `scope` field and nowhere else - `WALLET_REVOKED` answers
+     * both a single revoked instance and a deactivated wallet.
      *
-     * [deactivateWallet] is the one place that still forgets the account -
-     * there the caller asked for it and the outcome is unambiguous.
+     * [WalletLifecycleRefusal.SUSPENDED] and [WalletLifecycleRefusal.REVOKED]
+     * are about **this installation's instance only**. Under the EUDI
+     * specifications revoking one wallet unit ends that unit and nothing else,
+     * so the user's other devices, passkeys and keys must be left alone: the
+     * SDK ends the session, keeps the cached account, shows the backend's own
+     * explanation and leaves re-enrollment to the user.
+     *
+     * [WalletLifecycleRefusal.DEACTIVATED] is the one refusal that reaches the
+     * whole wallet: every instance has been revoked and the server-side data
+     * erased, so there is nothing left to log in to and the cached account is
+     * forgotten as well. A backend that sends no scope never produces it - the
+     * refusal degrades to [WalletLifecycleRefusal.REVOKED] and nothing local is
+     * lost.
+     *
+     * [deactivateWallet] forgets the account too, but there the caller asked
+     * for it.
      */
     private suspend fun enterLifecycleBlocked(reason: WalletLifecycleRefusal, message: String?) {
         Timber.w("Wallet lifecycle refusal: $reason — ${message ?: "(no message from the backend)"}")
+        // Captured before [endSessionLocally], which clears it.
+        val deactivatedAccountId =
+            if (reason == WalletLifecycleRefusal.DEACTIVATED) accountRegistry.activeAccountId else null
         // End the session either way - nothing this installation holds can be
         // used until someone else acts - but keep the account (see this
         // function's doc comment for why REVOKED is not licence to forget it),
@@ -621,6 +638,16 @@ class SirosWallet private constructor(
             authServerClient.clearTokenCache()
         } catch (e: Exception) {
             Timber.w(e, "Clearing the AS token cache failed (non-fatal)")
+        }
+        // The wallet is gone server-side: its private data is erased, so the
+        // vault this account's passkey decrypts no longer exists and offering
+        // it on the login screen would only produce the same refusal. Removed
+        // directly rather than through [forgetAccount], which logs out and
+        // would schedule the remote session DELETE this path deliberately
+        // avoids (see [endSessionLocally]).
+        deactivatedAccountId?.let {
+            Timber.i("Wallet deactivated server-side: forgetting cached account")
+            accountRegistry.removeAccount(it)
         }
         _state.value = WalletState.LifecycleBlocked(
             reason = reason,

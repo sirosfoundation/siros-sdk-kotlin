@@ -62,6 +62,16 @@ class AuthException(
      * user. [message] stays the developer-facing diagnostic.
      */
     val serverMessage: String? = null,
+    /**
+     * The `scope` of a SID-AUTH-06 lifecycle refusal (`instance` or `wallet`),
+     * when the server sent one. It is the only machine-readable way to tell a
+     * revoked wallet instance from a deactivated wallet, because both answer
+     * with `WALLET_REVOKED`; see
+     * [org.siros.sdk.auth.WalletLifecycleRefusal.fromRefusal]. Null against a
+     * backend that does not send it yet, which must be read as the
+     * per-instance case.
+     */
+    val serverScope: String? = null,
 ) : SirosException(message, cause, errorCode)
 
 /** Raised when keystore operations fail (locked, corrupt container, decryption error). */

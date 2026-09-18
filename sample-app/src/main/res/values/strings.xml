@@ -227,7 +227,9 @@
     <string name="wallet_blocked_suspended_title">This device is suspended</string>
     <string name="wallet_blocked_suspended_message">Reactivate it from another one of your devices, or contact your wallet provider. Your credentials are untouched.</string>
     <string name="wallet_blocked_retry">Try again</string>
-    <string name="wallet_blocked_revoked_title">This wallet was deactivated</string>
-    <string name="wallet_blocked_revoked_message">Its data was erased on the server and this passkey can no longer sign in. Enroll again to start over.</string>
+    <string name="wallet_blocked_revoked_title">This device was revoked</string>
+    <string name="wallet_blocked_revoked_message">It can no longer be used with this wallet. Your other devices keep their own status and are unaffected. Enroll this device again to start over.</string>
+    <string name="wallet_blocked_deactivated_title">This wallet was deactivated</string>
+    <string name="wallet_blocked_deactivated_message">Every device was revoked and the wallet\'s data was erased on the server, so this passkey can no longer sign in. Enroll again to start over.</string>
     <string name="wallet_blocked_enroll_again">Enroll again</string>
 </resources>

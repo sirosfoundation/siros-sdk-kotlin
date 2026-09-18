@@ -4726,11 +4726,10 @@ class SirosWalletTest {
     }
 
     /**
-     * `WALLET_REVOKED` does **not** mean the wallet was erased: the backend
-     * returns it for the login gate of a single revoked instance too, and the
-     * user's other devices keep working. Only the human-readable message tells
-     * the two apart, so the SDK keeps the cached account - forgetting it on a
-     * per-instance revocation would destroy the other passkeys that still work.
+     * A `WALLET_REVOKED` carrying no `scope` is a backend that predates the
+     * field, and it must be read as the per-instance case: the wallet may well
+     * still exist, and forgetting the cached account would destroy the other
+     * passkeys that still work. The conservative reading is the safe one.
      */
     @Test
     fun login_refused_as_revoked_keeps_the_cached_account() = runTest(dispatcher) {
@@ -4752,6 +4751,125 @@ class SirosWalletTest {
         assertEquals(WalletLifecycleRefusal.REVOKED, blocked.reason)
         assertEquals("This device was removed", blocked.message)
         assertEquals(1, blocked.cachedAccounts.size)
+        verify(exactly = 0) { accountRegistry.removeAccount(any()) }
+    }
+
+    /**
+     * `WALLET_REVOKED` with `scope: "instance"` is the per-instance case said
+     * out loud. Under the EUDI specifications revoking one wallet unit ends
+     * that unit and nothing else, so the user's other devices and passkeys -
+     * and this account on the login screen - survive it.
+     */
+    @Test
+    fun login_refused_as_revoked_with_instance_scope_keeps_the_cached_account() = runTest(dispatcher) {
+        val accountRegistry = lifecycleAccountRegistry()
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+        coEvery { authServerClient.loginBegin() } throws AuthException(
+            "AS request failed: 403 \u2014 /auth/login/begin",
+            errorCode = "WALLET_REVOKED",
+            code = 403,
+            serverMessage = "This wallet instance has been revoked",
+            serverScope = "instance",
+        )
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Disconnected())
+        val wallet = lifecycleWallet(stateFlow, accountRegistry, authServerClient)
+
+        wallet.login()
+        advanceUntilIdle()
+
+        val blocked = stateFlow.value as WalletState.LifecycleBlocked
+        assertEquals(WalletLifecycleRefusal.REVOKED, blocked.reason)
+        assertEquals(1, blocked.cachedAccounts.size)
+        verify(exactly = 0) { accountRegistry.removeAccount(any()) }
+    }
+
+    /**
+     * `WALLET_REVOKED` with `scope: "wallet"` is the only refusal that reaches
+     * the whole wallet: every instance is revoked and the server-side data
+     * erased, so the vault this account's passkey decrypts no longer exists.
+     * Keeping it on the login screen would only produce the same refusal, so
+     * this is the one case where the cached account goes.
+     */
+    @Test
+    fun login_refused_as_deactivated_forgets_the_cached_account() = runTest(dispatcher) {
+        val accountRegistry = lifecycleAccountRegistry()
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+        coEvery { authServerClient.loginBegin() } throws AuthException(
+            "AS request failed: 403 \u2014 /auth/login/begin",
+            errorCode = "WALLET_REVOKED",
+            code = 403,
+            serverMessage = "This wallet has been deactivated; a new enrollment is required",
+            serverScope = "wallet",
+        )
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Disconnected())
+        val listener = RecordingLifecycleListener()
+        val wallet = lifecycleWallet(stateFlow, accountRegistry, authServerClient, listener)
+
+        wallet.login()
+        advanceUntilIdle()
+
+        val blocked = stateFlow.value as WalletState.LifecycleBlocked
+        assertEquals(WalletLifecycleRefusal.DEACTIVATED, blocked.reason)
+        assertEquals(
+            "This wallet has been deactivated; a new enrollment is required",
+            blocked.message,
+        )
+        verify(exactly = 1) { accountRegistry.removeAccount("default:user-1") }
+        assertEquals(WalletLifecycleRefusal.DEACTIVATED, listener.blocked?.first)
+    }
+
+    /**
+     * A scope this SDK does not know is not a licence to erase. An unexpected
+     * value falls back to the per-instance reading, exactly as an absent one
+     * does, so a future backend that adds a third scope cannot make an older
+     * SDK throw away the user's account.
+     */
+    @Test
+    fun login_refused_with_an_unknown_scope_keeps_the_cached_account() = runTest(dispatcher) {
+        val accountRegistry = lifecycleAccountRegistry()
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+        coEvery { authServerClient.loginBegin() } throws AuthException(
+            "AS request failed: 403 \u2014 /auth/login/begin",
+            errorCode = "WALLET_REVOKED",
+            code = 403,
+            serverMessage = "Refused",
+            serverScope = "solar-system",
+        )
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Disconnected())
+        val wallet = lifecycleWallet(stateFlow, accountRegistry, authServerClient)
+
+        wallet.login()
+        advanceUntilIdle()
+
+        val blocked = stateFlow.value as WalletState.LifecycleBlocked
+        assertEquals(WalletLifecycleRefusal.REVOKED, blocked.reason)
+        verify(exactly = 0) { accountRegistry.removeAccount(any()) }
+    }
+
+    /**
+     * A suspension is per-instance by construction, so a `scope` on it changes
+     * nothing - and a (malformed) `scope: "wallet"` on a `WALLET_SUSPENDED`
+     * must not be allowed to erase anything either.
+     */
+    @Test
+    fun a_suspension_never_forgets_the_account_whatever_the_scope() = runTest(dispatcher) {
+        val accountRegistry = lifecycleAccountRegistry()
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+        coEvery { authServerClient.loginBegin() } throws AuthException(
+            "AS request failed: 403 \u2014 /auth/login/begin",
+            errorCode = "WALLET_SUSPENDED",
+            code = 403,
+            serverMessage = "Suspended",
+            serverScope = "wallet",
+        )
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Disconnected())
+        val wallet = lifecycleWallet(stateFlow, accountRegistry, authServerClient)
+
+        wallet.login()
+        advanceUntilIdle()
+
+        val blocked = stateFlow.value as WalletState.LifecycleBlocked
+        assertEquals(WalletLifecycleRefusal.SUSPENDED, blocked.reason)
         verify(exactly = 0) { accountRegistry.removeAccount(any()) }
     }
 
