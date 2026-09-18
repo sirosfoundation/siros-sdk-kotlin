@@ -76,8 +76,24 @@ interface KeystoreManager {
         audience: String,
         nonce: String,
         freshKey: Boolean = false,
-        holderBinding: HolderBinding? = null,
     ): String
+
+    /**
+     * [generateProof] with the Holder binding decided per issuance.
+     *
+     * Open with a default rather than abstract so that an implementation
+     * written before DIIP - including a host's own [KeystoreManager] - keeps
+     * compiling and linking. Such an implementation cannot honour
+     * [holderBinding], so the default ignores it and produces whatever shape
+     * that keystore has always produced; the keystores in this SDK override
+     * it.
+     */
+    suspend fun generateProof(
+        audience: String,
+        nonce: String,
+        freshKey: Boolean,
+        holderBinding: HolderBinding?,
+    ): String = generateProof(audience, nonce, freshKey)
 
     /**
      * Sign a verifiable presentation for OID4VP.

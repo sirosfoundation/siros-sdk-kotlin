@@ -413,7 +413,7 @@ fun CredentialCard(
                     Text(
                         text = stringResource(status.labelRes()).uppercase(),
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onError,
+                        color = status.ribbonContentColor(),
                         fontWeight = FontWeight.Bold,
                     )
                 }

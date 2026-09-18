@@ -2,8 +2,8 @@
 package org.siros.sdk.credentials.interop
 
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import timber.log.Timber
 import java.time.Instant
@@ -96,7 +96,7 @@ object CredentialValidity {
     }
 
     private fun parseDateTime(element: kotlinx.serialization.json.JsonElement?): Instant? {
-        val text = element?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: return null
+        val text = (element as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() } ?: return null
         return try {
             Instant.parse(text)
         } catch (e: DateTimeParseException) {
@@ -109,7 +109,7 @@ object CredentialValidity {
     }
 
     private fun parseEpochSeconds(element: kotlinx.serialization.json.JsonElement?): Instant? =
-        element?.jsonPrimitive?.longOrNull?.let(Instant::ofEpochSecond)
+        (element as? JsonPrimitive)?.longOrNull?.let(Instant::ofEpochSecond)
 }
 
 /**
@@ -173,11 +173,15 @@ class CredentialStatusEvaluator(
      * object with an `id`.
      */
     private fun issuerOf(claims: JsonObject): String? {
-        claims["iss"]?.jsonPrimitive?.contentOrNull?.let { return it }
+        (claims["iss"] as? JsonPrimitive)?.contentOrNull?.let { return it }
+        // Anything else - an array, say - is not an issuer identifier in any
+        // shape this reads. `jsonPrimitive` would throw on it, and since the
+        // caller evaluates every held credential in one pass, one malformed
+        // credential would suppress the status of all of them.
         return when (val issuer = claims["issuer"]) {
-            is JsonObject -> issuer["id"]?.jsonPrimitive?.contentOrNull
-            null -> null
-            else -> issuer.jsonPrimitive.contentOrNull
+            is JsonObject -> (issuer["id"] as? JsonPrimitive)?.contentOrNull
+            is JsonPrimitive -> issuer.contentOrNull
+            else -> null
         }
     }
 }

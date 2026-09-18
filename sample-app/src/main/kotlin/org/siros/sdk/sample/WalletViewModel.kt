@@ -509,15 +509,34 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     /** The DIIP release this wallet's wire behaviour follows - see [WalletConfig.diipProfile]. */
     val diipProfile: org.siros.sdk.credentials.interop.DiipProfile get() = wallet.diipProfile
 
-    private fun refreshCredentialStatuses() {
+    /**
+     * The credential set the published statuses describe, so a state emission
+     * that did not change it does no work. `Ready`/`FlowActive` are emitted on
+     * every engine progress update during a long issuance or presentation, and
+     * each evaluation re-parses every credential and may fetch a status list.
+     */
+    private var statusesEvaluatedFor: List<Long>? = null
+    private var credentialStatusJob: Job? = null
+
+    private fun refreshCredentialStatuses(credentials: List<StoredCredential>, force: Boolean = false) {
+        val ids = credentials.map { it.id }.sorted()
+        if (!force && ids == statusesEvaluatedFor) return
+        statusesEvaluatedFor = ids
+
         // Evaluating a credential's status parses it (CBOR, for an mdoc) and
         // can fetch and verify the issuer's status list, so it runs off the
         // main dispatcher; only the result is published back to the UI.
-        viewModelScope.launch {
+        //
+        // Cancelling any refresh still in flight keeps overlapping evaluations
+        // from racing to publish, and means the newest credential set wins
+        // rather than whichever evaluation happens to finish last.
+        credentialStatusJob?.cancel()
+        credentialStatusJob = viewModelScope.launch {
             val statuses = withContext(Dispatchers.Default) {
                 runCatching { wallet.refreshCredentialStatuses() }
             }.getOrElse {
                 Log.w(TAG, "Could not refresh credential statuses", it)
+                statusesEvaluatedFor = null
                 return@launch
             }
             _credentialStatuses.value = statuses.filterValues { it != CredentialStatus.VALID }
@@ -788,7 +807,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                                 .map { SirosCredentialRegistry.ZkSystem(it, emptyMap()) },
                             useStockMatcher = BuildConfig.STOCK_DC_MATCHER,
                         )
-                        refreshCredentialStatuses()
+                        refreshCredentialStatuses(newState.credentialsOrEmpty())
                         refreshWscdTofuMapping()
                         refreshWscdUserOverrides()
                         restoreFido2PluginState()
@@ -805,6 +824,8 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     is WalletState.LifecycleBlocked -> {
                         WalletSessionHolder.update(null)
                         SirosCredentialRegistry.clear(activity)
+                        credentialStatusJob?.cancel()
+                        statusesEvaluatedFor = null
                         _credentialStatuses.value = emptyMap()
                     }
 

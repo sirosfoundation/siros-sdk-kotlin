@@ -1728,14 +1728,32 @@ class SirosWallet private constructor(
             return override.holderBinding
         }
 
+        // The offer's identifier and the one the proof is being signed for are
+        // compared the way an override is, not as raw strings: the same issuer
+        // routinely writes itself with and without a trailing slash, or with
+        // an explicit :443. Treating those as different issuers would discard
+        // what the Issuer advertised and fall back to the configured profile -
+        // silently sending a DIIP-only Issuer the HAIP proof shape.
         val advertised = activeOffer
-            ?.takeIf { issuer == null || it.credentialIssuerIdentifier == issuer }
+            ?.takeIf { sameAdvertisedIssuer(it.credentialIssuerIdentifier, issuer) }
             ?.cryptographicBindingMethodsSupported
         HolderBinding.negotiate(advertised)?.let { negotiated ->
             Timber.d("Holder binding for ${issuer ?: "the active issuer"}: $negotiated (advertised: $advertised)")
             return negotiated
         }
         return config.interopProfile.holderBinding
+    }
+
+    /**
+     * Whether the active offer's issuer is the one a proof is being signed
+     * for. A null [issuer] means the caller did not say, in which case the
+     * active offer is the only issuance in flight and does apply.
+     */
+    private fun sameAdvertisedIssuer(offerIssuer: String?, issuer: String?): Boolean {
+        if (issuer == null) return true
+        if (offerIssuer == null) return false
+        if (offerIssuer == issuer) return true
+        return matchesIssuer(issuer, offerIssuer)
     }
 
     /** The configured override for [issuer], if a specific one was set. */
@@ -1852,12 +1870,20 @@ class SirosWallet private constructor(
      * wallet's own hosts would ride along to a third-party domain that
      * happens to match - a credential leak that no call site can see, because
      * nothing at the call site mentions cookies.
+     *
+     * Cross-protocol redirects are off as well. [isPublicFetchAllowed] checks
+     * the URL this wallet asks for, but OkHttp follows redirects by default,
+     * so without this a status-list or metadata URL could answer with a 302 to
+     * `http://` and serve the JWKS or the status token in the clear - the
+     * downgrade the HTTPS-only rule exists to prevent, arranged by whoever
+     * controls the URL.
      */
     private val thirdPartyHttpClient: OkHttpClient by lazy {
         httpClient.newBuilder()
             .cookieJar(okhttp3.CookieJar.NO_COOKIES)
             .authenticator(okhttp3.Authenticator.NONE)
             .cache(null)
+            .followSslRedirects(false)
             .build()
     }
 
@@ -1918,7 +1944,13 @@ class SirosWallet private constructor(
 
     @Suppress("unused") // referenced through the TokenStatusListClient below
     private suspend fun resolveIssuerSigningKey(issuer: String, kid: String?): com.nimbusds.jose.jwk.JWK? {
-        if (DidMethod.of(issuer) != null) {
+        // Any syntactically valid DID goes to the resolver, which delegates
+        // whatever is not did:jwk to go-trust. Testing DidMethod.of here would
+        // make an issuer identified by a method this SDK does not name - did:ebsi,
+        // say - fall through to the HTTPS branch, where it resolves to nothing:
+        // its status list would then never verify, and revocation for it would
+        // silently never apply.
+        if (DidMethod.methodName(issuer) != null) {
             val document = didResolver.resolve(issuer).documentOrNull ?: return null
             val jwk = document.findPublicKey(kid, DidRelationship.ASSERTION_METHOD) ?: return null
             return runCatching { com.nimbusds.jose.jwk.JWK.parse(jwk.toString()) }.getOrNull()

@@ -46,3 +46,18 @@ fun CredentialStatus.ribbonColor(): Color = when (this) {
     CredentialStatus.NOT_YET_VALID, CredentialStatus.SUSPENDED -> MaterialTheme.colorScheme.tertiary
     CredentialStatus.VALID -> MaterialTheme.colorScheme.primary
 }
+
+/**
+ * The content colour that goes on [ribbonColor].
+ *
+ * Material only guarantees contrast between a role and its own `on` colour, so
+ * a label fixed to `onError` over a `tertiary` ribbon can come out unreadable
+ * in some themes. Each status pairs with the role its background came from.
+ */
+@Composable
+@ReadOnlyComposable
+fun CredentialStatus.ribbonContentColor(): Color = when (this) {
+    CredentialStatus.EXPIRED, CredentialStatus.REVOKED -> MaterialTheme.colorScheme.onError
+    CredentialStatus.NOT_YET_VALID, CredentialStatus.SUSPENDED -> MaterialTheme.colorScheme.onTertiary
+    CredentialStatus.VALID -> MaterialTheme.colorScheme.onPrimary
+}

@@ -9,10 +9,10 @@ import com.nimbusds.jose.jwk.JWK
 import com.nimbusds.jose.jwk.RSAKey
 import com.nimbusds.jwt.SignedJWT
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import timber.log.Timber
 import java.io.ByteArrayOutputStream
 import java.util.Base64
@@ -102,8 +102,8 @@ object TokenStatusList {
     /** Read the Status List reference out of a credential's claims, if it has one. */
     fun extractReference(claims: JsonObject): Reference? {
         val statusList = (claims["status"] as? JsonObject)?.get("status_list") as? JsonObject ?: return null
-        val idx = statusList["idx"]?.jsonPrimitive?.intOrNull ?: return null
-        val uri = statusList["uri"]?.jsonPrimitive?.contentOrNull ?: return null
+        val idx = (statusList["idx"] as? JsonPrimitive)?.intOrNull ?: return null
+        val uri = (statusList["uri"] as? JsonPrimitive)?.contentOrNull ?: return null
         if (idx < 0 || uri.isEmpty()) return null
         return Reference(idx, uri)
     }
@@ -127,26 +127,46 @@ object TokenStatusList {
     }
 
     /**
+     * Hard cap on the inflated list, so a malformed or hostile stream cannot be
+     * expanded into unbounded memory. A status list covering a million
+     * credentials at one bit each is 125 KB, so this is far above anything
+     * legitimate - and the bytes come from a URL the credential names, which is
+     * not this wallet's to trust. Matches the Swift SDK's `Inflate`.
+     */
+    const val MAX_INFLATED_BYTES: Int = 64 * 1024 * 1024
+
+    /**
      * Inflate the zlib-compressed `lst` member.
      *
      * The draft says DEFLATE with a zlib wrapper; a few issuers emit raw
      * DEFLATE instead, so a failed zlib pass is retried without the wrapper
      * rather than reported as a corrupt list.
+     *
+     * Bounded by [MAX_INFLATED_BYTES]: a small compressed payload can expand
+     * without limit, and this runs on a credential refresh with whatever the
+     * issuer's status-list URL served.
      */
     fun inflate(compressed: ByteArray): ByteArray? {
         for (nowrap in listOf(false, true)) {
             val inflater = Inflater(nowrap)
             try {
                 inflater.setInput(compressed)
-                val out = ByteArrayOutputStream(compressed.size * 4)
+                val out = ByteArrayOutputStream(minOf(compressed.size * 4, MAX_INFLATED_BYTES))
                 val buffer = ByteArray(8192)
+                var overflowed = false
                 while (!inflater.finished()) {
                     val n = inflater.inflate(buffer)
                     if (n == 0) {
                         if (inflater.needsInput() || inflater.needsDictionary()) break
                     }
+                    if (out.size() + n > MAX_INFLATED_BYTES) {
+                        Timber.w("Status list inflated past $MAX_INFLATED_BYTES bytes; refusing it")
+                        overflowed = true
+                        break
+                    }
                     out.write(buffer, 0, n)
                 }
+                if (overflowed) return null
                 if (inflater.finished()) return out.toByteArray()
             } catch (e: java.util.zip.DataFormatException) {
                 Timber.d(e, "Status list did not inflate with nowrap=$nowrap")

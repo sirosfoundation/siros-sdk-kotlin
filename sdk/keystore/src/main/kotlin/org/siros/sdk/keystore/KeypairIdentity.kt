@@ -141,13 +141,23 @@ private fun matchesThumbprint(thumbprint: String?, kid: String): Boolean {
 }
 
 /**
- * The JWK thumbprint of the key a `did:jwk` - or a verification method of one
- * - embeds, or null when [kid] is not one.
+ * The JWK thumbprint of the key a `did:jwk` embeds, or null when [kid] is not
+ * one of its verification methods.
+ *
+ * A `did:jwk` document has exactly one verification method, `#0`, so the only
+ * DID URLs that name a key here are the bare DID and `<did>#0`. Anything else
+ * names nothing: accepting `did:jwk:<key>#anything` would let a malformed or
+ * hostile `cnf.kid` bind a credential to a key it never named, which is the
+ * DID URL binding this exists to enforce.
  */
 fun thumbprintOfDidJwk(kid: String): String? {
     if (!kid.startsWith("did:jwk:")) return null
     val did = kid.substringBefore('#')
-    val key = resolveDidJwk(did).documentOrNull?.findPublicKey(kid = null, relationship = DidRelationship.ANY)
+    if (kid != did && kid != didJwkKeyId(did)) return null
+    // kid is now known to name `#0`, so look that method up by its own id
+    // rather than by whatever spelling the credential used.
+    val key = resolveDidJwk(did).documentOrNull
+        ?.findPublicKey(kid = didJwkKeyId(did), relationship = DidRelationship.AUTHENTICATION)
         ?: return null
     return runCatching { JWK.parse(key.toString()).computeThumbprint().toString() }.getOrNull()
 }

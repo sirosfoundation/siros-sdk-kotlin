@@ -9,7 +9,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import java.net.URLDecoder
 import java.util.Base64
 
@@ -286,7 +285,7 @@ fun resolveDidJwk(did: String): DidResolution {
 
 /** Parse a DID document JSON object into the subset this SDK reads. */
 fun parseDidDocument(root: JsonObject): DidDocument {
-    val id = root["id"]?.jsonPrimitive?.contentOrNull ?: error("DID document has no id")
+    val id = (root["id"] as? JsonPrimitive)?.contentOrNull ?: error("DID document has no id")
     val methods = LinkedHashMap<String, VerificationMethod>()
 
     fun absolute(ref: String) = if (ref.startsWith("#")) "$id$ref" else ref
@@ -296,14 +295,14 @@ fun parseDidDocument(root: JsonObject): DidDocument {
         // declared elsewhere in the document, or the method inlined.
         is JsonPrimitive -> element.contentOrNull?.let(::absolute)
         is JsonObject -> {
-            val vmId = element["id"]?.jsonPrimitive?.contentOrNull?.let(::absolute)
+            val vmId = (element["id"] as? JsonPrimitive)?.contentOrNull?.let(::absolute)
             if (vmId == null) {
                 null
             } else {
                 methods[vmId] = VerificationMethod(
                     id = vmId,
-                    type = element["type"]?.jsonPrimitive?.contentOrNull ?: "",
-                    controller = element["controller"]?.jsonPrimitive?.contentOrNull ?: id,
+                    type = (element["type"] as? JsonPrimitive)?.contentOrNull ?: "",
+                    controller = (element["controller"] as? JsonPrimitive)?.contentOrNull ?: id,
                     publicKeyJwk = element["publicKeyJwk"] as? JsonObject,
                 )
                 vmId
@@ -351,7 +350,7 @@ fun parseDidDocument(root: JsonObject): DidDocument {
  * `privatedata` container, so this has to match rather than merely be stable.
  */
 internal fun canonicalPublicJwk(jwk: JsonObject): JsonObject {
-    val required = when (jwk["kty"]?.jsonPrimitive?.contentOrNull) {
+    val required = when ((jwk["kty"] as? JsonPrimitive)?.contentOrNull) {
         "EC" -> listOf("crv", "kty", "x", "y")
         "OKP" -> listOf("crv", "kty", "x")
         "RSA" -> listOf("e", "kty", "n")
@@ -376,7 +375,7 @@ internal fun canonicalPublicJwk(jwk: JsonObject): JsonObject {
  * local key id. Returns null when the credential has no holder binding at all.
  */
 fun resolveCnfKid(cnf: JsonObject?, thumbprintOf: (JsonObject) -> String): String? {
-    cnf?.get("kid")?.jsonPrimitive?.contentOrNull?.let { return it }
+    cnf?.get("kid")?.let { it as? JsonPrimitive }?.contentOrNull?.let { return it }
     (cnf?.get("jwk") as? JsonObject)?.let { return thumbprintOf(it) }
     return null
 }
