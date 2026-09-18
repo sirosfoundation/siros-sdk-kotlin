@@ -158,4 +158,29 @@ class DeepLinkClassifierTest {
         val result = classifyDeepLink("siros-sample://callback", redirectScheme)
         assertEquals(DeepLinkType.Unknown, result)
     }
+
+    /**
+     * A same-device offer chooser hands an offer to an installed wallet by
+     * its registered redirect URI, so the offer arrives on the same callback
+     * as an authorization code would. It was classified Unknown, and an app
+     * that treats anything it cannot place as a presentation sent it down the
+     * wrong flow entirely.
+     */
+    @Test
+    fun `credential offer on the wallet callback is an offer`() {
+        val result = classifyDeepLink(
+            "$redirectScheme://callback?credential_offer=%7B%22credential_issuer%22%3A%22https%3A%2F%2Fissuer.example%22%7D",
+            redirectScheme,
+        )
+        assertTrue(result is DeepLinkType.CredentialOffer)
+    }
+
+    @Test
+    fun `credential offer by reference on the wallet callback is an offer`() {
+        val result = classifyDeepLink(
+            "$redirectScheme://callback?credential_offer_uri=https%3A%2F%2Fissuer.example%2Foffer%2F1",
+            redirectScheme,
+        )
+        assertTrue(result is DeepLinkType.CredentialOffer)
+    }
 }

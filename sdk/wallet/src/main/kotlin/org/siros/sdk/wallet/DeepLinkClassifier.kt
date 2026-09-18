@@ -80,6 +80,15 @@ fun classifyDeepLink(uriString: String, redirectScheme: String): DeepLinkType {
         if (params.containsKey("request_uri") || params.containsKey("client_id")) {
             return DeepLinkType.PresentationRequest(uri = "openid4vp://?" + (jUri.rawQuery ?: ""))
         }
+        // And the same for an offer. An issuer that knows the wallet by its
+        // registered redirect URI - which is how a same-device offer chooser
+        // hands one to an installed app - sends the offer here rather than to
+        // `openid-credential-offer:`. Without this the offer was Unknown, and
+        // an app that falls back to presentation for anything it cannot place
+        // sent it down the wrong flow entirely.
+        if (params.containsKey("credential_offer") || params.containsKey("credential_offer_uri")) {
+            return DeepLinkType.CredentialOffer(uri = uriString)
+        }
         return DeepLinkType.Unknown
     }
 
