@@ -211,7 +211,9 @@
     <string name="wallet_blocked_suspended_title">Este dispositivo está suspenso</string>
     <string name="wallet_blocked_suspended_message">Reative-o a partir de outro dos seus dispositivos ou contacte o fornecedor da sua carteira. As suas credenciais estão intactas.</string>
     <string name="wallet_blocked_retry">Tentar novamente</string>
-    <string name="wallet_blocked_revoked_title">Esta carteira foi desativada</string>
-    <string name="wallet_blocked_revoked_message">Os seus dados foram apagados no servidor e esta passkey já não pode iniciar sessão. Registe-se novamente para começar de novo.</string>
+    <string name="wallet_blocked_revoked_title">Este dispositivo foi revogado</string>
+    <string name="wallet_blocked_revoked_message">Já não pode ser utilizado com esta carteira. Os seus outros dispositivos mantêm o seu próprio estado e não são afetados. Registe este dispositivo novamente para começar de novo.</string>
+    <string name="wallet_blocked_deactivated_title">Esta carteira foi desativada</string>
+    <string name="wallet_blocked_deactivated_message">Todos os dispositivos foram revogados e os dados da carteira foram apagados no servidor, pelo que esta passkey já não pode iniciar sessão. Registe-se novamente para começar de novo.</string>
     <string name="wallet_blocked_enroll_again">Registar novamente</string>
 </resources>

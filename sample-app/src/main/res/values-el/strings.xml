@@ -211,7 +211,9 @@
     <string name="wallet_blocked_suspended_title">Αυτή η συσκευή είναι σε αναστολή</string>
     <string name="wallet_blocked_suspended_message">Επανενεργοποιήστε την από κάποια άλλη συσκευή σας ή επικοινωνήστε με τον πάροχο του πορτοφολιού σας. Τα διαπιστευτήριά σας παραμένουν άθικτα.</string>
     <string name="wallet_blocked_retry">Δοκιμάστε ξανά</string>
-    <string name="wallet_blocked_revoked_title">Αυτό το πορτοφόλι απενεργοποιήθηκε</string>
-    <string name="wallet_blocked_revoked_message">Τα δεδομένα του διαγράφηκαν στον διακομιστή και αυτό το passkey δεν μπορεί πλέον να συνδεθεί. Εγγραφείτε ξανά για να ξεκινήσετε από την αρχή.</string>
+    <string name="wallet_blocked_revoked_title">Αυτή η συσκευή ανακλήθηκε</string>
+    <string name="wallet_blocked_revoked_message">Δεν μπορεί πλέον να χρησιμοποιηθεί με αυτό το πορτοφόλι. Οι άλλες συσκευές σας διατηρούν τη δική τους κατάσταση και δεν επηρεάζονται. Εγγράψτε ξανά αυτή τη συσκευή για να ξεκινήσετε από την αρχή.</string>
+    <string name="wallet_blocked_deactivated_title">Αυτό το πορτοφόλι απενεργοποιήθηκε</string>
+    <string name="wallet_blocked_deactivated_message">Όλες οι συσκευές ανακλήθηκαν και τα δεδομένα του πορτοφολιού διαγράφηκαν στον διακομιστή, οπότε αυτό το passkey δεν μπορεί πλέον να συνδεθεί. Εγγραφείτε ξανά για να ξεκινήσετε από την αρχή.</string>
     <string name="wallet_blocked_enroll_again">Νέα εγγραφή</string>
 </resources>
