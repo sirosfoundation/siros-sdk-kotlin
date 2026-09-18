@@ -79,4 +79,14 @@ class IssuerSigningKeyResolutionTest {
         assertFalse(isPublicFetchAllowed("not a url at all"))
         assertFalse(isPublicFetchAllowed(""))
     }
+
+    @Test
+    fun `a URL carrying userinfo is never fetched`() {
+        // The classic way to make a host look like one it is not. Userinfo
+        // means nothing for an issuer's metadata or a status list.
+        assertFalse(isPublicFetchAllowed("https://issuer.example@evil.example/list"))
+        assertFalse(isPublicFetchAllowed("https://user:pass@evil.example/list"))
+        assertFalse(isPublicFetchAllowed("https:///no-host"))
+        assertTrue(isPublicFetchAllowed("https://issuer.example/list"))
+    }
 }

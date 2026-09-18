@@ -276,4 +276,42 @@ class DidTest {
         assertNull(asked)
         assertTrue(result is DidResolution.Failed)
     }
+    @Test
+    fun `a document with several keys and no kid is ambiguous rather than the first one`() {
+        // Taking the first would make verification depend on document order:
+        // a token signed by the issuer's other assertion key would be
+        // rejected, and a key it never signed with could be accepted.
+        val document = parseDidDocument(
+            Json.parseToJsonElement(
+                """
+                {
+                  "id": "did:web:issuer.example",
+                  "verificationMethod": [
+                    {"id":"did:web:issuer.example#a","type":"JsonWebKey2020","controller":"did:web:issuer.example",
+                     "publicKeyJwk":{"kty":"EC","crv":"P-256","x":"aa","y":"bb"}},
+                    {"id":"did:web:issuer.example#b","type":"JsonWebKey2020","controller":"did:web:issuer.example",
+                     "publicKeyJwk":{"kty":"EC","crv":"P-256","x":"cc","y":"dd"}}
+                  ],
+                  "assertionMethod": ["did:web:issuer.example#a","did:web:issuer.example#b"]
+                }
+                """.trimIndent(),
+            ) as JsonObject,
+        )
+        assertNull(document.findPublicKey(kid = null, relationship = DidRelationship.ASSERTION_METHOD))
+        // Naming one resolves it.
+        assertEquals(
+            "aa",
+            document.findPublicKey("did:web:issuer.example#a", DidRelationship.ASSERTION_METHOD)
+                ?.get("x")?.jsonPrimitive?.content,
+        )
+    }
+
+    @Test
+    fun `a sole key still resolves without a kid`() {
+        val did = createDidJwk(p256Jwk)
+        assertNotNull(
+            resolveDidJwk(did).documentOrNull
+                ?.findPublicKey(kid = null, relationship = DidRelationship.AUTHENTICATION),
+        )
+    }
 }
