@@ -448,15 +448,56 @@ class WalletEngineSession(
         ))
     }
 
-    /** Start an OID4VP credential presentation flow. */
+    /**
+     * Start an OID4VP credential presentation flow.
+     *
+     * Sends [WalletMetadata.DEFAULT] as this wallet's `wallet_metadata`; the
+     * overload below is for a caller that has a `request_uri_method` to pass
+     * on or metadata of its own.
+     *
+     * Kept at its original two parameters deliberately: adding defaulted ones
+     * would have replaced this function's JVM signature and its `$default`
+     * synthetic, so anything compiled against an earlier SDK - the native
+     * bridge wrapper's own AAR, say - would meet a NoSuchMethodError on
+     * upgrade rather than a compile error.
+     */
     fun startPresentation(
         requestUri: String? = null,
         requestUriRef: String? = null,
+    ) {
+        startPresentation(requestUri, requestUriRef, null, WalletMetadata.DEFAULT)
+    }
+
+    /**
+     * Start an OID4VP credential presentation flow, stating the
+     * `request_uri_method` and the wallet capabilities to send with it.
+     *
+     * [requestUriMethod] is OpenID4VP 1.0 §5.10's parameter, and only has to
+     * be passed when [requestUriRef] was extracted from the authorization
+     * request here rather than handed to the backend whole in [requestUri] -
+     * see [FlowStartMessage.requestUriMethod].
+     *
+     * [walletMetadata] says what this wallet can present, normally
+     * [WalletMetadata.DEFAULT]. It is sent whatever the method: whether it
+     * reaches the verifier is the backend's call (only a POST carries it),
+     * and the SDK cannot tell at this point, since for a whole [requestUri]
+     * it has not looked inside. Null leaves the backend to its own guess.
+     *
+     * Every parameter is explicit - no defaults - so that a two-argument call
+     * keeps resolving to the overload above.
+     */
+    fun startPresentation(
+        requestUri: String?,
+        requestUriRef: String?,
+        requestUriMethod: String?,
+        walletMetadata: JsonObject?,
     ) {
         send(FlowStartMessage.serializer(), FlowStartMessage(
             protocol = "oid4vp",
             requestUri = requestUri,
             requestUriRef = requestUriRef,
+            requestUriMethod = requestUriMethod,
+            walletMetadata = walletMetadata,
         ))
     }
 
