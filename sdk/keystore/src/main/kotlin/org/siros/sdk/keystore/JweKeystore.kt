@@ -642,7 +642,13 @@ class JweKeystore(
         val binding = holderBinding ?: profile.holderBinding
         val publicJwk = key.toPublicJWK()
         val did = if (binding == HolderBinding.DID_JWK) {
-            runCatching { createDidJwk(publicJwk.toJSONString()) }.getOrNull()
+            // No fallback: DID_JWK is what this issuance negotiated, and the
+            // embedded-jwk shape is a different profile the Issuer did not
+            // agree to. Failing here says so; falling back would send a proof
+            // the Issuer cannot verify and report it as success.
+            runCatching { createDidJwk(publicJwk.toJSONString()) }.getOrElse {
+                throw KeystoreException("Could not derive a did:jwk for the negotiated DIIP holder binding", it)
+            }
         } else {
             null
         }
