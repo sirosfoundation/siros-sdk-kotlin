@@ -93,6 +93,15 @@ class JweKeystore(
     private val didKeyVersion: DidKeyVersion = DidKeyVersion.forProfile(profile),
 ) : KeystoreManager, ExtensionStore {
 
+    /**
+     * The pre-DIIP constructor shape, kept so existing Java and already-compiled
+     * consumers still link: Kotlin default arguments only help callers
+     * recompiled against the new primary constructor, and adding `profile`
+     * changed its JVM descriptor. Behaves exactly as before - HAIP, keys named
+     * by JWK thumbprint.
+     */
+    constructor(json: Json) : this(json, InteropProfile.DEFAULT)
+
     private val mutex = Mutex()
     private var keys: MutableMap<String, ECKey> = mutableMapOf()
 
@@ -585,6 +594,10 @@ class JweKeystore(
         jwsObject.serialize().toByteArray(Charsets.UTF_8)
     }
 
+    /** The pre-DIIP call shape: this keystore's own profile decides. */
+    override suspend fun generateProof(audience: String, nonce: String, freshKey: Boolean): String =
+        generateProof(audience, nonce, freshKey, holderBinding = null)
+
     override suspend fun generateProof(
         audience: String,
         nonce: String,
@@ -895,10 +908,19 @@ class JweKeystore(
                                         }
                                     }
                                 }
+                                // The last fallback follows [didKeyVersion],
+                                // not did:key unconditionally. A key folded in
+                                // by importKeypairJwk has no keyDids entry, so
+                                // a DIIP wallet would otherwise publish it
+                                // under the legacy did:key and every client
+                                // reading this container afterwards would see
+                                // the wrong holder identity for it.
                                 put(
                                     "did",
                                     kotlinx.serialization.json.JsonPrimitive(
-                                        keyDids[kid] ?: preservedDid ?: computeDidKey(ecKey),
+                                        keyDids[kid]
+                                            ?: preservedDid
+                                            ?: defaultDidFor(ecKey),
                                     ),
                                 )
                                 put("alg", kotlinx.serialization.json.JsonPrimitive("ES256"))
@@ -1222,6 +1244,17 @@ class JweKeystore(
      * Compute the did:key identifier for a P-256 EC key.
      * Format: did:key:zDn... (Multicodec 0x1200 for P-256 public key, base58btc).
      */
+    /**
+     * The DID a key pair is published under when nothing has recorded one -
+     * whichever identifier [didKeyVersion] names keys by.
+     */
+    private fun defaultDidFor(key: com.nimbusds.jose.jwk.ECKey): String =
+        if (didKeyVersion.namesKeysByDidUrl) {
+            runCatching { createDidJwk(key.toPublicJWK().toJSONString()) }.getOrElse { computeDidKey(key) }
+        } else {
+            computeDidKey(key)
+        }
+
     private fun computeDidKey(ecKey: ECKey): String {
         val pub = ecKey.toECPublicKey()
         // Compressed point: 0x02/0x03 prefix + 32-byte x coordinate

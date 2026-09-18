@@ -220,6 +220,10 @@ class WscdKeystoreAdapter private constructor(
         return signer.sign(keyId, payload)
     }
 
+    /** The pre-DIIP call shape: this keystore's own profile decides. */
+    override suspend fun generateProof(audience: String, nonce: String, freshKey: Boolean): String =
+        generateProof(audience, nonce, freshKey, holderBinding = null)
+
     override suspend fun generateProof(
         audience: String,
         nonce: String,
@@ -747,17 +751,14 @@ class WscdKeystoreAdapter private constructor(
     }
 
     /**
-     * The JWK thumbprint of the key a `did:jwk` (or a verification method of
-     * one) embeds, or null if [kid] is not one.
+     * The JWK thumbprint of the key a `did:jwk` embeds, or null if [kid] is
+     * not one of its verification methods - see
+     * [org.siros.sdk.keystore.thumbprintOfDidJwk], which this mirrors for the
+     * WSCD path. A did:jwk document has only `#0`, so any other fragment names
+     * nothing and must not select a key.
      */
-    private fun thumbprintOfDidJwk(kid: String): String? {
-        if (!kid.startsWith("did:jwk:")) return null
-        val resolution = resolveDidJwk(kid.substringBefore('#'))
-        val jwk = resolution.documentOrNull?.findPublicKey(null, DidRelationship.ANY) ?: return null
-        return runCatching {
-            com.nimbusds.jose.jwk.JWK.parse(jwk.toString()).computeThumbprint().toString()
-        }.getOrNull()
-    }
+    private fun thumbprintOfDidJwk(kid: String): String? =
+        org.siros.sdk.keystore.thumbprintOfDidJwk(kid)
 
     /**
      * The `did:jwk` for a public key, when this issuance identifies the
