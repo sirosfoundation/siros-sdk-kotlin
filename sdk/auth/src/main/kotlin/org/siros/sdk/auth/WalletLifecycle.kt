@@ -157,6 +157,25 @@ private val errorJson = Json { ignoreUnknownKeys = true }
  * absent, not JSON, or carries no `error` field. Lets callers branch on the
  * protocol's error codes without each re-parsing the body.
  */
-fun BackendApiException.apiErrorCode(): String? = runCatching {
-    (errorJson.parseToJsonElement(body ?: return null).jsonObject["error"] as? JsonPrimitive)?.content
+fun BackendApiException.apiErrorCode(): String? = stringField("error")
+
+/**
+ * The `scope` of a SID-AUTH-06 lifecycle refusal carried by this exception's
+ * JSON body, or null when absent.
+ *
+ * The wallet API answers a refusal with the same `{error, scope, message}`
+ * body as the authorization server does, so a refusal met on a wallet-API
+ * call has to be read here rather than only on [AuthException].
+ */
+fun BackendApiException.apiRefusalScope(): String? = stringField("scope")
+
+/**
+ * The server's user-facing explanation from this exception's JSON body, or
+ * null when absent. For display only: nothing a client decides may depend on
+ * reading it.
+ */
+fun BackendApiException.apiRefusalMessage(): String? = stringField("message")
+
+private fun BackendApiException.stringField(name: String): String? = runCatching {
+    (errorJson.parseToJsonElement(body ?: return null).jsonObject[name] as? JsonPrimitive)?.content
 }.getOrNull()?.takeIf { it.isNotBlank() }

@@ -573,10 +573,13 @@ public final class org/siros/sdk/auth/WalletLifecycleKt {
 	public static final field ERROR_CREDENTIAL_NOT_OWNED Ljava/lang/String;
 	public static final field ERROR_ERASURE_INCOMPLETE Ljava/lang/String;
 	public static final fun apiErrorCode (Lorg/siros/sdk/credentials/BackendApiException;)Ljava/lang/String;
+	public static final fun apiRefusalMessage (Lorg/siros/sdk/credentials/BackendApiException;)Ljava/lang/String;
+	public static final fun apiRefusalScope (Lorg/siros/sdk/credentials/BackendApiException;)Ljava/lang/String;
 }
 
 public final class org/siros/sdk/auth/WalletLifecycleRefusal : java/lang/Enum {
 	public static final field Companion Lorg/siros/sdk/auth/WalletLifecycleRefusal$Companion;
+	public static final field DEACTIVATED Lorg/siros/sdk/auth/WalletLifecycleRefusal;
 	public static final field REVOKED Lorg/siros/sdk/auth/WalletLifecycleRefusal;
 	public static final field SUSPENDED Lorg/siros/sdk/auth/WalletLifecycleRefusal;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
@@ -587,6 +590,21 @@ public final class org/siros/sdk/auth/WalletLifecycleRefusal : java/lang/Enum {
 
 public final class org/siros/sdk/auth/WalletLifecycleRefusal$Companion {
 	public final fun fromErrorCode (Ljava/lang/String;)Lorg/siros/sdk/auth/WalletLifecycleRefusal;
+	public final fun fromRefusal (Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/auth/WalletLifecycleRefusal;
+}
+
+public final class org/siros/sdk/auth/WalletLifecycleScope : java/lang/Enum {
+	public static final field Companion Lorg/siros/sdk/auth/WalletLifecycleScope$Companion;
+	public static final field INSTANCE Lorg/siros/sdk/auth/WalletLifecycleScope;
+	public static final field WALLET Lorg/siros/sdk/auth/WalletLifecycleScope;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public final fun getWire ()Ljava/lang/String;
+	public static fun valueOf (Ljava/lang/String;)Lorg/siros/sdk/auth/WalletLifecycleScope;
+	public static fun values ()[Lorg/siros/sdk/auth/WalletLifecycleScope;
+}
+
+public final class org/siros/sdk/auth/WalletLifecycleScope$Companion {
+	public final fun fromWire (Ljava/lang/String;)Lorg/siros/sdk/auth/WalletLifecycleScope;
 }
 
 public final class org/siros/sdk/auth/WebAuthnAuthClient {

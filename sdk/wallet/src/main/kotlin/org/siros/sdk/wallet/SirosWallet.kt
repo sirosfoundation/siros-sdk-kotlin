@@ -44,6 +44,8 @@ import org.siros.sdk.auth.WalletInstance
 import org.siros.sdk.auth.WalletInstanceStatus
 import org.siros.sdk.auth.WalletLifecycleRefusal
 import org.siros.sdk.auth.apiErrorCode
+import org.siros.sdk.auth.apiRefusalMessage
+import org.siros.sdk.auth.apiRefusalScope
 import org.siros.sdk.auth.WebAuthnAuthClient
 import org.siros.sdk.auth.WscdAutoEnrollHint
 import org.siros.sdk.credentials.AuthException
@@ -392,6 +394,22 @@ class SirosWallet private constructor(
     private var reloginInProgress: Boolean = false
 
     /**
+     * The cached account whose passkey answered the WebAuthn ceremony of the
+     * login currently running, once that is known.
+     *
+     * A lifecycle refusal has to name the account it is about before anything
+     * local may be forgotten, and the account active before a login is not it:
+     * a login offers every account's passkeys at once (see [loginCandidates]),
+     * so which wallet was refused is decided by the credential the
+     * authenticator returns, not by whoever was signed in before. Set the
+     * moment the ceremony resolves - which is before the server is asked, and
+     * therefore before it can refuse - and cleared when the login ends. Null
+     * means the refusal names no account, and then nothing is forgotten.
+     */
+    @Volatile
+    private var loginRefusalAccountId: String? = null
+
+    /**
      * Which session this wallet currently holds. Bumped whenever one ends
      * ([logout], [destroy]) or a new one is established (a successful
      * [login]/[register]).
@@ -572,8 +590,17 @@ class SirosWallet private constructor(
         var current = error
         var depth = 0
         while (current != null && depth++ < 8) {
-            val refusal = (current as? AuthException)?.let {
-                WalletLifecycleRefusal.fromRefusal(it.errorCode, it.serverScope)
+            val refusal = when (val e = current) {
+                is AuthException -> WalletLifecycleRefusal.fromRefusal(e.errorCode, e.serverScope)
+                // The backend emits the same refusal body from the wallet API
+                // (`internal/api/handlers.go`) as from the AS passkey endpoint,
+                // and a wallet-API failure surfaces as a BackendApiException
+                // carrying the raw body. Reading only one of the two emitters
+                // would let a refusal met on a wallet-API call fall through to a
+                // generic error instead of the blocked state.
+                is BackendApiException ->
+                    WalletLifecycleRefusal.fromRefusal(e.apiErrorCode(), e.apiRefusalScope())
+                else -> null
             }
             if (refusal != null) return refusal
             current = current.cause
@@ -586,7 +613,11 @@ class SirosWallet private constructor(
         var current = error
         var depth = 0
         while (current != null && depth++ < 8) {
-            (current as? AuthException)?.serverMessage?.let { return it }
+            when (val e = current) {
+                is AuthException -> e.serverMessage?.let { return it }
+                is BackendApiException -> e.apiRefusalMessage()?.let { return it }
+                else -> Unit
+            }
             current = current.cause
         }
         return null
@@ -616,11 +647,22 @@ class SirosWallet private constructor(
      * [deactivateWallet] forgets the account too, but there the caller asked
      * for it.
      */
-    private suspend fun enterLifecycleBlocked(reason: WalletLifecycleRefusal, message: String?) {
+    private suspend fun enterLifecycleBlocked(
+        reason: WalletLifecycleRefusal,
+        message: String?,
+        refusedAccountId: String?,
+    ) {
         Timber.w("Wallet lifecycle refusal: $reason — ${message ?: "(no message from the backend)"}")
-        // Captured before [endSessionLocally], which clears it.
         val deactivatedAccountId =
-            if (reason == WalletLifecycleRefusal.DEACTIVATED) accountRegistry.activeAccountId else null
+            if (reason == WalletLifecycleRefusal.DEACTIVATED) refusedAccountId else null
+        if (reason == WalletLifecycleRefusal.DEACTIVATED && deactivatedAccountId == null) {
+            // A deactivation whose account the caller could not name. It happens
+            // when a login offered every account's passkeys and was refused
+            // before this SDK could tell which one answered: the ceremony's
+            // credential is what says whose wallet it was, and without it
+            // forgetting anything would be a guess at the user's expense.
+            Timber.w("Wallet deactivated but the account could not be identified: keeping every cached account")
+        }
         // End the session either way - nothing this installation holds can be
         // used until someone else acts - but keep the account (see this
         // function's doc comment for why REVOKED is not licence to forget it),
@@ -661,10 +703,19 @@ class SirosWallet private constructor(
      * Route [error] into [WalletState.LifecycleBlocked] when it is a
      * SID-AUTH-06 refusal. Returns true when it handled the error, so callers
      * can leave their own error handling untouched for everything else.
+     *
+     * [refusedAccountId] is the account the refused operation was for, and the
+     * caller must capture it when that operation *starts* rather than leaving
+     * this to read whichever account happens to be active when the refusal
+     * lands. The two differ exactly where it is most costly: a login offers
+     * every account's passkeys at once, so the account signed in beforehand
+     * is not necessarily the one being refused, and a deactivation is the one
+     * refusal that throws local state away. Null when the caller cannot say,
+     * and then nothing is forgotten.
      */
-    private suspend fun handleLifecycleRefusal(error: Throwable?): Boolean {
+    private suspend fun handleLifecycleRefusal(error: Throwable?, refusedAccountId: String?): Boolean {
         val reason = lifecycleRefusalOf(error) ?: return false
-        enterLifecycleBlocked(reason, lifecycleMessageOf(error))
+        enterLifecycleBlocked(reason, lifecycleMessageOf(error), refusedAccountId)
         return true
     }
 
@@ -937,18 +988,34 @@ class SirosWallet private constructor(
             }
         } catch (e: SirosException) {
             // A SID-AUTH-06 refusal is a state, not an error: this passkey's
-            // wallet instance is suspended or the wallet was deactivated, and
-            // retrying the same login changes nothing until someone else acts.
-            if (handleLifecycleRefusal(e)) return
+            // wallet instance is suspended or revoked, or the wallet was
+            // deactivated, and retrying the same login changes nothing until
+            // someone else acts.
+            if (handleLifecycleRefusal(e, refusedLoginAccount())) return
             Timber.e(e, "Login failed")
             _state.value = WalletState.Error(e.message ?: "Login failed")
         } catch (e: Exception) {
-            if (handleLifecycleRefusal(e)) return
+            if (handleLifecycleRefusal(e, refusedLoginAccount())) return
             Timber.e(e, "Login failed")
             _state.value = WalletState.Error(e.message ?: "Login failed")
             throw WalletException("Login failed", e)
+        } finally {
+            loginRefusalAccountId = null
         }
     }
+
+    /**
+     * The account a refused login was for, or null when this SDK cannot say.
+     *
+     * [loginRefusalAccountId] answers it on the AS path, where the ceremony
+     * and the server call are separate steps. The legacy path performs both
+     * inside one call, so there the credential the authenticator last returned
+     * is the only record of who answered - sound here because the backend
+     * checks the lifecycle gate *after* verifying the assertion, so a
+     * lifecycle refusal always implies this attempt's ceremony ran.
+     */
+    private fun refusedLoginAccount(): String? =
+        loginRefusalAccountId ?: extractLastCredentialId()?.let { accountForCredential(it) }
 
     /**
      * Ensure [sessionStore] has *some* account scoped before login, purely so
@@ -1039,6 +1106,11 @@ class SirosWallet private constructor(
                 prfSaltsByCredential = prfCandidates.ifEmpty { null },
             )
         )
+
+        // Which cached account just answered. Recorded before the AS is asked,
+        // because the AS's answer may be a lifecycle refusal that has to say
+        // whose wallet it was about. See [loginRefusalAccountId].
+        loginRefusalAccountId = accountForCredential(result.credentialId)
 
         // Step 3: Complete login with AS
         val credentialJson = kotlinx.serialization.json.buildJsonObject {
@@ -1446,7 +1518,7 @@ class SirosWallet private constructor(
                 try {
                     authTokens.ensureBackendToken()
                 } catch (e: AuthException) {
-                    if (handleLifecycleRefusal(e)) return
+                    if (handleLifecycleRefusal(e, activeId)) return
                     Timber.i("Session cookie expired, need re-login")
                     sessionStore.clear()
                     apiClient = null
@@ -1478,11 +1550,11 @@ class SirosWallet private constructor(
                 Timber.i("Session resumed for user $userId (no private data)")
             }
         } catch (e: SirosException) {
-            if (handleLifecycleRefusal(e)) return
+            if (handleLifecycleRefusal(e, activeId)) return
             Timber.e(e, "Session resume failed")
             _state.value = disconnectedState()
         } catch (e: Exception) {
-            if (handleLifecycleRefusal(e)) return
+            if (handleLifecycleRefusal(e, activeId)) return
             Timber.e(e, "Session resume failed")
             _state.value = disconnectedState()
         }
@@ -1503,6 +1575,9 @@ class SirosWallet private constructor(
             Timber.w("unlockKeystore called but state is $current")
             return
         }
+        // The session this unlock belongs to, captured before anything can end
+        // it, so a lifecycle refusal met here names the right account.
+        val refusedAccountId = accountRegistry.activeAccountId
         try {
             val storedPrfSalt = sessionStore.prfSalt?.let { b64Decode(it) }
             val prfOutput = if (authMode == AuthMode.LEGACY_AS) {
@@ -1582,15 +1657,15 @@ class SirosWallet private constructor(
             Timber.e(e, "Keystore unlock failed: corrupt container")
             _state.value = WalletState.Error(e.message ?: "Keystore unlock failed")
         } catch (e: AuthException) {
-            if (handleLifecycleRefusal(e)) return
+            if (handleLifecycleRefusal(e, refusedAccountId)) return
             Timber.e(e, "Keystore unlock failed: authentication error")
             _state.value = WalletState.Error(e.message ?: "Authentication failed")
         } catch (e: SirosException) {
-            if (handleLifecycleRefusal(e)) return
+            if (handleLifecycleRefusal(e, refusedAccountId)) return
             Timber.e(e, "Keystore unlock failed")
             _state.value = WalletState.Error(e.message ?: "Keystore unlock failed")
         } catch (e: Exception) {
-            if (handleLifecycleRefusal(e)) return
+            if (handleLifecycleRefusal(e, refusedAccountId)) return
             Timber.e(e, "Keystore unlock failed")
             _state.value = WalletState.Error(e.message ?: "Keystore unlock failed")
         }

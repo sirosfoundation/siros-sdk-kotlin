@@ -4795,7 +4795,7 @@ class SirosWalletTest {
         val accountRegistry = lifecycleAccountRegistry()
         val authServerClient = mockk<AuthServerClient>(relaxed = true)
         coEvery { authServerClient.loginBegin() } throws AuthException(
-            "AS request failed: 403 \u2014 /auth/login/begin",
+            "AS request failed: 403 \u2014 /auth/login/finish",
             errorCode = "WALLET_REVOKED",
             code = 403,
             serverMessage = "This wallet has been deactivated; a new enrollment is required",
@@ -4803,7 +4803,11 @@ class SirosWalletTest {
         )
         val stateFlow = MutableStateFlow<WalletState>(WalletState.Disconnected())
         val listener = RecordingLifecycleListener()
-        val wallet = lifecycleWallet(stateFlow, accountRegistry, authServerClient, listener)
+        val wallet = lifecycleWallet(
+            stateFlow, accountRegistry, authServerClient, listener,
+            // The ceremony resolved to this account before the AS was asked.
+            fields = arrayOf("loginRefusalAccountId" to "default:user-1"),
+        )
 
         wallet.login()
         advanceUntilIdle()
@@ -4816,6 +4820,91 @@ class SirosWalletTest {
         )
         verify(exactly = 1) { accountRegistry.removeAccount("default:user-1") }
         assertEquals(WalletLifecycleRefusal.DEACTIVATED, listener.blocked?.first)
+    }
+
+    /**
+     * A login offers every cached account's passkeys at once, so the account
+     * signed in beforehand is not necessarily the one being refused. The
+     * account to forget is the one whose passkey answered the ceremony -
+     * reading the active account instead would destroy a wallet the refusal
+     * was never about.
+     */
+    @Test
+    fun a_deactivation_forgets_the_account_that_answered_not_the_active_one() = runTest(dispatcher) {
+        val accountRegistry = lifecycleAccountRegistry() // active is default:user-1
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+        coEvery { authServerClient.loginBegin() } throws AuthException(
+            "AS request failed: 403 \u2014 /auth/login/finish",
+            errorCode = "WALLET_REVOKED",
+            code = 403,
+            serverScope = "wallet",
+        )
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Disconnected())
+        val wallet = lifecycleWallet(
+            stateFlow, accountRegistry, authServerClient,
+            fields = arrayOf("loginRefusalAccountId" to "default:user-2"),
+        )
+
+        wallet.login()
+        advanceUntilIdle()
+
+        verify(exactly = 1) { accountRegistry.removeAccount("default:user-2") }
+        verify(exactly = 0) { accountRegistry.removeAccount("default:user-1") }
+    }
+
+    /**
+     * When nothing says which account a deactivation was about, forgetting
+     * anything would be a guess at the user's expense. The block still
+     * happens; every cached account stays.
+     */
+    @Test
+    fun a_deactivation_that_names_no_account_forgets_nothing() = runTest(dispatcher) {
+        val accountRegistry = lifecycleAccountRegistry()
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+        coEvery { authServerClient.loginBegin() } throws AuthException(
+            "AS request failed: 403 \u2014 /auth/login/begin",
+            errorCode = "WALLET_REVOKED",
+            code = 403,
+            serverScope = "wallet",
+        )
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Disconnected())
+        val wallet = lifecycleWallet(stateFlow, accountRegistry, authServerClient)
+
+        wallet.login()
+        advanceUntilIdle()
+
+        val blocked = stateFlow.value as WalletState.LifecycleBlocked
+        assertEquals(WalletLifecycleRefusal.DEACTIVATED, blocked.reason)
+        verify(exactly = 0) { accountRegistry.removeAccount(any()) }
+    }
+
+    /**
+     * The backend answers a refusal with the same `{error, scope, message}`
+     * body from the wallet API as from the AS passkey endpoint, and a
+     * wallet-API failure reaches the SDK as a `BackendApiException` carrying
+     * the raw body. Reading only the AS shape would let a refusal met there
+     * fall through to a generic error instead of the blocked state.
+     */
+    @Test
+    fun a_refusal_carried_by_the_wallet_api_is_recognised() = runTest(dispatcher) {
+        val accountRegistry = lifecycleAccountRegistry()
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+        coEvery { authServerClient.loginBegin() } throws
+            org.siros.sdk.credentials.BackendApiException(
+                403,
+                "Backend API error",
+                """{"error":"WALLET_REVOKED","scope":"instance","message":"This wallet instance has been revoked"}""",
+            )
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Disconnected())
+        val wallet = lifecycleWallet(stateFlow, accountRegistry, authServerClient)
+
+        wallet.login()
+        advanceUntilIdle()
+
+        val blocked = stateFlow.value as WalletState.LifecycleBlocked
+        assertEquals(WalletLifecycleRefusal.REVOKED, blocked.reason)
+        assertEquals("This wallet instance has been revoked", blocked.message)
+        verify(exactly = 0) { accountRegistry.removeAccount(any()) }
     }
 
     /**
@@ -5324,10 +5413,15 @@ class SirosWalletTest {
             .first { (it as Enum<*>).name == "NEW_AS" }
 
     /** [SirosWallet.handleLifecycleRefusal] is a private suspend function. */
-    private suspend fun invokePrivateBoolean(target: Any, name: String, arg: Throwable?): Boolean {
+    private suspend fun invokePrivateBoolean(
+        target: Any,
+        name: String,
+        arg: Throwable?,
+        accountId: String? = null,
+    ): Boolean {
         val method = target::class.declaredMemberFunctions.first { it.name == name }
         method.isAccessible = true
-        return method.callSuspend(target, arg) as Boolean
+        return method.callSuspend(target, arg, accountId) as Boolean
     }
 
     private fun invokePrivate(target: Any, name: String) {
