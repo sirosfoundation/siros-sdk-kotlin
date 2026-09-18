@@ -107,6 +107,10 @@ data class CredentialConfiguration(
     val vct: String? = null,
     val doctype: String? = null,
     val scope: String? = null,
+    @SerialName("credential_metadata") val credentialMetadata: CredentialDisplayMetadata? = null,
+    // Appended rather than grouped with the OID4VCI fields above: this is a
+    // data class, so a property's position is part of the binary API
+    // (componentN, copy, the constructor descriptor).
     /**
      * How this Issuer will accept the Holder's key being identified -
      * OID4VCI's `cryptographic_binding_methods_supported`, e.g. `["jwk"]`
@@ -118,7 +122,6 @@ data class CredentialConfiguration(
      */
     @SerialName("cryptographic_binding_methods_supported")
     val cryptographicBindingMethodsSupported: List<String>? = null,
-    @SerialName("credential_metadata") val credentialMetadata: CredentialDisplayMetadata? = null,
 )
 
 /**

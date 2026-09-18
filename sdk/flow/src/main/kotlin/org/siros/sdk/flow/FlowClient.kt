@@ -50,6 +50,22 @@ class FlowClient(
      */
     private val holderBindingFor: ((issuer: String?) -> HolderBinding)? = null,
 ) : CredentialNotifier {
+
+    /**
+     * The pre-DIIP constructor shape, kept so existing Java and
+     * already-compiled consumers still link: Kotlin default arguments only
+     * help callers recompiled against the new primary constructor, and adding
+     * [holderBindingFor] changed its JVM descriptor. Behaves exactly as
+     * before - the keystore's own profile decides the proof shape.
+     */
+    constructor(
+        session: WmpSession,
+        keystore: KeystoreManager,
+        apiClient: BackendApiClient? = null,
+        autoSign: Boolean = true,
+        json: Json = Json { ignoreUnknownKeys = true },
+    ) : this(session, keystore, apiClient, autoSign, json, holderBindingFor = null)
+
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val _events = Channel<FlowEvent>(Channel.BUFFERED)
 
@@ -235,6 +251,7 @@ class FlowClient(
                             val proof = keystore.generateProof(
                                 audience = signParams.audience ?: "",
                                 nonce = signParams.nonce ?: "",
+                                freshKey = false,
                                 // `audience` is the credential issuer, which
                                 // is what decides the proof's holder-binding
                                 // shape.

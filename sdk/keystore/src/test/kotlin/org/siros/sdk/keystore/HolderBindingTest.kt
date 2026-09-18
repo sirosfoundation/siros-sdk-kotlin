@@ -134,13 +134,13 @@ class HolderBindingTest {
         val kid = diipWallet.generateKey()
 
         val toHaipIssuer = SignedJWT.parse(
-            diipWallet.generateProof("https://haip.example", "nonce", holderBinding = HolderBinding.EMBEDDED_JWK),
+            diipWallet.generateProof("https://haip.example", "nonce", false, HolderBinding.EMBEDDED_JWK),
         )
         assertNotNull("a HAIP issuer gets the key it can verify", toHaipIssuer.header.jwk)
         assertNull(toHaipIssuer.header.keyID)
 
         val toDiipIssuer = SignedJWT.parse(
-            diipWallet.generateProof("https://diip.example", "nonce", holderBinding = HolderBinding.DID_JWK),
+            diipWallet.generateProof("https://diip.example", "nonce", false, HolderBinding.DID_JWK),
         )
         assertEquals(kid, toDiipIssuer.header.keyID)
         assertNull(toDiipIssuer.header.jwk)
@@ -158,6 +158,7 @@ class HolderBindingTest {
             keystore.generateProof(
                 "https://issuer.example",
                 "nonce",
+                freshKey = false,
                 holderBinding = HolderBinding.EMBEDDED_JWK,
             ),
         )
@@ -321,7 +322,7 @@ class HolderBindingTest {
         assertFalse("a HAIP keystore names keys by thumbprint", kid.startsWith("did:jwk:"))
 
         val proof = SignedJWT.parse(
-            keystore.generateProof("https://issuer.example", "n-1", holderBinding = HolderBinding.DID_JWK),
+            keystore.generateProof("https://issuer.example", "n-1", false, HolderBinding.DID_JWK),
         )
         val did = proof.jwtClaimsSet.issuer
         assertNotNull("a DIIP proof names the holder with iss", did)
