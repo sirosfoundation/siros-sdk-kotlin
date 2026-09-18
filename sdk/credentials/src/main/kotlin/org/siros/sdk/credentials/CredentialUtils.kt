@@ -456,15 +456,27 @@ object CredentialUtils {
      * names is what lets one evaluator serve every format.
      */
     fun validityClaims(credential: StoredCredential): JsonObject? = try {
+        parseValidityClaims(credential)
+    } catch (e: Exception) {
+        Timber.w(e, "Could not read validity claims from credential ${credential.id}")
+        null
+    }
+
+    /**
+     * [validityClaims] without the catch, so a caller can tell "this
+     * credential says nothing about its validity" from "this credential's
+     * validity data would not parse".
+     *
+     * The difference matters: the first is an ordinary credential and the
+     * second must not be reported as valid, which is what collapsing both to
+     * null did. Throws whatever the underlying parse threw.
+     */
+    fun parseValidityClaims(credential: StoredCredential): JsonObject? =
         if (credential.format == "mso_mdoc") {
             mdocValidityClaims(credential)
         } else {
             parseJwtPayload(credential.raw)
         }
-    } catch (e: Exception) {
-        Timber.w(e, "Could not read validity claims from credential ${credential.id}")
-        null
-    }
 
     private fun mdocValidityClaims(credential: StoredCredential): JsonObject? {
         val document = parseMdocDocument(credential) ?: return null

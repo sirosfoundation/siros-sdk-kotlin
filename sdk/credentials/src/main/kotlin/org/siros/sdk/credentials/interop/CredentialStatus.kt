@@ -32,6 +32,18 @@ enum class CredentialStatus {
     /** The issuer's Token Status List marks this credential invalid. */
     REVOKED,
 
+    /**
+     * This wallet cannot say. Either the credential's own validity data would
+     * not parse, or the issuer's Status List published a value this wallet
+     * does not recognise.
+     *
+     * Deliberately not [VALID]: an unreachable status list leaves a
+     * credential usable - that is what keeps a wallet working offline - but
+     * data that is present and not understood is a different thing, and
+     * calling it valid would be a claim this wallet cannot support.
+     */
+    UNKNOWN,
+
     /** The issuer's Token Status List marks this credential suspended - temporary, unlike [REVOKED]. */
     SUSPENDED,
     ;
@@ -140,7 +152,14 @@ class CredentialStatusEvaluator(
      * down would make the wallet unusable offline. That is a deliberate
      * choice, and it matches wallet-frontend.
      */
-    suspend fun evaluate(claims: JsonObject): CredentialStatus {
+    /**
+     * @param credentialIssuer the issuer this credential was stored under, used
+     *   when the claims themselves name none. An mdoc's normalised claims
+     *   carry no `iss`, and without this the Status List Token's issuer
+     *   binding would be skipped for every mdoc - letting a token served from
+     *   the credential's own status URI claim to be from any issuer at all.
+     */
+    suspend fun evaluate(claims: JsonObject, credentialIssuer: String? = null): CredentialStatus {
         val windowStatus = CredentialValidity.check(
             CredentialValidity.extract(claims),
             clockToleranceSeconds,
@@ -151,15 +170,26 @@ class CredentialStatusEvaluator(
         val client = statusListClient ?: return CredentialStatus.VALID
         val reference = TokenStatusList.extractReference(claims) ?: return CredentialStatus.VALID
 
-        return when (val resolution = client.resolve(reference, issuerOf(claims), clockToleranceSeconds)) {
+        // The credential's own `iss` wins - it is signed - and the stored
+        // issuer identifier stands in only when there is none.
+        val expectedIssuer = issuerOf(claims) ?: credentialIssuer
+        return when (val resolution = client.resolve(reference, expectedIssuer, clockToleranceSeconds)) {
             is TokenStatusList.Resolution.Unavailable -> {
                 Timber.w("Could not determine revocation status: ${resolution.reason}")
                 CredentialStatus.VALID
             }
             is TokenStatusList.Resolution.Found -> when (resolution.status) {
+                TokenStatusList.Status.VALID -> CredentialStatus.VALID
                 TokenStatusList.Status.INVALID -> CredentialStatus.REVOKED
                 TokenStatusList.Status.SUSPENDED -> CredentialStatus.SUSPENDED
-                else -> CredentialStatus.VALID
+                // The issuer published something this wallet does not know.
+                // Reading that as "valid" would be fail-open: the draft
+                // reserves further values, and an application-specific one
+                // means whatever the issuer's ecosystem says, not "fine".
+                else -> {
+                    Timber.w("Status list published an unrecognised status ${resolution.status}")
+                    CredentialStatus.UNKNOWN
+                }
             }
         }
     }

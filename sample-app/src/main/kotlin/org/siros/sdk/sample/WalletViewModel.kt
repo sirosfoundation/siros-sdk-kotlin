@@ -516,12 +516,21 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
      * each evaluation re-parses every credential and may fetch a status list.
      */
     private var statusesEvaluatedFor: List<Long>? = null
+    private var statusesEvaluatedAt: Long = 0
     private var credentialStatusJob: Job? = null
 
     private fun refreshCredentialStatuses(credentials: List<StoredCredential>, force: Boolean = false) {
         val ids = credentials.map { it.id }.sorted()
-        if (!force && ids == statusesEvaluatedFor) return
+        val now = System.currentTimeMillis()
+        // Skipping an unchanged credential set is what keeps a long flow from
+        // re-evaluating on every progress update. It must not mean "never
+        // again", though: a status list that was unreachable becomes
+        // reachable, and a suspension gets lifted, without any credential
+        // being added or removed.
+        val stale = now - statusesEvaluatedAt >= STATUS_REEVALUATION_INTERVAL_MS
+        if (!force && !stale && ids == statusesEvaluatedFor) return
         statusesEvaluatedFor = ids
+        statusesEvaluatedAt = now
 
         // Evaluating a credential's status parses it (CBOR, for an mdoc) and
         // can fetch and verify the issuer's status list, so it runs off the
@@ -537,6 +546,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             }.getOrElse {
                 Log.w(TAG, "Could not refresh credential statuses", it)
                 statusesEvaluatedFor = null
+                statusesEvaluatedAt = 0
                 return@launch
             }
             _credentialStatuses.value = statuses.filterValues { it != CredentialStatus.VALID }
@@ -826,6 +836,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                         SirosCredentialRegistry.clear(activity)
                         credentialStatusJob?.cancel()
                         statusesEvaluatedFor = null
+                        statusesEvaluatedAt = 0
                         _credentialStatuses.value = emptyMap()
                     }
 
@@ -2489,6 +2500,14 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     companion object {
         private const val TAG = "SIROS_VM"
+
+        /**
+         * How long an evaluated set of credential statuses is reused before
+         * being re-evaluated, even when the credentials themselves have not
+         * changed - so a status list that was unreachable, or a suspension
+         * that has been lifted, is picked up without a restart.
+         */
+        private const val STATUS_REEVALUATION_INTERVAL_MS = 5 * 60 * 1000L
         private val DEFAULT_BACKEND_URL = BuildConfig.DEFAULT_BACKEND_URL
         private const val DEFAULT_TENANT_ID = "default"
         private const val DEFAULT_R2PS_URL = "http://192.168.240.1:9443"

@@ -242,4 +242,6 @@
     <string name="wallet_blocked_revoked_title">This wallet was deactivated</string>
     <string name="wallet_blocked_revoked_message">Its data was erased on the server and this passkey can no longer sign in. Enroll again to start over.</string>
     <string name="wallet_blocked_enroll_again">Enroll again</string>
+    <string name="credential_status_unknown">Unknown</string>
+    <string name="credential_status_unknown_detail">This credential’s status could not be determined</string>
 </resources>

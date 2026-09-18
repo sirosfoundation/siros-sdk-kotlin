@@ -224,4 +224,6 @@
     <string name="credential_status_suspended_detail">Myöntäjä on keskeyttänyt tämän todistuksen väliaikaisesti</string>
     <string name="settings_interop_profiles">Yhteentoimivuusprofiilit</string>
     <string name="credential_detail_holder_binding">Haltijan sidonta</string>
+    <string name="credential_status_unknown">Tuntematon</string>
+    <string name="credential_status_unknown_detail">Tämän todisteen tilaa ei voitu määrittää</string>
 </resources>

@@ -224,4 +224,6 @@
     <string name="credential_status_suspended_detail">Αυτό το πιστοποιητικό τέθηκε σε αναστολή από τον εκδότη του</string>
     <string name="settings_interop_profiles">Προφίλ διαλειτουργικότητας</string>
     <string name="credential_detail_holder_binding">Σύνδεση κατόχου</string>
+    <string name="credential_status_unknown">Άγνωστο</string>
+    <string name="credential_status_unknown_detail">Η κατάσταση αυτού του πιστοποιητικού δεν μπόρεσε να προσδιοριστεί</string>
 </resources>

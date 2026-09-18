@@ -22,6 +22,7 @@ fun CredentialStatus.labelRes(): Int = when (this) {
     CredentialStatus.NOT_YET_VALID -> R.string.credential_status_not_yet_valid
     CredentialStatus.REVOKED -> R.string.credential_status_revoked
     CredentialStatus.SUSPENDED -> R.string.credential_status_suspended
+    CredentialStatus.UNKNOWN -> R.string.credential_status_unknown
 }
 
 /** The sentence shown on the detail screen, rather than the one-word ribbon. */
@@ -32,6 +33,7 @@ fun CredentialStatus.detailRes(): Int = when (this) {
     CredentialStatus.NOT_YET_VALID -> R.string.credential_status_not_yet_valid_detail
     CredentialStatus.REVOKED -> R.string.credential_status_revoked_detail
     CredentialStatus.SUSPENDED -> R.string.credential_status_suspended_detail
+    CredentialStatus.UNKNOWN -> R.string.credential_status_unknown_detail
 }
 
 /**
@@ -43,7 +45,8 @@ fun CredentialStatus.detailRes(): Int = when (this) {
 @ReadOnlyComposable
 fun CredentialStatus.ribbonColor(): Color = when (this) {
     CredentialStatus.EXPIRED, CredentialStatus.REVOKED -> MaterialTheme.colorScheme.error
-    CredentialStatus.NOT_YET_VALID, CredentialStatus.SUSPENDED -> MaterialTheme.colorScheme.tertiary
+    CredentialStatus.NOT_YET_VALID, CredentialStatus.SUSPENDED, CredentialStatus.UNKNOWN ->
+        MaterialTheme.colorScheme.tertiary
     CredentialStatus.VALID -> MaterialTheme.colorScheme.primary
 }
 
@@ -58,6 +61,7 @@ fun CredentialStatus.ribbonColor(): Color = when (this) {
 @ReadOnlyComposable
 fun CredentialStatus.ribbonContentColor(): Color = when (this) {
     CredentialStatus.EXPIRED, CredentialStatus.REVOKED -> MaterialTheme.colorScheme.onError
-    CredentialStatus.NOT_YET_VALID, CredentialStatus.SUSPENDED -> MaterialTheme.colorScheme.onTertiary
+    CredentialStatus.NOT_YET_VALID, CredentialStatus.SUSPENDED, CredentialStatus.UNKNOWN ->
+        MaterialTheme.colorScheme.onTertiary
     CredentialStatus.VALID -> MaterialTheme.colorScheme.onPrimary
 }

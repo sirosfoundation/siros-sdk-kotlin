@@ -1805,9 +1805,25 @@ class SirosWallet private constructor(
      * rather than hiding it, which is what keeps the wallet usable offline.
      */
     suspend fun credentialStatus(credential: StoredCredential): CredentialStatus {
-        val claims = CredentialUtils.validityClaims(credential)
-            ?: return CredentialStatus.VALID
-        val status = credentialStatusEvaluator.evaluate(claims)
+        // A credential whose validity data will not parse is not a valid one.
+        // Collapsing the parse failure into "no claims" and then into VALID
+        // let malformed - or deliberately malformed - MSO content skip both
+        // the validity window and the revocation check entirely.
+        val claims = try {
+            CredentialUtils.parseValidityClaims(credential)
+        } catch (e: Exception) {
+            Timber.w(e, "Could not read validity claims from credential ${credential.id}")
+            credentialStatuses[credential.id] = CredentialStatus.UNKNOWN
+            return CredentialStatus.UNKNOWN
+        } ?: return CredentialStatus.VALID
+
+        // An mdoc's normalised claims carry no `iss`, so the credential's own
+        // stored issuer identifier is what binds its Status List Token to an
+        // issuer. Without it that check is skipped for every mdoc.
+        val status = credentialStatusEvaluator.evaluate(
+            claims,
+            credentialIssuer = credential.credentialIssuerIdentifier,
+        )
         credentialStatuses[credential.id] = status
         return status
     }
@@ -1916,7 +1932,11 @@ class SirosWallet private constructor(
      * pinned to the other draft is common.
      */
     private suspend fun resolveHttpsIssuerSigningKey(issuer: String, kid: String?): com.nimbusds.jose.jwk.JWK? {
-        if (!issuer.startsWith("https://")) return null
+        // Case-insensitively, the way isPublicFetchAllowed parses it: URI
+        // schemes are case-insensitive, so rejecting `HTTPS://issuer.example`
+        // here would leave that issuer's status list unverifiable and its
+        // revocation silently never applied.
+        if (!issuer.startsWith("https://", ignoreCase = true)) return null
         val base = issuer.trimEnd('/')
         val paths = linkedSetOf(
             config.diipProfile.sdJwtVcIssuerMetadataPath,
@@ -7301,8 +7321,13 @@ class SirosWallet private constructor(
  * "valid", or a JWKS holding their own key. An issuer identifier is an HTTPS
  * URL to begin with, so this rejects nothing a well-formed deployment does.
  */
-internal fun isPublicFetchAllowed(url: String): Boolean =
-    runCatching { java.net.URI(url).scheme?.lowercase() }.getOrNull() == "https"
+internal fun isPublicFetchAllowed(url: String): Boolean = runCatching {
+    val uri = java.net.URI(url)
+    // Userinfo means nothing for an issuer's metadata or status list, and a
+    // URL carrying it is the classic way to make a host look like one it is
+    // not (`https://issuer.example@evil.example/`).
+    uri.scheme?.lowercase() == "https" && uri.userInfo == null && uri.host != null
+}.getOrDefault(false)
 
 internal fun selectIssuerKey(
     keys: List<com.nimbusds.jose.jwk.JWK>,

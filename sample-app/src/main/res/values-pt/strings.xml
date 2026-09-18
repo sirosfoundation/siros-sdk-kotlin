@@ -224,4 +224,6 @@
     <string name="credential_status_suspended_detail">Esta credencial foi suspensa pelo emissor</string>
     <string name="settings_interop_profiles">Perfis de interoperabilidade</string>
     <string name="credential_detail_holder_binding">Vinculação do titular</string>
+    <string name="credential_status_unknown">Desconhecido</string>
+    <string name="credential_status_unknown_detail">Não foi possível determinar o estado desta credencial</string>
 </resources>

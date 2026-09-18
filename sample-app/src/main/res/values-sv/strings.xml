@@ -224,4 +224,6 @@
     <string name="credential_status_suspended_detail">Det här intyget har spärrats tillfälligt av utfärdaren</string>
     <string name="settings_interop_profiles">Interop-profiler</string>
     <string name="credential_detail_holder_binding">Innehavarbindning</string>
+    <string name="credential_status_unknown">Okänt</string>
+    <string name="credential_status_unknown_detail">Det gick inte att fastställa detta intygs status</string>
 </resources>

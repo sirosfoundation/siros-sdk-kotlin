@@ -1,5 +1,6 @@
 package org.siros.sdk.keystore
 
+import org.siros.sdk.credentials.KeystoreException
 import com.nimbusds.jose.JWSAlgorithm
 import com.nimbusds.jose.JWSHeader
 import com.nimbusds.jwt.JWTClaimsSet
@@ -770,8 +771,11 @@ class WscdKeystoreAdapter private constructor(
         return runCatching {
             createDidJwk(Json.parseToJsonElement(publicKeyJson) as kotlinx.serialization.json.JsonObject)
         }.getOrElse {
-            Timber.w(it, "Could not derive a did:jwk for a WSCD key; falling back to an embedded jwk")
-            null
+            // No fallback: DID_JWK is what this issuance negotiated, and the
+            // embedded-jwk shape is a different profile the Issuer did not
+            // agree to. Falling back would send a proof the Issuer cannot
+            // verify and report it as success.
+            throw KeystoreException("Could not derive a did:jwk for the negotiated DIIP holder binding", it)
         }
     }
 

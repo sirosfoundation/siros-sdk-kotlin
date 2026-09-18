@@ -108,7 +108,12 @@ data class DidDocument(
         // (resolving a did:jwk back to its own key).
         val candidates = ids
         val match = when {
-            kid == null -> candidates.firstOrNull()
+            // With no `kid` to go on, only one key is unambiguous. Taking the
+            // first would make verification depend on document order: a token
+            // signed by another of the issuer's assertion keys would be
+            // rejected, and an unsigned-for key could be accepted instead.
+            // Same rule as selectIssuerKey applies to a published JWKS.
+            kid == null -> candidates.singleOrNull()
             // A `kid` may be the absolute DID URL or just the fragment.
             else -> candidates.firstOrNull { it == kid || it.substringAfter('#', "") == kid.substringAfter('#', kid) }
         } ?: return null
