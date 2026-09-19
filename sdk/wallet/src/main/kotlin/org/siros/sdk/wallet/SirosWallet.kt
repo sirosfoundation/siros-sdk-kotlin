@@ -1860,21 +1860,44 @@ class SirosWallet private constructor(
      */
     private suspend fun fetchPublicUrl(url: String, headers: Map<String, String> = emptyMap()): String? =
         withContext(Dispatchers.IO) {
-            if (!isPublicFetchAllowed(url)) {
-                Timber.d("Refusing to fetch $url: third-party fetches are HTTPS only")
-                return@withContext null
-            }
-            runCatching {
-                val builder = Request.Builder().url(url).get()
-                headers.forEach { (name, value) -> builder.header(name, value) }
-                thirdPartyHttpClient.newCall(builder.build()).execute().use { response ->
-                    if (response.isSuccessful) response.body?.string() else null
-                }
-            }.getOrElse {
+            runCatching { followPublicRedirects(url, headers) }.getOrElse {
                 Timber.d(it, "Could not fetch $url")
                 null
             }
         }
+
+    /**
+     * Fetch [url], following redirects by hand so that every hop is checked by
+     * [isPublicFetchAllowed], not just the first.
+     *
+     * Returns null as soon as a hop would go somewhere the rule refuses, or
+     * when the chain runs longer than [MAX_PUBLIC_REDIRECTS] - a redirect loop
+     * is not something to keep walking.
+     */
+    private fun followPublicRedirects(url: String, headers: Map<String, String>): String? {
+        var next: String? = url
+        repeat(MAX_PUBLIC_REDIRECTS + 1) {
+            val current = next ?: return null
+            if (!isPublicFetchAllowed(current)) {
+                Timber.d("Refusing to fetch $current: third-party fetches are HTTPS only, without userinfo")
+                return null
+            }
+            val builder = Request.Builder().url(current).get()
+            headers.forEach { (name, value) -> builder.header(name, value) }
+            thirdPartyHttpClient.newCall(builder.build()).execute().use { response ->
+                if (response.isRedirect) {
+                    // Resolved against the current URL, since a Location may be
+                    // relative - and then checked on the next turn of the loop.
+                    next = response.header("Location")
+                        ?.let { response.request.url.resolve(it)?.toString() }
+                    return@use
+                }
+                return if (response.isSuccessful) response.body?.string() else null
+            }
+        }
+        Timber.d("Refusing to follow more than $MAX_PUBLIC_REDIRECTS redirects from $url")
+        return null
+    }
 
     /**
      * The client third-party fetches go out on: [httpClient] with its cookie
@@ -1887,18 +1910,24 @@ class SirosWallet private constructor(
      * happens to match - a credential leak that no call site can see, because
      * nothing at the call site mentions cookies.
      *
-     * Cross-protocol redirects are off as well. [isPublicFetchAllowed] checks
-     * the URL this wallet asks for, but OkHttp follows redirects by default,
-     * so without this a status-list or metadata URL could answer with a 302 to
-     * `http://` and serve the JWKS or the status token in the clear - the
-     * downgrade the HTTPS-only rule exists to prevent, arranged by whoever
-     * controls the URL.
+     * Redirects are off as well. [isPublicFetchAllowed] checks the URL this
+     * wallet asks for, but OkHttp follows redirects by default, so without
+     * this a status-list or metadata URL could answer with a 302 to somewhere
+     * the rule would have refused - `http://`, or an `https://user@host/` that
+     * makes a host look like one it is not - and serve the JWKS or the status
+     * token from there. `followSslRedirects(false)` alone only covers the
+     * cross-protocol half of that.
+     *
+     * Following them by hand instead keeps one predicate for the first request
+     * and every hop after it: a rule enforced only on the first request is not
+     * a rule. See [followPublicRedirects].
      */
     private val thirdPartyHttpClient: OkHttpClient by lazy {
         httpClient.newBuilder()
             .cookieJar(okhttp3.CookieJar.NO_COOKIES)
             .authenticator(okhttp3.Authenticator.NONE)
             .cache(null)
+            .followRedirects(false)
             .followSslRedirects(false)
             .build()
     }
@@ -7321,6 +7350,9 @@ class SirosWallet private constructor(
  * "valid", or a JWKS holding their own key. An issuer identifier is an HTTPS
  * URL to begin with, so this rejects nothing a well-formed deployment does.
  */
+/** How many redirects a third-party fetch will follow before giving up. */
+private const val MAX_PUBLIC_REDIRECTS = 5
+
 internal fun isPublicFetchAllowed(url: String): Boolean = runCatching {
     val uri = java.net.URI(url)
     // Userinfo means nothing for an issuer's metadata or status list, and a
