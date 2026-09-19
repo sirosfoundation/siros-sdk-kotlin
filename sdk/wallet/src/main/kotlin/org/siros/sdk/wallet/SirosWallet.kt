@@ -6207,12 +6207,12 @@ class SirosWallet private constructor(
             null
         }
         if (x5chain != null) {
-            val preferLocal = if (isVerifier) {
-                config.preferLocalReaderTrustEvaluation
+            val mode = if (isVerifier) {
+                effectiveReaderTrustEvaluationMode
             } else {
-                config.preferLocalIssuerTrustEvaluation
+                effectiveIssuerTrustEvaluationMode
             }
-            if (preferLocal) {
+            if (mode == MdocTrustEvaluationMode.LOCAL_ONLY) {
                 return if (isVerifier) evaluateReaderTrustLocally(x5chain) else evaluateIssuerTrustLocally(x5chain)
             }
         }
@@ -6279,13 +6279,16 @@ class SirosWallet private constructor(
      * `"mdoc-reader-auth"` action name against go-trust's `mdocrical`
      * registry.
      *
-     * Defaults to the remote AuthZEN call - this is the only path that
-     * honors RICAL's temporary/dynamic trust roots, since go-trust's own
-     * registry cache/refresh handles freshness and the wallet just calls it
-     * fresh each time. Falls back to local X.509 path validation against
-     * [WalletConfig.readerTrustRootCertificatesPem] if the remote call
-     * throws (backend unreachable), or unconditionally if
-     * [WalletConfig.preferLocalReaderTrustEvaluation] is set.
+     * Which path runs is [WalletConfig.readerTrustEvaluationMode]. The
+     * default, [MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK],
+     * prefers the remote AuthZEN call: it is the only path that honors
+     * RICAL's temporary/dynamic trust roots, since go-trust's own registry
+     * cache/refresh handles freshness and the wallet just calls it fresh
+     * each time. It drops to local X.509 path validation against
+     * [WalletConfig.readerTrustRootCertificatesPem] only when go-trust could
+     * not be REACHED - a backend that refuses the caller fails closed
+     * instead. [MdocTrustEvaluationMode.REMOTE_ONLY] never drops, and
+     * [MdocTrustEvaluationMode.LOCAL_ONLY] never asks.
      *
      * @param x5chain the reader's DER-encoded certificate chain, leaf first.
      */
@@ -6293,18 +6296,79 @@ class SirosWallet private constructor(
         if (x5chain.isEmpty()) {
             return TrustResult(trusted = false, reason = "readerAuth has no certificate chain")
         }
-        if (config.preferLocalReaderTrustEvaluation) {
-            return evaluateReaderTrustLocally(x5chain)
+        return evaluateMdocTrust(
+            mode = effectiveReaderTrustEvaluationMode,
+            framework = "mdocrical",
+            entityLabel = "reader",
+            registryName = "RICAL",
+            remote = { evaluateReaderTrustRemote(x5chain) },
+            local = { evaluateReaderTrustLocally(x5chain) },
+        )
+    }
+
+    /**
+     * The reader-trust mode actually in force, reconciling the deprecated
+     * [WalletConfig.preferLocalReaderTrustEvaluation] with
+     * [WalletConfig.readerTrustEvaluationMode].
+     *
+     * An explicitly chosen mode always wins; the legacy boolean only decides
+     * while the mode is still at its default, so existing callers keep their
+     * behavior and new callers are never silently overridden by a boolean
+     * they did not set.
+     */
+    @Suppress("DEPRECATION")
+    private val effectiveReaderTrustEvaluationMode: MdocTrustEvaluationMode
+        get() = when {
+            config.readerTrustEvaluationMode != MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK ->
+                config.readerTrustEvaluationMode
+            config.preferLocalReaderTrustEvaluation -> MdocTrustEvaluationMode.LOCAL_ONLY
+            else -> MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK
+        }
+
+    /** See [effectiveReaderTrustEvaluationMode]. */
+    @Suppress("DEPRECATION")
+    private val effectiveIssuerTrustEvaluationMode: MdocTrustEvaluationMode
+        get() = when {
+            config.issuerTrustEvaluationMode != MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK ->
+                config.issuerTrustEvaluationMode
+            config.preferLocalIssuerTrustEvaluation -> MdocTrustEvaluationMode.LOCAL_ONLY
+            else -> MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK
+        }
+
+    /**
+     * The shared mode/fallback decision behind [evaluateReaderTrust] and
+     * [evaluateIssuerTrust], so the two cannot drift apart on a security
+     * decision. [remote] and [local] are the registry-specific halves.
+     */
+    private suspend fun evaluateMdocTrust(
+        mode: MdocTrustEvaluationMode,
+        framework: String,
+        entityLabel: String,
+        registryName: String,
+        remote: suspend () -> TrustResult,
+        local: () -> TrustResult,
+    ): TrustResult {
+        if (mode == MdocTrustEvaluationMode.LOCAL_ONLY) {
+            return local()
         }
         return try {
-            evaluateReaderTrustRemote(x5chain)
+            remote()
         } catch (e: Exception) {
             if (!isRemoteTrustEvaluationUnreachable(e)) {
-                Timber.e(e, "Remote reader trust evaluation was rejected by the backend (not unreachable) - failing closed rather than falling back to local RICAL root validation")
-                return TrustResult(trusted = false, framework = "mdocrical", reason = "Remote reader trust evaluation failed: ${e.message}")
+                Timber.e(e, "Remote $entityLabel trust evaluation was rejected by the backend (not unreachable) - failing closed rather than falling back to local $registryName root validation")
+                return TrustResult(trusted = false, framework = framework, reason = "Remote $entityLabel trust evaluation failed: ${e.message}")
             }
-            Timber.w(e, "Remote reader trust evaluation unreachable, falling back to local RICAL root validation")
-            evaluateReaderTrustLocally(x5chain)
+            if (mode == MdocTrustEvaluationMode.REMOTE_ONLY) {
+                Timber.e(e, "Remote $entityLabel trust evaluation is unreachable and this wallet is configured for remote-only evaluation - not attempting local $registryName root validation")
+                return TrustResult(
+                    trusted = false,
+                    framework = framework,
+                    reason = "Remote $entityLabel trust evaluation is unreachable and this wallet is configured " +
+                        "for remote-only evaluation, so local $registryName root validation was not attempted: ${e.message}",
+                )
+            }
+            Timber.w(e, "Remote $entityLabel trust evaluation unreachable, falling back to local $registryName root validation")
+            local()
         }
     }
 
@@ -6341,13 +6405,12 @@ class SirosWallet private constructor(
      * COSE_Sign1 signature has ALREADY verified locally (see
      * [MdocCose.verify1]) - this method is purely the trust decision.
      *
-     * Defaults to the remote AuthZEN call - this is the only path that
-     * honors VICAL's dynamic updates, since go-trust's own registry
-     * cache/refresh handles freshness and the wallet just calls it fresh
-     * each time. Falls back to local X.509 path validation against
-     * [WalletConfig.issuerTrustRootCertificatesPem] if the remote call
-     * throws (backend unreachable), or unconditionally if
-     * [WalletConfig.preferLocalIssuerTrustEvaluation] is set.
+     * Which path runs is [WalletConfig.issuerTrustEvaluationMode], with the
+     * same three choices and the same refused-versus-unreachable rule as
+     * [evaluateReaderTrust]. The default,
+     * [MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK], prefers the
+     * remote AuthZEN call: it is the only path that honors VICAL's dynamic
+     * updates.
      *
      * @param x5chain the issuer's DER-encoded certificate chain, leaf first.
      * @param docType the credential's mdoc doctype (e.g. `"org.iso.18013.5.1.mDL"`),
@@ -6360,19 +6423,14 @@ class SirosWallet private constructor(
         if (x5chain.isEmpty()) {
             return TrustResult(trusted = false, reason = "issuerAuth has no certificate chain")
         }
-        if (config.preferLocalIssuerTrustEvaluation) {
-            return evaluateIssuerTrustLocally(x5chain)
-        }
-        return try {
-            evaluateIssuerTrustRemote(x5chain, docType)
-        } catch (e: Exception) {
-            if (!isRemoteTrustEvaluationUnreachable(e)) {
-                Timber.e(e, "Remote issuer trust evaluation was rejected by the backend (not unreachable) - failing closed rather than falling back to local VICAL root validation")
-                return TrustResult(trusted = false, framework = "vical", reason = "Remote issuer trust evaluation failed: ${e.message}")
-            }
-            Timber.w(e, "Remote issuer trust evaluation unreachable, falling back to local VICAL root validation")
-            evaluateIssuerTrustLocally(x5chain)
-        }
+        return evaluateMdocTrust(
+            mode = effectiveIssuerTrustEvaluationMode,
+            framework = "vical",
+            entityLabel = "issuer",
+            registryName = "VICAL",
+            remote = { evaluateIssuerTrustRemote(x5chain, docType) },
+            local = { evaluateIssuerTrustLocally(x5chain) },
+        )
     }
 
     /**
