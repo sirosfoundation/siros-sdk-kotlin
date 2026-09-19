@@ -533,6 +533,8 @@ public final class org/siros/sdk/wallet/WalletConfig {
 	public final fun getBbsCredentialTypes ()Ljava/util/Set;
 	public final fun getCredentialStore ()Lorg/siros/sdk/credentials/CredentialStore;
 	public final fun getDefaultWscdMapping ()Ljava/util/Map;
+	public final fun getEffectiveIssuerTrustEvaluationMode ()Lorg/siros/sdk/wallet/MdocTrustEvaluationMode;
+	public final fun getEffectiveReaderTrustEvaluationMode ()Lorg/siros/sdk/wallet/MdocTrustEvaluationMode;
 	public final fun getEngineUrl ()Ljava/lang/String;
 	public final fun getHttpClient ()Lokhttp3/OkHttpClient;
 	public final fun getIssuerTrustEvaluationMode ()Lorg/siros/sdk/wallet/MdocTrustEvaluationMode;

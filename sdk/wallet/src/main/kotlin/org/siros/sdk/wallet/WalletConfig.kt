@@ -218,21 +218,52 @@ data class WalletConfig(
      * How [SirosWallet.evaluateReaderTrust] answers a RICAL question:
      * remotely against go-trust, locally against
      * [readerTrustRootCertificatesPem], or remotely with local as a
-     * fallback. Defaults to
-     * [MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK], which is what
-     * every previous release did.
+     * fallback. Read [effectiveReaderTrustEvaluationMode] rather than this.
+     *
+     * `null` means "not configured", which resolves to
+     * [MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK] - what every
+     * previous release did - unless the deprecated
+     * [preferLocalReaderTrustEvaluation] says otherwise. It is nullable
+     * precisely so that "unset" and "explicitly REMOTE_WITH_LOCAL_FALLBACK"
+     * are distinguishable: comparing against the default value cannot tell
+     * them apart, and would silently downgrade a caller who asked for the
+     * fallback mode by name while a legacy flag happened to be set.
      */
-    val readerTrustEvaluationMode: MdocTrustEvaluationMode =
-        MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK,
+    val readerTrustEvaluationMode: MdocTrustEvaluationMode? = null,
     /**
      * How [SirosWallet.evaluateIssuerTrust] answers a VICAL question. Same
      * convention as [readerTrustEvaluationMode], and independent of it: a
      * wallet may reasonably insist on remote issuer trust at issuance time
-     * while tolerating local reader trust at an offline checkpoint.
+     * while tolerating local reader trust at an offline checkpoint. Read
+     * [effectiveIssuerTrustEvaluationMode] rather than this.
      */
-    val issuerTrustEvaluationMode: MdocTrustEvaluationMode =
-        MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK,
+    val issuerTrustEvaluationMode: MdocTrustEvaluationMode? = null,
 ) {
+    /**
+     * The reader-trust mode actually in force: [readerTrustEvaluationMode] if
+     * one was chosen, otherwise whatever the deprecated
+     * [preferLocalReaderTrustEvaluation] implies.
+     *
+     * An explicitly chosen mode always wins, including an explicit
+     * [MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK].
+     */
+    @Suppress("DEPRECATION")
+    val effectiveReaderTrustEvaluationMode: MdocTrustEvaluationMode
+        get() = readerTrustEvaluationMode ?: if (preferLocalReaderTrustEvaluation) {
+            MdocTrustEvaluationMode.LOCAL_ONLY
+        } else {
+            MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK
+        }
+
+    /** See [effectiveReaderTrustEvaluationMode]. */
+    @Suppress("DEPRECATION")
+    val effectiveIssuerTrustEvaluationMode: MdocTrustEvaluationMode
+        get() = issuerTrustEvaluationMode ?: if (preferLocalIssuerTrustEvaluation) {
+            MdocTrustEvaluationMode.LOCAL_ONLY
+        } else {
+            MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK
+        }
+
     companion object {
         private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 

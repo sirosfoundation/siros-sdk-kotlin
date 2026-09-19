@@ -4625,6 +4625,38 @@ class SirosWalletTest {
     }
 
     /**
+     * The awkward precedence case: REMOTE_WITH_LOCAL_FALLBACK is also what an
+     * unset mode resolves to, so comparing against the default cannot tell
+     * "the caller asked for the fallback mode" from "the caller said
+     * nothing". The config property is nullable precisely so that it can.
+     */
+    @Test
+    @Suppress("DEPRECATION")
+    fun explicitFallbackMode_isNotDowngradedByDeprecatedBoolean() {
+        val config = WalletConfig(
+            backendUrl = "https://wallet.example.com",
+            preferLocalReaderTrustEvaluation = true,
+            readerTrustEvaluationMode = MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK,
+        )
+
+        assertEquals(
+            MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK,
+            config.effectiveReaderTrustEvaluationMode,
+        )
+    }
+
+    @Test
+    @Suppress("DEPRECATION")
+    fun unsetMode_stillHonoursTheDeprecatedBoolean() {
+        val config = WalletConfig(
+            backendUrl = "https://wallet.example.com",
+            preferLocalIssuerTrustEvaluation = true,
+        )
+
+        assertEquals(MdocTrustEvaluationMode.LOCAL_ONLY, config.effectiveIssuerTrustEvaluationMode)
+    }
+
+    /**
      * Wraps a request's `data` object in the envelope
      * [org.siros.sdk.wallet.dcapi.DCAPIRequestParser.parse] actually expects
      * from [androidx.credentials.GetDigitalCredentialOption.requestJson] -

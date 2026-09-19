@@ -6262,8 +6262,27 @@ class SirosWallet private constructor(
             )
         } catch (e: Exception) {
             if (x5chain == null) throw e
-            Timber.w(e, "Remote trust evaluation failed, falling back to local " +
-                (if (isVerifier) "RICAL" else "VICAL") + " root validation")
+            val registryName = if (isVerifier) "RICAL" else "VICAL"
+            // This path used to fall back on ANY exception, which meant a
+            // backend that REFUSED the caller (a 403) silently downgraded to
+            // the weaker local check here even though evaluateReaderTrust/
+            // evaluateIssuerTrust had been fixed not to - and it ignored
+            // REMOTE_ONLY entirely, so a wallet configured to fail closed
+            // still accepted a locally-trusted certificate on the DC API path.
+            if (!isRemoteTrustEvaluationUnreachable(e)) {
+                Timber.e(e, "Remote trust evaluation was rejected by the backend (not unreachable) - failing closed rather than falling back to local $registryName root validation")
+                throw e
+            }
+            val mode = if (isVerifier) {
+                effectiveReaderTrustEvaluationMode
+            } else {
+                effectiveIssuerTrustEvaluationMode
+            }
+            if (mode == MdocTrustEvaluationMode.REMOTE_ONLY) {
+                Timber.e(e, "Remote trust evaluation is unreachable and this wallet is configured for remote-only evaluation - not attempting local $registryName root validation")
+                throw e
+            }
+            Timber.w(e, "Remote trust evaluation unreachable, falling back to local $registryName root validation")
             if (isVerifier) evaluateReaderTrustLocally(x5chain) else evaluateIssuerTrustLocally(x5chain)
         }
     }
@@ -6306,34 +6325,13 @@ class SirosWallet private constructor(
         )
     }
 
-    /**
-     * The reader-trust mode actually in force, reconciling the deprecated
-     * [WalletConfig.preferLocalReaderTrustEvaluation] with
-     * [WalletConfig.readerTrustEvaluationMode].
-     *
-     * An explicitly chosen mode always wins; the legacy boolean only decides
-     * while the mode is still at its default, so existing callers keep their
-     * behavior and new callers are never silently overridden by a boolean
-     * they did not set.
-     */
-    @Suppress("DEPRECATION")
+    /** See [WalletConfig.effectiveReaderTrustEvaluationMode]. */
     private val effectiveReaderTrustEvaluationMode: MdocTrustEvaluationMode
-        get() = when {
-            config.readerTrustEvaluationMode != MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK ->
-                config.readerTrustEvaluationMode
-            config.preferLocalReaderTrustEvaluation -> MdocTrustEvaluationMode.LOCAL_ONLY
-            else -> MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK
-        }
+        get() = config.effectiveReaderTrustEvaluationMode
 
     /** See [effectiveReaderTrustEvaluationMode]. */
-    @Suppress("DEPRECATION")
     private val effectiveIssuerTrustEvaluationMode: MdocTrustEvaluationMode
-        get() = when {
-            config.issuerTrustEvaluationMode != MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK ->
-                config.issuerTrustEvaluationMode
-            config.preferLocalIssuerTrustEvaluation -> MdocTrustEvaluationMode.LOCAL_ONLY
-            else -> MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK
-        }
+        get() = config.effectiveIssuerTrustEvaluationMode
 
     /**
      * The shared mode/fallback decision behind [evaluateReaderTrust] and
