@@ -801,7 +801,7 @@ class SirosWallet private constructor(
         val rpId = rpObj["id"]?.jsonPrimitive?.contentOrNull ?: throw WalletException("Missing rp.id")
         val rpName = rpObj["name"]?.jsonPrimitive?.contentOrNull ?: rpId
         val challenge = WebAuthnAuthClient.decodeBase64Url(publicKey["challenge"]?.jsonPrimitive?.contentOrNull
-            ?: throw WalletException("Missing challenge"))
+            ?: throw WalletException(MISSING_CHALLENGE))
         val userObj = publicKey["user"]?.jsonObject
             ?: throw WalletException("Missing user in publicKey")
         val userId = WebAuthnAuthClient.decodeBase64Url(userObj["id"]?.jsonPrimitive?.contentOrNull
@@ -1088,7 +1088,7 @@ class SirosWallet private constructor(
         val rpId = publicKey["rpId"]?.jsonPrimitive?.contentOrNull
             ?: throw WalletException("Missing rpId")
         val challenge = WebAuthnAuthClient.decodeBase64Url(publicKey["challenge"]?.jsonPrimitive?.contentOrNull
-            ?: throw WalletException("Missing challenge"))
+            ?: throw WalletException(MISSING_CHALLENGE))
 
         // Step 2: Authenticate via platform AuthProvider
         val result = authProvider.authenticate(
@@ -1601,7 +1601,7 @@ class SirosWallet private constructor(
                 val rpId = publicKey["rpId"]?.jsonPrimitive?.contentOrNull
                     ?: throw WalletException("Missing rpId")
                 val challenge = WebAuthnAuthClient.decodeBase64Url(publicKey["challenge"]?.jsonPrimitive?.contentOrNull
-                    ?: throw WalletException("Missing challenge"))
+                    ?: throw WalletException(MISSING_CHALLENGE))
 
                 val result = authProvider.authenticate(
                     org.siros.sdk.auth.AuthenticateOptions(
@@ -1764,7 +1764,7 @@ class SirosWallet private constructor(
      * to discover what credentials each issuer offers.
      */
     suspend fun getIssuers(): List<IssuerEntry> = withContext(Dispatchers.IO) {
-        val client = apiClient ?: throw WalletException("Not connected")
+        val client = apiClient ?: throw WalletException(NOT_CONNECTED)
         val response = client.getIssuers()
         // Backend user API returns a plain JSON array, admin API wraps in {"issuers": [...]}
         val arr = when (response) {
@@ -2512,7 +2512,7 @@ class SirosWallet private constructor(
     suspend fun getAvailableCredentials(): List<CredentialOffer> = withContext(Dispatchers.IO) {
         val issuers = getIssuers()
         Timber.d("getAvailableCredentials: ${issuers.size} issuers")
-        val client = apiClient ?: throw WalletException("Not connected")
+        val client = apiClient ?: throw WalletException(NOT_CONNECTED)
         val offers = mutableListOf<CredentialOffer>()
 
         for (issuer in issuers) {
@@ -2594,7 +2594,7 @@ class SirosWallet private constructor(
         replacesBatchId: Long? = null,
         zkInput: ZkIssuanceInput? = null,
     ) {
-        val engine = engineSession ?: throw WalletException("Not connected")
+        val engine = engineSession ?: throw WalletException(NOT_CONNECTED)
         ensureEngineConnected(engine)
         if (issuanceInFlight) {
             throw WalletException("Another issuance is already in progress")
@@ -2717,7 +2717,7 @@ class SirosWallet private constructor(
      * values (e.g. the bare "mso_mdoc" format string instead of "mDL").
      */
     suspend fun renewCredential(batchId: Long) {
-        val engine = engineSession ?: throw WalletException("Not connected")
+        val engine = engineSession ?: throw WalletException(NOT_CONNECTED)
         ensureEngineConnected(engine)
         val candidate = exportCredentialRefreshTokens()[batchId]
             ?: throw WalletException("No refresh_token stored for batch $batchId - it may not be renewable, or was already renewed")
@@ -2751,7 +2751,7 @@ class SirosWallet private constructor(
      * every ordinary credential.
      */
     suspend fun startIssuance(offerUri: String, zkInput: ZkIssuanceInput? = null) {
-        val engine = engineSession ?: throw WalletException("Not connected")
+        val engine = engineSession ?: throw WalletException(NOT_CONNECTED)
         ensureEngineConnected(engine)
         if (issuanceInFlight) {
             throw WalletException("Another issuance is already in progress")
@@ -2863,7 +2863,7 @@ class SirosWallet private constructor(
      * @param requestUri the OID4VP request URI.
      */
     suspend fun startPresentation(requestUri: String) {
-        val engine = engineSession ?: throw WalletException("Not connected")
+        val engine = engineSession ?: throw WalletException(NOT_CONNECTED)
         ensureEngineConnected(engine)
         engine.startPresentation(requestUri = requestUri)
     }
@@ -3328,7 +3328,7 @@ class SirosWallet private constructor(
      * @param state The state parameter from the redirect (for CSRF validation).
      */
     fun completeAuthorization(flowId: String, code: String, state: String) {
-        val engine = engineSession ?: throw WalletException("Not connected")
+        val engine = engineSession ?: throw WalletException(NOT_CONNECTED)
         // Peek, don't remove yet - removing before the CSRF check below meant
         // a mismatched (attacker-supplied) state consumed the real, still-
         // pending context, so any later, legitimate completion attempt for
@@ -5522,7 +5522,7 @@ class SirosWallet private constructor(
                                 // credentialId) - stringify at this boundary.
                                 credentialId = cred.id.toString(),
                                 format = cred.format,
-                                vct = cred.metadata?.vct,
+                                vct = CredentialUtils.vctOf(cred),
                                 availableClaims = extractAvailableClaims(cred),
                             )
                         }
@@ -6228,7 +6228,7 @@ class SirosWallet private constructor(
             }
         }
 
-        val client = apiClient ?: throw WalletException("Not connected")
+        val client = apiClient ?: throw WalletException(NOT_CONNECTED)
 
         val evaluationRequest = kotlinx.serialization.json.buildJsonObject {
             putJsonObject("subject") {
@@ -6531,7 +6531,7 @@ class SirosWallet private constructor(
         subjectId: String? = null,
         extraContext: (kotlinx.serialization.json.JsonObjectBuilder.() -> Unit)? = null,
     ): TrustResult {
-        val client = apiClient ?: throw WalletException("Not connected")
+        val client = apiClient ?: throw WalletException(NOT_CONNECTED)
         val certificateId = sha256Hex(x5chain[0])
         val subjectId = subjectId ?: certificateId
         val x5c = kotlinx.serialization.json.buildJsonArray {
@@ -7018,6 +7018,12 @@ class SirosWallet private constructor(
 
     companion object {
         internal const val HKDF_INFO = "eDiplomas PRF"
+
+        /** Thrown wherever a call needs the backend and the wallet has no session yet. */
+        private const val NOT_CONNECTED = "Not connected"
+
+        /** Thrown wherever a signing step needs a server challenge it did not get. */
+        private const val MISSING_CHALLENGE = "Missing challenge"
 
         /**
          * How many reloaded credentials [hydrateReloadedCredentials] fetches

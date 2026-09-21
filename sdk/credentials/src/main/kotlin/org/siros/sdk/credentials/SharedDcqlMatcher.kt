@@ -145,7 +145,10 @@ internal object SharedDcqlMatcher {
         // metadata, which is only populated when the issuer happens to expose
         // a SIROS-internal schema endpoint.
         doctype = CredentialUtils.parseMdocDocument(cred)?.docType ?: cred.metadata?.doctype,
-        vct = cred.metadata?.vct,
+        // Likewise the vct the credential itself declares - the shared
+        // engine matches on this, and the metadata copy is absent until
+        // something has built it.
+        vct = CredentialUtils.vctOf(cred),
         title = cred.metadata?.name ?: cred.format,
         subtitle = cred.metadata?.issuer?.name ?: "",
         iconId = null,

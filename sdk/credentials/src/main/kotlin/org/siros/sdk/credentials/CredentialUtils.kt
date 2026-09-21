@@ -431,6 +431,22 @@ object CredentialUtils {
         null
     }
 
+    /**
+     * The `vct` a credential declares, read from the credential itself and
+     * only then from its metadata.
+     *
+     * `metadata` is a rendering artefact: it is absent until an issuance flow
+     * has an offer to build it from, and hydration - which repopulates it -
+     * skips any credential whose metadata is already real. Anything that
+     * decides what a credential *is* must therefore read the credential, or
+     * it will disagree with the issuer about a credential that is perfectly
+     * valid. mdocs answer this from their MSO instead; see
+     * [parseMdocDocument].
+     */
+    fun vctOf(credential: StoredCredential): String? =
+        parseJwtPayload(credential.raw)?.get("vct")?.jsonPrimitive?.contentOrNull
+            ?: credential.metadata?.vct
+
     fun buildFallbackMetadata(credential: StoredCredential): CredentialMetadata {
         val configId = credential.credentialConfigurationId?.takeIf { it.isNotBlank() }
         val issuerIdent = credential.credentialIssuerIdentifier?.takeIf { it.isNotBlank() }

@@ -46,6 +46,69 @@ class CredentialMatcherTest {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bareIssuerSigned.EncodeToBytes())
     }
 
+    /** An SD-JWT whose payload carries `vct`, in the `<jwt>~` shape stored. */
+    private fun sdJwtRaw(vct: String): String {
+        val enc = Base64.getUrlEncoder().withoutPadding()
+        val header = enc.encodeToString("""{"alg":"ES256"}""".toByteArray())
+        val payload = enc.encodeToString("""{"vct":"$vct"}""".toByteArray())
+        return "$header.$payload.c2ln~"
+    }
+
+    /**
+     * A credential is matched on the vct it carries, not on whether the
+     * wallet happens to have built display metadata for it yet.
+     *
+     * `metadata` is a rendering artefact - absent until the issuance flow has
+     * an offer to build it from, repopulated later by hydration, which skips
+     * credentials whose metadata is already real. Matching on it alone made a
+     * freshly issued EBW-OID credential invisible to a query naming its exact
+     * vct, on the gdc environment, while the PID beside it matched.
+     */
+    @Test
+    fun match_uses_the_credentials_own_vct_when_metadata_has_none() {
+        val credentials = listOf(
+            StoredCredential(
+                id = 1L,
+                format = "dc+sd-jwt",
+                raw = sdJwtRaw("uri:eu.ebw.oid.1"),
+                metadata = null,
+                batchId = 1L,
+                instanceId = 0,
+            ),
+        )
+        val query = json.parseToJsonElement(
+            """
+            {"credentials":[{"id":"ebw_oid","format":"dc+sd-jwt",
+              "meta":{"vct_values":["uri:eu.ebw.oid.1"]}}]}
+            """.trimIndent(),
+        ).jsonObject
+
+        val results = CredentialMatcher.match(query, credentials)
+        assertEquals(1, results.size)
+        assertEquals(listOf(1L), results[0].candidates.map { it.id })
+    }
+
+    /** The payload's vct wins, and a query for the stale one no longer matches. */
+    @Test
+    fun match_prefers_the_payload_vct_over_a_stale_metadata_copy() {
+        val credentials = listOf(
+            StoredCredential(
+                id = 1L,
+                format = "dc+sd-jwt",
+                raw = sdJwtRaw("uri:eu.ebw.oid.1"),
+                metadata = CredentialMetadata(vct = "urn:stale:1"),
+                batchId = 1L,
+                instanceId = 0,
+            ),
+        )
+        fun queryFor(vct: String) = json.parseToJsonElement(
+            """{"credentials":[{"id":"q","format":"dc+sd-jwt","meta":{"vct_values":["$vct"]}}]}""",
+        ).jsonObject
+
+        assertEquals(1, CredentialMatcher.match(queryFor("uri:eu.ebw.oid.1"), credentials)[0].candidates.size)
+        assertTrue(CredentialMatcher.match(queryFor("urn:stale:1"), credentials)[0].candidates.isEmpty())
+    }
+
     @Test
     fun match_filters_by_format_and_vct() {
         val credentials = listOf(

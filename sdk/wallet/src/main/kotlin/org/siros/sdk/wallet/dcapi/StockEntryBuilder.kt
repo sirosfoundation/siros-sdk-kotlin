@@ -98,7 +98,10 @@ internal object StockEntryBuilder {
             )
         }
         return SdJwtEntry(
-            verifiableCredentialType = cred.metadata?.vct ?: "",
+            // The credential's own vct: this is the type the OS picker
+            // matches a request against, and an empty string matches
+            // nothing at all.
+            verifiableCredentialType = CredentialUtils.vctOf(cred) ?: "",
             claims = claims,
             entryDisplayPropertySet = setOf(entryDisplayProperties(cred) as EntryDisplayProperties),
             // AndroidX's registry API requires a String id - stringify at
