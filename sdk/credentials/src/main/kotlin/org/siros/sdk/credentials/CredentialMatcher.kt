@@ -431,7 +431,19 @@ object CredentialMatcher {
 
     private fun matchesVct(credential: StoredCredential, vctValues: Set<String>?): Boolean {
         if (vctValues == null || vctValues.isEmpty()) return true
-        val credVct = credential.metadata?.vct ?: return false
+        // The vct the credential itself carries, and only then the copy in
+        // its metadata - the same order, and for the same reason, as
+        // matchesDoctype below. `metadata` is a rendering artefact: it is
+        // absent until the issuance flow has an offer to build it from, and
+        // is repopulated later by hydration, which skips any credential
+        // whose metadata is already real. Matching on it alone means a
+        // credential that is present, valid and presentable is invisible to
+        // DCQL for reasons that have nothing to do with the credential.
+        //
+        // Seen on the gdc environment: an EBW-OID credential issued minutes
+        // earlier, carrying `vct: uri:eu.ebw.oid.1`, against a query asking
+        // for exactly that - 0 matches, while the PID next to it matched.
+        val credVct = CredentialUtils.vctOf(credential) ?: return false
         return credVct in vctValues
     }
 

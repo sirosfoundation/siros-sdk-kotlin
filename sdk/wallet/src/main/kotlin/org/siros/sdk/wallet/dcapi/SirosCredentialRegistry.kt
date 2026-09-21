@@ -408,7 +408,11 @@ object SirosCredentialRegistry {
                     id = cred.id.toString(),
                     format = cred.format,
                     doctype = docTypeFor(cred),
-                    vct = cred.metadata?.vct,
+                    // The credential's own vct, not the metadata copy - the
+                    // OS picker matches on this, and a credential whose
+                    // metadata has not been built yet would otherwise be
+                    // registered with no type at all and match nothing.
+                    vct = CredentialUtils.vctOf(cred),
                     title = cred.metadata?.name ?: cred.format,
                     subtitle = cred.metadata?.issuer?.name ?: "",
                     iconId = iconId,
