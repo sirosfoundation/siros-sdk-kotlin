@@ -5522,7 +5522,7 @@ class SirosWallet private constructor(
                                 // credentialId) - stringify at this boundary.
                                 credentialId = cred.id.toString(),
                                 format = cred.format,
-                                vct = cred.metadata?.vct,
+                                vct = CredentialUtils.vctOf(cred),
                                 availableClaims = extractAvailableClaims(cred),
                             )
                         }
