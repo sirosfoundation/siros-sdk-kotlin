@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-09-21
+
+### Added
+- **Local or remote mdoc trust evaluation is now a choice, per registry.**
+  `MdocTrustEvaluationMode` — `REMOTE_WITH_LOCAL_FALLBACK` (the default, and
+  what every previous release did), `REMOTE_ONLY`, `LOCAL_ONLY` — selectable
+  independently for RICAL readers and VICAL issuers via
+  `WalletConfig.readerTrustEvaluationMode` and `issuerTrustEvaluationMode`.
+  The local path is deliberately the weaker of the two (plain X.509 path
+  validation, no RICAL/VICAL CBOR parsing, no `trustConstraints`, no
+  per-certificate `docType`), so which one runs is a security decision;
+  `REMOTE_ONLY` is for a deployment that would rather deny a presentation than
+  accept one on the weaker check.
+  - `WalletConfig.preferLocalReaderTrustEvaluation` and
+    `preferLocalIssuerTrustEvaluation` keep working and keep their meaning
+    (`true` is `LOCAL_ONLY`), and are deprecated. An explicitly chosen mode
+    always wins over them — read `effectiveReaderTrustEvaluationMode` /
+    `effectiveIssuerTrustEvaluationMode` for the resolved value.
+
+### Fixed
+- **A trust evaluation that fails closed is no longer answered from the
+  cache.** `evaluateTrustDirect` — the DC API and engine-relayed path — fell
+  back to the local roots on *any* exception, so a backend that was reachable
+  and refused the caller silently downgraded to the weaker check, and both of
+  its callers would then answer from a positive `TrustCache` entry with no
+  current remote evaluation at all. The refused-versus-unreachable rule now
+  applies on that path too, and the two fail-closed cases raise
+  `TrustEvaluationFailedClosedException`, which both callers honour ahead of
+  the cache lookup. The cache keeps its degraded mode for the one failure it
+  was meant for: an unreachable backend under `REMOTE_WITH_LOCAL_FALLBACK`.
+- **An SD-JWT is no longer parsed as an mdoc.** `buildWith` called
+  `parseMdocDocument` for every credential regardless of format; an SD-JWT's
+  `.` separators hit the base64url decoder and threw, once per SD-JWT per
+  registry refresh — and the registry refreshes on every credential change and
+  every flow. The fallback was right, but the stack traces drowned out genuine
+  issuance failures on a real device. The docType choice moves into
+  `docTypeFor`, which parses only for `mso_mdoc`; a *genuine* mdoc that fails
+  to parse still warns. (#204)
+- **A credential offer URI with no authority is read correctly.** RFC 3986
+  allows `openid-credential-offer:?credential_offer=…` with no `//`, and
+  issuers emit it. `java.net.URI` calls that opaque and reports no query, so
+  every parameter was invisible and the whole URI was handed to the engine as
+  if it were the offer JSON. The query is now read from the scheme-specific
+  part for an opaque URI.
+- **A credential offer arriving on the wallet's own callback is recognised.**
+  A same-device offer chooser delivers an offer through the registered
+  redirect URI, where the classifier knew an authorization code and a
+  presentation request but not an offer, so it returned `Unknown` and apps
+  sent it down the presentation flow. It is now classified as an offer, after
+  the authorization-code case, which still wins.
+
+### Changed
+- **A wallet lifecycle refusal now says whether it ends one device or the
+  whole wallet.** SIROS adopts the EUDI wallet-unit lifecycle semantics
+  exactly: revoking one instance ends that device and nothing else, and only
+  deactivating the wallet is terminal. `WALLET_REVOKED` answered both and only
+  the human-readable message differed, so the SDK took the one safe reading
+  and kept the cached account on every refusal. go-wallet-backend#340 adds a
+  machine-readable `scope` (`instance` / `wallet`), and this release consumes
+  it as a third refusal, `DEACTIVATED`, alongside `SUSPENDED` and the now
+  strictly per-instance `REVOKED`. Only `DEACTIVATED` forgets the cached
+  account.
+
 ## [0.18.0] - 2026-09-17
 
 ### Fixed
