@@ -4475,6 +4475,187 @@ class SirosWalletTest {
         coVerify(exactly = 0) { apiClient.evaluateTrust(any()) }
     }
 
+    // ── MdocTrustEvaluationMode ────────────────────────────────────────────
+    //
+    // Which of the two mdoc trust paths runs is a security decision, not a
+    // performance one: the local path parses no RICAL/VICAL CBOR and enforces
+    // neither `trustConstraints` nor `docType`. These pin apart the three
+    // outcomes that must never collapse into one another - a backend that
+    // said no, a backend that refused US, and a backend that was not there.
+    //
+    // The discriminator throughout is `framework`: the local path reports
+    // `local-rical-root`, every remote-side outcome reports `mdocrical`.
+
+    @Test
+    fun evaluateReaderTrust_localOnlyMode_skipsRemoteCallEntirely() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                readerTrustEvaluationMode = MdocTrustEvaluationMode.LOCAL_ONLY,
+            ),
+        )
+
+        val result = wallet.evaluateReaderTrust(listOf(ByteArray(4)))
+
+        assertEquals("local-rical-root", result.framework)
+        coVerify(exactly = 0) { apiClient.evaluateTrust(any()) }
+    }
+
+    @Test
+    fun evaluateReaderTrust_remoteWithLocalFallback_unreachableBackend_fallsBackToLocal() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws NetworkException("connection refused")
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+
+        val result = wallet.evaluateReaderTrust(listOf(ByteArray(4)))
+
+        assertEquals("local-rical-root", result.framework)
+    }
+
+    /**
+     * A 403 on `/v1/evaluate` means the backend was reachable and rejected the
+     * CALLER, not the trust question. Falling back to the weaker local check
+     * there would let an expired token silently downgrade a security-relevant
+     * deny - confirmed live at Geneva 2026.
+     */
+    @Test
+    fun evaluateReaderTrust_remoteWithLocalFallback_backendRefusedCaller_failsClosed() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws BackendApiException(403, "forbidden")
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+
+        val result = wallet.evaluateReaderTrust(listOf(ByteArray(4)))
+
+        assertTrue(!result.trusted)
+        assertEquals("mdocrical", result.framework)
+    }
+
+    @Test
+    fun evaluateReaderTrust_remoteOnlyMode_unreachableBackend_doesNotFallBackToLocal() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws NetworkException("offline")
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                readerTrustEvaluationMode = MdocTrustEvaluationMode.REMOTE_ONLY,
+            ),
+        )
+
+        val result = wallet.evaluateReaderTrust(listOf(ByteArray(4)))
+
+        assertTrue(!result.trusted)
+        assertEquals("mdocrical", result.framework)
+        // The reason has to name the configured mode, or an operator cannot
+        // tell a deliberate remote-only deny from a genuinely untrusted reader.
+        assertTrue("got: ${result.reason}", result.reason?.contains("remote-only") == true)
+    }
+
+    @Test
+    fun evaluateIssuerTrust_remoteOnlyMode_unreachableBackend_doesNotFallBackToLocal() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws NetworkException("offline")
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                issuerTrustEvaluationMode = MdocTrustEvaluationMode.REMOTE_ONLY,
+            ),
+        )
+
+        val result = wallet.evaluateIssuerTrust(listOf(ByteArray(4)), docType = "org.iso.18013.5.1.mDL")
+
+        assertTrue(!result.trusted)
+        assertEquals("vical", result.framework)
+        assertTrue("got: ${result.reason}", result.reason?.contains("remote-only") == true)
+    }
+
+    /**
+     * The deprecated boolean keeps working, so an existing caller's behavior
+     * does not change under them.
+     */
+    @Test
+    @Suppress("DEPRECATION")
+    fun evaluateReaderTrust_deprecatedPreferLocalBoolean_stillMeansLocalOnly() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                preferLocalReaderTrustEvaluation = true,
+            ),
+        )
+
+        val result = wallet.evaluateReaderTrust(listOf(ByteArray(4)))
+
+        assertEquals("local-rical-root", result.framework)
+        coVerify(exactly = 0) { apiClient.evaluateTrust(any()) }
+    }
+
+    /**
+     * Precedence: a caller who asks for REMOTE_ONLY must not be silently
+     * downgraded to local by a legacy boolean they did not set.
+     */
+    @Test
+    @Suppress("DEPRECATION")
+    fun evaluateReaderTrust_explicitModeWinsOverDeprecatedBoolean() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws NetworkException("offline")
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                preferLocalReaderTrustEvaluation = true,
+                readerTrustEvaluationMode = MdocTrustEvaluationMode.REMOTE_ONLY,
+            ),
+        )
+
+        val result = wallet.evaluateReaderTrust(listOf(ByteArray(4)))
+
+        assertEquals("mdocrical", result.framework)
+        assertTrue("got: ${result.reason}", result.reason?.contains("remote-only") == true)
+    }
+
+    /**
+     * The awkward precedence case: REMOTE_WITH_LOCAL_FALLBACK is also what an
+     * unset mode resolves to, so comparing against the default cannot tell
+     * "the caller asked for the fallback mode" from "the caller said
+     * nothing". The config property is nullable precisely so that it can.
+     */
+    @Test
+    @Suppress("DEPRECATION")
+    fun explicitFallbackMode_isNotDowngradedByDeprecatedBoolean() {
+        val config = WalletConfig(
+            backendUrl = "https://wallet.example.com",
+            preferLocalReaderTrustEvaluation = true,
+            readerTrustEvaluationMode = MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK,
+        )
+
+        assertEquals(
+            MdocTrustEvaluationMode.REMOTE_WITH_LOCAL_FALLBACK,
+            config.effectiveReaderTrustEvaluationMode,
+        )
+    }
+
+    @Test
+    @Suppress("DEPRECATION")
+    fun unsetMode_stillHonoursTheDeprecatedBoolean() {
+        val config = WalletConfig(
+            backendUrl = "https://wallet.example.com",
+            preferLocalIssuerTrustEvaluation = true,
+        )
+
+        assertEquals(MdocTrustEvaluationMode.LOCAL_ONLY, config.effectiveIssuerTrustEvaluationMode)
+    }
+
     /**
      * Wraps a request's `data` object in the envelope
      * [org.siros.sdk.wallet.dcapi.DCAPIRequestParser.parse] actually expects
