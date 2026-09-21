@@ -362,7 +362,7 @@ fun CredentialCard(
                     val typeId = meta?.vct ?: meta?.doctype
                     if (typeId != null) {
                         Text(
-                            text = typeId.substringAfterLast('/').substringAfterLast('.'),
+                            text = credentialTypeBadge(typeId),
                             style = MaterialTheme.typography.labelSmall,
                             color = fgColor.copy(alpha = 0.5f),
                             maxLines = 1,
@@ -616,6 +616,31 @@ private suspend fun fetchAndSubstituteSvg(credential: StoredCredential, template
  * `IllegalArgumentException` for any non-http(s) scheme, so this must be
  * handled before ever reaching [Request.Builder].
  */
+/**
+ * The short label for a credential type, for the badge beside the format.
+ *
+ * Only a URL-shaped identifier gets shortened, to its last path segment
+ * minus any document extension, which is the part that names the type:
+ * `https://example.com/credentials/student-id` reads as `student-id` and
+ * `https://registry.siros.org/sunet/mdl.vctm.json` as `mdl`.
+ *
+ * Everything else is left whole. Cutting at the last dot, which is what this
+ * used to do, is right for a hostname and wrong for every reverse-DNS or URN
+ * identifier in use: `uri:eu.ebw.oid.1` and `eu.we-build.iban-ov.1` both came
+ * out as "1", and `urn:eudi:pid:arf-1.8:1` as "8:1". A type identifier is
+ * short enough to show, and a wrong fragment of one is worse than the whole.
+ */
+internal fun credentialTypeBadge(typeId: String): String {
+    val afterScheme = typeId.substringAfter("://", typeId)
+    // Only a real path can be shortened. Without this, a bare origin loses
+    // its own name: "https://example.com/" would read as "example".
+    val path = afterScheme.substringAfter('/', "")
+    if (path.isBlank()) return typeId
+    val lastSegment = path.trimEnd('/').substringAfterLast('/')
+    if (lastSegment.isEmpty()) return typeId
+    return lastSegment.substringBefore('.').ifEmpty { lastSegment }
+}
+
 internal fun decodeSvgDataUri(uri: String): String? {
     val comma = uri.indexOf(',')
     if (comma < 0) return null

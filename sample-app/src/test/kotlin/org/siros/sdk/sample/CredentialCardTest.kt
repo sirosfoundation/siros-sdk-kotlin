@@ -17,6 +17,36 @@ import org.junit.Test
  */
 class CredentialCardTest {
 
+    /**
+     * The badge names the type. Cutting at the last dot - what this used to
+     * do - is right for a hostname and wrong for every reverse-DNS or URN
+     * identifier actually in use.
+     */
+    @Test
+    fun `type badge keeps a non-URL identifier whole`() {
+        assertEquals("uri:eu.ebw.oid.1", credentialTypeBadge("uri:eu.ebw.oid.1"))
+        assertEquals("eu.we-build.iban-ov.1", credentialTypeBadge("eu.we-build.iban-ov.1"))
+        assertEquals("urn:eudi:pid:arf-1.8:1", credentialTypeBadge("urn:eudi:pid:arf-1.8:1"))
+        assertEquals("urn:eudi:eucc:1", credentialTypeBadge("urn:eudi:eucc:1"))
+        assertEquals("eu.europa.ec.eudi.pid.1", credentialTypeBadge("eu.europa.ec.eudi.pid.1"))
+    }
+
+    @Test
+    fun `type badge shortens a URL identifier to the part that names the type`() {
+        assertEquals("student-id", credentialTypeBadge("https://example.com/credentials/student-id"))
+        assertEquals("mdl", credentialTypeBadge("https://registry.siros.org/sunet/mdl.vctm.json"))
+    }
+
+    @Test
+    fun `type badge never returns an empty or misleading label`() {
+        // A bare origin has no path naming a type; shortening it would leave
+        // "example", which names nothing.
+        assertEquals("https://example.com/", credentialTypeBadge("https://example.com/"))
+        assertEquals("https://example.com", credentialTypeBadge("https://example.com"))
+        assertEquals(".json", credentialTypeBadge("https://example.com/.json"))
+        assertEquals("", credentialTypeBadge(""))
+    }
+
     @Test
     fun `decodes a base64 data URI into raw bytes`() {
         val payload = "hello logo bytes".toByteArray(Charsets.UTF_8)
