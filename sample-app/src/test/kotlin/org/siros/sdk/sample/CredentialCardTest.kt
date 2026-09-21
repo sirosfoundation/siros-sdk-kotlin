@@ -18,6 +18,54 @@ import org.junit.Test
  */
 class CredentialCardTest {
 
+    /**
+     * The card used to decide its three text slots separately, so a
+     * credential with no metadata read "dc+sd-jwt" as its name and
+     * "DC+SD-JWT" again underneath it.
+     */
+    @Test
+    fun `card labels never say the same thing twice`() {
+        val everyShape = listOf(
+            cardLabels("Company Certificate", "dc+sd-jwt", "urn:eudi:eucc:1"),
+            cardLabels(null, "dc+sd-jwt", "uri:eu.ebw.oid.1"),
+            cardLabels("dc+sd-jwt", "dc+sd-jwt", "uri:eu.ebw.oid.1"),
+            cardLabels("uri:eu.ebw.oid.1", "dc+sd-jwt", "uri:eu.ebw.oid.1"),
+            cardLabels(null, "dc+sd-jwt", null),
+            cardLabels("  ", "mso_mdoc", null),
+        )
+        everyShape.forEach { labels ->
+            val shown = listOfNotNull(labels.title, labels.typeBadge)
+            assertEquals("$labels repeats itself", shown.size, shown.distinct().size)
+        }
+    }
+
+    @Test
+    fun `card labels prefer a real name, then the type, then the format`() {
+        assertEquals(
+            CardLabels("Company Certificate", "urn:eudi:eucc:1"),
+            cardLabels("Company Certificate", "dc+sd-jwt", "urn:eudi:eucc:1"),
+        )
+        // No name: the type is the most identifying thing left, and the badge
+        // beneath drops out rather than repeating it.
+        assertEquals(
+            CardLabels("uri:eu.ebw.oid.1", null),
+            cardLabels(null, "dc+sd-jwt", "uri:eu.ebw.oid.1"),
+        )
+        // Nothing at all: the format, said once, because something must name
+        // the card.
+        assertEquals(CardLabels("dc+sd-jwt", null), cardLabels(null, "dc+sd-jwt", null))
+    }
+
+    @Test
+    fun `issuer label falls back to the host of the issuer URL`() {
+        assertEquals("SIROS ID (dev)", issuerLabel("SIROS ID (dev)", "https://issuer.example"))
+        assertEquals("issuer.example", issuerLabel(null, "https://issuer.example/path"))
+        assertEquals("issuer.example", issuerLabel("  ", "https://issuer.example"))
+        assertEquals("not a url", issuerLabel(null, "not a url"))
+        assertNull(issuerLabel(null, null))
+        assertNull(issuerLabel(null, "  "))
+    }
+
     private val realTypes = listOf(
         "uri:eu.ebw.oid.1", "urn:eudi:eucc:1", "uri:eu.eudi.eu-poa.1",
         "eu.we-build.iban-ov.1", "urn:eudi:pid:arf-1.8:1", "eu.europa.ec.eudi.pid.1",

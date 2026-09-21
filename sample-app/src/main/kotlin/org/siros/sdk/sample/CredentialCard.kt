@@ -123,7 +123,13 @@ fun CredentialCard(
     // presentable one (see CredentialInstance.hasKey's doc comment).
     val remainingCount = instances?.count { it.sigCount == 0 && it.hasKey }
     val isExhausted = remainingCount == 0
-    val meta = credential.metadata
+    // A credential whose metadata has not been built yet is still a
+    // credential, and it already carries everything a card needs: its
+    // configuration id, its issuer, and its own type in its payload. Reading
+    // that directly is what hydration would have written, and means the card
+    // no longer depends on whether hydration has run - which is what left it
+    // showing "?" for an issuer and its own wire format for a name.
+    val meta = credential.metadata ?: CredentialUtils.buildFallbackMetadata(credential)
     val bgColor = meta?.backgroundColor?.toComposeColor()
         // A type that declares no colour used to land on the theme's
         // primaryContainer - and so did every other such type, which is why
@@ -302,12 +308,17 @@ fun CredentialCard(
                     .padding(20.dp),
                 verticalArrangement = Arrangement.SpaceBetween,
             ) {
-            // Top: issuer badge (logo or initial)
+            // Top: issuer badge (logo or initial), when the credential says
+            // who issued it. When it does not, the row is left out rather
+            // than filled in: a circle holding "?" beside the word "?" tells
+            // the holder nothing twice, and an empty corner tells them the
+            // same thing once, quietly.
+            val issuerName = issuerLabel(meta?.issuer?.name, meta?.issuer?.url)
+            val logoUri = meta?.logo?.uri
+            if (issuerName != null || logoUri != null) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                val issuerName = meta?.issuer?.name ?: "?"
-                val logoUri = meta?.logo?.uri
                 if (logoUri != null) {
                     coil.compose.AsyncImage(
                         model = coilLogoModel(logoUri),
@@ -317,7 +328,7 @@ fun CredentialCard(
                             .clip(CircleShape),
                         contentScale = ContentScale.Crop,
                     )
-                } else {
+                } else if (issuerName != null) {
                     Box(
                         modifier = Modifier
                             .size(32.dp)
@@ -333,22 +344,26 @@ fun CredentialCard(
                         )
                     }
                 }
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = issuerName,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = fgColor.copy(alpha = 0.7f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                if (issuerName != null) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = issuerName,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = fgColor.copy(alpha = 0.7f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
             }
 
             Spacer(modifier = Modifier.weight(1f))
 
             // Bottom: credential name + format badge
+            val labels = cardLabels(meta?.name, credential.format, meta?.vct ?: meta?.doctype)
             Column {
                 Text(
-                    text = meta?.name ?: credential.format,
+                    text = labels.title,
                     style = MaterialTheme.typography.titleLarge,
                     color = fgColor,
                     fontWeight = FontWeight.SemiBold,
@@ -361,15 +376,9 @@ fun CredentialCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        text = credential.format.uppercase(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = fgColor.copy(alpha = 0.5f),
-                    )
-                    val typeId = meta?.vct ?: meta?.doctype
-                    if (typeId != null) {
+                    if (labels.typeBadge != null) {
                         Text(
-                            text = credentialTypeBadge(typeId),
+                            text = labels.typeBadge,
                             style = MaterialTheme.typography.labelSmall,
                             color = fgColor.copy(alpha = 0.5f),
                             maxLines = 1,
@@ -696,6 +705,55 @@ internal fun hslColor(hue: Float, saturation: Float, lightness: Float): Color {
         green = (g1 + m).coerceIn(0f, 1f),
         blue = (b1 + m).coerceIn(0f, 1f),
     )
+}
+
+/**
+ * What a card says on its two text slots, decided together so that neither
+ * repeats the other.
+ *
+ * Deciding them separately is what produced a card reading "dc+sd-jwt" as
+ * its name and "DC+SD-JWT" again underneath: each slot fell back on its own
+ * and both landed on the wire format, which was not worth saying even once.
+ *
+ * The format is no longer a slot of its own. It is what a credential is
+ * encoded as, not what it is, and it survives here only as the last thing
+ * left to call a credential that says nothing else about itself.
+ *
+ * @property title the large line: the credential's name, else its type, else
+ *   its wire format.
+ * @property typeBadge the small label beneath, null when the title is
+ *   already saying it.
+ */
+internal data class CardLabels(val title: String, val typeBadge: String?)
+
+internal fun cardLabels(name: String?, format: String, typeId: String?): CardLabels {
+    val badge = typeId?.takeIf { it.isNotBlank() }?.let { credentialTypeBadge(it) }
+    // A "name" that is only the format or the type repeated is not a name.
+    val realName = name?.takeIf {
+        it.isNotBlank() && !it.equals(format, ignoreCase = true) && it != typeId && it != badge
+    }
+    return when {
+        realName != null -> CardLabels(realName, badge)
+        badge != null -> CardLabels(badge, null)
+        else -> CardLabels(format, null)
+    }
+}
+
+/**
+ * How to name the issuer, or null when the credential does not say.
+ *
+ * A credential built from an offer carries the issuer's display name; one
+ * the wallet had to reconstruct carries only the identifier it was issued
+ * from, and its host is a better answer than nothing.
+ */
+internal fun issuerLabel(name: String?, url: String?): String? {
+    name?.takeIf { it.isNotBlank() }?.let { return it }
+    val raw = url?.takeIf { it.isNotBlank() } ?: return null
+    return try {
+        java.net.URI(raw).host ?: raw
+    } catch (_: Exception) {
+        raw
+    }
 }
 
 /**
