@@ -125,6 +125,13 @@ fun CredentialCard(
     val isExhausted = remainingCount == 0
     val meta = credential.metadata
     val bgColor = meta?.backgroundColor?.toComposeColor()
+        // A type that declares no colour used to land on the theme's
+        // primaryContainer - and so did every other such type, which is why
+        // four EU Business Wallet credentials drew as four copies of one
+        // card. A tint derived from the type identifier is stable for a type
+        // across devices and installs, differs between types, and asks
+        // nothing of the issuer.
+        ?: typeTintColor(meta?.vct ?: meta?.doctype, isSystemInDarkTheme())
         ?: MaterialTheme.colorScheme.primaryContainer
     // Falls back to a color derived from the actual bgColor above (not an
     // unrelated theme token) - a credential that declares backgroundColor
@@ -617,6 +624,81 @@ private suspend fun fetchAndSubstituteSvg(credential: StoredCredential, template
  * handled before ever reaching [Request.Builder].
  */
 /**
+ * A background tint for a credential type that declares no colour of its own,
+ * derived from the type identifier so the same type is always the same colour
+ * and two types are all but never the same.
+ *
+ * Hue and saturation come from the identifier; lightness is fixed per theme,
+ * which is what keeps this safe: every generated tint sits in the same
+ * lightness band, so [contrastingTextColor] resolves against it exactly as it
+ * does against a declared colour, and no hash can produce an unreadable card.
+ *
+ * The hash is written out rather than taken from [String.hashCode] because
+ * this colour is part of what a credential looks like to its holder: it should
+ * not change because a runtime changed its mind about string hashing.
+ *
+ * @return null when there is no identifier to derive from, so the caller can
+ *   fall back to its theme colour.
+ */
+internal fun typeTintColor(typeId: String?, dark: Boolean): Color? {
+    if (typeId.isNullOrBlank()) return null
+    // FNV-1a, 32-bit.
+    var hash = 0x811C9DC5u
+    for (ch in typeId) {
+        hash = hash xor ch.code.toUInt()
+        hash *= 0x01000193u
+    }
+    val slot = (hash % (TINT_HUES * TINT_TONES).toUInt()).toInt()
+    val tone = slot / TINT_HUES
+    // The tone varies saturation and leaves lightness alone. Raising
+    // lightness for a paler tone squeezes the hues together - two tints 15
+    // degrees apart both came out near white and read as one colour - and it
+    // would also move the card out of the single lightness band the contrast
+    // guarantee below depends on.
+    return hslColor(
+        hue = (slot % TINT_HUES) * (360f / TINT_HUES),
+        saturation = (if (dark) 0.30f else 0.40f) + tone * 0.16f,
+        lightness = if (dark) 0.26f else 0.80f,
+    )
+}
+
+/**
+ * Hue steps, and tones per hue, for [typeTintColor].
+ *
+ * The hue is quantised rather than taken straight from the hash so that two
+ * types cannot land a couple of degrees apart and read as the same colour -
+ * an ungrouped hash did exactly that, putting two of ours at 340 and 342.
+ * Quantising trades that near-miss for an honest exact collision: with
+ * [TINT_HUES] x [TINT_TONES] slots, two types can share one, and there is no
+ * way to rule that out without the types agreeing with each other. Sharing a
+ * colour with one other type is a far smaller problem than the alternative
+ * this replaced, where every type without a declared colour shared one.
+ */
+private const val TINT_HUES = 24
+private const val TINT_TONES = 3
+
+/** HSL to [Color]; hue in degrees, saturation and lightness in 0..1. */
+internal fun hslColor(hue: Float, saturation: Float, lightness: Float): Color {
+    val c = (1f - kotlin.math.abs(2f * lightness - 1f)) * saturation
+    val hPrime = ((hue % 360f) + 360f) % 360f / 60f
+    val x = c * (1f - kotlin.math.abs(hPrime % 2f - 1f))
+    val (r1, g1, b1) = when (hPrime.toInt()) {
+        0 -> Triple(c, x, 0f)
+        1 -> Triple(x, c, 0f)
+        2 -> Triple(0f, c, x)
+        3 -> Triple(0f, x, c)
+        4 -> Triple(x, 0f, c)
+        else -> Triple(c, 0f, x)
+    }
+    val m = lightness - c / 2f
+    return Color(
+        red = (r1 + m).coerceIn(0f, 1f),
+        green = (g1 + m).coerceIn(0f, 1f),
+        blue = (b1 + m).coerceIn(0f, 1f),
+    )
+}
+
+/**
  * The short label for a credential type, for the badge beside the format.
  *
  * Only a URL-shaped identifier gets shortened, to its last path segment
@@ -690,7 +772,18 @@ internal fun String.toComposeColor(): Color? {
 
 /** Black or white, whichever contrasts better against [background] (relative luminance). */
 internal fun contrastingTextColor(background: Color): Color =
-    if (background.luminance() > 0.5f) Color.Black else Color.White
+    // Whichever actually reads better, not whichever side of mid-grey the
+    // background falls on. The two agree at the extremes and disagree in a
+    // wide band in between: a saturated blue card sits at luminance 0.39, so
+    // the old threshold chose white at 2.4:1 where black gives 8.8:1.
+    // Choosing by ratio also puts a floor under every card - the two choices
+    // are equal at luminance 0.179, where both give 4.6:1 - so no background,
+    // declared by an issuer or derived here, can produce unreadable text.
+    if (contrastRatio(Color.Black, background) >= contrastRatio(Color.White, background)) {
+        Color.Black
+    } else {
+        Color.White
+    }
 
 /**
  * WCAG-style contrast ratio between two colors, from 1 (identical/no
