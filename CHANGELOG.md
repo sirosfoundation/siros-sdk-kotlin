@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-09-21
+
+### Fixed
+- **A credential is matched on the vct it carries, not on its metadata.**
+  DCQL matching read `credential.metadata?.vct`, which is a rendering
+  artefact rather than the credential's identity: it is absent until an
+  issuance flow has an offer to build it from, and the hydration pass that
+  repopulates it skips any credential whose metadata is already real. A
+  freshly issued credential could therefore be present, valid, correctly
+  typed and presentable, and still match nothing. Seen live: an EBW-OID
+  credential carrying `vct: uri:eu.ebw.oid.1` matched 0 candidates against a
+  query naming exactly that, while the PID beside it matched.
+
+  `CredentialUtils.vctOf` reads the credential first and the metadata copy
+  second, and all four places that declare what a credential *is* now use it:
+  `CredentialMatcher`, `SharedDcqlMatcher` (the shared Rust engine's input),
+  and the two DC API registration paths `SirosCredentialRegistry` and
+  `StockEntryBuilder` — the last two decide what the OS picker matches a
+  request against, and previously passed a null vct and an empty string
+  respectively. (#208)
+
 ## [0.19.0] - 2026-09-21
 
 ### Added
