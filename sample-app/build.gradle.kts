@@ -130,6 +130,7 @@ dependencies {
     implementation(libs.compose.material.icons.extended)
     implementation(libs.compose.ui.tooling.preview)
     debugImplementation(libs.compose.ui.tooling)
+    debugImplementation(libs.compose.ui.test.manifest)
 
     implementation(libs.timber)
 
@@ -155,6 +156,15 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
 
+    androidTestImplementation(platform(libs.compose.bom))
+    androidTestImplementation(libs.compose.ui.test.junit4)
+    // Pinned past the BOM/transitive default (3.5.0): that version's
+    // input-injection code calls android.hardware.input.InputManager
+    // .getInstance() via reflection, which newer platform releases
+    // removed - every performTouchInput/performClick call in an
+    // instrumented test fails with NoSuchMethodException on such a
+    // device without this.
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test:rules:1.6.1")

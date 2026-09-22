@@ -16,3 +16,5 @@
 /sample-app/build/
 /tools/.venv/
 /tools/__pycache__/
+/.claude/
+/.kotlin/

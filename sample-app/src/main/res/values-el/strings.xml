@@ -23,7 +23,6 @@
     <string name="credentials_welcome">Καλώς ήρθατε, %1$s</string>
     <string name="credentials_count_one">%1$d πιστοποιητικό</string>
     <string name="credentials_count_other">%1$d πιστοποιητικά</string>
-    <string name="credentials_stack_overflow_more">+%1$d ακόμα</string>
     <string name="credentials_empty_title">Δεν υπάρχουν πιστοποιητικά</string>
     <string name="credentials_empty_subtitle">Πατήστε Προσθήκη παρακάτω για να ξεκινήσετε</string>
 
