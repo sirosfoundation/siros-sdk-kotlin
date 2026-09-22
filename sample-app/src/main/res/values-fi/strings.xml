@@ -23,7 +23,6 @@
     <string name="credentials_welcome">Tervetuloa, %1$s</string>
     <string name="credentials_count_one">%1$d todistus</string>
     <string name="credentials_count_other">%1$d todistusta</string>
-    <string name="credentials_stack_overflow_more">+%1$d lisää</string>
     <string name="credentials_empty_title">Ei todistuksia</string>
     <string name="credentials_empty_subtitle">Paina Lisää aloittaaksesi</string>
 

@@ -23,7 +23,6 @@
     <string name="credentials_welcome">Välkommen, %1$s</string>
     <string name="credentials_count_one">%1$d intyg</string>
     <string name="credentials_count_other">%1$d intyg</string>
-    <string name="credentials_stack_overflow_more">+%1$d till</string>
     <string name="credentials_empty_title">Inga intyg</string>
     <string name="credentials_empty_subtitle">Tryck på Lägg till nedan för att börja</string>
 
