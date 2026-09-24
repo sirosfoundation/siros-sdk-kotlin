@@ -219,6 +219,44 @@ data class HandshakeCompleteMessage(
     @SerialName("session_id") val sessionId: String,
     val capabilities: List<String>? = null,
     val timestamp: String? = null,
+    /**
+     * Server-controlled tunables the client should adopt - see
+     * [SessionConfig]'s own doc comment. Nullable/defaulted so this parses
+     * cleanly against an older server that predates this field entirely,
+     * not just an older server that sends it empty.
+     */
+    val config: SessionConfig? = null,
+)
+
+/**
+ * Server-controlled tunables delivered via [HandshakeCompleteMessage] right
+ * after authentication succeeds. Deliberately the seed of a general
+ * post-auth config/capability handshake rather than a one-off field:
+ * anywhere the client would otherwise have to hardcode a value that only
+ * works if it happens to match what the server independently assumes, that
+ * value belongs here instead - [pingIntervalMs] is just the first case (see
+ * its own doc comment for why it specifically had to stop being
+ * independently guessed by each side). Add new fields as nullable/defaulted
+ * so an older client ignores fields it doesn't understand yet, and a client
+ * talking to an older server that never sends a given field falls back to
+ * its own hardcoded default.
+ */
+@Serializable
+data class SessionConfig(
+    /**
+     * How often THIS client should send its own WebSocket ping frames, in
+     * milliseconds - mirrors the server's own keepalive cadence
+     * (go-wallet-backend's `config.ServerConfig.EngineWSPingInterval`) so
+     * neither side has to independently guess a value low enough to satisfy
+     * whatever intermediary (Fly.io's edge proxy, in production - confirmed
+     * empirically to close an idle connection after ~5-6s, nowhere near the
+     * 30s this used to be hardcoded to on both sides) would otherwise
+     * consider the connection idle and close it. Null/0 (the server hasn't
+     * said, or this is being decoded somewhere that never received a real
+     * handshake_complete) means: use [WalletEngineSession]'s own hardcoded
+     * default rather than treat it as "no ping at all".
+     */
+    @SerialName("ping_interval_ms") val pingIntervalMs: Long? = null,
 )
 
 @Serializable
