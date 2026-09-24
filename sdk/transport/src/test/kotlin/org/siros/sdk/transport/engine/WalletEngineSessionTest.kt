@@ -5,6 +5,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
 import io.mockk.verify
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
 import okhttp3.OkHttpClient
@@ -25,6 +26,15 @@ class WalletEngineSessionTest {
     private val client = mockk<OkHttpClient>()
     private val webSocket = mockk<WebSocket>(relaxed = true)
     private val response = mockk<Response>(relaxed = true)
+    // doConnect() derives a per-connection client via
+    // client.newBuilder().pingInterval(...).build() so a ping interval
+    // learned from the server (see SessionConfig) can take effect on the
+    // next connection without rebuilding [client] wholesale - see
+    // WalletEngineSession.doConnect's doc comment. A class property (not
+    // local to setUp()) so individual tests can also verify what interval
+    // it was actually given - see
+    // handshake_complete_config_ping_interval_is_adopted_on_next_connection.
+    private val builder = mockk<OkHttpClient.Builder>()
 
     private lateinit var request: Request
     private lateinit var listener: WebSocketListener
@@ -38,6 +48,11 @@ class WalletEngineSessionTest {
             listener = listenerSlot.captured
             webSocket
         }
+        // Returning [client] itself from build() keeps every test's existing
+        // newWebSocket stub above meaningful without needing a second one.
+        every { client.newBuilder() } returns builder
+        every { builder.pingInterval(any(), any()) } returns builder
+        every { builder.build() } returns client
     }
 
     @Test
@@ -83,6 +98,44 @@ class WalletEngineSessionTest {
             assertEquals(WalletEngineSession.State.CONNECTED, session.state.value)
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    @Test
+    fun handshake_complete_config_ping_interval_is_adopted_on_next_connection() = runTest {
+        val session = WalletEngineSession(
+            baseUrl = "https://wallet.example.com",
+            tenantId = "tenant-42",
+            client = client,
+        )
+        session.connect("app-token")
+
+        // The very first connection must use the hardcoded default, not
+        // whatever a server that hasn't spoken yet might eventually say.
+        verify(exactly = 1) {
+            builder.pingInterval(WalletEngineSession.DEFAULT_PING_INTERVAL_MS, TimeUnit.MILLISECONDS)
+        }
+
+        // onMessage only enqueues the frame for WalletEngineSession's own
+        // consumer coroutine (see its rawMessageChannel doc comment); awaiting
+        // it on messages() synchronizes with that coroutine actually having
+        // processed it (and so updated pingIntervalMs) before this test moves on.
+        session.messages().test {
+            listener.onMessage(
+                webSocket,
+                """{"type":"handshake_complete","session_id":"session-123","config":{"ping_interval_ms":7000}}""",
+            )
+            awaitItem()
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        // Adopting a new value must not itself force a reconnect - the
+        // healthy current connection is left alone.
+        verify(exactly = 1) { client.newWebSocket(any(), any()) }
+
+        session.forceReconnect()
+
+        verify(exactly = 1) { builder.pingInterval(7000L, TimeUnit.MILLISECONDS) }
+        verify(exactly = 2) { client.newWebSocket(any(), any()) }
     }
 
     @Test

@@ -102,6 +102,22 @@ class WalletEngineSession(
     private val baseReconnectDelayMs = 1000L
 
     /**
+     * This session's own WebSocket ping cadence, in milliseconds - starts at
+     * [DEFAULT_PING_INTERVAL_MS] and is updated (for the *next* connection
+     * attempt, not the current one - see [handleMessage]'s
+     * `HANDSHAKE_COMPLETE` case) whenever the server reports a different
+     * value via [HandshakeCompleteMessage.config]. In-memory only: a fresh
+     * process restart falls back to the hardcoded default and re-learns the
+     * server's value on its very first handshake, which is fine since that
+     * default is itself already safe (see [DEFAULT_PING_INTERVAL_MS]'s doc
+     * comment) - this isn't a value that ever needs to survive a restart to
+     * avoid a broken connection, only to avoid an unnecessary mid-life
+     * disagreement between client and server.
+     */
+    @Volatile
+    private var pingIntervalMs: Long = DEFAULT_PING_INTERVAL_MS
+
+    /**
      * Raw incoming WS text frames, processed strictly one at a time by a
      * single consumer coroutine (started in [init]) - `onMessage` previously
      * did `scope.launch { handleMessage(text) }` per frame, an unstructured
@@ -201,7 +217,19 @@ class WalletEngineSession(
             .header("Sec-WebSocket-Protocol", "wmp.v1")
             .build()
 
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
+        // Derived per-connection rather than baked into [client] itself:
+        // OkHttp's automatic ping/pong keepalive is fixed for the lifetime
+        // of whatever OkHttpClient a WebSocket is opened on, so a value
+        // learned from the server (see [pingIntervalMs]'s doc comment)
+        // between connections can only take effect on the NEXT one -
+        // `newBuilder()` reuses [client]'s connection pool/dispatcher/etc.
+        // and overrides only the interval, rather than constructing an
+        // unrelated OkHttpClient from scratch.
+        val connectionClient = client.newBuilder()
+            .pingInterval(pingIntervalMs, TimeUnit.MILLISECONDS)
+            .build()
+
+        webSocket = connectionClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
                 Timber.d("Engine WebSocket connected, sending handshake")
                 reconnectAttempts = 0
@@ -302,6 +330,15 @@ class WalletEngineSession(
                     sessionId = msg.sessionId
                     _state.value = State.CONNECTED
                     Timber.i("Engine session established: ${msg.sessionId}")
+                    msg.config?.pingIntervalMs
+                        ?.takeIf { it > 0 && it != pingIntervalMs }
+                        ?.let { serverPingIntervalMs ->
+                            Timber.i(
+                                "Server ping interval (${serverPingIntervalMs}ms) differs " +
+                                    "from ours (${pingIntervalMs}ms) - adopting it for the next connection"
+                            )
+                            pingIntervalMs = serverPingIntervalMs
+                        }
                 }
                 MessageTypes.FLOW_PROGRESS -> {
                     val msg = json.decodeFromString(FlowProgressMessage.serializer(), text)
@@ -681,8 +718,21 @@ class WalletEngineSession(
     }
 
     companion object {
+        /**
+         * Used until (and unless) the server tells us otherwise via
+         * [HandshakeCompleteMessage.config] - see [pingIntervalMs]'s doc
+         * comment. 3s, not the 30s this used to be hardcoded to: found
+         * empirically (raw idle-TLS-connection tests against production
+         * Fly.io apps, not documentation - Fly's own docs don't state a
+         * number) that Fly.io's edge closes a connection with no traffic on
+         * it after ~5-6s, which is why every engine WebSocket in production
+         * was silently reconnecting every few seconds. Matches
+         * go-wallet-backend's own default (config.ServerConfig.EngineWSPingInterval).
+         */
+        const val DEFAULT_PING_INTERVAL_MS = 3000L
+
         private fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
-            .pingInterval(30, TimeUnit.SECONDS)
+            .pingInterval(DEFAULT_PING_INTERVAL_MS, TimeUnit.MILLISECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .build()
     }
