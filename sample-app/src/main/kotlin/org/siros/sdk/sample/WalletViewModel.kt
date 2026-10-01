@@ -1281,15 +1281,24 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             try {
                 _isLoading.value = true
                 val token = wallet.getAccessToken() // Auth token for facetec-api
-                val delegate = org.siros.sdk.idv.facetec.FaceTecCaptureDelegate()
-                val client = org.siros.sdk.idv.RemoteIDVClient(
-                    org.siros.sdk.idv.RemoteIDVClient.Config(
-                        serverUrl = idvServerUrl,
+                // FaceTec 10: one session relays its blobs to facetec-api's
+                // process-request. Needs the FaceTec AAR on the classpath and a
+                // device key identifier (-PfacetecDeviceKeyIdentifier=...);
+                // without either, verifyIdentityAndIssue reports it unavailable.
+                val provider = org.siros.sdk.idv.facetec.FaceTecIDVProvider(
+                    org.siros.sdk.idv.facetec.FaceTecIDVConfig(
+                        processRequestUrl = "$idvServerUrl/v1/process-request",
                         authToken = "Bearer $token",
+                        deviceKeyIdentifier = BuildConfig.FACETEC_DEVICE_KEY_IDENTIFIER,
                     )
                 )
-                val provider = org.siros.sdk.idv.RemoteIDVProvider(client, delegate)
                 wallet.verifyIdentityAndIssue(provider, activity)
+            } catch (e: org.siros.sdk.idv.IDVException) {
+                android.util.Log.e("SIROS_VM", "IDV failed", e)
+                // IDVException is not a SirosException, so localizedErrorMessage
+                // would not find its idv_* code.
+                _errorMessage.value = ERROR_CODE_RESOURCES[e.errorCode]?.let(activity::getString)
+                    ?: e.message ?: "Identity verification failed"
             } catch (e: Exception) {
                 android.util.Log.e("SIROS_VM", "IDV failed", e)
                 _errorMessage.value = e.message ?: "Identity verification failed"
@@ -2529,6 +2538,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             "idv_liveness_failed" to R.string.error_idv_liveness_failed,
             "idv_verification_failed" to R.string.error_idv_verification_failed,
             "idv_network_error" to R.string.error_idv_network_error,
+            "idv_nfc_not_requested" to R.string.error_idv_nfc_not_requested,
+            "idv_nfc_device_not_capable" to R.string.error_idv_nfc_device_not_capable,
+            "idv_nfc_skipped" to R.string.error_idv_nfc_skipped,
+            "idv_nfc_chip_read_failed" to R.string.error_idv_nfc_chip_read_failed,
+            "idv_nfc_not_authenticated" to R.string.error_idv_nfc_not_authenticated,
             "ctap2_not_available" to R.string.error_ctap2_not_available,
             "ctap2_connection_failed" to R.string.error_ctap2_connection_failed,
             "ctap2_timeout" to R.string.error_ctap2_timeout,
