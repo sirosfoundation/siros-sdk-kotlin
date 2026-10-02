@@ -1,5 +1,6 @@
 package org.siros.sdk.keystore
 
+import org.siros.sdk.credentials.KeystoreException
 import org.siros.sdk.credentials.interop.HolderBinding
 
 /**
@@ -83,17 +84,36 @@ interface KeystoreManager {
      *
      * Open with a default rather than abstract so that an implementation
      * written before DIIP - including a host's own [KeystoreManager] - keeps
-     * compiling and linking. Such an implementation cannot honour
-     * [holderBinding], so the default ignores it and produces whatever shape
-     * that keystore has always produced; the keystores in this SDK override
-     * it.
+     * compiling and linking. `null` and [HolderBinding.EMBEDDED_JWK] forward
+     * to the three-argument [generateProof] unchanged, since an
+     * implementation written before DIIP existed can only ever have
+     * produced the HAIP/`EMBEDDED_JWK` shape - forwarding is exactly
+     * honouring the request. [HolderBinding.DID_JWK] is different: this
+     * conformer has no way to produce a did:jwk-shaped proof, and silently
+     * emitting the HAIP shape instead is not a safe fallback - it is a
+     * proof a DIIP-only Issuer will reject, sent as if it had been
+     * negotiated correctly. The keystores in this SDK override this method
+     * and handle [HolderBinding.DID_JWK] for real (see
+     * [JweKeystore]/[WscdKeystoreAdapter], including over a hardware-backed
+     * WSCD key: a did:jwk is a pure function of the public key, so no WSCD
+     * plugin needs special-casing); only a third-party conformer that
+     * hasn't gets this default.
      */
     suspend fun generateProof(
         audience: String,
         nonce: String,
         freshKey: Boolean,
         holderBinding: HolderBinding?,
-    ): String = generateProof(audience, nonce, freshKey)
+    ): String {
+        if (holderBinding == HolderBinding.DID_JWK) {
+            throw KeystoreException(
+                "This KeystoreManager does not implement generateProof(..., holderBinding) " +
+                    "and so cannot produce a did:jwk-shaped (DIIP) proof - refusing rather than " +
+                    "silently emitting a HAIP-shaped proof a DIIP-only Issuer would reject.",
+            )
+        }
+        return generateProof(audience, nonce, freshKey)
+    }
 
     /**
      * Sign a verifiable presentation for OID4VP.
