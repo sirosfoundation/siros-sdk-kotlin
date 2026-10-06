@@ -65,7 +65,8 @@ import org.siros.sdk.idv.IdentityVerificationProvider
  * - [IDVException.DocumentChipNotVerified]: facetec-api refused because the document's chip was
  *   not read and authenticated (`nfc_*` codes).
  * - [IDVException.ChipUntrusted]: the chip was read, but its data is not trusted by facetec-api's
- *   trust decision point (`chip_untrusted`). Another document is needed.
+ *   trust decision point (`chip_untrusted`). Usually another document is needed, but a temporary
+ *   trust-service outage is reported the same way, so offer a retry later too.
  * - [IDVException.DocumentExpired]: the document has expired (`document_expired`).
  * - [IDVException.SessionExpired]: facetec-api reports the liveness step as expired or used
  *   (`session_expired`); start over.

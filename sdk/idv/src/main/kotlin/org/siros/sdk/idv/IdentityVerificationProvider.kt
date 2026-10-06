@@ -61,8 +61,10 @@ sealed class IDVException(
     /**
      * The backend refused because the document's chip data could not be traced to a trusted
      * document signer (facetec-api's `chip_untrusted`, decided by its go-trust PDP). The chip was
-     * read and authenticated, so retrying with the same document will not help; the user needs
-     * another document. [errorCode] is `idv_chip_untrusted`.
+     * read and authenticated, but trust could not be established. That is usually because the
+     * document's signer is not trusted, so another document is needed; it can also be a temporary
+     * outage of the trust service (facetec-api reports both as `chip_untrusted`), in which case a
+     * new verification later with the same document may succeed. [errorCode] is `idv_chip_untrusted`.
      */
     class ChipUntrusted(message: String) : IDVException(message, errorCode = "idv_chip_untrusted")
 
