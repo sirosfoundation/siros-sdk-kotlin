@@ -240,8 +240,7 @@ class SirosWallet private constructor(
 
     /**
      * Whether `transaction_data` handling is in force: [transactionDataEnabled]
-     * **and** a [transactionConsentHandler] is registered (and the SDK build
-     * contains the full handling pipeline). Only then does the wallet declare
+     * **and** a [transactionConsentHandler] is registered. Only then does the wallet declare
      * support to the orchestrator; otherwise it declares nothing, the
      * orchestrator refuses `transaction_data` requests for it, and a request
      * that reaches the wallet anyway (for example through the DC API, which
@@ -250,8 +249,118 @@ class SirosWallet private constructor(
      */
     val isTransactionDataEffectivelyEnabled: Boolean
         get() = transactionDataEnabled &&
-            transactionConsentHandler != null &&
-            TransactionDataSupport.pipelineAvailable
+            transactionConsentHandler != null
+
+    /**
+     * Reports the authentication factors that authorised an SCA signing
+     * operation (EC TS12 3.6 `amr`). The default establishes none, so SCA
+     * presentations are refused with `insufficientAuthenticationFactors`
+     * until a provider that can justify two categories for the operation is
+     * registered; see [AuthenticationFactorsProvider].
+     */
+    @Volatile
+    var authenticationFactorsProvider: AuthenticationFactorsProvider = ConservativeAuthenticationFactorsProvider
+
+    @Volatile
+    private var customTransactionLogStore: TransactionLogStore? = null
+
+    private val defaultTransactionLogStore: TransactionLogStore by lazy {
+        val prefs = androidx.security.crypto.EncryptedSharedPreferences.create(
+            "siros_transaction_log",
+            androidx.security.crypto.MasterKeys.getOrCreate(androidx.security.crypto.MasterKeys.AES256_GCM_SPEC),
+            activity.applicationContext,
+            androidx.security.crypto.EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            androidx.security.crypto.EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+        )
+        JsonTransactionLogStore(
+            read = { prefs.getString(TRANSACTION_LOG_KEY, null) },
+            write = { value -> prefs.edit().apply { if (value == null) remove(TRANSACTION_LOG_KEY) else putString(TRANSACTION_LOG_KEY, value) }.commit() },
+        )
+    }
+
+    /**
+     * Where SCA attempts are recorded (EC TS12 5.3). Defaults to encrypted
+     * app-private storage; replace it to keep the log elsewhere.
+     */
+    var transactionLogStore: TransactionLogStore
+        get() = customTransactionLogStore ?: defaultTransactionLogStore
+        set(value) {
+            customTransactionLogStore = value
+        }
+
+    /** The SCA transaction log, newest first (EC TS12 5.3). */
+    suspend fun getTransactionLog(): List<TransactionLogEntry> = transactionLogStore.entries()
+
+    /**
+     * Whether the flow now in progress declared `transaction_data` support
+     * when it started: a later change of [transactionDataEnabled] applies to
+     * the next flow only. Legacy engine: set at [startPresentation].
+     */
+    @Volatile
+    private var engineFlowDeclaredTransactionData: Boolean = false
+
+    /** The same for the WMP session: offered once, at session creation. */
+    @Volatile
+    private var wmpSessionDeclaredTransactionData: Boolean = false
+
+    /** Test seam: replaces the production type-metadata source. */
+    @Volatile
+    internal var transactionMetadataSourceOverride: org.siros.sdk.wallet.transaction.TransactionMetadataSource? = null
+
+    private fun transactionCoordinator(): org.siros.sdk.wallet.transaction.TransactionDataCoordinator {
+        val source = transactionMetadataSourceOverride
+            ?: org.siros.sdk.wallet.transaction.VctmTransactionMetadataSource(vctmFetcher, registryUrl, httpClient)
+        return org.siros.sdk.wallet.transaction.TransactionDataCoordinator(
+            validator = org.siros.sdk.wallet.transaction.TransactionDataValidator(source),
+            display = org.siros.sdk.wallet.transaction.TransactionDisplayBuilder(source, java.util.Locale.getDefault().toLanguageTag()),
+            consentHandler = { transactionConsentHandler },
+            factorsProvider = { authenticationFactorsProvider },
+            log = { transactionLogStore },
+        )
+    }
+
+    /**
+     * Runs the `transaction_data` pipeline for a request and returns what to
+     * sign with.
+     *
+     * @param declared whether TS12 handling was in force for this flow.
+     * @throws TransactionDataError to refuse or decline; nothing is signed.
+     */
+    private suspend fun processTransactionData(
+        declared: Boolean,
+        entries: List<org.siros.sdk.wallet.transaction.TransactionDataEntry>,
+        responseMode: String?,
+        credentials: Map<String, List<org.siros.sdk.credentials.StoredCredential>>,
+        verifier: String?,
+        requestSigned: Boolean?,
+    ): org.siros.sdk.wallet.transaction.ScaPresentationPlan {
+        val request = org.siros.sdk.wallet.transaction.TransactionDataRequest(
+            entries = entries,
+            responseMode = responseMode,
+            credentials = credentials,
+            verifier = verifier,
+            requestSigned = requestSigned,
+        )
+        val coordinator = transactionCoordinator()
+        if (!declared) {
+            coordinator.refuse(request, TransactionDataError(
+                org.siros.sdk.credentials.TransactionDataReason.DISABLED,
+                "The request carries transaction_data, which this wallet is not set up to process; refusing it",
+            ))
+        }
+        return coordinator.process(request)
+    }
+
+    /** Wire entries to pipeline entries; a request an orchestrator sent without `raw` is refused and logged. */
+    private suspend fun wireEntries(
+        wire: List<org.siros.sdk.transport.wmp.openid4x.TransactionData>,
+        verifier: String?,
+    ): List<org.siros.sdk.wallet.transaction.TransactionDataEntry> = try {
+        wire.map { org.siros.sdk.wallet.transaction.TransactionDataEntry.fromWire(it) }
+    } catch (e: TransactionDataError) {
+        transactionCoordinator().recordUnreadable(verifier, e)
+        throw e
+    }
 
     private val _state = MutableStateFlow<WalletState>(WalletState.Disconnected())
 
@@ -3313,9 +3422,11 @@ class SirosWallet private constructor(
     suspend fun startPresentation(requestUri: String) {
         val engine = engineSession ?: throw WalletException(NOT_CONNECTED)
         ensureEngineConnected(engine)
+        val declare = isTransactionDataEffectivelyEnabled
+        engineFlowDeclaredTransactionData = declare
         engine.startPresentation(
             requestUri = requestUri,
-            features = TransactionDataSupport.engineFeatures(isTransactionDataEffectivelyEnabled),
+            features = TransactionDataSupport.engineFeatures(declare),
         )
     }
 
@@ -3363,7 +3474,18 @@ class SirosWallet private constructor(
         // transaction_data at a wallet that never declared support. Refuse it
         // before any trust evaluation or signing: answering without the
         // transaction hashes would authorise a payment the user never saw.
-        TransactionDataSupport.refuseIfPresent(request.hasTransactionData)
+        val transactionDataEnabled = isTransactionDataEffectivelyEnabled
+        if (request.hasTransactionData && !transactionDataEnabled) {
+            // Refused (and logged) without evaluating trust or touching a credential.
+            processTransactionData(
+                declared = false,
+                entries = runCatching { dcApiTransactionEntries(request) }.getOrNull().orEmpty(),
+                responseMode = request.responseMode,
+                credentials = emptyMap(),
+                verifier = origin,
+                requestSigned = request.keyMaterial != null,
+            )
+        }
 
         // request.clientId is only cryptographically bound to anything when
         // the request is signed (keyMaterial != null, verified against the
@@ -3498,6 +3620,21 @@ class SirosWallet private constructor(
         // their server and surfaced as an opaque HTTP 500, with our own
         // wallet-side exchange having completed successfully - nothing on
         // our side ever saw an error.
+        val scaPlan = if (request.hasTransactionData) {
+            val entries = dcApiTransactionEntries(request)
+            val answering = selectedIds.mapNotNull { id -> allCreds.find { it.id == id } }
+                .groupBy { matchResultByCredentialId[it.id]?.queryId ?: "_default" }
+            processTransactionData(
+                declared = transactionDataEnabled,
+                entries = entries,
+                responseMode = request.responseMode,
+                credentials = answering,
+                verifier = trustResult.entityName ?: subjectId,
+                requestSigned = request.keyMaterial != null,
+            )
+        } else {
+            null
+        }
         val tokensByQueryId = linkedMapOf<String, MutableList<String>>()
         for (id in selectedIds) {
             val cred = allCreds.find { it.id == id } ?: continue
@@ -3581,13 +3718,25 @@ class SirosWallet private constructor(
                     deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
                 )
             } else {
-                keystore.signVpToken(
-                    credential = cred.raw,
-                    disclosedClaims = disclosedClaims,
-                    nonce = request.nonce,
-                    audience = audience,
-                    kid = cred.kid,
-                )
+                val binding = scaPlan?.bindingFor(queryId)
+                if (binding != null) {
+                    keystore.signVpToken(
+                        credential = cred.raw,
+                        disclosedClaims = disclosedClaims,
+                        nonce = request.nonce,
+                        audience = audience,
+                        kid = cred.kid,
+                        transaction = binding,
+                    )
+                } else {
+                    keystore.signVpToken(
+                        credential = cred.raw,
+                        disclosedClaims = disclosedClaims,
+                        nonce = request.nonce,
+                        audience = audience,
+                        kid = cred.kid,
+                    )
+                }
             }
             tokensByQueryId.getOrPut(queryId) { mutableListOf() }.add(token)
         }
@@ -3665,6 +3814,22 @@ class SirosWallet private constructor(
 
         return DCAPIPresentationResult(responseJson = finalResponseJson, credentialIds = selectedIds)
     }
+
+    /** The `transaction_data` strings of a DC API request; anything but an array of strings is an invalid entry. */
+    private fun dcApiTransactionEntries(
+        request: org.siros.sdk.wallet.dcapi.DCAPIRequest,
+    ): List<org.siros.sdk.wallet.transaction.TransactionDataEntry> =
+        (request.transactionData as? kotlinx.serialization.json.JsonArray)?.map { el ->
+            (el as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content
+                ?.let { raw -> org.siros.sdk.wallet.transaction.TransactionDataEntry(raw) }
+                ?: throw TransactionDataError(
+                    org.siros.sdk.credentials.TransactionDataReason.INVALID_ENTRY,
+                    "A transaction_data entry is not a string",
+                )
+        } ?: throw TransactionDataError(
+            org.siros.sdk.credentials.TransactionDataReason.INVALID_ENTRY,
+            "transaction_data is not an array",
+        )
 
     /** Find the verifier's response-encryption key (`use: "enc"`) from DC API `client_metadata.jwks`. */
     private fun findEncryptionJwk(clientMetadata: kotlinx.serialization.json.JsonObject?): com.nimbusds.jose.jwk.JWK? {
@@ -4986,9 +5151,11 @@ class SirosWallet private constructor(
         peer.use(profile)
         // Offered per session: a later change of transactionDataEnabled
         // reaches the orchestrator only with the next session.
+        val declare = isTransactionDataEffectivelyEnabled
+        wmpSessionDeclaredTransactionData = declare
         peer.connect(
             appToken,
-            capabilitiesOffered = TransactionDataSupport.capabilitiesOffered(isTransactionDataEffectivelyEnabled),
+            capabilitiesOffered = TransactionDataSupport.capabilitiesOffered(declare),
         )
         wmpPeer = peer
         // WMP peer handles credential notifications via the profile
@@ -5418,9 +5585,17 @@ class SirosWallet private constructor(
                 // transport's handleSignRequest - this transport previously
                 // skipped it entirely, so a WMP-relayed sign_presentation was
                 // never checked against the trust result computed for this flow.
-                // Before anything is signed: transaction_data is never ignored.
-                TransactionDataSupport.refuseIfPresent(!params.transactionData.isNullOrEmpty())
+                val verifierName = lastTrustResults[flowId]?.entityName
                 validateAudience(flowId, params.audience)
+                // transaction_data is never ignored: the TS12 pipeline runs and
+                // the SD-JWT presentations it covers are built here, or the
+                // request is refused, before anything is signed.
+                val wire = params.transactionData?.takeIf { it.isNotEmpty() }
+                if (wire != null) {
+                    return org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult(
+                        vpToken = signWmpTransactionPresentation(params, wire, verifierName),
+                    )
+                }
                 val vpToken = keystore.signPresentation(
                     nonce = params.nonce,
                     audience = params.audience,
@@ -5461,6 +5636,49 @@ class SirosWallet private constructor(
             }
             else -> throw IllegalArgumentException("Unknown sign action: ${params.action}")
         }
+    }
+
+    /**
+     * The WMP `sign_presentation` for a request carrying `transaction_data`:
+     * runs the TS12 pipeline, then builds one SD-JWT presentation per selected
+     * credential (newline-joined, as the legacy transport does; the backend
+     * assembles the `vp_token`), binding the transaction into those the
+     * entries name.
+     */
+    private suspend fun signWmpTransactionPresentation(
+        params: org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams,
+        wire: List<org.siros.sdk.transport.wmp.openid4x.TransactionData>,
+        verifierName: String?,
+    ): String {
+        val refs = params.credentialsToInclude.orEmpty()
+        val all = credentialStore.getAll()
+        val selected = refs.map { ref -> ref to all.find { it.id == ref.credentialId.toLongOrNull() } }
+        val plan = processTransactionData(
+            declared = wmpSessionDeclaredTransactionData,
+            entries = wireEntries(wire, params.audience),
+            responseMode = params.responseMode,
+            credentials = selected.mapNotNull { (ref, c) ->
+                val q = ref.credentialQueryId
+                if (c != null && q != null) q to c else null
+            }.groupBy({ it.first }, { it.second }),
+            verifier = verifierName ?: params.audience,
+            requestSigned = null,
+        )
+        val tokens = mutableListOf<String>()
+        for ((ref, cred) in selected) {
+            // The pipeline already refused anything that is not an SD-JWT VC it can find.
+            val c = cred ?: throw TransactionDataError(
+                org.siros.sdk.credentials.TransactionDataReason.INVALID_ENTRY,
+                "A selected credential is not in the wallet",
+            )
+            val binding = plan.bindingFor(ref.credentialQueryId)
+            tokens += if (binding != null) {
+                keystore.signVpToken(c.raw, ref.disclosedClaims, params.nonce, params.audience, c.kid, binding)
+            } else {
+                keystore.signVpToken(c.raw, ref.disclosedClaims, params.nonce, params.audience, c.kid)
+            }
+        }
+        return tokens.joinToString("\n")
     }
 
     /**
@@ -5755,11 +5973,33 @@ class SirosWallet private constructor(
                             val audience = params?.audience ?: ""
                             val credsToInclude = params?.credentialsToInclude
 
-                            // Before anything is signed: transaction_data is never ignored.
-                            TransactionDataSupport.refuseIfPresent(!params?.transactionData.isNullOrEmpty())
+                            // validateAudience consumes the flow's trust result, so read the verifier's name first.
+                            val verifierName = lastTrustResults[msg.flowId]?.entityName
 
                             // Validate audience matches trusted verifier identity
                             validateAudience(msg.flowId, audience)
+
+                            // transaction_data is never ignored: either the whole TS12
+                            // pipeline runs (and yields what to bind) or the request is
+                            // refused, before anything is signed.
+                            val scaPlan = params?.transactionData?.takeIf { it.isNotEmpty() }?.let { wire ->
+                                val allForSca = credentialStore.getAll()
+                                val answering = credsToInclude.orEmpty()
+                                    .mapNotNull { ref ->
+                                        val c = allForSca.find { it.id == ref.credentialId.toLongOrNull() }
+                                        val q = ref.credentialQueryId
+                                        if (c != null && q != null) q to c else null
+                                    }
+                                    .groupBy({ it.first }, { it.second })
+                                processTransactionData(
+                                    declared = engineFlowDeclaredTransactionData,
+                                    entries = wireEntries(wire, audience),
+                                    responseMode = params.responseMode,
+                                    credentials = answering,
+                                    verifier = verifierName ?: audience,
+                                    requestSigned = null,
+                                )
+                            }
 
                             val vpToken = if (!credsToInclude.isNullOrEmpty()) {
                                 val allCreds = credentialStore.getAll()
@@ -5878,13 +6118,25 @@ class SirosWallet private constructor(
                                         android.util.Base64.encodeToString(deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
                                     } else {
                                         // SD-JWT VP token with KB-JWT
-                                        keystore.signVpToken(
-                                            credential = cred.raw,
-                                            disclosedClaims = ref.disclosedClaims,
-                                            nonce = nonce,
-                                            audience = audience,
-                                            kid = cred.kid,
-                                        )
+                                        val binding = scaPlan?.bindingFor(ref.credentialQueryId)
+                                        if (binding != null) {
+                                            keystore.signVpToken(
+                                                credential = cred.raw,
+                                                disclosedClaims = ref.disclosedClaims,
+                                                nonce = nonce,
+                                                audience = audience,
+                                                kid = cred.kid,
+                                                transaction = binding,
+                                            )
+                                        } else {
+                                            keystore.signVpToken(
+                                                credential = cred.raw,
+                                                disclosedClaims = ref.disclosedClaims,
+                                                nonce = nonce,
+                                                audience = audience,
+                                                kid = cred.kid,
+                                            )
+                                        }
                                     }
                                 }
                                 // For single credential presentations (most common), return the token directly.
@@ -7804,6 +8056,9 @@ class SirosWallet private constructor(
 
         /** Thrown wherever a call needs the backend and the wallet has no session yet. */
         private const val NOT_CONNECTED = "Not connected"
+
+        /** Slot of [defaultTransactionLogStore] in its encrypted preferences. */
+        private const val TRANSACTION_LOG_KEY = "transaction_log"
 
         /** Thrown wherever a signing step needs a server challenge it did not get. */
         private const val MISSING_CHALLENGE = "Missing challenge"
