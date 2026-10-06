@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import org.siros.sdk.credentials.TransactionDataError
 import org.siros.sdk.transport.StringOrStringListSerializer
 import org.siros.sdk.transport.engine.CredentialRef
 import org.siros.sdk.transport.wmp.*
@@ -434,12 +435,14 @@ class OpenID4xProfile(
         try {
             val result = handler.invoke(flowId, signParams)
             sendSignResponse(flowId, result)
-        } catch (e: Exception) {
-            Timber.e(e, "Sign request handler failed")
+        } catch (e: TransactionDataError) {
             // A refused transaction_data request names its reason (the
             // verifier-facing OpenID4VP error) instead of the generic code.
-            val code = (e as? org.siros.sdk.credentials.TransactionDataError)?.verifierError ?: "SIGN_ERROR"
-            sendFlowError(flowId, code, e.message)
+            Timber.w(e, "Sign request refused: transaction_data (${e.reason.code})")
+            sendFlowError(flowId, e.verifierError, e.message)
+        } catch (e: Exception) {
+            Timber.e(e, "Sign request handler failed")
+            sendFlowError(flowId, "SIGN_ERROR", e.message)
         }
     }
 
