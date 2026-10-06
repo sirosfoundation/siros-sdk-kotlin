@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is step 1 of the EC TS12 rollout; the handling itself follows.
 
 ### Added
+- **`transaction_data` core (EC TS12), not yet reachable from any transport.**
+  Strict decoding of each entry from its own `raw` (duplicate member names,
+  invalid UTF-8 and orchestrator-hint disagreement are refused), SD-JWT VC
+  only, SCA `category` check, type support, JSON Schema validation against
+  the spec's four built-in schemas (embedded verbatim) or the type metadata's,
+  hash algorithm choice, and `transaction_data_hashes` over the verifier's
+  `raw` string (golden vectors reproduced). `KeystoreManager.signVpToken`
+  gains a `TransactionBinding` overload (`jti`, `response_mode`, string
+  `transaction_data_hashes_alg`, two-category `amr`); the unused
+  `WscdKeystoreAdapter.signVpToken(..., TransactionDataItem)` overload, which
+  hashed a re-serialisation, is removed.
 - `WalletConfig.transactionDataEnabled` / `SirosWallet.transactionDataEnabled`
   (runtime flag, default `false`), `SirosWallet.transactionConsentHandler`
   and `isTransactionDataEffectivelyEnabled`; `TransactionDataError` with the
