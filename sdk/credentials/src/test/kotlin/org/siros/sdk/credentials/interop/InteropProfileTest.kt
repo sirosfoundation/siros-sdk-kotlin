@@ -47,11 +47,16 @@ class InteropProfileTest {
     }
 
     @Test
-    fun `the embedded key wins when an issuer accepts both`() {
-        // Either is interoperable by the issuer's own declaration, and the
-        // embedded key needs no DID resolution anywhere in the chain.
-        assertEquals(HolderBinding.EMBEDDED_JWK, HolderBinding.negotiate(listOf("did:jwk", "jwk")))
-        assertEquals(HolderBinding.EMBEDDED_JWK, HolderBinding.negotiate(listOf("jwk", "did:jwk")))
+    fun `did jwk wins when an issuer accepts both`() {
+        // A wallet that only ever speaks DIIP has no configured profile at
+        // all - it sends did:jwk whenever an issuer accepts it, since that
+        // is what DIIP requires. Converging on that (rather than preferring
+        // the embedded key, which used to make DIIP unreachable against any
+        // issuer that also advertises jwk) is converging on the wider DIIP
+        // ecosystem's actual behavior, and costs the issuer nothing extra -
+        // did:jwk is self-certifying, no network resolution needed.
+        assertEquals(HolderBinding.DID_JWK, HolderBinding.negotiate(listOf("did:jwk", "jwk")))
+        assertEquals(HolderBinding.DID_JWK, HolderBinding.negotiate(listOf("jwk", "did:jwk")))
     }
 
     @Test
@@ -91,7 +96,7 @@ class InteropProfileTest {
         // And the substring trap: "jwk" must be matched as a whole value, not
         // found inside "did:jwk".
         assertEquals(HolderBinding.DID_JWK, HolderBinding.negotiate(listOf("did:jwk")))
-        assertEquals(HolderBinding.EMBEDDED_JWK, HolderBinding.negotiate(listOf("jwk", "did:jwk")))
+        assertEquals(HolderBinding.DID_JWK, HolderBinding.negotiate(listOf("jwk", "did:jwk")))
         // A DID method that is not did:jwk names nothing this Holder can use.
         assertNull(HolderBinding.negotiate(listOf("did:key")))
     }
