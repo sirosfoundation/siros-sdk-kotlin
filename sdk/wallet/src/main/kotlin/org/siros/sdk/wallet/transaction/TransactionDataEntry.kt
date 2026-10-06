@@ -76,6 +76,8 @@ internal object TransactionDataDecoder {
     /** Upper bound on an entry's encoded size; a payment confirmation is well under 2 KiB. */
     const val MAX_RAW_CHARS = 64 * 1024
 
+    private const val BAD_ALG_LIST = "bad hash algorithm list"
+
     private val json = Json
 
     fun decode(entry: TransactionDataEntry): DecodedTransactionData {
@@ -116,12 +118,12 @@ internal object TransactionDataDecoder {
 
         val algs = when (val a = obj["transaction_data_hashes_alg"]) {
             null -> null
-            is JsonPrimitive -> if (a.isString && a.content.isNotEmpty()) listOf(a.content) else invalid("bad hash algorithm list")
+            is JsonPrimitive -> if (a.isString && a.content.isNotEmpty()) listOf(a.content) else invalid(BAD_ALG_LIST)
             is JsonArray -> a.map {
                 (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content?.takeIf { s -> s.isNotEmpty() }
-                    ?: invalid("bad hash algorithm list")
-            }.takeIf { it.isNotEmpty() } ?: invalid("bad hash algorithm list")
-            else -> invalid("bad hash algorithm list")
+                    ?: invalid(BAD_ALG_LIST)
+            }.takeIf { it.isNotEmpty() } ?: invalid(BAD_ALG_LIST)
+            else -> invalid(BAD_ALG_LIST)
         }
 
         val decoded = DecodedTransactionData(raw, type, ids, payload, algs)

@@ -7,14 +7,16 @@ import java.util.Base64
 /** `transaction_data_hashes` (OpenID4VP 1.0 Appendix B; EC TS12 v1.0.1 3.6). */
 internal object TransactionDataHashing {
     /** The `transaction_data_hashes_alg` names the SDK can compute, as IANA hash names. */
-    val SUPPORTED: List<String> = listOf("sha-256", "sha-384", "sha-512")
+    val SUPPORTED: List<String> = listOf(SHA_256, "sha-384", "sha-512")
+
+    private const val SHA_256 = "sha-256"
 
     /** The algorithm when the verifier lists none (OpenID4VP 1.0 Appendix B). */
-    const val DEFAULT = "sha-256"
+    const val DEFAULT = SHA_256
 
     private fun digest(alg: String): MessageDigest = MessageDigest.getInstance(
         when (alg) {
-            "sha-256" -> "SHA-256"
+            SHA_256 -> "SHA-256"
             "sha-384" -> "SHA-384"
             "sha-512" -> "SHA-512"
             else -> throw IllegalArgumentException("unsupported hash algorithm '$alg'")
