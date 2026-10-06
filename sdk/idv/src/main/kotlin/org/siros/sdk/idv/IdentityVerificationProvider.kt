@@ -58,6 +58,33 @@ sealed class IDVException(
      */
     class DocumentChipNotVerified(val reason: String, message: String) : IDVException(message, errorCode = "idv_$reason")
 
+    /**
+     * The backend refused because the document's chip data could not be traced to a trusted
+     * document signer (facetec-api's `chip_untrusted`, decided by its go-trust PDP). The chip was
+     * read and authenticated, so retrying with the same document will not help; the user needs
+     * another document. [errorCode] is `idv_chip_untrusted`.
+     */
+    class ChipUntrusted(message: String) : IDVException(message, errorCode = "idv_chip_untrusted")
+
+    /**
+     * The backend refused because the document's expiry date has passed (`document_expired`).
+     * A document whose expiry date is missing or unreadable is [VerificationFailed] instead.
+     * [errorCode] is `idv_document_expired`.
+     */
+    class DocumentExpired(message: String) : IDVException(message, errorCode = "idv_document_expired")
+
+    /**
+     * The backend no longer holds the liveness step this request relies on (`session_expired`):
+     * it expired, or was already used. A liveness step is single-use, so it is never retried;
+     * start a new verification from the face scan. [errorCode] is `idv_session_expired`.
+     *
+     * Through [RemoteIDVClient] this is the answer to a `/v1/id-scan` for a `livenessSessionId`
+     * that is older than the backend's liveness TTL or was already submitted. facetec-api's
+     * `/process-request` flow does not send it: there an expired or missing liveness proof is
+     * reported as `liveness_failed` ([LivenessFailed]).
+     */
+    class SessionExpired(message: String) : IDVException(message, errorCode = "idv_session_expired")
+
     /** Provider-specific error with vendor-specific code. */
     class ProviderError(val providerCode: String, message: String) : IDVException("[$providerCode] $message", errorCode = "idv_provider_$providerCode")
 }
