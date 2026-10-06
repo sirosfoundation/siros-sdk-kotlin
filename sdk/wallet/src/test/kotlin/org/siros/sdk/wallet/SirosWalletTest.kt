@@ -7338,13 +7338,15 @@ class SirosWalletTest {
     }
 
     @Test
-    fun scaEngine_declined_signsNothing() = runTest(dispatcher) {
-        val fx = scaFixture(answer = false)
+    fun scaEngine_declined_signsNothing_andTheAppIsToldWhy() = runTest(dispatcher) {
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val fx = scaFixture(answer = false, extra = arrayOf("eventListener" to listener))
 
         val (sent, _) = sendEngineSignRequest(fx)
 
         assertTrue(sent.isEmpty())
         assertEquals(TransactionOutcome.DECLINED, fx.log.items.single().outcome)
+        verify(exactly = 1) { listener.onTransactionDataRefused("flow-sca", org.siros.sdk.credentials.TransactionDataReason.DECLINED) }
     }
 
     @Test
@@ -7490,8 +7492,12 @@ class SirosWalletTest {
 
     @Test
     fun scaWmp_declined_and_insufficientFactors_signNothing() = runTest(dispatcher) {
-        val declined = runCatching { invokeWmpSign(scaFixture(answer = false).wallet, wmpParams()) }.exceptionOrNull() as TransactionDataError
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val declined = runCatching {
+            invokeWmpSign(scaFixture(answer = false, extra = arrayOf("eventListener" to listener)).wallet, wmpParams())
+        }.exceptionOrNull() as TransactionDataError
         assertEquals(org.siros.sdk.credentials.TransactionDataReason.DECLINED, declined.reason)
+        verify(exactly = 1) { listener.onTransactionDataRefused("flow-wmp", org.siros.sdk.credentials.TransactionDataReason.DECLINED) }
         val few = runCatching { invokeWmpSign(scaFixture(factors = scaFactors.take(1)).wallet, wmpParams()) }.exceptionOrNull() as TransactionDataError
         assertEquals(org.siros.sdk.credentials.TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS, few.reason)
     }

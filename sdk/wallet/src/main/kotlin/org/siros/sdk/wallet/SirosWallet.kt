@@ -5592,9 +5592,14 @@ class SirosWallet private constructor(
                 // request is refused, before anything is signed.
                 val wire = params.transactionData?.takeIf { it.isNotEmpty() }
                 if (wire != null) {
-                    return org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult(
-                        vpToken = signWmpTransactionPresentation(params, wire, verifierName),
-                    )
+                    return try {
+                        org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult(
+                            vpToken = signWmpTransactionPresentation(params, wire, verifierName),
+                        )
+                    } catch (e: TransactionDataError) {
+                        eventListener?.onTransactionDataRefused(flowId, e.reason)
+                        throw e
+                    }
                 }
                 val vpToken = keystore.signPresentation(
                     nonce = params.nonce,
@@ -6174,6 +6179,7 @@ class SirosWallet private constructor(
                     // The legacy protocol has no sign-refusal message: the
                     // engine learns of this when its sign request times out.
                     Timber.w(e, "Refused transaction_data (${e.reason.code}) for flow ${msg.flowId}")
+                    eventListener?.onTransactionDataRefused(msg.flowId, e.reason)
                     reportSignFailure(msg.flowId, "${e.verifierError} (${e.reason.code}): ${e.message}")
                 } catch (e: KeystoreException) {
                     Timber.e(e, "Error handling sign request: keystore error")
