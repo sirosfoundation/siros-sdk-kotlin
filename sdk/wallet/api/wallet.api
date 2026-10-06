@@ -28,6 +28,10 @@ public abstract interface class org/siros/sdk/wallet/AuthenticationFactorsProvid
 	public abstract fun factorsFor (Lorg/siros/sdk/wallet/SigningOperation;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
+public final class org/siros/sdk/wallet/AuthenticationFactorsProviderKt {
+	public static final fun getConservativeAuthenticationFactorsProvider ()Lorg/siros/sdk/wallet/AuthenticationFactorsProvider;
+}
+
 public final class org/siros/sdk/wallet/CachedAccount {
 	public static final field Companion Lorg/siros/sdk/wallet/CachedAccount$Companion;
 	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;)V
@@ -200,11 +204,6 @@ public final class org/siros/sdk/wallet/ClientIdScheme$X509SanUri : org/siros/sd
 	public fun getIdentifier ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
-}
-
-public final class org/siros/sdk/wallet/ConservativeAuthenticationFactorsProvider : org/siros/sdk/wallet/AuthenticationFactorsProvider {
-	public static final field INSTANCE Lorg/siros/sdk/wallet/ConservativeAuthenticationFactorsProvider;
-	public fun factorsFor (Lorg/siros/sdk/wallet/SigningOperation;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class org/siros/sdk/wallet/DeepLinkClassifierKt {

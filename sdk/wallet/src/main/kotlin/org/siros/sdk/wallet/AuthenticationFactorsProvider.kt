@@ -39,6 +39,5 @@ class SigningOperation(
  * operation's methods, in RFC 8176 vocabulary), and TS12 forbids guessing. A
  * possession factor alone never reaches two categories, so SCA is refused.
  */
-object ConservativeAuthenticationFactorsProvider : AuthenticationFactorsProvider {
-    override suspend fun factorsFor(operation: SigningOperation): List<AuthenticationFactor> = emptyList()
-}
+val ConservativeAuthenticationFactorsProvider: AuthenticationFactorsProvider =
+    AuthenticationFactorsProvider { emptyList() }

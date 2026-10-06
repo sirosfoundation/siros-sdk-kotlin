@@ -115,7 +115,9 @@ interface WalletEventListener {
      * transport reports a flow error. Not called for the DC API, whose
      * refusal is thrown to the caller of [SirosWallet.handleDCAPIRequest].
      */
-    fun onTransactionDataRefused(flowId: String, reason: org.siros.sdk.credentials.TransactionDataReason) {}
+    fun onTransactionDataRefused(flowId: String, reason: org.siros.sdk.credentials.TransactionDataReason) {
+        // Optional: apps that do not word refusals themselves ignore it.
+    }
 
     /**
      * An issuer requires user authorization (OAuth consent).
