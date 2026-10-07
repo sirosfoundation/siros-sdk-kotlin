@@ -12,6 +12,7 @@ import android.widget.TextView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import org.siros.sdk.wallet.TransactionConsentEntry
 import org.siros.sdk.wallet.TransactionConsentRequest
 import kotlin.coroutines.resume
 
@@ -28,43 +29,12 @@ import kotlin.coroutines.resume
 internal suspend fun showTransactionConsentDialog(activity: Activity, request: TransactionConsentRequest): Boolean =
     withContext(Dispatchers.Main) {
         suspendCancellableCoroutine { cont ->
-            val dp = activity.resources.displayMetrics.density
-            fun pad(v: Int) = (v * dp).toInt()
-            val column = LinearLayout(activity).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(pad(20), pad(8), pad(20), pad(8))
-            }
-            fun text(s: String, bold: Boolean = false, size: Float = 14f) = TextView(activity).apply {
-                this.text = s
-                textSize = size
-                if (bold) setTypeface(typeface, Typeface.BOLD)
-                inputType = InputType.TYPE_NULL
-            }
-            request.verifier?.let { column.addView(text(it)) }
-            request.credentialName?.let { column.addView(text(it)) }
             val unsigned = request.requestSigned == false
             val ack = CheckBox(activity)
-            if (unsigned) {
-                column.addView(text("This request is not signed, so its sender could not be verified. Only continue if you started this yourself."))
-                ack.text = "I started this request and want to continue"
-                column.addView(ack)
-            }
-            request.entries.forEach { entry ->
-                entry.fields.filter { it.level == 1 }.forEach {
-                    column.addView(text(it.label, size = 12f))
-                    column.addView(text(it.value, bold = true, size = 22f))
-                }
-                entry.fields.filter { it.level == 2 || it.level == 3 }.forEach { column.addView(text("${it.label}: ${it.value}")) }
-                entry.securityHint?.let { column.addView(text(it, size = 12f)) }
-            }
-            request.disclosures.forEach { d ->
-                val claims = d.claims?.takeIf { it.isNotEmpty() }?.joinToString(", ") ?: "all"
-                column.addView(text("${d.credentialName ?: ""}: $claims", size = 12f))
-            }
             val first = request.entries.firstOrNull()
             val dialog = AlertDialog.Builder(activity)
                 .setTitle(first?.title ?: "Confirm transaction")
-                .setView(ScrollView(activity).apply { addView(column) })
+                .setView(ScrollView(activity).apply { addView(buildContent(activity, request, ack)) })
                 .setPositiveButton(first?.affirmativeLabel ?: "Confirm") { _, _ -> if (cont.isActive) cont.resume(true) }
                 .setNegativeButton(first?.denialLabel ?: "Cancel") { _, _ -> if (cont.isActive) cont.resume(false) }
                 .setOnCancelListener { if (cont.isActive) cont.resume(false) }
@@ -78,3 +48,40 @@ internal suspend fun showTransactionConsentDialog(activity: Activity, request: T
             dialog.show()
         }
     }
+
+private fun text(activity: Activity, s: String, bold: Boolean = false, size: Float = 14f) = TextView(activity).apply {
+    this.text = s
+    textSize = size
+    if (bold) setTypeface(typeface, Typeface.BOLD)
+    inputType = InputType.TYPE_NULL
+}
+
+private fun buildContent(activity: Activity, request: TransactionConsentRequest, ack: CheckBox): LinearLayout {
+    val pad = { v: Int -> (v * activity.resources.displayMetrics.density).toInt() }
+    val column = LinearLayout(activity).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(pad(20), pad(8), pad(20), pad(8))
+    }
+    request.verifier?.let { column.addView(text(activity, it)) }
+    request.credentialName?.let { column.addView(text(activity, it)) }
+    if (request.requestSigned == false) {
+        column.addView(text(activity, "This request is not signed, so its sender could not be verified. Only continue if you started this yourself."))
+        ack.text = "I started this request and want to continue"
+        column.addView(ack)
+    }
+    request.entries.forEach { addEntry(activity, column, it) }
+    request.disclosures.forEach { d ->
+        val claims = d.claims?.takeIf { it.isNotEmpty() }?.joinToString(", ") ?: "all"
+        column.addView(text(activity, "${d.credentialName ?: ""}: $claims", size = 12f))
+    }
+    return column
+}
+
+private fun addEntry(activity: Activity, column: LinearLayout, entry: TransactionConsentEntry) {
+    entry.fields.filter { it.level == 1 }.forEach {
+        column.addView(text(activity, it.label, size = 12f))
+        column.addView(text(activity, it.value, bold = true, size = 22f))
+    }
+    entry.fields.filter { it.level == 2 || it.level == 3 }.forEach { column.addView(text(activity, "${it.label}: ${it.value}")) }
+    entry.securityHint?.let { column.addView(text(activity, it, size = 12f)) }
+}

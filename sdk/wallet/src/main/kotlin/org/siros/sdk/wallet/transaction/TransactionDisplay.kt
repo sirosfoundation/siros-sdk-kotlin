@@ -185,9 +185,8 @@ internal class TransactionDisplayBuilder(
             val name = (o["name"] as? JsonPrimitive)?.contentOrNull
             if (tag != null && !name.isNullOrEmpty()) tag to name else null
         }.orEmpty()
-        val metadataName = (ctx.metadata["name"] as? JsonPrimitive)?.contentOrNull
-        val name = pick(display, locale) ?: metadataName
-        return if (name == null) null else DisplayText.label(name, "credential name")
+        val name: String? = pick(display, locale) ?: (ctx.metadata["name"] as? JsonPrimitive)?.contentOrNull
+        return name?.let { DisplayText.label(it, "credential name") }
     }
 
     private fun parse(text: String): JsonElement = try {

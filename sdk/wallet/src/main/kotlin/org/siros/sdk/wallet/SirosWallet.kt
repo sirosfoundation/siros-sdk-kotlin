@@ -5858,7 +5858,7 @@ class SirosWallet private constructor(
             )
         } catch (e: Exception) {
             Timber.e(e, "Error handling a transaction_data sign request")
-            reportSignFailure(msg.flowId, e.message ?: "Signing failed")
+            reportSignFailure(msg.flowId, e.message ?: SIGNING_FAILED_MESSAGE)
         }
     }
 
@@ -6331,10 +6331,10 @@ class SirosWallet private constructor(
                     reportSignFailure(msg.flowId, "${e.verifierError} (${e.reason.code}): ${e.message}")
                 } catch (e: KeystoreException) {
                     Timber.e(e, "Error handling sign request: keystore error")
-                    reportSignFailure(msg.flowId, e.message ?: "Signing failed")
+                    reportSignFailure(msg.flowId, e.message ?: SIGNING_FAILED_MESSAGE)
                 } catch (e: Exception) {
                     Timber.e(e, "Error handling sign request")
-                    reportSignFailure(msg.flowId, e.message ?: "Signing failed")
+                    reportSignFailure(msg.flowId, e.message ?: SIGNING_FAILED_MESSAGE)
                 }
             }
         }
@@ -8210,6 +8210,9 @@ class SirosWallet private constructor(
 
         /** Thrown wherever a call needs the backend and the wallet has no session yet. */
         private const val NOT_CONNECTED = "Not connected"
+
+        /** Shown when a sign request fails without a message. */
+        private const val SIGNING_FAILED_MESSAGE = "Signing failed"
 
         /** Largest registry answer accepted on the `transaction_data` path. */
         private const val TRANSACTION_METADATA_MAX_BYTES = 256L * 1024
