@@ -19,6 +19,7 @@ class TransactionConsentGate {
     /** The request waiting for the user, or `null`. */
     val pending: StateFlow<TransactionConsentRequest?> = _pending
 
+    @Volatile
     private var waiting: CompletableDeferred<Boolean>? = null
 
     /** Register this with `SirosWallet.transactionConsentHandler`. */

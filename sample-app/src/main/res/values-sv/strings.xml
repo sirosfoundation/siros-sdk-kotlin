@@ -270,4 +270,13 @@
     <string name="transaction_refused_factors">Det gick inte att bekräfta tillräckligt många autentiseringssteg för betalningen.</string>
     <string name="transaction_refused_no_handler">Betalningen kan inte visas och nekades därför.</string>
     <string name="transaction_refused_declined">Du avböjde betalningen.</string>
+    <string name="transaction_consent_discloses">Delar från %1$s: %2$s</string>
+    <string name="transaction_consent_discloses_all">alla attribut</string>
+    <string name="transaction_log_entity">%1$s: %2$s</string>
+    <string name="transaction_log_unknown_type">Okänd begäran</string>
+    <string name="transaction_log_back">Tillbaka</string>
+    <string name="transaction_entity_payee">Betalningsmottagare</string>
+    <string name="transaction_entity_pisp">Betalningsinitieringstjänst</string>
+    <string name="transaction_entity_service">Tjänst</string>
+    <string name="transaction_entity_aisp">Kontoinformationstjänst</string>
 </resources>

@@ -270,4 +270,13 @@
     <string name="transaction_refused_factors">Δεν επιβεβαιώθηκαν αρκετά βήματα ταυτοποίησης για αυτή την πληρωμή.</string>
     <string name="transaction_refused_no_handler">Η πληρωμή δεν μπορεί να εμφανιστεί, γι’ αυτό απορρίφθηκε.</string>
     <string name="transaction_refused_declined">Απορρίψατε την πληρωμή.</string>
+    <string name="transaction_consent_discloses">Κοινοποιεί από %1$s: %2$s</string>
+    <string name="transaction_consent_discloses_all">όλα τα χαρακτηριστικά</string>
+    <string name="transaction_log_entity">%1$s: %2$s</string>
+    <string name="transaction_log_unknown_type">Άγνωστο αίτημα</string>
+    <string name="transaction_log_back">Πίσω</string>
+    <string name="transaction_entity_payee">Δικαιούχος</string>
+    <string name="transaction_entity_pisp">Υπηρεσία έναρξης πληρωμής</string>
+    <string name="transaction_entity_service">Υπηρεσία</string>
+    <string name="transaction_entity_aisp">Υπηρεσία πληροφοριών λογαριασμού</string>
 </resources>

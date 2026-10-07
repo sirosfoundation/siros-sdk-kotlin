@@ -38,7 +38,7 @@ fun TransactionLogScreen(entries: List<TransactionLogEntry>, onBack: () -> Unit)
             TopAppBar(
                 title = { Text(stringResource(R.string.transaction_log_title)) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null) }
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.transaction_log_back)) }
                 },
             )
         },
@@ -54,7 +54,7 @@ fun TransactionLogScreen(entries: List<TransactionLogEntry>, onBack: () -> Unit)
                 items(entries) { e ->
                     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
                         Text(
-                            e.typeName ?: e.transactionType ?: "-",
+                            e.typeName ?: e.transactionType ?: stringResource(R.string.transaction_log_unknown_type),
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.SemiBold,
                         )
@@ -69,7 +69,19 @@ fun TransactionLogScreen(entries: List<TransactionLogEntry>, onBack: () -> Unit)
                             style = MaterialTheme.typography.bodyMedium,
                         )
                         e.transactionId?.let { Text(stringResource(R.string.transaction_log_id, it), style = MaterialTheme.typography.bodySmall) }
-                        e.entities.forEach { (k, v) -> Text("$k: $v", style = MaterialTheme.typography.bodySmall) }
+                        e.entities.forEach { (k, v) ->
+                            val label = when (k) {
+                                "payee" -> R.string.transaction_entity_payee
+                                "pisp" -> R.string.transaction_entity_pisp
+                                "service" -> R.string.transaction_entity_service
+                                "aisp" -> R.string.transaction_entity_aisp
+                                else -> null
+                            }
+                            Text(
+                                if (label != null) stringResource(R.string.transaction_log_entity, stringResource(label), v) else v,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
                         e.verifier?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                         e.reason?.let { Text(stringResource(R.string.transaction_log_reason, it), style = MaterialTheme.typography.bodySmall) }
                         Spacer(Modifier.height(2.dp))

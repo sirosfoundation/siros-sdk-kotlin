@@ -17,6 +17,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -64,11 +65,15 @@ fun TransactionConsentDialog(
 ) {
     val unsigned = request.requestSigned == false
     var acknowledged by remember(request) { mutableStateOf(false) }
-    val first = request.entries.firstOrNull()
+    // The SDK never builds a request without entries; if it ever did, there is nothing to confirm.
+    val first = request.entries.firstOrNull() ?: run {
+        LaunchedEffect(request) { onDeny() }
+        return
+    }
 
     AlertDialog(
         onDismissRequest = onDeny,
-        title = { Text(first?.title ?: stringResource(R.string.transaction_consent_default_title)) },
+        title = { Text(first.title ?: stringResource(R.string.transaction_consent_default_title)) },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 request.verifier?.let {
@@ -93,16 +98,31 @@ fun TransactionConsentDialog(
                     if (index > 0) HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
                     TransactionEntryView(entry)
                 }
+                // EC TS12 3.3.1: the transaction is shown together with the attributes that will be disclosed.
+                if (request.disclosures.isNotEmpty()) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+                    request.disclosures.forEach { d ->
+                        Text(
+                            stringResource(
+                                R.string.transaction_consent_discloses,
+                                d.credentialName.orEmpty(),
+                                d.claims?.takeIf { it.isNotEmpty() }?.joinToString(", ")
+                                    ?: stringResource(R.string.transaction_consent_discloses_all),
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
             }
         },
         confirmButton = {
             TextButton(onClick = onConfirm, enabled = !unsigned || acknowledged) {
-                Text(first?.affirmativeLabel ?: stringResource(R.string.transaction_consent_default_title))
+                Text(first.affirmativeLabel)
             }
         },
         dismissButton = {
             TextButton(onClick = onDeny) {
-                Text(first?.denialLabel ?: stringResource(R.string.transaction_consent_default_deny))
+                Text(first.denialLabel ?: stringResource(R.string.transaction_consent_default_deny))
             }
         },
     )

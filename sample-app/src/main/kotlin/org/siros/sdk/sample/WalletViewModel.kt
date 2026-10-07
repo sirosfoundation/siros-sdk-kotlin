@@ -256,7 +256,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _readerTrustRootCertificatePem = MutableStateFlow(
             prefs.getString("reader_trust_root_certificate_pem", null) ?: ""
         )
-        _transactionDataEnabled = MutableStateFlow(prefs.getBoolean("transaction_data_enabled", false))
+        _transactionDataEnabled = MutableStateFlow(
+            activity.getSharedPreferences(SETTINGS_PREFS, android.content.Context.MODE_PRIVATE).getBoolean("transaction_data_enabled", false),
+        )
     }
 
     // ── Payment confirmation (EC TS12) ──────────────────────────────
@@ -279,7 +281,8 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     fun updateTransactionDataEnabled(enabled: Boolean) {
         _transactionDataEnabled.value = enabled
         wallet.transactionDataEnabled = enabled
-        activity.getSharedPreferences("siros_test_overrides", android.content.Context.MODE_PRIVATE)
+        // The app's own settings file, not the test-overrides one the older toggles share.
+        activity.getSharedPreferences(SETTINGS_PREFS, android.content.Context.MODE_PRIVATE)
             .edit()
             .putBoolean("transaction_data_enabled", enabled)
             .apply()
@@ -2635,6 +2638,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     }
 
     companion object {
+        /** The app's own settings file (the older toggles share the test-overrides file). */
+        private const val SETTINGS_PREFS = "siros_sample_settings"
+
         private const val TAG = "SIROS_VM"
 
         /**

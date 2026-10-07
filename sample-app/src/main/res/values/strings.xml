@@ -288,4 +288,13 @@
     <string name="transaction_refused_factors">Not enough authentication steps could be confirmed for this payment.</string>
     <string name="transaction_refused_no_handler">The payment cannot be shown, so it was refused.</string>
     <string name="transaction_refused_declined">You declined the payment.</string>
+    <string name="transaction_consent_discloses">Shares from %1$s: %2$s</string>
+    <string name="transaction_consent_discloses_all">all attributes</string>
+    <string name="transaction_log_entity">%1$s: %2$s</string>
+    <string name="transaction_log_unknown_type">Unknown request</string>
+    <string name="transaction_log_back">Back</string>
+    <string name="transaction_entity_payee">Payee</string>
+    <string name="transaction_entity_pisp">Payment initiation service</string>
+    <string name="transaction_entity_service">Service</string>
+    <string name="transaction_entity_aisp">Account information service</string>
 </resources>

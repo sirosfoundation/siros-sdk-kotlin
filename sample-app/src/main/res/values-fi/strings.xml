@@ -270,4 +270,13 @@
     <string name="transaction_refused_factors">Maksulle ei voitu vahvistaa riittävästi tunnistusvaiheita.</string>
     <string name="transaction_refused_no_handler">Maksua ei voi näyttää, joten se evättiin.</string>
     <string name="transaction_refused_declined">Hylkäsit maksun.</string>
+    <string name="transaction_consent_discloses">Jakaa kohteesta %1$s: %2$s</string>
+    <string name="transaction_consent_discloses_all">kaikki attribuutit</string>
+    <string name="transaction_log_entity">%1$s: %2$s</string>
+    <string name="transaction_log_unknown_type">Tuntematon pyyntö</string>
+    <string name="transaction_log_back">Takaisin</string>
+    <string name="transaction_entity_payee">Maksunsaaja</string>
+    <string name="transaction_entity_pisp">Maksutoimeksiantopalvelu</string>
+    <string name="transaction_entity_service">Palvelu</string>
+    <string name="transaction_entity_aisp">Tilitietopalvelu</string>
 </resources>

@@ -270,4 +270,13 @@
     <string name="transaction_refused_factors">Não foi possível confirmar passos de autenticação suficientes para este pagamento.</string>
     <string name="transaction_refused_no_handler">O pagamento não pode ser mostrado, por isso foi recusado.</string>
     <string name="transaction_refused_declined">Recusou o pagamento.</string>
+    <string name="transaction_consent_discloses">Partilha de %1$s: %2$s</string>
+    <string name="transaction_consent_discloses_all">todos os atributos</string>
+    <string name="transaction_log_entity">%1$s: %2$s</string>
+    <string name="transaction_log_unknown_type">Pedido desconhecido</string>
+    <string name="transaction_log_back">Voltar</string>
+    <string name="transaction_entity_payee">Beneficiário</string>
+    <string name="transaction_entity_pisp">Serviço de iniciação de pagamentos</string>
+    <string name="transaction_entity_service">Serviço</string>
+    <string name="transaction_entity_aisp">Serviço de informação sobre contas</string>
 </resources>
