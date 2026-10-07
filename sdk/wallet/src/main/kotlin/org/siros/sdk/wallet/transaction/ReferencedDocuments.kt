@@ -29,9 +29,8 @@ internal object ReferencedDocuments {
         uri: String,
         trust: MetadataTrust? = null,
     ): String {
-        val cached = trust?.documents?.get(uri)
-        val text = cached ?: source.document(uri)?.also { trust?.documents?.put(uri, it) }
-            ?: throw TransactionDataError(TransactionDataReason.METADATA_UNAVAILABLE, "The document at $uri is not available")
+        val cached: String? = trust?.documents?.get(uri)
+        val text = if (cached != null) cached else download(source, uri, trust)
         val claim = CredentialUtils.parseJwtPayload(credential.raw)?.get("transaction_data_types['$type'].$member#integrity")
         val pinned = when {
             claim == null -> null
@@ -49,5 +48,13 @@ internal object ReferencedDocuments {
             )
         }
         return text
+    }
+
+    /** Fetches [uri] once and remembers it for the rest of the validation. */
+    private suspend fun download(source: TransactionMetadataSource, uri: String, trust: MetadataTrust?): String {
+        val fetched = source.document(uri)
+            ?: throw TransactionDataError(TransactionDataReason.METADATA_UNAVAILABLE, "The document at $uri is not available")
+        trust?.documents?.put(uri, fetched)
+        return fetched
     }
 }
