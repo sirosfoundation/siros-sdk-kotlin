@@ -1,7 +1,6 @@
 package org.siros.sdk.wallet.transaction
 
 import kotlinx.coroutines.runBlocking
-import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
@@ -10,7 +9,6 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
-import org.siros.sdk.credentials.VctmFetcher
 import org.siros.sdk.wallet.transaction.TransactionTestFixtures.credential
 import java.security.MessageDigest
 import java.util.Base64
@@ -26,20 +24,20 @@ class VctmTransactionMetadataSourceTest {
     private fun sri(text: String) =
         "sha256-" + Base64.getEncoder().encodeToString(MessageDigest.getInstance("SHA-256").digest(text.toByteArray()))
 
+    /** Registry answers [registryBody]; everything else goes through a (test-relaxed) safe fetcher. */
     private fun source(
-        vctmBody: String? = vctmJson,
-        https: Boolean = false,
+        registryBody: String? = vctmJson,
+        maxBytes: Long = SafeDocumentFetcher.MAX_DOCUMENT_BYTES,
     ) = VctmTransactionMetadataSource(
-        vctmFetcher = VctmFetcher(httpGet = { vctmBody }),
         registryUrl = "https://wallet.example.com/registry",
-        httpClient = OkHttpClient(),
-        allowInsecureHttp = !https,
+        registryGet = { registryBody },
+        fetcher = SafeDocumentFetcher(allowInsecureHttp = true, allowNonPublicAddresses = true, maxBytes = maxBytes),
     )
 
-    private fun cred(extra: String = "") =
-        credential(claims = """{"vct":"https://pay.example.com/card"$extra}""")
-
-    // ── type metadata ──────────────────────────────────────────────
+    private fun cred(extra: String = "", issuer: String? = null) =
+        credential(claims = """{"vct":"https://pay.example.com/card"$extra}""").let {
+            if (issuer == null) it else it.copy(credentialIssuerIdentifier = issuer)
+        }
 
     @Test
     fun `resolves the type metadata of the credential's vct`() = runBlocking {
@@ -50,8 +48,8 @@ class VctmTransactionMetadataSourceTest {
 
     @Test
     fun `no metadata, wrong vct, or a credential without vct yields nothing`() = runBlocking {
-        assertNull(source(vctmBody = null).typeMetadata(cred()))
-        assertNull(source(vctmBody = """{"vct":"https://other.example/type"}""").typeMetadata(cred()))
+        assertNull(source(registryBody = null).typeMetadata(cred(issuer = "https://nowhere.invalid")))
+        assertNull(source(registryBody = """{"vct":"https://other.example/type"}""").typeMetadata(cred()))
         assertNull(source().typeMetadata(credential(claims = """{"iss":"x"}""")))
         assertNull(source().typeMetadata(credential(claims = "not json")))
     }
@@ -63,48 +61,56 @@ class VctmTransactionMetadataSourceTest {
         assertNull(source().typeMetadata(cred(""","vct#integrity":"garbage"""")))
     }
 
-    // ── referenced documents ───────────────────────────────────────
+    @Test
+    fun `a vct#integrity that is present but not a string refuses instead of meaning no pin`() = runBlocking {
+        for (bad in listOf("null", "{}", "[]", "[\"sha256-x\"]", "5", "true")) {
+            assertNull(bad, source().typeMetadata(cred(""","vct#integrity":$bad""")))
+        }
+    }
+
+    // ── the type-metadata path is bounded, like the document path ──
 
     @Test
-    fun `fetches a document without sending the wallet's credentials`() = runBlocking {
+    fun `type metadata from an issuer endpoint over http is not fetched`() = runBlocking {
+        server.enqueue(MockResponse().setBody(vctmJson))
+        val strict = VctmTransactionMetadataSource(
+            registryUrl = "https://wallet.example.com/registry",
+            registryGet = { null },
+            fetcher = SafeDocumentFetcher(), // production settings: https only, public only
+        )
+
+        assertNull(strict.typeMetadata(cred(issuer = server.url("/").toString().trimEnd('/'))))
+        assertEquals("never requested", 0, server.requestCount)
+    }
+
+    @Test
+    fun `type metadata over the size cap is refused, at the cap it is accepted`() = runBlocking {
+        val issuer = server.url("/").toString().trimEnd('/')
+        server.enqueue(MockResponse().setBody(vctmJson + " ".repeat(200)))
+        assertNull(source(registryBody = null, maxBytes = vctmJson.length + 100L).typeMetadata(cred(issuer = issuer)))
+
+        server.enqueue(MockResponse().setBody(vctmJson))
+        assertNotNull(source(registryBody = null, maxBytes = vctmJson.length.toLong()).typeMetadata(cred(issuer = issuer)))
+    }
+
+    @Test
+    fun `the registry is reached through the caller's bounded function, other URLs are not`() = runBlocking {
+        val seen = mutableListOf<String>()
+        val src = VctmTransactionMetadataSource(
+            registryUrl = "https://wallet.example.com/registry",
+            registryGet = { seen += it; vctmJson },
+            fetcher = SafeDocumentFetcher(),
+        )
+
+        assertNotNull(src.typeMetadata(cred()))
+        assertEquals(1, seen.size)
+        assert(seen.single().startsWith("https://wallet.example.com/registry/type-metadata"))
+        Unit
+    }
+
+    @Test
+    fun `a referenced document goes through the safe fetcher`() = runBlocking {
         server.enqueue(MockResponse().setBody("""{"type":"object"}"""))
-
-        val body = source().document(server.url("/schema.json").toString())
-
-        assertEquals("""{"type":"object"}""", body)
-        val req = server.takeRequest()
-        assertNull(req.getHeader("Authorization"))
-        assertNull(req.getHeader("X-Tenant-ID"))
-    }
-
-    @Test
-    fun `an error status, an oversized body or a non-https URL gives nothing`() = runBlocking {
-        server.enqueue(MockResponse().setResponseCode(404).setBody("nope"))
-        assertNull(source().document(server.url("/a").toString()))
-
-        server.enqueue(MockResponse().setBody("x".repeat((VctmTransactionMetadataSource.MAX_DOCUMENT_BYTES + 1).toInt())))
-        assertNull(source().document(server.url("/b").toString()))
-
-        server.enqueue(MockResponse().setBody("{}"))
-        assertNull("http is refused unless a test allows it", source(https = true).document(server.url("/c").toString()))
-        assertEquals("the refused URL was never requested", 2, server.requestCount)
-
-        assertNull(source().document("not a url"))
-    }
-
-    @Test
-    fun `a document exactly at the size limit is accepted`() = runBlocking {
-        val body = "x".repeat(VctmTransactionMetadataSource.MAX_DOCUMENT_BYTES.toInt())
-        server.enqueue(MockResponse().setBody(body))
-
-        assertEquals(body.length, source().document(server.url("/edge").toString())!!.length)
-    }
-
-    @Test
-    fun `an unreachable host gives nothing`() = runBlocking {
-        val url = server.url("/gone").toString()
-        server.shutdown()
-
-        assertNull(source().document(url))
+        assertEquals("""{"type":"object"}""", source().document(server.url("/schema.json").toString()))
     }
 }

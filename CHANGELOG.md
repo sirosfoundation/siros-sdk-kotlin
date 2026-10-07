@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signed (the DC API answers the verifier `invalid_transaction_data`). This
   is step 1 of the EC TS12 rollout; the handling itself follows.
 
+### Removed
+- **BREAKING:** `WscdKeystoreAdapter.signVpToken(..., transactionData:
+  List<TransactionDataItem>, ...)` and `TransactionDataItem`. The overload was
+  never called and hashed a re-serialisation of the entry instead of the
+  verifier's original string; use `KeystoreManager.signVpToken(..., kid,
+  transaction: TransactionBinding)`.
+
 ### Added
 - **`transaction_data` core (EC TS12), not yet reachable from any transport.**
   Strict decoding of each entry from its own `raw` (duplicate member names,

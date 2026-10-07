@@ -16,6 +16,8 @@ package org.siros.sdk.wallet.transaction
  * which refuses the entry.
  */
 internal object JsonDuplicateKeys {
+    /** Deeper than any transaction_data entry needs; also keeps the parser that follows off the stack limit. */
+    const val MAX_DEPTH = 64
 
     fun has(text: String): Boolean = try {
         val scanner = Scanner(text)
@@ -23,7 +25,10 @@ internal object JsonDuplicateKeys {
         val duplicate = scanner.value()
         scanner.skipWhitespace()
         duplicate || !scanner.atEnd()
-    } catch (_: IllegalStateException) {
+    } catch (_: Exception) {
+        // IllegalState, NumberFormat (a bad \u escape), IndexOutOfBounds...: cannot follow it.
+        true
+    } catch (_: StackOverflowError) {
         true
     }
 
@@ -39,6 +44,7 @@ internal object JsonDuplicateKeys {
         /** Scans one value; returns true if a duplicate key was found inside it. */
         fun value(): Boolean {
             check(i < s.length)
+            check(depth < MAX_DEPTH) { "nested too deeply" }
             return when (s[i]) {
                 '{' -> obj()
                 '[' -> array()
@@ -56,7 +62,27 @@ internal object JsonDuplicateKeys {
             }
         }
 
+        private var depth = 0
+
         private fun obj(): Boolean {
+            depth++
+            try {
+                return objBody()
+            } finally {
+                depth--
+            }
+        }
+
+        private fun array(): Boolean {
+            depth++
+            try {
+                return arrayBody()
+            } finally {
+                depth--
+            }
+        }
+
+        private fun objBody(): Boolean {
             i++ // {
             val keys = HashSet<String>()
             var duplicate = false
@@ -82,7 +108,7 @@ internal object JsonDuplicateKeys {
             }
         }
 
-        private fun array(): Boolean {
+        private fun arrayBody(): Boolean {
             i++ // [
             var duplicate = false
             skipWhitespace()

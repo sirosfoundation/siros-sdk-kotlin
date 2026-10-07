@@ -77,11 +77,17 @@ class AuthenticationFactor(val category: AuthenticationCategory, val method: Str
  *   [hashAlg] or a blank [responseMode].
  */
 class TransactionBinding(
-    val hashes: List<String>,
+    hashes: List<String>,
     val hashAlg: String,
     val responseMode: String,
-    val authenticationFactors: List<AuthenticationFactor>,
+    authenticationFactors: List<AuthenticationFactor>,
 ) {
+    /** Copied on construction: the caller's list cannot change what gets signed. */
+    val hashes: List<String> = hashes.toList()
+
+    /** The factors, copied on construction. */
+    val authenticationFactors: List<AuthenticationFactor> = authenticationFactors.toList()
+
     init {
         require(hashes.isNotEmpty() && hashes.none { it.isEmpty() }) { "transaction_data_hashes must be non-empty" }
         require(hashAlg in HASH_ALGS) { "unsupported transaction_data_hashes_alg '$hashAlg'" }
@@ -107,6 +113,6 @@ class TransactionBinding(
 
     companion object {
         /** `transaction_data_hashes_alg` names the SDK can produce. */
-        val HASH_ALGS: Set<String> = setOf("sha-256", "sha-384", "sha-512")
+        val HASH_ALGS: List<String> = listOf("sha-256", "sha-384", "sha-512")
     }
 }

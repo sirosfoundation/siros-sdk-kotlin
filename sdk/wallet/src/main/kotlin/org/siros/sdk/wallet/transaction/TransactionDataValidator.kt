@@ -4,9 +4,6 @@ package org.siros.sdk.wallet.transaction
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
-import org.siros.sdk.credentials.CredentialUtils
-import org.siros.sdk.credentials.Integrity
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.credentials.TransactionDataError
 import org.siros.sdk.credentials.TransactionDataReason
@@ -61,6 +58,8 @@ internal class ValidatedTransactionData(
     val entries: List<ValidatedTransactionEntry>,
     val responseMode: String,
     private val byQuery: Map<String, QueryHashes>,
+    /** Whether the metadata that drove this validation was authenticated by pins. */
+    internal val trust: MetadataTrust = MetadataTrust(),
 ) {
     /** The hashes for the credential(s) answering [queryId], or `null` when no entry is bound to it. */
     fun hashesFor(queryId: String): QueryHashes? = byQuery[queryId]
@@ -96,14 +95,18 @@ internal class TransactionDataValidator(private val source: TransactionMetadataS
             )
 
         val metadataByCredential = HashMap<Long, JsonObject>()
-        val validated = request.entries.map { entry -> validateEntry(entry, request, metadataByCredential) }
-        return ValidatedTransactionData(validated, responseMode, chooseHashes(validated))
+        val trust = MetadataTrust()
+        val validated = request.entries.map { entry -> validateEntry(entry, request, metadataByCredential, trust) }
+        val result = ValidatedTransactionData(validated, responseMode, chooseHashes(validated), trust)
+        trust.warnOnce()
+        return result
     }
 
     private suspend fun validateEntry(
         entry: TransactionDataEntry,
         request: TransactionDataRequest,
         metadataCache: MutableMap<Long, JsonObject>,
+        trust: MetadataTrust,
     ): ValidatedTransactionEntry {
         // 1. Decode raw ourselves; the orchestrator's hint only has to agree.
         val decoded = TransactionDataDecoder.decode(entry)
@@ -128,7 +131,10 @@ internal class TransactionDataValidator(private val source: TransactionMetadataS
             val metadata = metadataCache[credential.id]
                 ?: (source.typeMetadata(credential)
                     ?: throw error(TransactionDataReason.METADATA_UNAVAILABLE, "The credential's type metadata is not available"))
-                    .also { metadataCache[credential.id] = it }
+                    .also {
+                        metadataCache[credential.id] = it
+                        trust.noteTypeMetadata(credential)
+                    }
 
             // 4. The credential must be an SCA attestation (TS12 3: top-level category).
             if ((metadata["category"] as? JsonPrimitive)?.takeIf { it.isString }?.content != SCA_CATEGORY) {
@@ -154,7 +160,7 @@ internal class TransactionDataValidator(private val source: TransactionMetadataS
             }
 
             // 6. Schema.
-            validatePayload(decoded, credential, typeEntry)
+            validatePayload(decoded, credential, typeEntry, trust)
             ScaCredentialContext(credential, metadata, typeEntry)
         }
 
@@ -168,10 +174,15 @@ internal class TransactionDataValidator(private val source: TransactionMetadataS
      * The payload must satisfy the built-in schema of a built-in type and, if
      * the type's metadata entry names one, that schema too.
      */
-    private suspend fun validatePayload(decoded: DecodedTransactionData, credential: StoredCredential, typeEntry: JsonObject?) {
+    private suspend fun validatePayload(
+        decoded: DecodedTransactionData,
+        credential: StoredCredential,
+        typeEntry: JsonObject?,
+        trust: MetadataTrust,
+    ) {
         val payload: JsonElement = decoded.payload
         if (TransactionSchemas.isBuiltIn(decoded.type)) {
-            violation(decoded, TransactionSchemas.validateBuiltIn(decoded.type, payload))
+            violation(decoded, bounded { TransactionSchemas.validateBuiltIn(decoded.type, payload) })
         }
         if (typeEntry == null) return
 
@@ -190,41 +201,38 @@ internal class TransactionDataValidator(private val source: TransactionMetadataS
                 }
                 // The type's own built-in schema was checked above; check any other one named.
                 if (embedded.content != decoded.type) {
-                    violation(decoded, TransactionSchemas.validateBuiltIn(embedded.content, payload))
+                    violation(decoded, bounded { TransactionSchemas.validateBuiltIn(embedded.content, payload) })
                 }
                 null
             }
             embedded != null -> throw error(TransactionDataReason.METADATA_UNAVAILABLE, "schema is neither an object nor a string")
-            uri is JsonPrimitive && uri.isString -> fetchSchema(decoded.type, uri.content, credential)
+            uri is JsonPrimitive && uri.isString -> fetchSchema(decoded.type, uri.content, credential, trust)
             uri != null -> throw error(TransactionDataReason.METADATA_UNAVAILABLE, "schema_uri is not a string")
             TransactionSchemas.isBuiltIn(decoded.type) -> null
             else -> throw error(TransactionDataReason.UNSUPPORTED_TYPE, "The type '${decoded.type}' names no schema")
         }
         if (schema != null) {
-            val problems = try {
-                TransactionSchemas.validate(schema, payload)
-            } catch (e: TransactionSchemas.UnusableSchema) {
-                throw error(TransactionDataReason.METADATA_UNAVAILABLE, e.message ?: "The schema cannot be used", e)
-            }
+            val problems = bounded { TransactionSchemas.validate(schema, payload) }
             violation(decoded, problems)
         }
     }
 
-    private suspend fun fetchSchema(type: String, uri: String, credential: StoredCredential): JsonElement {
-        val text = source.document(uri)
-            ?: throw error(TransactionDataReason.METADATA_UNAVAILABLE, "The schema at $uri is not available")
-        // EC TS12 4.1.2: an #integrity claim on the credential must be honoured.
-        val pinned = CredentialUtils.parseJwtPayload(credential.raw)
-            ?.get("transaction_data_types['$type'].schema_uri#integrity")
-            ?.let { it as? JsonPrimitive }?.contentOrNull
-        if (pinned != null && !Integrity.matches(text.toByteArray(Charsets.UTF_8), pinned)) {
-            throw error(TransactionDataReason.METADATA_UNAVAILABLE, "The schema at $uri does not match the credential's integrity claim")
-        }
+    private suspend fun fetchSchema(type: String, uri: String, credential: StoredCredential, trust: MetadataTrust): JsonElement {
+        val text = ReferencedDocuments.fetch(source, credential, type, "schema_uri", uri, trust)
         return try {
             kotlinx.serialization.json.Json.parseToJsonElement(text)
         } catch (e: Exception) {
             throw error(TransactionDataReason.METADATA_UNAVAILABLE, "The schema at $uri is not JSON", e)
+        } catch (e: StackOverflowError) {
+            throw error(TransactionDataReason.METADATA_UNAVAILABLE, "The schema at $uri nests too deeply", e)
         }
+    }
+
+    /** Runs a schema check, turning an unusable schema, a timeout or any failure into a refusal. */
+    private fun <T> bounded(check: () -> T): T = try {
+        check()
+    } catch (e: TransactionSchemas.UnusableSchema) {
+        throw error(TransactionDataReason.METADATA_UNAVAILABLE, e.message ?: "The schema cannot be used", e)
     }
 
     private fun violation(decoded: DecodedTransactionData, problems: List<String>) {

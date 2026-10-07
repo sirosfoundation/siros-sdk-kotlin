@@ -297,4 +297,94 @@ class TransactionDataValidatorTest {
         assertEquals(1, src.metadataCalls)
         assertTrue(src.fetched.isEmpty())
     }
+
+    // ── malformed integrity claims refuse ──────────────────────────
+
+    @Test
+    fun `a schema_uri integrity claim that is present but not a string refuses`() {
+        val types = """{"https://bank.example/trx":{"schema_uri":"https://bank.example/schema.json"}}"""
+        val src = FakeSource(metadata(types = types), mapOf("https://bank.example/schema.json" to """{"type":"object"}"""))
+        val e = entry(type = "https://bank.example/trx", payload = """{"n":1}""")
+        for (bad in listOf("null", "{}", "[]", "[\"sha256-x\"]", "5", "true")) {
+            val cred = credential(
+                claims = """{"vct":"https://pay.example.com/card","transaction_data_types['https://bank.example/trx'].schema_uri#integrity":$bad}""",
+            )
+            assertEquals(bad, TransactionDataReason.METADATA_UNAVAILABLE, refusal(request(listOf(e), mapOf("pay" to listOf(cred))), src))
+        }
+    }
+
+    // ── the unpinned-metadata warning ─────────────────────────────
+
+    private class Capture : timber.log.Timber.Tree() {
+        val lines = mutableListOf<Pair<Int, String>>()
+        override fun log(priority: Int, tag: String?, message: String, t: Throwable?) { lines += priority to (message + (t?.toString() ?: "")) }
+    }
+
+    private fun <T> capturing(block: (Capture) -> T): T {
+        val tree = Capture()
+        timber.log.Timber.plant(tree)
+        try { return block(tree) } finally { timber.log.Timber.uproot(tree) }
+    }
+
+    private val distinctiveType = """{"urn:eudi:sca:payment:1":{"schema":"urn:eudi:sca:payment:1"}}"""
+
+    @Test
+    fun `unpinned metadata warns exactly once per validation, however many entries and documents`() {
+        val payload2 = """{"transaction_id":"tx-SECRET-2","payee":{"name":"Distinctive Payee","id":"2"},"currency":"EUR","amount":98765.43}"""
+        capturing { log ->
+            validate(request(listOf(entry(), entry(payload = payload2), entry(payload = payload2))), FakeSource(metadata(types = distinctiveType)))
+
+            val warnings = log.lines.filter { it.first == android.util.Log.WARN }
+            assertEquals(log.lines.toString(), 1, warnings.size)
+            assertEquals(MetadataTrust.WARNING, warnings.single().second)
+        }
+    }
+
+    @Test
+    fun `a pinned type metadata and pinned documents do not warn`() {
+        val schema = """{"type":"object"}"""
+        val types = """{"https://bank.example/trx":{"schema_uri":"https://bank.example/schema.json"}}"""
+        val digest = java.util.Base64.getEncoder().encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest(schema.toByteArray()))
+        val cred = credential(
+            claims = """{"vct":"https://pay.example.com/card","vct#integrity":"sha256-AAAA","transaction_data_types['https://bank.example/trx'].schema_uri#integrity":"sha256-$digest"}""",
+        )
+        capturing { log ->
+            validate(
+                request(listOf(entry(type = "https://bank.example/trx", payload = "{}")), mapOf("pay" to listOf(cred))),
+                FakeSource(metadata(types = types), mapOf("https://bank.example/schema.json" to schema)),
+            )
+            assertTrue(log.lines.toString(), log.lines.none { it.second.contains("unpinned") })
+        }
+    }
+
+    @Test
+    fun `a pinned type metadata with an unpinned fetched document still warns once`() {
+        val types = """{"https://bank.example/trx":{"schema_uri":"https://bank.example/schema.json"}}"""
+        val cred = credential(claims = """{"vct":"https://pay.example.com/card","vct#integrity":"sha256-AAAA"}""")
+        capturing { log ->
+            validate(
+                request(listOf(entry(type = "https://bank.example/trx", payload = "{}")), mapOf("pay" to listOf(cred))),
+                FakeSource(metadata(types = types), mapOf("https://bank.example/schema.json" to """{"type":"object"}""")),
+            )
+            assertEquals(1, log.lines.count { it.second == MetadataTrust.WARNING })
+        }
+    }
+
+    @Test
+    fun `nothing sensitive is logged while validating, warning or not`() {
+        val payload = """{"transaction_id":"tx-SECRET-1","payee":{"name":"Distinctive Payee","id":"PAYEE-ID-777"},"currency":"EUR","amount":98765.43}"""
+        val e = entry(payload = payload)
+        val secretCred = credential(claims = """{"vct":"https://pay.example.com/card","iss":"https://distinctive-issuer.example"}""")
+            .copy(credentialIssuerIdentifier = "https://distinctive-issuer.example")
+        val sensitive = listOf(
+            "pay.example.com", "distinctive-issuer", "tx-SECRET-1", "Distinctive Payee", "PAYEE-ID-777", "98765.43",
+            e.raw, TransactionDataHashing.hash(e.raw, "sha-256"), "Pay Card",
+        )
+        capturing { log ->
+            validate(request(listOf(e), mapOf("pay" to listOf(secretCred))), FakeSource(metadata(types = distinctiveType)))
+            val text = log.lines.joinToString("\n") { it.second }
+            assertTrue(text, text.isNotEmpty())
+            for (secret in sensitive) assertTrue("log contains '$secret': $text", !text.contains(secret))
+        }
+    }
 }

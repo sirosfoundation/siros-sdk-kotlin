@@ -153,4 +153,13 @@ class TransactionDataDecoderTest {
         assertEquals("urn:eudi:sca:payment:1", entry.hint!!.type)
         TransactionDataDecoder.decode(entry)
     }
+
+    @Test
+    fun `hostile nesting and bad escapes surface as an invalid entry, never as an Error or raw exception`() {
+        val deepArray = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString("[".repeat(45_000).toByteArray())
+        invalid(deepArray)
+        invalid(b64("""{"type":"t","credential_ids":["a"],"payload":{"x":"\uZZZZ"}}"""))
+        invalid(b64("""{"type":"t","credential_ids":["a"],"payload":""" + "[".repeat(40_000)))
+        invalid(b64("""{"type":"t","credential_ids":["a"],"payload":{"a":""" + "{\"a\":".repeat(5_000)))
+    }
 }

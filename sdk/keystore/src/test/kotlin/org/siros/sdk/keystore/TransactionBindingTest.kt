@@ -109,4 +109,18 @@ class TransactionBindingTest {
 
         assertTrue(e.toString(), e is KeystoreException)
     }
+
+    @Test
+    fun `the binding copies its lists, so the caller cannot change what is signed afterwards`() {
+        val hashes = mutableListOf("h1")
+        val factors = mutableListOf(pin, key)
+        val b = TransactionBinding(hashes, "sha-256", "m", factors)
+
+        hashes += "h2"
+        factors.clear()
+
+        assertEquals(listOf("h1"), b.hashes)
+        assertEquals(2, b.authenticationFactors.size)
+        assertEquals(listOf("h1"), claims(b)["transaction_data_hashes"])
+    }
 }

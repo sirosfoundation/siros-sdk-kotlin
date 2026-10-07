@@ -103,6 +103,8 @@ internal object TransactionDataDecoder {
             json.parseToJsonElement(text) as? JsonObject
         } catch (_: Exception) {
             null
+        } catch (_: StackOverflowError) {
+            null
         } ?: invalid("raw is not a JSON object")
 
         val type = (obj["type"] as? JsonPrimitive)?.takeIf { it.isString }?.content

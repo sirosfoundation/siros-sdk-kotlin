@@ -7,7 +7,7 @@ import java.util.Base64
 /** `transaction_data_hashes` (OpenID4VP 1.0 Appendix B; EC TS12 v1.0.1 3.6). */
 internal object TransactionDataHashing {
     /** The `transaction_data_hashes_alg` names the SDK can compute, as IANA hash names. */
-    val SUPPORTED: List<String> = listOf(SHA_256, "sha-384", "sha-512")
+    val SUPPORTED: List<String> = org.siros.sdk.keystore.TransactionBinding.HASH_ALGS
 
     private const val SHA_256 = "sha-256"
 

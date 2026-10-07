@@ -33,4 +33,20 @@ class JsonDuplicateKeysTest {
         assertTrue(JsonDuplicateKeys.has("""{"a":"\q"}"""))
         assertTrue(JsonDuplicateKeys.has(""))
     }
+
+    @Test
+    fun `a bad unicode escape or truncated escape is refused, not thrown`() {
+        assertTrue(JsonDuplicateKeys.has("""{"a":"\uZZZZ"}"""))
+        assertTrue(JsonDuplicateKeys.has("""{"a":"\u12"}"""))
+        assertTrue(JsonDuplicateKeys.has("""{"\uZZ":1}"""))
+    }
+
+    @Test
+    fun `nesting beyond the cap is refused without overflowing the stack`() {
+        val ok = "[".repeat(JsonDuplicateKeys.MAX_DEPTH - 1) + "]".repeat(JsonDuplicateKeys.MAX_DEPTH - 1)
+        assertFalse(JsonDuplicateKeys.has(ok))
+        assertTrue(JsonDuplicateKeys.has("[".repeat(JsonDuplicateKeys.MAX_DEPTH + 1) + "]".repeat(JsonDuplicateKeys.MAX_DEPTH + 1)))
+        assertTrue(JsonDuplicateKeys.has("[".repeat(60_000)))
+        assertTrue(JsonDuplicateKeys.has("{\"a\":".repeat(60_000)))
+    }
 }
