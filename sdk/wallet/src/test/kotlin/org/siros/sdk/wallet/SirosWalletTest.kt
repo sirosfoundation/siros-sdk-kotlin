@@ -7567,6 +7567,8 @@ class SirosWalletTest {
             val e = runCatching { fx.wallet.handleDCAPIRequest(dcApiRequest(bad), "https://shop.example.com") }.exceptionOrNull() as TransactionDataError
             assertEquals(bad, org.siros.sdk.credentials.TransactionDataReason.INVALID_ENTRY, e.reason)
         }
+        assertEquals("every malformed request is logged, with no payload", 4, fx.log.items.size)
+        assertTrue(fx.log.items.all { it.reason == "invalidEntry" && it.outcome == TransactionOutcome.REFUSED && it.transactionId == null })
     }
 
     @Test
