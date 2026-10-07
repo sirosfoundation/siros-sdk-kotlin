@@ -22,6 +22,16 @@ import org.siros.sdk.keystore.AuthenticationFactor
 fun interface AuthenticationFactorsProvider {
     /** The factors applied to authorise signing with [operation]'s key; empty when none can be established. */
     suspend fun factorsFor(operation: SigningOperation): List<AuthenticationFactor>
+
+    /**
+     * Whether two categories can possibly be established for [operation]. Asked
+     * BEFORE the user is shown the transaction, so a wallet that could never
+     * satisfy TS12 does not make the user read and confirm a payment it will
+     * then refuse. Return `true` if authentication will be prompted for after
+     * consent (a PIN or biometric dialog); the default is `true` so a provider
+     * that only implements [factorsFor] keeps working.
+     */
+    suspend fun canEstablish(operation: SigningOperation): Boolean = true
 }
 
 /** The signing operation an [AuthenticationFactorsProvider] is asked about. */
@@ -31,13 +41,17 @@ class SigningOperation(
 )
 
 /**
- * The default: claims no factor.
+ * The default: claims no factor, and says up front that none can be established.
  *
  * Nothing in the current signing path tells the SDK whether a PIN, passphrase
  * or biometric was verified for this particular operation (the software
  * keystore verifies nothing; the WSCD adapter only knows the previous
  * operation's methods, in RFC 8176 vocabulary), and TS12 forbids guessing. A
- * possession factor alone never reaches two categories, so SCA is refused.
+ * possession factor alone never reaches two categories, so SCA is refused,
+ * before consent.
  */
-val ConservativeAuthenticationFactorsProvider: AuthenticationFactorsProvider =
-    AuthenticationFactorsProvider { emptyList() }
+object ConservativeAuthenticationFactorsProvider : AuthenticationFactorsProvider {
+    override suspend fun factorsFor(operation: SigningOperation): List<AuthenticationFactor> = emptyList()
+
+    override suspend fun canEstablish(operation: SigningOperation): Boolean = false
+}

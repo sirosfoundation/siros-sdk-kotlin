@@ -2,6 +2,10 @@
 package org.siros.sdk.wallet.transaction
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -22,9 +26,21 @@ import timber.log.Timber
  * What a successful [TransactionDataCoordinator.process] hands to signing:
  * the KB-JWT binding for each DCQL query id an entry is bound to. A query not
  * in it is presented without transaction data.
+ *
+ * Signing must use exactly the credentials that were validated and shown (the
+ * wiring signs the objects it validated, never ones re-read from the store
+ * after the user's minutes of thought), and report a signing failure through
+ * [signingFailed] so the log does not keep a "consented" record that never
+ * produced a presentation.
  */
-internal class ScaPresentationPlan(private val bindings: Map<String, TransactionBinding>) {
+internal class ScaPresentationPlan(
+    private val bindings: Map<String, TransactionBinding>,
+    private val onSigningFailed: suspend () -> Unit = {},
+) {
     fun bindingFor(queryId: String?): TransactionBinding? = queryId?.let { bindings[it] }
+
+    /** Records that signing failed after consent (outcome `refused`, reason `signingFailed`). */
+    suspend fun signingFailed() = onSigningFailed()
 }
 
 /**
@@ -32,6 +48,14 @@ internal class ScaPresentationPlan(private val bindings: Map<String, Transaction
  * validate, show and obtain consent, establish authentication factors, and
  * log the outcome. Throws a [TransactionDataError] to refuse or decline, with
  * nothing signed; returns the plan to sign with otherwise.
+ *
+ * Validation and display (schema validation, hashing, document fetches) run
+ * on [Dispatchers.Default] and the log's I/O on [Dispatchers.IO], never on the
+ * caller's (typically main) thread.
+ *
+ * Nothing logged by this class contains a payload value, transaction id,
+ * entity name, raw entry, hash, URL or an error message that might embed them;
+ * only the reason code.
  */
 internal class TransactionDataCoordinator(
     private val validator: TransactionDataValidator,
@@ -44,35 +68,66 @@ internal class TransactionDataCoordinator(
 ) {
     /** Records [error] as a refusal of [request] and throws it. */
     suspend fun refuse(request: TransactionDataRequest, error: TransactionDataError): Nothing {
-        record(request, null, TransactionOutcome.REFUSED, error.reason)
+        record(request, null, TransactionOutcome.REFUSED, error.reason.code)
         throw error
     }
 
     /** Records a refusal of a request whose entries could not even be read (nothing but the verifier is known). */
     suspend fun recordUnreadable(verifier: String?, error: TransactionDataError) {
-        record(TransactionDataRequest(emptyList(), null, emptyMap(), verifier = verifier), null, TransactionOutcome.REFUSED, error.reason, unreadable = true)
+        record(
+            TransactionDataRequest(emptyList(), null, emptyMap(), verifier = verifier), null,
+            TransactionOutcome.REFUSED, error.reason.code, unreadable = true,
+        )
     }
 
     suspend fun process(request: TransactionDataRequest): ScaPresentationPlan {
         val validated = try {
-            validator.validate(request)
+            withContext(Dispatchers.Default) { validator.validate(request) }
         } catch (e: TransactionDataError) {
-            record(request, null, TransactionOutcome.REFUSED, e.reason)
+            record(request, null, TransactionOutcome.REFUSED, e.reason.code)
             throw e
         }
         try {
-            val consentModel = display.build(validated, request.verifier, request.requestSigned)
+            val consentModel = withContext(Dispatchers.Default) {
+                display.build(
+                    validated, request.verifier, request.requestSigned,
+                    request.disclosures.map {
+                        org.siros.sdk.wallet.TransactionDisclosure(
+                            it.credentialName, it.claims, bindsTransaction = it.queryId != null && it.queryId in validated.boundQueryIds(),
+                        )
+                    },
+                )
+            }
+            // One warning per validation, now that display has fetched what it needs.
+            validated.trust.warnOnce()
+
+            // Refuse before the user reads anything if no two-category authentication can possibly follow.
+            val provider = factorsProvider()
+            for (queryId in validated.boundQueryIds()) {
+                val operation = SigningOperation(request.credentials.getValue(queryId).first())
+                if (!canEstablish(provider, operation)) {
+                    throw TransactionDataError(
+                        TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS,
+                        "No two-category authentication can be established for this operation",
+                    )
+                }
+            }
+
             val handler = consentHandler() ?: throw TransactionDataError(
                 TransactionDataReason.NO_CONSENT_HANDLER,
                 "No consent handler is registered, so the transaction cannot be shown to the user",
             )
-            // A handler that throws or does not answer is a decline, never consent.
+            // A handler that throws, is cancelled from its own scope, or does not answer is a decline,
+            // never consent. Only the wallet's own coroutine being cancelled propagates.
             val confirmed = try {
                 withTimeoutOrNull(consentTimeoutMillis) { handler.confirm(consentModel) }
             } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Timber.w(e, "The transaction consent handler failed; treating it as declined")
+                currentCoroutineContext().ensureActive()
+                Timber.w("The transaction consent handler was cancelled; treating it as declined")
+                null
+            } catch (e: Throwable) {
+                if (e is VirtualMachineError) throw e
+                Timber.w("The transaction consent handler failed (${e.javaClass.simpleName}); treating it as declined")
                 null
             }
             if (confirmed != true) {
@@ -83,68 +138,106 @@ internal class TransactionDataCoordinator(
                 val credential = request.credentials.getValue(queryId).first()
                 // A provider that fails has established nothing.
                 val factors = try {
-                    factorsProvider().factorsFor(SigningOperation(credential))
+                    provider.factorsFor(SigningOperation(credential))
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    Timber.w(e, "The authentication factors provider failed")
+                    Timber.w("The authentication factors provider failed (${e.javaClass.simpleName})")
                     emptyList()
                 }
                 bindings[queryId] = validated.bindingFor(queryId, factors)!!
             }
             record(request, validated, TransactionOutcome.CONSENTED, null)
-            return ScaPresentationPlan(bindings)
+            return ScaPresentationPlan(bindings) {
+                record(request, validated, TransactionOutcome.REFUSED, SIGNING_FAILED)
+            }
         } catch (e: TransactionDataError) {
             record(
                 request, validated,
                 if (e.reason == TransactionDataReason.DECLINED) TransactionOutcome.DECLINED else TransactionOutcome.REFUSED,
-                e.reason,
+                e.reason.code,
             )
             throw e
         }
     }
 
+    private suspend fun canEstablish(provider: AuthenticationFactorsProvider, operation: SigningOperation): Boolean = try {
+        provider.canEstablish(operation)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        false
+    }
+
+    /**
+     * Writes the log record(s). A refusal is ONE record per request (the first
+     * readable entry's type and id, or nothing if none is readable), so a
+     * request with 32 broken entries cannot write 32; consented and declined
+     * attempts get one per entry. Free-text fields are capped.
+     */
     private suspend fun record(
         request: TransactionDataRequest,
         validated: ValidatedTransactionData?,
         outcome: TransactionOutcome,
-        reason: TransactionDataReason?,
+        reason: String?,
         unreadable: Boolean = false,
     ) {
         val now = nowMillis()
-        val credentialName = validated?.entries?.firstOrNull()?.contexts?.firstOrNull()?.let { it.credential.metadata?.name ?: (it.metadata["name"] as? JsonPrimitive)?.contentOrNull }
+        val credentialName = validated?.entries?.firstOrNull()?.contexts?.firstOrNull()
+            ?.let { it.credential.metadata?.name ?: (it.metadata["name"] as? JsonPrimitive)?.contentOrNull }
             ?: request.credentials.values.firstOrNull()?.firstOrNull()?.metadata?.name
-        // Refused before validation finished: read what can be read, for the record only.
         val items: List<Pair<String?, JsonObject?>> = validated?.entries?.map { it.type to it.payload }
             ?: if (unreadable) listOf(null to null) else request.entries.map { e ->
+                // Refused before validation finished: read what can be read, for the record only.
                 runCatching { TransactionDataDecoder.decode(e) }.getOrNull()?.let { it.type to it.payload } ?: (null to null)
-            }
-        for ((type, payload) in items) {
+            }.let { readable -> listOf(readable.firstOrNull { it.first != null } ?: (null to null)) }
+        val perRequest = if (outcome == TransactionOutcome.REFUSED) items.take(1) else items
+        for ((type, payload) in perRequest) {
             try {
-                log().append(
-                    TransactionLogEntry(
-                        transactionId = (payload?.get("transaction_id") as? JsonPrimitive)?.contentOrNull,
-                        transactionType = type,
-                        typeName = type?.let { TypeNames.builtIn(it) },
-                        entities = if (type != null && payload != null) entityNames(type, payload) else emptyMap(),
-                        verifier = request.verifier,
-                        credential = credentialName,
-                        timestampMillis = now,
-                        outcome = outcome,
-                        reason = reason?.code,
-                    ),
-                )
+                withContext(Dispatchers.IO) {
+                    log().append(
+                        TransactionLogEntry(
+                            transactionId = capped((payload?.get("transaction_id") as? JsonPrimitive)?.contentOrNull),
+                            transactionType = capped(type),
+                            typeName = type?.let { TypeNames.builtIn(it) },
+                            entities = if (type != null && payload != null) entityNames(type, payload).mapValues { capped(it.value)!! } else emptyMap(),
+                            verifier = capped(request.verifier),
+                            credential = capped(credentialName),
+                            timestampMillis = now,
+                            outcome = outcome,
+                            reason = reason,
+                        ),
+                    )
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Timber.e(e, "Could not record the transaction in the log")
+                // Never include the exception: a store failure message may name what was being written.
+                Timber.e("Could not record the transaction in the log (${e.javaClass.simpleName})")
             }
         }
     }
 
     companion object {
-        /** How long the user has to answer; the backend's own interaction timeout is five minutes. */
-        const val CONSENT_TIMEOUT_MILLIS = 5L * 60 * 1000
+        /**
+         * How long the user has to answer. go-wallet-backend's
+         * `Session.RequestSign` gives up on a sign request after 3 minutes
+         * (`time.NewTimer(3 * time.Minute)`, internal/engine/session.go), and
+         * validation and display run before consent starts, so this stays well
+         * below that: a confirmation given after the backend stopped waiting
+         * would be wasted.
+         */
+        const val CONSENT_TIMEOUT_MILLIS = 120L * 1000
+
+        /** The log reason of a presentation that failed to sign after consent. */
+        const val SIGNING_FAILED = "signingFailed"
+
+        /** Longest free-text field written to the log. */
+        const val MAX_LOG_FIELD = 200
+
+        /** [s] limited to [MAX_LOG_FIELD] characters, marked when cut (these are copied from attacker-controlled JSON). */
+        fun capped(s: String?): String? =
+            if (s == null || s.length <= MAX_LOG_FIELD) s else s.take(MAX_LOG_FIELD) + "…[truncated]"
 
         /** The entity names EC TS12 5.3 asks for, by built-in type; nothing else is copied out of the payload. */
         fun entityNames(type: String, payload: JsonObject): Map<String, String> {

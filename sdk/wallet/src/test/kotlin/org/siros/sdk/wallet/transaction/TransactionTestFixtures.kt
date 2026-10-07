@@ -77,12 +77,13 @@ internal object TransactionTestFixtures {
     class FakeSource(
         private val metadata: JsonObject? = metadata(),
         private val documents: Map<String, String> = emptyMap(),
+        private val perCredential: ((StoredCredential) -> JsonObject?)? = null,
     ) : TransactionMetadataSource {
         val fetched = mutableListOf<String>()
         var metadataCalls = 0
         override suspend fun typeMetadata(credential: StoredCredential): JsonObject? {
             metadataCalls++
-            return metadata
+            return perCredential?.invoke(credential) ?: metadata
         }
         override suspend fun document(uri: String): String? {
             fetched += uri

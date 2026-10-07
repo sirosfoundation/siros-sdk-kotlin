@@ -1,10 +1,14 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.wallet
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import java.io.IOException
 
 /** How an SCA presentation attempt ended (EC TS12 v1.0.1 5.3 covers successful and failed attempts). */
 @Serializable
@@ -55,7 +59,10 @@ data class TransactionLogEntry(
  * [entries]. The default store keeps them in encrypted app-private storage.
  */
 interface TransactionLogStore {
-    /** Records [entry]. Must not throw for a full or unavailable store: logging never blocks a presentation decision. */
+    /**
+     * Records [entry]. May throw if the store cannot be written; callers treat
+     * that as a logging failure only and never change a decision because of it.
+     */
     suspend fun append(entry: TransactionLogEntry)
 
     /** All entries, newest first. */
@@ -67,34 +74,89 @@ interface TransactionLogStore {
 
 /**
  * A [TransactionLogStore] over one string slot of durable storage, holding a
- * JSON array capped at [maxEntries] (oldest dropped). Concurrency-safe.
+ * JSON array. Concurrency-safe; all I/O runs on [Dispatchers.IO].
+ *
+ * Retention: at most [maxEntries] records and at most [maxRefused] REFUSED
+ * ones, evicting REFUSED records first, so a flood of refusals (any web page
+ * can fire DC API requests) can never push out the consented and declined
+ * attempts TS12 5.3 wants kept. A refusal identical to the newest refusal
+ * (same reason, verifier and type) within [refusalDedupMillis] is not written
+ * again.
+ *
+ * Failure handling: a slot that cannot be READ makes [append] and [entries]
+ * throw rather than overwrite history from an empty list; a slot holding
+ * corrupt JSON is handed to [keepCorrupt] (so it is not destroyed) before a
+ * fresh log starts; a failed write ([write] returns `false`) makes [append]
+ * throw.
+ *
+ * @param read the stored text, or `null` if empty; throws if storage is unreadable.
+ * @param write stores the text (`null` clears); returns whether it was stored.
+ * @param keepCorrupt keeps a copy of text that did not parse.
  */
-class JsonTransactionLogStore(
+internal class JsonTransactionLogStore(
     private val read: () -> String?,
-    private val write: (String?) -> Unit,
+    private val write: (String?) -> Boolean,
+    private val keepCorrupt: (String) -> Unit = {},
     private val maxEntries: Int = 500,
+    private val maxRefused: Int = 100,
+    private val refusalDedupMillis: Long = 60_000,
 ) : TransactionLogStore {
     private val json = Json { ignoreUnknownKeys = true }
     private val serializer = ListSerializer(TransactionLogEntry.serializer())
     private val lock = Any()
 
-    private fun load(): List<TransactionLogEntry> = try {
-        read()?.let { json.decodeFromString(serializer, it) }.orEmpty()
-    } catch (_: Exception) {
-        // A corrupt slot must not lose new entries to an exception.
-        emptyList()
-    }
-
-    override suspend fun append(entry: TransactionLogEntry) {
-        synchronized(lock) {
-            val updated = (listOf(entry) + load()).take(maxEntries)
-            write(json.encodeToString(serializer, updated))
+    private fun load(): List<TransactionLogEntry> {
+        val raw = read() ?: return emptyList()
+        return try {
+            json.decodeFromString(serializer, raw)
+        } catch (_: SerializationException) {
+            keepCorrupt(raw)
+            emptyList()
+        } catch (_: IllegalArgumentException) {
+            keepCorrupt(raw)
+            emptyList()
         }
     }
 
-    override suspend fun entries(): List<TransactionLogEntry> = synchronized(lock) { load() }
+    private fun evict(list: List<TransactionLogEntry>): List<TransactionLogEntry> {
+        // list is newest first
+        var out = list
+        var refused = out.count { it.outcome == TransactionOutcome.REFUSED }
+        while (refused > maxRefused) {
+            out = out.toMutableList().also { it.removeAt(it.indexOfLast { e -> e.outcome == TransactionOutcome.REFUSED }) }
+            refused--
+        }
+        while (out.size > maxEntries) {
+            val victim = out.indexOfLast { it.outcome == TransactionOutcome.REFUSED }.takeIf { it >= 0 } ?: out.lastIndex
+            out = out.toMutableList().also { it.removeAt(victim) }
+        }
+        return out
+    }
+
+    override suspend fun append(entry: TransactionLogEntry) {
+        withContext(Dispatchers.IO) {
+            synchronized(lock) {
+                val current = load()
+                if (entry.outcome == TransactionOutcome.REFUSED) {
+                    val last = current.firstOrNull { it.outcome == TransactionOutcome.REFUSED }
+                    if (last != null && last.reason == entry.reason && last.verifier == entry.verifier &&
+                        last.transactionType == entry.transactionType &&
+                        entry.timestampMillis - last.timestampMillis in 0 until refusalDedupMillis
+                    ) return@synchronized
+                }
+                val updated = evict(listOf(entry) + current)
+                if (!write(json.encodeToString(serializer, updated))) throw IOException("The transaction log could not be written")
+            }
+        }
+    }
+
+    override suspend fun entries(): List<TransactionLogEntry> = withContext(Dispatchers.IO) { synchronized(lock) { load() } }
 
     override suspend fun clear() {
-        synchronized(lock) { write(null) }
+        withContext(Dispatchers.IO) {
+            synchronized(lock) {
+                if (!write(null)) throw IOException("The transaction log could not be cleared")
+            }
+        }
     }
 }

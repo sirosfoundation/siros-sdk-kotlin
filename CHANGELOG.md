@@ -37,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SCA presentations are refused (`insufficientAuthenticationFactors`) until a
   provider that can justify two categories for the operation is registered
   (the WSCD manager does not report them yet, siros-wscd-manager#101/#102).
+  The user is not asked to confirm a request the provider says it cannot
+  satisfy (`AuthenticationFactorsProvider.canEstablish`). The DC API shows the
+  confirmation in its own activity. Values and labels with control, bidi or
+  zero-width characters are refused; for the built-in types the amount,
+  currency and payee name are always level 1 whatever the metadata says.
 - **`transaction_data` core (EC TS12), not yet reachable from any transport.**
   Strict decoding of each entry from its own `raw` (duplicate member names,
   invalid UTF-8 and orchestrator-hint disagreement are refused), SD-JWT VC

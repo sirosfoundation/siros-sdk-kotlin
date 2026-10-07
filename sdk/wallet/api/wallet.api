@@ -25,11 +25,12 @@ public final class org/siros/sdk/wallet/AmbiguousWscdPluginException : org/siros
 }
 
 public abstract interface class org/siros/sdk/wallet/AuthenticationFactorsProvider {
+	public abstract fun canEstablish (Lorg/siros/sdk/wallet/SigningOperation;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun factorsFor (Lorg/siros/sdk/wallet/SigningOperation;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
-public final class org/siros/sdk/wallet/AuthenticationFactorsProviderKt {
-	public static final fun getConservativeAuthenticationFactorsProvider ()Lorg/siros/sdk/wallet/AuthenticationFactorsProvider;
+public final class org/siros/sdk/wallet/AuthenticationFactorsProvider$DefaultImpls {
+	public static fun canEstablish (Lorg/siros/sdk/wallet/AuthenticationFactorsProvider;Lorg/siros/sdk/wallet/SigningOperation;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class org/siros/sdk/wallet/CachedAccount {
@@ -206,6 +207,12 @@ public final class org/siros/sdk/wallet/ClientIdScheme$X509SanUri : org/siros/sd
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class org/siros/sdk/wallet/ConservativeAuthenticationFactorsProvider : org/siros/sdk/wallet/AuthenticationFactorsProvider {
+	public static final field INSTANCE Lorg/siros/sdk/wallet/ConservativeAuthenticationFactorsProvider;
+	public fun canEstablish (Lorg/siros/sdk/wallet/SigningOperation;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun factorsFor (Lorg/siros/sdk/wallet/SigningOperation;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
 public final class org/siros/sdk/wallet/DeepLinkClassifierKt {
 	public static final fun classifyDeepLink (Landroid/net/Uri;Ljava/lang/String;)Lorg/siros/sdk/wallet/DeepLinkType;
 	public static final fun classifyDeepLink (Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/wallet/DeepLinkType;
@@ -296,14 +303,6 @@ public final class org/siros/sdk/wallet/IssuanceStart$Offer : org/siros/sdk/wall
 
 public final class org/siros/sdk/wallet/IssuanceStartKt {
 	public static final fun resolveIssuanceStart (Ljava/lang/String;)Lorg/siros/sdk/wallet/IssuanceStart;
-}
-
-public final class org/siros/sdk/wallet/JsonTransactionLogStore : org/siros/sdk/wallet/TransactionLogStore {
-	public fun <init> (Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;I)V
-	public synthetic fun <init> (Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;IILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public fun append (Lorg/siros/sdk/wallet/TransactionLogEntry;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun entries (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class org/siros/sdk/wallet/MdocIssuerIdentity {
@@ -412,7 +411,8 @@ public final class org/siros/sdk/wallet/SirosWallet {
 	public final fun getZkCircuitClient ()Lorg/siros/sdk/credentials/ZkCircuitClient;
 	public final fun getZkPresentation ()Lorg/siros/sdk/keystore/ZkMdocPresentation;
 	public final fun getZkSystemIds ()Ljava/util/List;
-	public final fun handleDCAPIRequest (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun handleDCAPIRequest (Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/wallet/TransactionConsentHandler;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun handleDCAPIRequest$default (Lorg/siros/sdk/wallet/SirosWallet;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/wallet/TransactionConsentHandler;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun holderBindingFor (Ljava/lang/String;)Lorg/siros/sdk/credentials/interop/HolderBinding;
 	public final fun interopProfileFor (Ljava/lang/String;)Lorg/siros/sdk/credentials/interop/InteropProfile;
 	public final fun isTransactionDataEffectivelyEnabled ()Z
@@ -546,20 +546,38 @@ public abstract interface class org/siros/sdk/wallet/TransactionConsentHandler {
 }
 
 public final class org/siros/sdk/wallet/TransactionConsentRequest {
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/Boolean;Ljava/lang/String;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/Boolean;Ljava/lang/String;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/Boolean;Ljava/lang/String;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/util/List;
 	public final fun component4 ()Ljava/lang/Boolean;
 	public final fun component5 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/Boolean;Ljava/lang/String;)Lorg/siros/sdk/wallet/TransactionConsentRequest;
-	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/TransactionConsentRequest;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/Boolean;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/wallet/TransactionConsentRequest;
+	public final fun component6 ()Ljava/util/List;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/Boolean;Ljava/lang/String;Ljava/util/List;)Lorg/siros/sdk/wallet/TransactionConsentRequest;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/TransactionConsentRequest;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/Boolean;Ljava/lang/String;Ljava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/wallet/TransactionConsentRequest;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getCredentialName ()Ljava/lang/String;
+	public final fun getDisclosures ()Ljava/util/List;
 	public final fun getEntries ()Ljava/util/List;
 	public final fun getLocale ()Ljava/lang/String;
 	public final fun getRequestSigned ()Ljava/lang/Boolean;
 	public final fun getVerifier ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/wallet/TransactionDisclosure {
+	public fun <init> (Ljava/lang/String;Ljava/util/List;Z)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/util/List;
+	public final fun component3 ()Z
+	public final fun copy (Ljava/lang/String;Ljava/util/List;Z)Lorg/siros/sdk/wallet/TransactionDisclosure;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/TransactionDisclosure;Ljava/lang/String;Ljava/util/List;ZILjava/lang/Object;)Lorg/siros/sdk/wallet/TransactionDisclosure;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBindsTransaction ()Z
+	public final fun getClaims ()Ljava/util/List;
+	public final fun getCredentialName ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }

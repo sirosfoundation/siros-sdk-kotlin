@@ -28,7 +28,12 @@ internal class TransactionDataRequest(
     val nonce: String? = null,
     val verifier: String? = null,
     val requestSigned: Boolean? = null,
+    /** What the presentation will disclose, for the consent screen. */
+    val disclosures: List<DisclosureInput> = emptyList(),
 )
+
+/** One credential of the presentation and what it will disclose, as the wiring knows it before validation. */
+internal class DisclosureInput(val queryId: String?, val credentialName: String?, val claims: List<String>?)
 
 /** One credential an entry is bound to, with the metadata it was validated against. */
 internal class ScaCredentialContext(
