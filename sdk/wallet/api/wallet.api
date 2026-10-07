@@ -411,8 +411,8 @@ public final class org/siros/sdk/wallet/SirosWallet {
 	public final fun getZkCircuitClient ()Lorg/siros/sdk/credentials/ZkCircuitClient;
 	public final fun getZkPresentation ()Lorg/siros/sdk/keystore/ZkMdocPresentation;
 	public final fun getZkSystemIds ()Ljava/util/List;
+	public final fun handleDCAPIRequest (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun handleDCAPIRequest (Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/wallet/TransactionConsentHandler;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun handleDCAPIRequest$default (Lorg/siros/sdk/wallet/SirosWallet;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/wallet/TransactionConsentHandler;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun holderBindingFor (Ljava/lang/String;)Lorg/siros/sdk/credentials/interop/HolderBinding;
 	public final fun interopProfileFor (Ljava/lang/String;)Lorg/siros/sdk/credentials/interop/InteropProfile;
 	public final fun isTransactionDataEffectivelyEnabled ()Z

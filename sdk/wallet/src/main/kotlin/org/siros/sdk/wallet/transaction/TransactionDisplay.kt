@@ -116,7 +116,7 @@ internal class TransactionDisplayBuilder(
             }
             val labels = (obj["display"] as? JsonArray)?.mapNotNull { d ->
                 val o = d as? JsonObject ?: return@mapNotNull null
-                val tag = (o["lang"] ?: o["locale"])?.let { it as? JsonPrimitive }?.contentOrNull
+                val tag = ((o["lang"] ?: o["locale"]) as? JsonPrimitive)?.contentOrNull
                 val label = (o["label"] as? JsonPrimitive)?.contentOrNull
                 if (tag != null && !label.isNullOrEmpty()) tag to label else null
             }.orEmpty()
@@ -181,11 +181,13 @@ internal class TransactionDisplayBuilder(
     private fun credentialName(ctx: ScaCredentialContext): String? {
         val display = (ctx.metadata["display"] as? JsonArray)?.mapNotNull { d ->
             val o = d as? JsonObject ?: return@mapNotNull null
-            val tag = (o["locale"] ?: o["lang"])?.let { it as? JsonPrimitive }?.contentOrNull
+            val tag = ((o["locale"] ?: o["lang"]) as? JsonPrimitive)?.contentOrNull
             val name = (o["name"] as? JsonPrimitive)?.contentOrNull
             if (tag != null && !name.isNullOrEmpty()) tag to name else null
         }.orEmpty()
-        return (pick(display, locale) ?: (ctx.metadata["name"] as? JsonPrimitive)?.contentOrNull)?.let { DisplayText.label(it, "credential name") }
+        val metadataName = (ctx.metadata["name"] as? JsonPrimitive)?.contentOrNull
+        val name = pick(display, locale) ?: metadataName
+        return if (name == null) null else DisplayText.label(name, "credential name")
     }
 
     private fun parse(text: String): JsonElement = try {

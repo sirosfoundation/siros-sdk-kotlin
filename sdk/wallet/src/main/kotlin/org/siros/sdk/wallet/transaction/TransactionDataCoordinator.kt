@@ -17,6 +17,7 @@ import org.siros.sdk.keystore.TransactionBinding
 import org.siros.sdk.wallet.AuthenticationFactorsProvider
 import org.siros.sdk.wallet.SigningOperation
 import org.siros.sdk.wallet.TransactionConsentHandler
+import org.siros.sdk.wallet.TransactionConsentRequest
 import org.siros.sdk.wallet.TransactionLogEntry
 import org.siros.sdk.wallet.TransactionLogStore
 import org.siros.sdk.wallet.TransactionOutcome
@@ -101,52 +102,16 @@ internal class TransactionDataCoordinator(
             // One warning per validation, now that display has fetched what it needs.
             validated.trust.warnOnce()
 
-            // Refuse before the user reads anything if no two-category authentication can possibly follow.
             val provider = factorsProvider()
-            for (queryId in validated.boundQueryIds()) {
-                val operation = SigningOperation(request.credentials.getValue(queryId).first())
-                if (!canEstablish(provider, operation)) {
-                    throw TransactionDataError(
-                        TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS,
-                        "No two-category authentication can be established for this operation",
-                    )
-                }
-            }
-
+            requireFactorsCanBeEstablished(provider, validated, request)
             val handler = consentHandler() ?: throw TransactionDataError(
                 TransactionDataReason.NO_CONSENT_HANDLER,
                 "No consent handler is registered, so the transaction cannot be shown to the user",
             )
-            // A handler that throws, is cancelled from its own scope, or does not answer is a decline,
-            // never consent. Only the wallet's own coroutine being cancelled propagates.
-            val confirmed = try {
-                withTimeoutOrNull(consentTimeoutMillis) { handler.confirm(consentModel) }
-            } catch (e: CancellationException) {
-                currentCoroutineContext().ensureActive()
-                Timber.w("The transaction consent handler was cancelled; treating it as declined")
-                null
-            } catch (e: Throwable) {
-                if (e is VirtualMachineError) throw e
-                Timber.w("The transaction consent handler failed (${e.javaClass.simpleName}); treating it as declined")
-                null
-            }
-            if (confirmed != true) {
+            if (!askUser(handler, consentModel)) {
                 throw TransactionDataError(TransactionDataReason.DECLINED, "The user did not confirm the transaction")
             }
-            val bindings = LinkedHashMap<String, TransactionBinding>()
-            for (queryId in validated.boundQueryIds()) {
-                val credential = request.credentials.getValue(queryId).first()
-                // A provider that fails has established nothing.
-                val factors = try {
-                    provider.factorsFor(SigningOperation(credential))
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    Timber.w("The authentication factors provider failed (${e.javaClass.simpleName})")
-                    emptyList()
-                }
-                bindings[queryId] = validated.bindingFor(queryId, factors)!!
-            }
+            val bindings = bind(provider, validated, request)
             record(request, validated, TransactionOutcome.CONSENTED, null)
             return ScaPresentationPlan(bindings) {
                 record(request, validated, TransactionOutcome.REFUSED, SIGNING_FAILED)
@@ -159,6 +124,63 @@ internal class TransactionDataCoordinator(
             )
             throw e
         }
+    }
+
+    /** Refuses before the user reads anything if no two-category authentication can possibly follow. */
+    private suspend fun requireFactorsCanBeEstablished(
+        provider: AuthenticationFactorsProvider,
+        validated: ValidatedTransactionData,
+        request: TransactionDataRequest,
+    ) {
+        for (queryId in validated.boundQueryIds()) {
+            val operation = SigningOperation(request.credentials.getValue(queryId).first())
+            if (!canEstablish(provider, operation)) {
+                throw TransactionDataError(
+                    TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS,
+                    "No two-category authentication can be established for this operation",
+                )
+            }
+        }
+    }
+
+    /**
+     * Asks the user. A handler that throws, is cancelled from its own scope, or
+     * does not answer is a decline, never consent; only the wallet's own
+     * coroutine being cancelled propagates.
+     */
+    private suspend fun askUser(handler: TransactionConsentHandler, model: TransactionConsentRequest): Boolean = try {
+        withTimeoutOrNull(consentTimeoutMillis) { handler.confirm(model) } == true
+    } catch (e: CancellationException) {
+        currentCoroutineContext().ensureActive()
+        Timber.w("The transaction consent handler was cancelled; treating it as declined")
+        false
+    } catch (e: Throwable) {
+        if (e is VirtualMachineError) throw e
+        Timber.w("The transaction consent handler failed (${e.javaClass.simpleName}); treating it as declined")
+        false
+    }
+
+    /** The KB-JWT binding per bound query, with the factors established for each credential. */
+    private suspend fun bind(
+        provider: AuthenticationFactorsProvider,
+        validated: ValidatedTransactionData,
+        request: TransactionDataRequest,
+    ): Map<String, TransactionBinding> {
+        val bindings = LinkedHashMap<String, TransactionBinding>()
+        for (queryId in validated.boundQueryIds()) {
+            val credential = request.credentials.getValue(queryId).first()
+            // A provider that fails has established nothing.
+            val factors = try {
+                provider.factorsFor(SigningOperation(credential))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.w("The authentication factors provider failed (${e.javaClass.simpleName})")
+                emptyList()
+            }
+            bindings[queryId] = validated.bindingFor(queryId, factors)!!
+        }
+        return bindings
     }
 
     private suspend fun canEstablish(provider: AuthenticationFactorsProvider, operation: SigningOperation): Boolean = try {

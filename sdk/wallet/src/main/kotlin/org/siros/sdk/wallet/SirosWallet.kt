@@ -5,6 +5,7 @@ import android.app.Activity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -347,13 +348,19 @@ class SirosWallet private constructor(
         nonce: String,
         audience: String,
         binding: org.siros.sdk.keystore.TransactionBinding,
+        plan: org.siros.sdk.wallet.transaction.ScaPresentationPlan,
     ): String = try {
         keystore.signVpToken(cred.raw, disclosedClaims, nonce, audience, cred.kid, binding)
-    } catch (e: AbstractMethodError) {
-        throw KeystoreException(
-            "This keystore cannot bind transaction_data to a presentation",
-            errorCode = "transaction_data_unsupported_keystore",
-        )
+    } catch (e: Throwable) {
+        // Consent was given but nothing could be presented: the log must not stay "consented" alone.
+        plan.signingFailed()
+        if (e is AbstractMethodError) {
+            throw KeystoreException(
+                "This keystore cannot bind transaction_data to a presentation",
+                errorCode = "transaction_data_unsupported_keystore",
+            )
+        }
+        throw e
     }
 
     /**
@@ -398,23 +405,10 @@ class SirosWallet private constructor(
      * @throws TransactionDataError to refuse or decline; nothing is signed.
      */
     private suspend fun processTransactionData(
+        request: org.siros.sdk.wallet.transaction.TransactionDataRequest,
         declared: Boolean,
-        entries: List<org.siros.sdk.wallet.transaction.TransactionDataEntry>,
-        responseMode: String?,
-        credentials: Map<String, List<org.siros.sdk.credentials.StoredCredential>>,
-        verifier: String?,
-        requestSigned: Boolean?,
-        disclosures: List<org.siros.sdk.wallet.transaction.DisclosureInput> = emptyList(),
         consentOverride: TransactionConsentHandler? = null,
     ): org.siros.sdk.wallet.transaction.ScaPresentationPlan {
-        val request = org.siros.sdk.wallet.transaction.TransactionDataRequest(
-            entries = entries,
-            responseMode = responseMode,
-            credentials = credentials,
-            verifier = verifier,
-            requestSigned = requestSigned,
-            disclosures = disclosures,
-        )
         val coordinator = transactionCoordinator(consentOverride)
         if (!declared) {
             coordinator.refuse(request, TransactionDataError(
@@ -3537,38 +3531,21 @@ class SirosWallet private constructor(
      *   `navigator.credentials.get()` call, as verified by the platform
      *   (e.g. Android's Credential Manager) - NOT read from the request body,
      *   which is untrusted until the platform attests it.
-     * @param consentHandler shows a payment confirmation (`transaction_data`) for
-     *   this request, in place of [transactionConsentHandler]. The DC API
-     *   activity passes a handler that shows a dialog in the activity itself,
-     *   because the app's own screens are not in front of the user during a
-     *   DC API request.
      * @throws WalletException if the user declines, or if not connected.
-     * @throws TransactionDataError if the request carries `transaction_data`
-     *   (always, until the TS12 pipeline is complete); nothing is signed.
+     * @throws TransactionDataError if a `transaction_data` request is refused or
+     *   declined; nothing is signed.
      */
-    suspend fun handleDCAPIRequest(
-        rawRequestJson: String,
-        origin: String,
-        consentHandler: TransactionConsentHandler? = null,
-    ): DCAPIPresentationResult {
+    suspend fun handleDCAPIRequest(rawRequestJson: String, origin: String): DCAPIPresentationResult {
         val request = DCAPIRequestParser.parse(rawRequestJson)
 
         // The DC API has no negotiation, so a request can carry
         // transaction_data at a wallet that never declared support. Refuse it
         // before any trust evaluation or signing: answering without the
         // transaction hashes would authorise a payment the user never saw.
+        val consentHandler = currentCoroutineContext()[DcApiConsentHandler]?.handler
         val transactionDataEnabled = this.transactionDataEnabled && (consentHandler ?: transactionConsentHandler) != null
-        if (request.hasTransactionData && !transactionDataEnabled) {
-            // Refused (and logged) without evaluating trust or touching a credential.
-            processTransactionData(
-                declared = false,
-                entries = runCatching { dcApiTransactionEntries(request) }.getOrNull().orEmpty(),
-                responseMode = request.responseMode,
-                credentials = emptyMap(),
-                verifier = origin,
-                requestSigned = request.keyMaterial != null,
-            )
-        }
+        // Refused (and logged) without evaluating trust or touching a credential.
+        if (request.hasTransactionData && !transactionDataEnabled) refuseDcApiTransactionData(request, origin)
 
         // request.clientId is only cryptographically bound to anything when
         // the request is signed (keyMaterial != null, verified against the
@@ -3704,36 +3681,17 @@ class SirosWallet private constructor(
         // wallet-side exchange having completed successfully - nothing on
         // our side ever saw an error.
         val scaPlan = if (request.hasTransactionData) {
-            val entries = try {
-                dcApiTransactionEntries(request)
-            } catch (e: TransactionDataError) {
-                transactionCoordinator(consentHandler).recordUnreadable(origin, e)
-                throw e
-            }
             val answering = selectedIds.mapNotNull { id -> allCreds.find { it.id == id } }
                 .groupBy { matchResultByCredentialId[it.id]?.queryId ?: "_default" }
-            processTransactionData(
-                declared = transactionDataEnabled,
-                entries = entries,
-                responseMode = request.responseMode,
-                credentials = answering,
-                verifier = trustResult.entityName ?: subjectId,
-                requestSigned = request.keyMaterial != null,
-                disclosures = answering.flatMap { (queryId, creds) ->
-                    creds.map { c ->
-                        org.siros.sdk.wallet.transaction.DisclosureInput(
-                            queryId, c.metadata?.name,
-                            matchResultByCredentialId[c.id]?.requestedClaims?.mapNotNull { it.lastOrNull() }?.distinct(),
-                        )
-                    }
-                },
-                consentOverride = consentHandler,
+            planDcApiTransactionData(
+                request, origin, trustResult.entityName ?: subjectId, answering,
+                matchResultByCredentialId.mapValues { (_, r) -> r?.requestedClaims?.mapNotNull { it.lastOrNull() }?.distinct() },
+                consentHandler,
             )
         } else {
             null
         }
         val tokensByQueryId = linkedMapOf<String, MutableList<String>>()
-        try {
         for (id in selectedIds) {
             val cred = allCreds.find { it.id == id } ?: continue
             val matchResult = matchResultByCredentialId[id]
@@ -3818,7 +3776,7 @@ class SirosWallet private constructor(
             } else {
                 val binding = scaPlan?.bindingFor(queryId)
                 if (binding != null) {
-                    signScaVp(cred, disclosedClaims, request.nonce, audience, binding)
+                    signScaVp(cred, disclosedClaims, request.nonce, audience, binding, scaPlan)
                 } else {
                     keystore.signVpToken(
                         credential = cred.raw,
@@ -3830,10 +3788,6 @@ class SirosWallet private constructor(
                 }
             }
             tokensByQueryId.getOrPut(queryId) { mutableListOf() }.add(token)
-        }
-        } catch (e: Exception) {
-            scaPlan?.signingFailed()
-            throw e
         }
 
         val vpTokenObj = kotlinx.serialization.json.buildJsonObject {
@@ -3908,6 +3862,72 @@ class SirosWallet private constructor(
         ))
 
         return DCAPIPresentationResult(responseJson = finalResponseJson, credentialIds = selectedIds)
+    }
+
+    /** Carries the per-request consent handler of [handleDCAPIRequest]'s overload. */
+    private class DcApiConsentHandler(val handler: TransactionConsentHandler) : kotlin.coroutines.AbstractCoroutineContextElement(Key) {
+        companion object Key : kotlin.coroutines.CoroutineContext.Key<DcApiConsentHandler>
+    }
+
+    /**
+     * As [handleDCAPIRequest], with [consentHandler] showing a payment
+     * confirmation (`transaction_data`) for this request in place of
+     * [transactionConsentHandler]. The DC API activity passes a handler that
+     * shows a dialog in the activity itself, because the app's own screens
+     * are not in front of the user during a DC API request.
+     */
+    suspend fun handleDCAPIRequest(
+        rawRequestJson: String,
+        origin: String,
+        consentHandler: TransactionConsentHandler,
+    ): DCAPIPresentationResult =
+        withContext(DcApiConsentHandler(consentHandler)) { handleDCAPIRequest(rawRequestJson, origin) }
+
+    /** Refuses (and logs) a DC API request carrying `transaction_data` this wallet is not set up to process. */
+    private suspend fun refuseDcApiTransactionData(request: org.siros.sdk.wallet.dcapi.DCAPIRequest, origin: String) {
+        processTransactionData(
+            org.siros.sdk.wallet.transaction.TransactionDataRequest(
+                entries = runCatching { dcApiTransactionEntries(request) }.getOrNull().orEmpty(),
+                responseMode = request.responseMode,
+                credentials = emptyMap(),
+                verifier = origin,
+                requestSigned = request.keyMaterial != null,
+            ),
+            declared = false,
+        )
+    }
+
+    /** Validates and obtains consent for a DC API request's `transaction_data` (after trust and credential selection). */
+    private suspend fun planDcApiTransactionData(
+        request: org.siros.sdk.wallet.dcapi.DCAPIRequest,
+        origin: String,
+        verifier: String,
+        answering: Map<String, List<org.siros.sdk.credentials.StoredCredential>>,
+        disclosedClaimsById: Map<Long, List<String>?>,
+        consentHandler: TransactionConsentHandler?,
+    ): org.siros.sdk.wallet.transaction.ScaPresentationPlan {
+        val entries = try {
+            dcApiTransactionEntries(request)
+        } catch (e: TransactionDataError) {
+            transactionCoordinator(consentHandler).recordUnreadable(origin, e)
+            throw e
+        }
+        return processTransactionData(
+            org.siros.sdk.wallet.transaction.TransactionDataRequest(
+                entries = entries,
+                responseMode = request.responseMode,
+                credentials = answering,
+                verifier = verifier,
+                requestSigned = request.keyMaterial != null,
+                disclosures = answering.flatMap { (queryId, creds) ->
+                    creds.map { c ->
+                        org.siros.sdk.wallet.transaction.DisclosureInput(queryId, c.metadata?.name, disclosedClaimsById[c.id])
+                    }
+                },
+            ),
+            declared = true,
+            consentOverride = consentHandler,
+        )
     }
 
     /** The `transaction_data` strings of a DC API request; anything but an array of strings is an invalid entry. */
@@ -4517,273 +4537,6 @@ class SirosWallet private constructor(
      * without depending on specific step names.
      */
     private val terminatedFlowIds = mutableSetOf<String>()
-
-    /** One legacy-transport sign request (see the collector in [connectEngine]). */
-    private suspend fun handleEngineSignRequest(engine: WalletEngineSession, msg: SignRequestMessage) {
-    try {
-        Timber.d("Sign request: ${msg.action} for flow ${msg.flowId}")
-        when (msg.action) {
-            "generate_proof" -> {
-                val params = msg.params
-                val count = params?.count ?: 1
-                val generated = generateProofsForRequest(
-                    audience = params?.audience ?: "",
-                    nonce = params?.nonce ?: "",
-                    count = count,
-                    proofTypesSupported = params?.proofTypesSupported?.keys,
-                    proofTypeHint = params?.proofType,
-                )
-                // The "attestation" proof type returns a single GeneratedProofData
-    // whose attestedKeyIds already covers the whole batch in order; the
-    // "jwt" proof type returns one GeneratedProofData PER credential,
-    // each carrying its own single-element attestedKeyIds - flatMap
-    // concatenates either shape into one batch-order list. Taking only
-    // the first entry's list (as this used to) silently dropped every
-    // index past 0 for a "jwt" batch of more than one credential.
-    activeAttestedKeyIds = generated.flatMap { it.attestedKeyIds.orEmpty() }.ifEmpty { null }
-                val proofs = generated.map {
-                    ProofObject(proofType = it.proofType, jwt = it.jwt, attestation = it.attestation)
-                }
-                Timber.d("Sending sign response with ${proofs.size} proofs for flow ${msg.flowId}, messageId=${msg.messageId}")
-                engine.sendSignResponse(
-                    msg.flowId,
-                    proofs = proofs,
-                    messageId = msg.messageId,
-                    credentialRequestExtras = zkIssuanceExtras(msg.flowId),
-                )
-                Timber.d("Sign response sent successfully for flow ${msg.flowId}")
-            }
-            "sign_presentation" -> {
-                val params = msg.params
-                val nonce = params?.nonce ?: ""
-                val audience = params?.audience ?: ""
-                val credsToInclude = params?.credentialsToInclude
-
-                // validateAudience consumes the flow's trust result, so read the verifier's name first.
-                val verifierName = lastTrustResults[msg.flowId]?.entityName
-
-                // Validate audience matches trusted verifier identity
-                validateAudience(msg.flowId, audience)
-
-                // transaction_data is never ignored: either the whole TS12
-                // pipeline runs (and yields what to bind) or the request is
-                // refused, before anything is signed.
-                var credentialSnapshot: List<org.siros.sdk.credentials.StoredCredential>? = null
-                val scaPlan = params?.transactionData?.takeIf { it.isNotEmpty() }?.let { wire ->
-                    // The credentials validated and shown are the ones signed: this snapshot is reused
-                    // below instead of re-reading the store after the user's minutes of thought.
-                    val allForSca = credentialStore.getAll()
-                    credentialSnapshot = allForSca
-                    val answering = credsToInclude.orEmpty()
-                        .mapNotNull { ref ->
-                            val c = allForSca.find { it.id == ref.credentialId.toLongOrNull() }
-                            val q = ref.credentialQueryId
-                            if (c != null && q != null) q to c else null
-                        }
-                        .groupBy({ it.first }, { it.second })
-                    processTransactionData(
-                        declared = engineFlowDeclaredTransactionData,
-                        entries = wireEntries(wire, audience),
-                        responseMode = params.responseMode,
-                        credentials = answering,
-                        verifier = verifierName ?: audience,
-                        requestSigned = null,
-                        disclosures = credsToInclude.orEmpty().mapNotNull { ref ->
-                            allForSca.find { it.id == ref.credentialId.toLongOrNull() }?.let { c ->
-                                org.siros.sdk.wallet.transaction.DisclosureInput(ref.credentialQueryId, c.metadata?.name, ref.disclosedClaims)
-                            }
-                        },
-                    )
-                }
-
-                val vpToken = try {
-                if (!credsToInclude.isNullOrEmpty()) {
-                    val allCreds = credentialSnapshot ?: credentialStore.getAll()
-                    val storedMatchResults = pendingMatchResultsByFlow.remove(msg.flowId)
-                    Timber.d(
-                        "sign_presentation: flow=${msg.flowId} storedMatchResults=" +
-                            "${storedMatchResults?.map { "${it.queryId}:${it.format}" }}"
-                    )
-                    val vpParts = credsToInclude.mapNotNull { ref ->
-                        // ref.credentialId arrives as a string over the WMP wire
-                        // protocol - see the CredentialMatch construction sites'
-                        // comments on that separate contract from privatedata-spec.
-                        val cred = allCreds.find { it.id == ref.credentialId.toLongOrNull() }
-                        if (cred == null) {
-                            Timber.w("Credential ...${ref.credentialId.takeLast(4)} not found in store for VP signing")
-                            return@mapNotNull null
-                        }
-                        val matchResult = storedMatchResults?.firstOrNull { r ->
-                            r.queryId == ref.credentialQueryId || r.candidates.any { it.id == cred.id }
-                        }
-                        Timber.d(
-                            "sign_presentation: credentialQueryId=${ref.credentialQueryId} " +
-                                "credId=${cred.id} matchResult.format=${matchResult?.format} " +
-                                "zkSystemTypes=${matchResult?.zkSystemTypes} disclosedClaims=${ref.disclosedClaims}"
-                        )
-
-                        if (matchResult?.format?.equals("mso_mdoc_zk", ignoreCase = true) == true) {
-                            // ZK-wrapped mDoc presentation (see handleDCAPIRequest's
-                            // identical branch, which this mirrors for the WS-engine/
-                            // redirect-flow transport instead of DC API).
-                            val credBytes = android.util.Base64.decode(cred.raw, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
-                            // cred.kid is commonly null for a softkey-issued credential
-                            // with no explicit per-credential key binding - see the
-                            // identical fallback + comment in handleDCAPIRequest.
-                            // Resolved lazily (checked only inside the signer lambda) -
-                            // see handleDCAPIRequest's identical comment for why.
-                            val kid = cred.kid ?: keystore.listKeys().firstOrNull()?.keyId
-                            // Only bind a pseudonym when actually disclosed for this
-                            // query - see handleDCAPIRequest's identical comment.
-                            val wantsPseudonym = ref.disclosedClaims?.contains(LongfellowZkProofSystem.PSEUDONYM_CLAIM) == true
-                            val verifierIdentity = if (wantsPseudonym) {
-                                // audience has already been checked against the
-                                // trust-evaluated verifier identifier by
-                                // validateAudience above, so it's the confirmed
-                                // client id for this flow. sessionId (when
-                                // present) is the real verifier_context binding
-                                // input - see VerifierIdentity.sessionId's doc
-                                // comment.
-                                VerifierIdentity(
-                                    clientId = audience,
-                                    ppidContext = matchResult.ppidContext,
-                                    sessionId = params?.verifierSessionId,
-                                )
-                            } else {
-                                null
-                            }
-                            val sessionTranscript = MdocDeviceResponseBuilder.buildOpenID4VPSessionTranscript(
-                                clientId = audience,
-                                nonce = nonce,
-                                responseUri = params?.responseUri ?: "",
-                                verifierJwkThumbprint = params?.verifierJwkThumbprint,
-                            )
-                            Timber.d("sign_presentation: generating ZK proof, wantsPseudonym=$wantsPseudonym verifierIdentity=$verifierIdentity")
-                            // ZK proof generation is a multi-second native compute
-                            // with no intermediate progress signal from the engine (the
-                            // last real server step was "credential_selection", and the
-                            // next one - "submitting_response" - only arrives after this
-                            // call returns) - without this, the UI shows a stale
-                            // "Selecting credential" label the whole time. "computing_proof"
-                            // is a CLIENT-ONLY status token, never sent by the server and
-                            // deliberately absent from FlowStepCatalog (which mirrors
-                            // go-wallet-backend's real FlowStep vocabulary 1:1) - it's
-                            // overwritten by the next genuine engine.flowProgress() update
-                            // as soon as one arrives.
-                            (_state.value as? WalletState.FlowActive)
-                                ?.takeIf { it.flowId == msg.flowId }
-                                ?.let { _state.value = it.copy(status = "computing_proof") }
-                            val presented = try {
-                                zkPresentation.present(
-                                    ZkMdocPresentation.Request(
-                                        credentialBytes = credBytes,
-                                        requestedSystems = matchResult.zkSystemTypes.orEmpty(),
-                                        sessionTranscript = sessionTranscript,
-                                        requestedClaims = ref.disclosedClaims ?: emptyList(),
-                                        verifierIdentity = verifierIdentity,
-                                    ),
-                                    signer = { algorithm, data ->
-                                        require(algorithm == COSE_ALG_ES256) {
-                                            "This keystore signs ES256 only, proof system asked for COSE alg $algorithm"
-                                        }
-                                        keystore.sign(
-                                            requireNotNull(kid) { "No signing key available for credential ${cred.id} - cannot generate a ZK proof for it" },
-                                            data,
-                                        )
-                                    },
-                                )
-                            } catch (e: ZkMdocPresentation.NoMatchingProofSystem) {
-                                throw WalletException(e.message ?: "No registered ZK proof system satisfies the request")
-                            }
-                            Timber.d("sign_presentation: ZK proof generated, system=${presented.system.systemId} pseudonymOutcome=${presented.proof.pseudonymOutcome} proofBytes.size=${presented.proof.proofBytes.size}")
-                            android.util.Base64.encodeToString(
-                                presented.deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
-                            )
-                        } else if (cred.format == "mso_mdoc") {
-                            // mDoc DeviceResponse (ISO 18013-5)
-                            val credBytes = android.util.Base64.decode(cred.raw, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
-                            val deviceResponse = keystore.signMdocPresentation(
-                                credentialBytes = credBytes,
-                                disclosedClaims = ref.disclosedClaims,
-                                nonce = nonce,
-                                audience = audience,
-                                responseUri = params?.responseUri ?: "",
-                                verifierJwkThumbprint = params?.verifierJwkThumbprint,
-                                kid = cred.kid,
-                            )
-                            android.util.Base64.encodeToString(deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
-                        } else {
-                            // SD-JWT VP token with KB-JWT
-                            val binding = scaPlan?.bindingFor(ref.credentialQueryId)
-                            if (binding != null) {
-                                signScaVp(cred, ref.disclosedClaims, nonce, audience, binding)
-                            } else {
-                                keystore.signVpToken(
-                                    credential = cred.raw,
-                                    disclosedClaims = ref.disclosedClaims,
-                                    nonce = nonce,
-                                    audience = audience,
-                                    kid = cred.kid,
-                                )
-                            }
-                        }
-                    }
-                    // For single credential presentations (most common), return the token directly.
-                    // For multiple credentials, join with newline for WMP transport.
-                    // Note: The backend assembles the OID4VP-compliant vp_token JSON
-                    // object (keyed by credential query ID, §8.1) before submission
-                    // to the verifier.
-                    vpParts.joinToString("\n")
-                } else {
-                    // Fallback: legacy plain VP JWT (no credential data)
-                    keystore.signPresentation(
-                        nonce = nonce,
-                        audience = audience,
-                        credentialIds = emptyList(),
-                    )
-                }
-                } catch (e: Exception) {
-                    // Consent was given but nothing could be presented: the log must not stay "consented" alone.
-                    scaPlan?.signingFailed()
-                    throw e
-                }
-                Timber.d("Sending VP sign response for flow ${msg.flowId}, messageId=${msg.messageId}")
-                engine.sendSignResponse(msg.flowId, vpToken = vpToken, messageId = msg.messageId)
-                Timber.d("VP sign response sent successfully for flow ${msg.flowId}")
-            }
-            "request_attestation" -> handleRequestAttestation(engine, msg)
-            "sign_client_auth" -> handleSignClientAuth(engine, msg)
-            else -> {
-                // go-wallet-backend's RequestSign only unblocks on a
-                // sign_response carrying this message_id (there is no
-                // sign-error message); staying silent would stall the
-                // flow for its full 3 minute ErrSignTimeout. An empty
-                // response lets the backend decide what a missing
-                // result means for the action it asked for.
-                Timber.w("Unknown sign action: ${msg.action}; sending empty sign_response")
-                engine.sendSignResponse(flowId = msg.flowId, messageId = msg.messageId)
-            }
-        }
-    } catch (e: TransactionDataError) {
-        // The legacy protocol has no sign-refusal message: the
-        // engine learns of this when its sign request times out.
-        // Only the reason code is logged or shown: the message may hold URLs, credential ids or payload text.
-        Timber.w("Refused transaction_data (${e.reason.code}) for flow ${msg.flowId}")
-        eventListener?.onTransactionDataRefused(msg.flowId, e.reason)
-        // A user's own decline is not an error and gets no error message; the flow still ends.
-        reportSignFailure(
-            msg.flowId,
-            "Payment confirmation refused: ${e.reason.code}",
-            notifyError = e.reason != org.siros.sdk.credentials.TransactionDataReason.DECLINED,
-        )
-    } catch (e: KeystoreException) {
-        Timber.e(e, "Error handling sign request: keystore error")
-        reportSignFailure(msg.flowId, e.message ?: "Signing failed")
-    } catch (e: Exception) {
-        Timber.e(e, "Error handling sign request")
-        reportSignFailure(msg.flowId, e.message ?: "Signing failed")
-    }
-    }
 
     /**
      * Report a flow-terminating failure immediately (e.g. a keystore/WSCD
@@ -5957,7 +5710,10 @@ class SirosWallet private constructor(
                 if (wire != null) {
                     return try {
                         org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult(
-                            vpToken = signWmpTransactionPresentation(params, wire, verifierName),
+                            vpToken = signScaPresentation(
+                                params.credentialsToInclude.orEmpty(), params.nonce, params.audience, params.responseMode,
+                                wire, verifierName, wmpSessionDeclaredTransactionData,
+                            ),
                         )
                     } catch (e: TransactionDataError) {
                         eventListener?.onTransactionDataRefused(flowId, e.reason)
@@ -6007,67 +5763,102 @@ class SirosWallet private constructor(
     }
 
     /**
-     * The WMP `sign_presentation` for a request carrying `transaction_data`:
-     * runs the TS12 pipeline, then builds one SD-JWT presentation per selected
-     * credential (newline-joined, as the legacy transport does; the backend
-     * assembles the `vp_token`), binding the transaction into those the
-     * entries name.
+     * The `sign_presentation` of a request carrying `transaction_data`, on the
+     * legacy engine and WMP transports: runs the TS12 pipeline, then builds one
+     * SD-JWT presentation per selected credential (newline-joined; the
+     * backend assembles the `vp_token`), binding the transaction into those the
+     * entries name. The credentials signed are the ones validated and shown.
+     *
+     * This path builds SD-JWT presentations only; an mdoc or ZK credential in
+     * the same (combined) request is refused before the user is asked.
      */
-    private suspend fun signWmpTransactionPresentation(
-        params: org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams,
+    private suspend fun signScaPresentation(
+        refs: List<org.siros.sdk.transport.engine.CredentialRef>,
+        nonce: String,
+        audience: String,
+        responseMode: String?,
         wire: List<org.siros.sdk.transport.wmp.openid4x.TransactionData>,
         verifierName: String?,
+        declared: Boolean,
     ): String {
-        val refs = params.credentialsToInclude.orEmpty()
         val all = credentialStore.getAll()
         val selected = refs.map { ref -> ref to all.find { it.id == ref.credentialId.toLongOrNull() } }
-        // This path builds SD-JWT presentations only: an mdoc or ZK credential in the same
-        // (combined) request cannot be answered here, so refuse before the user is asked.
+        val verifier = verifierName ?: audience
         if (selected.any { (_, c) -> c != null && c.format != "dc+sd-jwt" && c.format != "vc+sd-jwt" }) {
-            val e = TransactionDataError(
-                org.siros.sdk.credentials.TransactionDataReason.UNSUPPORTED_FORMAT,
-                "A presentation that carries transaction_data may only contain SD-JWT VC credentials on this transport",
-            )
             transactionCoordinator().refuse(
                 org.siros.sdk.wallet.transaction.TransactionDataRequest(
                     entries = runCatching { wire.map { org.siros.sdk.wallet.transaction.TransactionDataEntry.fromWire(it) } }.getOrDefault(emptyList()),
-                    responseMode = params.responseMode, credentials = emptyMap(), verifier = verifierName ?: params.audience,
+                    responseMode = responseMode, credentials = emptyMap(), verifier = verifier,
                 ),
-                e,
+                TransactionDataError(
+                    org.siros.sdk.credentials.TransactionDataReason.UNSUPPORTED_FORMAT,
+                    "A presentation that carries transaction_data may only contain SD-JWT VC credentials on this transport",
+                ),
             )
         }
         val plan = processTransactionData(
-            declared = wmpSessionDeclaredTransactionData,
-            entries = wireEntries(wire, params.audience),
-            responseMode = params.responseMode,
-            credentials = selected.mapNotNull { (ref, c) ->
-                val q = ref.credentialQueryId
-                if (c != null && q != null) q to c else null
-            }.groupBy({ it.first }, { it.second }),
-            verifier = verifierName ?: params.audience,
-            requestSigned = null,
-            disclosures = selected.mapNotNull { (ref, c) ->
-                c?.let { org.siros.sdk.wallet.transaction.DisclosureInput(ref.credentialQueryId, it.metadata?.name, ref.disclosedClaims) }
-            },
+            org.siros.sdk.wallet.transaction.TransactionDataRequest(
+                entries = wireEntries(wire, verifier),
+                responseMode = responseMode,
+                credentials = selected.mapNotNull { (ref, c) ->
+                    val q = ref.credentialQueryId
+                    if (c != null && q != null) q to c else null
+                }.groupBy({ it.first }, { it.second }),
+                verifier = verifier,
+                requestSigned = null,
+                disclosures = selected.mapNotNull { (ref, c) ->
+                    c?.let { org.siros.sdk.wallet.transaction.DisclosureInput(ref.credentialQueryId, it.metadata?.name, ref.disclosedClaims) }
+                },
+            ),
+            declared = declared,
         )
-        return try {
-            val tokens = mutableListOf<String>()
-            for ((ref, cred) in selected) {
-                val c = cred ?: throw TransactionDataError(
-                    org.siros.sdk.credentials.TransactionDataReason.INVALID_ENTRY,
-                    "A selected credential is not in the wallet",
-                )
-                val binding = plan.bindingFor(ref.credentialQueryId)
-                tokens += if (binding != null) {
-                    signScaVp(c, ref.disclosedClaims, params.nonce, params.audience, binding)
-                } else {
-                    keystore.signVpToken(c.raw, ref.disclosedClaims, params.nonce, params.audience, c.kid)
-                }
+        val tokens = mutableListOf<String>()
+        for ((ref, cred) in selected) {
+            val c = cred ?: throw TransactionDataError(
+                org.siros.sdk.credentials.TransactionDataReason.INVALID_ENTRY,
+                "A selected credential is not in the wallet",
+            )
+            val binding = plan.bindingFor(ref.credentialQueryId)
+            tokens += if (binding != null) {
+                signScaVp(c, ref.disclosedClaims, nonce, audience, binding, plan)
+            } else {
+                keystore.signVpToken(c.raw, ref.disclosedClaims, nonce, audience, c.kid)
             }
-            tokens.joinToString("\n")
+        }
+        return tokens.joinToString("\n")
+    }
+
+    /** The legacy-transport `sign_presentation` for a request carrying `transaction_data` (see [signScaPresentation]). */
+    private suspend fun handleScaEngineSignPresentation(engine: WalletEngineSession, msg: SignRequestMessage) {
+        try {
+            val params = msg.params
+            val audience = params.audience ?: ""
+            // validateAudience consumes the flow's trust result, so read the verifier's name first.
+            val verifierName = lastTrustResults[msg.flowId]?.entityName
+            validateAudience(msg.flowId, audience)
+            val vpToken = signScaPresentation(
+                refs = params.credentialsToInclude.orEmpty(),
+                nonce = params.nonce ?: "",
+                audience = audience,
+                responseMode = params.responseMode,
+                wire = params.transactionData.orEmpty(),
+                verifierName = verifierName,
+                declared = engineFlowDeclaredTransactionData,
+            )
+            engine.sendSignResponse(msg.flowId, vpToken = vpToken, messageId = msg.messageId)
+        } catch (e: TransactionDataError) {
+            // Only the reason code is logged or shown: the message may hold URLs, credential ids or payload text.
+            Timber.w("Refused transaction_data (${e.reason.code}) for flow ${msg.flowId}")
+            eventListener?.onTransactionDataRefused(msg.flowId, e.reason)
+            // A user's own decline is not an error and gets no error message; the flow still ends.
+            reportSignFailure(
+                msg.flowId,
+                "Payment confirmation refused: ${e.reason.code}",
+                notifyError = e.reason != org.siros.sdk.credentials.TransactionDataReason.DECLINED,
+            )
         } catch (e: Exception) {
-            plan.signingFailed()
-            throw e
+            Timber.e(e, "Error handling a transaction_data sign request")
+            reportSignFailure(msg.flowId, e.message ?: "Signing failed")
         }
     }
 
@@ -6328,9 +6119,222 @@ class SirosWallet private constructor(
                 // sequential collector would stall every other sign request (issuance proofs, client
                 // auth, attestation), so it is handled in its own coroutine.
                 if (msg.action == "sign_presentation" && !msg.params?.transactionData.isNullOrEmpty()) {
-                    scope.launch { handleEngineSignRequest(engine, msg) }
-                } else {
-                    handleEngineSignRequest(engine, msg)
+                    scope.launch { handleScaEngineSignPresentation(engine, msg) }
+                    return@collect
+                }
+                try {
+                    Timber.d("Sign request: ${msg.action} for flow ${msg.flowId}")
+                    when (msg.action) {
+                        "generate_proof" -> {
+                            val params = msg.params
+                            val count = params?.count ?: 1
+                            val generated = generateProofsForRequest(
+                                audience = params?.audience ?: "",
+                                nonce = params?.nonce ?: "",
+                                count = count,
+                                proofTypesSupported = params?.proofTypesSupported?.keys,
+                                proofTypeHint = params?.proofType,
+                            )
+                            // The "attestation" proof type returns a single GeneratedProofData
+                // whose attestedKeyIds already covers the whole batch in order; the
+                // "jwt" proof type returns one GeneratedProofData PER credential,
+                // each carrying its own single-element attestedKeyIds - flatMap
+                // concatenates either shape into one batch-order list. Taking only
+                // the first entry's list (as this used to) silently dropped every
+                // index past 0 for a "jwt" batch of more than one credential.
+                activeAttestedKeyIds = generated.flatMap { it.attestedKeyIds.orEmpty() }.ifEmpty { null }
+                            val proofs = generated.map {
+                                ProofObject(proofType = it.proofType, jwt = it.jwt, attestation = it.attestation)
+                            }
+                            Timber.d("Sending sign response with ${proofs.size} proofs for flow ${msg.flowId}, messageId=${msg.messageId}")
+                            engine.sendSignResponse(
+                                msg.flowId,
+                                proofs = proofs,
+                                messageId = msg.messageId,
+                                credentialRequestExtras = zkIssuanceExtras(msg.flowId),
+                            )
+                            Timber.d("Sign response sent successfully for flow ${msg.flowId}")
+                        }
+                        "sign_presentation" -> {
+                            val params = msg.params
+                            val nonce = params?.nonce ?: ""
+                            val audience = params?.audience ?: ""
+                            val credsToInclude = params?.credentialsToInclude
+
+                            // (A request carrying transaction_data never reaches here: it was routed to
+                            // handleScaEngineSignPresentation above.)
+
+                            // Validate audience matches trusted verifier identity
+                            validateAudience(msg.flowId, audience)
+
+                            val vpToken = if (!credsToInclude.isNullOrEmpty()) {
+                                val allCreds = credentialStore.getAll()
+                                val storedMatchResults = pendingMatchResultsByFlow.remove(msg.flowId)
+                                Timber.d(
+                                    "sign_presentation: flow=${msg.flowId} storedMatchResults=" +
+                                        "${storedMatchResults?.map { "${it.queryId}:${it.format}" }}"
+                                )
+                                val vpParts = credsToInclude.mapNotNull { ref ->
+                                    // ref.credentialId arrives as a string over the WMP wire
+                                    // protocol - see the CredentialMatch construction sites'
+                                    // comments on that separate contract from privatedata-spec.
+                                    val cred = allCreds.find { it.id == ref.credentialId.toLongOrNull() }
+                                    if (cred == null) {
+                                        Timber.w("Credential ...${ref.credentialId.takeLast(4)} not found in store for VP signing")
+                                        return@mapNotNull null
+                                    }
+                                    val matchResult = storedMatchResults?.firstOrNull { r ->
+                                        r.queryId == ref.credentialQueryId || r.candidates.any { it.id == cred.id }
+                                    }
+                                    Timber.d(
+                                        "sign_presentation: credentialQueryId=${ref.credentialQueryId} " +
+                                            "credId=${cred.id} matchResult.format=${matchResult?.format} " +
+                                            "zkSystemTypes=${matchResult?.zkSystemTypes} disclosedClaims=${ref.disclosedClaims}"
+                                    )
+
+                                    if (matchResult?.format?.equals("mso_mdoc_zk", ignoreCase = true) == true) {
+                                        // ZK-wrapped mDoc presentation (see handleDCAPIRequest's
+                                        // identical branch, which this mirrors for the WS-engine/
+                                        // redirect-flow transport instead of DC API).
+                                        val credBytes = android.util.Base64.decode(cred.raw, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
+                                        // cred.kid is commonly null for a softkey-issued credential
+                                        // with no explicit per-credential key binding - see the
+                                        // identical fallback + comment in handleDCAPIRequest.
+                                        // Resolved lazily (checked only inside the signer lambda) -
+                                        // see handleDCAPIRequest's identical comment for why.
+                                        val kid = cred.kid ?: keystore.listKeys().firstOrNull()?.keyId
+                                        // Only bind a pseudonym when actually disclosed for this
+                                        // query - see handleDCAPIRequest's identical comment.
+                                        val wantsPseudonym = ref.disclosedClaims?.contains(LongfellowZkProofSystem.PSEUDONYM_CLAIM) == true
+                                        val verifierIdentity = if (wantsPseudonym) {
+                                            // audience has already been checked against the
+                                            // trust-evaluated verifier identifier by
+                                            // validateAudience above, so it's the confirmed
+                                            // client id for this flow. sessionId (when
+                                            // present) is the real verifier_context binding
+                                            // input - see VerifierIdentity.sessionId's doc
+                                            // comment.
+                                            VerifierIdentity(
+                                                clientId = audience,
+                                                ppidContext = matchResult.ppidContext,
+                                                sessionId = params?.verifierSessionId,
+                                            )
+                                        } else {
+                                            null
+                                        }
+                                        val sessionTranscript = MdocDeviceResponseBuilder.buildOpenID4VPSessionTranscript(
+                                            clientId = audience,
+                                            nonce = nonce,
+                                            responseUri = params?.responseUri ?: "",
+                                            verifierJwkThumbprint = params?.verifierJwkThumbprint,
+                                        )
+                                        Timber.d("sign_presentation: generating ZK proof, wantsPseudonym=$wantsPseudonym verifierIdentity=$verifierIdentity")
+                                        // ZK proof generation is a multi-second native compute
+                                        // with no intermediate progress signal from the engine (the
+                                        // last real server step was "credential_selection", and the
+                                        // next one - "submitting_response" - only arrives after this
+                                        // call returns) - without this, the UI shows a stale
+                                        // "Selecting credential" label the whole time. "computing_proof"
+                                        // is a CLIENT-ONLY status token, never sent by the server and
+                                        // deliberately absent from FlowStepCatalog (which mirrors
+                                        // go-wallet-backend's real FlowStep vocabulary 1:1) - it's
+                                        // overwritten by the next genuine engine.flowProgress() update
+                                        // as soon as one arrives.
+                                        (_state.value as? WalletState.FlowActive)
+                                            ?.takeIf { it.flowId == msg.flowId }
+                                            ?.let { _state.value = it.copy(status = "computing_proof") }
+                                        val presented = try {
+                                            zkPresentation.present(
+                                                ZkMdocPresentation.Request(
+                                                    credentialBytes = credBytes,
+                                                    requestedSystems = matchResult.zkSystemTypes.orEmpty(),
+                                                    sessionTranscript = sessionTranscript,
+                                                    requestedClaims = ref.disclosedClaims ?: emptyList(),
+                                                    verifierIdentity = verifierIdentity,
+                                                ),
+                                                signer = { algorithm, data ->
+                                                    require(algorithm == COSE_ALG_ES256) {
+                                                        "This keystore signs ES256 only, proof system asked for COSE alg $algorithm"
+                                                    }
+                                                    keystore.sign(
+                                                        requireNotNull(kid) { "No signing key available for credential ${cred.id} - cannot generate a ZK proof for it" },
+                                                        data,
+                                                    )
+                                                },
+                                            )
+                                        } catch (e: ZkMdocPresentation.NoMatchingProofSystem) {
+                                            throw WalletException(e.message ?: "No registered ZK proof system satisfies the request")
+                                        }
+                                        Timber.d("sign_presentation: ZK proof generated, system=${presented.system.systemId} pseudonymOutcome=${presented.proof.pseudonymOutcome} proofBytes.size=${presented.proof.proofBytes.size}")
+                                        android.util.Base64.encodeToString(
+                                            presented.deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
+                                        )
+                                    } else if (cred.format == "mso_mdoc") {
+                                        // mDoc DeviceResponse (ISO 18013-5)
+                                        val credBytes = android.util.Base64.decode(cred.raw, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
+                                        val deviceResponse = keystore.signMdocPresentation(
+                                            credentialBytes = credBytes,
+                                            disclosedClaims = ref.disclosedClaims,
+                                            nonce = nonce,
+                                            audience = audience,
+                                            responseUri = params?.responseUri ?: "",
+                                            verifierJwkThumbprint = params?.verifierJwkThumbprint,
+                                            kid = cred.kid,
+                                        )
+                                        android.util.Base64.encodeToString(deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
+                                    } else {
+                                        // SD-JWT VP token with KB-JWT
+                                        keystore.signVpToken(
+                                            credential = cred.raw,
+                                            disclosedClaims = ref.disclosedClaims,
+                                            nonce = nonce,
+                                            audience = audience,
+                                            kid = cred.kid,
+                                        )
+                                    }
+                                }
+                                // For single credential presentations (most common), return the token directly.
+                                // For multiple credentials, join with newline for WMP transport.
+                                // Note: The backend assembles the OID4VP-compliant vp_token JSON
+                                // object (keyed by credential query ID, §8.1) before submission
+                                // to the verifier.
+                                vpParts.joinToString("\n")
+                            } else {
+                                // Fallback: legacy plain VP JWT (no credential data)
+                                keystore.signPresentation(
+                                    nonce = nonce,
+                                    audience = audience,
+                                    credentialIds = emptyList(),
+                                )
+                            }
+                            Timber.d("Sending VP sign response for flow ${msg.flowId}, messageId=${msg.messageId}")
+                            engine.sendSignResponse(msg.flowId, vpToken = vpToken, messageId = msg.messageId)
+                            Timber.d("VP sign response sent successfully for flow ${msg.flowId}")
+                        }
+                        "request_attestation" -> handleRequestAttestation(engine, msg)
+                        "sign_client_auth" -> handleSignClientAuth(engine, msg)
+                        else -> {
+                            // go-wallet-backend's RequestSign only unblocks on a
+                            // sign_response carrying this message_id (there is no
+                            // sign-error message); staying silent would stall the
+                            // flow for its full 3 minute ErrSignTimeout. An empty
+                            // response lets the backend decide what a missing
+                            // result means for the action it asked for.
+                            Timber.w("Unknown sign action: ${msg.action}; sending empty sign_response")
+                            engine.sendSignResponse(flowId = msg.flowId, messageId = msg.messageId)
+                        }
+                    }
+                } catch (e: TransactionDataError) {
+                    // The legacy protocol has no sign-refusal message: the
+                    // engine learns of this when its sign request times out.
+                    Timber.w(e, "Refused transaction_data (${e.reason.code}) for flow ${msg.flowId}")
+                    reportSignFailure(msg.flowId, "${e.verifierError} (${e.reason.code}): ${e.message}")
+                } catch (e: KeystoreException) {
+                    Timber.e(e, "Error handling sign request: keystore error")
+                    reportSignFailure(msg.flowId, e.message ?: "Signing failed")
+                } catch (e: Exception) {
+                    Timber.e(e, "Error handling sign request")
+                    reportSignFailure(msg.flowId, e.message ?: "Signing failed")
                 }
             }
         }
