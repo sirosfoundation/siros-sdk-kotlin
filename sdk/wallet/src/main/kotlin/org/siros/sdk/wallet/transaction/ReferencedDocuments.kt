@@ -29,7 +29,8 @@ internal object ReferencedDocuments {
         uri: String,
         trust: MetadataTrust? = null,
     ): String {
-        val text = trust?.documents?.get(uri) ?: source.document(uri)?.also { trust?.documents?.put(uri, it) }
+        val cached = trust?.documents?.get(uri)
+        val text = cached ?: source.document(uri)?.also { trust?.documents?.put(uri, it) }
             ?: throw TransactionDataError(TransactionDataReason.METADATA_UNAVAILABLE, "The document at $uri is not available")
         val claim = CredentialUtils.parseJwtPayload(credential.raw)?.get("transaction_data_types['$type'].$member#integrity")
         val pinned = when {

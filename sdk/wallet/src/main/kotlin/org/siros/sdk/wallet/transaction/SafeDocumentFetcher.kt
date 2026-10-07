@@ -53,10 +53,7 @@ internal class SafeDocumentFetcher(
         .build()
 
     suspend fun get(uri: String): String? = withContext(Dispatchers.IO) {
-        val url = uri.toHttpUrlOrNull() ?: return@withContext null
-        if (!url.isHttps && !allowInsecureHttp) return@withContext null
-        if (url.username.isNotEmpty() || url.password.isNotEmpty()) return@withContext null
-        if (!allowNonPublicAddresses && isIpLiteral(url.host)) return@withContext null
+        val url = fetchableUrl(uri) ?: return@withContext null
         try {
             buildClient().newCall(Request.Builder().url(url).get().build()).execute().use { response ->
                 if (!response.isSuccessful) return@use null // includes every 3xx: redirects are not followed
@@ -70,6 +67,15 @@ internal class SafeDocumentFetcher(
             Timber.w("Document fetch failed (${e.javaClass.simpleName})")
             null
         }
+    }
+
+    /** [uri] parsed, if it is a URL this fetcher may even try: https, no userinfo, no IP-literal host. */
+    private fun fetchableUrl(uri: String): okhttp3.HttpUrl? {
+        val url = uri.toHttpUrlOrNull() ?: return null
+        val refused = (!url.isHttps && !allowInsecureHttp) ||
+            url.username.isNotEmpty() || url.password.isNotEmpty() ||
+            (!allowNonPublicAddresses && isIpLiteral(url.host))
+        return if (refused) null else url
     }
 
     /** Resolves through [delegate] and refuses the whole answer if any address is not public. */

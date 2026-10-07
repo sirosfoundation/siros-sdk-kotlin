@@ -356,6 +356,32 @@ class WscdKeystoreAdapter private constructor(
         transaction: TransactionBinding,
     ): String = buildVpToken(credential, disclosedClaims, nonce, audience, kid, transaction)
 
+    /**
+     * The `amr` side of a KB-JWT. SCA: the TS12 claims (hashes, `jti`,
+     * `response_mode`, and a two-category `amr` built for this operation); the
+     * RFC 8176 string array describes the PREVIOUS authentication and is the
+     * wrong shape for TS12, so it is not emitted. Non-SCA presentations are
+     * unchanged: the signer's last-operation `amr`, when it reports one.
+     */
+    private suspend fun addAuthenticationClaims(
+        claims: JWTClaimsSet.Builder,
+        keyId: String,
+        transaction: TransactionBinding?,
+    ) {
+        if (transaction != null) {
+            transaction.applyTo(claims)
+            return
+        }
+        try {
+            val props = signer.securityProperties(keyId)
+            if (props.amr.isNotEmpty()) {
+                claims.claim("amr", props.amr)
+            }
+        } catch (_: Exception) {
+            // Security properties not available: omit amr
+        }
+    }
+
     private suspend fun buildVpToken(
         credential: String,
         disclosedClaims: List<String>?,
@@ -429,25 +455,7 @@ class WscdKeystoreAdapter private constructor(
             .claim("nonce", nonce)
             .claim("sd_hash", sdHash)
 
-        if (transaction != null) {
-            // SCA: the TS12 claims, including a two-category amr built for
-            // this operation. The RFC 8176 string array below describes the
-            // PREVIOUS authentication and is the wrong shape for TS12, so it
-            // is not emitted here.
-            transaction.applyTo(claims)
-        } else {
-            // Non-SCA presentations are unchanged.
-            // NOTE: amr reflects the auth method from the *previous* sign operation
-            // since we query it before signing the KB-JWT.
-            try {
-                val props = signer.securityProperties(key.keyId)
-                if (props.amr.isNotEmpty()) {
-                    claims.claim("amr", props.amr)
-                }
-            } catch (_: Exception) {
-                // Security properties not available — omit amr
-            }
-        }
+        addAuthenticationClaims(claims, key.keyId, transaction)
 
         val claimsSet = claims.build()
 
