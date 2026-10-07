@@ -82,37 +82,13 @@ fun TransactionConsentDialog(
                 request.credentialName?.let {
                     Text(stringResource(R.string.transaction_consent_credential, it), style = MaterialTheme.typography.bodySmall)
                 }
-                if (unsigned) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        stringResource(R.string.transaction_consent_unsigned_warning),
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = acknowledged, onCheckedChange = { acknowledged = it })
-                        Text(stringResource(R.string.transaction_consent_unsigned_ack), style = MaterialTheme.typography.bodySmall)
-                    }
-                }
+                if (unsigned) UnsignedWarning(acknowledged) { acknowledged = it }
                 request.entries.forEachIndexed { index, entry ->
                     if (index > 0) HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
                     TransactionEntryView(entry)
                 }
                 // EC TS12 3.3.1: the transaction is shown together with the attributes that will be disclosed.
-                if (request.disclosures.isNotEmpty()) {
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
-                    request.disclosures.forEach { d ->
-                        Text(
-                            stringResource(
-                                R.string.transaction_consent_discloses,
-                                d.credentialName.orEmpty(),
-                                d.claims?.takeIf { it.isNotEmpty() }?.joinToString(", ")
-                                    ?: stringResource(R.string.transaction_consent_discloses_all),
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                }
+                DisclosuresView(request)
             }
         },
         confirmButton = {
@@ -147,5 +123,33 @@ private fun TransactionEntryView(entry: TransactionConsentEntry) {
         entry.securityHint?.let {
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+}
+
+@Composable
+private fun UnsignedWarning(acknowledged: Boolean, onAcknowledged: (Boolean) -> Unit) {
+    Spacer(Modifier.height(8.dp))
+    Text(
+        stringResource(R.string.transaction_consent_unsigned_warning),
+        color = MaterialTheme.colorScheme.error,
+        style = MaterialTheme.typography.bodyMedium,
+    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Checkbox(checked = acknowledged, onCheckedChange = onAcknowledged)
+        Text(stringResource(R.string.transaction_consent_unsigned_ack), style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+private fun DisclosuresView(request: TransactionConsentRequest) {
+    if (request.disclosures.isEmpty()) return
+    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+    val all = stringResource(R.string.transaction_consent_discloses_all)
+    request.disclosures.forEach { d ->
+        val claims = d.claims?.takeIf { it.isNotEmpty() }?.joinToString(", ") ?: all
+        Text(
+            stringResource(R.string.transaction_consent_discloses, d.credentialName.orEmpty(), claims),
+            style = MaterialTheme.typography.bodySmall,
+        )
     }
 }
