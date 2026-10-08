@@ -496,6 +496,7 @@ class WalletEngineSessionTest {
         session.startPresentation(
             requestUri = null,
             requestUriRef = "https://verifier.example.com/request-object/42",
+            features = null,
             requestUriMethod = "post",
             walletMetadata = WalletMetadata.DEFAULT,
         )
@@ -523,6 +524,7 @@ class WalletEngineSessionTest {
         session.startPresentation(
             requestUri = "https://verifier.example.com/request",
             requestUriRef = null,
+            features = null,
             requestUriMethod = null,
             walletMetadata = null,
         )
