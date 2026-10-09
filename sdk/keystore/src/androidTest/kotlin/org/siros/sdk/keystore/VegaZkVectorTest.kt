@@ -253,4 +253,38 @@ class VegaZkVectorTest {
         val verifyResult = verify(loadVerifierKey(), secondProve.proofBytes, disclosedBytesFor(vector))
         assertArrayEquals(vector.ecdsaWitness.qx, verifyResult.qx)
     }
+
+    /**
+     * Confirms the one correctness property [VegaProofCache] depends on: a
+     * prep-chain is NOT reusable across a DIFFERENT disclosure combination,
+     * even for the exact same credential. An earlier version of
+     * [VegaProofSystem.buildWitness]'s own doc comment claimed the opposite
+     * ("a later presentation disclosing a DIFFERENT subset still reuses the
+     * same slot/witness identity... so reuse stays sound regardless") -
+     * that claim was never actually checked against the real crate, and is
+     * wrong: `disclose` is baked into each step circuit's public values at
+     * `prep_prove` time (`ClaimDigestStepCircuit::new`'s own `disclose`
+     * parameter feeds directly into its public-IO vector, confirmed by
+     * reading `vega-prover`), the same way the blinding nonce is - so
+     * changing it between `prep_prove` and a `prove()` reusing that state
+     * hits the identical "Step circuit N public values changed" failure
+     * class a changed nonce does.
+     */
+    @Test
+    fun prove_withDifferentDisclosurePatternThanPrepProve_fails() {
+        val vector = loadTestVector()
+        val flipped = vector.claims.map { it.copy(disclose = !it.disclose) }
+
+        val prover = loadProverKey()
+        val prepState = prepProve(prover, vector.claims, vector.ecdsaWitness, vector.msoBody)
+        try {
+            prove(prover, flipped, vector.ecdsaWitness, vector.msoBody, prepState)
+            org.junit.Assert.fail(
+                "expected prove() to reject a disclosure pattern that differs from what prep_prove committed to",
+            )
+        } catch (e: Exception) {
+            // Expected - the native layer's own "Step circuit N public
+            // values changed between prep_prove and prove" class of error.
+        }
+    }
 }

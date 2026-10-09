@@ -116,6 +116,27 @@ class ZkMdocPresentation(
         resolve(MdocCbor.parseStoredCredential(request.credentialBytes).docType, request.requestedSystems, request.requestedClaims.size)
 
     /**
+     * Runs the resolved system's own precompute ahead of a real [present]
+     * call, if (and only if) it resolves to [VegaProofSystem] - a no-op for
+     * any other system, including a request that doesn't resolve to a
+     * registered system at all (this is a speculative optimization, not a
+     * correctness-bearing step; [present] still works without ever calling
+     * this). See [VegaProofSystem.prewarm]'s own doc comment for when a
+     * host should call this: as soon as a verifier's request names its
+     * `zk_system_type`/claims (e.g. right after a QR scan, or at credential
+     * issuance time for whichever disclosure combination a host already
+     * expects to need), rather than waiting for the live `present()` call
+     * that would otherwise run this same work in the user-visible path.
+     */
+    suspend fun prewarmVega(request: Request) {
+        val docType = MdocCbor.parseStoredCredential(request.credentialBytes).docType
+        val (system, spec) = resolve(docType, request.requestedSystems, request.requestedClaims.size) ?: return
+        if (system is VegaProofSystem) {
+            system.prewarm(spec, CredentialDocument.Mdoc(request.credentialBytes), request.requestedClaims)
+        }
+    }
+
+    /**
      * Resolve, prove, and assemble. Multi-second native compute; callers
      * that show progress should signal it before calling.
      *
