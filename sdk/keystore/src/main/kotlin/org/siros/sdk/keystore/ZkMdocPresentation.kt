@@ -239,7 +239,12 @@ class ZkMdocPresentation(
          * BBS is not an mdoc system and is registered by the wallet
          * separately, where its holder state lives.
          */
-        fun standard(circuitClient: ZkCircuitClient, extra: List<ZkProofSystem> = emptyList()): ZkMdocPresentation {
+        fun standard(
+            circuitClient: ZkCircuitClient,
+            extra: List<ZkProofSystem> = emptyList(),
+            /** See [org.siros.sdk.wallet.WalletConfig.vegaProfilingEnabled]'s doc comment. Null (default) collects no profiling data. */
+            vegaProfilingSink: VegaProfilingSink? = null,
+        ): ZkMdocPresentation {
             // One residency for both systems: whichever proves next evicts
             // the other's prover, so the process holds one at a time.
             val residency = ZkProverResidency()
@@ -247,7 +252,7 @@ class ZkMdocPresentation(
                 ZkProofSystemRegistry(
                     listOf(
                         LongfellowZkProofSystem(circuitClient, residency = residency),
-                        VegaProofSystem(circuitClient, residency = residency),
+                        VegaProofSystem(circuitClient, residency = residency, profilingSink = vegaProfilingSink),
                     ) + extra,
                 ),
                 residency = residency,

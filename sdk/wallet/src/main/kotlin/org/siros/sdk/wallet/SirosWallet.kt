@@ -4254,6 +4254,15 @@ class SirosWallet private constructor(
                 )
             }
         },
+        // See WalletConfig.vegaProfilingEnabled's doc comment for the file
+        // location and why external-files (not internal) storage is used.
+        vegaProfilingSink = if (config.vegaProfilingEnabled) {
+            org.siros.sdk.keystore.VegaProfilingFileSink(
+                java.io.File(activity.applicationContext.getExternalFilesDir(null), "vega_profiling.jsonl"),
+            )
+        } else {
+            null
+        },
     )
 
     private val zkProofSystemRegistry: ZkProofSystemRegistry get() = zkPresentation.registry

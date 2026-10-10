@@ -66,6 +66,13 @@ class VegaProofSystem(
     private val residency: ZkProverResidency = ZkProverResidency(),
     /** Caches `prep_prove` output per (credential, exact disclosure combination) - see [VegaProofCache]'s own doc comment. */
     private val proofCache: VegaProofCache = VegaProofCache(),
+    /**
+     * Optional structured timing sink - null (default, matching
+     * [org.siros.sdk.wallet.WalletConfig.vegaProfilingEnabled]'s default)
+     * collects no profiling data beyond the [Timber] log line this class
+     * already emits. See [VegaProfilingEntry]/[VegaProfilingFileSink].
+     */
+    private val profilingSink: VegaProfilingSink? = null,
 ) : ZkProofSystem {
 
     companion object {
@@ -186,6 +193,17 @@ class VegaProofSystem(
                     "Vega prepProve took ${prepMs}ms (${if (usedCachedState) "cache hit, skipped" else "ran fresh"}), " +
                         "prove took ${proveMs}ms",
                 )
+                profilingSink?.record(
+                    VegaProfilingEntry(
+                        timestampMs = System.currentTimeMillis(),
+                        event = "generateProof",
+                        usedCachedState = usedCachedState,
+                        prepProveMs = if (usedCachedState) null else prepMs,
+                        proveMs = proveMs,
+                        deviceModel = android.os.Build.MODEL,
+                        abi = android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown",
+                    ),
+                )
                 proveResult
             }
 
@@ -229,7 +247,20 @@ class VegaProofSystem(
         val mdoc = MdocCbor.parseStoredCredential(credentialBytes)
         residency.use(key = residencyKey(spec), load = { loadProverKey(spec) }) { proverKey ->
             val (claims, ecdsaWitness, msoBody) = buildWitness(mdoc, requestedClaims)
+            val prepStart = System.nanoTime()
             val state = withContext(Dispatchers.Default) { prepProve(proverKey, claims, ecdsaWitness, msoBody) }
+            val prepMs = (System.nanoTime() - prepStart) / 1_000_000
+            profilingSink?.record(
+                VegaProfilingEntry(
+                    timestampMs = System.currentTimeMillis(),
+                    event = "prewarm",
+                    usedCachedState = false,
+                    prepProveMs = prepMs,
+                    proveMs = null,
+                    deviceModel = android.os.Build.MODEL,
+                    abi = android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown",
+                ),
+            )
             proofCache.record(credentialBytes, requestedClaims, state, usedCachedState = false)
         }
     }
