@@ -180,7 +180,17 @@ class VegaZkVectorTest {
     fun proveAndVerify_realMdocVector_succeeds() {
         val vector = loadTestVector()
 
-        val proveResult = loadProverKey().let { proverKey ->
+        // .use{}, not .let{}: VegaProverKey is AutoCloseable over real
+        // native memory (the prover key itself, ~150MB) - .let only scopes
+        // the Kotlin-side reference, it does not free that. Three test
+        // methods in this class each load their own prover key in one
+        // instrumented process (AndroidJUnitRunner doesn't restart between
+        // methods) - relying on eventual Cleaner-based finalization instead
+        // of closing explicitly let all three keys stay simultaneously
+        // resident, which is exactly what triggered a real on-device kill
+        // (no tombstone, no OOM log - just silently gone, consistent with
+        // the low-memory killer) once a third test method was added here.
+        val proveResult = loadProverKey().use { proverKey ->
             val prepState = prepProve(proverKey, vector.claims, vector.ecdsaWitness, vector.msoBody)
             prove(proverKey, vector.claims, vector.ecdsaWitness, vector.msoBody, prepState)
         }
@@ -245,7 +255,7 @@ class VegaZkVectorTest {
     fun prove_reusingPriorState_stillVerifies() {
         val vector = loadTestVector()
 
-        val secondProve = loadProverKey().let { proverKey ->
+        val secondProve = loadProverKey().use { proverKey ->
             val nextState = firstProveNextState(proverKey, vector)
             prove(proverKey, vector.claims, vector.ecdsaWitness, vector.msoBody, nextState)
         }
@@ -275,16 +285,17 @@ class VegaZkVectorTest {
         val vector = loadTestVector()
         val flipped = vector.claims.map { it.copy(disclose = !it.disclose) }
 
-        val prover = loadProverKey()
-        val prepState = prepProve(prover, vector.claims, vector.ecdsaWitness, vector.msoBody)
-        try {
-            prove(prover, flipped, vector.ecdsaWitness, vector.msoBody, prepState)
-            org.junit.Assert.fail(
-                "expected prove() to reject a disclosure pattern that differs from what prep_prove committed to",
-            )
-        } catch (e: Exception) {
-            // Expected - the native layer's own "Step circuit N public
-            // values changed between prep_prove and prove" class of error.
+        loadProverKey().use { prover ->
+            val prepState = prepProve(prover, vector.claims, vector.ecdsaWitness, vector.msoBody)
+            try {
+                prove(prover, flipped, vector.ecdsaWitness, vector.msoBody, prepState)
+                org.junit.Assert.fail(
+                    "expected prove() to reject a disclosure pattern that differs from what prep_prove committed to",
+                )
+            } catch (e: Exception) {
+                // Expected - the native layer's own "Step circuit N public
+                // values changed between prep_prove and prove" class of error.
+            }
         }
     }
 }
