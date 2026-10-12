@@ -134,6 +134,49 @@ class VegaProofSystem(
     private fun residencyKey(spec: ZkSystemSpec) = "$systemId:${spec.id}"
 
     /**
+     * Runs [block] with this (coroutine worker) thread's priority temporarily
+     * raised, restoring the prior value afterward regardless of how [block]
+     * exits. `Dispatchers.Default`'s pooled threads run at the normal Linux
+     * "nice" priority Android gives a background/non-UI thread by default -
+     * on a big.LITTLE device, its energy-aware scheduler (EAS) keeps threads
+     * at that priority off the big/performance cores entirely, even while
+     * the app is the one the user is actively looking at. Measured on real
+     * hardware (a Pixel 10a) with `zk-cred-vega`'s own `perf_profile_traced`
+     * example, `taskset`-pinned: `prep_prove`/`prove` both run roughly 2.2x
+     * slower confined to the small cores (`taskset -c 0-3`: 1.56s/2.73s)
+     * than the big ones (`taskset -c 4-7`: 0.59s/1.24s) - and the small-core
+     * numbers match this SDK's own in-app Timber-logged timings almost
+     * exactly, meaning every real presentation has been paying this tax.
+     * An app cannot set its own thread's CPU affinity directly (`sched_setaffinity`
+     * is blocked for regular apps), but raising thread *priority* is
+     * something EAS already uses as its own placement signal, and is the
+     * standard Android technique for pulling a short-lived, latency-sensitive
+     * background computation onto a big core (the same trick audio/camera
+     * pipelines use) - this does not request realtime/FIFO scheduling, only
+     * a priority hint, so it cannot starve the UI thread's own (separately
+     * boosted) top-app scheduling.
+     */
+    private inline fun <T> withBoostedThreadPriority(block: () -> T): T {
+        val tid = android.os.Process.myTid()
+        val priorPriority = try {
+            android.os.Process.getThreadPriority(tid)
+        } catch (e: Exception) {
+            Timber.d(e, "Could not read thread priority before ZK proving - leaving it alone")
+            return block()
+        }
+        return try {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO)
+            block()
+        } finally {
+            try {
+                android.os.Process.setThreadPriority(tid, priorPriority)
+            } catch (e: Exception) {
+                Timber.w(e, "Could not restore ZK proving thread's prior priority ($priorPriority)")
+            }
+        }
+    }
+
+    /**
      * Matches any requested spec declaring `system == systemId` for a proof
      * over AT MOST [MAX_CLAIMS_V1] claims - unlike Longfellow's exact-match
      * requirement (a circuit compiled per attribute count), VEGA's circuit
@@ -184,10 +227,10 @@ class VegaProofSystem(
             // coroutine genuinely suspends here instead.
             val result = withContext(Dispatchers.Default) {
                 val prepStart = System.nanoTime()
-                val state = cachedState ?: prepProve(proverKey, claims, ecdsaWitness, msoBody)
+                val state = cachedState ?: withBoostedThreadPriority { prepProve(proverKey, claims, ecdsaWitness, msoBody) }
                 val prepMs = (System.nanoTime() - prepStart) / 1_000_000
                 val proveStart = System.nanoTime()
-                val proveResult = prove(proverKey, claims, ecdsaWitness, msoBody, state)
+                val proveResult = withBoostedThreadPriority { prove(proverKey, claims, ecdsaWitness, msoBody, state) }
                 val proveMs = (System.nanoTime() - proveStart) / 1_000_000
                 Timber.i(
                     "Vega prepProve took ${prepMs}ms (${if (usedCachedState) "cache hit, skipped" else "ran fresh"}), " +
@@ -248,7 +291,7 @@ class VegaProofSystem(
         residency.use(key = residencyKey(spec), load = { loadProverKey(spec) }) { proverKey ->
             val (claims, ecdsaWitness, msoBody) = buildWitness(mdoc, requestedClaims)
             val prepStart = System.nanoTime()
-            val state = withContext(Dispatchers.Default) { prepProve(proverKey, claims, ecdsaWitness, msoBody) }
+            val state = withContext(Dispatchers.Default) { withBoostedThreadPriority { prepProve(proverKey, claims, ecdsaWitness, msoBody) } }
             val prepMs = (System.nanoTime() - prepStart) / 1_000_000
             profilingSink?.record(
                 VegaProfilingEntry(
