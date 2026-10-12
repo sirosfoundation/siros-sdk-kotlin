@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlin.reflect.full.callSuspend
 import kotlin.reflect.full.declaredMemberFunctions
@@ -52,11 +53,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.siros.sdk.auth.AuthServerClient
+import org.siros.sdk.auth.AuthenticateOptions
+import org.siros.sdk.auth.AuthenticateResult
+import org.siros.sdk.auth.DeleteAccountBegin
+import org.siros.sdk.auth.DeleteAccountChallenge
+import org.siros.sdk.auth.DeleteAccountOutcome
 import org.siros.sdk.auth.AuthTokens
 import org.siros.sdk.auth.BackendApiClient
-import org.siros.sdk.auth.DeactivationOutcome
 import org.siros.sdk.auth.WalletInstance
-import org.siros.sdk.auth.WalletInstanceStatus
 import org.siros.sdk.auth.WalletLifecycleRefusal
 import org.siros.sdk.credentials.AuthException
 import org.siros.sdk.credentials.BackendApiException
@@ -2514,36 +2518,6 @@ class SirosWalletTest {
                 dpopProof = "dpop-jwt",
             )
         }
-    }
-
-    /**
-     * `deactivateWallet()` (SID-AUTH-06): revoke every instance server-side,
-     * then forget the local account - the vault it decrypts no longer exists.
-     */
-    @Test
-    fun deactivateWallet_revokesAllAndForgetsLocalAccount() = runTest(dispatcher) {
-        val apiClient = mockk<BackendApiClient>(relaxed = true)
-        coEvery { apiClient.revokeAllWalletInstances("device stolen") } returns
-            DeactivationOutcome(revoked = 2, complete = true)
-        val accountRegistry = mockk<AccountRegistry>(relaxed = true)
-        every { accountRegistry.activeAccountId } returns "acct-1"
-        every { accountRegistry.listLoginableAccounts() } returns emptyList()
-        val wallet = newWallet(
-            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
-            "engineSession" to mockk<WalletEngineSession>(relaxed = true),
-            "keystore" to mockk<KeystoreManager>(relaxed = true),
-            "sessionStore" to mockk<SessionStore>(relaxed = true),
-            "accountRegistry" to accountRegistry,
-            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
-            "apiClient" to apiClient,
-        )
-
-        val outcome = wallet.deactivateWallet("device stolen")
-
-        assertEquals(2, outcome.revoked)
-        assertTrue(outcome.complete)
-        coVerify(exactly = 1) { apiClient.revokeAllWalletInstances("device stolen") }
-        verify(exactly = 1) { accountRegistry.removeAccount("acct-1") }
     }
 
     /**
@@ -6527,104 +6501,6 @@ class SirosWalletTest {
     }
 
     /**
-     * Every status write records a cut-off, and the acting token's exemption
-     * does not reach `POST /auth/token` or an engine flow start - so the
-     * facade re-logs in rather than letting the next flow discover it as a
-     * 401. Suspending this device's own instance therefore ends in
-     * LifecycleBlocked(SUSPENDED), which is the truthful state.
-     */
-    @Test
-    fun suspending_this_device_relogins_and_lands_in_the_blocked_state() = runTest(dispatcher) {
-        val apiClient = mockk<BackendApiClient>(relaxed = true)
-        coEvery {
-            apiClient.setWalletInstanceStatus("jkt-self", WalletInstanceStatus.SUSPENDED, "lost phone")
-        } returns WalletInstance(id = "jkt-self", status = "suspended")
-        val authServerClient = mockk<AuthServerClient>(relaxed = true)
-        coEvery { authServerClient.loginBegin() } throws AuthException(
-            "AS request failed: 403 — /auth/login/begin",
-            errorCode = "WALLET_SUSPENDED",
-            code = 403,
-            serverMessage = "This device is suspended",
-        )
-        val stateFlow = MutableStateFlow<WalletState>(
-            WalletState.Ready(userId = "user-1", displayName = "Alice")
-        )
-        val authTokens = mockk<AuthTokens>(relaxed = true)
-        val wallet = lifecycleWallet(
-            stateFlow, lifecycleAccountRegistry(), authServerClient,
-            fields = arrayOf("apiClient" to apiClient, "authTokens" to authTokens),
-        )
-
-        val updated = wallet.setWalletInstanceStatus("jkt-self", WalletInstanceStatus.SUSPENDED, "lost phone")
-        advanceUntilIdle()
-
-        assertEquals("suspended", updated.status)
-        assertEquals(WalletInstanceStatus.SUSPENDED, updated.statusEnum)
-        coVerify(atLeast = 1) { authTokens.clear() }
-        coVerify(exactly = 1) { authServerClient.loginBegin() }
-        assertEquals(
-            WalletLifecycleRefusal.SUSPENDED,
-            (stateFlow.value as WalletState.LifecycleBlocked).reason,
-        )
-    }
-
-    /**
-     * deactivateWallet reports what the backend actually did and forgets the
-     * local account - the vault it decrypts no longer exists. It does not
-     * re-login: there is nothing left to log in to.
-     */
-    @Test
-    fun deactivate_wallet_returns_the_outcome_and_forgets_the_account() = runTest(dispatcher) {
-        val accountRegistry = lifecycleAccountRegistry()
-        val apiClient = mockk<BackendApiClient>(relaxed = true)
-        coEvery { apiClient.revokeAllWalletInstances("device stolen") } returns
-            DeactivationOutcome(revoked = 2, complete = true)
-        val authServerClient = mockk<AuthServerClient>(relaxed = true)
-        val stateFlow = MutableStateFlow<WalletState>(
-            WalletState.Ready(userId = "user-1", displayName = "Alice")
-        )
-        val wallet = lifecycleWallet(
-            stateFlow, accountRegistry, authServerClient,
-            fields = arrayOf("apiClient" to apiClient, "authTokens" to mockk<AuthTokens>(relaxed = true)),
-        )
-
-        val outcome = wallet.deactivateWallet("device stolen")
-        advanceUntilIdle()
-
-        assertEquals(2, outcome.revoked)
-        assertTrue(outcome.complete)
-        verify(exactly = 1) { accountRegistry.removeAccount("default:user-1") }
-        coVerify(exactly = 0) { authServerClient.loginBegin() }
-    }
-
-    /**
-     * An erasure the backend could not finish still deactivated the wallet -
-     * the revocations stand and the keys are gone or going - so the local
-     * account is forgotten either way; `complete` is only what the app tells
-     * the user.
-     */
-    @Test
-    fun deactivate_wallet_forgets_the_account_even_when_the_erasure_is_incomplete() = runTest(dispatcher) {
-        val accountRegistry = lifecycleAccountRegistry()
-        val apiClient = mockk<BackendApiClient>(relaxed = true)
-        coEvery { apiClient.revokeAllWalletInstances(null) } returns
-            DeactivationOutcome(revoked = 2, complete = false)
-        val stateFlow = MutableStateFlow<WalletState>(
-            WalletState.Ready(userId = "user-1", displayName = "Alice")
-        )
-        val wallet = lifecycleWallet(
-            stateFlow, accountRegistry, mockk<AuthServerClient>(relaxed = true),
-            fields = arrayOf("apiClient" to apiClient, "authTokens" to mockk<AuthTokens>(relaxed = true)),
-        )
-
-        val outcome = wallet.deactivateWallet()
-        advanceUntilIdle()
-
-        assertEquals(false, outcome.complete)
-        verify(exactly = 1) { accountRegistry.removeAccount("default:user-1") }
-    }
-
-    /**
      * The facade marks the row that is this installation by comparing the
      * backend's instance ids to the instance-key thumbprint it already sends
      * as `wallet_instance_id` (the WIA's `cnf.jkt`).
@@ -6877,6 +6753,232 @@ class SirosWalletTest {
             "PID",
             stored.first().metadata?.name,
         )
+    }
+
+    // ── deleteAccount (SID-AUTH-06, go-wallet-backend#352) ──────────
+
+    private class DeleteFixture {
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        val credentialStore = mockk<org.siros.sdk.credentials.CredentialStore>(relaxed = true)
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val accountRegistry = mockk<AccountRegistry>(relaxed = true)
+        val transactionLog = mockk<TransactionLogStore>(relaxed = true)
+        val wscdPolicy = mockk<WscdSelectionPolicy>(relaxed = true)
+        val metadataCache = mockk<FileFetchCache>(relaxed = true)
+        val authServerClient = mockk<AuthServerClient>(relaxed = true)
+        val authProvider = mockk<org.siros.sdk.auth.AuthProvider>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val assertion = AuthenticateResult(
+            credentialId = byteArrayOf(1), authenticatorData = byteArrayOf(2),
+            clientDataJSON = byteArrayOf(3), signature = byteArrayOf(4), userHandle = null,
+        )
+        val options = AuthenticateOptions(rpId = "rp.example", challenge = byteArrayOf(9))
+
+        init {
+            every { keystore.isUnlocked } returns true
+            every { accountRegistry.listLoginableAccounts() } returns emptyList()
+            coEvery { apiClient.deleteAccountBegin() } returns DeleteAccountBegin.Ready(DeleteAccountChallenge("ch-1", options))
+            coEvery { authProvider.authenticate(any()) } returns assertion
+        }
+
+        fun respond(outcome: DeleteAccountOutcome) {
+            coEvery { apiClient.deleteAccount("ch-1", assertion, "DELETE") } returns outcome
+        }
+
+        /** Nothing a wipe touches has been touched. */
+        fun verifyNothingWiped() {
+            coVerify(exactly = 0) { keystore.clearCredentials() }
+            coVerify(exactly = 0) { keystore.clearPresentationRecords() }
+            coVerify(exactly = 0) { credentialStore.clear() }
+            verify(exactly = 0) { keystore.lock() }
+            verify(exactly = 0) { sessionStore.clearAll() }
+            verify(exactly = 0) { sessionStore.clear() }
+            verify(exactly = 0) { accountRegistry.clear() }
+            coVerify(exactly = 0) { transactionLog.clear() }
+            verify(exactly = 0) { wscdPolicy.clearAll() }
+            coVerify(exactly = 0) { metadataCache.clear() }
+            assertTrue(stateFlow.value is WalletState.Ready)
+        }
+    }
+
+    private fun TestScope.deleteWallet(f: DeleteFixture): SirosWallet {
+        val activity = mockk<android.app.Activity>(relaxed = true)
+        every { activity.applicationContext } returns activity
+        every { activity.noBackupFilesDir } returns java.nio.file.Files.createTempDirectory("siros-wipe").toFile()
+        return newWallet(
+            "_state" to f.stateFlow,
+            "activity" to activity,
+            "apiClient" to f.apiClient,
+            "authProvider" to f.authProvider,
+            "keystore" to f.keystore,
+            "credentialStore" to f.credentialStore,
+            "sessionStore" to f.sessionStore,
+            "accountRegistry" to f.accountRegistry,
+            "customTransactionLogStore" to f.transactionLog,
+            "trustCache" to TrustCache(),
+            "wscdSelectionPolicy" to f.wscdPolicy,
+            "displayMetadataCache" to f.metadataCache,
+            "authServerClient" to f.authServerClient,
+            "authTokens" to mockk<AuthTokens>(relaxed = true),
+            "_presentationHistory" to mutableListOf<org.siros.sdk.credentials.PresentationRecord>(),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+        )
+    }
+
+    private inline fun withRegistryMocked(block: () -> Unit) {
+        io.mockk.mockkObject(org.siros.sdk.wallet.dcapi.SirosCredentialRegistry)
+        try {
+            coEvery { org.siros.sdk.wallet.dcapi.SirosCredentialRegistry.clear(any()) } just runs
+            block()
+        } finally {
+            io.mockk.unmockkObject(org.siros.sdk.wallet.dcapi.SirosCredentialRegistry)
+        }
+    }
+
+    @Test
+    fun deleteAccount_wipes_every_store_when_the_account_is_gone() = runTest(dispatcher) {
+        val gone = listOf(
+            DeleteAccountOutcome.Deleted to DeleteAccountResult.Deleted::class.java,
+            DeleteAccountOutcome.CleanupPending to DeleteAccountResult.CleanupPending::class.java,
+            DeleteAccountOutcome.OperatorRequired to DeleteAccountResult.OperatorRequired::class.java,
+        )
+        for ((outcome, resultType) in gone) {
+            val f = DeleteFixture()
+            f.respond(outcome)
+            val wallet = deleteWallet(f)
+            withRegistryMocked {
+                val result = wallet.deleteAccount("DELETE")
+                advanceUntilIdle()
+
+                assertEquals(resultType, result.javaClass)
+                assertTrue((result as DeleteAccountResult.AccountGone).localWipe.complete)
+                coVerify(exactly = 1) { f.keystore.clearCredentials() }
+                coVerify(exactly = 1) { f.keystore.clearPresentationRecords() }
+                coVerify(exactly = 1) { f.credentialStore.clear() }
+                verify(atLeast = 1) { f.keystore.lock() }
+                verify(exactly = 1) { f.sessionStore.clearAll() }
+                verify(exactly = 1) { f.accountRegistry.clear() }
+                coVerify(exactly = 1) { f.transactionLog.clear() }
+                verify(exactly = 1) { f.wscdPolicy.clearAll() }
+                coVerify(exactly = 1) { f.metadataCache.clear() }
+                coVerify(exactly = 1) { org.siros.sdk.wallet.dcapi.SirosCredentialRegistry.clear(any()) }
+                assertEquals(WalletState.Disconnected(), f.stateFlow.value)
+            }
+        }
+    }
+
+    @Test
+    fun deleteAccount_keeps_all_local_state_unless_the_account_is_gone() = runTest(dispatcher) {
+        val kept = listOf(
+            DeleteAccountOutcome.RetryNeeded("later") to DeleteAccountResult.RetryNeeded("later"),
+            DeleteAccountOutcome.StepUpRequired(null) to DeleteAccountResult.StepUpRequired(null),
+            DeleteAccountOutcome.StepUpFailed(null) to DeleteAccountResult.StepUpFailed(null),
+            DeleteAccountOutcome.StepUpExpired(null) to DeleteAccountResult.StepUpExpired(null),
+            DeleteAccountOutcome.ConfirmationRequired(null) to DeleteAccountResult.ConfirmationRequired(null),
+            DeleteAccountOutcome.SessionRevoked(null) to DeleteAccountResult.SessionRevoked(null),
+            DeleteAccountOutcome.NotFound(null) to DeleteAccountResult.NotFound(null),
+        )
+        for ((outcome, expected) in kept) {
+            val f = DeleteFixture()
+            f.respond(outcome)
+            val wallet = deleteWallet(f)
+            withRegistryMocked {
+                val result = wallet.deleteAccount("DELETE")
+                advanceUntilIdle()
+
+                assertEquals(expected, result)
+                f.verifyNothingWiped()
+                coVerify(exactly = 0) { org.siros.sdk.wallet.dcapi.SirosCredentialRegistry.clear(any()) }
+            }
+        }
+    }
+
+    @Test
+    fun deleteAccount_finishes_the_wipe_and_reports_when_a_store_fails() = runTest(dispatcher) {
+        val f = DeleteFixture()
+        f.respond(DeleteAccountOutcome.Deleted)
+        coEvery { f.credentialStore.clear() } throws IllegalStateException("disk full")
+        every { f.sessionStore.clearAll() } throws IllegalStateException("prefs gone")
+        val wallet = deleteWallet(f)
+        withRegistryMocked {
+            val result = wallet.deleteAccount("DELETE") as DeleteAccountResult.Deleted
+            advanceUntilIdle()
+
+            assertEquals(
+                listOf("credentialStore", "sessionStore"),
+                result.localWipe.failures.map { it.store },
+            )
+            assertFalse(result.localWipe.complete)
+            // Everything after the failures still ran.
+            verify(exactly = 1) { f.accountRegistry.clear() }
+            coVerify(exactly = 1) { f.transactionLog.clear() }
+            verify(exactly = 1) { f.wscdPolicy.clearAll() }
+            coVerify(exactly = 1) { f.metadataCache.clear() }
+            coVerify(exactly = 1) { org.siros.sdk.wallet.dcapi.SirosCredentialRegistry.clear(any()) }
+        }
+    }
+
+    @Test
+    fun deleteAccount_keeps_local_state_when_begin_is_refused() = runTest(dispatcher) {
+        val refusals = listOf(
+            DeleteAccountBegin.NoPasskey("none") to DeleteAccountResult.NoPasskey("none"),
+            DeleteAccountBegin.Forbidden(null) to DeleteAccountResult.InsufficientScope(null),
+            DeleteAccountBegin.SessionRevoked(null) to DeleteAccountResult.SessionRevoked(null),
+            DeleteAccountBegin.NotFound(null) to DeleteAccountResult.NotFound(null),
+        )
+        for ((begin, expected) in refusals) {
+            val f = DeleteFixture()
+            coEvery { f.apiClient.deleteAccountBegin() } returns begin
+            val wallet = deleteWallet(f)
+
+            assertEquals(expected, wallet.deleteAccount("DELETE"))
+
+            coVerify(exactly = 0) { f.authProvider.authenticate(any()) }
+            coVerify(exactly = 0) { f.apiClient.deleteAccount(any(), any(), any()) }
+            f.verifyNothingWiped()
+        }
+    }
+
+    @Test
+    fun deleteAccount_refuses_a_wrong_confirmation_before_any_request() = runTest(dispatcher) {
+        val f = DeleteFixture()
+        val wallet = deleteWallet(f)
+
+        for (typed in listOf("delete", "DELETE ", "", "yes")) {
+            assertEquals(DeleteAccountResult.ConfirmationRequired(null), wallet.deleteAccount(typed))
+        }
+
+        coVerify(exactly = 0) { f.apiClient.deleteAccountBegin() }
+        coVerify(exactly = 0) { f.apiClient.deleteAccount(any(), any(), any()) }
+        f.verifyNothingWiped()
+    }
+
+    @Test
+    fun deleteAccount_does_not_send_when_the_assertion_is_unavailable() = runTest(dispatcher) {
+        val f = DeleteFixture()
+        val wallet = deleteWallet(f)
+
+        val result = wallet.deleteAccount("DELETE", stepUp = { throw AuthException("user cancelled") })
+
+        assertTrue(result is DeleteAccountResult.StepUpUnavailable)
+        coVerify(exactly = 0) { f.apiClient.deleteAccount(any(), any(), any()) }
+        f.verifyNothingWiped()
+    }
+
+    @Test
+    fun deleteAccount_uses_the_given_step_up_for_the_begin_options_and_defaults_to_the_auth_provider() = runTest(dispatcher) {
+        val f = DeleteFixture()
+        f.respond(DeleteAccountOutcome.RetryNeeded(null))
+        val wallet = deleteWallet(f)
+        val seen = mutableListOf<AuthenticateOptions>()
+
+        wallet.deleteAccount("DELETE", stepUp = { seen += it; f.assertion })
+        wallet.deleteAccount("DELETE")
+
+        assertEquals(listOf(f.options), seen)
+        coVerify(exactly = 1) { f.authProvider.authenticate(f.options) }
+        coVerify(exactly = 2) { f.apiClient.deleteAccount("ch-1", f.assertion, "DELETE") }
     }
 
     private fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {

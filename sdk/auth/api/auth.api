@@ -201,6 +201,8 @@ public final class org/siros/sdk/auth/AuthenticatorSelection {
 public final class org/siros/sdk/auth/BackendApiClient {
 	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lokhttp3/OkHttpClient;Lkotlinx/serialization/json/Json;)V
 	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lokhttp3/OkHttpClient;Lkotlinx/serialization/json/Json;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun deleteAccount (Ljava/lang/String;Lorg/siros/sdk/auth/AuthenticateResult;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun deleteAccountBegin (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun deleteCredential (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun evaluateTrust (Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun generateWIA (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -224,14 +226,8 @@ public final class org/siros/sdk/auth/BackendApiClient {
 	public final fun resolveIssuer (Ljava/lang/String;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun resolveIssuer$default (Lorg/siros/sdk/auth/BackendApiClient;Ljava/lang/String;Ljava/util/List;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun resolveKey (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public final fun revokeAllWalletInstances (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun revokeAllWalletInstances$default (Lorg/siros/sdk/auth/BackendApiClient;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun setAppToken (Ljava/lang/String;)V
 	public final fun setAuthTokens (Lorg/siros/sdk/auth/AuthTokens;)V
-	public final fun setWalletInstanceStatus (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public final fun setWalletInstanceStatus (Ljava/lang/String;Lorg/siros/sdk/auth/WalletInstanceStatus;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun setWalletInstanceStatus$default (Lorg/siros/sdk/auth/BackendApiClient;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-	public static synthetic fun setWalletInstanceStatus$default (Lorg/siros/sdk/auth/BackendApiClient;Ljava/lang/String;Lorg/siros/sdk/auth/WalletInstanceStatus;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun storeCredential (Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun updatePrivateData (Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
@@ -252,15 +248,171 @@ public final class org/siros/sdk/auth/CredentialManagerAuthProvider : org/siros/
 public final class org/siros/sdk/auth/CredentialManagerAuthProvider$Companion {
 }
 
-public final class org/siros/sdk/auth/DeactivationOutcome {
-	public fun <init> (IZ)V
-	public final fun component1 ()I
-	public final fun component2 ()Z
-	public final fun copy (IZ)Lorg/siros/sdk/auth/DeactivationOutcome;
-	public static synthetic fun copy$default (Lorg/siros/sdk/auth/DeactivationOutcome;IZILjava/lang/Object;)Lorg/siros/sdk/auth/DeactivationOutcome;
+public abstract interface class org/siros/sdk/auth/DeleteAccountBegin {
+}
+
+public final class org/siros/sdk/auth/DeleteAccountBegin$Forbidden : org/siros/sdk/auth/DeleteAccountBegin {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/auth/DeleteAccountBegin$Forbidden;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/DeleteAccountBegin$Forbidden;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/DeleteAccountBegin$Forbidden;
 	public fun equals (Ljava/lang/Object;)Z
-	public final fun getComplete ()Z
-	public final fun getRevoked ()I
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/DeleteAccountBegin$NoPasskey : org/siros/sdk/auth/DeleteAccountBegin {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/auth/DeleteAccountBegin$NoPasskey;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/DeleteAccountBegin$NoPasskey;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/DeleteAccountBegin$NoPasskey;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/DeleteAccountBegin$NotFound : org/siros/sdk/auth/DeleteAccountBegin {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/auth/DeleteAccountBegin$NotFound;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/DeleteAccountBegin$NotFound;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/DeleteAccountBegin$NotFound;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/DeleteAccountBegin$Ready : org/siros/sdk/auth/DeleteAccountBegin {
+	public fun <init> (Lorg/siros/sdk/auth/DeleteAccountChallenge;)V
+	public final fun component1 ()Lorg/siros/sdk/auth/DeleteAccountChallenge;
+	public final fun copy (Lorg/siros/sdk/auth/DeleteAccountChallenge;)Lorg/siros/sdk/auth/DeleteAccountBegin$Ready;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/DeleteAccountBegin$Ready;Lorg/siros/sdk/auth/DeleteAccountChallenge;ILjava/lang/Object;)Lorg/siros/sdk/auth/DeleteAccountBegin$Ready;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getChallenge ()Lorg/siros/sdk/auth/DeleteAccountChallenge;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/DeleteAccountBegin$SessionRevoked : org/siros/sdk/auth/DeleteAccountBegin {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/auth/DeleteAccountBegin$SessionRevoked;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/DeleteAccountBegin$SessionRevoked;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/DeleteAccountBegin$SessionRevoked;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/DeleteAccountChallenge {
+	public fun <init> (Ljava/lang/String;Lorg/siros/sdk/auth/AuthenticateOptions;)V
+	public final fun getChallengeId ()Ljava/lang/String;
+	public final fun getOptions ()Lorg/siros/sdk/auth/AuthenticateOptions;
+}
+
+public final class org/siros/sdk/auth/DeleteAccountKt {
+	public static final field DELETE_ACCOUNT_CONFIRMATION Ljava/lang/String;
+}
+
+public abstract interface class org/siros/sdk/auth/DeleteAccountOutcome {
+}
+
+public final class org/siros/sdk/auth/DeleteAccountOutcome$CleanupPending : org/siros/sdk/auth/DeleteAccountOutcome {
+	public static final field INSTANCE Lorg/siros/sdk/auth/DeleteAccountOutcome$CleanupPending;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/DeleteAccountOutcome$ConfirmationRequired : org/siros/sdk/auth/DeleteAccountOutcome {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/auth/DeleteAccountOutcome$ConfirmationRequired;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/DeleteAccountOutcome$ConfirmationRequired;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/DeleteAccountOutcome$ConfirmationRequired;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/DeleteAccountOutcome$Deleted : org/siros/sdk/auth/DeleteAccountOutcome {
+	public static final field INSTANCE Lorg/siros/sdk/auth/DeleteAccountOutcome$Deleted;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/DeleteAccountOutcome$NotFound : org/siros/sdk/auth/DeleteAccountOutcome {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/auth/DeleteAccountOutcome$NotFound;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/DeleteAccountOutcome$NotFound;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/DeleteAccountOutcome$NotFound;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/DeleteAccountOutcome$OperatorRequired : org/siros/sdk/auth/DeleteAccountOutcome {
+	public static final field INSTANCE Lorg/siros/sdk/auth/DeleteAccountOutcome$OperatorRequired;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/DeleteAccountOutcome$RetryNeeded : org/siros/sdk/auth/DeleteAccountOutcome {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/auth/DeleteAccountOutcome$RetryNeeded;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/DeleteAccountOutcome$RetryNeeded;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/DeleteAccountOutcome$RetryNeeded;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/DeleteAccountOutcome$SessionRevoked : org/siros/sdk/auth/DeleteAccountOutcome {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/auth/DeleteAccountOutcome$SessionRevoked;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/DeleteAccountOutcome$SessionRevoked;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/DeleteAccountOutcome$SessionRevoked;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/DeleteAccountOutcome$StepUpExpired : org/siros/sdk/auth/DeleteAccountOutcome {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/auth/DeleteAccountOutcome$StepUpExpired;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/DeleteAccountOutcome$StepUpExpired;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/DeleteAccountOutcome$StepUpExpired;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/DeleteAccountOutcome$StepUpFailed : org/siros/sdk/auth/DeleteAccountOutcome {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/auth/DeleteAccountOutcome$StepUpFailed;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/DeleteAccountOutcome$StepUpFailed;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/DeleteAccountOutcome$StepUpFailed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/DeleteAccountOutcome$StepUpRequired : org/siros/sdk/auth/DeleteAccountOutcome {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/auth/DeleteAccountOutcome$StepUpRequired;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/DeleteAccountOutcome$StepUpRequired;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/DeleteAccountOutcome$StepUpRequired;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
@@ -277,6 +429,7 @@ public final class org/siros/sdk/auth/LocalAuthProvider : org/siros/sdk/auth/Aut
 	public fun <init> (Landroid/content/Context;Z)V
 	public synthetic fun <init> (Landroid/content/Context;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun authenticate (Lorg/siros/sdk/auth/AuthenticateOptions;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun deleteAllCredentials ()V
 	public final fun getLastCredentialId ()[B
 	public final fun getLastPrfOutput ()Lorg/siros/sdk/auth/PrfOutput;
 	public fun getPrfOutput ([B[BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -428,6 +581,10 @@ public final class org/siros/sdk/auth/RegisterResult {
 	public fun toString ()Ljava/lang/String;
 }
 
+public abstract interface class org/siros/sdk/auth/StepUpAuthenticator {
+	public abstract fun assert (Lorg/siros/sdk/auth/AuthenticateOptions;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
 public final class org/siros/sdk/auth/TacPermission : java/lang/Enum {
 	public static final field ADMIN Lorg/siros/sdk/auth/TacPermission;
 	public static final field Companion Lorg/siros/sdk/auth/TacPermission$Companion;
@@ -573,7 +730,6 @@ public final class org/siros/sdk/auth/WalletInstanceStatus$Companion {
 
 public final class org/siros/sdk/auth/WalletLifecycleKt {
 	public static final field ERROR_CREDENTIAL_NOT_OWNED Ljava/lang/String;
-	public static final field ERROR_ERASURE_INCOMPLETE Ljava/lang/String;
 	public static final fun apiErrorCode (Lorg/siros/sdk/credentials/BackendApiException;)Ljava/lang/String;
 	public static final fun apiRefusalMessage (Lorg/siros/sdk/credentials/BackendApiException;)Ljava/lang/String;
 	public static final fun apiRefusalScope (Lorg/siros/sdk/credentials/BackendApiException;)Ljava/lang/String;

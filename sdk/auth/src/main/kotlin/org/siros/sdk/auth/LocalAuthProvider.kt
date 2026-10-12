@@ -69,6 +69,20 @@ class LocalAuthProvider(
         Timber.i("LocalAuthProvider: rolled back last registration")
     }
 
+    /**
+     * Delete every passkey this provider holds: its Keystore keys and the
+     * metadata that maps to them. Used when the account they belong to is
+     * deleted, since nothing can use them afterwards.
+     */
+    fun deleteAllCredentials() {
+        credStore.getAll().forEach { entry ->
+            try { keyStore.deleteEntry(entry.keyAlias) } catch (_: Exception) {}
+        }
+        credStore.clear()
+        lastCredentialId = null
+        lastPrfOutput = null
+    }
+
     override suspend fun register(options: RegisterOptions): RegisterResult {
         // Generate a random credential ID
         val credentialId = ByteArray(32).also { SecureRandom().nextBytes(it) }

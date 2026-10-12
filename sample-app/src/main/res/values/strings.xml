@@ -222,7 +222,7 @@
 
     <!-- Devices / wallet instance lifecycle (SID-AUTH-06) -->
     <string name="devices_title">Devices</string>
-    <string name="devices_description">The wallet installations registered to this account. Suspending one blocks it until it is reactivated; removing one is permanent.</string>
+    <string name="devices_description">The wallet installations registered to this account.</string>
     <string name="devices_manage_button">Manage devices</string>
     <string name="devices_empty">No wallet instances registered yet. One is registered the first time this installation obtains a wallet instance attestation.</string>
     <string name="devices_refresh">Refresh</string>
@@ -235,22 +235,6 @@
     <string name="devices_status_suspended">Suspended</string>
     <string name="devices_status_revoked">Removed</string>
     <string name="devices_status_unknown">Unknown</string>
-    <string name="devices_suspend">Suspend</string>
-    <string name="devices_reactivate">Reactivate</string>
-    <string name="devices_remove">Remove</string>
-    <string name="devices_cancel">Cancel</string>
-    <string name="devices_suspend_self_warning">Suspending this device signs it out until it is reactivated from another device or by your provider.</string>
-    <string name="devices_remove_confirm_title">Remove this device?</string>
-    <string name="devices_remove_confirm_message">%1$s will be removed permanently and can never be reactivated. Removing the last device deactivates the wallet and erases its data.</string>
-    <string name="devices_deactivate_title">Deactivate wallet</string>
-    <string name="devices_deactivate_description">Removes every device and erases this wallet\'s data on the server. A new enrollment is required afterwards.</string>
-    <string name="devices_deactivate_button">Deactivate wallet</string>
-    <string name="devices_deactivate_confirm_title">Deactivate this wallet?</string>
-    <string name="devices_deactivate_confirm_message">This cannot be undone. Type %1$s to confirm.</string>
-    <string name="devices_deactivate_confirm_word">DEACTIVATE</string>
-    <string name="devices_reason_optional">Reason (optional)</string>
-    <string name="devices_deactivate_complete">Wallet deactivated: %1$d device(s) removed and the server-side data erased.</string>
-    <string name="devices_deactivate_incomplete">Wallet deactivated: %1$d device(s) removed, but the server could not finish erasing its data. Your provider must complete it.</string>
     <string name="wallet_blocked_suspended_title">This device is suspended</string>
     <string name="wallet_blocked_suspended_message">Reactivate it from another one of your devices, or contact your wallet provider. Your credentials are untouched.</string>
     <string name="wallet_blocked_retry">Try again</string>
@@ -304,4 +288,21 @@
     <string name="transaction_entity_pisp">Payment initiation service</string>
     <string name="transaction_entity_service">Service</string>
     <string name="transaction_entity_aisp">Account information service</string>
+    <string name="delete_account_button">Delete Account</string>
+    <string name="delete_account_title">Delete account?</string>
+    <string name="delete_account_message">This permanently erases your account, credentials and passkeys on the server and on this device, and cannot be undone. You will be asked to confirm with a passkey. Type DELETE to continue.</string>
+    <string name="delete_account_confirm">Delete</string>
+    <string name="delete_account_cancel">Cancel</string>
+    <string name="delete_account_done">Your account was deleted and this device was cleared.</string>
+    <string name="delete_account_cleanup_pending">Your account was deleted and this device was cleared. The server is finishing the last cleanup.</string>
+    <string name="delete_account_operator_required">Your account was deleted and this device was cleared, but an operator must finish erasing the remaining server data.</string>
+    <string name="delete_account_retry">The server could not finish deleting your account and kept it. Nothing was removed from this device. Try again.</string>
+    <string name="delete_account_confirmation_required">Type DELETE to confirm.</string>
+    <string name="delete_account_step_up_unavailable">The passkey confirmation was cancelled or is unavailable. Nothing was deleted.</string>
+    <string name="delete_account_step_up_failed">The passkey confirmation was rejected. Nothing was deleted.</string>
+    <string name="delete_account_step_up_expired">The passkey confirmation expired. Nothing was deleted; try again.</string>
+    <string name="delete_account_session_revoked">Your session is no longer valid. Log in again before deleting the account.</string>
+    <string name="delete_account_not_found">The server has no such account. Nothing was deleted.</string>
+    <string name="delete_account_no_passkey">This account has no passkey, so it cannot be deleted from the wallet. Nothing was deleted.</string>
+    <string name="delete_account_insufficient_scope">This session is not allowed to delete the account. Log in with a passkey and try again.</string>
 </resources>

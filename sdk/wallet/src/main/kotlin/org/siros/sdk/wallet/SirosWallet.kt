@@ -50,10 +50,12 @@ import org.siros.sdk.auth.AuthProvider
 import org.siros.sdk.auth.CredentialManagerAuthProvider
 import org.siros.sdk.auth.LocalAuthProvider
 import org.siros.sdk.auth.PrfOutput
-import org.siros.sdk.auth.DeactivationOutcome
+import org.siros.sdk.auth.DELETE_ACCOUNT_CONFIRMATION
+import org.siros.sdk.auth.DeleteAccountBegin
+import org.siros.sdk.auth.DeleteAccountOutcome
 import org.siros.sdk.auth.ERROR_CREDENTIAL_NOT_OWNED
+import org.siros.sdk.auth.StepUpAuthenticator
 import org.siros.sdk.auth.WalletInstance
-import org.siros.sdk.auth.WalletInstanceStatus
 import org.siros.sdk.auth.WalletLifecycleRefusal
 import org.siros.sdk.auth.apiErrorCode
 import org.siros.sdk.auth.apiRefusalMessage
@@ -118,6 +120,8 @@ import org.siros.sdk.keystore.ZkMdocPresentation
 import org.siros.sdk.keystore.WscdKeystoreAdapter
 import org.siros.sdk.keystore.WscdManager
 import org.siros.sdk.wallet.dcapi.DCAPIRequest
+import org.siros.sdk.wallet.dcapi.PickerIconCache
+import org.siros.sdk.wallet.dcapi.SirosCredentialRegistry
 import org.siros.sdk.wallet.dcapi.DCAPIRequestParser
 import org.siros.sdk.transport.CredentialNotifier
 import org.siros.sdk.transport.engine.CredentialMatch
@@ -472,20 +476,97 @@ class SirosWallet private constructor(
     }
 
     /**
-     * Delete the currently active account: removes it from the local account
-     * registry (so it no longer lingers as a cached "Welcome back" entry on
-     * the login screen) and logs out. There's no server-side account
-     * deletion endpoint - this is [forgetAccount] scoped to whichever
-     * account is currently active, which is what "delete" is expected to do
-     * from the logged-in Settings screen.
+     * Permanently delete this account (`POST /user/session/delete-begin`, then
+     * `DELETE /user/session`).
+     *
+     * A fresh passkey assertion from [stepUp] and the typed [confirmation]
+     * authorise it; the assertion is valid for two minutes and single use.
+     * The default [stepUp] asks this wallet's own passkey provider.
+     *
+     * Only on [DeleteAccountResult.Deleted], [DeleteAccountResult.CleanupPending]
+     * and [DeleteAccountResult.OperatorRequired] is the device wiped (see
+     * [wipeLocalState]); every other result, including
+     * [DeleteAccountResult.RetryNeeded], leaves all local data in place.
+     *
+     * @param confirmation what the user typed; must be [DELETE_ACCOUNT_CONFIRMATION]
+     *   exactly, and is checked before any request is made.
+     * @throws AuthException when no session is active.
      */
-    fun deleteAccount() {
-        val activeId = accountRegistry.activeAccountId
-        if (activeId != null) {
-            forgetAccount(activeId)
-        } else {
-            logout()
+    suspend fun deleteAccount(
+        confirmation: String,
+        stepUp: StepUpAuthenticator = StepUpAuthenticator { authProvider.authenticate(it) },
+    ): DeleteAccountResult {
+        if (confirmation != DELETE_ACCOUNT_CONFIRMATION) return DeleteAccountResult.ConfirmationRequired(null)
+        val client = apiClient ?: throw AuthException(NOT_LOGGED_IN)
+        val challenge = when (val begin = client.deleteAccountBegin()) {
+            is DeleteAccountBegin.Ready -> begin.challenge
+            is DeleteAccountBegin.NoPasskey -> return DeleteAccountResult.NoPasskey(begin.message)
+            is DeleteAccountBegin.Forbidden -> return DeleteAccountResult.InsufficientScope(begin.message)
+            is DeleteAccountBegin.SessionRevoked -> return DeleteAccountResult.SessionRevoked(begin.message)
+            is DeleteAccountBegin.NotFound -> return DeleteAccountResult.NotFound(begin.message)
         }
+        val assertion = try {
+            stepUp.assert(challenge.options)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.w(e, "Account deletion: step-up assertion unavailable")
+            return DeleteAccountResult.StepUpUnavailable(e.message)
+        }
+        return when (val outcome = client.deleteAccount(challenge.challengeId, assertion, confirmation)) {
+            DeleteAccountOutcome.Deleted -> DeleteAccountResult.Deleted(wipeLocalState())
+            DeleteAccountOutcome.CleanupPending -> DeleteAccountResult.CleanupPending(wipeLocalState())
+            DeleteAccountOutcome.OperatorRequired -> DeleteAccountResult.OperatorRequired(wipeLocalState())
+            is DeleteAccountOutcome.RetryNeeded -> DeleteAccountResult.RetryNeeded(outcome.message)
+            is DeleteAccountOutcome.StepUpRequired -> DeleteAccountResult.StepUpRequired(outcome.message)
+            is DeleteAccountOutcome.StepUpFailed -> DeleteAccountResult.StepUpFailed(outcome.message)
+            is DeleteAccountOutcome.StepUpExpired -> DeleteAccountResult.StepUpExpired(outcome.message)
+            is DeleteAccountOutcome.ConfirmationRequired -> DeleteAccountResult.ConfirmationRequired(outcome.message)
+            is DeleteAccountOutcome.SessionRevoked -> DeleteAccountResult.SessionRevoked(outcome.message)
+            is DeleteAccountOutcome.NotFound -> DeleteAccountResult.NotFound(outcome.message)
+        }
+    }
+
+    /**
+     * Erase everything this device holds for the user: keystore keys and
+     * credentials, presentation records, session and account registry,
+     * transaction log, caches, WSCD choices, local passkeys and the DC API
+     * registry. Every store is cleared even if an earlier one fails; the
+     * failures are reported, not thrown.
+     *
+     * This is the one place that lists the wallet's persistent stores, so a
+     * new store is added here and nowhere else. Keys held by an external
+     * authenticator (for example a FIDO2 security key) cannot be erased from
+     * here.
+     */
+    private suspend fun wipeLocalState(): LocalWipeReport = withContext(kotlinx.coroutines.NonCancellable) {
+        val steps = listOf(
+            // Contents first, while the keystore is still unlocked.
+            LocalWipeStep("keystore.credentials") { if (keystore.isUnlocked) keystore.clearCredentials() },
+            LocalWipeStep("keystore.presentationRecords") { if (keystore.isUnlocked) keystore.clearPresentationRecords() },
+            LocalWipeStep("credentialStore") { credentialStore.clear() },
+            // Drops the engine, tokens and the in-memory key material (keys, WSCD state, PRF-derived main key).
+            LocalWipeStep("session") { endSessionLocally() },
+            LocalWipeStep("authServerTokenCache") { authServerClient.clearTokenCache() },
+            LocalWipeStep("keystore") { keystore.lock() },
+            LocalWipeStep("sessionStore") { sessionStore.clearAll() },
+            LocalWipeStep("accountRegistry") {
+                accountRegistry.clear()
+                accountRegistry.activeAccountId = null
+            },
+            LocalWipeStep("transactionLog") { transactionLogStore.clear() },
+            LocalWipeStep("trustCache") { trustCache.clear() },
+            LocalWipeStep("wscdSelectionPolicy") { wscdSelectionPolicy.clearAll() },
+            LocalWipeStep("displayMetadataCache") { (displayMetadataCache as? FileFetchCache)?.clear() },
+            LocalWipeStep("pickerIconCache") { PickerIconCache(activity.applicationContext).clear() },
+            LocalWipeStep("dcApiRegistry") { SirosCredentialRegistry.clear(activity.applicationContext) },
+            LocalWipeStep("localPasskeys") { (authProvider as? LocalAuthProvider)?.deleteAllCredentials() },
+            LocalWipeStep("presentationHistory") { _presentationHistory.clear() },
+        )
+        val report = runLocalWipe(steps)
+        _state.value = disconnectedState()
+        Timber.i("Account deleted; local state wiped (${report.failures.size} failure(s))")
+        report
     }
 
     // ── Passkey Management ──────────────────────────────────────────
@@ -545,84 +626,6 @@ class SirosWallet private constructor(
      * reading this right after it is the reliable order.
      */
     val thisInstanceId: String? get() = instanceKeyThumbprint()
-
-    /**
-     * Suspend, reactivate or revoke one of this user's wallet instances
-     * (`PUT /user/session/instances/{id}/status`). Suspension is reversible and
-     * only blocks that installation (login, attestation, sessions); revocation
-     * is terminal. Revoking the last non-revoked instance deactivates the
-     * wallet - prefer [deactivateWallet] for that, which also clears local state.
-     *
-     * Any change away from `active` cuts off every bearer token issued before
-     * it, including this session's (the acting token survives only for the
-     * request that made the change, and may not mint new ones), so this
-     * re-logs in once afterwards - see [WalletState.LifecycleBlocked].
-     * Suspending *this* device's own instance therefore ends in
-     * `LifecycleBlocked(SUSPENDED)`, which is the truthful state; confirm
-     * with the user before calling it for [WalletInstance.isThisDevice].
-     */
-    suspend fun setWalletInstanceStatus(
-        instanceId: String,
-        status: WalletInstanceStatus,
-        reason: String? = null,
-    ): WalletInstance {
-        val client = apiClient ?: throw AuthException(NOT_LOGGED_IN)
-        val updated = client.setWalletInstanceStatus(instanceId, status, reason)
-        // Every status write records a cut-off, and the acting token's
-        // exemption from it does not reach POST /auth/token or an engine flow
-        // start - so this session is done either way. Re-login once instead of
-        // letting the next issuance or presentation discover it as a 401.
-        reloginAfterLifecycleChange()
-        return updated
-    }
-
-    /**
-     * Deprecated string form of [setWalletInstanceStatus]. Kept for one
-     * release so callers built against SDK 0.16 keep compiling.
-     */
-    @Deprecated(
-        "Use the WalletInstanceStatus overload",
-        ReplaceWith("setWalletInstanceStatus(instanceId, requireNotNull(WalletInstanceStatus.fromWire(status)), reason)"),
-    )
-    suspend fun setWalletInstanceStatus(instanceId: String, status: String, reason: String? = null): WalletInstance =
-        setWalletInstanceStatus(
-            instanceId,
-            WalletInstanceStatus.fromWire(status)
-                ?: throw IllegalArgumentException("Unknown wallet instance status: $status"),
-            reason,
-        )
-
-    /**
-     * Deactivate this wallet: revoke every wallet instance of the user
-     * (`POST /user/session/instances/revoke-all`). The backend erases the
-     * wallet's private data and server-side credentials, and refuses every
-     * passkey of the user at login with `WALLET_REVOKED`; a new enrollment is
-     * required afterwards. The local cached account is forgotten and the
-     * wallet logged out, since the vault it decrypts no longer exists - in
-     * both outcomes, since the revocations stand even when the erasure
-     * cascade did not finish.
-     *
-     * Unlike [setWalletInstanceStatus] this does not re-login: there is
-     * nothing left to log in to.
-     *
-     * @return how many instances the backend revoked and whether it confirmed
-     *   the erasure ([DeactivationOutcome.complete]); an incomplete erasure
-     *   leaves residual server-side data for an administrator to clean up.
-     */
-    suspend fun deactivateWallet(reason: String? = null): DeactivationOutcome {
-        val client = apiClient ?: throw AuthException(NOT_LOGGED_IN)
-        val outcome = client.revokeAllWalletInstances(reason)
-        if (outcome.complete) {
-            Timber.i("Wallet deactivated: ${outcome.revoked} instance(s) revoked; forgetting local account")
-        } else {
-            Timber.w(
-                "Wallet deactivated with an unfinished erasure: ${outcome.revoked} instance(s) revoked, " +
-                    "residual server-side data must be cleaned up by an administrator; forgetting local account anyway"
-            )
-        }
-        deleteAccount()
-        return outcome
-    }
 
     // ── Lifecycle refusals and the cut-off re-login (SID-AUTH-06) ───
 
@@ -803,24 +806,6 @@ class SirosWallet private constructor(
         }
     }
 
-    /** [reloginAfterCutOff] under the once-only guard, never throwing at the caller. */
-    private suspend fun reloginAfterLifecycleChange() {
-        val generation = beginSelfDrivenRelogin()
-        if (generation == null) {
-            Timber.d("Re-login not started: one already ran for this session, or there is none to replace")
-            return
-        }
-        try {
-            reloginAfterCutOff(generation)
-        } catch (e: Exception) {
-            // login() has already put the failure in the state; this call
-            // must not turn a lifecycle write that succeeded into a throw.
-            Timber.w(e, "Re-login after a wallet lifecycle change failed")
-        } finally {
-            endSelfDrivenRelogin()
-        }
-    }
-
     /**
      * The lifecycle refusal [error] (or one of its causes) reports, or null
      * when it is not one. The AS carries the code as
@@ -889,8 +874,7 @@ class SirosWallet private constructor(
      * refusal degrades to [WalletLifecycleRefusal.REVOKED] and nothing local is
      * lost.
      *
-     * [deactivateWallet] forgets the account too, but there the caller asked
-     * for it.
+     * [deleteAccount] forgets everything too, but there the caller asked for it.
      */
     private suspend fun enterLifecycleBlocked(
         reason: WalletLifecycleRefusal,
