@@ -1380,50 +1380,16 @@ class SirosWallet private constructor(
         // below, in the recovery branch this login may need to take.
         setupApiClientWithTokens()
 
-        // extractLastPrfOutput() is non-null exactly when loginCandidates(credId)
-        // included this credential - i.e. this device's local account cache
-        // already had the right salt on hand for the single evalByCredential
-        // ceremony above. When it's null - most commonly because that local
-        // cache was wiped (reinstall, app data cleared, device migration)
-        // while the credential itself is perfectly intact in the platform
-        // authenticator - recover the real salt from the account's own
-        // server-synced privateData container (every PrfKeyInfo entry there
-        // carries the exact salt + hkdfSalt/hkdfInfo this credential was
-        // registered with, keyed by credentialId - see
-        // [KeystoreManager.unlock]'s prfSalt parameter), then spend one more
-        // ceremony (one extra tap) getting the real PRF output for it,
-        // rather than treating an otherwise-healthy passkey as permanently
-        // unusable.
-        var recoveredPrfSalt: ByteArray? = null
-        var recoveredHkdfSalt: ByteArray? = null
-        var recoveredHkdfInfo: ByteArray? = null
-        var prefetchedPrivateData: ByteArray? = null
-        val prfOutput = extractLastPrfOutput() ?: run {
-            val privateData = fetchPrivateData()
-            prefetchedPrivateData = privateData
-            val prfKeyInfo = EncryptedContainer.parse(privateData).prfKeys
-                .firstOrNull { it.credentialId.contentEquals(credId) }
-                ?: throw WalletException("PRF not supported by authenticator — cannot decrypt wallet data")
-            try {
-                authProvider.getPrfOutput(credId, prfKeyInfo.prfSalt, rpId).also {
-                    recoveredPrfSalt = prfKeyInfo.prfSalt
-                    recoveredHkdfSalt = prfKeyInfo.hkdfSalt
-                    recoveredHkdfInfo = prfKeyInfo.hkdfInfo
-                }
-            } catch (e: AuthException) {
-                throw WalletException("PRF not supported by authenticator — cannot decrypt wallet data", e)
-            }
-        }
-
+        val recovered = resolveLoginPrfOutput(credId, rpId)
         finishLogin(
             session.uuid,
             session.displayName,
             credId,
-            prfOutput,
-            recoveredPrfSalt,
-            recoveredHkdfSalt,
-            recoveredHkdfInfo,
-            prefetchedPrivateData,
+            recovered.prfOutput,
+            recovered.recoveredPrfSalt,
+            recovered.recoveredHkdfSalt,
+            recovered.recoveredHkdfInfo,
+            recovered.prefetchedPrivateData,
         )
     }
 
@@ -1451,38 +1417,60 @@ class SirosWallet private constructor(
         legacyAppToken = session.appToken
         sessionStore.appToken = session.appToken
 
-        // See the equivalent recovery path in newAsLogin for why this is
-        // needed and where each recovered value comes from.
-        var recoveredPrfSalt: ByteArray? = null
-        var recoveredHkdfSalt: ByteArray? = null
-        var recoveredHkdfInfo: ByteArray? = null
-        var prefetchedPrivateData: ByteArray? = null
-        val prfOutput = extractLastPrfOutput() ?: run {
-            val privateData = fetchPrivateData()
-            prefetchedPrivateData = privateData
-            val prfKeyInfo = EncryptedContainer.parse(privateData).prfKeys
-                .firstOrNull { it.credentialId.contentEquals(credId) }
-                ?: throw WalletException("PRF not supported by authenticator — cannot decrypt wallet data")
-            try {
-                authProvider.getPrfOutput(credId, prfKeyInfo.prfSalt, rpId).also {
-                    recoveredPrfSalt = prfKeyInfo.prfSalt
-                    recoveredHkdfSalt = prfKeyInfo.hkdfSalt
-                    recoveredHkdfInfo = prfKeyInfo.hkdfInfo
-                }
-            } catch (e: AuthException) {
-                throw WalletException("PRF not supported by authenticator — cannot decrypt wallet data", e)
-            }
-        }
-
+        val recovered = resolveLoginPrfOutput(credId, rpId)
         finishLogin(
             session.uuid,
             session.displayName,
             credId,
-            prfOutput,
-            recoveredPrfSalt,
-            recoveredHkdfSalt,
-            recoveredHkdfInfo,
-            prefetchedPrivateData,
+            recovered.prfOutput,
+            recovered.recoveredPrfSalt,
+            recovered.recoveredHkdfSalt,
+            recovered.recoveredHkdfInfo,
+            recovered.prefetchedPrivateData,
+        )
+    }
+
+    /** [resolveLoginPrfOutput]'s result - see its own doc comment. */
+    private data class RecoveredLoginPrf(
+        val prfOutput: PrfOutput,
+        val recoveredPrfSalt: ByteArray? = null,
+        val recoveredHkdfSalt: ByteArray? = null,
+        val recoveredHkdfInfo: ByteArray? = null,
+        val prefetchedPrivateData: ByteArray? = null,
+    )
+
+    /**
+     * extractLastPrfOutput() is non-null exactly when loginCandidates(credId)
+     * included this credential - i.e. this device's local account cache
+     * already had the right salt on hand for the single evalByCredential
+     * ceremony [newAsLogin]/[legacyLogin] just ran. When it's null - most
+     * commonly because that local cache was wiped (reinstall, app data
+     * cleared, device migration) while the credential itself is perfectly
+     * intact in the platform authenticator - recover the real salt from the
+     * account's own server-synced privateData container (every PrfKeyInfo
+     * entry there carries the exact salt + hkdfSalt/hkdfInfo this credential
+     * was registered with, keyed by credentialId - see
+     * [KeystoreManager.unlock]'s prfSalt parameter), then spend one more
+     * ceremony (one extra tap) getting the real PRF output for it, rather
+     * than treating an otherwise-healthy passkey as permanently unusable.
+     */
+    private suspend fun resolveLoginPrfOutput(credId: ByteArray, rpId: String): RecoveredLoginPrf {
+        extractLastPrfOutput()?.let { return RecoveredLoginPrf(prfOutput = it) }
+        val privateData = fetchPrivateData()
+        val prfKeyInfo = EncryptedContainer.parse(privateData).prfKeys
+            .firstOrNull { it.credentialId.contentEquals(credId) }
+            ?: throw WalletException("PRF not supported by authenticator — cannot decrypt wallet data")
+        val prfOutput = try {
+            authProvider.getPrfOutput(credId, prfKeyInfo.prfSalt, rpId)
+        } catch (e: AuthException) {
+            throw WalletException("PRF not supported by authenticator — cannot decrypt wallet data", e)
+        }
+        return RecoveredLoginPrf(
+            prfOutput = prfOutput,
+            recoveredPrfSalt = prfKeyInfo.prfSalt,
+            recoveredHkdfSalt = prfKeyInfo.hkdfSalt,
+            recoveredHkdfInfo = prfKeyInfo.hkdfInfo,
+            prefetchedPrivateData = privateData,
         )
     }
 
