@@ -70,6 +70,23 @@ internal data class NymConfig(
 )
 
 /**
+ * What a pseudonym config needs from the caller, for code that has to decide
+ * whether it can supply it.
+ *
+ * @property holderPrivateSeed The seed is the holder's `private_seed`; false
+ *   when the config derives from a seed the holder does not hold.
+ * @property userValue The config takes a user-supplied value as `prover_input`.
+ * @property verifierId The config uses a `verifier_id`.
+ * @property verifierContext The config also uses a `verifier_context`.
+ */
+data class NymConfigInfo(
+    val holderPrivateSeed: Boolean,
+    val userValue: Boolean,
+    val verifierId: Boolean,
+    val verifierContext: Boolean,
+)
+
+/**
  * The rulebook's pseudonym function `pseudonym-v1-sha256`:
  * `SHA256(DST || seed || prover_input || verifier_input)`, with
  * `DST = "nym_auth/v1/<config>"` (UTF-8) and no separators.
@@ -97,6 +114,16 @@ object NymPseudonym {
         NymConfig("account-recovery-ssc", NymSeedKind.SECRET, NymProverInput.NONE, NymVerifierInput.SHA256_OF_ID_AND_CONTEXT),
         NymConfig("user-managed-pseudonym-xsite-ssc", NymSeedKind.SECRET, NymProverInput.SHA256_OF_USER_VALUE, NymVerifierInput.NONE),
     ).associateBy { it.id }
+
+    /** What [config] needs from the caller, or null for an unknown config. */
+    fun describe(config: String): NymConfigInfo? = configs[config]?.let {
+        NymConfigInfo(
+            holderPrivateSeed = it.seed == NymSeedKind.PRIVATE,
+            userValue = it.proverInput != NymProverInput.NONE,
+            verifierId = it.verifierInput != NymVerifierInput.NONE,
+            verifierContext = it.verifierInput == NymVerifierInput.SHA256_OF_ID_AND_CONTEXT,
+        )
+    }
 
     /**
      * Derives the 32-byte pseudonym.

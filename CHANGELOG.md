@@ -56,6 +56,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Shared vectors in `spec/circuit-zk-validator-vectors.json`. A `circuit_zk`
   request that matches nothing is now answered with `access_denied` and no
   description, never the "no credential matches" text. (#267)
+- **`CircuitZkPresenter`: assembles and encodes a `circuit_zk` presentation
+  from a validated request.** Eight fail-closed steps (validator re-run,
+  doctype, witness, `psc` check, data-dependent predicates, circuit selection,
+  prover, assembly) with function handlers registered per function id
+  (`pseudonym-v1-sha256`, `age_check`), a `CircuitZkProver` interface and the
+  same `ZkWitnessSigner` / residency handling as `ZkMdocPresentation`. Refusals
+  are `CircuitZkError` with no description. `FakeCircuitZkProver.optIn()` is a
+  fake that reports itself as such and is never registered by default. (#268)
 
 ## [0.20.5] - 2026-10-12
 

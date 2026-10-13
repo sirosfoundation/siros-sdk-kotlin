@@ -81,7 +81,15 @@ data class CircuitZkCircuit(
     val docTypes: Set<String>,
     val functions: Set<String>? = null,
     val aliases: Set<String> = emptySet(),
-)
+) {
+    /**
+     * Whether this circuit can prove [plan] for a credential of [docType]: the
+     * doctype is one it serves, it is in the verifier's circuit list (if any),
+     * and it supports every planned function (if it declares any).
+     */
+    fun supports(plan: CircuitZkPlan, docType: String): Boolean =
+        docType in docTypes && CircuitZkMatching.fits(this, plan)
+}
 
 /** The circuits the wallet can prove with, from the circuit catalog. */
 fun interface CircuitZkCircuitSource {
@@ -165,7 +173,7 @@ internal object CircuitZkMatching {
         return plan to matched
     }
 
-    private fun fits(circuit: CircuitZkCircuit, plan: CircuitZkPlan): Boolean {
+    internal fun fits(circuit: CircuitZkCircuit, plan: CircuitZkPlan): Boolean {
         val filter = plan.circuitFilter
         if (!filter.isNullOrEmpty() && filter.none { ref ->
                 (ref.system == null || ref.system == circuit.system) &&
