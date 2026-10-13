@@ -91,7 +91,7 @@ class JweKeystore(
      * orphans a credential.
      */
     private val didKeyVersion: DidKeyVersion = DidKeyVersion.forProfile(profile),
-) : KeystoreManager, ExtensionStore {
+) : KeystoreManager, ExtensionStore, RootSecret {
 
     /**
      * The pre-DIIP constructor shape, kept so existing Java and already-compiled
@@ -151,6 +151,26 @@ class JweKeystore(
     private var credentialRefreshTokens: MutableMap<Long, CredentialRefreshTokenEntry> = mutableMapOf()
 
     override val isUnlocked: Boolean get() = mainKey != null
+
+    /**
+     * Derives a secret from the container `mainKey` without exporting it:
+     * `HKDF-SHA256(mainKey, salt = empty, info)[:length]`. See [PrivateSeed].
+     *
+     * `mainKey` is permanent: it is created once and never rotated or
+     * re-keyed, because every secret derived from it would change. Nothing in
+     * this class replaces it after [unlock].
+     *
+     * @throws KeystoreException if the keystore is locked.
+     */
+    override fun deriveSecret(info: ByteArray, length: Int): ByteArray {
+        val key = mainKey ?: throw KeystoreException("Keystore is locked")
+        val ikm = key.encoded
+        try {
+            return EncryptedContainer.hkdfSha256(ikm, ByteArray(0), info, length)
+        } finally {
+            ikm.fill(0)
+        }
+    }
 
     override suspend fun unlock(
         prfOutput: ByteArray,

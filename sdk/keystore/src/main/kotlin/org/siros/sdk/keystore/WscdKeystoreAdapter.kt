@@ -81,7 +81,10 @@ class WscdKeystoreAdapter private constructor(
     // Extension state has to land in the same blob the credentials do, or
     // it does not reach the account's other devices - and [credentialsKeystore]
     // is the JweKeystore that owns this adapter's container.
-    ExtensionStore by credentialsKeystore {
+    ExtensionStore by credentialsKeystore,
+    // The mainKey lives in [credentialsKeystore]; a wallet whose signing keys
+    // are in a WSCD still derives its private seed from that same key.
+    RootSecret by credentialsKeystore {
 
     constructor(signer: Signer) : this(signer, JweKeystore())
 

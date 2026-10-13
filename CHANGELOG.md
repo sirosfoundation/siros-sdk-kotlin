@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keys (optional strict mode), has a pluggable `issuer_key_set` decoder hook
   and an opt-in `requireResultHandles` check. Shared vectors in
   `spec/circuit-zk-presentation-vectors.json`. (#262)
+- **`PrivateSeed`: a stable per-credential-type holder `private_seed`, derived
+  from the container `mainKey`.** `HKDF-SHA256(mainKey, info =
+  "org.siros.private_seed/v1" || credentialType)[:16]`, with `psc` and a
+  fail-closed `matchesCommitment`. `JweKeystore` and `WscdKeystoreAdapter`
+  implement the narrow `RootSecret` API; the key is never exported and a
+  locked keystore throws `KeystoreException`. `mainKey` must never be
+  rotated. Vectors in `spec/private-seed-vectors.json`. (#263)
 
 ## [0.20.5] - 2026-10-12
 
