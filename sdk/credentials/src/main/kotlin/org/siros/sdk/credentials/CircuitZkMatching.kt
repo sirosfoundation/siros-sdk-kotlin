@@ -1,0 +1,180 @@
+// Copyright 2026 SIROS Foundation. BSD 2-Clause License.
+package org.siros.sdk.credentials
+
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+
+/** One function of a `circuit_zk` request: its id, the handle its result is returned under, and its raw parameters. */
+data class CircuitZkFunction(
+    val id: String,
+    val handle: String,
+    val params: JsonObject = JsonObject(emptyMap()),
+)
+
+/** One entry of a request's circuit list; a null [system] matches any proof system. */
+data class CircuitZkCircuitRef(val system: String?, val circuitId: String)
+
+/**
+ * What a `circuit_zk` credential query asks for, as plain data: the matcher's
+ * plan, without its types. [circuitFilter] is the verifier's own list of
+ * acceptable circuits, null or empty meaning any. [raw] is the credential
+ * query the plan was made from.
+ */
+data class CircuitZkPlan(
+    val functions: List<CircuitZkFunction>,
+    val circuitFilter: List<CircuitZkCircuitRef>? = null,
+    val raw: JsonObject = JsonObject(emptyMap()),
+)
+
+/** Result of [CircuitZkPlanner.plan]. */
+sealed interface CircuitZkPlanResult {
+    /** The query is a well-formed `circuit_zk` request. */
+    class Plan(val plan: CircuitZkPlan) : CircuitZkPlanResult
+
+    /** It is not. The wallet matches nothing. */
+    object InvalidRequest : CircuitZkPlanResult
+}
+
+/**
+ * Turns a `circuit_zk` credential query into a [CircuitZkPlan]. The
+ * implementation backed by the shared matcher is a later change; tests use a
+ * fake.
+ */
+fun interface CircuitZkPlanner {
+    /** May throw; the matcher treats that as [CircuitZkPlanResult.InvalidRequest]. */
+    fun plan(credentialQuery: JsonObject, clientMetadata: JsonObject?): CircuitZkPlanResult
+}
+
+/**
+ * The wallet's verdict on a plan. [AccessDenied.ruleId] is for local logs and
+ * tests only and never leaves the wallet.
+ */
+sealed interface CircuitZkVerdict {
+    /** The plan is satisfiable. */
+    object Ok : CircuitZkVerdict
+
+    /** The plan is not; the request is answered with access-denied. */
+    class AccessDenied(val ruleId: String? = null) : CircuitZkVerdict
+}
+
+/** Where the rulebook's satisfiability rules run in the wallet. Injected. */
+fun interface CircuitZkRequestValidator {
+    /** The verdict for [plan]. */
+    fun validate(plan: CircuitZkPlan): CircuitZkVerdict
+
+    companion object {
+        /** Accepts every plan, until real rules are injected. */
+        val PERMISSIVE = CircuitZkRequestValidator { CircuitZkVerdict.Ok }
+    }
+}
+
+/**
+ * A circuit this wallet can prove with. [functions] is null when the catalog
+ * does not say which functions the circuit supports, in which case no
+ * function filtering applies to it.
+ */
+data class CircuitZkCircuit(
+    val system: String,
+    val circuitId: String,
+    val docTypes: Set<String>,
+    val functions: Set<String>? = null,
+    val aliases: Set<String> = emptySet(),
+)
+
+/** The circuits the wallet can prove with, from the circuit catalog. */
+fun interface CircuitZkCircuitSource {
+    /** The current circuits. */
+    fun circuits(): List<CircuitZkCircuit>
+
+    companion object {
+        /**
+         * The circuits of a catalog [manifest]: published, not deprecated.
+         * `functions`, when a descriptor's `params` carries a string array of
+         * that name, is the circuit's declared function set; otherwise null.
+         */
+        fun fromManifest(manifest: ZkManifest): List<CircuitZkCircuit> = manifest.circuits
+            .filter { it.published && it.deprecatedAt == null }
+            .map { d ->
+                CircuitZkCircuit(
+                    system = d.system,
+                    circuitId = d.id,
+                    docTypes = d.docTypes.toSet(),
+                    functions = (d.params["functions"] as? JsonArray)
+                        ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.toSet(),
+                    aliases = d.aliases.toSet(),
+                )
+            }
+    }
+}
+
+/** The document types served through `circuit_zk`: the doctypes of every circuit. */
+fun CircuitZkCircuitSource.docTypes(): Set<String> = circuits().flatMapTo(HashSet()) { it.docTypes }
+
+/**
+ * Everything the matcher needs to answer a `circuit_zk` query. Absent
+ * (null) means the feature is off, and a `circuit_zk` query matches nothing.
+ */
+class CircuitZkSupport(
+    val planner: CircuitZkPlanner,
+    val validator: CircuitZkRequestValidator = CircuitZkRequestValidator.PERMISSIVE,
+    val circuits: CircuitZkCircuitSource,
+)
+
+internal object CircuitZkMatching {
+    /**
+     * The credentials matching one `circuit_zk` [query], with the plan; fails
+     * closed: any planner or validator failure, an invalid plan, or no fitting
+     * circuit means no candidates, never a fallback.
+     */
+    fun match(
+        query: JsonObject,
+        clientMetadata: JsonObject?,
+        credentials: List<StoredCredential>,
+        support: CircuitZkSupport,
+    ): Pair<CircuitZkPlan?, List<StoredCredential>> {
+        val plan = try {
+            when (val r = support.planner.plan(query, clientMetadata)) {
+                is CircuitZkPlanResult.Plan -> r.plan
+                CircuitZkPlanResult.InvalidRequest -> return null to emptyList()
+            }
+        } catch (e: Exception) {
+            return null to emptyList()
+        }
+        val verdict = try {
+            support.validator.validate(plan)
+        } catch (e: Exception) {
+            return plan to emptyList()
+        }
+        if (verdict !is CircuitZkVerdict.Ok) return plan to emptyList()
+
+        val fitting = try {
+            support.circuits.circuits().filter { fits(it, plan) }
+        } catch (e: Exception) {
+            emptyList()
+        }
+        val docTypes = fitting.flatMapTo(HashSet()) { it.docTypes }
+        val wantedDoctype = ((query["meta"] as? JsonObject)?.get("doctype_value") as? JsonPrimitive)?.contentOrNull
+        val matched = credentials.filter { cred ->
+            cred.format.equals("mso_mdoc", ignoreCase = true) && run {
+                val docType = CredentialUtils.parseMdocDocument(cred)?.docType ?: cred.metadata?.doctype
+                docType != null && docType in docTypes && (wantedDoctype == null || wantedDoctype == docType)
+            }
+        }
+        return plan to matched
+    }
+
+    private fun fits(circuit: CircuitZkCircuit, plan: CircuitZkPlan): Boolean {
+        val filter = plan.circuitFilter
+        if (!filter.isNullOrEmpty() && filter.none { ref ->
+                (ref.system == null || ref.system == circuit.system) &&
+                    (ref.circuitId == circuit.circuitId || ref.circuitId in circuit.aliases)
+            }
+        ) {
+            return false
+        }
+        val declared = circuit.functions ?: return true
+        return plan.functions.all { it.id in declared }
+    }
+}

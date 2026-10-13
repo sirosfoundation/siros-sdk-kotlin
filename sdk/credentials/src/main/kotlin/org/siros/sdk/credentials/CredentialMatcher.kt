@@ -81,6 +81,8 @@ object CredentialMatcher {
          * common case (most requests won't set this).
          */
         val ppidContext: String? = null,
+        /** The plan a `circuit_zk` query was matched under; null for every other format. */
+        val circuitZkPlan: CircuitZkPlan? = null,
     )
 
     /**
@@ -168,12 +170,17 @@ object CredentialMatcher {
      *   [org.siros.sdk.wallet.SirosWallet.zkSystemIds]) - required for the
      *   shared engine to recognize a ZK-format/`zk_system_type` request as
      *   satisfiable at all; see [SharedDcqlMatcher.evaluate]'s doc comment.
+     * @param circuitZk Support for `circuit_zk` queries; `null` (the default) means the
+     *   feature is off and such a query matches nothing, as before.
+     * @param clientMetadata The request's `client_metadata`, handed to the planner.
      * @return A [DcqlMatchOutput] with full matching information
      */
     fun matchDcql(
         dcqlQuery: JsonObject,
         credentials: List<StoredCredential>,
         zkSystemIds: List<String> = emptyList(),
+        circuitZk: CircuitZkSupport? = null,
+        clientMetadata: JsonObject? = null,
     ): DcqlMatchOutput {
         val credentialQueries = dcqlQuery["credentials"]?.jsonArray ?: run {
             Timber.w("DCQL query has no 'credentials' array, returning all credentials")
@@ -190,8 +197,14 @@ object CredentialMatcher {
         }
 
         val parsed = credentialQueries.mapNotNull { queryElement ->
-            matchSingleQuery(queryElement.jsonObject, credentials)
+            val query = queryElement.jsonObject
+            if (circuitZk != null && CredentialUtils.isCircuitZkFormat(query["format"]?.jsonPrimitive?.contentOrNull)) {
+                matchCircuitZkQuery(query, credentials, circuitZk, clientMetadata)
+            } else {
+                matchSingleQuery(query, credentials)
+            }
         }
+        val hasCircuitZk = circuitZk != null && parsed.any { CredentialUtils.isCircuitZkFormat(it.format) }
 
         // Which credentials qualify is decided by the shared engine - the same
         // one the OS credential picker runs, and the only implementation here
@@ -204,7 +217,14 @@ object CredentialMatcher {
         // asked for is no longer offered. OID4VP 1.0 §6.4.1 requires that; the
         // parsing path above never checked it, so such a credential would be
         // offered, consented to, and then fail to satisfy the verifier.
-        val shared = SharedDcqlMatcher.evaluate(dcqlQuery, credentials, zkSystemIds)
+        //
+        // A request with a circuit_zk query is not given to the engine, which
+        // does not know the format: the planner is what decides those queries
+        // (fail closed, see [matchCircuitZkQuery]), and the other queries of
+        // such a request keep the built-in matcher's answer.
+        val shared = if (hasCircuitZk) null else SharedDcqlMatcher.evaluate(
+            dcqlQuery, credentials, zkSystemIds, circuitZk?.circuits?.docTypes().orEmpty(),
+        )
         val queryResults = when {
             shared == null -> {
                 // No answer, not an empty answer. Falling back keeps
@@ -371,6 +391,24 @@ object CredentialMatcher {
         }
     }
 
+    /** One `circuit_zk` query, decided by the planner, validator and circuit table. Fails closed. */
+    private fun matchCircuitZkQuery(
+        query: JsonObject,
+        credentials: List<StoredCredential>,
+        support: CircuitZkSupport,
+        clientMetadata: JsonObject?,
+    ): MatchResult? {
+        val queryId = query["id"]?.jsonPrimitive?.contentOrNull ?: return null
+        val (plan, matched) = CircuitZkMatching.match(query, clientMetadata, credentials, support)
+        return MatchResult(
+            queryId = queryId,
+            format = query["format"]?.jsonPrimitive?.contentOrNull,
+            candidates = matched,
+            requestedClaims = emptyList(),
+            circuitZkPlan = plan,
+        )
+    }
+
     private fun matchSingleQuery(
         query: JsonObject,
         credentials: List<StoredCredential>,
@@ -434,6 +472,8 @@ object CredentialMatcher {
 
     private fun matchesFormat(credential: StoredCredential, format: String?): Boolean {
         if (format == null) return true
+        // Without circuit_zk support (the feature is off) such a query matches nothing, as it always has.
+        if (CredentialUtils.isCircuitZkFormat(format)) return false
         if (format.equals("mso_mdoc_zk", ignoreCase = true)) {
             // A verifier requesting a ZK-wrapped presentation ("mso_mdoc_zk")
             // still matches a credential stored in the ordinary "mso_mdoc"

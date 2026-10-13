@@ -81,6 +81,7 @@ import org.siros.sdk.credentials.IssuerMetadata
 import org.siros.sdk.credentials.CredentialConfiguration
 import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialUtils
+import org.siros.sdk.credentials.docTypes
 import org.siros.sdk.credentials.Vctm
 import org.siros.sdk.credentials.ZkCircuitClient
 import org.siros.sdk.credentials.interop.AuthorizationDetail
@@ -220,6 +221,27 @@ class SirosWallet private constructor(
     private val dcApiExpectedOriginsMode: ExpectedOriginsMode? = config.dcApiExpectedOrigins
     private val dcApiRequiresSignedRequest: ((kotlinx.serialization.json.JsonObject?) -> Boolean)? =
         config.dcApiRequiresSignedRequest
+
+    // circuit_zk matching support; null (also for a wallet built without initializers)
+    // means the feature is off and a circuit_zk query matches nothing.
+    private val circuitZkSupport: org.siros.sdk.credentials.CircuitZkSupport? =
+        if (config.circuitZk && config.circuitZkPlanner != null && config.circuitZkCircuits != null) {
+            org.siros.sdk.credentials.CircuitZkSupport(
+                config.circuitZkPlanner,
+                config.circuitZkValidator,
+                config.circuitZkCircuits,
+            )
+        } else {
+            null
+        }
+
+    /**
+     * The document types served through `circuit_zk` (empty while it is off).
+     * Pass to `SirosCredentialRegistry.refresh` as `claimlessDoctypes`: those
+     * credentials are registered with no claims.
+     */
+    val circuitZkDocTypes: Set<String>
+        get() = circuitZkSupport?.circuits?.docTypes().orEmpty()
 
     // ── Public API ──────────────────────────────────────────────────
 
@@ -3757,7 +3779,10 @@ class SirosWallet private constructor(
 
         val allCreds = credentialStore.getAll()
         val dcqlOutput = if (request.dcqlQuery != null) {
-            CredentialMatcher.matchDcql(request.dcqlQuery, allCreds, zkSystemIds)
+            CredentialMatcher.matchDcql(
+                request.dcqlQuery, allCreds, zkSystemIds, circuitZkSupport,
+                request.clientMetadata,
+            )
         } else {
             CredentialMatcher.DcqlMatchOutput(
                 queryResults = listOf(CredentialMatcher.MatchResult(
@@ -3768,6 +3793,13 @@ class SirosWallet private constructor(
             )
         }
         val matchResults = dcqlOutput.queryResults
+        // Until the circuit_zk presentation branch exists, a matched circuit_zk
+        // request is answered with access-denied and nothing else: it must not
+        // fall through to the plain or legacy mso_mdoc_zk paths below.
+        if (matchResults.any { CredentialUtils.isCircuitZkFormat(it.format) && it.candidates.isNotEmpty() }) {
+            Timber.w("DC API circuit_zk request matched, but presenting it is not supported yet (protocol=${request.protocol})")
+            throw org.siros.sdk.wallet.dcapi.DCAPIRequestRefused(request.protocol)
+        }
         val candidates = matchResults.flatMap { it.candidates }.distinctBy { it.id }
 
         // Which query result actually governs each candidate - same

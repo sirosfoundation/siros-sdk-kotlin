@@ -5102,6 +5102,75 @@ class SirosWalletTest {
         coVerify(exactly = 0) { apiClient.evaluateTrust(any()) }
     }
 
+    private fun signedCircuitZkRequest(origin: String): String {
+        val ecKey = com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256).generate()
+        val claims = com.nimbusds.jwt.JWTClaimsSet.parse(
+            """{"client_id":"x509_san_dns:rp.example","nonce":"n","expected_origins":["$origin"],""" +
+                """"dcql_query":{"credentials":[{"id":"q","format":"circuit_zk","meta":{"doctype_value":"test.doctype.1"}}]}}"""
+        )
+        val jwt = com.nimbusds.jwt.SignedJWT(
+            com.nimbusds.jose.JWSHeader.Builder(com.nimbusds.jose.JWSAlgorithm.ES256).jwk(ecKey.toPublicJWK()).build(), claims,
+        ).also { it.sign(com.nimbusds.jose.crypto.ECDSASigner(ecKey)) }
+        return wrapDCAPIRequest("openid4vp-v1-signed", buildJsonObject { put("request", jwt.serialize()) })
+    }
+
+    private fun circuitZkWallet(support: org.siros.sdk.credentials.CircuitZkSupport?, keystore: KeystoreManager): SirosWallet {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
+        val store = FakeCredentialStore(mutableListOf(
+            StoredCredential(
+                id = 1L, format = "mso_mdoc", raw = "raw",
+                metadata = CredentialMetadata(doctype = "test.doctype.1"), batchId = 1L, instanceId = 0,
+            ),
+        ))
+        return newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "apiClient" to apiClient,
+            "keystore" to keystore,
+            "credentialStore" to store,
+            "trustCache" to TrustCache(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+            "circuitZkSupport" to support,
+        )
+    }
+
+    private fun fittingSupport() = org.siros.sdk.credentials.CircuitZkSupport(
+        planner = { _, _ -> org.siros.sdk.credentials.CircuitZkPlanResult.Plan(org.siros.sdk.credentials.CircuitZkPlan(emptyList())) },
+        circuits = {
+            listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf("test.doctype.1")))
+        },
+    )
+
+    @Test
+    fun handleDCAPIRequest_matchedCircuitZk_isAnsweredWithAccessDeniedAndNeverSigns() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        val wallet = circuitZkWallet(fittingSupport(), keystore)
+
+        org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+            kotlinx.coroutines.runBlocking {
+                wallet.handleDCAPIRequest(signedCircuitZkRequest("https://rp.example"), origin = "https://rp.example")
+            }
+        }
+        coVerify(exactly = 0) { keystore.signVpToken(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun handleDCAPIRequest_circuitZkWithTheFlagOff_matchesNothing() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        val wallet = circuitZkWallet(null, keystore)
+
+        val e = org.junit.Assert.assertThrows(Exception::class.java) {
+            kotlinx.coroutines.runBlocking {
+                wallet.handleDCAPIRequest(signedCircuitZkRequest("https://rp.example"), origin = "https://rp.example")
+            }
+        }
+        assertFalse("flag off: not the circuit_zk refusal", e is org.siros.sdk.wallet.dcapi.DCAPIRequestRefused)
+        coVerify(exactly = 0) { keystore.signVpToken(any(), any(), any(), any()) }
+    }
+
     @Test
     fun handleDCAPIRequest_untrustedVerifier_throwsAndNeverSigns() = runTest(dispatcher) {
         val apiClient = mockk<BackendApiClient>()

@@ -1,6 +1,9 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.wallet
 
+import org.siros.sdk.credentials.CircuitZkCircuitSource
+import org.siros.sdk.credentials.CircuitZkPlanner
+import org.siros.sdk.credentials.CircuitZkRequestValidator
 import org.siros.sdk.wallet.dcapi.DCAPIRequestRules
 import org.siros.sdk.wallet.dcapi.ExpectedOriginsMode
 import kotlinx.serialization.json.contentOrNull
@@ -343,6 +346,21 @@ data class WalletConfig(
      */
     val dcApiRequiresSignedRequest: (kotlinx.serialization.json.JsonObject?) -> Boolean =
         DCAPIRequestRules.DEFAULT_REQUIRES_SIGNED_REQUEST,
+    /**
+     * Turns on `circuit_zk` matching. `false` (default): a `circuit_zk` query
+     * matches nothing, exactly as before. With `true` it is matched through
+     * [circuitZkPlanner], [circuitZkValidator] and [circuitZkCircuits]; without
+     * a planner and a circuit source it still matches nothing (fail closed).
+     * Until the DC API presentation branch exists, a matched `circuit_zk`
+     * request is answered with access-denied.
+     */
+    val circuitZk: Boolean = false,
+    /** Turns a `circuit_zk` credential query into a plan; see [circuitZk]. */
+    val circuitZkPlanner: CircuitZkPlanner? = null,
+    /** The wallet's satisfiability rules for a plan; permissive by default. */
+    val circuitZkValidator: CircuitZkRequestValidator = CircuitZkRequestValidator.PERMISSIVE,
+    /** The circuits the wallet can prove with, from the circuit catalog. */
+    val circuitZkCircuits: CircuitZkCircuitSource? = null,
 ) {
     /**
      * The reader-trust mode actually in force: [readerTrustEvaluationMode] if

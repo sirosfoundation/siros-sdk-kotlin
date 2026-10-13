@@ -38,6 +38,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `access_denied` and no description, before trust evaluation.
   `WalletConfig.dcApiExpectedOrigins` (`OFF` default, `IF_PRESENT`,
   `REQUIRED`) gates the other formats. (#264)
+- **`circuit_zk` matching and format plumbing, behind `WalletConfig.circuitZk`
+  (default off).** `CircuitZkPlanner`, `CircuitZkRequestValidator` (permissive
+  by default) and `CircuitZkCircuitSource` (from the catalog manifest) decide a
+  `circuit_zk` query, failing closed (no candidates, no fallback). One
+  `CredentialUtils.isCircuitZkFormat`; a `circuit_zk` query never enters the
+  legacy `mso_mdoc_zk` path, and a matched request is answered with
+  access-denied until the presentation branch exists. Credential types served
+  through `circuit_zk` register no claims in the OS picker blob
+  (`SirosCredentialRegistry.refresh(claimlessDoctypes = wallet.circuitZkDocTypes)`).
+  With the flag off nothing changes. (#265)
 
 ## [0.20.5] - 2026-10-12
 

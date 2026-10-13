@@ -99,6 +99,7 @@ object SirosCredentialRegistry {
         val credentials: List<StoredCredential>,
         val zkSystems: List<ZkSystem>,
         val useStockMatcher: Boolean,
+        val claimlessDoctypes: Set<String> = emptySet(),
     )
 
     /**
@@ -121,18 +122,24 @@ object SirosCredentialRegistry {
      * update, so call this whenever the credential set materially changes.
      * An empty set clears the registry: a wallet with nothing to offer should
      * not appear in the picker at all.
+     *
+     * @param claimlessDoctypes The document types served through `circuit_zk`
+     *   (see [SirosWallet.circuitZkDocTypes]): their credentials are registered
+     *   with no claims, because they are answered with a proof, never with
+     *   claim values. Empty by default.
      */
     suspend fun refresh(
         context: Context,
         credentials: List<StoredCredential>,
         zkSystems: List<ZkSystem> = emptyList(),
         useStockMatcher: Boolean = false,
+        claimlessDoctypes: Set<String> = emptySet(),
     ) {
         if (credentials.isEmpty()) {
             clear(context)
             return
         }
-        latestRequest.set(RefreshRequest(credentials, zkSystems, useStockMatcher))
+        latestRequest.set(RefreshRequest(credentials, zkSystems, useStockMatcher, claimlessDoctypes))
         try {
             if (useStockMatcher) {
                 registerWithStockMatcher(context, credentials)
@@ -141,7 +148,7 @@ object SirosCredentialRegistry {
             val iconCache = PickerIconCache(context)
             // File reads only (PickerIconCache hops to IO itself); no network here.
             val icons = cachedIcons(iconCache, credentials)
-            val blob = buildBlob(credentials, zkSystems, icons, debug = context.isDebuggable())
+            val blob = buildBlob(credentials, zkSystems, icons, debug = context.isDebuggable(), claimlessDoctypes = claimlessDoctypes)
             val matcher = context.assets.open(MATCHER_ASSET).use { it.readBytes() }
             RegistryManager.create(context).registerCredentials(
                 SirosRegistry(credentials = blob, matcher = matcher),
@@ -284,7 +291,7 @@ object SirosCredentialRegistry {
                 return@launch
             }
             Timber.i("Re-registering DC API credentials with $landed newly rendered logo icon(s)")
-            refresh(appContext, latest.credentials, latest.zkSystems, latest.useStockMatcher)
+            refresh(appContext, latest.credentials, latest.zkSystems, latest.useStockMatcher, latest.claimlessDoctypes)
         }
     }
 
@@ -374,12 +381,13 @@ object SirosCredentialRegistry {
         zkSystems: List<ZkSystem>,
         icons: Map<Long, ByteArray> = emptyMap(),
         debug: Boolean = false,
+        claimlessDoctypes: Set<String> = emptySet(),
     ): ByteArray {
         // `use`, not a bare call: the builder holds a native handle, and
         // leaving it to the Cleaner means the handle survives until a GC that
         // may never come under memory pressure. Registration runs on every
         // credential change, so a leak here accumulates.
-        return SirosBlobBuilder().use { builder -> buildWith(builder, credentials, zkSystems, icons, debug) }
+        return SirosBlobBuilder().use { builder -> buildWith(builder, credentials, zkSystems, icons, debug, claimlessDoctypes) }
     }
 
     private fun buildWith(
@@ -388,6 +396,7 @@ object SirosCredentialRegistry {
         zkSystems: List<ZkSystem>,
         icons: Map<Long, ByteArray>,
         debug: Boolean,
+        claimlessDoctypes: Set<String>,
     ): ByteArray {
         // With this on, a request that matches nothing gets one picker entry
         // naming why (see the matcher's `Diagnostics`). Only ever for a
@@ -416,7 +425,9 @@ object SirosCredentialRegistry {
                     title = cred.metadata?.name ?: cred.format,
                     subtitle = cred.metadata?.issuer?.name ?: "",
                     iconId = iconId,
-                    claims = CredentialUtils.extractClaims(cred).map { claim ->
+                    // A type served through circuit_zk is answered with a proof, never
+                    // with claims, so it registers none.
+                    claims = if (CredentialUtils.isOfDocTypes(cred, claimlessDoctypes)) emptyList() else CredentialUtils.extractClaims(cred).map { claim ->
                         FfiClaim(
                             // A list, not a dotted string. ISO mdoc namespaces
                             // contain dots themselves (org.iso.18013.5.1), so

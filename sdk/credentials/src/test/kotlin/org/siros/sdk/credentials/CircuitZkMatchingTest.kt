@@ -1,0 +1,297 @@
+package org.siros.sdk.credentials
+
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/** `circuit_zk` matching in [CredentialMatcher], with a fake planner. */
+class CircuitZkMatchingTest {
+    private val json = Json { ignoreUnknownKeys = true }
+    private val doctype = "test.doctype.1"
+
+    private fun mdoc(id: Long, docType: String?) = StoredCredential(
+        id = id, format = "mso_mdoc", raw = "raw-$id",
+        metadata = CredentialMetadata(doctype = docType), batchId = id, instanceId = 0,
+    )
+
+    // Carries a doctype in its metadata, so only its format keeps it out of an mdoc match.
+    private fun sdJwt(id: Long) = StoredCredential(
+        id = id, format = "dc+sd-jwt", raw = "raw-$id", metadata = CredentialMetadata(vct = "urn:x", doctype = doctype),
+        batchId = id, instanceId = 0,
+    )
+
+    /** A real bare IssuerSigned with one claim, so claim registration has something to withhold. */
+    private fun mdocRaw(docType: String): String {
+        val item = com.upokecenter.cbor.CBORObject.NewMap()
+        item[com.upokecenter.cbor.CBORObject.FromObject("digestID")] = com.upokecenter.cbor.CBORObject.FromObject(0L)
+        item[com.upokecenter.cbor.CBORObject.FromObject("random")] = com.upokecenter.cbor.CBORObject.FromObject(ByteArray(16))
+        item[com.upokecenter.cbor.CBORObject.FromObject("elementIdentifier")] = com.upokecenter.cbor.CBORObject.FromObject("given_name")
+        item[com.upokecenter.cbor.CBORObject.FromObject("elementValue")] = com.upokecenter.cbor.CBORObject.FromObject("Jane")
+        val items = com.upokecenter.cbor.CBORObject.NewArray()
+        items.Add(com.upokecenter.cbor.CBORObject.FromObjectAndTag(item.EncodeToBytes(), 24))
+        val nameSpaces = com.upokecenter.cbor.CBORObject.NewMap()
+        nameSpaces[com.upokecenter.cbor.CBORObject.FromObject("org.iso.18013.5.1")] = items
+        val mso = com.upokecenter.cbor.CBORObject.NewMap()
+        mso[com.upokecenter.cbor.CBORObject.FromObject("docType")] = com.upokecenter.cbor.CBORObject.FromObject(docType)
+        val taggedMso = com.upokecenter.cbor.CBORObject.FromObjectAndTag(mso.EncodeToBytes(), 24).EncodeToBytes()
+        val issuerAuth = com.upokecenter.cbor.CBORObject.NewArray()
+        issuerAuth.Add(com.upokecenter.cbor.CBORObject.FromObject(ByteArray(0)))
+        issuerAuth.Add(com.upokecenter.cbor.CBORObject.NewMap())
+        issuerAuth.Add(com.upokecenter.cbor.CBORObject.FromObject(taggedMso))
+        issuerAuth.Add(com.upokecenter.cbor.CBORObject.FromObject(ByteArray(64)))
+        val issuerSigned = com.upokecenter.cbor.CBORObject.NewMap()
+        issuerSigned[com.upokecenter.cbor.CBORObject.FromObject("nameSpaces")] = nameSpaces
+        issuerSigned[com.upokecenter.cbor.CBORObject.FromObject("issuerAuth")] = issuerAuth
+        return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(issuerSigned.EncodeToBytes())
+    }
+
+    private fun query(extraMeta: String = "", format: String = "circuit_zk"): JsonObject = json.parseToJsonElement(
+        """{"credentials":[{"id":"q","format":"$format","meta":{"doctype_value":"$doctype"$extraMeta}}]}"""
+    ).jsonObject
+
+    private val plan = CircuitZkPlan(functions = listOf(CircuitZkFunction("fn-a", "h1")))
+
+    private class FakePlanner(var result: () -> CircuitZkPlanResult) : CircuitZkPlanner {
+        var calls = 0
+        var lastMetadata: JsonObject? = null
+        override fun plan(credentialQuery: JsonObject, clientMetadata: JsonObject?): CircuitZkPlanResult {
+            calls++
+            lastMetadata = clientMetadata
+            return result()
+        }
+    }
+
+    private fun circuit(id: String = "c1", system: String = "sys", docTypes: Set<String> = setOf(doctype), functions: Set<String>? = null, aliases: Set<String> = emptySet()) =
+        CircuitZkCircuit(system, id, docTypes, functions, aliases)
+
+    private fun support(
+        planner: CircuitZkPlanner = FakePlanner { CircuitZkPlanResult.Plan(plan) },
+        validator: CircuitZkRequestValidator = CircuitZkRequestValidator.PERMISSIVE,
+        circuits: List<CircuitZkCircuit> = listOf(circuit()),
+    ) = CircuitZkSupport(planner, validator, { circuits })
+
+    private fun match(q: JsonObject, creds: List<StoredCredential>, s: CircuitZkSupport?) =
+        CredentialMatcher.matchDcql(q, creds, circuitZk = s).queryResults.single()
+
+    @Test
+    fun `a valid plan with a fitting circuit matches the doctype's mdocs and carries the plan`() {
+        val r = match(query(), listOf(mdoc(1, doctype), mdoc(2, "other"), sdJwt(3)), support())
+        assertEquals(listOf(1L), r.candidates.map { it.id })
+        assertEquals(plan, r.circuitZkPlan)
+        assertEquals("circuit_zk", r.format)
+    }
+
+    @Test
+    fun `flag off - no support - a circuit_zk query matches nothing`() {
+        val r = match(query(), listOf(mdoc(1, doctype)), null)
+        assertTrue(r.candidates.isEmpty())
+        assertNull(r.circuitZkPlan)
+    }
+
+    @Test
+    fun `flag off - even a credential stored as format circuit_zk is not matched`() {
+        val odd = StoredCredential(id = 9, format = "circuit_zk", raw = "x", metadata = CredentialMetadata(doctype = doctype), batchId = 9, instanceId = 0)
+        assertTrue(match(query(), listOf(odd), null).candidates.isEmpty())
+    }
+
+    @Test
+    fun `the planner is not even consulted with the flag off`() {
+        val planner = FakePlanner { CircuitZkPlanResult.Plan(plan) }
+        match(query(), listOf(mdoc(1, doctype)), null)
+        assertEquals(0, planner.calls)
+    }
+
+    @Test
+    fun `an invalid request gives no candidates`() {
+        val s = support(planner = FakePlanner { CircuitZkPlanResult.InvalidRequest })
+        assertTrue(match(query(), listOf(mdoc(1, doctype)), s).candidates.isEmpty())
+    }
+
+    @Test
+    fun `a planner failure gives no candidates and never a fallback`() {
+        val s = support(planner = FakePlanner { error("boom") })
+        val r = match(query(), listOf(mdoc(1, doctype)), s)
+        assertTrue(r.candidates.isEmpty())
+        assertNull(r.circuitZkPlan)
+    }
+
+    @Test
+    fun `a validator refusal gives no candidates`() {
+        val s = support(validator = { CircuitZkVerdict.AccessDenied("rule-x") })
+        val r = match(query(), listOf(mdoc(1, doctype)), s)
+        assertTrue(r.candidates.isEmpty())
+    }
+
+    @Test
+    fun `a validator failure gives no candidates`() {
+        val s = support(validator = { error("boom") })
+        assertTrue(match(query(), listOf(mdoc(1, doctype)), s).candidates.isEmpty())
+    }
+
+    @Test
+    fun `a circuit source failure gives no candidates`() {
+        val s = CircuitZkSupport(FakePlanner { CircuitZkPlanResult.Plan(plan) }, CircuitZkRequestValidator.PERMISSIVE, { error("boom") })
+        assertTrue(match(query(), listOf(mdoc(1, doctype)), s).candidates.isEmpty())
+    }
+
+    @Test
+    fun `a wallet without a fitting circuit matches nothing`() {
+        assertTrue(match(query(), listOf(mdoc(1, doctype)), support(circuits = emptyList())).candidates.isEmpty())
+        assertTrue(match(query(), listOf(mdoc(1, doctype)), support(circuits = listOf(circuit(docTypes = setOf("other"))))).candidates.isEmpty())
+    }
+
+    @Test
+    fun `the verifier's circuit list filters, by id, alias and system`() {
+        fun planWith(vararg refs: CircuitZkCircuitRef) =
+            support(planner = FakePlanner { CircuitZkPlanResult.Plan(plan.copy(circuitFilter = refs.toList())) }, circuits = listOf(circuit(aliases = setOf("old-id"))))
+        val creds = listOf(mdoc(1, doctype))
+        assertEquals(1, match(query(), creds, planWith(CircuitZkCircuitRef("sys", "c1"))).candidates.size)
+        assertEquals(1, match(query(), creds, planWith(CircuitZkCircuitRef(null, "c1"))).candidates.size)
+        assertEquals(1, match(query(), creds, planWith(CircuitZkCircuitRef("sys", "old-id"))).candidates.size)
+        assertEquals(1, match(query(), creds, planWith(CircuitZkCircuitRef("sys", "nope"), CircuitZkCircuitRef("sys", "c1"))).candidates.size)
+        assertTrue(match(query(), creds, planWith(CircuitZkCircuitRef("sys", "nope"))).candidates.isEmpty())
+        assertTrue(match(query(), creds, planWith(CircuitZkCircuitRef("other-sys", "c1"))).candidates.isEmpty())
+        // An empty or absent list is not a constraint.
+        assertEquals(1, match(query(), creds, planWith()).candidates.size)
+    }
+
+    @Test
+    fun `functions filter only when the circuit declares them`() {
+        val creds = listOf(mdoc(1, doctype))
+        assertEquals(1, match(query(), creds, support(circuits = listOf(circuit(functions = null)))).candidates.size)
+        assertEquals(1, match(query(), creds, support(circuits = listOf(circuit(functions = setOf("fn-a", "fn-b"))))).candidates.size)
+        assertTrue(match(query(), creds, support(circuits = listOf(circuit(functions = setOf("fn-b"))))).candidates.isEmpty())
+        assertTrue(match(query(), creds, support(circuits = listOf(circuit(functions = emptySet())))).candidates.isEmpty())
+    }
+
+    @Test
+    fun `any one fitting circuit is enough`() {
+        val s = support(circuits = listOf(circuit("c1", docTypes = setOf("other")), circuit("c2")))
+        assertEquals(1, match(query(), listOf(mdoc(1, doctype)), s).candidates.size)
+    }
+
+    @Test
+    fun `the query's own doctype_value must equal the credential's`() {
+        val q = json.parseToJsonElement(
+            """{"credentials":[{"id":"q","format":"circuit_zk","meta":{"doctype_value":"other"}}]}"""
+        ).jsonObject
+        val s = support(circuits = listOf(circuit(docTypes = setOf(doctype, "other"))))
+        assertEquals(listOf(2L), match(q, listOf(mdoc(1, doctype), mdoc(2, "other")), s).candidates.map { it.id })
+    }
+
+    @Test
+    fun `only mso_mdoc credentials match`() {
+        assertTrue(match(query(), listOf(sdJwt(1)), support()).candidates.isEmpty())
+    }
+
+    @Test
+    fun `the client_metadata reaches the planner`() {
+        val planner = FakePlanner { CircuitZkPlanResult.Plan(plan) }
+        val meta = json.parseToJsonElement("""{"a":1}""").jsonObject
+        CredentialMatcher.matchDcql(query(), listOf(mdoc(1, doctype)), circuitZk = support(planner = planner), clientMetadata = meta)
+        assertEquals(meta, planner.lastMetadata)
+    }
+
+    @Test
+    fun `other formats are unaffected by circuit_zk support and by its failures`() {
+        val q = json.parseToJsonElement(
+            """{"credentials":[{"id":"q","format":"mso_mdoc","meta":{"doctype_value":"$doctype"}}]}"""
+        ).jsonObject
+        val broken = support(planner = FakePlanner { error("boom") })
+        assertEquals(listOf(1L), match(q, listOf(mdoc(1, doctype)), broken).candidates.map { it.id })
+    }
+
+    @Test
+    fun `a request mixing circuit_zk with another format keeps the other format's answer when circuit_zk fails`() {
+        val q = json.parseToJsonElement(
+            """{"credentials":[{"id":"a","format":"mso_mdoc","meta":{"doctype_value":"$doctype"}},{"id":"b","format":"circuit_zk","meta":{"doctype_value":"$doctype"}}]}"""
+        ).jsonObject
+        val out = CredentialMatcher.matchDcql(q, listOf(mdoc(1, doctype)), circuitZk = support(planner = FakePlanner { error("x") }))
+        assertEquals(listOf(1L), out.queryResults.first { it.queryId == "a" }.candidates.map { it.id })
+        assertTrue(out.queryResults.first { it.queryId == "b" }.candidates.isEmpty())
+    }
+
+    // ---- routing ----
+
+    @Test
+    fun `isCircuitZkFormat is the one predicate and is not the legacy zk format`() {
+        assertTrue(CredentialUtils.isCircuitZkFormat("circuit_zk"))
+        assertTrue(CredentialUtils.isCircuitZkFormat("CIRCUIT_ZK"))
+        assertFalse(CredentialUtils.isCircuitZkFormat("mso_mdoc_zk"))
+        assertFalse(CredentialUtils.isCircuitZkFormat("mso_mdoc"))
+        assertFalse(CredentialUtils.isCircuitZkFormat(null))
+    }
+
+    @Test
+    fun `a circuit_zk result never reads as a legacy mso_mdoc_zk query`() {
+        val r = match(query(), listOf(mdoc(1, doctype)), support())
+        assertFalse(r.format.equals("mso_mdoc_zk", ignoreCase = true))
+        assertFalse(CredentialMatcher.isZkRequest(query()))
+        assertNull(r.zkSystemTypes)
+    }
+
+    @Test
+    fun `the legacy mso_mdoc_zk query still matches plain mso_mdoc, with or without support`() {
+        val q = query(format = "mso_mdoc_zk")
+        for (s in listOf(null, support())) {
+            assertEquals(listOf(1L), match(q, listOf(mdoc(1, doctype)), s).candidates.map { it.id })
+        }
+        assertTrue(CredentialMatcher.isZkRequest(q))
+    }
+
+    // ---- circuit table ----
+
+    private fun descriptor(id: String, published: Boolean = true, deprecatedAt: String? = null, params: String = "{}") =
+        ZkCircuitDescriptor(
+            id = id, aliases = listOf("$id-alias"), system = "sys", docTypes = listOf(doctype),
+            published = published, deprecatedAt = deprecatedAt, params = json.parseToJsonElement(params).jsonObject,
+        )
+
+    @Test
+    fun `circuits come from the manifest, published and not deprecated, functions optional`() {
+        val circuits = CircuitZkCircuitSource.fromManifest(
+            ZkManifest(
+                circuits = listOf(
+                    descriptor("a", params = """{"functions":["fn-a","fn-b"],"other":1}"""),
+                    descriptor("b"),
+                    descriptor("c", published = false),
+                    descriptor("d", deprecatedAt = "2026-01-01"),
+                ),
+            ),
+        )
+        assertEquals(listOf("a", "b"), circuits.map { it.circuitId })
+        assertEquals(setOf("fn-a", "fn-b"), circuits[0].functions)
+        assertNull(circuits[1].functions)
+        assertEquals(setOf("a-alias"), circuits[0].aliases)
+        assertEquals("sys", circuits[0].system)
+    }
+
+    @Test
+    fun `the doctypes served through circuit_zk are derived from the circuit table`() {
+        val source = CircuitZkCircuitSource { listOf(circuit("a", docTypes = setOf("x", "y")), circuit("b", docTypes = setOf("z"))) }
+        assertEquals(setOf("x", "y", "z"), source.docTypes())
+        assertEquals(emptySet<String>(), CircuitZkCircuitSource { emptyList() }.docTypes())
+    }
+
+    // ---- no claims registered ----
+
+    @Test
+    fun `a circuit_zk doctype registers zero claims, other types keep theirs`() {
+        val claimless = StoredCredential(id = 1, format = "mso_mdoc", raw = mdocRaw(doctype), batchId = 1, instanceId = 0)
+        val other = StoredCredential(id = 2, format = "mso_mdoc", raw = mdocRaw("other"), batchId = 2, instanceId = 0)
+        assertTrue("fixture carries claims", SharedDcqlMatcher.buildFfiClaims(claimless).isNotEmpty())
+        assertTrue(SharedDcqlMatcher.buildFfiClaims(claimless, setOf(doctype)).isEmpty())
+        assertTrue(SharedDcqlMatcher.buildFfiClaims(other, setOf(doctype)).isNotEmpty())
+        assertTrue(CredentialUtils.isOfDocTypes(claimless, setOf(doctype)))
+        assertFalse(CredentialUtils.isOfDocTypes(other, setOf(doctype)))
+        assertFalse(CredentialUtils.isOfDocTypes(sdJwt(3), setOf(doctype)))
+        assertFalse(CredentialUtils.isOfDocTypes(claimless, emptySet()))
+        assertNotNull(SharedDcqlMatcher.buildFfiClaims(other, setOf(doctype)))
+    }
+}

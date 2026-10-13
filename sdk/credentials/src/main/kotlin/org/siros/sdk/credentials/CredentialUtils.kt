@@ -785,6 +785,25 @@ object CredentialUtils {
     private fun isZkpFormat(format: String): Boolean = format.equals("mso_mdoc_zk", ignoreCase = true)
 
     /**
+     * True for the `circuit_zk` DCQL format. Deliberately separate from
+     * [isZkpFormat]: a `circuit_zk` request must never take the legacy
+     * `mso_mdoc_zk` presentation path, which would produce the wrong
+     * presentation.
+     */
+    fun isCircuitZkFormat(format: String?): Boolean = format.equals("circuit_zk", ignoreCase = true)
+
+    /**
+     * Whether [cred] is an mdoc of one of [docTypes] - the types served
+     * through `circuit_zk`, which are answered with a proof and so register
+     * no claims in the OS picker blob.
+     */
+    fun isOfDocTypes(cred: StoredCredential, docTypes: Set<String>): Boolean {
+        if (docTypes.isEmpty() || !cred.format.equals("mso_mdoc", ignoreCase = true)) return false
+        val docType = parseMdocDocument(cred)?.docType ?: cred.metadata?.doctype
+        return docType != null && docType in docTypes
+    }
+
+    /**
      * Instances from [instances] (all copies of one batch - see
      * [StoredCredential.batchId]) that are still allowed to be used for a
      * NEW presentation under [policy], given what [presentationHistory]
