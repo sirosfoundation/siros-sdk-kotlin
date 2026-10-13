@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NymPseudonymError`. Shared vectors in `spec/nym-pseudonym-vectors.json`
   (self-generated, not yet cross-checked with the circuit developers). Unrelated
   to the legacy `DefaultZkPseudonymDeriver`. (#261)
+- **`CircuitZkPresentationCodec`: encoder and strict decoder for the generic
+  `circuit_zk` presentation (`CircuitZkPresentation`).** Follows the rulebook
+  CDDL; `circuit_id` is opaque (the caller validates it against the catalog).
+  Fails closed with `CircuitZkPresentationError`, preserves unknown top-level
+  keys (optional strict mode), has a pluggable `issuer_key_set` decoder hook
+  and an opt-in `requireResultHandles` check. Shared vectors in
+  `spec/circuit-zk-presentation-vectors.json`. (#262)
 
 ## [0.20.5] - 2026-10-12
 

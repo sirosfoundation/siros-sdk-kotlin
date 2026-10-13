@@ -1,0 +1,603 @@
+{
+  "status": "self-generated, not yet cross-checked with the circuit developers",
+  "rulebook": "nym_auth v0.3, Presentation encoding (CircuitZkPresentation)",
+  "generator": "tools/gen_circuit_zk_presentation_vectors.py",
+  "vectors": [
+    {
+      "name": "golden: rulebook example shape (pseudonym + predicate, no proof_time); circuit_id is the WIP rulebook string",
+      "presentation": {
+        "circuit_id": "urn:circuits:longfellow:nym_auth:v1",
+        "proof_hex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "issuer_key_set": {
+          "der_certificates_hex": [
+            "3082010a000102030405060708090a0b0c0d0e0f"
+          ]
+        },
+        "results": {
+          "nym-123": {
+            "pseudonym_hex": "5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e"
+          },
+          "age-range-123": {
+            "predicate": true
+          }
+        }
+      },
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a26d6167652d72616e67652d313233f5676e796d2d31323358205f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e",
+      "base64url": "pGpjaXJjdWl0X2lkeCN1cm46Y2lyY3VpdHM6bG9uZ2ZlbGxvdzpueW1fYXV0aDp2MWVwcm9vZlggQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9uaXNzdWVyX2tleV9zZXSBVDCCAQoAAQIDBAUGBwgJCgsMDQ4PZ3Jlc3VsdHOibWFnZS1yYW5nZS0xMjP1Z255bS0xMjNYIF9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1-"
+    },
+    {
+      "name": "golden: same with proof_time",
+      "presentation": {
+        "circuit_id": "urn:circuits:longfellow:nym_auth:v1",
+        "proof_hex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "issuer_key_set": {
+          "der_certificates_hex": [
+            "3082010a000102030405060708090a0b0c0d0e0f"
+          ]
+        },
+        "proof_time": "2026-05-01T12:00:00Z",
+        "results": {
+          "nym-123": {
+            "pseudonym_hex": "5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e"
+          },
+          "age-range-123": {
+            "predicate": true
+          }
+        }
+      },
+      "cbor_hex": "a56a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f6a70726f6f665f74696d65c074323032362d30352d30315431323a30303a30305a67726573756c7473a26d6167652d72616e67652d313233f5676e796d2d31323358205f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e",
+      "base64url": "pWpjaXJjdWl0X2lkeCN1cm46Y2lyY3VpdHM6bG9uZ2ZlbGxvdzpueW1fYXV0aDp2MWVwcm9vZlggQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9uaXNzdWVyX2tleV9zZXSBVDCCAQoAAQIDBAUGBwgJCgsMDQ4PanByb29mX3RpbWXAdDIwMjYtMDUtMDFUMTI6MDA6MDBaZ3Jlc3VsdHOibWFnZS1yYW5nZS0xMjP1Z255bS0xMjNYIF9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1-"
+    },
+    {
+      "name": "predicate only",
+      "presentation": {
+        "circuit_id": "urn:circuits:longfellow:nym_auth:v1",
+        "proof_hex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "issuer_key_set": {
+          "der_certificates_hex": [
+            "3082010a000102030405060708090a0b0c0d0e0f"
+          ]
+        },
+        "results": {
+          "age": {
+            "predicate": true
+          }
+        }
+      },
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a163616765f5",
+      "base64url": "pGpjaXJjdWl0X2lkeCN1cm46Y2lyY3VpdHM6bG9uZ2ZlbGxvdzpueW1fYXV0aDp2MWVwcm9vZlggQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9uaXNzdWVyX2tleV9zZXSBVDCCAQoAAQIDBAUGBwgJCgsMDQ4PZ3Jlc3VsdHOhY2FnZfU"
+    },
+    {
+      "name": "pseudonym only, two certificates",
+      "presentation": {
+        "circuit_id": "urn:circuits:longfellow:nym_auth:v1",
+        "proof_hex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "issuer_key_set": {
+          "der_certificates_hex": [
+            "3082010a000102030405060708090a0b0c0d0e0f",
+            "30820122101112131415161718191a1b1c1d1e1f2021222324252627"
+          ]
+        },
+        "results": {
+          "nym": {
+            "pseudonym_hex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+          }
+        }
+      },
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657482543082010a000102030405060708090a0b0c0d0e0f581c30820122101112131415161718191a1b1c1d1e1f202122232425262767726573756c7473a1636e796d58200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+      "base64url": "pGpjaXJjdWl0X2lkeCN1cm46Y2lyY3VpdHM6bG9uZ2ZlbGxvdzpueW1fYXV0aDp2MWVwcm9vZlggQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9uaXNzdWVyX2tleV9zZXSCVDCCAQoAAQIDBAUGBwgJCgsMDQ4PWBwwggEiEBESExQVFhcYGRobHB0eHyAhIiMkJSYnZ3Jlc3VsdHOhY255bVggAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA"
+    },
+    {
+      "name": "results keys are sorted by UTF-8 bytes on encode",
+      "presentation": {
+        "circuit_id": "urn:circuits:longfellow:nym_auth:v1",
+        "proof_hex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "issuer_key_set": {
+          "der_certificates_hex": [
+            "3082010a000102030405060708090a0b0c0d0e0f"
+          ]
+        },
+        "results": {
+          "b": {
+            "predicate": true
+          },
+          "a": {
+            "predicate": true
+          },
+          "B": {
+            "predicate": true
+          },
+          "å": {
+            "predicate": true
+          }
+        }
+      },
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a46142f56161f56162f562c3a5f5",
+      "base64url": "pGpjaXJjdWl0X2lkeCN1cm46Y2lyY3VpdHM6bG9uZ2ZlbGxvdzpueW1fYXV0aDp2MWVwcm9vZlggQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9uaXNzdWVyX2tleV9zZXSBVDCCAQoAAQIDBAUGBwgJCgsMDQ4PZ3Jlc3VsdHOkYUL1YWH1YWL1YsOl9Q"
+    },
+    {
+      "name": "empty proof and empty circuit_id are allowed by the CDDL",
+      "presentation": {
+        "circuit_id": "",
+        "proof_hex": "",
+        "issuer_key_set": {
+          "der_certificates_hex": [
+            "3082010a000102030405060708090a0b0c0d0e0f"
+          ]
+        },
+        "results": {
+          "nym-123": {
+            "pseudonym_hex": "5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e"
+          },
+          "age-range-123": {
+            "predicate": true
+          }
+        }
+      },
+      "cbor_hex": "a46a636972637569745f6964606570726f6f66406e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a26d6167652d72616e67652d313233f5676e796d2d31323358205f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e",
+      "base64url": "pGpjaXJjdWl0X2lkYGVwcm9vZkBuaXNzdWVyX2tleV9zZXSBVDCCAQoAAQIDBAUGBwgJCgsMDQ4PZ3Jlc3VsdHOibWFnZS1yYW5nZS0xMjP1Z255bS0xMjNYIF9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1-"
+    },
+    {
+      "name": "multi-byte circuit_id and handle",
+      "presentation": {
+        "circuit_id": "urn:test:日本",
+        "proof_hex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "issuer_key_set": {
+          "der_certificates_hex": [
+            "3082010a000102030405060708090a0b0c0d0e0f"
+          ]
+        },
+        "results": {
+          "über": {
+            "predicate": true
+          }
+        }
+      },
+      "cbor_hex": "a46a636972637569745f69646f75726e3a746573743ae697a5e69cac6570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a165c3bc626572f5",
+      "base64url": "pGpjaXJjdWl0X2lkb3Vybjp0ZXN0OuaXpeacrGVwcm9vZlggQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9uaXNzdWVyX2tleV9zZXSBVDCCAQoAAQIDBAUGBwgJCgsMDQ4PZ3Jlc3VsdHOhZcO8YmVy9Q"
+    },
+    {
+      "name": "proof_time with fractional seconds",
+      "presentation": {
+        "circuit_id": "urn:circuits:longfellow:nym_auth:v1",
+        "proof_hex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "issuer_key_set": {
+          "der_certificates_hex": [
+            "3082010a000102030405060708090a0b0c0d0e0f"
+          ]
+        },
+        "proof_time": "2026-05-01T12:00:00.500Z",
+        "results": {
+          "nym-123": {
+            "pseudonym_hex": "5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e"
+          },
+          "age-range-123": {
+            "predicate": true
+          }
+        }
+      },
+      "cbor_hex": "a56a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f6a70726f6f665f74696d65c07818323032362d30352d30315431323a30303a30302e3530305a67726573756c7473a26d6167652d72616e67652d313233f5676e796d2d31323358205f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e",
+      "base64url": "pWpjaXJjdWl0X2lkeCN1cm46Y2lyY3VpdHM6bG9uZ2ZlbGxvdzpueW1fYXV0aDp2MWVwcm9vZlggQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9uaXNzdWVyX2tleV9zZXSBVDCCAQoAAQIDBAUGBwgJCgsMDQ4PanByb29mX3RpbWXAeBgyMDI2LTA1LTAxVDEyOjAwOjAwLjUwMFpncmVzdWx0c6JtYWdlLXJhbmdlLTEyM_VnbnltLTEyM1ggX2BhYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ent8fX4"
+    },
+    {
+      "name": "unknown top-level key preserved",
+      "presentation": {
+        "circuit_id": "urn:circuits:longfellow:nym_auth:v1",
+        "proof_hex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "issuer_key_set": {
+          "der_certificates_hex": [
+            "3082010a000102030405060708090a0b0c0d0e0f"
+          ]
+        },
+        "results": {
+          "nym-123": {
+            "pseudonym_hex": "5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e"
+          },
+          "age-range-123": {
+            "predicate": true
+          }
+        },
+        "unknown_entries_cbor_hex": {
+          "x_future": "656c61746572"
+        }
+      },
+      "cbor_hex": "a56a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a26d6167652d72616e67652d313233f5676e796d2d31323358205f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e68785f667574757265656c61746572",
+      "base64url": "pWpjaXJjdWl0X2lkeCN1cm46Y2lyY3VpdHM6bG9uZ2ZlbGxvdzpueW1fYXV0aDp2MWVwcm9vZlggQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9uaXNzdWVyX2tleV9zZXSBVDCCAQoAAQIDBAUGBwgJCgsMDQ4PZ3Jlc3VsdHOibWFnZS1yYW5nZS0xMjP1Z255bS0xMjNYIF9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1-aHhfZnV0dXJlZWxhdGVy"
+    },
+    {
+      "name": "unknown top-level key with structured value preserved",
+      "presentation": {
+        "circuit_id": "urn:circuits:longfellow:nym_auth:v1",
+        "proof_hex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "issuer_key_set": {
+          "der_certificates_hex": [
+            "3082010a000102030405060708090a0b0c0d0e0f"
+          ]
+        },
+        "results": {
+          "nym-123": {
+            "pseudonym_hex": "5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e"
+          },
+          "age-range-123": {
+            "predicate": true
+          }
+        },
+        "unknown_entries_cbor_hex": {
+          "x_ext": "a1616101"
+        }
+      },
+      "cbor_hex": "a56a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a26d6167652d72616e67652d313233f5676e796d2d31323358205f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e65785f657874a1616101",
+      "base64url": "pWpjaXJjdWl0X2lkeCN1cm46Y2lyY3VpdHM6bG9uZ2ZlbGxvdzpueW1fYXV0aDp2MWVwcm9vZlggQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9uaXNzdWVyX2tleV9zZXSBVDCCAQoAAQIDBAUGBwgJCgsMDQ4PZ3Jlc3VsdHOibWFnZS1yYW5nZS0xMjP1Z255bS0xMjNYIF9gYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1-ZXhfZXh0oWFhAQ"
+    }
+  ],
+  "hook_vectors": [
+    {
+      "name": "issuer_key_set is a map, accepted by the hook",
+      "hook": "accepts circuit_id == 'urn:test:custom-keys' and returns Other(rawCborItem); returns null for any other circuit_id",
+      "presentation": {
+        "circuit_id": "urn:test:custom-keys",
+        "proof_hex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+        "issuer_key_set": {
+          "other_cbor_hex": "a2646b696e6461786464617461420a0b"
+        },
+        "results": {
+          "nym-123": {
+            "pseudonym_hex": "5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e"
+          },
+          "age-range-123": {
+            "predicate": true
+          }
+        }
+      },
+      "cbor_hex": "a46a636972637569745f69647475726e3a746573743a637573746f6d2d6b6579736570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f736574a2646b696e6461786464617461420a0b67726573756c7473a26d6167652d72616e67652d313233f5676e796d2d31323358205f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e",
+      "base64url": "pGpjaXJjdWl0X2lkdHVybjp0ZXN0OmN1c3RvbS1rZXlzZXByb29mWCBAQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVpbXF1eX25pc3N1ZXJfa2V5X3NldKJka2luZGF4ZGRhdGFCCgtncmVzdWx0c6JtYWdlLXJhbmdlLTEyM_VnbnltLTEyM1ggX2BhYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5ent8fX4"
+    }
+  ],
+  "rejections": [
+    {
+      "name": "top level is an array",
+      "cbor_hex": "80",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "NOT_A_MAP"
+    },
+    {
+      "name": "top level is a tagged map",
+      "cbor_hex": "d9d9f7a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616e58200708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223242526",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "NOT_A_MAP"
+    },
+    {
+      "name": "missing circuit_id",
+      "cbor_hex": "a36570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616e58200708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223242526",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "MISSING_KEY"
+    },
+    {
+      "name": "missing proof",
+      "cbor_hex": "a36a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616e58200708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223242526",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "MISSING_KEY"
+    },
+    {
+      "name": "missing issuer_key_set",
+      "cbor_hex": "a36a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f67726573756c7473a1616e58200708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223242526",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "MISSING_KEY"
+    },
+    {
+      "name": "missing results",
+      "cbor_hex": "a36a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "MISSING_KEY"
+    },
+    {
+      "name": "circuit_id is a byte string",
+      "cbor_hex": "a46a636972637569745f696441786570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616e58200708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223242526",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "WRONG_TYPE"
+    },
+    {
+      "name": "proof is a text string",
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f6661786e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616e58200708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223242526",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "WRONG_TYPE"
+    },
+    {
+      "name": "results is an array",
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c747380",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "NOT_A_MAP"
+    },
+    {
+      "name": "issuer_key_set is empty",
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f7365748067726573756c7473a1616e58200708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223242526",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "EMPTY_ISSUER_KEY_SET"
+    },
+    {
+      "name": "issuer_key_set element is a text string",
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657482543082010a000102030405060708090a0b0c0d0e0f617867726573756c7473a1616e58200708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223242526",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "BAD_ISSUER_KEY_ELEMENT"
+    },
+    {
+      "name": "issuer_key_set element is a tagged byte string",
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481d818543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616e58200708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223242526",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "BAD_ISSUER_KEY_ELEMENT"
+    },
+    {
+      "name": "issuer_key_set is an integer (no hook)",
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f7365740167726573756c7473a1616e58200708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223242526",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "UNSUPPORTED_ISSUER_KEY_SET"
+    },
+    {
+      "name": "issuer_key_set is a map (no hook)",
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f736574a2646b696e6461786464617461420a0b67726573756c7473a1616e58200708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223242526",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "UNSUPPORTED_ISSUER_KEY_SET"
+    },
+    {
+      "name": "results is empty",
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a0",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "EMPTY_RESULTS"
+    },
+    {
+      "name": "pseudonym of 31 bytes",
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616e581f000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "BAD_PSEUDONYM_LENGTH"
+    },
+    {
+      "name": "pseudonym of 33 bytes",
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616e5821000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "BAD_PSEUDONYM_LENGTH"
+    },
+    {
+      "name": "pseudonym empty",
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616e40",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "BAD_PSEUDONYM_LENGTH"
+    },
+    {
+      "name": "predicate false",
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616ef4",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "BAD_PREDICATE"
+    },
+    {
+      "name": "predicate null",
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616ef6",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "BAD_PREDICATE"
+    },
+    {
+      "name": "result is an unsigned integer",
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616e01",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "WRONG_TYPE"
+    },
+    {
+      "name": "result is a text string",
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616e6474727565",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "WRONG_TYPE"
+    },
+    {
+      "name": "result is a tagged byte string",
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616ed8185820000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "WRONG_TYPE"
+    },
+    {
+      "name": "results key is an integer",
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a101f5",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "WRONG_TYPE"
+    },
+    {
+      "name": "top-level key is an integer",
+      "cbor_hex": "a501f56a636972637569745f696461616570726f6f66406e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616ef5",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "WRONG_TYPE"
+    },
+    {
+      "name": "proof_time is an untagged text string",
+      "cbor_hex": "a56a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616e58200708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425266a70726f6f665f74696d6574323032362d30352d30315431323a30303a30305a",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "BAD_PROOF_TIME"
+    },
+    {
+      "name": "proof_time is tag 1 (epoch)",
+      "cbor_hex": "a56a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616e58200708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425266a70726f6f665f74696d65c11a69f495c0",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "BAD_PROOF_TIME"
+    },
+    {
+      "name": "proof_time is tag 0 holding an integer",
+      "cbor_hex": "a56a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616e58200708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425266a70726f6f665f74696d65c001",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "BAD_PROOF_TIME"
+    },
+    {
+      "name": "proof_time is tag 0 holding a non-date string",
+      "cbor_hex": "a56a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616e58200708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425266a70726f6f665f74696d65c069796573746572646179",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "BAD_PROOF_TIME"
+    },
+    {
+      "name": "proof_time is tag 0 without a zone offset",
+      "cbor_hex": "a56a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616e58200708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425266a70726f6f665f74696d65c073323032362d30352d30315431323a30303a3030",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "BAD_PROOF_TIME"
+    },
+    {
+      "name": "trailing byte after the item",
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616e58200708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2021222324252600",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "TRAILING_BYTES"
+    },
+    {
+      "name": "a second CBOR item follows",
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616e58200708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223242526a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616e58200708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223242526",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "TRAILING_BYTES"
+    },
+    {
+      "name": "truncated item",
+      "cbor_hex": "a46a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616e58200708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "MALFORMED_CBOR"
+    },
+    {
+      "name": "empty input",
+      "cbor_hex": "",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "MALFORMED_CBOR"
+    },
+    {
+      "name": "duplicate top-level key",
+      "cbor_hex": "a56a636972637569745f696461616a636972637569745f696461626570726f6f66406e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616ef5",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "MALFORMED_CBOR"
+    },
+    {
+      "name": "unknown top-level key, strict mode",
+      "cbor_hex": "a56a636972637569745f6964782375726e3a63697263756974733a6c6f6e6766656c6c6f773a6e796d5f617574683a76316570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f73657481543082010a000102030405060708090a0b0c0d0e0f67726573756c7473a1616e58200708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2021222324252668785f667574757265656c61746572",
+      "strict": true,
+      "issuer_key_set_hook": false,
+      "error": "UNKNOWN_KEY"
+    },
+    {
+      "name": "base64url with padding",
+      "base64url": "pGpjaXJjdWl0X2lkeCN1cm46Y2lyY3VpdHM6bG9uZ2ZlbGxvdzpueW1fYXV0aDp2MWVwcm9vZlggQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9uaXNzdWVyX2tleV9zZXSBVDCCAQoAAQIDBAUGBwgJCgsMDQ4PZ3Jlc3VsdHOhYW5YIAcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUm=",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "BAD_BASE64URL"
+    },
+    {
+      "name": "base64url with '+'",
+      "base64url": "+GpjaXJjdWl0X2lkeCN1cm46Y2lyY3VpdHM6bG9uZ2ZlbGxvdzpueW1fYXV0aDp2MWVwcm9vZlggQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9uaXNzdWVyX2tleV9zZXSBVDCCAQoAAQIDBAUGBwgJCgsMDQ4PZ3Jlc3VsdHOhYW5YIAcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUm",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "BAD_BASE64URL"
+    },
+    {
+      "name": "base64url with '/'",
+      "base64url": "/GpjaXJjdWl0X2lkeCN1cm46Y2lyY3VpdHM6bG9uZ2ZlbGxvdzpueW1fYXV0aDp2MWVwcm9vZlggQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9uaXNzdWVyX2tleV9zZXSBVDCCAQoAAQIDBAUGBwgJCgsMDQ4PZ3Jlc3VsdHOhYW5YIAcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUm",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "BAD_BASE64URL"
+    },
+    {
+      "name": "base64url with whitespace",
+      "base64url": "pGpjaXJjdW l0X2lkeCN1cm46Y2lyY3VpdHM6bG9uZ2ZlbGxvdzpueW1fYXV0aDp2MWVwcm9vZlggQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9uaXNzdWVyX2tleV9zZXSBVDCCAQoAAQIDBAUGBwgJCgsMDQ4PZ3Jlc3VsdHOhYW5YIAcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUm",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "BAD_BASE64URL"
+    },
+    {
+      "name": "base64url length 1 mod 4",
+      "base64url": "pGpjaXJjdWl0X2lkeCN1cm46Y2lyY3VpdHM6bG9uZ2ZlbGxvdzpueW1fYXV0aDp2MWVwcm9vZlggQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl9uaXNzdWVyX2tleV9zZXSBVDCCAQoAAQIDBAUGBwgJCgsMDQ4PZ3Jlc3VsdHOhYW5YIAcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmA",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "BAD_BASE64URL"
+    },
+    {
+      "name": "base64url with non-zero trailing bits",
+      "base64url": "pGpjaXJjdWl0X2lkeCN1cm46Y2lyY3VpdHM6bG9uZ2ZlbGxvdzpueW1fYXV0aDp2MWVwcm9vZlghQEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8Bbmlzc3Vlcl9rZXlfc2V0gVQwggEKAAECAwQFBgcICQoLDA0OD2dyZXN1bHRzoWFuWCAHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fICEiIyQlJh",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "BAD_BASE64URL"
+    },
+    {
+      "name": "same input without the hook",
+      "cbor_hex": "a46a636972637569745f69647475726e3a746573743a637573746f6d2d6b6579736570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f736574a2646b696e6461786464617461420a0b67726573756c7473a26d6167652d72616e67652d313233f5676e796d2d31323358205f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e",
+      "strict": false,
+      "issuer_key_set_hook": false,
+      "error": "UNSUPPORTED_ISSUER_KEY_SET"
+    },
+    {
+      "name": "hook declines another circuit_id (null), item is not a list",
+      "cbor_hex": "a46a636972637569745f69646e75726e3a746573743a6f746865726570726f6f665820404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f6e6973737565725f6b65795f736574a2646b696e6461786464617461420a0b67726573756c7473a26d6167652d72616e67652d313233f5676e796d2d31323358205f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e",
+      "strict": false,
+      "issuer_key_set_hook": true,
+      "error": "UNSUPPORTED_ISSUER_KEY_SET"
+    }
+  ],
+  "handle_checks": [
+    {
+      "name": "exact match",
+      "presentation": "golden: rulebook example shape (pseudonym + predicate, no proof_time); circuit_id is the WIP rulebook string",
+      "expected_handles": [
+        "age-range-123",
+        "nym-123"
+      ],
+      "ok": true
+    },
+    {
+      "name": "missing handle",
+      "presentation": "golden: rulebook example shape (pseudonym + predicate, no proof_time); circuit_id is the WIP rulebook string",
+      "expected_handles": [
+        "age-range-123",
+        "nym-123",
+        "other"
+      ],
+      "ok": false
+    },
+    {
+      "name": "additional handle",
+      "presentation": "golden: rulebook example shape (pseudonym + predicate, no proof_time); circuit_id is the WIP rulebook string",
+      "expected_handles": [
+        "nym-123"
+      ],
+      "ok": false
+    },
+    {
+      "name": "no overlap",
+      "presentation": "predicate only",
+      "expected_handles": [
+        "x"
+      ],
+      "ok": false
+    }
+  ]
+}
