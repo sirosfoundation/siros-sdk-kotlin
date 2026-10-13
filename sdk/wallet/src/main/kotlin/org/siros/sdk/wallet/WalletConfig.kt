@@ -372,6 +372,13 @@ data class WalletConfig(
      * from the policy decision point's response.
      */
     val circuitZkVerifierIdSources: List<VerifierIdSource> = listOf(X509SanDnsSource(), AuthZENSource("semantic")),
+    /**
+     * The claims the wallet never matches on, registers, presents or displays,
+     * by credential type. The default protects the nym_auth `ssc` and `psc`;
+     * [NonDisclosurePolicy.NONE] turns it off. A type without an entry is
+     * unaffected. Installed process-wide when the wallet is built.
+     */
+    val nonDisclosurePolicy: org.siros.sdk.credentials.NonDisclosurePolicy = org.siros.sdk.credentials.NonDisclosurePolicy.DEFAULT,
     /** The circuits the wallet can prove with, from the circuit catalog. */
     val circuitZkCircuits: CircuitZkCircuitSource? = null,
 ) {

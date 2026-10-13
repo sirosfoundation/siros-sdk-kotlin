@@ -817,6 +817,9 @@ class JweKeystore(
             filterDisclosures(disclosures, disclosedClaims)
         }
 
+        // Fail closed: never disclose (or silently strip) a protected claim.
+        org.siros.sdk.credentials.CredentialDisclosureGuard.requireNoneProtectedSdJwt(credential, selectedDisclosures)
+
         // Build the SD-JWT presentation string (with trailing ~)
         val sdJwtPresentation = buildString {
             append(issuerJwt)

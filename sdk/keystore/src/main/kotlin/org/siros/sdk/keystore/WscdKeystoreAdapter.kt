@@ -424,6 +424,9 @@ class WscdKeystoreAdapter private constructor(
             }
         } else disclosures
 
+        // Fail closed: never disclose (or silently strip) a protected claim.
+        org.siros.sdk.credentials.CredentialDisclosureGuard.requireNoneProtectedSdJwt(credential, selected)
+
         // Build SD-JWT presentation
         val sdJwtPresentation = buildString {
             append(issuerJwt)

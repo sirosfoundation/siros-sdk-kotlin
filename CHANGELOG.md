@@ -74,6 +74,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure is `access_denied` with no description; the history record has
   `zkProof = true` and no claim names. `WalletConfig.circuitZkValidator` now
   defaults to the rulebook validator. (#269)
+- **A non-disclosure guard: `ssc` and `psc` are never matched, registered,
+  presented or displayed.** `NonDisclosurePolicy` is a data table of protected
+  claim paths by credential type (default: the nym_auth doctype's `ssc` and
+  `psc`; override with `WalletConfig.nonDisclosurePolicy`); one
+  `CredentialDisclosureGuard` serves the matcher, the OS picker claims, the
+  display claims and every presentation builder, which refuses (never strips)
+  a presentation that would disclose a protected claim
+  (`DisclosureRefusedException`). A type with no entry is unaffected.
+  `circuitZkConsentSummary` gives hosts a summary with no credential values. (#270)
 
 ## [0.20.5] - 2026-10-12
 

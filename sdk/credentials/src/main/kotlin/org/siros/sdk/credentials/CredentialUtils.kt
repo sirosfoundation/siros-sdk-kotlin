@@ -135,7 +135,12 @@ object CredentialUtils {
                 )
             }
 
-        return vctmResolved + uncovered
+        // Protected claims (see [CredentialDisclosureGuard]) are never displayed, registered or matched on.
+        val vct = vctOf(credential)
+        return (vctmResolved + uncovered).filterNot { c ->
+            CredentialDisclosureGuard.isProtected(vct, c.key.split(".")) ||
+                CredentialDisclosureGuard.isProtected(vct, listOf(c.key))
+        }
     }
 
     /**
@@ -172,7 +177,8 @@ object CredentialUtils {
         if (credential.format.equals("mso_mdoc", ignoreCase = true)) return emptyList()
         val rawPayload = parseJwtPayload(credential.raw) ?: return emptyList()
         val payload = mergeSdJwtDisclosures(credential.raw, rawPayload)
-        return flattenJsonObject(payload, emptyList())
+        val vct = vctOf(credential)
+        return flattenJsonObject(payload, emptyList()).filterNot { (path, _) -> CredentialDisclosureGuard.isProtected(vct, path) }
     }
 
     private fun flattenJsonObject(obj: JsonObject, prefix: List<String>): List<Pair<List<String>, JsonElement>> {
@@ -217,7 +223,7 @@ object CredentialUtils {
             .associateBy { it.path.joinToString("/") }
 
         return document.issuerSigned.nameSpaces.flatMap { (namespace, items) ->
-            items.map { entry ->
+            items.filterNot { CredentialDisclosureGuard.isProtected(document.docType, listOf(namespace, it.item.elementIdentifier)) }.map { entry ->
                 val elementId = entry.item.elementIdentifier
                 val meta = claimMetaByPath["$namespace/$elementId"]
                 val cborValue = entry.item.elementValue

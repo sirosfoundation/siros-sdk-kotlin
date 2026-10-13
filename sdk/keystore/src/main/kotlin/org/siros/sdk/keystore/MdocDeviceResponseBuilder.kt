@@ -129,17 +129,34 @@ class MdocDeviceResponseBuilder(
         sessionTranscriptBytes: ByteArray,
         disclosedClaims: List<String>?,
         signer: suspend (ByteArray) -> ByteArray,
+    ): ByteArray = buildForProximity(sessionTranscriptBytes, disclosedClaims, signer, guarded = true)
+
+    /**
+     * The fully-signed DeviceResponse a ZK prover takes as its PRIVATE witness
+     * (see [LongfellowZkProofSystem]): it never leaves the wallet and is not a
+     * disclosure, so the non-disclosure guard does not apply to it.
+     */
+    internal suspend fun buildPrivateWitnessResponse(
+        sessionTranscriptBytes: ByteArray,
+        signer: suspend (ByteArray) -> ByteArray,
+    ): ByteArray = buildForProximity(sessionTranscriptBytes, null, signer, guarded = false)
+
+    private suspend fun buildForProximity(
+        sessionTranscriptBytes: ByteArray,
+        disclosedClaims: List<String>?,
+        signer: suspend (ByteArray) -> ByteArray,
+        guarded: Boolean,
     ): ByteArray {
-        val disclosedDocument = parseAndFilter(disclosedClaims)
+        val disclosedDocument = parseAndFilter(disclosedClaims, guarded)
         val deviceAuthBytes = buildDeviceAuthentication(disclosedDocument.docType, sessionTranscriptBytes)
         val coseSign1 = MdocCose.sign1Detached(algorithm, deviceAuthBytes, signer)
 
         return assembleFinalResponse(disclosedDocument, coseSign1)
     }
 
-    private fun parseAndFilter(disclosedClaims: List<String>?): org.siros.sdk.credentials.mdoc.DocumentMdoc {
+    private fun parseAndFilter(disclosedClaims: List<String>?, guarded: Boolean = true): org.siros.sdk.credentials.mdoc.DocumentMdoc {
         val document = MdocCbor.parseStoredCredential(credentialBytes)
-        return if (disclosedClaims == null) {
+        val selected = if (disclosedClaims == null) {
             document
         } else {
             document.copy(
@@ -148,6 +165,12 @@ class MdocDeviceResponseBuilder(
                 )
             )
         }
+        // Fail closed: a presentation that would disclose a protected element is refused, never stripped.
+        if (guarded) org.siros.sdk.credentials.CredentialDisclosureGuard.requireNoneProtected(
+            selected.docType,
+            selected.issuerSigned.nameSpaces.mapValues { (_, items) -> items.map { it.item.elementIdentifier } },
+        )
+        return selected
     }
 
     /**

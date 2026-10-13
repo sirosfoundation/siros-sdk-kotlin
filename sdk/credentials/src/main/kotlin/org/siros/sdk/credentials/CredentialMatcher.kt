@@ -431,7 +431,9 @@ object CredentialMatcher {
         val matched = credentials.filter { cred ->
             matchesFormat(cred, format) &&
                 matchesVct(cred, vctValues) &&
-                matchesDoctype(cred, doctypeValue)
+                matchesDoctype(cred, doctypeValue) &&
+                // A query for a protected claim matches nothing (see CredentialDisclosureGuard).
+                !CredentialDisclosureGuard.requestsProtected(cred, claims)
         }
 
         Timber.d("DCQL query '$queryId': format=$format vct=$vctValues doctype=$doctypeValue → ${matched.size} matches")

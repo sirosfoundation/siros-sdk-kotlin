@@ -225,6 +225,11 @@ class SirosWallet private constructor(
     // circuit_zk matching support; null (also for a wallet built without initializers)
     // means the feature is off and a circuit_zk query matches nothing.
     private val verifierIdRegistry: VerifierIdRegistry? = VerifierIdRegistry(config.circuitZkVerifierIdSources)
+
+    init {
+        // The guard is shared by every enforcement point, which are stateless utilities.
+        org.siros.sdk.credentials.CredentialDisclosureGuard.policy = config.nonDisclosurePolicy
+    }
     private val circuitZkProver: org.siros.sdk.keystore.CircuitZkProver? = config.circuitZkProver
     private val circuitZkSupport: org.siros.sdk.credentials.CircuitZkSupport? =
         if (config.circuitZk && config.circuitZkPlanner != null && config.circuitZkCircuits != null) {
