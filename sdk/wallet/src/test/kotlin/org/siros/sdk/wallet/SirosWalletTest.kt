@@ -5162,12 +5162,37 @@ class SirosWalletTest {
         every { keystore.isUnlocked } returns false
         val wallet = circuitZkWallet(null, keystore)
 
-        val e = org.junit.Assert.assertThrows(Exception::class.java) {
+        // Nothing matches, and the answer is the silent access-denied, never the
+        // "no credential matches" text that would reach the verifier.
+        val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
             kotlinx.coroutines.runBlocking {
                 wallet.handleDCAPIRequest(signedCircuitZkRequest("https://rp.example"), origin = "https://rp.example")
             }
         }
-        assertFalse("flag off: not the circuit_zk refusal", e is org.siros.sdk.wallet.dcapi.DCAPIRequestRefused)
+        assertEquals("DC API request refused (protocol=openid4vp-v1-signed)", e.message)
+        coVerify(exactly = 0) { keystore.signVpToken(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun handleDCAPIRequest_circuitZkValidatorRefusal_neverLeaksTheRuleId() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        val base = fittingSupport()
+        val wallet = circuitZkWallet(
+            org.siros.sdk.credentials.CircuitZkSupport(
+                base.planner,
+                { org.siros.sdk.credentials.CircuitZkVerdict.AccessDenied("secret-rule-id-123") },
+                base.circuits,
+            ),
+            keystore,
+        )
+        val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+            kotlinx.coroutines.runBlocking {
+                wallet.handleDCAPIRequest(signedCircuitZkRequest("https://rp.example"), origin = "https://rp.example")
+            }
+        }
+        assertFalse(e.message!!.contains("secret-rule-id-123"))
+        assertFalse(e.toString().contains("secret-rule-id-123"))
         coVerify(exactly = 0) { keystore.signVpToken(any(), any(), any(), any()) }
     }
 

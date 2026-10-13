@@ -48,6 +48,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through `circuit_zk` register no claims in the OS picker blob
   (`SirosCredentialRegistry.refresh(claimlessDoctypes = wallet.circuitZkDocTypes)`).
   With the flag off nothing changes. (#265)
+- **`RulebookCircuitZkValidator`: the wallet-side rulebook satisfiability rules
+  for a planned `circuit_zk` request**, as a named data-driven `CircuitZkRuleSet`
+  (function rules registered per function id) behind `CircuitZkRequestValidator`.
+  Returns `Ok` or `AccessDenied(ruleId)`; the rule id is for local logs only.
+  `VerifierIdTypes` is the registry of verifier-id types (rulebook defaults).
+  Shared vectors in `spec/circuit-zk-validator-vectors.json`. A `circuit_zk`
+  request that matches nothing is now answered with `access_denied` and no
+  description, never the "no credential matches" text. (#267)
 
 ## [0.20.5] - 2026-10-12
 

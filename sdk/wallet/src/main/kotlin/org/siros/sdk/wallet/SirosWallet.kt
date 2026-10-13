@@ -3796,11 +3796,15 @@ class SirosWallet private constructor(
         // Until the circuit_zk presentation branch exists, a matched circuit_zk
         // request is answered with access-denied and nothing else: it must not
         // fall through to the plain or legacy mso_mdoc_zk paths below.
-        if (matchResults.any { CredentialUtils.isCircuitZkFormat(it.format) && it.candidates.isNotEmpty() }) {
-            Timber.w("DC API circuit_zk request matched, but presenting it is not supported yet (protocol=${request.protocol})")
+        // Likewise when nothing matched a request that has a circuit_zk query: the rulebook
+        // allows access_denied with no description there, so the "no credential matches"
+        // text below (which reaches the verifier) is never used for it.
+        val candidates = matchResults.flatMap { it.candidates }.distinctBy { it.id }
+        val circuitZkResults = matchResults.filter { CredentialUtils.isCircuitZkFormat(it.format) }
+        if (circuitZkResults.any { it.candidates.isNotEmpty() } || (circuitZkResults.isNotEmpty() && candidates.isEmpty())) {
+            Timber.w("DC API circuit_zk request not answered (protocol=${request.protocol})")
             throw org.siros.sdk.wallet.dcapi.DCAPIRequestRefused(request.protocol)
         }
-        val candidates = matchResults.flatMap { it.candidates }.distinctBy { it.id }
 
         // Which query result actually governs each candidate - same
         // first-match selection used below when building tokens (a
