@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`NymPseudonym.derive`: the nym_auth rulebook pseudonym function
+  (`pseudonym-v1-sha256`), pure and driven by one config table.** Computes
+  `SHA256(DST || seed || prover_input || verifier_input)` for the four
+  rulebook v0.3 configs; `verifier_id` is an opaque caller-supplied string.
+  Misuse (unknown config, missing or unused input, wrong seed length) throws
+  `NymPseudonymError`. Shared vectors in `spec/nym-pseudonym-vectors.json`
+  (self-generated, not yet cross-checked with the circuit developers). Unrelated
+  to the legacy `DefaultZkPseudonymDeriver`. (#261)
+
 ## [0.20.5] - 2026-10-12
 
 ### Fixed
