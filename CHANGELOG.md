@@ -64,6 +64,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same `ZkWitnessSigner` / residency handling as `ZkMdocPresentation`. Refusals
   are `CircuitZkError` with no description. `FakeCircuitZkProver.optIn()` is a
   fake that reports itself as such and is never registered by default. (#268)
+- **`handleDCAPIRequest` answers a `circuit_zk` request (behind
+  `WalletConfig.circuitZk`, default off).** Request hardening, then trust from
+  the policy decision point alone (no local certificate check, no trust cache:
+  an outage is a refusal), plan and validate, resolve the verifier id through
+  the new `VerifierIdSource` registry (`WalletConfig.circuitZkVerifierIdSources`;
+  shipped: `X509SanDnsSource`, `AuthZENSource`), present, and return the token
+  in `vp_token`. `TrustResult` gains an optional read-only `context`. Every
+  failure is `access_denied` with no description; the history record has
+  `zkProof = true` and no claim names. `WalletConfig.circuitZkValidator` now
+  defaults to the rulebook validator. (#269)
 
 ## [0.20.5] - 2026-10-12
 

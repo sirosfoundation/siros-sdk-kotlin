@@ -357,8 +357,21 @@ data class WalletConfig(
     val circuitZk: Boolean = false,
     /** Turns a `circuit_zk` credential query into a plan; see [circuitZk]. */
     val circuitZkPlanner: CircuitZkPlanner? = null,
-    /** The wallet's satisfiability rules for a plan; permissive by default. */
-    val circuitZkValidator: CircuitZkRequestValidator = CircuitZkRequestValidator.PERMISSIVE,
+    /**
+     * The wallet's satisfiability rules for a plan. `null` (default) means the
+     * rulebook rules ([org.siros.sdk.credentials.RulebookCircuitZkValidator]),
+     * with the verifier-id types of [circuitZkVerifierIdSources].
+     */
+    val circuitZkValidator: CircuitZkRequestValidator? = null,
+    /** The prover behind `circuit_zk` presentations. Without one, a matched request is refused. */
+    val circuitZkProver: org.siros.sdk.keystore.CircuitZkProver? = null,
+    /**
+     * The sources of `verifier_id`, in order: for a type, the first source
+     * that does not decline wins. The defaults produce the rulebook's two
+     * types: `x509_san_dns` from the request's certificate and `semantic`
+     * from the policy decision point's response.
+     */
+    val circuitZkVerifierIdSources: List<VerifierIdSource> = listOf(X509SanDnsSource(), AuthZENSource("semantic")),
     /** The circuits the wallet can prove with, from the circuit catalog. */
     val circuitZkCircuits: CircuitZkCircuitSource? = null,
 ) {

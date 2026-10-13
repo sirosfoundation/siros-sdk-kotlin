@@ -224,11 +224,16 @@ class SirosWallet private constructor(
 
     // circuit_zk matching support; null (also for a wallet built without initializers)
     // means the feature is off and a circuit_zk query matches nothing.
+    private val verifierIdRegistry: VerifierIdRegistry? = VerifierIdRegistry(config.circuitZkVerifierIdSources)
+    private val circuitZkProver: org.siros.sdk.keystore.CircuitZkProver? = config.circuitZkProver
     private val circuitZkSupport: org.siros.sdk.credentials.CircuitZkSupport? =
         if (config.circuitZk && config.circuitZkPlanner != null && config.circuitZkCircuits != null) {
             org.siros.sdk.credentials.CircuitZkSupport(
                 config.circuitZkPlanner,
-                config.circuitZkValidator,
+                config.circuitZkValidator ?: org.siros.sdk.credentials.RulebookCircuitZkValidator(
+                    verifierIdTypes = VerifierIdRegistry(config.circuitZkVerifierIdSources),
+                    circuits = config.circuitZkCircuits,
+                ),
                 config.circuitZkCircuits,
             )
         } else {
@@ -3723,6 +3728,13 @@ class SirosWallet private constructor(
             throw e
         }
 
+        // A circuit_zk request has its own branch; request hardening has passed above.
+        if (circuitZkSupport != null && request.dcqlQuery != null &&
+            DCAPIRequestRules.DEFAULT_REQUIRES_SIGNED_REQUEST(request.dcqlQuery)
+        ) {
+            return handleCircuitZkDcApi(request, origin)
+        }
+
         // The DC API has no negotiation, so a request can carry
         // transaction_data at a wallet that never declared support. Refuse it
         // before any trust evaluation or signing: answering without the
@@ -3989,6 +4001,34 @@ class SirosWallet private constructor(
             tokensByQueryId.getOrPut(queryId) { mutableListOf() }.add(token)
         }
 
+        val finalResponseJson = buildDcApiResponseJson(request, tokensByQueryId, encryptionJwk)
+
+        recordPresentation(PresentationRecord(
+            id = randomUint32Id(),
+            flowId = "dc-api-${java.util.UUID.randomUUID()}",
+            verifierName = trustResult.entityName,
+            credentialIds = selectedIds,
+            credentialNames = selectedIds.mapNotNull { id -> allCreds.find { it.id == id }?.metadata?.name },
+            requestedClaims = matchResults.flatMap { result ->
+                result.requestedClaims.mapNotNull { path -> path.lastOrNull() }
+            }.distinct(),
+            zkProof = selectedIds.any { it in zkRequestedIds },
+            timestamp = System.currentTimeMillis(),
+        ))
+
+        return DCAPIPresentationResult(responseJson = finalResponseJson, credentialIds = selectedIds)
+    }
+
+    /**
+     * The final DC API response for [tokensByQueryId]: `vp_token`, the verifier's `state`, JWE for
+     * `dc_api.jwt`, wrapped in the `{"protocol", "data"}` envelope. Shared by every DC API
+     * presentation branch.
+     */
+    private fun buildDcApiResponseJson(
+        request: org.siros.sdk.wallet.dcapi.DCAPIRequest,
+        tokensByQueryId: Map<String, List<String>>,
+        encryptionJwk: com.nimbusds.jose.jwk.JWK?,
+    ): String {
         val vpTokenObj = kotlinx.serialization.json.buildJsonObject {
             for ((queryId, tokens) in tokensByQueryId) {
                 put(queryId, kotlinx.serialization.json.buildJsonArray {
@@ -4042,25 +4082,140 @@ class SirosWallet private constructor(
         // with no declared protocol to associate the response with; it
         // fails the exchange with a generic, non-diagnostic error rather
         // than a parse error.
-        val finalResponseJson = kotlinx.serialization.json.buildJsonObject {
+        return kotlinx.serialization.json.buildJsonObject {
             put("protocol", kotlinx.serialization.json.JsonPrimitive(request.protocol))
             put("data", responseData)
         }.toString()
+    }
 
+    /**
+     * The `circuit_zk` branch of [handleDCAPIRequest]: request hardening has
+     * already passed (signed protocol, origin in `expected_origins`). Every
+     * failure is a silent refusal - [org.siros.sdk.wallet.dcapi.DCAPIRequestRefused], which the DC API
+     * activity answers with `access_denied` and no description - and nothing
+     * here logs request contents or the verifier id.
+     *
+     * Trust is the policy decision point's answer alone: no local certificate
+     * check and no trust cache, so an outage is a refusal. Consent was the
+     * OS picker's, so there is no in-app consent step.
+     */
+    private suspend fun handleCircuitZkDcApi(
+        request: org.siros.sdk.wallet.dcapi.DCAPIRequest,
+        origin: String,
+    ): DCAPIPresentationResult {
+        fun refuse(step: String): Nothing {
+            Timber.w("DC API circuit_zk request refused (protocol=${request.protocol}, step=$step)")
+            throw org.siros.sdk.wallet.dcapi.DCAPIRequestRefused(request.protocol)
+        }
+        val support = circuitZkSupport ?: refuse("disabled")
+        val prover = circuitZkProver ?: refuse("no-prover")
+        val registry = verifierIdRegistry ?: refuse("no-sources")
+        val query = request.dcqlQuery ?: refuse("no-query")
+
+        // Trust: the PDP only. The request is signed (the rules guarantee it), so its client id is bound to the key.
+        val subjectId = request.clientId ?: origin
+        val trust = try {
+            evaluateTrustDirect(
+                subjectId = subjectId,
+                subjectType = "credential_verifier",
+                keyMaterialType = when {
+                    request.keyMaterial?.x5c != null -> "x5c"
+                    request.keyMaterial?.jwk != null -> "jwk"
+                    else -> null
+                },
+                x5c = request.keyMaterial?.x5c?.let { chain ->
+                    kotlinx.serialization.json.buildJsonArray {
+                        chain.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) }
+                    }
+                },
+                jwk = request.keyMaterial?.jwk,
+                context = null,
+                allowLocalFallback = false,
+            )
+        } catch (e: Exception) {
+            refuse("trust-unavailable")
+        }
+        if (!trust.trusted) refuse("trust")
+
+        // Plan, validate, match.
+        val allCreds = credentialStore.getAll()
+        val results = CredentialMatcher.matchDcql(query, allCreds, zkSystemIds, support, request.clientMetadata).queryResults
+        if (results.isEmpty() || results.any { !CredentialUtils.isCircuitZkFormat(it.format) }) refuse("query-shape")
+        if (results.any { it.circuitZkPlan == null || it.candidates.isEmpty() }) refuse("no-match")
+
+        val encryptionJwk = if (request.responseMode == "dc_api.jwt") {
+            findEncryptionJwk(request.clientMetadata) ?: refuse("no-encryption-key")
+        } else {
+            null
+        }
+        val encryptionThumbprint = encryptionJwk?.computeThumbprint()?.toString()
+        val transcript = MdocDeviceResponseBuilder.buildDCAPISessionTranscript(
+            origin = origin,
+            nonce = request.nonce,
+            encryptionPublicJwkThumbprint = encryptionThumbprint,
+        )
+        val witnessProvider = (keystore as? org.siros.sdk.keystore.RootSecret)
+            ?.let { org.siros.sdk.keystore.HolderWitnessProvider(org.siros.sdk.keystore.PrivateSeed(it)) }
+            ?: NoWitnessProvider
+        val presenter = org.siros.sdk.keystore.CircuitZkPresenter(prover, support.circuits, support.validator, witnessProvider)
+        val verifierContext = VerifierIdContext(request, trust, origin)
+
+        val tokensByQueryId = linkedMapOf<String, List<String>>()
+        val usedIds = mutableListOf<Long>()
+        for (result in results) {
+            val plan = result.circuitZkPlan ?: refuse("no-plan")
+            val cred = eligibleInstances(result.candidates).firstOrNull() ?: refuse("no-eligible-copy")
+            val pseudonym = plan.functions.firstOrNull { it.id == org.siros.sdk.credentials.CircuitZkRuleSet.PSEUDONYM }
+            val type = (pseudonym?.params?.get("verifier_id_type") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+            val verifierId = if (type != null) registry.resolve(type, verifierContext) ?: refuse("verifier-id") else null
+            val context = (pseudonym?.params?.get("verifier_context") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+            val kid = cred.kid ?: keystore.listKeys().firstOrNull()?.keyId
+            val presented = try {
+                presenter.present(
+                    org.siros.sdk.keystore.CircuitZkPresenter.Request(
+                        credentialBytes = Base64.getUrlDecoder().decode(cred.raw),
+                        plan = plan,
+                        verifierId = verifierId,
+                        verifierContext = context,
+                        sessionTranscript = transcript,
+                    ),
+                    signer = { algorithm, data ->
+                        require(algorithm == COSE_ALG_ES256) { "This keystore signs ES256 only" }
+                        keystore.sign(requireNotNull(kid) { "No signing key available" }, data)
+                    },
+                )
+            } catch (e: org.siros.sdk.keystore.CircuitZkError) {
+                refuse("presenter")
+            }
+            tokensByQueryId[result.queryId] = listOf(presented.base64Url)
+            usedIds += cred.id
+        }
+
+        val finalResponseJson = buildDcApiResponseJson(request, tokensByQueryId, encryptionJwk)
         recordPresentation(PresentationRecord(
             id = randomUint32Id(),
             flowId = "dc-api-${java.util.UUID.randomUUID()}",
-            verifierName = trustResult.entityName,
-            credentialIds = selectedIds,
-            credentialNames = selectedIds.mapNotNull { id -> allCreds.find { it.id == id }?.metadata?.name },
-            requestedClaims = matchResults.flatMap { result ->
-                result.requestedClaims.mapNotNull { path -> path.lastOrNull() }
-            }.distinct(),
-            zkProof = selectedIds.any { it in zkRequestedIds },
+            verifierName = trust.entityName,
+            credentialIds = usedIds,
+            credentialNames = usedIds.mapNotNull { id -> allCreds.find { it.id == id }?.metadata?.name },
+            // No claim names and no pseudonym: nothing is disclosed but a proof.
+            requestedClaims = emptyList(),
+            zkProof = true,
             timestamp = System.currentTimeMillis(),
         ))
+        return DCAPIPresentationResult(responseJson = finalResponseJson, credentialIds = usedIds)
+    }
 
-        return DCAPIPresentationResult(responseJson = finalResponseJson, credentialIds = selectedIds)
+    /** No wallet-held private input: used when the keystore cannot derive seeds. */
+    private object NoWitnessProvider : org.siros.sdk.keystore.CircuitZkWitnessProvider {
+        override fun witness(
+            function: org.siros.sdk.credentials.CircuitZkFunction,
+            needs: Set<org.siros.sdk.keystore.CircuitZkWitnessKind>,
+            credentialType: String,
+        ): org.siros.sdk.keystore.CircuitZkFunctionWitness? =
+            if (needs.isEmpty()) org.siros.sdk.keystore.CircuitZkFunctionWitness() else null
+
+        override fun privateSeedMatches(credentialType: String, psc: ByteArray) = false
     }
 
     /** Carries the per-request consent handler of [handleDCAPIRequest]'s overload. */
@@ -7633,6 +7788,9 @@ class SirosWallet private constructor(
         x5c: kotlinx.serialization.json.JsonElement?,
         jwk: kotlinx.serialization.json.JsonElement?,
         context: kotlinx.serialization.json.JsonElement?,
+        // False for circuit_zk: the PDP's answer is the only one accepted, so an
+        // outage or a LOCAL_ONLY setting is a refusal, never a local x5c check.
+        allowLocalFallback: Boolean = true,
     ): TrustResult {
         // A verifier/RP or issuer presenting an x5c chain here is the same
         // real-world trust question already answered locally for proximity
@@ -7653,7 +7811,7 @@ class SirosWallet private constructor(
         } catch (_: Exception) {
             null
         }
-        if (x5chain != null) {
+        if (x5chain != null && allowLocalFallback) {
             val mode = if (isVerifier) {
                 effectiveReaderTrustEvaluationMode
             } else {
@@ -7697,7 +7855,8 @@ class SirosWallet private constructor(
         }
 
         return try {
-            Timber.d("Calling /v1/evaluate for $subjectId")
+            // Not for circuit_zk (no local fallback): its log lines never carry the verifier id.
+            if (allowLocalFallback) Timber.d("Calling /v1/evaluate for $subjectId")
             val response = client.evaluateTrust(evaluationRequest)
 
             val decision = response["decision"]?.jsonPrimitive?.boolean ?: false
@@ -7713,9 +7872,10 @@ class SirosWallet private constructor(
                 clientIdScheme = null,
                 identifier = subjectId,
                 domain = respContext?.get("domain")?.jsonPrimitive?.contentOrNull,
+                context = respContext,
             )
         } catch (e: Exception) {
-            if (x5chain == null) throw e
+            if (x5chain == null || !allowLocalFallback) throw e
             val registryName = if (isVerifier) "RICAL" else "VICAL"
             // This path used to fall back on ANY exception, which meant a
             // backend that REFUSED the caller (a 403) silently downgraded to

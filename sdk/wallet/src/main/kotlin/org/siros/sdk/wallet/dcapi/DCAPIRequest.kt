@@ -78,6 +78,8 @@ data class DCAPIRequest(
     val expectedOrigins: List<String>? = null,
     /** Whether the signed payload has an `expected_origins` member, whatever its value. */
     val hasExpectedOrigins: Boolean = false,
+    /** `verifier_info` from the verified payload of a signed request; `null` when absent or unsigned. */
+    val verifierInfo: kotlinx.serialization.json.JsonElement? = null,
 )
 
 /**
@@ -220,6 +222,7 @@ object DCAPIRequestParser {
             transactionData = payload["transaction_data"],
             expectedOrigins = parseExpectedOrigins(payload["expected_origins"]),
             hasExpectedOrigins = payload.containsKey("expected_origins"),
+            verifierInfo = payload["verifier_info"],
         )
     }
 

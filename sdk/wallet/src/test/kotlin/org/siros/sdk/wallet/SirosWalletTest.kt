@@ -5196,6 +5196,380 @@ class SirosWalletTest {
         coVerify(exactly = 0) { keystore.signVpToken(any(), any(), any(), any()) }
     }
 
+    // ── circuit_zk over the DC API (fake trust, planner, prover and signer; test CA) ──
+
+    private object CzkFixtures {
+        const val DOCTYPE = "eu.europa.ec.eudi.nym_auth.1"
+        const val ORIGIN = "https://rp.example"
+        val root = ByteArray(32) { (it * 5 + 1).toByte() }
+        fun resource(name: String) = checkNotNull(CzkFixtures::class.java.getResourceAsStream("/circuitzk/$name")) { name }.readBytes().decodeToString()
+        private fun pemDer(pem: String) = java.util.Base64.getMimeDecoder().decode(pem.lines().filter { !it.startsWith("-----") }.joinToString(""))
+        val leafDer: ByteArray by lazy { pemDer(resource("leaf.pem")) }
+        val caDer: ByteArray by lazy { pemDer(resource("ca.pem")) }
+        val leafKey: java.security.interfaces.ECPrivateKey by lazy {
+            java.security.KeyFactory.getInstance("EC").generatePrivate(java.security.spec.PKCS8EncodedKeySpec(pemDer(resource("leaf-key.pem")))) as java.security.interfaces.ECPrivateKey
+        }
+        fun hkdf(info: ByteArray, length: Int): ByteArray {
+            fun mac(k: ByteArray, d: ByteArray) = javax.crypto.Mac.getInstance("HmacSHA256").apply { init(javax.crypto.spec.SecretKeySpec(k, "HmacSHA256")) }.doFinal(d)
+            return mac(mac(ByteArray(32), root), info + byteArrayOf(1)).copyOf(length)
+        }
+        val seed get() = hkdf("org.siros.private_seed/v1$DOCTYPE".toByteArray(), 16)
+        val psc get() = java.security.MessageDigest.getInstance("SHA-256").digest(seed)
+
+        fun mdoc(psc: ByteArray = this.psc, birth: String = "2000-06-15"): String {
+            fun c(o: Any) = com.upokecenter.cbor.CBORObject.FromObject(o)
+            fun item(id: Long, name: String, v: com.upokecenter.cbor.CBORObject): com.upokecenter.cbor.CBORObject {
+                val m = com.upokecenter.cbor.CBORObject.NewMap()
+                m[c("digestID")] = c(id); m[c("random")] = c(ByteArray(16)); m[c("elementIdentifier")] = c(name); m[c("elementValue")] = v
+                return com.upokecenter.cbor.CBORObject.FromObjectAndTag(m.EncodeToBytes(), 24)
+            }
+            val items = com.upokecenter.cbor.CBORObject.NewArray()
+            items.Add(item(0, "birth_date", com.upokecenter.cbor.CBORObject.FromObjectAndTag(birth, 1004)))
+            items.Add(item(1, "ssc", c(ByteArray(32) { 9 })))
+            items.Add(item(2, "psc", c(psc)))
+            val ns = com.upokecenter.cbor.CBORObject.NewMap(); ns[c(DOCTYPE)] = items
+            val mso = com.upokecenter.cbor.CBORObject.NewMap(); mso[c("docType")] = c(DOCTYPE)
+            val unprotected = com.upokecenter.cbor.CBORObject.NewMap(); unprotected[c(33)] = c(leafDer)
+            val auth = com.upokecenter.cbor.CBORObject.NewArray()
+            auth.Add(c(ByteArray(0))); auth.Add(unprotected)
+            auth.Add(c(com.upokecenter.cbor.CBORObject.FromObjectAndTag(mso.EncodeToBytes(), 24).EncodeToBytes())); auth.Add(c(ByteArray(64)))
+            val signed = com.upokecenter.cbor.CBORObject.NewMap(); signed[c("nameSpaces")] = ns; signed[c("issuerAuth")] = auth
+            return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(signed.EncodeToBytes())
+        }
+    }
+
+    /** A request signed with the test leaf key and carrying the test chain in `x5c`. */
+    private fun czkRequest(
+        clientId: String = "x509_san_dns:rp.example",
+        origins: String? = """["${CzkFixtures.ORIGIN}"]""",
+        protocol: String = "openid4vp-v1-signed",
+        signed: Boolean = true,
+        nonce: String = "czk-nonce-1",
+    ): String {
+        val query = """{"credentials":[{"id":"q","format":"circuit_zk","meta":{"doctype_value":"${CzkFixtures.DOCTYPE}"}}]}"""
+        val claims = com.nimbusds.jwt.JWTClaimsSet.parse(
+            """{"client_id":"$clientId","nonce":"$nonce","response_mode":"dc_api","dcql_query":$query""" +
+                (origins?.let { ""","expected_origins":$it""" } ?: "") + "}"
+        )
+        if (!signed) {
+            return wrapDCAPIRequest("openid4vp-v1-unsigned", Json.parseToJsonElement(claims.toString()).jsonObject)
+        }
+        val header = com.nimbusds.jose.JWSHeader.Builder(com.nimbusds.jose.JWSAlgorithm.ES256)
+            .x509CertChain(listOf(com.nimbusds.jose.util.Base64.encode(CzkFixtures.leafDer), com.nimbusds.jose.util.Base64.encode(CzkFixtures.caDer)))
+            .build()
+        val jwt = com.nimbusds.jwt.SignedJWT(header, claims).also { it.sign(com.nimbusds.jose.crypto.ECDSASigner(CzkFixtures.leafKey)) }
+        return wrapDCAPIRequest(protocol, buildJsonObject { put("request", jwt.serialize()) })
+    }
+
+    private class CzkSetup(
+        val wallet: SirosWallet,
+        val apiClient: BackendApiClient,
+        val history: MutableList<PresentationRecord>,
+        val prover: CountingCzkProver,
+    )
+
+    private class CountingCzkProver(val inner: org.siros.sdk.keystore.CircuitZkProver) : org.siros.sdk.keystore.CircuitZkProver {
+        var calls = 0
+        override val isFake get() = inner.isFake
+        override suspend fun prove(input: org.siros.sdk.keystore.CircuitZkProveInput): org.siros.sdk.keystore.CircuitZkProveOutput {
+            calls++
+            return inner.prove(input)
+        }
+    }
+
+    private fun czkSetup(
+        functions: List<org.siros.sdk.credentials.CircuitZkFunction> = listOf(
+            org.siros.sdk.credentials.CircuitZkFunction(
+                "pseudonym-v1-sha256", "n",
+                Json.parseToJsonElement("""{"config":"known-offender-matching-psc","verifier_id_type":"x509_san_dns"}""").jsonObject,
+            ),
+        ),
+        trust: suspend () -> JsonObject = { buildJsonObject { put("decision", true) } },
+        sources: List<VerifierIdSource> = listOf(X509SanDnsSource(), AuthZENSource("semantic")),
+        psc: ByteArray = CzkFixtures.psc,
+        birth: String = "2000-06-15",
+        flagOn: Boolean = true,
+        cachedTrust: Boolean = false,
+        localOnlyTrust: Boolean = false,
+    ): CzkSetup {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } coAnswers { trust() }
+        val keystore = mockk<KeystoreManager>(moreInterfaces = arrayOf(org.siros.sdk.keystore.RootSecret::class))
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("kid", "ES256", 0L))
+        every { (keystore as org.siros.sdk.keystore.RootSecret).deriveSecret(any(), any()) } answers {
+            CzkFixtures.hkdf(firstArg(), secondArg())
+        }
+        val store = FakeCredentialStore(mutableListOf(
+            StoredCredential(id = 1L, format = "mso_mdoc", raw = CzkFixtures.mdoc(psc, birth),
+                metadata = CredentialMetadata(name = "Nym"), batchId = 1L, instanceId = 0),
+        ))
+        val registry = VerifierIdRegistry(sources)
+        val circuits = org.siros.sdk.credentials.CircuitZkCircuitSource {
+            listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf(CzkFixtures.DOCTYPE)))
+        }
+        val support = org.siros.sdk.credentials.CircuitZkSupport(
+            planner = { _, _ -> org.siros.sdk.credentials.CircuitZkPlanResult.Plan(org.siros.sdk.credentials.CircuitZkPlan(
+                functions,
+                raw = Json.parseToJsonElement("""{"id":"q","format":"circuit_zk","meta":{"doctype_value":"${CzkFixtures.DOCTYPE}"}}""").jsonObject,
+            )) },
+            validator = org.siros.sdk.credentials.RulebookCircuitZkValidator(verifierIdTypes = registry, circuits = circuits),
+            circuits = circuits,
+        )
+        val history = mutableListOf<PresentationRecord>()
+        val cache = TrustCache()
+        if (cachedTrust) cache.put("x509_san_dns:rp.example", TrustResult(trusted = true))
+        val prover = CountingCzkProver(org.siros.sdk.keystore.FakeCircuitZkProver.optIn())
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "apiClient" to apiClient,
+            "keystore" to keystore,
+            "credentialStore" to store,
+            "trustCache" to cache,
+            "_presentationHistory" to history,
+            "config" to WalletConfig(
+                backendUrl = "https://backend.example",
+                readerTrustEvaluationMode = if (localOnlyTrust) MdocTrustEvaluationMode.LOCAL_ONLY else null,
+            ),
+            "circuitZkSupport" to (if (flagOn) support else null),
+            "circuitZkProver" to prover,
+            "verifierIdRegistry" to registry,
+        )
+        return CzkSetup(wallet, apiClient, history, prover)
+    }
+
+    private fun czkRun(s: CzkSetup, raw: String, origin: String = CzkFixtures.ORIGIN) =
+        kotlinx.coroutines.runBlocking { s.wallet.handleDCAPIRequest(raw, origin) }
+
+    private fun czkRefused(s: CzkSetup, raw: String, origin: String = CzkFixtures.ORIGIN) {
+        val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) { czkRun(s, raw, origin) }
+        assertEquals("DC API request refused (protocol=${e.protocol})", e.message)
+        assertTrue(s.history.isEmpty())
+    }
+
+    private val czkLogs = mutableListOf<String>()
+    private val czkTree = object : timber.log.Timber.Tree() {
+        override fun log(priority: Int, tag: String?, message: String, t: Throwable?) { czkLogs += message + (t?.toString() ?: "") }
+    }
+
+    private fun czkExpectedPseudonym(verifierId: String) = org.siros.sdk.credentials.NymPseudonym.derive(
+        "known-offender-matching-psc", CzkFixtures.seed, verifierId = verifierId,
+    )
+
+    @Test
+    fun circuitZkDcApi_success_presentationDecodesAndPseudonymMatchesIndependentRecompute() = runTest(dispatcher) {
+        timber.log.Timber.plant(czkTree)
+        try {
+            val s = czkSetup()
+            val result = czkRun(s, czkRequest())
+
+            assertEquals(listOf(1L), result.credentialIds)
+            val envelope = Json.parseToJsonElement(result.responseJson).jsonObject
+            assertEquals("openid4vp-v1-signed", envelope["protocol"]?.jsonPrimitive?.content)
+            val token = envelope["data"]!!.jsonObject["vp_token"]!!.jsonObject["q"]!!.jsonArray.single().jsonPrimitive.content
+            val decoded = org.siros.sdk.credentials.CircuitZkPresentationCodec.decodeBase64Url(token)
+            assertEquals(
+                org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("x509_san_dns:rp.example")),
+                decoded.results["n"],
+            )
+            assertEquals(setOf("n"), decoded.results.keys)
+            assertEquals(1, s.prover.calls)
+            // History: a ZK proof, no claim names, no pseudonym.
+            val record = s.history.single()
+            assertTrue(record.zkProof)
+            assertTrue(record.requestedClaims.isEmpty())
+            coVerify(exactly = 1) { s.apiClient.evaluateTrust(any()) }
+            // No log carries request contents or the verifier id.
+            for (line in czkLogs) {
+                assertFalse(line, line.contains("rp.example"))
+                assertFalse(line, line.contains("czk-nonce-1"))
+            }
+        } finally {
+            timber.log.Timber.uproot(czkTree)
+        }
+    }
+
+    @Test
+    fun circuitZkDcApi_requestHardeningFailures_areRefusedBeforeTrust() = runTest(dispatcher) {
+        for (raw in listOf(
+            czkRequest(signed = false),
+            czkRequest(origins = """["https://evil.example"]"""),
+            czkRequest(origins = null),
+            czkRequest(protocol = "openid4vp-v1-multisigned"),
+        )) {
+            val s = czkSetup()
+            czkRefused(s, raw)
+            coVerify(exactly = 0) { s.apiClient.evaluateTrust(any()) }
+        }
+    }
+
+    @Test
+    fun circuitZkDcApi_wrongCallingOrigin_isRefused() = runTest(dispatcher) {
+        val s = czkSetup()
+        czkRefused(s, czkRequest(), origin = "https://evil.example")
+        coVerify(exactly = 0) { s.apiClient.evaluateTrust(any()) }
+    }
+
+    @Test
+    fun circuitZkDcApi_x509HashClientId_withX509SanDnsType_isRefused() = runTest(dispatcher) {
+        val s = czkSetup()
+        czkRefused(s, czkRequest(clientId = "x509_hash:abcdef"))
+        assertEquals(0, s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkDcApi_clientIdDnsNotInCertificateSan_isRefused() = runTest(dispatcher) {
+        val s = czkSetup()
+        czkRefused(s, czkRequest(clientId = "x509_san_dns:not-in-cert.example"))
+        assertEquals(0, s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkDcApi_unregisteredVerifierIdType_isRefused() = runTest(dispatcher) {
+        val fn = org.siros.sdk.credentials.CircuitZkFunction(
+            "pseudonym-v1-sha256", "n",
+            Json.parseToJsonElement("""{"config":"known-offender-matching-psc","verifier_id_type":"x509_hash"}""").jsonObject,
+        )
+        val s = czkSetup(functions = listOf(fn))
+        czkRefused(s, czkRequest())
+        assertEquals(0, s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkDcApi_trustFailureAndPdpOutage_areRefused_withNoLocalOrCachedFallback() = runTest(dispatcher) {
+        val untrusted = czkSetup(trust = { buildJsonObject { put("decision", false) } })
+        czkRefused(untrusted, czkRequest())
+
+        // An outage: the request is refused even with a positive cache entry and the local-only mode.
+        val outage = czkSetup(trust = { throw java.io.IOException("PDP unreachable") }, cachedTrust = true)
+        czkRefused(outage, czkRequest())
+        coVerify(exactly = 1) { outage.apiClient.evaluateTrust(any()) }
+
+        val rejected = czkSetup(trust = { throw IllegalStateException("403") })
+        czkRefused(rejected, czkRequest())
+
+        // A wallet configured for local-only reader trust still asks the PDP for circuit_zk, and an outage is a refusal.
+        val localOnly = czkSetup(trust = { throw java.io.IOException("PDP unreachable") }, localOnlyTrust = true)
+        czkRefused(localOnly, czkRequest())
+        coVerify(exactly = 1) { localOnly.apiClient.evaluateTrust(any()) }
+    }
+
+    @Test
+    fun circuitZkDcApi_localOnlyTrustMode_stillUsesThePdp() = runTest(dispatcher) {
+        val s = czkSetup(localOnlyTrust = true)
+        assertEquals(listOf(1L), czkRun(s, czkRequest()).credentialIds)
+        coVerify(exactly = 1) { s.apiClient.evaluateTrust(any()) }
+    }
+
+    @Test
+    fun circuitZkDcApi_falseAgePredicate_isRefusedWithNoDescription() = runTest(dispatcher) {
+        val age = org.siros.sdk.credentials.CircuitZkFunction(
+            "age_check", "a", Json.parseToJsonElement("""{"ge":"2010-01-01"}""").jsonObject,
+        )
+        val s = czkSetup(functions = listOf(age))
+        czkRefused(s, czkRequest())
+        assertEquals(0, s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkDcApi_pscMismatch_isRefused() = runTest(dispatcher) {
+        val s = czkSetup(psc = ByteArray(32))
+        czkRefused(s, czkRequest())
+        assertEquals(0, s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkDcApi_flagOff_isRefusedAsBefore() = runTest(dispatcher) {
+        val s = czkSetup(flagOn = false)
+        czkRefused(s, czkRequest())
+        // The existing path: trust is evaluated, then nothing matches. The prover is never reached.
+        assertEquals(0, s.prover.calls)
+    }
+
+    private class FixedSource(override val type: String, val id: String?, val calls: MutableList<String>) : VerifierIdSource {
+        override suspend fun resolve(context: VerifierIdContext): String? { calls += id ?: "declined-$type"; return id }
+    }
+
+    @Test
+    fun circuitZkDcApi_sourcesForOneTypeAreTriedInOrder_andADecliningSourceFallsThrough() = runTest(dispatcher) {
+        val calls = mutableListOf<String>()
+        val s = czkSetup(sources = listOf(
+            FixedSource("x509_san_dns", null, calls),
+            FixedSource("x509_san_dns", "second-id", calls),
+            FixedSource("x509_san_dns", "third-id", calls),
+        ))
+        val result = czkRun(s, czkRequest())
+        val token = Json.parseToJsonElement(result.responseJson).jsonObject["data"]!!.jsonObject["vp_token"]!!.jsonObject["q"]!!.jsonArray.single().jsonPrimitive.content
+        val decoded = org.siros.sdk.credentials.CircuitZkPresentationCodec.decodeBase64Url(token)
+        assertEquals(org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("second-id")), decoded.results["n"])
+        assertEquals(listOf("declined-x509_san_dns", "second-id"), calls)
+    }
+
+    @Test
+    fun circuitZkDcApi_authZenSourceReadsTheVerifierIdFromTheTrustContext() = runTest(dispatcher) {
+        val semantic = org.siros.sdk.credentials.CircuitZkFunction(
+            "pseudonym-v1-sha256", "n",
+            Json.parseToJsonElement("""{"config":"known-offender-matching-psc","verifier_id_type":"semantic"}""").jsonObject,
+        )
+        val withContext = czkSetup(functions = listOf(semantic), trust = {
+            buildJsonObject {
+                put("decision", true)
+                putJsonObject("context") { putJsonObject("verifier_ids") { put("semantic", "semantic_id:LEIXG-5299") } }
+            }
+        })
+        val result = czkRun(withContext, czkRequest())
+        val token = Json.parseToJsonElement(result.responseJson).jsonObject["data"]!!.jsonObject["vp_token"]!!.jsonObject["q"]!!.jsonArray.single().jsonPrimitive.content
+        assertEquals(
+            org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("semantic_id:LEIXG-5299")),
+            org.siros.sdk.credentials.CircuitZkPresentationCodec.decodeBase64Url(token).results["n"],
+        )
+
+        // No context, no verifier_ids, or a different type: the source declines and the request is refused.
+        for (trust in listOf<suspend () -> JsonObject>(
+            { buildJsonObject { put("decision", true) } },
+            { buildJsonObject { put("decision", true); putJsonObject("context") { put("framework", "x") } } },
+            { buildJsonObject { put("decision", true); putJsonObject("context") { putJsonObject("verifier_ids") { put("other", "v") } } } },
+        )) {
+            czkRefused(czkSetup(functions = listOf(semantic), trust = trust), czkRequest())
+        }
+    }
+
+    @Test
+    fun trustResult_contextIsAbsentByDefault() {
+        assertNull(TrustResult(trusted = true).context)
+    }
+
+    @Test
+    fun x509SanDnsSource_declinesOtherPrefixesAndUnsignedRequests() = runTest(dispatcher) {
+        fun ctx(clientId: String?, x5c: List<String>?) = VerifierIdContext(
+            org.siros.sdk.wallet.dcapi.DCAPIRequest(
+                clientId = clientId, responseMode = "dc_api", nonce = "n", dcqlQuery = null, clientMetadata = null,
+                keyMaterial = x5c?.let { org.siros.sdk.wallet.dcapi.DCAPIRequestKeyMaterial(x5c = it) }, protocol = "openid4vp-v1-signed", state = null,
+            ),
+            TrustResult(trusted = true), "https://rp.example",
+        )
+        val leaf = listOf(java.util.Base64.getEncoder().encodeToString(CzkFixtures.leafDer))
+        val src = X509SanDnsSource()
+        assertEquals("x509_san_dns:rp.example", src.resolve(ctx("x509_san_dns:rp.example", leaf)))
+        assertEquals("x509_san_dns:RP.example", src.resolve(ctx("x509_san_dns:RP.example", leaf)))
+        assertEquals("x509_san_dns:other.example", src.resolve(ctx("x509_san_dns:other.example", leaf)))
+        assertNull(src.resolve(ctx("x509_hash:rp.example", leaf)))
+        assertNull(src.resolve(ctx("rp.example", leaf)))
+        assertNull(src.resolve(ctx("x509_san_dns:", leaf)))
+        assertNull(src.resolve(ctx("x509_san_dns:nope.example", leaf)))
+        assertNull(src.resolve(ctx("x509_san_dns:*.example", leaf)))
+        // A SAN of another type (an IP address) with the same text is not a dNSName.
+        val ipSan = listOf(java.util.Base64.getEncoder().encodeToString(
+            java.util.Base64.getMimeDecoder().decode(CzkFixtures.resource("leaf-ip-san.pem").lines().filter { !it.startsWith("-----") }.joinToString("")),
+        ))
+        assertEquals("x509_san_dns:rp.example", src.resolve(ctx("x509_san_dns:rp.example", ipSan)))
+        assertNull(src.resolve(ctx("x509_san_dns:1.2.3.4", ipSan)))
+        assertNull(src.resolve(ctx("x509_san_dns:rp.example", null)))
+        assertNull(src.resolve(ctx("x509_san_dns:rp.example", listOf("AAAA"))))
+        assertNull(src.resolve(ctx(null, leaf)))
+    }
+
     @Test
     fun handleDCAPIRequest_untrustedVerifier_throwsAndNeverSigns() = runTest(dispatcher) {
         val apiClient = mockk<BackendApiClient>()
