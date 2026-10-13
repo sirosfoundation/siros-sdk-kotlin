@@ -119,6 +119,8 @@ import org.siros.sdk.keystore.WscdKeystoreAdapter
 import org.siros.sdk.keystore.WscdManager
 import org.siros.sdk.wallet.dcapi.DCAPIRequest
 import org.siros.sdk.wallet.dcapi.DCAPIRequestParser
+import org.siros.sdk.wallet.dcapi.DCAPIRequestRules
+import org.siros.sdk.wallet.dcapi.ExpectedOriginsMode
 import org.siros.sdk.transport.CredentialNotifier
 import org.siros.sdk.transport.engine.CredentialMatch
 import org.siros.sdk.transport.engine.CredentialNotificationEvent
@@ -213,6 +215,12 @@ class SirosWallet private constructor(
     private val activity: Activity,
     private val config: WalletConfig,
 ) {
+    // The DC API request rules, copied out of [config] once. Nullable only so a
+    // wallet built without running initializers (tests) falls back to the defaults.
+    private val dcApiExpectedOriginsMode: ExpectedOriginsMode? = config.dcApiExpectedOrigins
+    private val dcApiRequiresSignedRequest: ((kotlinx.serialization.json.JsonObject?) -> Boolean)? =
+        config.dcApiRequiresSignedRequest
+
     // ── Public API ──────────────────────────────────────────────────
 
     /**
@@ -3678,7 +3686,20 @@ class SirosWallet private constructor(
      *   declined; nothing is signed.
      */
     suspend fun handleDCAPIRequest(rawRequestJson: String, origin: String): DCAPIPresentationResult {
-        val request = DCAPIRequestParser.parse(rawRequestJson)
+        val request = try {
+            DCAPIRequestParser.parse(
+                rawRequestJson,
+                DCAPIRequestRules(
+                    origin,
+                    dcApiExpectedOriginsMode ?: ExpectedOriginsMode.OFF,
+                    dcApiRequiresSignedRequest ?: DCAPIRequestRules.DEFAULT_REQUIRES_SIGNED_REQUEST,
+                ),
+            )
+        } catch (e: org.siros.sdk.wallet.dcapi.DCAPIRequestRefused) {
+            // Refused before trust evaluation or matching; names the protocol only.
+            Timber.w("DC API request refused (protocol=${e.protocol})")
+            throw e
+        }
 
         // The DC API has no negotiation, so a request can carry
         // transaction_data at a wallet that never declared support. Refuse it

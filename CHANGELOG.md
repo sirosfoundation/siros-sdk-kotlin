@@ -30,6 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implement the narrow `RootSecret` API; the key is never exported and a
   locked keystore throws `KeystoreException`. `mainKey` must never be
   rotated. Vectors in `spec/private-seed-vectors.json`. (#263)
+- **DC API: `expected_origins` and wallet-chosen request entry.** The parser
+  reads `expected_origins` from a signed payload and, given a policy, answers
+  the first `requests[]` entry the policy accepts (the default still takes the
+  first). A `circuit_zk` request must use `openid4vp-v1-signed` and name the
+  calling origin in `expected_origins` (exact match); otherwise it is refused
+  with `access_denied` and no description, before trust evaluation.
+  `WalletConfig.dcApiExpectedOrigins` (`OFF` default, `IF_PRESENT`,
+  `REQUIRED`) gates the other formats. (#264)
 
 ## [0.20.5] - 2026-10-12
 

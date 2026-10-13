@@ -5054,6 +5054,55 @@ class SirosWalletTest {
     }
 
     @Test
+    fun handleDCAPIRequest_circuitZkUnsignedRequest_isRefusedBeforeTrustEvaluation() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "apiClient" to apiClient,
+            "trustCache" to TrustCache(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+        val requestJson = wrapDCAPIRequest("openid4vp-v1-unsigned", buildJsonObject {
+            put("nonce", "n")
+            putJsonObject("dcql_query") {
+                putJsonArray("credentials") { add(buildJsonObject { put("id", "q"); put("format", "circuit_zk") }) }
+            }
+        })
+
+        val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+            kotlinx.coroutines.runBlocking { wallet.handleDCAPIRequest(requestJson, origin = "https://relying-party.example") }
+        }
+
+        assertEquals("openid4vp-v1-unsigned", e.protocol)
+        coVerify(exactly = 0) { apiClient.evaluateTrust(any()) }
+    }
+
+    @Test
+    fun handleDCAPIRequest_requiredMode_refusesSignedRequestWithoutExpectedOriginsBeforeTrust() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "apiClient" to apiClient,
+            "trustCache" to TrustCache(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+            "dcApiExpectedOriginsMode" to org.siros.sdk.wallet.dcapi.ExpectedOriginsMode.REQUIRED,
+        )
+        val ecKey = com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256).generate()
+        val jwt = com.nimbusds.jwt.SignedJWT(
+            com.nimbusds.jose.JWSHeader.Builder(com.nimbusds.jose.JWSAlgorithm.ES256).jwk(ecKey.toPublicJWK()).build(),
+            com.nimbusds.jwt.JWTClaimsSet.Builder().claim("nonce", "n").build(),
+        ).also { it.sign(com.nimbusds.jose.crypto.ECDSASigner(ecKey)) }
+        val requestJson = wrapDCAPIRequest("openid4vp-v1-signed", buildJsonObject { put("request", jwt.serialize()) })
+
+        org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+            kotlinx.coroutines.runBlocking { wallet.handleDCAPIRequest(requestJson, origin = "https://relying-party.example") }
+        }
+        coVerify(exactly = 0) { apiClient.evaluateTrust(any()) }
+    }
+
+    @Test
     fun handleDCAPIRequest_untrustedVerifier_throwsAndNeverSigns() = runTest(dispatcher) {
         val apiClient = mockk<BackendApiClient>()
         coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject {

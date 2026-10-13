@@ -155,6 +155,10 @@ class DCAPIGetCredentialActivity : Activity() {
                 // which credentials the wallet holds and why a request failed.
                 Timber.w("DC API transaction_data refused (${e.reason.code})")
                 finishWithProtocolError(null, e.verifierError)
+            } catch (e: DCAPIRequestRefused) {
+                // The request does not meet the wallet's signed-request rules. Answered with
+                // access_denied and no description, so the verifier learns nothing about why.
+                finishWithProtocolError(null)
             } catch (e: WalletException) {
                 // A decline (untrusted verifier, no matching/eligible
                 // credential, missing encryption key, ...) is a normal

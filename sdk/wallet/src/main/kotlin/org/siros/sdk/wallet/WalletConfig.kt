@@ -1,6 +1,8 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.wallet
 
+import org.siros.sdk.wallet.dcapi.DCAPIRequestRules
+import org.siros.sdk.wallet.dcapi.ExpectedOriginsMode
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -326,6 +328,21 @@ data class WalletConfig(
      * toggle; flip this and rebuild the wallet to change it.
      */
     val vegaProfilingEnabled: Boolean = false,
+    /**
+     * How strictly a signed DC API request's `expected_origins` is enforced
+     * for the formats other than `circuit_zk`: [ExpectedOriginsMode.OFF]
+     * (default, ignore it, as always), `IF_PRESENT` or `REQUIRED`.
+     * `circuit_zk` always requires a signed request whose `expected_origins`
+     * lists the calling origin, whatever this says.
+     */
+    val dcApiExpectedOrigins: ExpectedOriginsMode = ExpectedOriginsMode.OFF,
+    /**
+     * Which DC API requests must be signed and name the calling origin, given
+     * the request's DCQL query. The default is any query with a credential of
+     * `format: "circuit_zk"`.
+     */
+    val dcApiRequiresSignedRequest: (kotlinx.serialization.json.JsonObject?) -> Boolean =
+        DCAPIRequestRules.DEFAULT_REQUIRES_SIGNED_REQUEST,
 ) {
     /**
      * The reader-trust mode actually in force: [readerTrustEvaluationMode] if
