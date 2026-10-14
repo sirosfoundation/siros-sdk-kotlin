@@ -292,7 +292,7 @@
     <string name="settings_policy_non_disclosure_default">Predefinição: nunca corresponder, mostrar ou partilhar os compromissos de semente nym_auth (ssc, psc)</string>
     <string name="settings_policy_non_disclosure_none">Nenhum: sem atributos protegidos (apenas testes)</string>
     <string name="settings_policy_circuit_zk">Pedidos circuit_zk</string>
-    <string name="settings_policy_circuit_zk_description">Responder a pedidos circuit_zk (conhecimento zero). O planeador da aplicação de exemplo só compreende a consulta de demonstração nym_auth.</string>
+    <string name="settings_policy_circuit_zk_description">Responder a pedidos circuit_zk (conhecimento zero). A aplicação de exemplo fornece apenas o circuito de demonstração nym_auth, por isso só consegue responder a essa consulta.</string>
     <string name="settings_policy_fake_prover">Provador FALSO (sem prova real)</string>
     <string name="settings_policy_fake_prover_description">Usar o provador falso, que NÃO produz nenhuma prova real. Um verificador não a pode aceitar. Apenas desenvolvimento. Requer circuit_zk ativo.</string>
     <string name="settings_policy_expected_origins">Origens esperadas (outros formatos)</string>

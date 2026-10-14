@@ -21,4 +21,14 @@ class DCAPIActivityLoggingTest {
             .filter { (_, line) -> line.contains("Timber.") && !line.trimStart().startsWith("//") && payload.containsMatchIn(line) }
         assertTrue("payload or origin logged at: ${offending.map { it.index + 1 to it.value.trim() }}", offending.isEmpty())
     }
+
+    /** Timber prints a throwable's message, and a DC API refusal's message names the verifier and why it was refused. */
+    @Test
+    fun noLogCallPassesAThrowable() {
+        assertTrue("missing ${source.path}", source.exists())
+        val throwable = Regex("""Timber\.\w\(\s*(e|ex|t|throwable|error|cause)\s*[,)]""")
+        val offending = source.readLines().withIndex()
+            .filter { (_, line) -> !line.trimStart().startsWith("//") && throwable.containsMatchIn(line) }
+        assertTrue("throwable logged at: ${offending.map { it.index + 1 to it.value.trim() }}", offending.isEmpty())
+    }
 }

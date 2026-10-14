@@ -79,6 +79,16 @@ class WalletPolicyOptionsTest {
     }
 
     @Test
+    fun aProductionProverOnTheBaseIsKeptUnlessTheFakeIsSelected() {
+        val real = org.siros.sdk.keystore.FakeCircuitZkProver.optIn()
+        val withReal = base.copy(circuitZkProver = real)
+        assertSame(real, WalletPolicyOptions(circuitZk = true).applyTo(withReal, planner, circuits).circuitZkProver)
+        val fake = WalletPolicyOptions(circuitZk = true, fakeProver = true).applyTo(withReal, planner, circuits).circuitZkProver
+        assertTrue(fake!!.isFake)
+        assertTrue(fake !== real)
+    }
+
+    @Test
     fun theFakeProverIsNeverInstalledWithoutCircuitZk_andCircuitZkAloneInstallsNoProver() {
         assertNull(WalletPolicyOptions(circuitZk = false, fakeProver = true).applyTo(base, planner, circuits).circuitZkProver)
         val on = WalletPolicyOptions(circuitZk = true).applyTo(base, planner, circuits)

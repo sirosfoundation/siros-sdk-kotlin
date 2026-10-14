@@ -116,7 +116,8 @@ class DCAPIGetCredentialActivity : Activity() {
         val origin = try {
             request.callingAppInfo.getOrigin(loadPrivilegedAllowlist())
         } catch (e: Exception) {
-            Timber.w(e, "Could not resolve verified origin for DC API request")
+            // Class only: the exception message can carry the calling package or origin.
+            Timber.w("Could not resolve verified origin for DC API request (${e.javaClass.simpleName})")
             null
         }
         if (origin == null) {
@@ -182,14 +183,15 @@ class DCAPIGetCredentialActivity : Activity() {
                 // real (successful) DC API response whose body is an
                 // OpenID4VP error object lets the RP read and display the
                 // actual reason instead.
-                Timber.w(e, "DC API presentation declined")
+                // The message can name the verifier and the trust reason, so log only the coarse reason.
+                Timber.w("DC API presentation declined (${(e as? DCAPIPresentationDeclined)?.reason ?: e.javaClass.simpleName})")
                 // The verifier's answer is unchanged; the user is told why in coarse terms.
                 finishWithProtocolError(
                     e.message ?: "Presentation declined",
                     userMessageRes = (e as? DCAPIPresentationDeclined)?.reason?.userMessageRes,
                 )
             } catch (e: Exception) {
-                Timber.e(e, "DC API presentation failed unexpectedly")
+                Timber.e("DC API presentation failed unexpectedly (${e.javaClass.simpleName})")
                 finishWithError(e.message ?: "Presentation failed")
             }
         }

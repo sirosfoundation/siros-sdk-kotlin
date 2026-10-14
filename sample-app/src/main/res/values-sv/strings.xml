@@ -292,7 +292,7 @@
     <string name="settings_policy_non_disclosure_default">Standard: matcha, visa eller dela aldrig nym_auth-frökommitteringarna (ssc, psc)</string>
     <string name="settings_policy_non_disclosure_none">Ingen: inga skyddade anspråk (endast test)</string>
     <string name="settings_policy_circuit_zk">circuit_zk-begäranden</string>
-    <string name="settings_policy_circuit_zk_description">Besvara circuit_zk-begäranden (nollkunskap). Exempelappens planerare förstår bara nym_auth-demofrågan.</string>
+    <string name="settings_policy_circuit_zk_description">Besvara circuit_zk-begäranden (nollkunskap). Exempelappen tillhandahåller bara demokretsen nym_auth och kan därför bara besvara den frågan.</string>
     <string name="settings_policy_fake_prover">FALSK bevisare (inget riktigt bevis)</string>
     <string name="settings_policy_fake_prover_description">Använd den falska bevisaren, som INTE skapar något riktigt bevis. En verifierare kan inte godta det. Endast utveckling. Kräver att circuit_zk är på.</string>
     <string name="settings_policy_expected_origins">Förväntade ursprung (andra format)</string>

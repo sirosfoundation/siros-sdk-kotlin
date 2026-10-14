@@ -167,7 +167,7 @@ private fun <T> PolicyChoice(
                     .padding(vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                RadioButton(selected = option == selected, onClick = { onSelect(option) }, enabled = enabled)
+                RadioButton(selected = option == selected, onClick = null, enabled = enabled)
                 Spacer(Modifier.width(8.dp))
                 Text(stringResource(label(option)), style = MaterialTheme.typography.bodyMedium)
             }

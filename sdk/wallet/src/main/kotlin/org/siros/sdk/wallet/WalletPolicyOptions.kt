@@ -59,8 +59,10 @@ data class WalletPolicyOptions(
     /**
      * [base] with this policy applied. [planner] and [circuits] are what
      * `circuit_zk` needs besides a prover; they are only used when [circuitZk]
-     * is on. Without a prover (no [fakeProver], and the SDK ships no other)
-     * `circuit_zk` is on for matching but every request is refused.
+     * is on. The prover of [base] is kept unless [fakeProver] selects the fake
+     * one, so a host can combine these options with a production prover. With
+     * neither (the SDK ships no other) `circuit_zk` is on for matching but
+     * every request is refused.
      */
     fun applyTo(
         base: WalletConfig,
@@ -76,7 +78,7 @@ data class WalletPolicyOptions(
         circuitZk = circuitZk,
         circuitZkPlanner = if (circuitZk) planner else null,
         circuitZkCircuits = if (circuitZk) circuits else null,
-        circuitZkProver = if (circuitZk && fakeProver) FakeCircuitZkProver.optIn() else null,
+        circuitZkProver = if (circuitZk && fakeProver) FakeCircuitZkProver.optIn() else base.circuitZkProver,
         circuitZkVerifierIdSources = buildList {
             if (VerifierIdSourceKind.X509_SAN_DNS in verifierIdSources) add(X509SanDnsSource())
             if (VerifierIdSourceKind.AUTHZEN in verifierIdSources) add(AuthZENSource("semantic"))
