@@ -203,24 +203,14 @@ class DCAPIGetCredentialActivity : Activity() {
      * registers are the credential's numeric id; anything else (the debug diagnostics entry, a
      * foreign id) becomes an id no credential has, which the wallet refuses as an unavailable selection
      * (it must not be dropped: an empty selection would present the first eligible credential).
+     * An absent or unreadable selection is refused the same way; see [DCAPISelection].
      */
-    private fun selectedCredentialIdsOf(request: ProviderGetCredentialRequest): List<Long> {
-        val fromSet = try {
-            request.selectedCredentialSet?.credentials?.map { it.credentialId.toLongOrNull() ?: NO_SUCH_CREDENTIAL }
-        } catch (e: Exception) {
-            null
-        }
-        if (!fromSet.isNullOrEmpty()) return fromSet
-        return try {
-            listOfNotNull(request.selectedEntryId?.let { it.toLongOrNull() ?: NO_SUCH_CREDENTIAL })
-        } catch (e: Exception) {
-            emptyList()
-        }
-    }
-
-    private companion object {
-        const val NO_SUCH_CREDENTIAL = -1L
-    }
+    private fun selectedCredentialIdsOf(request: ProviderGetCredentialRequest): List<Long> =
+        // Fail closed: an absent or unreadable picker selection is never "no selection".
+        DCAPISelection.resolve(
+            selectedSet = { request.selectedCredentialSet?.credentials?.map { it.credentialId } },
+            selectedEntry = { request.selectedEntryId },
+        )
 
     override fun onDestroy() {
         // The wallet call is not cancelled when the Activity goes away
