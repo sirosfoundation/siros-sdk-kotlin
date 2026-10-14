@@ -3,6 +3,7 @@ package org.siros.sdk.credentials
 
 import java.util.Base64
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -227,6 +228,68 @@ object CredentialDisclosureGuard {
     }
 
     /**
+     * What a raw-credential debug view may show of [credential]: the whole of it when its type
+     * protects nothing, otherwise a redacted view. Redaction is ancestor-aware and segment-based
+     * (as the other enforcement points): cleartext payload claims that are protected, below a
+     * protected path or hold one are dropped, and so are the disclosures whose placed path is
+     * protected, below one or holds one. A disclosure that cannot be placed is dropped when a
+     * protected path mentions its name, and an array-element disclosure (no claim name) is always
+     * dropped for a protected type. A format that cannot be redacted structurally (an mdoc) shows
+     * no raw text at all for a protected type.
+     */
+    fun rawViewOf(credential: StoredCredential): RawCredentialView {
+        val raw = credential.raw
+        val type = typeOf(credential)
+        val protectedHere = policy.protectedPaths(type)
+        if (protectedHere.isEmpty()) {
+            val parts = CredentialUtils.parseSdJwtParts(raw)
+            val unparseable = parts.header == null && parts.payload == null && parts.disclosures.isEmpty()
+            return RawCredentialView(parts, rawText = if (unparseable) raw else null, redacted = false)
+        }
+        val none = SdJwtParts(null, null, emptyList())
+        if (credential.format.equals("mso_mdoc", ignoreCase = true) || type == null) {
+            return RawCredentialView(none, rawText = null, redacted = true)
+        }
+        val parts = CredentialUtils.parseSdJwtParts(raw)
+        val payload = parts.payload?.let { redactObject(type, it, emptyList(), 0) }
+        val pathsByDigest = disclosurePaths(raw)
+        val kept = ArrayList<JsonElement>()
+        for (segment in raw.split('~').drop(1).filter { it.isNotBlank() }) {
+            val array = try {
+                json.parseToJsonElement(String(Base64.getUrlDecoder().decode(segment), Charsets.UTF_8)) as? JsonArray
+            } catch (e: Exception) {
+                null
+            } ?: continue
+            val name = (array.getOrNull(1) as? JsonPrimitive)?.takeIf { it.isString }?.content
+            if (array.size != 3 || name == null) continue
+            val path = pathsByDigest[digestOf(segment)]
+            val refused = if (path != null) {
+                policy.requestsProtected(type, listOf(path))
+            } else {
+                policy.requestsProtected(type, listOf(listOf(name))) || protectedHere.any { name in it }
+            }
+            if (refused) continue
+            // A kept object-valued disclosure may still hold a protected descendant.
+            val value = array[2]
+            val redactedValue = if (value is JsonObject && path != null) redactObject(type, value, path, 0) else value
+            kept.add(JsonArray(listOf(array[0], array[1], redactedValue)))
+        }
+        return RawCredentialView(SdJwtParts(parts.header, payload, kept), rawText = null, redacted = true)
+    }
+
+    private fun redactObject(vct: String, obj: JsonObject, prefix: List<String>, depth: Int): JsonObject {
+        if (depth > 32) return JsonObject(emptyMap())
+        val out = LinkedHashMap<String, JsonElement>()
+        for ((key, value) in obj) {
+            val path = prefix + key
+            if (key != "_sd" && policy.requestsProtected(vct, listOf(path)) && value !is JsonObject) continue
+            if (key != "_sd" && policy.isProtected(vct, path)) continue
+            out[key] = if (value is JsonObject && key != "_sd") redactObject(vct, value, path, depth + 1) else value
+        }
+        return JsonObject(out)
+    }
+
+    /**
      * Whether [obj], a cleartext (always-disclosed) object of the issuer payload at [prefix],
      * holds a protected claim. The path is built from the original segments, never a dotted key.
      * An object is searched below; a protected path or something under it is refused, and so is a
@@ -251,7 +314,7 @@ object CredentialDisclosureGuard {
         return false
     }
 
-    private fun digestOf(disclosure: String): String =
+    internal fun digestOf(disclosure: String): String =
         Base64.getUrlEncoder().withoutPadding()
             .encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest(disclosure.toByteArray(Charsets.UTF_8)))
 
@@ -260,7 +323,7 @@ object CredentialDisclosureGuard {
      * disclosure's digest: found by walking the issuer payload and each disclosed object's `_sd`
      * lists from the root. A disclosure no walk reaches has no entry.
      */
-    private fun disclosurePaths(credential: String): Map<String, List<String>> {
+    internal fun disclosurePaths(credential: String): Map<String, List<String>> {
         val parts = credential.split('~')
         val payload = try {
             val body = parts[0].split('.').getOrNull(1) ?: return emptyMap()
@@ -300,3 +363,14 @@ object CredentialDisclosureGuard {
         return result
     }
 }
+
+/**
+ * What a raw-credential debug view may show: [parts] decoded (redacted when [redacted]), or
+ * [rawText] when the credential is not an SD-JWT and nothing is protected. With [redacted] and no
+ * parts there is nothing to show.
+ */
+data class RawCredentialView(
+    val parts: SdJwtParts,
+    val rawText: String?,
+    val redacted: Boolean,
+)

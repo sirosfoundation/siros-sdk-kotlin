@@ -343,6 +343,48 @@ class NonDisclosureTest {
         assertTrue(CredentialDisclosureGuard.requestsProtected(c, listOf(listOf("secret"))))
     }
 
+    private fun RawCredentialView.shown(): String =
+        listOfNotNull(parts.header?.toString(), parts.payload?.toString(), rawText) .plus(parts.disclosures.map { it.toString() }).joinToString("\n")
+
+    @Test
+    fun `the raw view redacts protected cleartext claims and disclosures, nested ones included`() {
+        CredentialDisclosureGuard.policy = NonDisclosurePolicy(mapOf("my.vct" to setOf(listOf("secret"), listOf("address", "secret"), listOf("address", "pin"))))
+        // Disclosures: address (ancestor), address.secret (protected), address.street, top-level secret.
+        val n = nestedSdJwt("my.vct")
+        val v = CredentialDisclosureGuard.rawViewOf(StoredCredential(id = 7, format = "dc+sd-jwt", raw = n.raw, batchId = 7, instanceId = 0))
+        assertTrue(v.redacted)
+        assertFalse(v.shown().contains("hush"))
+        assertFalse(v.shown().contains("\"secret\""))
+        assertTrue(v.shown().contains("Main St"))
+        assertNull(v.rawText)
+        // Cleartext payload claims, nested too.
+        val c = cleartextSdJwt("""{"vct":"my.vct","secret":"S1","name":"Jane","address":{"pin":"P1","street":"x"},"other":[{"secret":"S2"}]}""")
+        val cv = CredentialDisclosureGuard.rawViewOf(c)
+        assertFalse(cv.shown().contains("S1"))
+        assertFalse(cv.shown().contains("P1"))
+        assertTrue(cv.shown().contains("Jane"))
+        assertTrue(cv.shown().contains("\"street\""))
+        // A protected array-valued ancestor is not searched, so it is dropped.
+        val a = CredentialDisclosureGuard.rawViewOf(cleartextSdJwt("""{"vct":"my.vct","address":[{"pin":"P3"}]}"""))
+        assertFalse(a.shown().contains("P3"))
+    }
+
+    @Test
+    fun `the raw view of a protected mdoc or unparseable credential shows no raw text, an unprotected one is unchanged`() {
+        val m = CredentialDisclosureGuard.rawViewOf(mdoc(nym))
+        assertTrue(m.redacted)
+        assertNull(m.rawText)
+        assertTrue(m.parts.disclosures.isEmpty() && m.parts.payload == null)
+        // Type not in the policy: shown as before, including the raw string when unparseable.
+        val other = CredentialDisclosureGuard.rawViewOf(mdoc("other.doctype"))
+        assertFalse(other.redacted)
+        assertEquals(mdoc("other.doctype").raw, other.rawText)
+        val plain = CredentialDisclosureGuard.rawViewOf(sdJwt("other.vct", "secret" to "s"))
+        assertFalse(plain.redacted)
+        assertTrue(plain.shown().contains("\"s\"") || plain.parts.disclosures.size == 1)
+        assertEquals(1, plain.parts.disclosures.size)
+    }
+
     @Test
     fun `an mdoc element holding a protected sub-path is hidden and refused`() {
         CredentialDisclosureGuard.policy = NonDisclosurePolicy(mapOf(nym to setOf(listOf(nym, "given_name", "inner"))))

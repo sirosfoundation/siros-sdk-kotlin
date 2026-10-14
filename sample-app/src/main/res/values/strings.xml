@@ -66,6 +66,7 @@
     <string name="credential_detail_raw_header">Header</string>
     <string name="credential_detail_raw_payload">Payload</string>
     <string name="credential_detail_raw_disclosure">Disclosure %1$d</string>
+    <string name="credential_detail_raw_redacted">Protected claims are hidden from this view.</string>
     <string name="copy_to_clipboard">Copy to clipboard</string>
     <string name="copied_to_clipboard">Copied to clipboard</string>
     <!-- The outcomes of DIIP's Validity and Revocation Algorithm: the
