@@ -232,6 +232,62 @@ class NonDisclosureTest {
         CredentialDisclosureGuard.requireNoneProtectedSdJwt(sdJwt("other.vct", "secret" to "s").raw, listOf(parts[1]))
     }
 
+    // ---- ancestors of a protected nested path ----
+
+    private fun b64(s: String) = Base64.getUrlEncoder().withoutPadding().encodeToString(s.toByteArray())
+    private fun digest(d: String) =
+        Base64.getUrlEncoder().withoutPadding().encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest(d.toByteArray()))
+
+    /** vct + a selectively disclosable `address` object holding selectively disclosable `secret` and `street`, and a top-level `secret`. */
+    private class Nested(val raw: String, val address: String, val secret: String, val street: String, val topSecret: String)
+
+    private fun nestedSdJwt(vct: String): Nested {
+        val secret = b64("""["s1","secret","hush"]""")
+        val street = b64("""["s2","street","Main St"]""")
+        val address = b64("""["s3","address",{"_sd":["${digest(secret)}","${digest(street)}"]}]""")
+        val topSecret = b64("""["s4","secret","top"]""")
+        val payload = b64("""{"vct":"$vct","_sd":["${digest(address)}","${digest(topSecret)}"],"_sd_alg":"sha-256"}""")
+        val raw = "${b64("""{"alg":"ES256"}""")}.$payload.c2ln~$address~$secret~$street~$topSecret~"
+        return Nested(raw, address, secret, street, topSecret)
+    }
+
+    @Test
+    fun `an object holding a protected nested sd-jwt claim is not displayed or matched`() {
+        CredentialDisclosureGuard.policy = NonDisclosurePolicy(mapOf("my.vct" to setOf(listOf("address", "secret"))))
+        val n = nestedSdJwt("my.vct")
+        val c = StoredCredential(id = 7, format = "dc+sd-jwt", raw = n.raw, batchId = 7, instanceId = 0)
+        assertFalse(CredentialUtils.extractClaims(c).any { it.key == "address" })
+        assertTrue(CredentialUtils.extractClaims(c).any { it.key == "secret" })
+        val paths = CredentialUtils.flattenClaimPaths(c).map { it.first }
+        assertFalse(paths.contains(listOf("address")))
+        assertFalse(paths.contains(listOf("address", "secret")))
+        assertTrue(paths.contains(listOf("address", "street")))
+        assertTrue(paths.contains(listOf("secret")))
+    }
+
+    @Test
+    fun `an sd-jwt presentation refuses a disclosure that is a protected path or an ancestor of one`() {
+        CredentialDisclosureGuard.policy = NonDisclosurePolicy(mapOf("my.vct" to setOf(listOf("address", "secret"))))
+        val n = nestedSdJwt("my.vct")
+        // The ancestor: the address object would carry the digest of address.secret.
+        assertThrows(DisclosureRefusedException::class.java) { CredentialDisclosureGuard.requireNoneProtectedSdJwt(n.raw, listOf(n.address)) }
+        // The protected path itself, named only "secret" inside address.
+        assertThrows(DisclosureRefusedException::class.java) { CredentialDisclosureGuard.requireNoneProtectedSdJwt(n.raw, listOf(n.secret)) }
+        // Not protected: a sibling, and a top-level claim that merely shares the name.
+        CredentialDisclosureGuard.requireNoneProtectedSdJwt(n.raw, listOf(n.street, n.topSecret))
+    }
+
+    @Test
+    fun `an mdoc element holding a protected sub-path is hidden and refused`() {
+        CredentialDisclosureGuard.policy = NonDisclosurePolicy(mapOf(nym to setOf(listOf(nym, "given_name", "inner"))))
+        assertFalse(CredentialUtils.extractMdocClaims(mdoc(nym)).any { it.key == "$nym.given_name" })
+        assertTrue(CredentialUtils.extractMdocClaims(mdoc(nym)).any { it.key == "$nym.birth_date" })
+        assertThrows(DisclosureRefusedException::class.java) {
+            CredentialDisclosureGuard.requireNoneProtected(nym, mapOf(nym to listOf("given_name")))
+        }
+        CredentialDisclosureGuard.requireNoneProtected(nym, mapOf(nym to listOf("birth_date")))
+    }
+
     // ---- consent summary ----
 
     @Test

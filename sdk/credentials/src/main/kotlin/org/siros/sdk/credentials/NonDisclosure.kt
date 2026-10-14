@@ -153,6 +153,9 @@ object CredentialDisclosureGuard {
     /** Whether the claim at [path] of [type] is protected. */
     fun isProtected(type: String?, path: List<String>): Boolean = policy.isProtected(type, path)
 
+    /** Whether asking for [requested] of [type] would reach a protected claim, as [NonDisclosurePolicy.requestsProtected]. */
+    fun requestsProtected(type: String?, requested: List<List<String>>): Boolean = policy.requestsProtected(type, requested)
+
     /** Whether asking for [requested] of [credential] would reach a protected claim. */
     fun requestsProtected(credential: StoredCredential, requested: List<List<String>>): Boolean {
         if (policy.types.isEmpty()) return false
@@ -168,7 +171,8 @@ object CredentialDisclosureGuard {
     fun requireNoneProtected(docType: String, disclosed: Map<String, Collection<String>>) {
         for ((namespace, elements) in disclosed) {
             for (element in elements) {
-                if (policy.isProtected(docType, listOf(namespace, element))) throw DisclosureRefusedException()
+                // Ancestor-aware: an element holding a protected sub-path is refused too.
+                if (policy.requestsProtected(docType, listOf(listOf(namespace, element)))) throw DisclosureRefusedException()
             }
         }
     }
@@ -188,7 +192,9 @@ object CredentialDisclosureGuard {
         } catch (e: Exception) {
             null
         } ?: return
-        if (policy.protectedPaths(vct).isEmpty()) return
+        val protectedHere = policy.protectedPaths(vct)
+        if (protectedHere.isEmpty()) return
+        val pathsByDigest = disclosurePaths(credential)
         for (disclosure in selectedDisclosures) {
             val name = try {
                 val array = json.parseToJsonElement(String(Base64.getUrlDecoder().decode(disclosure), Charsets.UTF_8)) as? JsonArray
@@ -197,7 +203,68 @@ object CredentialDisclosureGuard {
                 // Unreadable: it could be anything, so it is not sent.
                 throw DisclosureRefusedException()
             }
-            if (name != null && policy.isProtected(vct, listOf(name))) throw DisclosureRefusedException()
+            if (name == null) continue
+            // A disclosure is refused when its claim path is protected, below a protected
+            // path, or an ancestor of one (an `address` object holding a protected
+            // `address.secret`). Its path comes from where its digest sits in the credential;
+            // a disclosure not found there (a nested one whose parent is not carried, say)
+            // cannot be placed, so any protected path that mentions its name refuses it.
+            val path = pathsByDigest[digestOf(disclosure)]
+            val refused = if (path != null) {
+                policy.requestsProtected(vct, listOf(path))
+            } else {
+                policy.requestsProtected(vct, listOf(listOf(name))) || protectedHere.any { name in it }
+            }
+            if (refused) throw DisclosureRefusedException()
         }
+    }
+
+    private fun digestOf(disclosure: String): String =
+        Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest(disclosure.toByteArray(Charsets.UTF_8)))
+
+    /**
+     * The claim path of every object-property disclosure carried by [credential], keyed by the
+     * disclosure's digest: found by walking the issuer payload and each disclosed object's `_sd`
+     * lists from the root. A disclosure no walk reaches has no entry.
+     */
+    private fun disclosurePaths(credential: String): Map<String, List<String>> {
+        val parts = credential.split('~')
+        val payload = try {
+            val body = parts[0].split('.').getOrNull(1) ?: return emptyMap()
+            json.parseToJsonElement(String(Base64.getUrlDecoder().decode(body), Charsets.UTF_8)) as? JsonObject ?: return emptyMap()
+        } catch (e: Exception) {
+            return emptyMap()
+        }
+        val byDigest = HashMap<String, Pair<String, kotlinx.serialization.json.JsonElement>>()
+        for (segment in parts.drop(1).filter { it.isNotEmpty() }) {
+            try {
+                val array = json.parseToJsonElement(String(Base64.getUrlDecoder().decode(segment), Charsets.UTF_8)) as? JsonArray ?: continue
+                if (array.size != 3) continue
+                val claimName = (array[1] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: continue
+                byDigest[digestOf(segment)] = claimName to array[2]
+            } catch (e: Exception) {
+                continue
+            }
+        }
+        val result = HashMap<String, List<String>>()
+        fun walk(obj: JsonObject, prefix: List<String>, depth: Int) {
+            if (depth > 32) return
+            for ((key, value) in obj) {
+                if (key == "_sd") {
+                    for (d in (value as? JsonArray).orEmpty()) {
+                        val digest = (d as? JsonPrimitive)?.contentOrNull ?: continue
+                        val (claimName, claimValue) = byDigest[digest] ?: continue
+                        val path = prefix + claimName
+                        result[digest] = path
+                        if (claimValue is JsonObject) walk(claimValue, path, depth + 1)
+                    }
+                } else if (value is JsonObject) {
+                    walk(value, prefix + key, depth + 1)
+                }
+            }
+        }
+        walk(payload, emptyList(), 0)
+        return result
     }
 }

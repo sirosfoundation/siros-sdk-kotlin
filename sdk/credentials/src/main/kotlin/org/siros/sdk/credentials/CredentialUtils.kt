@@ -138,8 +138,9 @@ object CredentialUtils {
         // Protected claims (see [CredentialDisclosureGuard]) are never displayed, registered or matched on.
         val vct = vctOf(credential)
         return (vctmResolved + uncovered).filterNot { c ->
-            CredentialDisclosureGuard.isProtected(vct, c.key.split(".")) ||
-                CredentialDisclosureGuard.isProtected(vct, listOf(c.key))
+            // Ancestor-aware: an object holding a protected descendant is not displayed either.
+            CredentialDisclosureGuard.requestsProtected(vct, listOf(c.key.split("."))) ||
+                CredentialDisclosureGuard.requestsProtected(vct, listOf(listOf(c.key)))
         }
     }
 
@@ -178,7 +179,7 @@ object CredentialUtils {
         val rawPayload = parseJwtPayload(credential.raw) ?: return emptyList()
         val payload = mergeSdJwtDisclosures(credential.raw, rawPayload)
         val vct = vctOf(credential)
-        return flattenJsonObject(payload, emptyList()).filterNot { (path, _) -> CredentialDisclosureGuard.isProtected(vct, path) }
+        return flattenJsonObject(payload, emptyList()).filterNot { (path, _) -> CredentialDisclosureGuard.requestsProtected(vct, listOf(path)) }
     }
 
     private fun flattenJsonObject(obj: JsonObject, prefix: List<String>): List<Pair<List<String>, JsonElement>> {
@@ -223,7 +224,7 @@ object CredentialUtils {
             .associateBy { it.path.joinToString("/") }
 
         return document.issuerSigned.nameSpaces.flatMap { (namespace, items) ->
-            items.filterNot { CredentialDisclosureGuard.isProtected(document.docType, listOf(namespace, it.item.elementIdentifier)) }.map { entry ->
+            items.filterNot { CredentialDisclosureGuard.requestsProtected(document.docType, listOf(listOf(namespace, it.item.elementIdentifier))) }.map { entry ->
                 val elementId = entry.item.elementIdentifier
                 val meta = claimMetaByPath["$namespace/$elementId"]
                 val cborValue = entry.item.elementValue
