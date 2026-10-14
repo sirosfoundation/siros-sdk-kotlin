@@ -5245,8 +5245,11 @@ class SirosWalletTest {
         protocol: String = "openid4vp-v1-signed",
         signed: Boolean = true,
         nonce: String = "czk-nonce-1",
+        queryIds: List<String> = listOf("q"),
     ): String {
-        val query = """{"credentials":[{"id":"q","format":"circuit_zk","meta":{"doctype_value":"${CzkFixtures.DOCTYPE}"}}]}"""
+        val query = """{"credentials":[""" + queryIds.joinToString(",") {
+            """{"id":"$it","format":"circuit_zk","meta":{"doctype_value":"${CzkFixtures.DOCTYPE}"}}"""
+        } + "]}"
         val claims = com.nimbusds.jwt.JWTClaimsSet.parse(
             """{"client_id":"$clientId","nonce":"$nonce","response_mode":"dc_api","dcql_query":$query""" +
                 (origins?.let { ""","expected_origins":$it""" } ?: "") + "}"
@@ -5492,6 +5495,70 @@ class SirosWalletTest {
     fun circuitZkDcApi_noCredentialInTheWallet_isRefusedWithTheNoMatchReason() = runTest(dispatcher) {
         val s = czkSetup(credentials = emptyList())
         czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NO_MATCHING_CREDENTIAL)
+        assertEquals(0, s.prover.calls)
+    }
+
+    private fun czkCred(id: Long, batch: Long, instance: Int = 0) = StoredCredential(
+        id = id, format = "mso_mdoc", raw = CzkFixtures.mdoc(CzkFixtures.psc, "2000-06-15"),
+        metadata = CredentialMetadata(name = "Nym $id"), batchId = batch, instanceId = instance,
+    )
+
+    private fun czkSelectionSetup() = czkSetup(credentials = listOf(czkCred(1, 1), czkCred(2, 2), czkCred(3, 1, 1)))
+
+    private fun czkRunSelected(s: CzkSetup, vararg ids: Long, raw: String = czkRequest()) =
+        kotlinx.coroutines.runBlocking { s.wallet.handleDCAPIRequest(raw, CzkFixtures.ORIGIN, ids.toList()) }
+
+    @Test
+    fun circuitZkDcApi_presentsExactlyTheCredentialTheUserPicked() = runTest(dispatcher) {
+        // No pick: the first eligible credential, as before.
+        assertEquals(listOf(1L), czkRun(czkSelectionSetup(), czkRequest()).credentialIds)
+        assertEquals(listOf(1L), czkRunSelected(czkSelectionSetup()).credentialIds)
+        // A pick of the second credential is what is presented.
+        assertEquals(listOf(2L), czkRunSelected(czkSelectionSetup(), 2L).credentialIds)
+        // The prover ran once, for the picked credential only.
+        val s = czkSelectionSetup()
+        czkRunSelected(s, 2L)
+        assertEquals(1, s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkDcApi_aPickIsServedByAnotherCopyOfTheSameCredential() = runTest(dispatcher) {
+        // Credential 3 is the second copy (batch 1) of credential 1: picking 3 presents 3, not the other credential.
+        assertEquals(listOf(3L), czkRunSelected(czkSelectionSetup(), 3L).credentialIds)
+    }
+
+    @Test
+    fun circuitZkDcApi_aPickThatIsNotACandidateIsRefused_neverReplacedByAnotherCredential() = runTest(dispatcher) {
+        val plain = StoredCredential(id = 9L, format = "dc+sd-jwt", raw = "x", metadata = CredentialMetadata(name = "Plain"), batchId = 9L, instanceId = 0)
+        for (pick in listOf(longArrayOf(99L), longArrayOf(9L), longArrayOf(-1L))) {
+            val s = czkSetup(credentials = listOf(czkCred(1, 1), czkCred(2, 2), plain))
+            val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+                czkRunSelected(s, *pick)
+            }
+            assertEquals(org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE, e.reason)
+            assertEquals(0, s.prover.calls)
+            assertTrue(s.history.isEmpty())
+        }
+    }
+
+    @Test
+    fun circuitZkDcApi_multiQuery_eachQueryTakesAPickThatIsItsCandidate() = runTest(dispatcher) {
+        val raw = czkRequest(queryIds = listOf("q", "q2"))
+        // One credential picked for both (it satisfies both queries).
+        assertEquals(listOf(2L, 2L), czkRunSelected(czkSelectionSetup(), 2L, raw = raw).credentialIds)
+        // One credential per query, in query order.
+        assertEquals(listOf(2L, 1L), czkRunSelected(czkSelectionSetup(), 2L, 1L, raw = raw).credentialIds)
+        assertEquals(listOf(1L, 2L), czkRunSelected(czkSelectionSetup(), 1L, 2L, raw = raw).credentialIds)
+        // No pick at all: the first eligible for each.
+        assertEquals(listOf(1L, 1L), czkRunSelected(czkSelectionSetup(), raw = raw).credentialIds)
+    }
+
+    @Test
+    fun circuitZkDcApi_multiQuery_aPickMatchingNoQueryIsStillRefused() = runTest(dispatcher) {
+        val s = czkSelectionSetup()
+        org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+            czkRunSelected(s, 77L, raw = czkRequest(queryIds = listOf("q", "q2")))
+        }
         assertEquals(0, s.prover.calls)
     }
 

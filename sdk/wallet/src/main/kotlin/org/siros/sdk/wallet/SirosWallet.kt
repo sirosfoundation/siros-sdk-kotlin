@@ -3713,11 +3713,30 @@ class SirosWallet private constructor(
      *   `navigator.credentials.get()` call, as verified by the platform
      *   (e.g. Android's Credential Manager) - NOT read from the request body,
      *   which is untrusted until the platform attests it.
+     * @param selectedCredentialIds the credential ids the user picked in the OS picker, in the
+     *   order of the selected credential set (Android reports them through
+     *   `ProviderGetCredentialRequest.selectedEntryId` / `selectedCredentialSet`; the picker
+     *   entries this SDK registers are `StoredCredential.id.toString()`). Only the `circuit_zk`
+     *   branch uses it: it presents exactly the picked credential, never another one, and
+     *   refuses (fail closed) if the pick is not a candidate of the request. For a request with
+     *   several credential queries, each query uses the picked credential that is one of its
+     *   own candidates; a query none of the picks matches falls back to its first eligible
+     *   credential, but at least one query must consume a pick. The pick is matched by id or
+     *   by being another copy (same `batchId`) of the picked credential, so a one-time-use copy
+     *   that is used up does not strand the user. Entries are not matched to queries by the
+     *   picker's per-slot metadata (this SDK's matcher registers none), only by candidacy, so a
+     *   credential that satisfies two queries is picked for both. `null` or empty keeps the
+     *   previous behaviour: the first eligible credential of each query. The plain, mdoc and
+     *   legacy ZK paths ignore it and keep presenting via their own selection.
      * @throws WalletException if the user declines, or if not connected.
      * @throws TransactionDataError if a `transaction_data` request is refused or
      *   declined; nothing is signed.
      */
-    suspend fun handleDCAPIRequest(rawRequestJson: String, origin: String): DCAPIPresentationResult {
+    suspend fun handleDCAPIRequest(
+        rawRequestJson: String,
+        origin: String,
+        selectedCredentialIds: List<Long>? = null,
+    ): DCAPIPresentationResult {
         val request = try {
             DCAPIRequestParser.parse(
                 rawRequestJson,
@@ -3737,7 +3756,7 @@ class SirosWallet private constructor(
         if (circuitZkSupport != null && request.dcqlQuery != null &&
             DCAPIRequestRules.DEFAULT_REQUIRES_SIGNED_REQUEST(request.dcqlQuery)
         ) {
-            return handleCircuitZkDcApi(request, origin)
+            return handleCircuitZkDcApi(request, origin, selectedCredentialIds.orEmpty())
         }
 
         // The DC API has no negotiation, so a request can carry
@@ -4111,6 +4130,7 @@ class SirosWallet private constructor(
     private suspend fun handleCircuitZkDcApi(
         request: org.siros.sdk.wallet.dcapi.DCAPIRequest,
         origin: String,
+        selectedCredentialIds: List<Long>,
     ): DCAPIPresentationResult {
         fun refuse(step: String, reason: org.siros.sdk.wallet.dcapi.DCAPIRefusalReason): Nothing {
             Timber.w("DC API circuit_zk request refused (protocol=${request.protocol}, step=$step, reason=$reason)")
@@ -4152,6 +4172,14 @@ class SirosWallet private constructor(
         if (results.isEmpty() || results.any { !CredentialUtils.isCircuitZkFormat(it.format) }) refuse("query-shape", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
         if (results.any { it.circuitZkPlan == null || it.candidates.isEmpty() }) refuse("no-match", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NO_MATCHING_CREDENTIAL)
 
+        // The user's pick: the credential ids, plus every other copy of the same credential (batch).
+        val pickedBatches = selectedCredentialIds.mapNotNull { id -> allCreds.firstOrNull { it.id == id }?.batchId }.toSet()
+        fun picked(c: StoredCredential) = c.id in selectedCredentialIds || (c.batchId != null && c.batchId in pickedBatches)
+        // Fail closed: a pick that is a candidate of none of the queries is never answered with another credential.
+        if (selectedCredentialIds.isNotEmpty() && results.none { r -> r.candidates.any(::picked) }) {
+            refuse("selection-not-candidate", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+        }
+
         val encryptionJwk = if (request.responseMode == "dc_api.jwt") {
             findEncryptionJwk(request.clientMetadata) ?: refuse("no-encryption-key", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
         } else {
@@ -4171,9 +4199,17 @@ class SirosWallet private constructor(
 
         val tokensByQueryId = linkedMapOf<String, List<String>>()
         val usedIds = mutableListOf<Long>()
-        for (result in results) {
+        for ((queryIndex, result) in results.withIndex()) {
             val plan = result.circuitZkPlan ?: refuse("no-plan", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
-            val cred = eligibleInstances(result.candidates).firstOrNull() ?: refuse("no-eligible-copy", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+            // Best effort for a multi-credential selection: when the picker reported one credential per
+            // query, the one at this query's position goes first; otherwise picks keep their reported order.
+            val pickedHere = if (selectedCredentialIds.isEmpty()) emptyList() else result.candidates.filter(::picked).sortedBy { c ->
+                val position = selectedCredentialIds.indexOf(c.id).let { if (it < 0) selectedCredentialIds.size else it }
+                if (selectedCredentialIds.size == results.size && position == queryIndex) -1 else position
+            }
+            // A query the user's pick belongs to presents only that credential; one it does not belong to
+            // (a multi-query request) falls back to the first eligible.
+            val cred = eligibleInstances(pickedHere.ifEmpty { result.candidates }).firstOrNull() ?: refuse("no-eligible-copy", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
             val pseudonym = plan.functions.firstOrNull { it.id == org.siros.sdk.credentials.CircuitZkRuleSet.PSEUDONYM }
             val type = (pseudonym?.params?.get("verifier_id_type") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
             val verifierId = if (type != null) registry.resolve(type, verifierContext) ?: refuse("verifier-id", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE) else null
@@ -4243,8 +4279,9 @@ class SirosWallet private constructor(
         rawRequestJson: String,
         origin: String,
         consentHandler: TransactionConsentHandler,
+        selectedCredentialIds: List<Long>? = null,
     ): DCAPIPresentationResult =
-        withContext(DcApiConsentHandler(consentHandler)) { handleDCAPIRequest(rawRequestJson, origin) }
+        withContext(DcApiConsentHandler(consentHandler)) { handleDCAPIRequest(rawRequestJson, origin, selectedCredentialIds) }
 
     /** Refuses (and logs) a DC API request carrying `transaction_data` this wallet is not set up to process. */
     private suspend fun refuseDcApiTransactionData(request: org.siros.sdk.wallet.dcapi.DCAPIRequest, origin: String) {

@@ -19,6 +19,9 @@ import androidx.credentials.GetCredentialResponse
 import androidx.credentials.GetDigitalCredentialOption
 import androidx.credentials.exceptions.GetCredentialUnknownException
 import androidx.credentials.provider.PendingIntentHandler
+import androidx.credentials.provider.ProviderGetCredentialRequest
+import androidx.credentials.registry.provider.selectedCredentialSet
+import androidx.credentials.registry.provider.selectedEntryId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -132,6 +135,9 @@ class DCAPIGetCredentialActivity : Activity() {
         val carriesTransactionData = digitalOption.requestJson.contains("transaction_data")
         if (!carriesTransactionData) Timber.d("DCAPI raw request (origin=$origin): ${digitalOption.requestJson}")
 
+        // What the user picked in the OS picker; the wallet presents exactly that (circuit_zk).
+        val selectedCredentialIds = selectedCredentialIdsOf(request)
+
         scope.launch {
             try {
                 val result = wallet.handleDCAPIRequest(
@@ -140,6 +146,7 @@ class DCAPIGetCredentialActivity : Activity() {
                     // The app's own screens are not in front of the user during a DC API request,
                     // so a payment confirmation is shown in this activity.
                     consentHandler = TransactionConsentHandler { showTransactionConsentDialog(this@DCAPIGetCredentialActivity, it) },
+                    selectedCredentialIds = selectedCredentialIds,
                 )
                 if (!carriesTransactionData) Timber.d("DCAPI final response: ${result.responseJson}")
                 val responseIntent = Intent()
@@ -181,6 +188,31 @@ class DCAPIGetCredentialActivity : Activity() {
                 finishWithError(e.message ?: "Presentation failed")
             }
         }
+    }
+
+    /**
+     * The credential ids the user picked: every credential of the selected set when the OS reports
+     * a set (a multi-credential request), else the single selected entry. Entry ids this SDK
+     * registers are the credential's numeric id; anything else (the debug diagnostics entry, a
+     * foreign id) becomes an id no credential has, which the wallet refuses as an unavailable selection
+     * (it must not be dropped: an empty selection would present the first eligible credential).
+     */
+    private fun selectedCredentialIdsOf(request: ProviderGetCredentialRequest): List<Long> {
+        val fromSet = try {
+            request.selectedCredentialSet?.credentials?.map { it.credentialId.toLongOrNull() ?: NO_SUCH_CREDENTIAL }
+        } catch (e: Exception) {
+            null
+        }
+        if (!fromSet.isNullOrEmpty()) return fromSet
+        return try {
+            listOfNotNull(request.selectedEntryId?.let { it.toLongOrNull() ?: NO_SUCH_CREDENTIAL })
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private companion object {
+        const val NO_SUCH_CREDENTIAL = -1L
     }
 
     override fun onDestroy() {
