@@ -5250,13 +5250,16 @@ class SirosWalletTest {
         queryIds: List<String> = listOf("q"),
         /** The `doctype_value` of each query, in order; the nym_auth doctype for all when null. */
         queryDoctypes: List<String>? = null,
+        /** A raw `transaction_data` JSON array to carry, or none. */
+        transactionData: String? = null,
     ): String {
         val query = """{"credentials":[""" + queryIds.withIndex().joinToString(",") { (i, id) ->
             """{"id":"$id","format":"circuit_zk","meta":{"doctype_value":"${queryDoctypes?.get(i) ?: CzkFixtures.DOCTYPE}"}}"""
         } + "]}"
         val claims = com.nimbusds.jwt.JWTClaimsSet.parse(
             """{"client_id":"$clientId","nonce":"$nonce","response_mode":"dc_api","dcql_query":$query""" +
-                (origins?.let { ""","expected_origins":$it""" } ?: "") + "}"
+                (origins?.let { ""","expected_origins":$it""" } ?: "") +
+                (transactionData?.let { ""","transaction_data":$it""" } ?: "") + "}"
         )
         if (!signed) {
             return wrapDCAPIRequest("openid4vp-v1-unsigned", Json.parseToJsonElement(claims.toString()).jsonObject)
@@ -5411,6 +5414,28 @@ class SirosWalletTest {
         } finally {
             timber.log.Timber.uproot(czkTree)
         }
+    }
+
+    @Test
+    fun circuitZkDcApi_transactionData_isRefusedBeforeTrustAndProof() = runTest(dispatcher) {
+        // Fail closed: the circuit path has no transaction pipeline, so a transaction-bearing request
+        // (with or without a wallet consent handler) is refused, never proved.
+        for (txData in listOf("""["e30"]""", "[]")) {
+            val s = czkSetup()
+            czkRefused(s, czkRequest(transactionData = txData), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+            assertEquals(0, s.prover.calls)
+            coVerify(exactly = 0) { s.apiClient.evaluateTrust(any()) }
+        }
+    }
+
+    @Test
+    fun circuitZkDcApi_consumeNonZkp_aCopyUsedForACircuitProofIsNotConsumed() = runTest(dispatcher) {
+        val s = czkSetup()
+        s.wallet.credentialConsumptionPolicy = CredentialConsumptionPolicy.CONSUME_NON_ZKP
+        assertEquals(listOf(1L), czkRun(s, czkRequest()).credentialIds)
+        // The first proof is in the history; the same single copy still answers a second request.
+        assertEquals(listOf(1L), czkRun(s, czkRequest(nonce = "czk-nonce-2")).credentialIds)
+        assertEquals(2, s.prover.calls)
     }
 
     @Test

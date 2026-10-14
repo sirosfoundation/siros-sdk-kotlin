@@ -107,6 +107,13 @@ class WalletPolicyOptionsTest {
         assertEquals(chosen, WalletPolicyOptions.fromStored { stored[it] })
         assertEquals(WalletPolicyOptions(), WalletPolicyOptions.fromStored { null })
         assertEquals(emptySet<VerifierIdSourceKind>(), WalletPolicyOptions.fromStored { if (it == "verifier_id_sources") "" else null }.verifierIdSources)
+        // An unrecognised name (a source renamed or removed by an upgrade) falls back to the default, not to "none".
+        val defaults = WalletPolicyOptions().verifierIdSources
+        assertTrue(defaults.isNotEmpty())
+        for (value in listOf("REMOVED_SOURCE", "X509_SAN_DNS,REMOVED_SOURCE", "REMOVED_SOURCE,AUTHZEN")) {
+            assertEquals(value, defaults, WalletPolicyOptions.fromStored { if (it == "verifier_id_sources") value else null }.verifierIdSources)
+        }
+        assertEquals(setOf(VerifierIdSourceKind.AUTHZEN), WalletPolicyOptions.fromStored { if (it == "verifier_id_sources") "AUTHZEN" else null }.verifierIdSources)
         val damaged = WalletPolicyOptions.fromStored { if (it == "circuit_zk") "maybe" else stored[it] }
         assertEquals(chosen.copy(circuitZk = false), damaged)
         assertEquals(WalletPolicyOptions().expectedOrigins, WalletPolicyOptions.fromStored { if (it == "expected_origins") "STRICT" else null }.expectedOrigins)

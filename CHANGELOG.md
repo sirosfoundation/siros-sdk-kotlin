@@ -183,6 +183,23 @@ this version.
   (Trust is now evaluated after matching; the verifier still only sees
   `access_denied`.)
 
+### Fixed (review follow-up 5)
+- **`circuit_zk` over the DC API refuses a request carrying `transaction_data`.**
+  The circuit branch has no transaction pipeline (validation, consent, hash
+  binding), so it used to answer such a request with a proof the user never
+  saw the transaction for. It is now refused before trust evaluation or any
+  credential access (reason `UNSUPPORTED_REQUEST`; the verifier gets the bare
+  `access_denied`). Known limitation until the circuit path implements the
+  transaction pipeline.
+- A copy used for a `circuit_zk` proof is no longer treated as consumed under
+  `CredentialConsumptionPolicy.CONSUME_NON_ZKP` (the circuit path now passes
+  the per-presentation ZK resolver to `eligibleInstances`).
+- `WalletPolicyOptions.fromStored`: a stored verifier-ID source list with an
+  unrecognised name (a source renamed or removed by an upgrade) falls back to
+  the default instead of disabling every source; an empty string still means
+  none.
+- Finnish settings label: `KAMALA` (terrible) corrected to `VÄÄRÄ` (fake).
+
 ### Fixed (review follow-up)
 - **The non-disclosure policy is ancestor-aware.** A policy protecting a nested
   path such as `address.secret` now also hides the `address` object from display

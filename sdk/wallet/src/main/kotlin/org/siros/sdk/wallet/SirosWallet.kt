@@ -3747,6 +3747,9 @@ class SirosWallet private constructor(
      * @throws WalletException if the user declines, or if not connected.
      * @throws TransactionDataError if a `transaction_data` request is refused or
      *   declined; nothing is signed.
+     * @throws org.siros.sdk.wallet.dcapi.DCAPIRequestRefused for a `circuit_zk` request carrying
+     *   `transaction_data`: the circuit path does not implement the transaction pipeline yet, so it
+     *   is refused (limitation) rather than answered unvalidated.
      */
     suspend fun handleDCAPIRequest(
         rawRequestJson: String,
@@ -4152,6 +4155,12 @@ class SirosWallet private constructor(
      * Trust is the policy decision point's answer alone: no local certificate
      * check and no trust cache, so an outage is a refusal. Consent was the
      * OS picker's, so there is no in-app consent step.
+     *
+     * A request carrying `transaction_data` is refused (reason
+     * [org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST]) before anything else: this
+     * branch does not yet implement the transaction pipeline, and a proof must never be produced
+     * for a transaction that was not validated and consented to. A request mixing `circuit_zk` and
+     * other query formats is refused for its shape.
      */
     private suspend fun handleCircuitZkDcApi(
         request: org.siros.sdk.wallet.dcapi.DCAPIRequest,
@@ -4162,6 +4171,10 @@ class SirosWallet private constructor(
             Timber.w("DC API circuit_zk request refused (protocol=${request.protocol}, step=$step, reason=$reason)")
             throw org.siros.sdk.wallet.dcapi.DCAPIRequestRefused(request.protocol, reason)
         }
+        // Fail closed: this branch has no transaction_data pipeline (validation, consent, hash binding), so a
+        // request that carries transaction_data is never answered here - not even for a circuit_zk query alone.
+        // Refused before trust evaluation or any credential access; the verifier gets the bare access_denied.
+        if (request.hasTransactionData) refuse("transaction-data", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
         val support = circuitZkSupport ?: refuse("disabled", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
         val prover = circuitZkProver ?: refuse("no-prover", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
         val registry = verifierIdRegistry ?: refuse("no-sources", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
@@ -4246,7 +4259,8 @@ class SirosWallet private constructor(
             // query it does not belong to is refused: the user consented to the credential they picked,
             // never to another one. Only without any pick does the first eligible candidate answer.
             if (selectedCredentialIds.isNotEmpty() && pickedHere.isEmpty()) refuse("query-without-pick", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
-            val cred = eligibleInstances(if (selectedCredentialIds.isEmpty()) result.candidates else pickedHere).firstOrNull() ?: refuse("no-eligible-copy", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+            // Every copy answers as a circuit proof, so CONSUME_NON_ZKP never counts a copy used for one as consumed.
+            val cred = eligibleInstances(if (selectedCredentialIds.isEmpty()) result.candidates else pickedHere) { true }.firstOrNull() ?: refuse("no-eligible-copy", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
             val pseudonym = plan.functions.firstOrNull { it.id == org.siros.sdk.credentials.CircuitZkRuleSet.PSEUDONYM }
             val type = (pseudonym?.params?.get("verifier_id_type") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
             val verifierId = if (type != null) registry.resolve(type, verifierContext) ?: refuse("verifier-id", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE) else null

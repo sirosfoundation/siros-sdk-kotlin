@@ -121,10 +121,20 @@ data class WalletPolicyOptions(
                 expectedOrigins = get(KEY_EXPECTED_ORIGINS).asEnum<ExpectedOriginsMode>() ?: d.expectedOrigins,
                 signedRequest = get(KEY_SIGNED_REQUEST).asEnum<SignedRequestRule>() ?: d.signedRequest,
                 fakeProver = get(KEY_FAKE_PROVER)?.toBooleanStrictOrNull() ?: d.fakeProver,
-                verifierIdSources = get(KEY_VERIFIER_ID_SOURCES)
-                    ?.split(',')?.filter { it.isNotEmpty() }?.mapNotNull { it.asEnum<VerifierIdSourceKind>() }?.toSet()
-                    ?: d.verifierIdSources,
+                verifierIdSources = verifierIdSources(get(KEY_VERIFIER_ID_SOURCES)) ?: d.verifierIdSources,
             )
+        }
+
+        /**
+         * The stored sources: an empty string is the deliberate "none" (empty set); a list with any
+         * unrecognised name (a source renamed or removed by an upgrade) is null, so the default applies
+         * rather than silently disabling every source.
+         */
+        private fun verifierIdSources(stored: String?): Set<VerifierIdSourceKind>? {
+            if (stored == null) return null
+            val names = stored.split(',').filter { it.isNotEmpty() }
+            val parsed = names.map { it.asEnum<VerifierIdSourceKind>() ?: return null }
+            return parsed.toSet()
         }
 
         private inline fun <reified E : Enum<E>> String?.asEnum(): E? =
