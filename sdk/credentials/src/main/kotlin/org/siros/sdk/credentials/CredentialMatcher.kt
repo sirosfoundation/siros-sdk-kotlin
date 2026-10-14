@@ -249,15 +249,32 @@ object CredentialMatcher {
         val malformed = hasDuplicateDcqlIds(credentialQueries)
         // A circuit source that fails registers no claimless doctype (the claims are then registered, the stricter side).
         val claimless = try { circuitZk?.circuits?.docTypes().orEmpty() } catch (e: Exception) { emptySet() }
+        val ordinaryQueries = credentialQueries.filterNot { isCircuitZkQuery(it) }
         val shared = if (malformed || hasCircuitZkQuery) null else engine(dcqlQuery, credentials, zkSystemIds, claimless)
-
+        val ordinaryShared = if (!malformed && hasCircuitZkQuery && ordinaryQueries.isNotEmpty()) {
+            engine(JsonObject(mapOf("credentials" to JsonArray(ordinaryQueries))), credentials, zkSystemIds, claimless)
+        } else {
+            null
+        }
         val queryResults = when {
             malformed -> {
                 Timber.w("DCQL query repeats a credential or claim id (OID4VP 1.0 §6.1/§6.3); offering nothing")
                 parsed.map { it.copy(candidates = emptyList()) }
             }
 
-            hasCircuitZkQuery -> parsed
+            hasCircuitZkQuery -> parsed.map { result ->
+                if (CredentialUtils.isCircuitZkFormat(result.format)) {
+                    result
+                } else if (ordinaryShared == null) {
+                    // The engine could not validate them: not offered, never the unchecked built-in answer.
+                    Timber.w("DCQL query '${result.queryId}': the engine could not validate it beside a circuit_zk query; offering nothing")
+                    result.copy(candidates = emptyList())
+                } else {
+                    val qualifying = ordinaryShared.candidatesByQuery[result.queryId].orEmpty().toSet()
+                    SharedDcqlMatcher.reportDifference(result.queryId, result.candidates.map { it.id }, qualifying.toList())
+                    result.copy(candidates = result.candidates.filter { it.id in qualifying })
+                }
+            }
 
             shared == null -> {
                 // No answer, not an empty answer. Falling back keeps

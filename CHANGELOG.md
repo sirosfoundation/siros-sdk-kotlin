@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Ordinary queries beside a `circuit_zk` query are validated by the engine
+  too.** `matchDcql` used to skip engine validation for the whole request when
+  any `circuit_zk` query was present (the engine did not know the format when
+  that was written), so a credential missing a claim an ordinary query asked for
+  became a candidate again. The ordinary queries are now given to the shared
+  engine as a request of their own (circuit queries and `credential_sets`
+  removed) and only its per-query candidates are used; the planner still decides
+  the `circuit_zk` queries. If the engine cannot answer, the ordinary queries
+  offer nothing (the built-in fallback never checked claims). (#266)
+- **The SD-JWT non-disclosure guard also covers the issuer payload.**
+  `CredentialDisclosureGuard.requireNoneProtectedSdJwt` checked only the
+  selected disclosures, but every presentation carries the issuer JWT
+  unchanged, so a protected claim stored there in cleartext (or any presentation
+  with no disclosure) was transmitted by `JweKeystore` and `WscdKeystoreAdapter`.
+  It now refuses a protected cleartext claim, by original path segments and
+  ancestor-aware. Display and matching already hid such claims. (#266)
 - **A `circuit_zk` query the matcher cannot read still makes the request a
   `circuit_zk` request, and the whole request is refused.** `DcqlMatchOutput`
   gains `hasCircuitZkQuery` (from the original queries, whether or not

@@ -110,6 +110,30 @@ class CircuitZkMatchingTest {
     }
 
     @Test
+    fun `ordinary queries beside a circuit_zk query are still validated by the engine`() {
+        var asked: JsonObject? = null
+        CredentialMatcher.engine = { q, _, _, _ ->
+            asked = q
+            // Credential 2 has the claim, credential 1 does not.
+            SharedDcqlMatcher.Outcome(satisfiable = true, candidatesByQuery = mapOf("p" to listOf(2L)))
+        }
+        val creds = listOf(mdoc(1, doctype), mdoc(2, doctype))
+        val out = CredentialMatcher.matchDcql(mixed(), creds, circuitZk = support())
+        assertEquals(listOf(1L, 2L), out.queryResults.single { it.queryId == "q" }.candidates.map { it.id })
+        assertEquals(listOf(2L), out.queryResults.single { it.queryId == "p" }.candidates.map { it.id })
+        // The engine is asked about the ordinary query only.
+        assertEquals(listOf("p"), asked!!["credentials"]!!.jsonArray.map { it.jsonObject["id"]!!.jsonPrimitive.content })
+    }
+
+    @Test
+    fun `ordinary queries beside a circuit_zk query are not offered when the engine cannot validate them`() {
+        CredentialMatcher.engine = { _, _, _, _ -> null }
+        val out = CredentialMatcher.matchDcql(mixed(), listOf(mdoc(1, doctype)), circuitZk = support())
+        assertTrue(out.queryResults.single { it.queryId == "p" }.candidates.isEmpty())
+        assertEquals(1, out.queryResults.single { it.queryId == "q" }.candidates.size)
+    }
+
+    @Test
     fun `a valid plan with a fitting circuit matches the doctype's mdocs and carries the plan`() {
         val r = match(query(), listOf(mdoc(1, doctype), mdoc(2, "other"), sdJwt(3)), support())
         assertEquals(listOf(1L), r.candidates.map { it.id })
