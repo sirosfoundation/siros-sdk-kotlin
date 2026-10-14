@@ -189,7 +189,8 @@ class JweKeystore(
         handlers: List<CircuitZkFunctionHandler>,
         residency: ZkProverResidency?,
         userValue: ByteArray?,
-    ): CircuitZkPresenter = witnessSource.circuitZkPresenter(prover, circuits, validator, handlers, residency, userValue)
+        serving: org.siros.sdk.credentials.CircuitZkServing?,
+    ): CircuitZkPresenter = witnessSource.circuitZkPresenter(prover, circuits, validator, handlers, residency, userValue, serving)
 
     /** The root as the tests of this module see it. */
     internal fun rootSecretForTest(): RootSecret = rootSecret

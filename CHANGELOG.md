@@ -59,10 +59,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`PrivateSeed`: a stable per-credential-type holder `private_seed`, derived
   from the container `mainKey`.** `HKDF-SHA256(mainKey, info =
   "org.siros.private_seed/v1" || credentialType)[:16]`, with `psc` and a
-  fail-closed `matchesCommitment`. `JweKeystore` and `WscdKeystoreAdapter`
-  implement the narrow `RootSecret` API; the key is never exported and a
-  locked keystore throws `KeystoreException`. `mainKey` must never be
-  rotated. Vectors in `spec/private-seed-vectors.json`. (#263)
+  fail-closed `matchesCommitment`. `PrivateSeed` and the generic `RootSecret`
+  derivation are internal: `JweKeystore` and `WscdKeystoreAdapter` implement
+  only the purpose-bound `HolderWitnessSource` (the issuer commitment, and a
+  `CircuitZkPresenter` that feeds the seed to its prover), so no public member
+  of a keystore derives a secret. The key is never exported and a locked
+  keystore throws `KeystoreException`. `mainKey` must never be rotated. The seed
+  still reaches the prover the host configures, by design: the host app is
+  inside the wallet's trust boundary. `FixedRootHolderWitnessSource` serves
+  demos and tests over a caller-supplied key. Vectors in
+  `spec/private-seed-vectors.json`. (#263)
 - **DC API: `expected_origins` and wallet-chosen request entry.** The parser
   reads `expected_origins` from a signed payload and, given a policy, answers
   the first `requests[]` entry the policy accepts (the default still takes the
@@ -117,6 +123,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`DisclosureRefusedException`). A type with no entry is unaffected.
   `circuitZkConsentSummary` gives hosts a summary with no credential values. (#270)
 
+### Binary compatibility (this PR, against 0.x main)
+The SDK is 0.x and `apiCheck` tracks every signature (`api/*.api` are dumped in
+this PR); as with earlier 0.x releases (see the `ZkCircuitDescriptor` note
+above), appended defaulted constructor and function parameters are source
+compatible but change the JVM descriptors, so an already compiled consumer
+must be rebuilt. Not binary compatible, by type (all source compatible unless
+noted):
+- `WalletConfig`: new trailing properties (circuit_zk, DC API, policy
+  options); the constructor, `copy` and `copy$default` descriptors change.
+- `TrustResult`: trailing `context`; constructor and `copy` change.
+- `DCAPIRequest`: trailing `extensions` and related fields; constructor and
+  `copy` change.
+- `CredentialMatcher.MatchResult`: trailing `circuitZkPlan`; constructor and
+  `copy` change. `CredentialMatcher.matchDcql` gains a trailing `circuitZk`
+  (and client metadata) parameter; the old descriptor and `$default` go.
+- `SirosWallet.handleDCAPIRequest` (both overloads): trailing
+  `selectedCredentialIds`; the two-argument and consent-handler descriptors go.
+- `SirosCredentialRegistry.refresh`: trailing `claimlessDoctypes` and
+  `circuitZkCircuits`.
+- `ZkCircuitDescriptor`: trailing `capabilities`.
+- `CircuitZkCircuit`, `CircuitZkSupport`, `CircuitZkPresenter` and
+  `HolderWitnessSource.circuitZkPresenter`: new in this PR, so no released
+  descriptor changes.
+- The generated matcher bindings (`uniffi.siros_dc_matcher_ffi.FfiCombination`,
+  `FfiMatchOutcome`, `FfiMatchedCredential`) follow the 0.9.0 matcher AAR;
+  they are not SDK API to build against.
+- Binary compatible: `WalletException` is now `open`; `JweKeystore` and
+  `WscdKeystoreAdapter` additionally implement `HolderWitnessSource`;
+  `CredentialDisclosureGuard.register/unregister/requestsProtected(type, ...)`
+  are additions.
+No type was reworked to preserve the old descriptors; consumers rebuild against
+this version.
+
 ### Changed (review follow-up)
 - **`CredentialDisclosureGuard` is no longer last-writer-wins.** `SirosWallet`
   registers its `nonDisclosurePolicy` with the new `register(owner, policy)`
@@ -145,6 +184,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `access_denied`.)
 
 ### Fixed (review follow-up)
+- **The non-disclosure policy is ancestor-aware.** A policy protecting a nested
+  path such as `address.secret` now also hides the `address` object from display
+  and matching (`extractClaims`, `flattenClaimPaths`, `extractMdocClaims`), and
+  a presentation refuses a disclosure whose claim path is protected, below a
+  protected path, or an ancestor of one (the SD-JWT path is resolved from where
+  the disclosure's digest sits in the credential; an unplaceable disclosure is
+  refused if any protected path mentions its name). The mdoc element check is
+  ancestor-aware too.
+- **`circuit_zk` circuit selection no longer treats a circuit with
+  `capabilities` or a `credential_type` as unrestricted.** Such a circuit is
+  selected only when the shared matcher serves it (`CircuitZkServing`,
+  `SharedCircuitZkServing`: the circuit and a claimless credential of the
+  doctype are registered in a throwaway blob and the request matched; no
+  capability rule is reimplemented), in `CredentialMatcher`, in
+  `handleDCAPIRequest` and in `CircuitZkPresenter`. Without a matcher answer
+  the circuit is not selected. Circuits without either keep the legacy
+  `functions` filter.
 - The DC API activity no longer logs request, response or error payloads
   (only sizes and status).
 - Coroutine cancellation is no longer converted to a refusal or swallowed in

@@ -106,13 +106,76 @@ data class CircuitZkCircuit(
     val credentialType: String? = null,
     val capabilities: String? = null,
 ) {
+    /** Whether the matcher, not this SDK, decides if the circuit serves a request: it declares [capabilities] or a [credentialType]. */
+    val constrainedByMatcher: Boolean get() = capabilities != null || credentialType != null
+
     /**
      * Whether this circuit can prove [plan] for a credential of [docType]: the
      * doctype is one it serves, it is in the verifier's circuit list (if any),
      * and it supports every planned function (if it declares any).
+     *
+     * A circuit that declares [capabilities] or a [credentialType] is never
+     * treated as unrestricted: this overload has no matcher to ask, so such a
+     * circuit does not fit. Use the overload taking a [CircuitZkServing].
      */
-    fun supports(plan: CircuitZkPlan, docType: String): Boolean =
-        docType in docTypes && CircuitZkMatching.fits(this, plan)
+    fun supports(plan: CircuitZkPlan, docType: String): Boolean = supports(plan, docType, null)
+
+    /**
+     * As [supports], with [serving] to ask the matcher whether a circuit that declares
+     * [capabilities] or a [credentialType] serves the request. The matcher is the only
+     * judge of that rule; without an answer (`serving` null, or it returns null) the
+     * circuit does not fit.
+     */
+    fun supports(plan: CircuitZkPlan, docType: String, serving: CircuitZkServing?): Boolean =
+        docType in docTypes && CircuitZkMatching.fits(this, plan, docType, serving)
+}
+
+/**
+ * Whether the matcher offers [circuit] for a `circuit_zk` credential [query] over a credential
+ * of [docType]: its capability rule, asked rather than reimplemented. Null means the matcher
+ * could not answer, which callers treat as "no" (fail closed).
+ */
+fun interface CircuitZkServing {
+    /** [query] is the credential query (a plan's [CircuitZkPlan.raw]). */
+    fun serves(circuit: CircuitZkCircuit, docType: String, query: JsonObject): Boolean?
+}
+
+/**
+ * [CircuitZkServing] by the shared matcher, the engine the OS picker runs: the circuit and a
+ * claimless credential of the doctype are registered in a throwaway blob, and the request is
+ * matched against it. No capability rule lives in this SDK.
+ */
+object SharedCircuitZkServing : CircuitZkServing {
+    /** The matcher registrations that declare [circuit]: one per id it answers to (its id, then each alias). */
+    fun capabilities(circuit: CircuitZkCircuit): List<uniffi.siros_dc_matcher_ffi.FfiCapability> =
+        (listOf(circuit.circuitId) + circuit.aliases.sorted()).distinct().map { id ->
+            val params = buildMap {
+                put("circuit_id", id)
+                circuit.functions?.let { put("functions", it.sorted().joinToString(",")) }
+                circuit.credentialType?.let { put("credential_type", it) }
+                circuit.capabilities?.let { put("capabilities", it) }
+            }
+            uniffi.siros_dc_matcher_ffi.FfiCapability(circuit.system, params)
+        }
+
+    override fun serves(circuit: CircuitZkCircuit, docType: String, query: JsonObject): Boolean? = try {
+        val blob = uniffi.siros_dc_matcher_ffi.SirosBlobBuilder().use { builder ->
+            capabilities(circuit).forEach(builder::addCircuitZkSystem)
+            builder.addCredential(
+                uniffi.siros_dc_matcher_ffi.FfiCredential(
+                    id = "1", format = "mso_mdoc", doctype = docType, vct = null,
+                    title = docType, subtitle = "", iconId = null, claims = emptyList(),
+                ),
+            )
+            builder.build()
+        }
+        val dcql = JsonObject(mapOf("credentials" to JsonArray(listOf(query)))).toString()
+        val outcome = uniffi.siros_dc_matcher_ffi.matchDcqlWithContext(blob, dcql, null)
+        outcome.satisfiable && outcome.matches.any { it.credentials.isNotEmpty() }
+    } catch (e: Throwable) {
+        // No native library, or a request the matcher rejects: no answer, which is a no.
+        null
+    }
 }
 
 /** The circuits the wallet can prove with, from the circuit catalog. */
@@ -153,6 +216,8 @@ class CircuitZkSupport(
     val planner: CircuitZkPlanner,
     val validator: CircuitZkRequestValidator = CircuitZkRequestValidator.PERMISSIVE,
     val circuits: CircuitZkCircuitSource,
+    /** Asks the matcher whether a circuit with `capabilities` or a `credential_type` serves a request; null: none does. */
+    val serving: CircuitZkServing? = SharedCircuitZkServing,
 )
 
 internal object CircuitZkMatching {
@@ -182,12 +247,13 @@ internal object CircuitZkMatching {
         }
         if (verdict !is CircuitZkVerdict.Ok) return plan to emptyList()
 
-        val fitting = try {
-            support.circuits.circuits().filter { fits(it, plan) }
+        // A doctype is served when some circuit fits the plan for it; a circuit the matcher
+        // constrains is asked per doctype (never assumed unrestricted).
+        val docTypes = try {
+            support.circuits.circuits().flatMapTo(HashSet()) { c -> c.docTypes.filter { fits(c, plan, it, support.serving) } }
         } catch (e: Exception) {
-            emptyList()
+            emptySet<String>()
         }
-        val docTypes = fitting.flatMapTo(HashSet()) { it.docTypes }
         val wantedDoctype = ((query["meta"] as? JsonObject)?.get("doctype_value") as? JsonPrimitive)?.contentOrNull
         val matched = credentials.filter { cred ->
             cred.format.equals("mso_mdoc", ignoreCase = true) && run {
@@ -198,10 +264,23 @@ internal object CircuitZkMatching {
         return plan to matched
     }
 
-    internal fun fits(circuit: CircuitZkCircuit, plan: CircuitZkPlan): Boolean {
+    /**
+     * Whether [circuit] fits [plan] for a credential of [docType]. The verifier's circuit list is
+     * applied here. A circuit that declares `capabilities` or a `credential_type` is judged by the
+     * matcher alone ([serving]; no answer is a no), and its legacy `functions` are not read, as the
+     * matcher does not read them. Any other circuit is filtered by its declared `functions`.
+     */
+    internal fun fits(circuit: CircuitZkCircuit, plan: CircuitZkPlan, docType: String, serving: CircuitZkServing?): Boolean {
         val filter = plan.circuitFilter
         // Null: the verifier named no circuits. An empty list is a list nothing is in.
         if (filter != null && filter.none { it.admits(circuit) }) return false
+        if (circuit.constrainedByMatcher) {
+            return try {
+                serving?.serves(circuit, docType, plan.raw) == true
+            } catch (e: Exception) {
+                false
+            }
+        }
         val declared = circuit.functions ?: return true
         return plan.functions.all { it.id in declared }
     }

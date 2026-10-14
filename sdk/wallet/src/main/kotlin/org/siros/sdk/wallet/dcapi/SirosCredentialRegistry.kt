@@ -388,15 +388,7 @@ object SirosCredentialRegistry {
      * them, the SDK does not.
      */
     internal fun circuitCapabilities(circuit: CircuitZkCircuit): List<FfiCapability> =
-        (listOf(circuit.circuitId) + circuit.aliases.sorted()).distinct().map { id ->
-            val params = buildMap {
-                put("circuit_id", id)
-                circuit.functions?.let { put("functions", it.sorted().joinToString(",")) }
-                circuit.credentialType?.let { put("credential_type", it) }
-                circuit.capabilities?.let { put("capabilities", it) }
-            }
-            FfiCapability(circuit.system, params)
-        }
+        org.siros.sdk.credentials.SharedCircuitZkServing.capabilities(circuit)
 
     /**
      * Encode the blob to register.

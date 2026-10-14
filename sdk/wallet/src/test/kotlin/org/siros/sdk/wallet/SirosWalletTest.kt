@@ -5303,6 +5303,9 @@ class SirosWalletTest {
         credentials: List<StoredCredential>? = null,
         /** Further doctypes the (single) circuit serves. */
         extraDocTypes: Set<String> = emptySet(),
+        /** The circuit declares these `capabilities`, so only the matcher ([serving]) can select it. */
+        capabilities: String? = null,
+        serving: org.siros.sdk.credentials.CircuitZkServing? = null,
     ): CzkSetup {
         val apiClient = mockk<BackendApiClient>()
         val trustRequests = mutableListOf<JsonObject>()
@@ -5311,8 +5314,8 @@ class SirosWalletTest {
         every { keystore.isUnlocked } returns false
         every { keystore.listKeys() } returns listOf(KeyInfo("kid", "ES256", 0L))
         val seedSource = org.siros.sdk.keystore.FixedRootHolderWitnessSource(CzkFixtures.root)
-        every { (keystore as org.siros.sdk.keystore.HolderWitnessSource).circuitZkPresenter(any(), any(), any(), any(), any(), any()) } answers {
-            seedSource.circuitZkPresenter(arg(0), arg(1), arg(2), arg(3), arg(4), arg(5))
+        every { (keystore as org.siros.sdk.keystore.HolderWitnessSource).circuitZkPresenter(any(), any(), any(), any(), any(), any(), any()) } answers {
+            seedSource.circuitZkPresenter(arg(0), arg(1), arg(2), arg(3), arg(4), arg(5), arg(6))
         }
         val store = FakeCredentialStore((credentials ?: listOf(
             StoredCredential(id = 1L, format = "mso_mdoc", raw = CzkFixtures.mdoc(psc, birth),
@@ -5320,13 +5323,14 @@ class SirosWalletTest {
         )).toMutableList())
         val registry = VerifierIdRegistry(sources)
         val circuits = org.siros.sdk.credentials.CircuitZkCircuitSource {
-            listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf(CzkFixtures.DOCTYPE) + extraDocTypes))
+            listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf(CzkFixtures.DOCTYPE) + extraDocTypes, capabilities = capabilities))
         }
         val support = org.siros.sdk.credentials.CircuitZkSupport(
             // The plan's raw query is the query itself (its doctype_value is what the presenter checks the credential against).
             planner = { query, _ -> org.siros.sdk.credentials.CircuitZkPlanResult.Plan(org.siros.sdk.credentials.CircuitZkPlan(functions, raw = query)) },
             validator = org.siros.sdk.credentials.RulebookCircuitZkValidator(verifierIdTypes = registry, circuits = circuits),
             circuits = circuits,
+            serving = serving,
         )
         val history = mutableListOf<PresentationRecord>()
         val cache = TrustCache()
@@ -5421,6 +5425,24 @@ class SirosWalletTest {
             czkRefused(s, raw, reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.REQUEST_NOT_VERIFIED)
             coVerify(exactly = 0) { s.apiClient.evaluateTrust(any()) }
         }
+    }
+
+    @Test
+    fun circuitZkDcApi_circuitWithCapabilities_isSelectedOnlyWhenTheMatcherServesIt() = runTest(dispatcher) {
+        val caps = """{"schema":1,"presentation":"circuit_zk","credential":{"format":"mso_mdoc","type":"${CzkFixtures.DOCTYPE}"},"functions":[]}"""
+        // No matcher answer: a circuit that declares capabilities is not unrestricted, so nothing is selected.
+        val noMatcher = czkSetup(capabilities = caps, serving = null)
+        czkRefused(noMatcher, czkRequest())
+        assertEquals(0, noMatcher.prover.calls)
+        val declined = czkSetup(capabilities = caps, serving = org.siros.sdk.credentials.CircuitZkServing { _, _, _ -> false })
+        czkRefused(declined, czkRequest())
+        assertEquals(0, declined.prover.calls)
+        // The matcher serves it: presented, and the matcher was asked about this circuit.
+        val asked = mutableListOf<String>()
+        val served = czkSetup(capabilities = caps, serving = org.siros.sdk.credentials.CircuitZkServing { c, _, _ -> asked += c.circuitId; true })
+        czkRun(served, czkRequest())
+        assertEquals(1, served.prover.calls)
+        assertTrue(asked.isNotEmpty() && asked.all { it == "c1" })
     }
 
     @Test

@@ -4228,8 +4228,8 @@ class SirosWallet private constructor(
             encryptionPublicJwkThumbprint = encryptionThumbprint,
         )
         val presenter = (keystore as? org.siros.sdk.keystore.HolderWitnessSource)
-            ?.circuitZkPresenter(prover, support.circuits, support.validator)
-            ?: org.siros.sdk.keystore.CircuitZkPresenter(prover, support.circuits, support.validator, NoWitnessProvider)
+            ?.circuitZkPresenter(prover, support.circuits, support.validator, serving = support.serving)
+            ?: org.siros.sdk.keystore.CircuitZkPresenter(prover, support.circuits, support.validator, NoWitnessProvider, serving = support.serving)
         val verifierContext = VerifierIdContext(request, trust, origin)
 
         val tokensByQueryId = linkedMapOf<String, List<String>>()

@@ -351,8 +351,10 @@ data class WalletConfig(
      * matches nothing, exactly as before. With `true` it is matched through
      * [circuitZkPlanner], [circuitZkValidator] and [circuitZkCircuits]; without
      * a circuit source it still matches nothing (fail closed).
-     * Until the DC API presentation branch exists, a matched `circuit_zk`
-     * request is answered with access-denied.
+     * `handleDCAPIRequest` presents a matched `circuit_zk` request only with a
+     * [circuitZkProver] configured; without one it is answered with access-denied.
+     * A circuit that declares `capabilities` or a `credential_type` is selected
+     * only when the shared matcher serves it (never assumed unrestricted).
      */
     val circuitZk: Boolean = false,
     /**

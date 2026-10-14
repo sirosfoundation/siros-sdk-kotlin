@@ -154,7 +154,19 @@ class SirosCredentialRegistryCapabilityVectorsTest {
             val blob = SirosCredentialRegistry.buildBlob(
                 listOf(credential1), emptyList(), icons = mapOf(1L to byteArrayOf(1)), circuitZkCircuits = listOf(circuit),
             )
-            matchDcqlWithContext(blob, query, clientMetadata).satisfiable
+            val direct = matchDcqlWithContext(blob, query, clientMetadata).satisfiable
+            // The SDK's own selection asks the matcher the same question through
+            // [SharedCircuitZkServing]; without the verifier's lists (which the SDK applies
+            // itself) the two must agree, for every case.
+            if (clientMetadata == null) {
+                val credentialQuery = Json.parseToJsonElement(query).jsonObject["credentials"]!!.jsonArray[0].jsonObject
+                assertEquals(
+                    "${case["name"]!!.jsonPrimitive.content}/${circuit.circuitId}: SharedCircuitZkServing",
+                    direct,
+                    org.siros.sdk.credentials.SharedCircuitZkServing.serves(circuit, type, credentialQuery),
+                )
+            }
+            direct
         }.map { it["id"]!!.jsonPrimitive.content }.toSet()
     }
 

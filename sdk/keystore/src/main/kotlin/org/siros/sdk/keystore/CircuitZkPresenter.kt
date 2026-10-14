@@ -198,6 +198,7 @@ class CircuitZkPresenter(
     private val witnessProvider: CircuitZkWitnessProvider,
     handlers: List<CircuitZkFunctionHandler> = listOf(PseudonymFunctionHandler, AgeCheckFunctionHandler),
     private val residency: ZkProverResidency? = null,
+    private val serving: org.siros.sdk.credentials.CircuitZkServing? = org.siros.sdk.credentials.SharedCircuitZkServing,
 ) {
     private val handlersById = handlers.associateBy { it.functionId }
 
@@ -291,7 +292,7 @@ class CircuitZkPresenter(
         }
 
         // 6. A circuit that fits the plan.
-        val circuit = circuits.circuits().firstOrNull { it.supports(plan, document.docType) } ?: refuse(CircuitZkStep.CIRCUIT)
+        val circuit = circuits.circuits().firstOrNull { it.supports(plan, document.docType, serving) } ?: refuse(CircuitZkStep.CIRCUIT)
 
         // 7. Prove.
         val output = prover.prove(

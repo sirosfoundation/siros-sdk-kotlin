@@ -121,6 +121,7 @@ interface HolderWitnessSource {
         handlers: List<CircuitZkFunctionHandler> = listOf(PseudonymFunctionHandler, AgeCheckFunctionHandler),
         residency: ZkProverResidency? = null,
         userValue: ByteArray? = null,
+        serving: org.siros.sdk.credentials.CircuitZkServing? = org.siros.sdk.credentials.SharedCircuitZkServing,
     ): CircuitZkPresenter
 }
 
@@ -135,8 +136,9 @@ internal class SeedBackedWitnessSource(private val seeds: PrivateSeed) : HolderW
         handlers: List<CircuitZkFunctionHandler>,
         residency: ZkProverResidency?,
         userValue: ByteArray?,
+        serving: org.siros.sdk.credentials.CircuitZkServing?,
     ): CircuitZkPresenter =
-        CircuitZkPresenter(prover, circuits, validator, HolderWitnessProvider(seeds, userValue), handlers, residency)
+        CircuitZkPresenter(prover, circuits, validator, HolderWitnessProvider(seeds, userValue), handlers, residency, serving)
 }
 
 /**
@@ -162,5 +164,6 @@ class FixedRootHolderWitnessSource(rootKey: ByteArray) : HolderWitnessSource {
         handlers: List<CircuitZkFunctionHandler>,
         residency: ZkProverResidency?,
         userValue: ByteArray?,
-    ): CircuitZkPresenter = delegate.circuitZkPresenter(prover, circuits, validator, handlers, residency, userValue)
+        serving: org.siros.sdk.credentials.CircuitZkServing?,
+    ): CircuitZkPresenter = delegate.circuitZkPresenter(prover, circuits, validator, handlers, residency, userValue, serving)
 }

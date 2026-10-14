@@ -295,6 +295,97 @@ class CircuitZkMatchingTest {
         assertEquals(emptySet<String>(), CircuitZkCircuitSource { emptyList() }.docTypes())
     }
 
+    // ---- circuits the matcher constrains (capabilities / credential_type) ----
+
+    private val capabilities = """{"schema":1,"presentation":"circuit_zk","credential":{"format":"mso_mdoc","type":"$doctype"},"functions":[{"id":"fn-a"}]}"""
+
+    private fun constrained(id: String = "c1") = CircuitZkCircuit("sys", id, setOf(doctype), capabilities = capabilities)
+
+    private fun matchWith(circuits: List<CircuitZkCircuit>, serving: CircuitZkServing?) =
+        match(query(), listOf(mdoc(1, doctype)), CircuitZkSupport(FakePlanner { CircuitZkPlanResult.Plan(plan) }, CircuitZkRequestValidator.PERMISSIVE, { circuits }, serving))
+
+    @Test
+    fun `a circuit with capabilities is not unrestricted - without the matcher's yes it is not selected`() {
+        assertTrue(matchWith(listOf(constrained()), null).candidates.isEmpty())
+        assertTrue(matchWith(listOf(constrained()), CircuitZkServing { _, _, _ -> null }).candidates.isEmpty())
+        assertTrue(matchWith(listOf(constrained()), CircuitZkServing { _, _, _ -> false }).candidates.isEmpty())
+        assertTrue(matchWith(listOf(constrained()), CircuitZkServing { _, _, _ -> error("boom") }).candidates.isEmpty())
+        assertEquals(listOf(1L), matchWith(listOf(constrained()), CircuitZkServing { _, _, _ -> true }).candidates.map { it.id })
+    }
+
+    @Test
+    fun `a circuit with a credential_type is judged by the matcher too`() {
+        val typed = CircuitZkCircuit("sys", "c1", setOf(doctype), credentialType = doctype)
+        assertTrue(matchWith(listOf(typed), null).candidates.isEmpty())
+        assertEquals(listOf(1L), matchWith(listOf(typed), CircuitZkServing { _, _, _ -> true }).candidates.map { it.id })
+    }
+
+    @Test
+    fun `the matcher is asked with the circuit, the doctype and the query, and its legacy functions are not read`() {
+        val asked = mutableListOf<Triple<String, String, JsonObject>>()
+        val raw = json.parseToJsonElement("""{"id":"q"}""").jsonObject
+        val c = constrained().copy(functions = setOf("something-else"))
+        val p = CircuitZkPlan(listOf(CircuitZkFunction("fn-a", "h")), raw = raw)
+        val serving = CircuitZkServing { circuit, docType, q -> asked += Triple(circuit.circuitId, docType, q); true }
+        assertTrue(c.supports(p, doctype, serving))
+        assertEquals(listOf(Triple("c1", doctype, raw)), asked)
+        // The two-argument form has no matcher to ask: it never treats the circuit as unrestricted.
+        assertFalse(c.supports(p, doctype))
+        assertFalse(c.supports(p, "other", serving))
+    }
+
+    @Test
+    fun `the verifier's circuit list still applies before the matcher is asked`() {
+        var asked = 0
+        val p = CircuitZkPlan(plan.functions, circuitFilter = listOf(CircuitZkCircuitRef(null, "other-id")))
+        assertFalse(constrained().supports(p, doctype, CircuitZkServing { _, _, _ -> asked++; true }))
+        assertEquals(0, asked)
+    }
+
+    @Test
+    fun `an unrestricted circuit is unchanged and never asks the matcher`() {
+        var asked = 0
+        assertEquals(listOf(1L), matchWith(listOf(circuit()), CircuitZkServing { _, _, _ -> asked++; false }).candidates.map { it.id })
+        assertEquals(0, asked)
+    }
+
+    /**
+     * The matcher's v0.9.0 capability vectors, replayed as the matcher's answers: for every case,
+     * the circuits the vector says are served (`expect`) are exactly the circuits selection takes,
+     * through both selection paths. The rule itself is the matcher's and is exercised by the
+     * device test `SirosCredentialRegistryCapabilityVectorsTest`; this proves selection consumes
+     * the answer instead of deciding.
+     */
+    @Test
+    fun `selection takes exactly the circuits the matcher vectors say are served`() {
+        val f = java.io.File("../../spec/circuit-capabilities-vectors/match.json")
+        require(f.isFile) { "vector file not found at ${f.absolutePath}" }
+        val cases = json.parseToJsonElement(f.readText()).jsonObject["cases"]!!.let { it as kotlinx.serialization.json.JsonArray }.map { it.jsonObject }
+        assertTrue(cases.size >= 40)
+        var withServed = 0
+        var withNone = 0
+        for (case in cases) {
+            val name = (case["name"] as kotlinx.serialization.json.JsonPrimitive).content
+            val expect = (case["expect"] as? kotlinx.serialization.json.JsonArray)?.map { (it as kotlinx.serialization.json.JsonPrimitive).content }?.toSet().orEmpty()
+            val circuits = (case["circuits"] as kotlinx.serialization.json.JsonArray).map { it.jsonObject }.map { c ->
+                CircuitZkCircuit(
+                    system = (c["system"] as kotlinx.serialization.json.JsonPrimitive).content,
+                    circuitId = (c["id"] as kotlinx.serialization.json.JsonPrimitive).content,
+                    docTypes = setOf(doctype),
+                    capabilities = c["capabilities"]?.toString() ?: "{}",
+                )
+            }
+            val serving = CircuitZkServing { circuit, _, _ -> circuit.circuitId in expect }
+            val p = CircuitZkPlan(plan.functions, raw = query().let { (it["credentials"] as kotlinx.serialization.json.JsonArray)[0].jsonObject })
+            val selected = circuits.filter { it.supports(p, doctype, serving) }.map { it.circuitId }.toSet()
+            assertEquals(name, circuits.map { it.circuitId }.toSet().intersect(expect), selected)
+            val matched = matchWith(circuits, serving).candidates
+            assertEquals(name, selected.isNotEmpty(), matched.isNotEmpty())
+            if (selected.isEmpty()) withNone++ else withServed++
+        }
+        assertTrue("some cases serve, some do not ($withServed/$withNone)", withServed > 5 && withNone > 5)
+    }
+
     // ---- no claims registered ----
 
     @Test
