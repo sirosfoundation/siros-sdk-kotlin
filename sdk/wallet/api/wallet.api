@@ -1136,6 +1136,11 @@ public final class org/siros/sdk/wallet/dcapi/DCAPIGetCredentialActivity : andro
 	public fun <init> ()V
 }
 
+public final class org/siros/sdk/wallet/dcapi/DCAPIPresentationDeclined : org/siros/sdk/credentials/WalletException {
+	public fun <init> (Ljava/lang/String;Lorg/siros/sdk/wallet/dcapi/DCAPIRefusalReason;)V
+	public final fun getReason ()Lorg/siros/sdk/wallet/dcapi/DCAPIRefusalReason;
+}
+
 public final class org/siros/sdk/wallet/dcapi/DCAPIRefusalReason : java/lang/Enum {
 	public static final field NOT_TRUSTED Lorg/siros/sdk/wallet/dcapi/DCAPIRefusalReason;
 	public static final field NO_MATCHING_CREDENTIAL Lorg/siros/sdk/wallet/dcapi/DCAPIRefusalReason;

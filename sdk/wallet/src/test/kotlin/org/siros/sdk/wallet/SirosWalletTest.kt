@@ -5200,6 +5200,7 @@ class SirosWalletTest {
 
     private object CzkFixtures {
         const val DOCTYPE = "eu.europa.ec.eudi.nym_auth.1"
+        const val OTHER_DOCTYPE = "org.example.other.1"
         const val ORIGIN = "https://rp.example"
         val root = ByteArray(32) { (it * 5 + 1).toByte() }
         fun resource(name: String) = checkNotNull(CzkFixtures::class.java.getResourceAsStream("/circuitzk/$name")) { name }.readBytes().decodeToString()
@@ -5214,9 +5215,10 @@ class SirosWalletTest {
             return mac(mac(ByteArray(32), root), info + byteArrayOf(1)).copyOf(length)
         }
         val seed get() = hkdf("org.siros.private_seed/v1$DOCTYPE".toByteArray(), 16)
-        val psc get() = java.security.MessageDigest.getInstance("SHA-256").digest(seed)
+        val psc get() = pscFor(DOCTYPE)
+        fun pscFor(docType: String) = java.security.MessageDigest.getInstance("SHA-256").digest(hkdf("org.siros.private_seed/v1$docType".toByteArray(), 16))
 
-        fun mdoc(psc: ByteArray = this.psc, birth: String = "2000-06-15"): String {
+        fun mdoc(psc: ByteArray = this.psc, birth: String = "2000-06-15", docType: String = DOCTYPE): String {
             fun c(o: Any) = com.upokecenter.cbor.CBORObject.FromObject(o)
             fun item(id: Long, name: String, v: com.upokecenter.cbor.CBORObject): com.upokecenter.cbor.CBORObject {
                 val m = com.upokecenter.cbor.CBORObject.NewMap()
@@ -5227,8 +5229,8 @@ class SirosWalletTest {
             items.Add(item(0, "birth_date", com.upokecenter.cbor.CBORObject.FromObjectAndTag(birth, 1004)))
             items.Add(item(1, "ssc", c(ByteArray(32) { 9 })))
             items.Add(item(2, "psc", c(psc)))
-            val ns = com.upokecenter.cbor.CBORObject.NewMap(); ns[c(DOCTYPE)] = items
-            val mso = com.upokecenter.cbor.CBORObject.NewMap(); mso[c("docType")] = c(DOCTYPE)
+            val ns = com.upokecenter.cbor.CBORObject.NewMap(); ns[c(docType)] = items
+            val mso = com.upokecenter.cbor.CBORObject.NewMap(); mso[c("docType")] = c(docType)
             val unprotected = com.upokecenter.cbor.CBORObject.NewMap(); unprotected[c(33)] = c(leafDer)
             val auth = com.upokecenter.cbor.CBORObject.NewArray()
             auth.Add(c(ByteArray(0))); auth.Add(unprotected)
@@ -5246,9 +5248,11 @@ class SirosWalletTest {
         signed: Boolean = true,
         nonce: String = "czk-nonce-1",
         queryIds: List<String> = listOf("q"),
+        /** The `doctype_value` of each query, in order; the nym_auth doctype for all when null. */
+        queryDoctypes: List<String>? = null,
     ): String {
-        val query = """{"credentials":[""" + queryIds.joinToString(",") {
-            """{"id":"$it","format":"circuit_zk","meta":{"doctype_value":"${CzkFixtures.DOCTYPE}"}}"""
+        val query = """{"credentials":[""" + queryIds.withIndex().joinToString(",") { (i, id) ->
+            """{"id":"$id","format":"circuit_zk","meta":{"doctype_value":"${queryDoctypes?.get(i) ?: CzkFixtures.DOCTYPE}"}}"""
         } + "]}"
         val claims = com.nimbusds.jwt.JWTClaimsSet.parse(
             """{"client_id":"$clientId","nonce":"$nonce","response_mode":"dc_api","dcql_query":$query""" +
@@ -5269,6 +5273,7 @@ class SirosWalletTest {
         val apiClient: BackendApiClient,
         val history: MutableList<PresentationRecord>,
         val prover: CountingCzkProver,
+        val trustRequests: MutableList<JsonObject> = mutableListOf(),
     )
 
     private class CountingCzkProver(val inner: org.siros.sdk.keystore.CircuitZkProver) : org.siros.sdk.keystore.CircuitZkProver {
@@ -5296,9 +5301,12 @@ class SirosWalletTest {
         localOnlyTrust: Boolean = false,
         /** Replaces the default single credential (id 1). */
         credentials: List<StoredCredential>? = null,
+        /** Further doctypes the (single) circuit serves. */
+        extraDocTypes: Set<String> = emptySet(),
     ): CzkSetup {
         val apiClient = mockk<BackendApiClient>()
-        coEvery { apiClient.evaluateTrust(any()) } coAnswers { trust() }
+        val trustRequests = mutableListOf<JsonObject>()
+        coEvery { apiClient.evaluateTrust(any()) } coAnswers { trustRequests += firstArg<JsonObject>(); trust() }
         val keystore = mockk<KeystoreManager>(moreInterfaces = arrayOf(org.siros.sdk.keystore.RootSecret::class))
         every { keystore.isUnlocked } returns false
         every { keystore.listKeys() } returns listOf(KeyInfo("kid", "ES256", 0L))
@@ -5311,13 +5319,11 @@ class SirosWalletTest {
         )).toMutableList())
         val registry = VerifierIdRegistry(sources)
         val circuits = org.siros.sdk.credentials.CircuitZkCircuitSource {
-            listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf(CzkFixtures.DOCTYPE)))
+            listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf(CzkFixtures.DOCTYPE) + extraDocTypes))
         }
         val support = org.siros.sdk.credentials.CircuitZkSupport(
-            planner = { _, _ -> org.siros.sdk.credentials.CircuitZkPlanResult.Plan(org.siros.sdk.credentials.CircuitZkPlan(
-                functions,
-                raw = Json.parseToJsonElement("""{"id":"q","format":"circuit_zk","meta":{"doctype_value":"${CzkFixtures.DOCTYPE}"}}""").jsonObject,
-            )) },
+            // The plan's raw query is the query itself (its doctype_value is what the presenter checks the credential against).
+            planner = { query, _ -> org.siros.sdk.credentials.CircuitZkPlanResult.Plan(org.siros.sdk.credentials.CircuitZkPlan(functions, raw = query)) },
             validator = org.siros.sdk.credentials.RulebookCircuitZkValidator(verifierIdTypes = registry, circuits = circuits),
             circuits = circuits,
         )
@@ -5341,7 +5347,7 @@ class SirosWalletTest {
             "circuitZkProver" to prover,
             "verifierIdRegistry" to registry,
         )
-        return CzkSetup(wallet, apiClient, history, prover)
+        return CzkSetup(wallet, apiClient, history, prover, trustRequests)
     }
 
     private fun czkRun(s: CzkSetup, raw: String, origin: String = CzkFixtures.ORIGIN) =
@@ -5563,6 +5569,23 @@ class SirosWalletTest {
     }
 
     @Test
+    fun circuitZkDcApi_multiQuery_aQueryTheUsersPickIsNotACandidateOf_isRefused_notAnsweredWithAnotherCredential() = runTest(dispatcher) {
+        // Query "qo" wants the other doctype (only credential 5 is its candidate); the user picked credential 1.
+        val other = StoredCredential(
+            id = 5L, format = "mso_mdoc", raw = CzkFixtures.mdoc(psc = CzkFixtures.pscFor(CzkFixtures.OTHER_DOCTYPE), docType = CzkFixtures.OTHER_DOCTYPE),
+            metadata = CredentialMetadata(name = "Other"), batchId = 5L, instanceId = 0,
+        )
+        val raw = czkRequest(queryIds = listOf("qo", "q"), queryDoctypes = listOf(CzkFixtures.OTHER_DOCTYPE, CzkFixtures.DOCTYPE))
+        val s = czkSetup(credentials = listOf(czkCred(1, 1), other), extraDocTypes = setOf(CzkFixtures.OTHER_DOCTYPE))
+        val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) { czkRunSelected(s, 1L, raw = raw) }
+        assertEquals(org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE, e.reason)
+        assertEquals(0, s.prover.calls)
+        assertTrue(s.history.isEmpty())
+        // Without any pick, each query takes its own first eligible candidate, as before.
+        assertEquals(listOf(5L, 1L), czkRunSelected(czkSetup(credentials = listOf(czkCred(1, 1), other), extraDocTypes = setOf(CzkFixtures.OTHER_DOCTYPE)), raw = raw).credentialIds)
+    }
+
+    @Test
     fun circuitZkDcApi_flagOff_isRefusedAsBefore() = runTest(dispatcher) {
         val s = czkSetup(flagOn = false)
         czkRefused(s, czkRequest())
@@ -5598,7 +5621,15 @@ class SirosWalletTest {
         val withContext = czkSetup(functions = listOf(semantic), trust = {
             buildJsonObject {
                 put("decision", true)
-                putJsonObject("context") { putJsonObject("verifier_ids") { put("semantic", "semantic_id:LEIXG-5299") } }
+                // go-trust #203: a LIST of {verifier_id_type, verifier_id, basis}. Entries of other types
+                // come first, and the requested type is listed twice with the same value (one identifier).
+                putJsonObject("context") {
+                    putJsonArray("verifier_ids") {
+                        add(buildJsonObject { put("verifier_id_type", "dns"); put("verifier_id", "rp.example.com"); put("basis", "client-id-binding") })
+                        add(buildJsonObject { put("verifier_id_type", "semantic"); put("verifier_id", "semantic_id:LEIXG-5299"); put("basis", "x5c-chain") })
+                        add(buildJsonObject { put("verifier_id_type", "semantic"); put("verifier_id", "semantic_id:LEIXG-5299"); put("basis", "other-basis") })
+                    }
+                }
             }
         })
         val result = czkRun(withContext, czkRequest())
@@ -5612,10 +5643,83 @@ class SirosWalletTest {
         for (trust in listOf<suspend () -> JsonObject>(
             { buildJsonObject { put("decision", true) } },
             { buildJsonObject { put("decision", true); putJsonObject("context") { put("framework", "x") } } },
-            { buildJsonObject { put("decision", true); putJsonObject("context") { putJsonObject("verifier_ids") { put("other", "v") } } } },
+            { buildJsonObject { put("decision", true); putJsonObject("context") { putJsonArray("verifier_ids") { add(buildJsonObject { put("verifier_id_type", "other"); put("verifier_id", "v") }) } } } },
+            // Malformed or empty entries of the requested type are skipped, never guessed from.
+            { buildJsonObject { put("decision", true); putJsonObject("context") { putJsonArray("verifier_ids") { add(buildJsonObject { put("verifier_id_type", "semantic"); put("verifier_id", "") }); add(kotlinx.serialization.json.JsonPrimitive("semantic")) } } } },
+            // Two DISTINCT values of the requested type: the wallet does not choose, it declines.
+            { buildJsonObject { put("decision", true); putJsonObject("context") { putJsonArray("verifier_ids") {
+                add(buildJsonObject { put("verifier_id_type", "semantic"); put("verifier_id", "semantic_id:LEIXG-5299") })
+                add(buildJsonObject { put("verifier_id_type", "semantic"); put("verifier_id", "semantic_id:LEIXG-OTHER") })
+            } } } },
+            // The pre-contract map form is not the contract.
+            { buildJsonObject { put("decision", true); putJsonObject("context") { putJsonObject("verifier_ids") { put("semantic", "semantic_id:LEIXG-5299") } } } },
         )) {
             czkRefused(czkSetup(functions = listOf(semantic), trust = trust), czkRequest())
         }
+    }
+
+    @Test
+    fun authZenSource_usesTheOneDistinctValueOfTheRequestedType_andDeclinesWhenAmbiguous() = runTest(dispatcher) {
+        fun ctx(ids: kotlinx.serialization.json.JsonElement) = VerifierIdContext(
+            org.siros.sdk.wallet.dcapi.DCAPIRequest(
+                clientId = "c", responseMode = "dc_api", nonce = "n", dcqlQuery = null, clientMetadata = null,
+                keyMaterial = null, protocol = "openid4vp-v1-signed", state = null,
+            ),
+            TrustResult(trusted = true, context = buildJsonObject { put("verifier_ids", ids) }), "https://rp.example",
+        )
+        val ids = Json.parseToJsonElement(
+            """[{"verifier_id_type":"semantic","verifier_id":""},{"verifier_id_type":"dns","verifier_id":"d"},
+               {"verifier_id_type":"uri","verifier_id":"u1"},{"verifier_id_type":"uri","verifier_id":"u2"},
+               {"verifier_id_type":"semantic","verifier_id":"one","basis":"x5c-chain"},{"verifier_id_type":"semantic","verifier_id":"one"}]""",
+        )
+        assertEquals("one", AuthZENSource("semantic").resolve(ctx(ids)))
+        // Distinct values of one type: declined, not guessed.
+        assertNull(AuthZENSource("uri").resolve(ctx(ids)))
+        assertEquals("d", AuthZENSource("dns").resolve(ctx(ids)))
+        assertNull(AuthZENSource("uri").resolve(ctx(ids)))
+    }
+
+    private class CancellingSource(override val type: String) : VerifierIdSource {
+        override suspend fun resolve(context: VerifierIdContext): String? = throw kotlinx.coroutines.CancellationException("cancelled")
+    }
+
+    @Test
+    fun verifierIdRegistry_doesNotSwallowCancellation_butStillSkipsAFailingSource() = runTest(dispatcher) {
+        val ctx = VerifierIdContext(
+            org.siros.sdk.wallet.dcapi.DCAPIRequest(
+                clientId = "c", responseMode = "dc_api", nonce = "n", dcqlQuery = null, clientMetadata = null,
+                keyMaterial = null, protocol = "openid4vp-v1-signed", state = null,
+            ),
+            TrustResult(trusted = true), "https://rp.example",
+        )
+        org.junit.Assert.assertThrows(kotlinx.coroutines.CancellationException::class.java) {
+            kotlinx.coroutines.runBlocking { VerifierIdRegistry(listOf(CancellingSource("t"), FixedSource("t", "later", mutableListOf()))).resolve("t", ctx) }
+        }
+        val failing = object : VerifierIdSource {
+            override val type = "t"
+            override suspend fun resolve(context: VerifierIdContext): String? = error("boom")
+        }
+        assertEquals("later", VerifierIdRegistry(listOf(failing, FixedSource("t", "later", mutableListOf()))).resolve("t", ctx))
+    }
+
+    @Test
+    fun circuitZkDcApi_theTrustRequestCarriesTheVerifierIdTypeHint_onlyWhenOneTypeIsAsked() = runTest(dispatcher) {
+        val s = czkSetup()
+        czkRun(s, czkRequest())
+        assertEquals("x509_san_dns", s.trustRequests.single()["context"]!!.jsonObject["verifier_id_type"]!!.jsonPrimitive.content)
+        // No pseudonym function: no type is known, so no context is sent.
+        val noPseudonym = czkSetup(functions = listOf(org.siros.sdk.credentials.CircuitZkFunction(
+            "age_check", "a", Json.parseToJsonElement("""{"ge":"2000-01-01"}""").jsonObject,
+        )))
+        czkRun(noPseudonym, czkRequest())
+        assertNull(noPseudonym.trustRequests.single()["context"])
+    }
+
+    @Test
+    fun circuitZkDcApi_cancelledTrustEvaluation_propagatesCancellation_notARefusal() = runTest(dispatcher) {
+        val s = czkSetup(trust = { throw kotlinx.coroutines.CancellationException("cancelled") })
+        org.junit.Assert.assertThrows(kotlinx.coroutines.CancellationException::class.java) { czkRun(s, czkRequest()) }
+        assertEquals(0, s.prover.calls)
     }
 
     @Test
@@ -5699,6 +5803,9 @@ class SirosWalletTest {
             thrown = e
         }
         assertTrue(thrown is WalletException)
+        // The user is told (coarsely) and the verifier's message is the same WalletException message as before.
+        assertEquals(org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NOT_TRUSTED, (thrown as org.siros.sdk.wallet.dcapi.DCAPIPresentationDeclined).reason)
+        assertTrue(thrown!!.message!!.startsWith("Verifier 'https://untrusted-relying-party.example' is not trusted"))
         coVerify(exactly = 0) { keystore.signVpToken(any(), any(), any(), any()) }
         assertEquals(0, wallet.presentationHistory.size)
     }
@@ -5933,6 +6040,60 @@ class SirosWalletTest {
             thrown = e
         }
         assertTrue(thrown is WalletException)
+        assertEquals(org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NO_MATCHING_CREDENTIAL, (thrown as org.siros.sdk.wallet.dcapi.DCAPIPresentationDeclined).reason)
+        assertEquals("No credential in the wallet matches the request", thrown.message)
+    }
+
+    private fun plainDcApiWallet(credential: StoredCredential?): SirosWallet {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        coEvery { keystore.signVpToken(any(), any(), any(), any()) } returns "signed-vp-token"
+        return newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "apiClient" to apiClient,
+            "keystore" to keystore,
+            "credentialStore" to FakeCredentialStore(listOfNotNull(credential).toMutableList()),
+            "trustCache" to TrustCache(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+    }
+
+    private fun declinedReason(block: suspend () -> Unit): org.siros.sdk.wallet.dcapi.DCAPIPresentationDeclined {
+        val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIPresentationDeclined::class.java) { kotlinx.coroutines.runBlocking { block() } }
+        // Still a WalletException: existing handlers (and the verifier's error_description) are unchanged.
+        assertTrue(e is WalletException)
+        return e
+    }
+
+    @Test
+    fun handleDCAPIRequest_missingEncryptionKey_isDeclinedWithAUserReason() = runTest(dispatcher) {
+        val wallet = plainDcApiWallet(StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw", metadata = CredentialMetadata(name = "X"), batchId = 1L, instanceId = 0))
+        val e = declinedReason {
+            wallet.handleDCAPIRequest(
+                wrapDCAPIRequest("openid4vp-v1-unsigned", buildJsonObject { put("nonce", "n"); put("response_mode", "dc_api.jwt") }),
+                origin = "https://relying-party.example",
+            )
+        }
+        assertEquals(org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST, e.reason)
+        assertEquals("dc_api.jwt response_mode requires client_metadata.jwks with an encryption key", e.message)
+    }
+
+    @Test
+    fun handleDCAPIRequest_noEligibleCopyLeft_isDeclinedWithAUserReason() = runTest(dispatcher) {
+        // The credential's key is not in the keystore, so no copy is eligible.
+        val wallet = plainDcApiWallet(StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw", kid = "gone-kid", metadata = CredentialMetadata(name = "X"), batchId = 1L, instanceId = 0))
+        val e = declinedReason {
+            wallet.handleDCAPIRequest(
+                wrapDCAPIRequest("openid4vp-v1-unsigned", buildJsonObject { put("nonce", "n") }),
+                origin = "https://relying-party.example",
+            )
+        }
+        assertEquals(org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE, e.reason)
+        assertEquals("No eligible copies of the requested credential remain - renew it to get more", e.message)
     }
 
     @Test

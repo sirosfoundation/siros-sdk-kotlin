@@ -133,7 +133,8 @@ class DCAPIGetCredentialActivity : Activity() {
         // A payment confirmation request (transaction_data) and its response (KB-JWT with the transaction
         // hashes) are private; their content is never logged.
         val carriesTransactionData = digitalOption.requestJson.contains("transaction_data")
-        if (!carriesTransactionData) Timber.d("DCAPI raw request (origin=$origin): ${digitalOption.requestJson}")
+        // Only the size is logged: a request or response body can carry a nonce, a presentation or a pseudonym.
+        Timber.d("DCAPI request received (origin=$origin, bytes=${digitalOption.requestJson.length}, transaction_data=$carriesTransactionData)")
 
         // What the user picked in the OS picker; the wallet presents exactly that (circuit_zk).
         val selectedCredentialIds = selectedCredentialIdsOf(request)
@@ -148,7 +149,7 @@ class DCAPIGetCredentialActivity : Activity() {
                     consentHandler = TransactionConsentHandler { showTransactionConsentDialog(this@DCAPIGetCredentialActivity, it) },
                     selectedCredentialIds = selectedCredentialIds,
                 )
-                if (!carriesTransactionData) Timber.d("DCAPI final response: ${result.responseJson}")
+                Timber.d("DCAPI response ready (bytes=${result.responseJson.length})")
                 val responseIntent = Intent()
                 PendingIntentHandler.setGetCredentialResponse(
                     responseIntent,
@@ -182,7 +183,11 @@ class DCAPIGetCredentialActivity : Activity() {
                 // OpenID4VP error object lets the RP read and display the
                 // actual reason instead.
                 Timber.w(e, "DC API presentation declined")
-                finishWithProtocolError(e.message ?: "Presentation declined")
+                // The verifier's answer is unchanged; the user is told why in coarse terms.
+                finishWithProtocolError(
+                    e.message ?: "Presentation declined",
+                    userMessageRes = (e as? DCAPIPresentationDeclined)?.reason?.userMessageRes,
+                )
             } catch (e: Exception) {
                 Timber.e(e, "DC API presentation failed unexpectedly")
                 finishWithError(e.message ?: "Presentation failed")
@@ -254,7 +259,7 @@ class DCAPIGetCredentialActivity : Activity() {
             put("error", JsonPrimitive(error))
             if (description != null) put("error_description", JsonPrimitive(description))
         }.toString()
-        Timber.d("DCAPI error response: $errorJson")
+        Timber.d("DCAPI error response (error=$error, bytes=${errorJson.length})")
         val responseIntent = Intent()
         PendingIntentHandler.setGetCredentialResponse(
             responseIntent,

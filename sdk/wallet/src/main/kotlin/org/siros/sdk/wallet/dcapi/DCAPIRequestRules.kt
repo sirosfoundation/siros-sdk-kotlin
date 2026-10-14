@@ -7,6 +7,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.siros.sdk.credentials.SirosException
+import org.siros.sdk.credentials.WalletException
 import org.siros.sdk.wallet.R
 
 /**
@@ -100,15 +101,30 @@ class DCAPIRequestRefused(
 ) : SirosException("DC API request refused (protocol=$protocol)", errorCode = "dcapi_request_refused")
 
 /**
+ * A DC API presentation the wallet declines on the existing-format paths (untrusted
+ * verifier, no matching credential, no eligible copy left, no encryption key). The
+ * verifier is answered exactly as it always was: `access_denied` with this
+ * exception's message as the description. [reason] is for the USER only: the
+ * activity shows the fixed sentence of [DCAPIRefusalReason.userMessageRes] so the
+ * decline is never silent. It is a [WalletException], so existing handlers still catch it.
+ */
+class DCAPIPresentationDeclined(
+    message: String,
+    val reason: DCAPIRefusalReason,
+) : WalletException(message)
+
+/**
  * The wallet's rules for a DC API request: whether a request must be signed
  * and carry the calling origin in `expected_origins`.
  *
- * - For a request that [requiresSignedRequest] says needs one (by default,
- *   any credential query with `format: "circuit_zk"`), the protocol must be
+ * - For a request that needs a signed one, the protocol must be
  *   exactly `openid4vp-v1-signed` (so `openid4vp-v1-multisigned` is
  *   refused), and [origin] must equal, as an exact string, an entry of a
  *   non-empty `expected_origins`. A missing or malformed `expected_origins`
- *   fails. There is no configuration for this.
+ *   fails. Every credential query with `format: "circuit_zk"` needs it
+ *   ([DEFAULT_REQUIRES_SIGNED_REQUEST]) and nothing can lift that:
+ *   [requiresSignedRequest] is a hook that may only ADD requests to the
+ *   set (its `false` never exempts a `circuit_zk` request).
  * - Any other request follows [mode].
  *
  * [origin] is what the OS reports for the calling page. The wallet compares
@@ -121,7 +137,8 @@ class DCAPIRequestRules(
 ) : DCAPIEntryPolicy {
 
     override fun accepts(request: DCAPIRequest): Boolean {
-        if (requiresSignedRequest(request.dcqlQuery)) {
+        // The mandatory rule always applies; the hook can only add to it.
+        if (DEFAULT_REQUIRES_SIGNED_REQUEST(request.dcqlQuery) || requiresSignedRequest(request.dcqlQuery)) {
             return request.protocol == SIGNED_PROTOCOL &&
                 request.keyMaterial != null &&
                 originListed(request)
@@ -143,7 +160,7 @@ class DCAPIRequestRules(
         /** The only protocol a `circuit_zk` request may use. */
         const val SIGNED_PROTOCOL = "openid4vp-v1-signed"
 
-        /** The default hook: any credential query with `format: "circuit_zk"`. */
+        /** The mandatory rule, and the hook's default: any credential query with `format: "circuit_zk"`. */
         val DEFAULT_REQUIRES_SIGNED_REQUEST: (JsonObject?) -> Boolean = { query ->
             ((query?.get("credentials") as? JsonArray) ?: JsonArray(emptyList())).any {
                 (it as? JsonObject)?.get("format")?.jsonPrimitive?.contentOrNull == "circuit_zk"

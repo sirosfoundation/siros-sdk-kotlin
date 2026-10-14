@@ -117,6 +117,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`DisclosureRefusedException`). A type with no entry is unaffected.
   `circuitZkConsentSummary` gives hosts a summary with no credential values. (#270)
 
+### Changed (review follow-up)
+- **`CredentialDisclosureGuard` is no longer last-writer-wins.** `SirosWallet`
+  registers its `nonDisclosurePolicy` with the new `register(owner, policy)`
+  (dropped by `unregister`, called from `destroy()`); the policy in force is the
+  union of every live registration, so a second wallet with
+  `NonDisclosurePolicy.NONE` cannot weaken a running one. `policy` still reads
+  the policy in force; assigning it replaces all registrations (apps/tests).
+  Binary compatibility: additive (`register`, `unregister`,
+  `NonDisclosurePolicy.union`).
+- **`WalletException` is now `open`** (binary compatible) so the DC API can
+  raise `DCAPIPresentationDeclined(message, reason)`, a `WalletException`
+  carrying a coarse `DCAPIRefusalReason`. The existing-format decline paths
+  (untrusted verifier, no matching credential, no eligible copy, missing
+  encryption key, no ZK proof system) now show the user the refusal dialog. The
+  verifier response is unchanged (`access_denied` with the same description).
+- `DCAPIRequestRules`: the `requiresSignedRequest` hook can only ADD
+  requirements; a `circuit_zk` query is always signed and origin-bound.
+- `circuit_zk` with a picker selection: a query the user's pick is not a
+  candidate of is refused; the first-eligible fallback applies only when no
+  selection was supplied.
+- `AuthZENSource` reads go-trust #203's `context.verifier_ids` list of
+  `{verifier_id_type, verifier_id, basis?}`. One distinct value of the requested
+  type is used; several distinct values decline. The trust request carries
+  `context.verifier_id_type` when the request asks for exactly one type.
+  (Trust is now evaluated after matching; the verifier still only sees
+  `access_denied`.)
+
+### Fixed (review follow-up)
+- The DC API activity no longer logs request, response or error payloads
+  (only sizes and status).
+- Coroutine cancellation is no longer converted to a refusal or swallowed in
+  `CircuitZkPresenter.present`, the circuit_zk trust call and
+  `VerifierIdRegistry.resolve`.
+
 ## [0.20.5] - 2026-10-12
 
 ### Fixed

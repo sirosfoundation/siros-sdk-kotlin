@@ -227,8 +227,9 @@ class SirosWallet private constructor(
     private val verifierIdRegistry: VerifierIdRegistry? = VerifierIdRegistry(config.circuitZkVerifierIdSources)
 
     init {
-        // The guard is shared by every enforcement point, which are stateless utilities.
-        org.siros.sdk.credentials.CredentialDisclosureGuard.policy = config.nonDisclosurePolicy
+        // The guard is shared by every enforcement point, which are stateless utilities. This wallet
+        // registers its own policy; another wallet's looser one cannot weaken it (the guard applies the union).
+        org.siros.sdk.credentials.CredentialDisclosureGuard.register(this, config.nonDisclosurePolicy)
     }
     private val circuitZkProver: org.siros.sdk.keystore.CircuitZkProver? = config.circuitZkProver
     private val circuitZkSupport: org.siros.sdk.credentials.CircuitZkSupport? =
@@ -2075,6 +2076,7 @@ class SirosWallet private constructor(
         // state is deliberately left as it was (a destroyed wallet is not a
         // logged-out one), so it would otherwise still look replaceable.
         isDestroyed = true
+        org.siros.sdk.credentials.CredentialDisclosureGuard.unregister(this)
         bumpSessionGeneration()
         activity.applicationContext.unregisterComponentCallbacks(memoryPressureCallbacks)
         zkPresentation.releaseProvers()
@@ -3734,8 +3736,8 @@ class SirosWallet private constructor(
      *   branch uses it: it presents exactly the picked credential, never another one, and
      *   refuses (fail closed) if the pick is not a candidate of the request. For a request with
      *   several credential queries, each query uses the picked credential that is one of its
-     *   own candidates; a query none of the picks matches falls back to its first eligible
-     *   credential, but at least one query must consume a pick. The pick is matched by id or
+     *   own candidates; a query none of the picks matches is refused (nothing is presented for
+     *   a credential the user did not pick). The pick is matched by id or
      *   by being another copy (same `batchId`) of the picked credential, so a one-time-use copy
      *   that is used up does not strand the user. Entries are not matched to queries by the
      *   picker's per-slot metadata (this SDK's matcher registers none), only by candidacy, so a
@@ -3824,7 +3826,10 @@ class SirosWallet private constructor(
         // rejected before any credential is matched or signed, not merely
         // have its trust result computed and ignored.
         if (!trustResult.trusted) {
-            throw WalletException("Verifier '$subjectId' is not trusted: ${trustResult.reason ?: "no reason given"}")
+            throw org.siros.sdk.wallet.dcapi.DCAPIPresentationDeclined(
+                "Verifier '$subjectId' is not trusted: ${trustResult.reason ?: "no reason given"}",
+                org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NOT_TRUSTED,
+            )
         }
 
         val allCreds = credentialStore.getAll()
@@ -3900,12 +3905,13 @@ class SirosWallet private constructor(
         val selectedIds = eligibleInstances(candidates) { it.id in zkRequestedIds }.map { it.id }
 
         if (selectedIds.isEmpty()) {
-            throw WalletException(
+            throw org.siros.sdk.wallet.dcapi.DCAPIPresentationDeclined(
                 if (candidates.isEmpty()) {
                     "No credential in the wallet matches the request"
                 } else {
                     "No eligible copies of the requested credential remain - renew it to get more"
                 },
+                if (candidates.isEmpty()) org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NO_MATCHING_CREDENTIAL else org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE,
             )
         }
 
@@ -3915,7 +3921,10 @@ class SirosWallet private constructor(
         val audience = "origin:$origin"
         val encryptionJwk = if (request.responseMode == "dc_api.jwt") {
             findEncryptionJwk(request.clientMetadata)
-                ?: throw WalletException("dc_api.jwt response_mode requires client_metadata.jwks with an encryption key")
+                ?: throw org.siros.sdk.wallet.dcapi.DCAPIPresentationDeclined(
+                    "dc_api.jwt response_mode requires client_metadata.jwks with an encryption key",
+                    org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST,
+                )
         } else {
             null
         }
@@ -4005,7 +4014,10 @@ class SirosWallet private constructor(
                         },
                     )
                 } catch (e: ZkMdocPresentation.NoMatchingProofSystem) {
-                    throw WalletException(e.message ?: "No registered ZK proof system satisfies the request")
+                    throw org.siros.sdk.wallet.dcapi.DCAPIPresentationDeclined(
+                        e.message ?: "No registered ZK proof system satisfies the request",
+                        org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST,
+                    )
                 }
                 android.util.Base64.encodeToString(
                     presented.deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
@@ -4155,6 +4167,17 @@ class SirosWallet private constructor(
         val registry = verifierIdRegistry ?: refuse("no-sources", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
         val query = request.dcqlQuery ?: refuse("no-query", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
 
+        // Plan, validate, match.
+        val allCreds = credentialStore.getAll()
+        val results = CredentialMatcher.matchDcql(query, allCreds, zkSystemIds, support, request.clientMetadata).queryResults
+
+        // The one verifier_id_type the pseudonym functions ask for, if there is exactly one: sent to the PDP as
+        // context.verifier_id_type so it narrows its answer. Optional; several types means no hint.
+        val verifierIdHint = results.mapNotNull { r ->
+            val f = r.circuitZkPlan?.functions?.firstOrNull { it.id == org.siros.sdk.credentials.CircuitZkRuleSet.PSEUDONYM }
+            (f?.params?.get("verifier_id_type") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+        }.distinct().singleOrNull()?.let { type -> kotlinx.serialization.json.buildJsonObject { put("verifier_id_type", kotlinx.serialization.json.JsonPrimitive(type)) } }
+
         // Trust: the PDP only. The request is signed (the rules guarantee it), so its client id is bound to the key.
         val subjectId = request.clientId ?: origin
         val trust = try {
@@ -4172,17 +4195,16 @@ class SirosWallet private constructor(
                     }
                 },
                 jwk = request.keyMaterial?.jwk,
-                context = null,
+                context = verifierIdHint,
                 allowLocalFallback = false,
             )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             refuse("trust-unavailable", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.TRUST_UNAVAILABLE)
         }
         if (!trust.trusted) refuse("trust", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NOT_TRUSTED)
 
-        // Plan, validate, match.
-        val allCreds = credentialStore.getAll()
-        val results = CredentialMatcher.matchDcql(query, allCreds, zkSystemIds, support, request.clientMetadata).queryResults
         if (results.isEmpty() || results.any { !CredentialUtils.isCircuitZkFormat(it.format) }) refuse("query-shape", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
         if (results.any { it.circuitZkPlan == null || it.candidates.isEmpty() }) refuse("no-match", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NO_MATCHING_CREDENTIAL)
 
@@ -4221,9 +4243,11 @@ class SirosWallet private constructor(
                 val position = selectedCredentialIds.indexOf(c.id).let { if (it < 0) selectedCredentialIds.size else it }
                 if (selectedCredentialIds.size == results.size && position == queryIndex) -1 else position
             }
-            // A query the user's pick belongs to presents only that credential; one it does not belong to
-            // (a multi-query request) falls back to the first eligible.
-            val cred = eligibleInstances(pickedHere.ifEmpty { result.candidates }).firstOrNull() ?: refuse("no-eligible-copy", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+            // A query the user's pick belongs to presents only that credential. When a pick was made, a
+            // query it does not belong to is refused: the user consented to the credential they picked,
+            // never to another one. Only without any pick does the first eligible candidate answer.
+            if (selectedCredentialIds.isNotEmpty() && pickedHere.isEmpty()) refuse("query-without-pick", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+            val cred = eligibleInstances(if (selectedCredentialIds.isEmpty()) result.candidates else pickedHere).firstOrNull() ?: refuse("no-eligible-copy", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
             val pseudonym = plan.functions.firstOrNull { it.id == org.siros.sdk.credentials.CircuitZkRuleSet.PSEUDONYM }
             val type = (pseudonym?.params?.get("verifier_id_type") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
             val verifierId = if (type != null) registry.resolve(type, verifierContext) ?: refuse("verifier-id", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE) else null

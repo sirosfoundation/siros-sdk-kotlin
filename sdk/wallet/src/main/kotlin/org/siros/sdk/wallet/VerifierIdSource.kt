@@ -5,6 +5,8 @@ import java.io.ByteArrayInputStream
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.util.Base64
+import kotlinx.coroutines.CancellationException
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -51,6 +53,8 @@ class VerifierIdRegistry(private val sources: List<VerifierIdSource>) : Verifier
             if (source.type != type) continue
             val id = try {
                 source.resolve(context)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 null
             }
@@ -99,13 +103,26 @@ class X509SanDnsSource : VerifierIdSource {
 }
 
 /**
- * Reads the identifier from the policy decision point's response: the
- * trust response's `context.verifier_ids[<type>]`. Declines when the
- * context, the `verifier_ids` member or the type is absent.
+ * Reads the identifier from the policy decision point's response. go-trust
+ * (#203) returns `context.verifier_ids` as a LIST of objects
+ * `{"verifier_id_type": ..., "verifier_id": ..., "basis": ...}` (`basis` is
+ * informational and ignored here). Among the entries whose `verifier_id_type`
+ * equals [type], duplicates of one value are one identifier; if several DISTINCT
+ * values exist the source declines rather than choose, because the value is
+ * hashed into a pseudonym and a guess would be a different pseudonym. Malformed
+ * entries and empty `verifier_id`s are ignored. Declines when the context, the
+ * member (not a list) or a matching entry is absent. Note these strings are not
+ * [X509SanDnsSource]'s: go-trust's `dns` type is the bare lower-cased name,
+ * that source's value is the `x509_san_dns:` client id as received; they are
+ * different types and so different pseudonyms.
  */
 class AuthZENSource(override val type: String) : VerifierIdSource {
     override suspend fun resolve(context: VerifierIdContext): String? {
-        val ids = context.trust.context?.get("verifier_ids") as? JsonObject ?: return null
-        return (ids[type] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull?.takeIf { it.isNotEmpty() }
+        val ids = context.trust.context?.get("verifier_ids") as? JsonArray ?: return null
+        return ids.asSequence()
+            .mapNotNull { it as? JsonObject }
+            .filter { (it["verifier_id_type"] as? JsonPrimitive)?.takeIf { p -> p.isString }?.contentOrNull == type }
+            .mapNotNull { (it["verifier_id"] as? JsonPrimitive)?.takeIf { p -> p.isString }?.contentOrNull?.takeIf { v -> v.isNotEmpty() } }
+            .distinct().toList().singleOrNull()
     }
 }

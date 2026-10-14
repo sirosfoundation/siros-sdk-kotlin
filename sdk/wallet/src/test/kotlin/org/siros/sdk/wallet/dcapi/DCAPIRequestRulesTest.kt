@@ -195,7 +195,13 @@ class DCAPIRequestRulesTest {
         val raw = envelope(unsigned("dc+sd-jwt"))
         parse(raw)
         assertThrows(DCAPIRequestRefused::class.java) { parse(raw, hook = { true }) }
-        parse(envelope(unsigned("circuit_zk")), hook = { false })
+    }
+
+    @Test
+    fun `the hook can only add requirements, a circuit_zk query is always signed and origin-bound`() {
+        // A hook returning false does not let an unsigned (or unlisted-origin) circuit_zk request through.
+        assertThrows(DCAPIRequestRefused::class.java) { parse(envelope(unsigned("circuit_zk")), hook = { false }) }
+        assertThrows(DCAPIRequestRefused::class.java) { parse(envelope(unsigned("circuit_zk")), hook = { it == null }) }
     }
 
     @Test
