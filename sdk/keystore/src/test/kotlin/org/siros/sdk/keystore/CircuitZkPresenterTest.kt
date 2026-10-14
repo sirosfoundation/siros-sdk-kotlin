@@ -271,6 +271,20 @@ class CircuitZkPresenterTest {
     }
 
     @Test
+    fun `a cancelled prover is cancellation, not a refusal, while any other failure stays a silent refusal`() {
+        val cancelled = CountingProver(FakeCircuitZkProver.optIn(), override = { throw kotlinx.coroutines.CancellationException("cancelled") })
+        try {
+            present(presenter(cancelled), request(p = plan(ageFn())))
+            fail("cancellation must propagate")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // expected
+        }
+        assertEquals(1, cancelled.calls)
+        val boom = CountingProver(FakeCircuitZkProver.optIn(), override = { error("x") })
+        assertDenied(CircuitZkStep.PROVE) { present(presenter(boom), request(p = plan(ageFn()))) }
+    }
+
+    @Test
     fun `a credential without an x5chain is refused`() {
         assertDenied(CircuitZkStep.BUILD) { present(presenter(), request(cred = credential(withX5chain = false))) }
     }

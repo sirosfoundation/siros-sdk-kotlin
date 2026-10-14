@@ -158,6 +158,8 @@ class NymAuthDemoRunner(private val rootKey: ByteArray) {
             )
         } catch (e: CircuitZkError) {
             Outcome.Refused
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             Outcome.Failed("${e.javaClass.simpleName}: ${e.message}")
         }

@@ -240,6 +240,9 @@ class CircuitZkPresenter(
             return presentInternal(request, signer)
         } catch (e: CircuitZkError) {
             throw e
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // A cancelled or timed-out caller gets cancellation, not a refusal.
+            throw e
         } catch (e: Exception) {
             // Any failure of a collaborator (prover, witness provider, circuit source) is a silent refusal.
             Timber.w("circuit_zk presentation failed (${e.javaClass.simpleName})")
