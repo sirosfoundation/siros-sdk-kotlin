@@ -61,9 +61,8 @@ class SharedCircuitZkPlanner : CircuitZkPlanner {
 
         /**
          * The matcher's plan JSON as a [CircuitZkPlan]. Its two independent
-         * circuit lists become the pairs [CircuitZkCircuitRef] holds: a list
-         * that was not sent is a null on every pair, and a list sent empty
-         * leaves no pair at all, which admits no circuit.
+         * circuit lists become a [CircuitZkCircuitFilter], which keeps them as
+         * two lists: one not sent is null, one sent empty admits no circuit.
          *
          * @throws IllegalArgumentException if the JSON is not a plan.
          */
@@ -79,12 +78,8 @@ class SharedCircuitZkPlanner : CircuitZkPlanner {
             val filter = plan["circuit_filter"] as? JsonObject
             val systems = filter?.get("proof_systems")?.strings("proof_systems")
             val ids = filter?.get("circuit_ids")?.strings("circuit_ids")
-            val refs = when {
-                systems == null && ids == null -> null
-                ids == null -> systems!!.map { CircuitZkCircuitRef(it, null) }
-                systems == null -> ids.map { CircuitZkCircuitRef(null, it) }
-                else -> systems.flatMap { s -> ids.map { i -> CircuitZkCircuitRef(s, i) } }
-            }
+            // Not expanded into pairs: see [CircuitZkCircuitFilter].
+            val refs = if (systems == null && ids == null) null else CircuitZkCircuitFilter(systems, ids)
             return CircuitZkPlan(
                 functions = functions,
                 circuitFilter = refs,

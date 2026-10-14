@@ -14,30 +14,32 @@ data class CircuitZkFunction(
 )
 
 /**
- * One entry of a request's circuit list: a null [system] matches any proof
- * system, a null [circuitId] any circuit id. The verifier's two independent
- * lists (`circuit_proof_system_values`, `circuit_id_values`) are expressed as
- * their pairs: a circuit is admitted when its system is in the first list AND
- * its id in the second, which is "some pair admits it", and a list the
- * verifier did not send is a null on every pair.
+ * A request's circuit list: the verifier's two independent lists
+ * (`circuit_proof_system_values`, `circuit_id_values`), kept as two lists. A circuit is admitted when
+ * its system is in [proofSystems] AND its id (or an alias of it) is in [circuitIds]; a list the
+ * verifier did not send is null and constrains nothing, and a list sent empty admits nothing.
+ *
+ * They are deliberately not expanded into the pairs they imply: both lists are verifier-controlled
+ * and planned before the trust decision, so their product is an allocation an untrusted request
+ * could make arbitrarily large. Membership needs only the two lists.
  */
-data class CircuitZkCircuitRef(val system: String?, val circuitId: String?) {
-    /** Whether [circuit] is the circuit this entry names (its id, or one of its aliases). */
+data class CircuitZkCircuitFilter(val proofSystems: List<String>?, val circuitIds: List<String>?) {
+    /** Whether [circuit] is one this filter names (its id, or one of its aliases). */
     fun admits(circuit: CircuitZkCircuit): Boolean =
-        (system == null || system == circuit.system) &&
-            (circuitId == null || circuitId == circuit.circuitId || circuitId in circuit.aliases)
+        (proofSystems == null || circuit.system in proofSystems) &&
+            (circuitIds == null || circuit.circuitId in circuitIds || circuit.aliases.any { it in circuitIds })
 }
 
 /**
  * What a `circuit_zk` credential query asks for, as plain data: the matcher's
  * plan, without its types. [circuitFilter] is the verifier's own list of
  * acceptable circuits: null means the verifier named none (any circuit fits),
- * and an EMPTY list means it named an empty list, which no circuit satisfies
+ * and an EMPTY list in either of its two lists means it named an empty list, which no circuit satisfies
  * (the matcher's reading). [raw] is the credential query the plan was made from.
  */
 data class CircuitZkPlan(
     val functions: List<CircuitZkFunction>,
-    val circuitFilter: List<CircuitZkCircuitRef>? = null,
+    val circuitFilter: CircuitZkCircuitFilter? = null,
     val raw: JsonObject = JsonObject(emptyMap()),
 )
 
@@ -273,7 +275,7 @@ internal object CircuitZkMatching {
     internal fun fits(circuit: CircuitZkCircuit, plan: CircuitZkPlan, docType: String, serving: CircuitZkServing?): Boolean {
         val filter = plan.circuitFilter
         // Null: the verifier named no circuits. An empty list is a list nothing is in.
-        if (filter != null && filter.none { it.admits(circuit) }) return false
+        if (filter != null && !filter.admits(circuit)) return false
         if (circuit.constrainedByMatcher) {
             return try {
                 serving?.serves(circuit, docType, plan.raw) == true

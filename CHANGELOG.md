@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **The `circuit_zk` circuit list is kept as the verifier's two lists, never
+  expanded into their product.** `CircuitZkPlan.circuitFilter` is now a
+  `CircuitZkCircuitFilter(proofSystems, circuitIds)` (it replaces
+  `List<CircuitZkCircuitRef>`; `CircuitZkCircuitRef` is removed). Planning runs
+  before the trust decision, and 10,000 proof systems x 10,000 circuit ids
+  expanded to 100 million pairs, a heap exhaustion from an untrusted signed
+  request. Admission is the same (system in the first list and id or alias in
+  the second); the planner, matcher and rulebook validator all use `admits`.
+  (#266)
 - **`circuit_zk` / `nym_auth` fails closed unless the credential's only
   namespace is its doctype namespace.** `CircuitZkPresenter` now refuses
   (step `NAMESPACE`, the verifier still gets a bare `access_denied`) a credential
@@ -34,8 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one `add_circuit_zk_system` per circuit id and alias, `functions` only when
   the catalog declares them), so the OS picker offers `circuit_zk` rows. The
   matcher's planner conformance vectors are in `spec/circuit-zk-planner-vectors`.
-  Behaviour changes: `CircuitZkCircuitRef.circuitId` is nullable and an empty
-  `CircuitZkPlan.circuitFilter` now admits no circuit (null still means "any");
+  Behaviour changes: `CircuitZkPlan.circuitFilter` is a `CircuitZkCircuitFilter` of the
+  verifier's two lists, and an empty list in it admits no circuit (null still means "any");
   a request repeating a DCQL credential-query or claim `id` offers nothing.
   The matcher AAR is 0.9.0 (0.7.0: `zk_required` absent means optional,
   duplicate ids rejected, holder binding and `multiple` honoured). (#271)

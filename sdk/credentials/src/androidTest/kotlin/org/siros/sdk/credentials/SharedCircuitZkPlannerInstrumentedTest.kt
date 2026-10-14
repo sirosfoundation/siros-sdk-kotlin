@@ -110,16 +110,16 @@ class SharedCircuitZkPlannerInstrumentedTest {
     @Test
     fun plans_the_requests_the_old_probe_could_not() {
         fun cm(lists: String) = Json.parseToJsonElement("""{"vp_formats_supported":{"circuit_zk":$lists}}""").jsonObject
-        assertEquals(emptyList<CircuitZkCircuitRef>(), planned(query(), cm("""{"circuit_id_values":[]}""")).circuitFilter)
-        assertEquals(emptyList<CircuitZkCircuitRef>(), planned(query(), cm("""{"circuit_proof_system_values":[],"circuit_id_values":["c"]}""")).circuitFilter)
+        assertEquals(CircuitZkCircuitFilter(null, emptyList()), planned(query(), cm("""{"circuit_id_values":[]}""")).circuitFilter)
+        assertEquals(CircuitZkCircuitFilter(emptyList(), listOf("c")), planned(query(), cm("""{"circuit_proof_system_values":[],"circuit_id_values":["c"]}""")).circuitFilter)
         assertEquals(1, planned(query(meta = """{"vct_values":[]}""")).functions.size)
         assertEquals(1, planned(query(id = null)).functions.size)
         // Plain and envelope shapes of the verifier's lists both reach the plan.
         val plain = cm("""{"circuit_proof_system_values":["s1"],"circuit_id_values":["c1"]}""")
-        assertEquals(listOf(CircuitZkCircuitRef("s1", "c1")), planned(query(), plain).circuitFilter)
+        assertEquals(CircuitZkCircuitFilter(listOf("s1"), listOf("c1")), planned(query(), plain).circuitFilter)
         val envelope = java.util.Base64.getUrlEncoder().withoutPadding()
             .encodeToString("""{"circuit_proof_system_values":["s1"],"circuit_id_values":["c>?"]}""".toByteArray())
-        assertEquals(listOf(CircuitZkCircuitRef("s1", "c>?")), planned(query(), cm("""{"fn_id":"x","input":"$envelope"}""")).circuitFilter)
+        assertEquals(CircuitZkCircuitFilter(listOf("s1"), listOf("c>?")), planned(query(), cm("""{"fn_id":"x","input":"$envelope"}""")).circuitFilter)
     }
 
     /** What a request's two circuit lists become in the SDK's plan, end to end. */
@@ -130,7 +130,7 @@ class SharedCircuitZkPlannerInstrumentedTest {
             return (SharedCircuitZkPlanner().plan(v.query()!!, v.clientMetadata()) as CircuitZkPlanResult.Plan).plan
         }
         assertEquals(
-            listOf(CircuitZkCircuitRef("longfellow-libzk-v1", "urn:circuits:longfellow:nym_auth:v1")),
+            CircuitZkCircuitFilter(listOf("longfellow-libzk-v1"), listOf("urn:circuits:longfellow:nym_auth:v1")),
             planned("ok_normative_plain.json").circuitFilter,
         )
         assertNull(planned("ok_client_metadata_without_circuit_zk.json").circuitFilter)

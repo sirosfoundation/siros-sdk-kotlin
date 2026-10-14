@@ -26,9 +26,13 @@ class RulebookCircuitZkValidatorTest {
             val o = it.jsonObject
             CircuitZkFunction(o["id"]!!.jsonPrimitive.content, o["handle"]!!.jsonPrimitive.content, o["params"]!!.jsonObject)
         },
-        circuitFilter = j["circuit_filter"]?.jsonArray?.map {
-            val o = it.jsonObject
-            CircuitZkCircuitRef(o["system"]?.jsonPrimitive?.content, o["circuit_id"]!!.jsonPrimitive.content)
+        circuitFilter = j["circuit_filter"]?.jsonArray?.map { it.jsonObject }?.let { pairs ->
+            // The vectors list the pairs; the plan keeps the two lists they are made of.
+            val systems = pairs.mapNotNull { it["system"]?.jsonPrimitive?.content }.distinct()
+            CircuitZkCircuitFilter(
+                systems.takeIf { it.isNotEmpty() },
+                pairs.map { it["circuit_id"]!!.jsonPrimitive.content }.distinct(),
+            )
         },
         raw = j["query"]!!.jsonObject,
     )

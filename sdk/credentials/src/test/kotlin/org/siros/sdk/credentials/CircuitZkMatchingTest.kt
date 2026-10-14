@@ -148,24 +148,24 @@ class CircuitZkMatchingTest {
 
     @Test
     fun `the verifier's circuit list filters, by id, alias and system`() {
-        fun planWith(vararg refs: CircuitZkCircuitRef) =
-            support(planner = FakePlanner { CircuitZkPlanResult.Plan(plan.copy(circuitFilter = refs.toList())) }, circuits = listOf(circuit(aliases = setOf("old-id"))))
+        fun planWith(filter: CircuitZkCircuitFilter) =
+            support(planner = FakePlanner { CircuitZkPlanResult.Plan(plan.copy(circuitFilter = filter)) }, circuits = listOf(circuit(aliases = setOf("old-id"))))
         // A null filter: the verifier named no circuits.
         val unfiltered = support(planner = FakePlanner { CircuitZkPlanResult.Plan(plan) }, circuits = listOf(circuit(aliases = setOf("old-id"))))
         val creds = listOf(mdoc(1, doctype))
-        assertEquals(1, match(query(), creds, planWith(CircuitZkCircuitRef("sys", "c1"))).candidates.size)
-        assertEquals(1, match(query(), creds, planWith(CircuitZkCircuitRef(null, "c1"))).candidates.size)
-        assertEquals(1, match(query(), creds, planWith(CircuitZkCircuitRef("sys", "old-id"))).candidates.size)
-        assertEquals(1, match(query(), creds, planWith(CircuitZkCircuitRef("sys", "nope"), CircuitZkCircuitRef("sys", "c1"))).candidates.size)
-        assertTrue(match(query(), creds, planWith(CircuitZkCircuitRef("sys", "nope"))).candidates.isEmpty())
-        assertTrue(match(query(), creds, planWith(CircuitZkCircuitRef("other-sys", "c1"))).candidates.isEmpty())
+        assertEquals(1, match(query(), creds, planWith(CircuitZkCircuitFilter(listOf("sys"), listOf("c1")))).candidates.size)
+        assertEquals(1, match(query(), creds, planWith(CircuitZkCircuitFilter(null, listOf("c1")))).candidates.size)
+        assertEquals(1, match(query(), creds, planWith(CircuitZkCircuitFilter(listOf("sys"), listOf("old-id")))).candidates.size)
+        assertEquals(1, match(query(), creds, planWith(CircuitZkCircuitFilter(listOf("sys"), listOf("nope", "c1")))).candidates.size)
+        assertTrue(match(query(), creds, planWith(CircuitZkCircuitFilter(listOf("sys"), listOf("nope")))).candidates.isEmpty())
+        assertTrue(match(query(), creds, planWith(CircuitZkCircuitFilter(listOf("other-sys"), listOf("c1")))).candidates.isEmpty())
         // A list the verifier did not send is not a constraint; an empty list is one nothing satisfies
         // (the matcher's reading: it is for wallets to conclude that nothing can match).
         assertEquals(1, match(query(), creds, unfiltered).candidates.size)
-        assertTrue(match(query(), creds, planWith()).candidates.isEmpty())
-        // Only a proof-system list, or only an id list: a null on the other side of every pair.
-        assertEquals(1, match(query(), creds, planWith(CircuitZkCircuitRef("sys", null))).candidates.size)
-        assertTrue(match(query(), creds, planWith(CircuitZkCircuitRef("other-sys", null))).candidates.isEmpty())
+        assertTrue(match(query(), creds, planWith(CircuitZkCircuitFilter(emptyList(), emptyList()))).candidates.isEmpty())
+        // Only a proof-system list, or only an id list: the other list is null.
+        assertEquals(1, match(query(), creds, planWith(CircuitZkCircuitFilter(listOf("sys"), null))).candidates.size)
+        assertTrue(match(query(), creds, planWith(CircuitZkCircuitFilter(listOf("other-sys"), null))).candidates.isEmpty())
     }
 
     @Test
@@ -337,7 +337,7 @@ class CircuitZkMatchingTest {
     @Test
     fun `the verifier's circuit list still applies before the matcher is asked`() {
         var asked = 0
-        val p = CircuitZkPlan(plan.functions, circuitFilter = listOf(CircuitZkCircuitRef(null, "other-id")))
+        val p = CircuitZkPlan(plan.functions, circuitFilter = CircuitZkCircuitFilter(null, listOf("other-id")))
         assertFalse(constrained().supports(p, doctype, CircuitZkServing { _, _, _ -> asked++; true }))
         assertEquals(0, asked)
     }

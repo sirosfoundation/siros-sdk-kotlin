@@ -175,7 +175,7 @@ class CircuitZkRuleSet(
             val doctype = ((plan.raw["meta"] as? JsonObject)?.get("doctype_value") as? JsonPrimitive)?.content
             val relevant = source.circuits().filter { c ->
                 (doctype == null || doctype in c.docTypes) &&
-                    (plan.circuitFilter == null || plan.circuitFilter.any { it.admits(c) })
+                    (plan.circuitFilter == null || plan.circuitFilter.admits(c))
             }
             if (relevant.isEmpty()) return true
             // A matcher-constrained circuit's legacy `functions` are not read (as in CircuitZkMatching.fits).

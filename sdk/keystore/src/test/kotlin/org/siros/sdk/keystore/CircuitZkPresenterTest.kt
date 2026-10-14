@@ -283,7 +283,7 @@ class CircuitZkPresenterTest {
             present(presenter(circuits = listOf(CircuitZkCircuit("s", "c", setOf(docType), functions = setOf("age_check")))), request())
         }
         assertDenied(CircuitZkStep.CIRCUIT) {
-            val withFilter = request(p = plan(pseudonymFn(), ageFn()).copy(circuitFilter = listOf(org.siros.sdk.credentials.CircuitZkCircuitRef("sys", "other"))))
+            val withFilter = request(p = plan(pseudonymFn(), ageFn()).copy(circuitFilter = org.siros.sdk.credentials.CircuitZkCircuitFilter(listOf("sys"), listOf("other"))))
             present(presenter(), withFilter)
         }
     }
