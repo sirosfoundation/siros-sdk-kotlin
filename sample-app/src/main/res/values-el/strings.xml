@@ -59,6 +59,7 @@
     <string name="credential_detail_raw_header">Κεφαλίδα</string>
     <string name="credential_detail_raw_payload">Ωφέλιμο φορτίο</string>
     <string name="credential_detail_raw_disclosure">Αποκάλυψη %1$d</string>
+    <string name="credential_detail_raw_redacted">Οι προστατευμένοι ισχυρισμοί είναι κρυμμένοι σε αυτή την προβολή.</string>
     <string name="copy_to_clipboard">Αντιγραφή στο πρόχειρο</string>
     <string name="copied_to_clipboard">Αντιγράφηκε στο πρόχειρο</string>
     <string name="credential_renew">Ανανέωση</string>

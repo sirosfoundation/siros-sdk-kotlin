@@ -59,6 +59,7 @@
     <string name="credential_detail_raw_header">Header</string>
     <string name="credential_detail_raw_payload">Nyttolast</string>
     <string name="credential_detail_raw_disclosure">Friläggning %1$d</string>
+    <string name="credential_detail_raw_redacted">Skyddade uppgifter är dolda i den här vyn.</string>
     <string name="copy_to_clipboard">Kopiera till urklipp</string>
     <string name="copied_to_clipboard">Kopierat till urklipp</string>
     <string name="credential_renew">Förnya</string>
