@@ -1132,7 +1132,6 @@ public final class org/siros/sdk/wallet/dcapi/DCAPIEntryPolicy$Companion {
 }
 
 public final class org/siros/sdk/wallet/dcapi/DCAPIGetCredentialActivity : android/app/Activity {
-	public static final field NO_SUCH_CREDENTIAL J
 	public fun <init> ()V
 }
 
