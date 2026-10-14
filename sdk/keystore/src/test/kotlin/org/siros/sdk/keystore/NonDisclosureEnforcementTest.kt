@@ -162,6 +162,34 @@ class NonDisclosureEnforcementTest {
         assertTrue(j.signVpToken(other, null, "n", "aud").isNotEmpty())
     }
 
+    /** A compact SD-JWT with the issuer payload verbatim and the given disclosures (none by default). */
+    private fun cleartextSdJwt(payloadJson: String, vararg disclosures: String): String {
+        val enc = Base64.getUrlEncoder().withoutPadding()
+        return "${enc.encodeToString("""{"alg":"ES256"}""".toByteArray())}.${enc.encodeToString(payloadJson.toByteArray())}.c2ln~" +
+            disclosures.joinToString("") { "$it~" }
+    }
+
+    private val cleartextPolicy = NonDisclosurePolicy(mapOf("my.vct" to setOf(listOf("secret"))))
+    private val nameDisclosure = Base64.getUrlEncoder().withoutPadding().encodeToString("""["s2","name","Jane"]""".toByteArray())
+
+    private fun cleartextCredentials() = listOf(
+        cleartextSdJwt("""{"vct":"my.vct","secret":"s"}"""),
+        cleartextSdJwt("""{"vct":"my.vct","secret":"s"}""", nameDisclosure),
+    )
+
+    @Test
+    fun `the jwe keystore refuses a protected claim stored in the issuer payload, with or without disclosures`() = runTest {
+        CredentialDisclosureGuard.policy = cleartextPolicy
+        val j = jwe()
+        for (raw in cleartextCredentials()) {
+            for (claims in listOf(null, emptyList(), listOf("name"))) {
+                assertThrows(DisclosureRefusedException::class.java) { kotlinx.coroutines.runBlocking { j.signVpToken(raw, claims, "n", "aud") } }
+            }
+        }
+        val clean = cleartextSdJwt("""{"vct":"my.vct","other":"o"}""", nameDisclosure)
+        assertTrue(j.signVpToken(clean, listOf("name"), "n", "aud").isNotEmpty())
+    }
+
     // ---- legacy ZK ----
 
     @Test

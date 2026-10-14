@@ -296,6 +296,53 @@ class NonDisclosureTest {
         CredentialDisclosureGuard.requireNoneProtectedSdJwt(n.raw, listOf(n.street, n.topSecret))
     }
 
+    /** A compact SD-JWT whose issuer payload is [payloadJson] verbatim, with no disclosures. */
+    private fun cleartextSdJwt(payloadJson: String): StoredCredential {
+        val enc = Base64.getUrlEncoder().withoutPadding()
+        val raw = "${enc.encodeToString("""{"alg":"ES256"}""".toByteArray())}.${enc.encodeToString(payloadJson.toByteArray())}.c2ln~"
+        return StoredCredential(id = 9, format = "dc+sd-jwt", raw = raw, batchId = 9, instanceId = 0)
+    }
+
+    @Test
+    fun `a protected claim in the issuer payload is refused even with no disclosure selected`() {
+        CredentialDisclosureGuard.policy = NonDisclosurePolicy(mapOf("my.vct" to setOf(listOf("secret"), listOf("address", "pin"))))
+        // Top-level, nested, and an ancestor holding a protected path as a non-object value.
+        for (payload in listOf(
+            """{"vct":"my.vct","secret":"s"}""",
+            """{"vct":"my.vct","address":{"pin":"1"}}""",
+            """{"vct":"my.vct","secret":{"deeper":"s"}}""",
+            """{"vct":"my.vct","address":[{"pin":"1"}]}""",
+        )) {
+            val c = cleartextSdJwt(payload)
+            assertThrows(payload, DisclosureRefusedException::class.java) { CredentialDisclosureGuard.requireNoneProtectedSdJwt(c.raw, emptyList()) }
+        }
+        // Unprotected cleartext, a sibling of the protected nested path, a dotted key that is not the path, and another vct.
+        for (payload in listOf(
+            """{"vct":"my.vct","name":"Jane"}""",
+            """{"vct":"my.vct","address":{"street":"x"}}""",
+            """{"vct":"my.vct","address.pin":"1","secret.x":"2"}""",
+            """{"vct":"other.vct","secret":"s"}""",
+        )) {
+            CredentialDisclosureGuard.requireNoneProtectedSdJwt(cleartextSdJwt(payload).raw, emptyList())
+        }
+    }
+
+    @Test
+    fun `a protected cleartext claim is neither displayed nor matched on`() {
+        CredentialDisclosureGuard.policy = NonDisclosurePolicy(mapOf("my.vct" to setOf(listOf("secret"), listOf("address", "pin"))))
+        val c = cleartextSdJwt("""{"vct":"my.vct","secret":"s","name":"Jane","address":{"pin":"1","street":"x"}}""")
+        val shown = CredentialUtils.extractClaims(c).map { it.key }
+        assertFalse(shown.contains("secret"))
+        assertFalse(shown.contains("address"))
+        assertTrue(shown.contains("name"))
+        val paths = CredentialUtils.flattenClaimPaths(c).map { it.first }
+        assertFalse(paths.contains(listOf("secret")))
+        assertFalse(paths.contains(listOf("address")))
+        assertFalse(paths.contains(listOf("address", "pin")))
+        assertTrue(paths.contains(listOf("address", "street")))
+        assertTrue(CredentialDisclosureGuard.requestsProtected(c, listOf(listOf("secret"))))
+    }
+
     @Test
     fun `an mdoc element holding a protected sub-path is hidden and refused`() {
         CredentialDisclosureGuard.policy = NonDisclosurePolicy(mapOf(nym to setOf(listOf(nym, "given_name", "inner"))))

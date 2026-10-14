@@ -181,19 +181,26 @@ object CredentialDisclosureGuard {
      * Fail-closed check for an SD-JWT presentation about to carry
      * [selectedDisclosures] of the compact [credential].
      *
-     * @throws DisclosureRefusedException if any disclosure names a protected claim.
+     * It covers both halves of what a presentation reveals: the selected disclosures, and the
+     * always-disclosed claims in the issuer JWT payload, which every presentation carries unchanged
+     * (so a protected claim stored there is refused even with no disclosure selected at all).
+     *
+     * @throws DisclosureRefusedException if the presentation would carry a protected claim.
      */
     fun requireNoneProtectedSdJwt(credential: String, selectedDisclosures: List<String>) {
-        if (policy.types.isEmpty() || selectedDisclosures.isEmpty()) return
+        if (policy.types.isEmpty()) return
+        var payloadObj: JsonObject? = null
         val vct = try {
             val payload = credential.substringBefore('~').split('.').getOrNull(1) ?: return
             val obj = json.parseToJsonElement(String(Base64.getUrlDecoder().decode(payload), Charsets.UTF_8)) as? JsonObject
+            payloadObj = obj
             (obj?.get("vct") as? JsonPrimitive)?.contentOrNull
         } catch (e: Exception) {
             null
         } ?: return
         val protectedHere = policy.protectedPaths(vct)
         if (protectedHere.isEmpty()) return
+        if (payloadObj != null && carriesProtectedCleartext(vct, payloadObj, emptyList(), 0)) throw DisclosureRefusedException()
         val pathsByDigest = disclosurePaths(credential)
         for (disclosure in selectedDisclosures) {
             val name = try {
@@ -217,6 +224,31 @@ object CredentialDisclosureGuard {
             }
             if (refused) throw DisclosureRefusedException()
         }
+    }
+
+    /**
+     * Whether [obj], a cleartext (always-disclosed) object of the issuer payload at [prefix],
+     * holds a protected claim. The path is built from the original segments, never a dotted key.
+     * An object is searched below; a protected path or something under it is refused, and so is a
+     * non-object value (an array, say) sitting at an ancestor of a protected path, which cannot be
+     * searched by path. `_sd` digests are not cleartext claims: the disclosures they point to are
+     * the other half of the guard.
+     */
+    private fun carriesProtectedCleartext(vct: String, obj: JsonObject, prefix: List<String>, depth: Int): Boolean {
+        // Too deep to walk: it could hold anything, so it is not sent.
+        if (depth > 32) return true
+        for ((key, value) in obj) {
+            if (prefix.isEmpty() && (key == "_sd" || key == "_sd_alg")) continue
+            if (prefix.isNotEmpty() && key == "_sd") continue
+            val path = prefix + key
+            if (policy.isProtected(vct, path)) return true
+            if (value is JsonObject) {
+                if (carriesProtectedCleartext(vct, value, path, depth + 1)) return true
+            } else if (policy.requestsProtected(vct, listOf(path))) {
+                return true
+            }
+        }
+        return false
     }
 
     private fun digestOf(disclosure: String): String =
