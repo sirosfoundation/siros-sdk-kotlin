@@ -46,6 +46,24 @@ class NonDisclosurePolicy(protectedPaths: Map<String, Set<List<String>>>) {
         }
     }
 
+    /**
+     * The policy protecting everything either policy protects (per type, the
+     * union of the protected paths). Returns [this] or [other] when one already
+     * covers the other, so a single policy is never copied.
+     */
+    fun union(other: NonDisclosurePolicy): NonDisclosurePolicy {
+        if (other === this || other.protectedByType.isEmpty()) return this
+        if (protectedByType.isEmpty()) return other
+        val merged = (protectedByType.keys + other.protectedByType.keys).associateWith { t ->
+            protectedByType[t].orEmpty() + other.protectedByType[t].orEmpty()
+        }
+        return when (merged) {
+            protectedByType -> this
+            other.protectedByType -> other
+            else -> NonDisclosurePolicy(merged)
+        }
+    }
+
     companion object {
         /** The nym_auth document type, whose `ssc` and `psc` are seed commitments. */
         const val NYM_AUTH_DOCTYPE = "eu.europa.ec.eudi.nym_auth.1"
@@ -77,16 +95,50 @@ class DisclosureRefusedException : SirosException(
 
 /**
  * The one guard behind every enforcement point: matching, the OS picker blob,
- * presentation building, display. It consults the installed [policy].
+ * presentation building, display. It consults the policy in force.
  *
- * [policy] is process-wide because the enforcement points are spread over
- * stateless utilities; `SirosWallet` installs `WalletConfig.nonDisclosurePolicy`
- * when it is built.
+ * The enforcement points are stateless utilities, so the guard is process-wide,
+ * but no wallet can weaken another: each `SirosWallet` [register]s its own
+ * policy and the policy in force is the union of every live registration (what
+ * any wallet protects is protected). A wallet configured with
+ * [NonDisclosurePolicy.NONE] therefore only lifts the protection while no
+ * other wallet in the process asks for it. Registrations are weak, and
+ * [unregister] drops one explicitly.
  */
 object CredentialDisclosureGuard {
-    /** The policy in force. */
+    private val lock = Any()
+    private val registrations = java.util.WeakHashMap<Any, NonDisclosurePolicy>()
+
     @Volatile
-    var policy: NonDisclosurePolicy = NonDisclosurePolicy.DEFAULT
+    private var inForce: NonDisclosurePolicy = NonDisclosurePolicy.DEFAULT
+
+    /**
+     * The policy in force. Reading returns the union of the registered policies
+     * (the default while none is registered). Assigning replaces everything
+     * registered with [value]: for apps and tests that manage the policy
+     * themselves, not for wallets.
+     */
+    var policy: NonDisclosurePolicy
+        get() = inForce
+        set(value) = synchronized(lock) {
+            registrations.clear()
+            inForce = value
+        }
+
+    /** Registers [policy] for [owner] (replacing its earlier one); the policy in force is recomputed. */
+    fun register(owner: Any, policy: NonDisclosurePolicy) = synchronized(lock) {
+        registrations[owner] = policy
+        recompute()
+    }
+
+    /** Drops [owner]'s registration. */
+    fun unregister(owner: Any) = synchronized(lock) {
+        if (registrations.remove(owner) != null) recompute()
+    }
+
+    private fun recompute() {
+        inForce = registrations.values.reduceOrNull { a, b -> a.union(b) } ?: NonDisclosurePolicy.DEFAULT
+    }
 
     private val json = Json { ignoreUnknownKeys = true }
 

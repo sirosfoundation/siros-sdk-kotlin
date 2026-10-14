@@ -10,6 +10,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -111,6 +112,37 @@ class NonDisclosureTest {
         CredentialDisclosureGuard.policy = NonDisclosurePolicy(mapOf("my.vct" to setOf(listOf("secret"))))
         assertTrue(CredentialDisclosureGuard.isProtected("my.vct", listOf("secret")))
         assertFalse(CredentialDisclosureGuard.isProtected(nym, listOf(nym, "ssc")))
+    }
+
+    @Test
+    fun `a wallet registering a looser policy cannot weaken one that registered a stricter policy`() {
+        val strict = Any()
+        val loose = Any()
+        CredentialDisclosureGuard.register(strict, NonDisclosurePolicy.DEFAULT)
+        CredentialDisclosureGuard.register(loose, NonDisclosurePolicy.NONE)
+        assertTrue(CredentialDisclosureGuard.isProtected(nym, listOf(nym, "ssc")))
+        assertTrue(CredentialDisclosureGuard.isProtected(nym, listOf(nym, "psc")))
+        // Order does not matter, and the union covers both tables.
+        val other = Any()
+        CredentialDisclosureGuard.register(other, NonDisclosurePolicy(mapOf("my.vct" to setOf(listOf("secret")))))
+        assertTrue(CredentialDisclosureGuard.isProtected("my.vct", listOf("secret")))
+        assertTrue(CredentialDisclosureGuard.isProtected(nym, listOf(nym, "ssc")))
+        // Dropping the strict wallet lifts only what it alone asked for.
+        CredentialDisclosureGuard.unregister(strict)
+        assertFalse(CredentialDisclosureGuard.isProtected(nym, listOf(nym, "ssc")))
+        assertTrue(CredentialDisclosureGuard.isProtected("my.vct", listOf("secret")))
+    }
+
+    @Test
+    fun `a single registration is in force as itself, and assigning policy replaces every registration`() {
+        val owner = Any()
+        CredentialDisclosureGuard.register(owner, NonDisclosurePolicy.NONE)
+        assertSame(NonDisclosurePolicy.NONE, CredentialDisclosureGuard.policy)
+        CredentialDisclosureGuard.policy = NonDisclosurePolicy.DEFAULT
+        assertSame(NonDisclosurePolicy.DEFAULT, CredentialDisclosureGuard.policy)
+        // The earlier registration no longer takes part.
+        CredentialDisclosureGuard.register(Any(), NonDisclosurePolicy.DEFAULT)
+        assertTrue(CredentialDisclosureGuard.isProtected(nym, listOf(nym, "ssc")))
     }
 
     // ---- enforcement point 1: matching ----

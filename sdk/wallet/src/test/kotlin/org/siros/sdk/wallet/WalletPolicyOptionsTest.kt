@@ -128,6 +128,16 @@ class WalletPolicyOptionsTest {
     }
 
     @Test
+    fun aSecondWalletWithNoProtection_doesNotWeakenARunningWalletsPolicy() {
+        CredentialDisclosureGuard.policy = NonDisclosurePolicy.NONE
+        createWalletThroughItsRealInit(base)
+        assertTrue(CredentialDisclosureGuard.isProtected(NonDisclosurePolicy.NYM_AUTH_DOCTYPE, nymPsc))
+        createWalletThroughItsRealInit(WalletPolicyOptions(nonDisclosure = NonDisclosureMode.NONE).applyTo(base))
+        assertTrue(CredentialDisclosureGuard.isProtected(NonDisclosurePolicy.NYM_AUTH_DOCTYPE, nymPsc))
+        assertTrue(CredentialDisclosureGuard.isProtected(NonDisclosurePolicy.NYM_AUTH_DOCTYPE, nymSsc))
+    }
+
+    @Test
     fun theWalletsRealInitInstallsTheDefaultPolicy_whichProtectsTheNymAuthSeedCommitments() {
         // Start from the opposite policy so a wallet that installed nothing would fail this.
         CredentialDisclosureGuard.policy = NonDisclosurePolicy.NONE
