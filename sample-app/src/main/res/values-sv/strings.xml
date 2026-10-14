@@ -286,4 +286,24 @@
     <string name="transaction_entity_pisp">Betalningsinitieringstjänst</string>
     <string name="transaction_entity_service">Tjänst</string>
     <string name="transaction_entity_aisp">Kontoinformationstjänst</string>
+    <string name="settings_policy_title">Begäranspolicy</string>
+    <string name="settings_policy_description">Hur plånboken besvarar presentationsbegäranden. Flera av dessa är till för att testa det integritetsskyddande flödet (circuit_zk).</string>
+    <string name="settings_policy_non_disclosure">Skyddade anspråk</string>
+    <string name="settings_policy_non_disclosure_default">Standard: matcha, visa eller dela aldrig nym_auth-frökommitteringarna (ssc, psc)</string>
+    <string name="settings_policy_non_disclosure_none">Ingen: inga skyddade anspråk (endast test)</string>
+    <string name="settings_policy_circuit_zk">circuit_zk-begäranden</string>
+    <string name="settings_policy_circuit_zk_description">Besvara circuit_zk-begäranden (nollkunskap). Exempelappens planerare förstår bara nym_auth-demofrågan.</string>
+    <string name="settings_policy_fake_prover">FALSK bevisare (inget riktigt bevis)</string>
+    <string name="settings_policy_fake_prover_description">Använd den falska bevisaren, som INTE skapar något riktigt bevis. En verifierare kan inte godta det. Endast utveckling. Kräver att circuit_zk är på.</string>
+    <string name="settings_policy_expected_origins">Förväntade ursprung (andra format)</string>
+    <string name="settings_policy_origins_off">Av: ignorera expected_origins</string>
+    <string name="settings_policy_origins_if_present">Om det finns: tillämpa det när begäran har det</string>
+    <string name="settings_policy_origins_required">Krävs: avvisa en signerad begäran utan det</string>
+    <string name="settings_policy_signed_request">Signerade begäranden krävs för</string>
+    <string name="settings_policy_signed_circuit_zk_only">endast circuit_zk-begäranden (standard)</string>
+    <string name="settings_policy_signed_always">Alla begäranden</string>
+    <string name="settings_policy_verifier_ids">Källor för verifierar-id</string>
+    <string name="settings_policy_source_x509">x509_san_dns (begärans certifikat)</string>
+    <string name="settings_policy_source_authzen">AuthZEN (förtroendetjänstens svar)</string>
+    <string name="settings_policy_applies_next">Börjar gälla nästa gång plånboken skapas: efter Koppla från, eller en omstart av appen.</string>
 </resources>

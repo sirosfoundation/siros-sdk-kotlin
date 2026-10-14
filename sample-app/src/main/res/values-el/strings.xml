@@ -286,4 +286,24 @@
     <string name="transaction_entity_pisp">Υπηρεσία έναρξης πληρωμής</string>
     <string name="transaction_entity_service">Υπηρεσία</string>
     <string name="transaction_entity_aisp">Υπηρεσία πληροφοριών λογαριασμού</string>
+    <string name="settings_policy_title">Πολιτική αιτημάτων</string>
+    <string name="settings_policy_description">Πώς το πορτοφόλι απαντά σε αιτήματα παρουσίασης. Αρκετές από αυτές τις ρυθμίσεις προορίζονται για δοκιμή της ροής προστασίας απορρήτου (circuit_zk).</string>
+    <string name="settings_policy_non_disclosure">Προστατευμένοι ισχυρισμοί</string>
+    <string name="settings_policy_non_disclosure_default">Προεπιλογή: ποτέ αντιστοίχιση, εμφάνιση ή κοινοποίηση των δεσμεύσεων σπόρου nym_auth (ssc, psc)</string>
+    <string name="settings_policy_non_disclosure_none">Κανένας: χωρίς προστατευμένους ισχυρισμούς (μόνο δοκιμές)</string>
+    <string name="settings_policy_circuit_zk">Αιτήματα circuit_zk</string>
+    <string name="settings_policy_circuit_zk_description">Απάντηση σε αιτήματα circuit_zk (μηδενικής γνώσης). Ο σχεδιαστής της εφαρμογής δείγματος κατανοεί μόνο το δοκιμαστικό ερώτημα nym_auth.</string>
+    <string name="settings_policy_fake_prover">ΨΕΥΤΙΚΟΣ αποδείκτης (χωρίς πραγματική απόδειξη)</string>
+    <string name="settings_policy_fake_prover_description">Χρήση του ψεύτικου αποδείκτη, που ΔΕΝ παράγει πραγματική απόδειξη. Ένας επαληθευτής δεν μπορεί να την αποδεχτεί. Μόνο για ανάπτυξη. Απαιτεί ενεργό circuit_zk.</string>
+    <string name="settings_policy_expected_origins">Αναμενόμενες προελεύσεις (άλλες μορφές)</string>
+    <string name="settings_policy_origins_off">Ανενεργό: παράβλεψη του expected_origins</string>
+    <string name="settings_policy_origins_if_present">Αν υπάρχει: εφαρμογή όταν το αίτημα το έχει</string>
+    <string name="settings_policy_origins_required">Απαιτείται: απόρριψη υπογεγραμμένου αιτήματος χωρίς αυτό</string>
+    <string name="settings_policy_signed_request">Υπογεγραμμένα αιτήματα απαιτούνται για</string>
+    <string name="settings_policy_signed_circuit_zk_only">μόνο αιτήματα circuit_zk (προεπιλογή)</string>
+    <string name="settings_policy_signed_always">Όλα τα αιτήματα</string>
+    <string name="settings_policy_verifier_ids">Πηγές αναγνωριστικού επαληθευτή</string>
+    <string name="settings_policy_source_x509">x509_san_dns (το πιστοποιητικό του αιτήματος)</string>
+    <string name="settings_policy_source_authzen">AuthZEN (η απάντηση της υπηρεσίας εμπιστοσύνης)</string>
+    <string name="settings_policy_applies_next">Ισχύει την επόμενη φορά που θα δημιουργηθεί το πορτοφόλι: μετά την Αποσύνδεση ή την επανεκκίνηση της εφαρμογής.</string>
 </resources>

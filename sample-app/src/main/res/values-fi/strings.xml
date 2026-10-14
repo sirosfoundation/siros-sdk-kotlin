@@ -286,4 +286,24 @@
     <string name="transaction_entity_pisp">Maksutoimeksiantopalvelu</string>
     <string name="transaction_entity_service">Palvelu</string>
     <string name="transaction_entity_aisp">Tilitietopalvelu</string>
+    <string name="settings_policy_title">Pyyntökäytäntö</string>
+    <string name="settings_policy_description">Miten lompakko vastaa esityspyyntöihin. Useat näistä on tarkoitettu yksityisyyttä suojaavan (circuit_zk) kulun testaamiseen.</string>
+    <string name="settings_policy_non_disclosure">Suojatut väitteet</string>
+    <string name="settings_policy_non_disclosure_default">Oletus: älä koskaan täsmäytä, näytä tai jaa nym_auth-siemensitoumuksia (ssc, psc)</string>
+    <string name="settings_policy_non_disclosure_none">Ei mitään: ei suojattuja väitteitä (vain testaus)</string>
+    <string name="settings_policy_circuit_zk">circuit_zk-pyynnöt</string>
+    <string name="settings_policy_circuit_zk_description">Vastaa circuit_zk-pyyntöihin (nollatieto). Esimerkkisovelluksen suunnittelija ymmärtää vain nym_auth-demokyselyn.</string>
+    <string name="settings_policy_fake_prover">KAMALA todistaja (ei oikeaa todistetta)</string>
+    <string name="settings_policy_fake_prover_description">Käytä väärää todistajaa, joka EI tuota oikeaa todistetta. Tarkastaja ei voi hyväksyä sitä. Vain kehitykseen. Vaatii circuit_zk:n päälle.</string>
+    <string name="settings_policy_expected_origins">Odotetut alkuperät (muut muodot)</string>
+    <string name="settings_policy_origins_off">Pois: ohita expected_origins</string>
+    <string name="settings_policy_origins_if_present">Jos läsnä: valvo sitä, kun pyynnössä se on</string>
+    <string name="settings_policy_origins_required">Vaaditaan: hylkää allekirjoitettu pyyntö ilman sitä</string>
+    <string name="settings_policy_signed_request">Allekirjoitetut pyynnöt vaaditaan</string>
+    <string name="settings_policy_signed_circuit_zk_only">vain circuit_zk-pyynnöille (oletus)</string>
+    <string name="settings_policy_signed_always">Kaikille pyynnöille</string>
+    <string name="settings_policy_verifier_ids">Tarkastajatunnisteen lähteet</string>
+    <string name="settings_policy_source_x509">x509_san_dns (pyynnön varmenne)</string>
+    <string name="settings_policy_source_authzen">AuthZEN (luottamuspalvelun vastaus)</string>
+    <string name="settings_policy_applies_next">Tulee voimaan seuraavan kerran, kun lompakko luodaan: Katkaise yhteys -toiminnon tai sovelluksen uudelleenkäynnistyksen jälkeen.</string>
 </resources>
