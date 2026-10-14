@@ -190,6 +190,19 @@ class NonDisclosureEnforcementTest {
         assertTrue(j.signVpToken(clean, listOf("name"), "n", "aud").isNotEmpty())
     }
 
+    @Test
+    fun `the wscd adapter refuses a protected claim stored in the issuer payload, with or without disclosures`() = runTest {
+        CredentialDisclosureGuard.policy = cleartextPolicy
+        val a = adapter().ready()
+        for (raw in cleartextCredentials()) {
+            for (claims in listOf(null, emptyList(), listOf("name"))) {
+                assertThrows(DisclosureRefusedException::class.java) { kotlinx.coroutines.runBlocking { a.signVpToken(raw, claims, "n", "aud") } }
+            }
+        }
+        val clean = cleartextSdJwt("""{"vct":"my.vct","other":"o"}""", nameDisclosure)
+        assertTrue(a.signVpToken(clean, null, "n", "aud").isNotEmpty())
+    }
+
     // ---- legacy ZK ----
 
     @Test
