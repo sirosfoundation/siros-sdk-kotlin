@@ -217,27 +217,32 @@ class CircuitZkPresenterTest {
     }
 
     @Test
-    fun `an element of another namespace is never read in place of the doctype namespace`() {
+    fun `a decoy namespace listed first is refused and nothing is proved`() {
         val prover = CountingProver(FakeCircuitZkProver.optIn())
-        // A decoy birth_date of a younger holder, in a namespace listed first: the doctype namespace says 2000-06-15.
         val decoyBirth = item(70, "birth_date", CBORObject.FromObjectAndTag("2015-01-01", 1004))
-        val c = credential(decoyFirst = listOf(decoyBirth))
-        present(presenter(prover), request(cred = c, p = plan(ageFn("""{"le":"2005-01-01"}"""))))
-        assertDenied(CircuitZkStep.PREDICATE) { present(presenter(prover), request(cred = c, p = plan(ageFn("""{"ge":"2010-01-01"}""")))) }
-        // A decoy psc matching this wallet's seed does not stand in for a wrong psc in the doctype namespace.
+        assertDenied(CircuitZkStep.NAMESPACE) {
+            present(presenter(prover), request(cred = credential(decoyFirst = listOf(decoyBirth)), p = plan(ageFn("""{"le":"2005-01-01"}"""))))
+        }
         val decoyPsc = item(71, "psc", cbor(goodPsc))
-        assertDenied(CircuitZkStep.COMMITMENT) {
+        assertDenied(CircuitZkStep.NAMESPACE) {
             present(presenter(prover), request(cred = credential(psc = ByteArray(32), decoyFirst = listOf(decoyPsc))))
         }
+        assertEquals(0, prover.calls)
     }
 
     @Test
-    fun `claims present only outside the doctype namespace, or repeated inside it, are refused`() {
+    fun `a credential without the doctype namespace is refused`() {
         val prover = CountingProver(FakeCircuitZkProver.optIn())
-        assertDenied(CircuitZkStep.COMMITMENT) { present(presenter(prover), request(cred = credential(claimsNamespace = "org.example.other"))) }
-        assertDenied(CircuitZkStep.PREDICATE) {
+        assertDenied(CircuitZkStep.NAMESPACE) { present(presenter(prover), request(cred = credential(claimsNamespace = "org.example.other"))) }
+        assertDenied(CircuitZkStep.NAMESPACE) {
             present(presenter(prover), request(cred = credential(claimsNamespace = "org.example.other"), p = plan(ageFn())))
         }
+        assertEquals(0, prover.calls)
+    }
+
+    @Test
+    fun `a claim repeated inside the doctype namespace is refused`() {
+        val prover = CountingProver(FakeCircuitZkProver.optIn())
         assertDenied(CircuitZkStep.PREDICATE) { present(presenter(prover), request(cred = credential(duplicateBirth = true), p = plan(ageFn()))) }
         assertEquals(0, prover.calls)
     }

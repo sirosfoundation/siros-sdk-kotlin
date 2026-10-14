@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **`circuit_zk` / `nym_auth` fails closed unless the credential's only
+  namespace is its doctype namespace.** `CircuitZkPresenter` now refuses
+  (step `NAMESPACE`, the verifier still gets a bare `access_denied`) a credential
+  whose `nameSpaces` is not exactly `{docType}`: a decoy namespace listed first,
+  an extra namespace, or a missing doctype namespace. The nym_auth circuits read
+  `birth_date` and `ssc` from the doctype-named namespace and do not check that
+  no other namespace holds an attribute of the same name, so the wallet checks
+  it. This changes behaviour: credentials with extra namespaces were previously
+  proved. The legacy `mso_mdoc_zk` path (`ZkMdocPresentation`,
+  `LongfellowZkProofSystem`) is unchanged and still takes any namespace. (#266)
 - **The wallet's DC API trust path no longer logs the verifier id or a
   throwable.** `handleDCAPIRequest` and the trust call it shares with the
   `circuit_zk` branch (`evaluateTrustDirect`) logged the verifier's subject id

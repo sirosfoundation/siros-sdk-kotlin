@@ -42,7 +42,7 @@ sealed class CircuitZkError(message: String, errorCode: String) : SirosException
 }
 
 /** The steps of [CircuitZkPresenter.present], in order. Internal. */
-internal enum class CircuitZkStep { VALIDATE, DOCTYPE, WITNESS, COMMITMENT, PREDICATE, CIRCUIT, PROVE, BUILD }
+internal enum class CircuitZkStep { VALIDATE, DOCTYPE, NAMESPACE, WITNESS, COMMITMENT, PREDICATE, CIRCUIT, PROVE, BUILD }
 
 /** What kind of wallet-held private input a function needs. */
 enum class CircuitZkWitnessKind {
@@ -280,6 +280,12 @@ class CircuitZkPresenter(
         val wanted = ((plan.raw["meta"] as? kotlinx.serialization.json.JsonObject)?.get("doctype_value")
             as? kotlinx.serialization.json.JsonPrimitive)?.content
         if (wanted == null || wanted != document.docType) refuse(CircuitZkStep.DOCTYPE)
+
+        // 2b. Fail closed on the namespace the circuit binds. A nym_auth credential carries its claims in the
+        // namespace named by its doctype, and the circuit reads birth_date and ssc from that one; it does not
+        // check that no other namespace holds an attribute of the same name. So the doctype namespace must be
+        // present and the only one: a credential with a decoy or extra namespace is never proved.
+        if (document.issuerSigned.nameSpaces.keys != setOf(document.docType)) refuse(CircuitZkStep.NAMESPACE)
 
         // 3. Wallet-held private inputs; a function whose witness cannot be supplied is refused.
         val witnesses = LinkedHashMap<String, CircuitZkFunctionWitness>()
