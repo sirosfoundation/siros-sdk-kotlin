@@ -84,7 +84,7 @@ class WscdKeystoreAdapter private constructor(
     ExtensionStore by credentialsKeystore,
     // The mainKey lives in [credentialsKeystore]; a wallet whose signing keys
     // are in a WSCD still derives its private seed from that same key.
-    RootSecret by credentialsKeystore {
+    HolderWitnessSource by credentialsKeystore {
 
     constructor(signer: Signer) : this(signer, JweKeystore())
 

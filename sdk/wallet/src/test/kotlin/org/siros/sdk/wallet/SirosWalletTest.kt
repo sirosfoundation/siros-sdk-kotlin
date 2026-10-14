@@ -5307,11 +5307,12 @@ class SirosWalletTest {
         val apiClient = mockk<BackendApiClient>()
         val trustRequests = mutableListOf<JsonObject>()
         coEvery { apiClient.evaluateTrust(any()) } coAnswers { trustRequests += firstArg<JsonObject>(); trust() }
-        val keystore = mockk<KeystoreManager>(moreInterfaces = arrayOf(org.siros.sdk.keystore.RootSecret::class))
+        val keystore = mockk<KeystoreManager>(moreInterfaces = arrayOf(org.siros.sdk.keystore.HolderWitnessSource::class))
         every { keystore.isUnlocked } returns false
         every { keystore.listKeys() } returns listOf(KeyInfo("kid", "ES256", 0L))
-        every { (keystore as org.siros.sdk.keystore.RootSecret).deriveSecret(any(), any()) } answers {
-            CzkFixtures.hkdf(firstArg(), secondArg())
+        val seedSource = org.siros.sdk.keystore.FixedRootHolderWitnessSource(CzkFixtures.root)
+        every { (keystore as org.siros.sdk.keystore.HolderWitnessSource).circuitZkPresenter(any(), any(), any(), any(), any(), any()) } answers {
+            seedSource.circuitZkPresenter(arg(0), arg(1), arg(2), arg(3), arg(4), arg(5))
         }
         val store = FakeCredentialStore((credentials ?: listOf(
             StoredCredential(id = 1L, format = "mso_mdoc", raw = CzkFixtures.mdoc(psc, birth),

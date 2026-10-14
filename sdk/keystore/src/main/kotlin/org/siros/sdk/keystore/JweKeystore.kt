@@ -91,7 +91,7 @@ class JweKeystore(
      * orphans a credential.
      */
     private val didKeyVersion: DidKeyVersion = DidKeyVersion.forProfile(profile),
-) : KeystoreManager, ExtensionStore, RootSecret {
+) : KeystoreManager, ExtensionStore, HolderWitnessSource {
 
     /**
      * The pre-DIIP constructor shape, kept so existing Java and already-compiled
@@ -160,9 +160,11 @@ class JweKeystore(
      * re-keyed, because every secret derived from it would change. Nothing in
      * this class replaces it after [unlock].
      *
+     * Internal: outside this module only the purpose-bound [HolderWitnessSource] is available.
+     *
      * @throws KeystoreException if the keystore is locked.
      */
-    override fun deriveSecret(info: ByteArray, length: Int): ByteArray {
+    internal fun deriveSecret(info: ByteArray, length: Int): ByteArray {
         val key = mainKey ?: throw KeystoreException("Keystore is locked")
         val ikm = key.encoded
         try {
@@ -171,6 +173,26 @@ class JweKeystore(
             ikm.fill(0)
         }
     }
+
+    private val rootSecret = object : RootSecret {
+        override fun deriveSecret(info: ByteArray, length: Int): ByteArray = this@JweKeystore.deriveSecret(info, length)
+    }
+
+    private val witnessSource by lazy { SeedBackedWitnessSource(PrivateSeed(rootSecret)) }
+
+    override fun privateSeedCommitment(credentialType: String): ByteArray = witnessSource.privateSeedCommitment(credentialType)
+
+    override fun circuitZkPresenter(
+        prover: CircuitZkProver,
+        circuits: org.siros.sdk.credentials.CircuitZkCircuitSource,
+        validator: org.siros.sdk.credentials.CircuitZkRequestValidator,
+        handlers: List<CircuitZkFunctionHandler>,
+        residency: ZkProverResidency?,
+        userValue: ByteArray?,
+    ): CircuitZkPresenter = witnessSource.circuitZkPresenter(prover, circuits, validator, handlers, residency, userValue)
+
+    /** The root as the tests of this module see it. */
+    internal fun rootSecretForTest(): RootSecret = rootSecret
 
     override suspend fun unlock(
         prfOutput: ByteArray,

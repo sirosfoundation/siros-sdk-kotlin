@@ -23,9 +23,7 @@ import org.siros.sdk.credentials.ZkWitnessSigner
 import org.siros.sdk.keystore.CircuitZkError
 import org.siros.sdk.keystore.CircuitZkPresenter
 import org.siros.sdk.keystore.FakeCircuitZkProver
-import org.siros.sdk.keystore.HolderWitnessProvider
-import org.siros.sdk.keystore.PrivateSeed
-import org.siros.sdk.keystore.RootSecret
+import org.siros.sdk.keystore.FixedRootHolderWitnessSource
 
 /**
  * Drives the wallet's circuit_zk presenter against a fixture credential, with
@@ -43,10 +41,8 @@ class NymAuthDemoRunner(private val rootKey: ByteArray) {
         const val PRIVATE_SEED_LABEL = "org.siros.private_seed/v1"
     }
 
-    /** A root secret for the demo: HKDF-SHA256 over a random per-install key. */
-    private val root = object : RootSecret {
-        override fun deriveSecret(info: ByteArray, length: Int): ByteArray = hkdf(rootKey, info, length)
-    }
+    /** The demo's seed source: HKDF-SHA256 over a random per-install key. */
+    private val source = FixedRootHolderWitnessSource(rootKey)
 
     data class Params(
         val birthDate: String,
@@ -80,7 +76,7 @@ class NymAuthDemoRunner(private val rootKey: ByteArray) {
         return try {
             val deviceKey = NymAuthDemoIssuer.newDeviceKey()
             val ssc = ByteArray(32).also(java.security.SecureRandom()::nextBytes)
-            val psc = if (p.foreignPsc) ByteArray(32).also(java.security.SecureRandom()::nextBytes) else PrivateSeed(root).psc(NymAuthDemoIssuer.DOC_TYPE)
+            val psc = if (p.foreignPsc) ByteArray(32).also(java.security.SecureRandom()::nextBytes) else source.privateSeedCommitment(NymAuthDemoIssuer.DOC_TYPE)
             val credential = NymAuthDemoIssuer.issue(p.birthDate, ssc, psc, deviceKey.public as ECPublicKey)
 
             val circuit = CircuitZkCircuit(
@@ -89,11 +85,10 @@ class NymAuthDemoRunner(private val rootKey: ByteArray) {
                 docTypes = setOf(NymAuthDemoIssuer.DOC_TYPE),
             )
             val circuits = CircuitZkCircuitSource { listOf(circuit) }
-            val presenter = CircuitZkPresenter(
+            val presenter = source.circuitZkPresenter(
                 prover = FakeCircuitZkProver.optIn(),
                 circuits = circuits,
                 validator = RulebookCircuitZkValidator(circuits = circuits),
-                witnessProvider = HolderWitnessProvider(PrivateSeed(root)),
             )
 
             val config = "known-offender-matching-psc"
@@ -145,7 +140,7 @@ class NymAuthDemoRunner(private val rootKey: ByteArray) {
             val decoded = CircuitZkPresentationCodec.decodeBase64Url(result.base64Url)
             decoded.requireResultHandles(setOf("nym", "age"))
             val pseudonym = (decoded.results["nym"] as ResultValue.Pseudonym)
-            val seed = root.deriveSecret((PRIVATE_SEED_LABEL + NymAuthDemoIssuer.DOC_TYPE).toByteArray(Charsets.UTF_8), 16)
+            val seed = hkdf(rootKey, (PRIVATE_SEED_LABEL + NymAuthDemoIssuer.DOC_TYPE).toByteArray(Charsets.UTF_8), 16)
             val recomputed = NymPseudonym.derive(config = config, seed = seed, verifierId = p.verifierId)
             Outcome.Presented(
                 circuitId = decoded.circuitId,

@@ -74,7 +74,7 @@ interface CircuitZkWitnessProvider {
 }
 
 /** The default provider: the K-S `private_seed` per credential type, and the user-supplied value if any. */
-class HolderWitnessProvider(
+class HolderWitnessProvider internal constructor(
     private val seeds: PrivateSeed,
     private val userValue: ByteArray? = null,
 ) : CircuitZkWitnessProvider {

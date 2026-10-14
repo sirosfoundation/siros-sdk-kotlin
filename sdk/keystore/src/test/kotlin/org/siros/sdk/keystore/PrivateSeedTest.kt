@@ -83,13 +83,13 @@ class PrivateSeedTest {
     @Test
     fun `a locked keystore throws and derives nothing`() = runTest {
         val locked = JweKeystore()
-        val seeds = PrivateSeed(locked)
+        val seeds = PrivateSeed(locked.rootSecretForTest())
         assertThrows(KeystoreException::class.java) { seeds.psc("t") }
         assertThrows(KeystoreException::class.java) { seeds.matchesCommitment("t", ByteArray(32)) }
         assertThrows(KeystoreException::class.java) { seeds.derive("t") }
 
         val unlocked = JweKeystore().also { it.unlock(prf, ByteArray(0), salt, info) }
-        val unlockedSeeds = PrivateSeed(unlocked)
+        val unlockedSeeds = PrivateSeed(unlocked.rootSecretForTest())
         unlockedSeeds.psc("t")
         unlocked.lock()
         assertThrows(KeystoreException::class.java) { unlockedSeeds.psc("t") }
@@ -98,12 +98,12 @@ class PrivateSeedTest {
     @Test
     fun `the seed follows mainKey - stable across reopen, new for a new container`() = runTest {
         val first = JweKeystore().also { it.unlock(prf, ByteArray(0), salt, info) }
-        val before = PrivateSeed(first).psc("t")
+        val before = PrivateSeed(first.rootSecretForTest()).psc("t")
         val reopened = JweKeystore().also { it.unlock(prf, first.exportEncryptedContainer(), salt, info) }
-        assertArrayEquals(before, PrivateSeed(reopened).psc("t"))
+        assertArrayEquals(before, PrivateSeed(reopened.rootSecretForTest()).psc("t"))
         // Same PRF output, new container, new random mainKey: a seed derived from the PRF output would not change.
         val other = JweKeystore().also { it.unlock(prf, ByteArray(0), salt, info) }
-        assertNotEquals(before.toHex(), PrivateSeed(other).psc("t").toHex())
+        assertNotEquals(before.toHex(), PrivateSeed(other.rootSecretForTest()).psc("t").toHex())
     }
 
     @Test
@@ -116,10 +116,34 @@ class PrivateSeedTest {
     }
 
     @Test
-    fun `the WSCD adapter exposes the same root`() {
+    fun `the WSCD adapter exposes the same purpose-bound source`() {
         val adapter = WscdKeystoreAdapter(mockk(relaxed = true))
-        assertTrue(adapter is RootSecret)
-        assertThrows(KeystoreException::class.java) { PrivateSeed(adapter).psc("t") }
+        assertTrue(adapter is HolderWitnessSource)
+        assertThrows(KeystoreException::class.java) { adapter.privateSeedCommitment("t") }
+    }
+
+    @Test
+    fun `no public keystore member derives a secret or exposes the root`() {
+        for (cls in listOf(JweKeystore::class.java, WscdKeystoreAdapter::class.java)) {
+            assertTrue("${cls.simpleName} implements RootSecret", cls.interfaces.none { it.simpleName == "RootSecret" })
+            // An internal member is public in bytecode but carries a `$module` suffix on its name.
+            for (m in cls.methods.filter { '$' !in it.name }) {
+                assertFalse("${cls.simpleName}.${m.name}", m.name.startsWith("deriveSecret"))
+                assertFalse("${cls.simpleName}.${m.name}", m.name.contains("rootSecret", ignoreCase = true))
+            }
+        }
+        // The public source surface has no member that returns a seed or a witness provider.
+        for (m in HolderWitnessSource::class.java.methods) {
+            assertFalse(m.name, CircuitZkWitnessProvider::class.java.isAssignableFrom(m.returnType))
+        }
+        assertEquals(setOf("privateSeedCommitment", "circuitZkPresenter"), HolderWitnessSource::class.java.methods.map { it.name }.toSet())
+    }
+
+    @Test
+    fun `a fixed-root source gives the vector commitment`() {
+        val v = vectors.first()
+        val source = FixedRootHolderWitnessSource(hex(v.str("root_hex")))
+        assertEquals(v.str("psc_hex"), source.privateSeedCommitment(v.str("credential_type")).toHex())
     }
 
     @Test

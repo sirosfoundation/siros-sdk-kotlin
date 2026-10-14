@@ -4227,10 +4227,9 @@ class SirosWallet private constructor(
             nonce = request.nonce,
             encryptionPublicJwkThumbprint = encryptionThumbprint,
         )
-        val witnessProvider = (keystore as? org.siros.sdk.keystore.RootSecret)
-            ?.let { org.siros.sdk.keystore.HolderWitnessProvider(org.siros.sdk.keystore.PrivateSeed(it)) }
-            ?: NoWitnessProvider
-        val presenter = org.siros.sdk.keystore.CircuitZkPresenter(prover, support.circuits, support.validator, witnessProvider)
+        val presenter = (keystore as? org.siros.sdk.keystore.HolderWitnessSource)
+            ?.circuitZkPresenter(prover, support.circuits, support.validator)
+            ?: org.siros.sdk.keystore.CircuitZkPresenter(prover, support.circuits, support.validator, NoWitnessProvider)
         val verifierContext = VerifierIdContext(request, trust, origin)
 
         val tokensByQueryId = linkedMapOf<String, List<String>>()
