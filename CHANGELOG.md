@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **A `circuit_zk` query the matcher cannot read still makes the request a
+  `circuit_zk` request, and the whole request is refused.** `DcqlMatchOutput`
+  gains `hasCircuitZkQuery` (from the original queries, whether or not
+  `WalletConfig.circuitZk` is on) and `unparsedQueryCount`. A `circuit_zk` query
+  with a missing or non-string `id` was dropped from the results, so with the
+  flag off, or with the native matcher unavailable, an ordinary sibling query
+  could be answered alone. `handleDCAPIRequest`, the circuit branch and the
+  engine-relayed match path now refuse on the flag, not on returned results.
+  (#266)
 - **The `circuit_zk` circuit list is kept as the verifier's two lists, never
   expanded into their product.** `CircuitZkPlan.circuitFilter` is now a
   `CircuitZkCircuitFilter(proofSystems, circuitIds)` (it replaces

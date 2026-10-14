@@ -121,6 +121,15 @@ object CredentialMatcher {
         val credentialSets: List<CredentialSetQuery>?,
         /** Options that can be satisfied given the wallet's current credentials. */
         val satisfiableOptions: List<SatisfiableOption>,
+        /**
+         * Whether the ORIGINAL request has a `circuit_zk` credential query, however that query was
+         * read: a query dropped from [queryResults] (no string `id`) still sets it. A caller that
+         * does not answer `circuit_zk` through its own path must refuse the whole request when this
+         * is set, never answer the ordinary queries alone.
+         */
+        val hasCircuitZkQuery: Boolean = false,
+        /** How many credential queries of the original request produced no entry in [queryResults] (no string `id`). */
+        val unparsedQueryCount: Int = 0,
     )
 
     /**
@@ -204,7 +213,12 @@ object CredentialMatcher {
                 matchSingleQuery(query, credentials)
             }
         }
-        val hasCircuitZk = circuitZk != null && parsed.any { CredentialUtils.isCircuitZkFormat(it.format) }
+        // Request level, from the ORIGINAL queries: a circuit_zk query that matchCircuitZkQuery or
+        // matchSingleQuery dropped (no string `id`) leaves no result to look at, and the request
+        // still contains it.
+        val circuitQueries = credentialQueries.filter { isCircuitZkQuery(it) }
+        val hasCircuitZkQuery = circuitQueries.isNotEmpty()
+        val unparsedQueryCount = credentialQueries.size - parsed.size
 
         // Which credentials qualify is decided by the shared engine - the same
         // one the OS credential picker runs, and the only implementation here
@@ -218,10 +232,13 @@ object CredentialMatcher {
         // parsing path above never checked it, so such a credential would be
         // offered, consented to, and then fail to satisfy the verifier.
         //
-        // A request with a circuit_zk query is not given to the engine, which
-        // does not know the format: the planner is what decides those queries
-        // (fail closed, see [matchCircuitZkQuery]), and the other queries of
-        // such a request keep the built-in matcher's answer.
+        // A request with a circuit_zk query is not given to the engine whole: the planner is what
+        // decides those queries (fail closed, see [matchCircuitZkQuery]). The ordinary queries of
+        // such a request are still validated by the engine, as a request of their own (the
+        // circuit queries and `credential_sets` removed), so a credential missing a claim they ask
+        // for is not offered just because a circuit_zk query sits beside them. Per-query candidates
+        // are all that is taken from that answer. The engine not answering is a refusal for them
+        // here, not the built-in fallback, which never checked claims.
         //
         // A request repeating a credential query `id` or a claim `id` (§6.1,
         // §6.3) is malformed, and the engine rejects it as such (matcher
@@ -230,14 +247,17 @@ object CredentialMatcher {
         // whichever entry came first, which is how a request for two
         // credentials used to be quietly answered with one. Fail closed.
         val malformed = hasDuplicateDcqlIds(credentialQueries)
-        val shared = if (hasCircuitZk || malformed) null else SharedDcqlMatcher.evaluate(
-            dcqlQuery, credentials, zkSystemIds, circuitZk?.circuits?.docTypes().orEmpty(),
-        )
+        // A circuit source that fails registers no claimless doctype (the claims are then registered, the stricter side).
+        val claimless = try { circuitZk?.circuits?.docTypes().orEmpty() } catch (e: Exception) { emptySet() }
+        val shared = if (malformed || hasCircuitZkQuery) null else engine(dcqlQuery, credentials, zkSystemIds, claimless)
+
         val queryResults = when {
             malformed -> {
                 Timber.w("DCQL query repeats a credential or claim id (OID4VP 1.0 §6.1/§6.3); offering nothing")
                 parsed.map { it.copy(candidates = emptyList()) }
             }
+
+            hasCircuitZkQuery -> parsed
 
             shared == null -> {
                 // No answer, not an empty answer. Falling back keeps
@@ -291,8 +311,21 @@ object CredentialMatcher {
             queryResults = queryResults,
             credentialSets = credentialSets,
             satisfiableOptions = satisfiableOptions,
+            hasCircuitZkQuery = hasCircuitZkQuery,
+            unparsedQueryCount = unparsedQueryCount,
         )
     }
+
+    /** Whether [query], as read from the request, asks for the `circuit_zk` format (without throwing on a malformed one). */
+    private fun isCircuitZkQuery(query: JsonElement): Boolean =
+        CredentialUtils.isCircuitZkFormat(((query as? JsonObject)?.get("format") as? JsonPrimitive)?.contentOrNull)
+
+    /**
+     * The engine that validates ordinary queries; [SharedDcqlMatcher.evaluate] unless a test
+     * replaces it (the native library is not available to unit tests).
+     */
+    internal var engine: (JsonObject, List<StoredCredential>, List<String>, Set<String>) -> SharedDcqlMatcher.Outcome? =
+        { query, credentials, zkSystemIds, claimlessDoctypes -> SharedDcqlMatcher.evaluate(query, credentials, zkSystemIds, claimlessDoctypes) }
 
     /** Whether two credential queries share an `id`, or two claims of one query do (§6.1, §6.3). */
     internal fun hasDuplicateDcqlIds(credentialQueries: JsonArray): Boolean {

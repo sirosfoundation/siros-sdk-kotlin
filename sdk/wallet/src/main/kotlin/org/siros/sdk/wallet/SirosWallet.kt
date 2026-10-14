@@ -3861,7 +3861,9 @@ class SirosWallet private constructor(
         val circuitZkResults = matchResults.filter { CredentialUtils.isCircuitZkFormat(it.format) }
         // Any circuit_zk result still here (matched or not, alone or mixed with an ordinary query)
         // was not answered by the supported path: the whole request is refused, never partly answered.
-        if (circuitZkResults.isNotEmpty()) {
+        // The request-level flag, from the original queries, covers a circuit_zk query the matcher could not even
+        // read into a result (no string id): it is still part of the request.
+        if (circuitZkResults.isNotEmpty() || dcqlOutput.hasCircuitZkQuery) {
             Timber.w("DC API circuit_zk request not answered (protocol=${request.protocol})")
             throw org.siros.sdk.wallet.dcapi.DCAPIRequestRefused(
                 request.protocol,
@@ -4184,7 +4186,8 @@ class SirosWallet private constructor(
 
         // Plan, validate, match.
         val allCreds = credentialStore.getAll()
-        val results = CredentialMatcher.matchDcql(query, allCreds, zkSystemIds, support, request.clientMetadata).queryResults
+        val output = CredentialMatcher.matchDcql(query, allCreds, zkSystemIds, support, request.clientMetadata)
+        val results = output.queryResults
 
         // The one verifier_id_type the pseudonym functions ask for, if there is exactly one: sent to the PDP as
         // context.verifier_id_type so it narrows its answer. Optional; several types means no hint.
@@ -4220,6 +4223,8 @@ class SirosWallet private constructor(
         }
         if (!trust.trusted) refuse("trust", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NOT_TRUSTED)
 
+        // A query of the request that produced no result (no string id) is still part of it: never answered without it.
+        if (output.unparsedQueryCount > 0) refuse("query-shape", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
         if (results.isEmpty() || results.any { !CredentialUtils.isCircuitZkFormat(it.format) }) refuse("query-shape", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
         if (results.any { it.circuitZkPlan == null || it.candidates.isEmpty() }) refuse("no-match", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NO_MATCHING_CREDENTIAL)
 
@@ -6881,6 +6886,15 @@ class SirosWallet private constructor(
                     // did, when this transport could not prove - would
                     // silently turn every engine-relayed ZK request into "no
                     // matching credential".
+                    // circuit_zk is not answered on this transport: a request with such a query (even one the
+                    // matcher could not read into a result) is refused whole, never answered by its ordinary queries.
+                    if (dcqlOutput.hasCircuitZkQuery) {
+                        val reason = "This transport does not answer circuit_zk requests"
+                        Timber.w("Match request for flow ${msg.flowId} carries a circuit_zk query; not answered")
+                        engine.sendMatchResponse(msg.flowId, emptyList(), reason)
+                        engine.sendCredentialsMatched(msg.flowId, emptyList(), reason)
+                        return@collect
+                    }
                     val matchResults = dcqlOutput.queryResults
                     val candidates = matchResults.flatMap { it.candidates }.distinctBy { it.id }
                     // The query each candidate is answered under - first match

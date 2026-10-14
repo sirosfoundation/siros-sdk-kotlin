@@ -5102,11 +5102,11 @@ class SirosWalletTest {
         coVerify(exactly = 0) { apiClient.evaluateTrust(any()) }
     }
 
-    private fun signedCircuitZkRequest(origin: String, extraQueries: String = ""): String {
+    private fun signedCircuitZkRequest(origin: String, extraQueries: String = "", circuitQueryId: String? = "q"): String {
         val ecKey = com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256).generate()
         val claims = com.nimbusds.jwt.JWTClaimsSet.parse(
             """{"client_id":"x509_san_dns:rp.example","nonce":"n","expected_origins":["$origin"],""" +
-                """"dcql_query":{"credentials":[{"id":"q","format":"circuit_zk","meta":{"doctype_value":"test.doctype.1"}}$extraQueries]}}"""
+                """"dcql_query":{"credentials":[{${circuitQueryId?.let { "\"id\":\"$it\"," } ?: ""}"format":"circuit_zk","meta":{"doctype_value":"test.doctype.1"}}$extraQueries]}}"""
         )
         val jwt = com.nimbusds.jwt.SignedJWT(
             com.nimbusds.jose.JWSHeader.Builder(com.nimbusds.jose.JWSAlgorithm.ES256).jwk(ecKey.toPublicJWK()).build(), claims,
@@ -5191,6 +5191,26 @@ class SirosWalletTest {
     }
 
     @Test
+    fun handleDCAPIRequest_circuitZkQueryWithoutAnId_withTheFlagOff_isRefusedNotPartlyAnswered() = runTest(dispatcher) {
+        // The matcher drops a query with no string id, so no circuit_zk result is left to look at; the request
+        // still contains the query and must not be answered by its ordinary sibling alone.
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        val wallet = circuitZkWallet(null, keystore)
+
+        val request = signedCircuitZkRequest(
+            "https://rp.example",
+            extraQueries = """,{"id":"p","format":"mso_mdoc","meta":{"doctype_value":"test.doctype.1"}}""",
+            circuitQueryId = null,
+        )
+        val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+            kotlinx.coroutines.runBlocking { wallet.handleDCAPIRequest(request, origin = "https://rp.example") }
+        }
+        assertEquals("DC API request refused (protocol=openid4vp-v1-signed)", e.message)
+        coVerify(exactly = 0) { keystore.signVpToken(any(), any(), any(), any()) }
+    }
+
+    @Test
     fun handleDCAPIRequest_circuitZkValidatorRefusal_neverLeaksTheRuleId() = runTest(dispatcher) {
         val keystore = mockk<KeystoreManager>()
         every { keystore.isUnlocked } returns false
@@ -5269,10 +5289,12 @@ class SirosWalletTest {
         queryDoctypes: List<String>? = null,
         /** A raw `transaction_data` JSON array to carry, or none. */
         transactionData: String? = null,
+        /** Raw credential-query JSON objects appended after the circuit_zk queries, each led by a comma. */
+        extraQueries: String = "",
     ): String {
         val query = """{"credentials":[""" + queryIds.withIndex().joinToString(",") { (i, id) ->
             """{"id":"$id","format":"circuit_zk","meta":{"doctype_value":"${queryDoctypes?.get(i) ?: CzkFixtures.DOCTYPE}"}}"""
-        } + "]}"
+        } + "$extraQueries]}"
         val claims = com.nimbusds.jwt.JWTClaimsSet.parse(
             """{"client_id":"$clientId","nonce":"$nonce","response_mode":"dc_api","dcql_query":$query""" +
                 (origins?.let { ""","expected_origins":$it""" } ?: "") +
@@ -5443,6 +5465,18 @@ class SirosWalletTest {
             assertEquals(0, s.prover.calls)
             coVerify(exactly = 0) { s.apiClient.evaluateTrust(any()) }
         }
+    }
+
+    @Test
+    fun circuitZkDcApi_aQueryWithoutAnId_isNeverDroppedFromAProvedRequest() = runTest(dispatcher) {
+        // The matcher drops a credential query with no string id; the request is still not answered without it.
+        val s = czkSetup()
+        czkRefused(
+            s,
+            czkRequest(extraQueries = """,{"format":"mso_mdoc","meta":{"doctype_value":"x"}}"""),
+            reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST,
+        )
+        assertEquals(0, s.prover.calls)
     }
 
     @Test

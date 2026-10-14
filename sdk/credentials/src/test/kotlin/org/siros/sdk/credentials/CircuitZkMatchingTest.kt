@@ -2,12 +2,15 @@ package org.siros.sdk.credentials
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Test
 
 /** `circuit_zk` matching in [CredentialMatcher], with a fake planner. */
@@ -78,6 +81,33 @@ class CircuitZkMatchingTest {
 
     private fun match(q: JsonObject, creds: List<StoredCredential>, s: CircuitZkSupport?) =
         CredentialMatcher.matchDcql(q, creds, circuitZk = s).queryResults.single()
+
+    @After
+    fun restoreEngine() {
+        CredentialMatcher.engine = { q, c, z, d -> SharedDcqlMatcher.evaluate(q, c, z, d) }
+    }
+
+    private fun mixed(circuitId: String? = "q"): JsonObject = json.parseToJsonElement(
+        """{"credentials":[{${circuitId?.let { "\"id\":\"$it\"," } ?: ""}"format":"circuit_zk","meta":{"doctype_value":"$doctype"}},""" +
+            """{"id":"p","format":"mso_mdoc","meta":{"doctype_value":"$doctype"},"claims":[{"path":["$doctype","given_name"]}]}]}"""
+    ).jsonObject
+
+    @Test
+    fun `a circuit_zk query without an id still marks the whole request`() {
+        for (support in listOf(null, support())) {
+            val out = CredentialMatcher.matchDcql(mixed(circuitId = null), listOf(mdoc(1, doctype)), circuitZk = support)
+            // The malformed query is not in the results, but the request still has one.
+            assertEquals(listOf("p"), out.queryResults.map { it.queryId })
+            assertTrue(out.hasCircuitZkQuery)
+            assertEquals(1, out.unparsedQueryCount)
+        }
+        val ordinary = CredentialMatcher.matchDcql(
+            json.parseToJsonElement("""{"credentials":[{"id":"p","format":"mso_mdoc","meta":{"doctype_value":"$doctype"}}]}""").jsonObject,
+            listOf(mdoc(1, doctype)),
+        )
+        assertFalse(ordinary.hasCircuitZkQuery)
+        assertEquals(0, ordinary.unparsedQueryCount)
+    }
 
     @Test
     fun `a valid plan with a fitting circuit matches the doctype's mdocs and carries the plan`() {
@@ -215,7 +245,8 @@ class CircuitZkMatchingTest {
     }
 
     @Test
-    fun `a request mixing circuit_zk with another format keeps the other format's answer when circuit_zk fails`() {
+    fun `a request mixing circuit_zk with another format keeps the engine's answer for the other format when circuit_zk fails`() {
+        CredentialMatcher.engine = { _, _, _, _ -> SharedDcqlMatcher.Outcome(true, mapOf("a" to listOf(1L))) }
         val q = json.parseToJsonElement(
             """{"credentials":[{"id":"a","format":"mso_mdoc","meta":{"doctype_value":"$doctype"}},{"id":"b","format":"circuit_zk","meta":{"doctype_value":"$doctype"}}]}"""
         ).jsonObject
