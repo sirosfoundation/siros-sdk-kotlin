@@ -17,6 +17,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removed) and only its per-query candidates are used; the planner still decides
   the `circuit_zk` queries. If the engine cannot answer, the ordinary queries
   offer nothing (the built-in fallback never checked claims). (#266)
+- **The raw credential view redacts protected claims.** The sample app's Raw tab
+  decoded the SD-JWT payload and disclosures unchanged, so a protected claim
+  stayed readable and copyable. `CredentialDisclosureGuard.rawViewOf` (SDK) now
+  decides what a debug view may show: protected, descendant and ancestor claims
+  are dropped from the cleartext payload and the disclosures (nested ones placed
+  by digest); a protected mdoc shows no raw text. (#266)
+- **The public ZK response builder refuses a protected element.**
+  `MdocDeviceResponseBuilder.buildZkDeviceResponse` (and so
+  `ZkMdocPresentation.buildDeviceResponse`) serialised `disclosedClaims`
+  verbatim, so a host using the custom-prover/replay API could emit `ssc`/`psc`
+  under the default policy. It now throws `DisclosureRefusedException`. (#266)
+- **An absent or unreadable DC API picker selection is refused.** The activity
+  returned an empty selection, which the wallet reads as "present the first
+  eligible credential". The decision is now `DCAPISelection.resolve` (JVM
+  testable), which yields an id no credential has; the no-selection fallback
+  remains only for callers that pass no `selectedCredentialIds`. (#266)
 - **The SD-JWT non-disclosure guard also covers the issuer payload.**
   `CredentialDisclosureGuard.requireNoneProtectedSdJwt` checked only the
   selected disclosures, but every presentation carries the issuer JWT
