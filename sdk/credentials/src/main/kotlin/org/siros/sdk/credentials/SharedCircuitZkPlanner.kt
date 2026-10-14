@@ -53,7 +53,7 @@ class SharedCircuitZkPlanner : CircuitZkPlanner {
             val text = try {
                 circuitZkPlan(query.toString(), clientMetadata?.toString())
             } catch (e: CircuitZkPlanException) {
-                Timber.d("The matcher does not plan this request: ${e.message}")
+                Timber.d("The matcher does not plan this request (${e.javaClass.simpleName})")
                 return null
             }
             return json.parseToJsonElement(text) as? JsonObject

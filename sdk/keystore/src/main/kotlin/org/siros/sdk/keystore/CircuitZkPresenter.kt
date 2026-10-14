@@ -122,6 +122,17 @@ object PseudonymFunctionHandler : CircuitZkFunctionHandler {
     override fun holds(function: CircuitZkFunction, credential: DocumentMdoc) = true
 }
 
+/**
+ * The value of the element [name] in the credential's own doctype namespace (the namespace a nym_auth
+ * credential carries its claims in, and the one the circuit binds), or null when that namespace or element
+ * is absent or the element occurs more than once there. The same element name in another namespace is
+ * never consulted, so a pre-check cannot read a different value than the circuit proves.
+ */
+internal fun doctypeElement(document: DocumentMdoc, name: String): CBORObject? {
+    val matches = document.issuerSigned.nameSpaces[document.docType].orEmpty().filter { it.item.elementIdentifier == name }
+    return matches.singleOrNull()?.item?.elementValue
+}
+
 /** `age_check`: `birth_date` must lie within `ge`..`le`. Needs no private input from the wallet. */
 object AgeCheckFunctionHandler : CircuitZkFunctionHandler {
     override val functionId = "age_check"
@@ -142,8 +153,7 @@ object AgeCheckFunctionHandler : CircuitZkFunctionHandler {
     }
 
     private fun birthDate(credential: DocumentMdoc): LocalDate? {
-        val value = credential.issuerSigned.nameSpaces.values.flatten()
-            .firstOrNull { it.item.elementIdentifier == "birth_date" }?.item?.elementValue ?: return null
+        val value = doctypeElement(credential, "birth_date") ?: return null
         val text = if (value.isTagged) value.UntagOne() else value
         if (text.type != CBORType.TextString) return null
         return try { LocalDate.parse(text.AsString()) } catch (e: DateTimeParseException) { null }
@@ -328,8 +338,7 @@ class CircuitZkPresenter(
     }
 
     private fun elementBytes(document: DocumentMdoc, name: String): ByteArray? {
-        val v = document.issuerSigned.nameSpaces.values.flatten()
-            .firstOrNull { it.item.elementIdentifier == name }?.item?.elementValue ?: return null
+        val v = doctypeElement(document, name) ?: return null
         return if (v.type == CBORType.ByteString) v.GetByteString() else null
     }
 

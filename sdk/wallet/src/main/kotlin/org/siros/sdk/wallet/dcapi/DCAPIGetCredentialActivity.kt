@@ -134,7 +134,7 @@ class DCAPIGetCredentialActivity : Activity() {
         // hashes) are private; their content is never logged.
         val carriesTransactionData = digitalOption.requestJson.contains("transaction_data")
         // Only the size is logged: a request or response body can carry a nonce, a presentation or a pseudonym.
-        Timber.d("DCAPI request received (origin=$origin, bytes=${digitalOption.requestJson.length}, transaction_data=$carriesTransactionData)")
+        Timber.d("DCAPI request received (bytes=${digitalOption.requestJson.length}, transaction_data=$carriesTransactionData)")
 
         // What the user picked in the OS picker; the wallet presents exactly that (circuit_zk).
         val selectedCredentialIds = selectedCredentialIdsOf(request)

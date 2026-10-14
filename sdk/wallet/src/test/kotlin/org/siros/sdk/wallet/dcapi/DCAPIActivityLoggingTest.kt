@@ -7,7 +7,7 @@ import org.junit.Test
 
 /**
  * The DC API activity sits between the verifier and the wallet, so what it logs must never carry
- * a request or response body (a nonce, a presentation, a pseudonym) or an error description.
+ * a request or response body (a nonce, a presentation, a pseudonym), the verifier's origin or an error description or an error description.
  * The activity cannot run on the JVM, so this reads its source: no log call may interpolate a payload.
  */
 class DCAPIActivityLoggingTest {
@@ -16,9 +16,9 @@ class DCAPIActivityLoggingTest {
     @Test
     fun noLogCallInterpolatesARequestOrResponsePayload() {
         assertTrue("missing ${source.path}", source.exists())
-        val payload = Regex("""\$\{?[\w.?]*(requestJson|responseJson|errorJson|description)\b(?!\.length)""")
+        val payload = Regex("""\$\{?[\w.?]*(requestJson|responseJson|errorJson|description|origin|callingOrigin|verifierId)\b(?!\.length)""")
         val offending = source.readLines().withIndex()
             .filter { (_, line) -> line.contains("Timber.") && !line.trimStart().startsWith("//") && payload.containsMatchIn(line) }
-        assertTrue("payload logged at: ${offending.map { it.index + 1 to it.value.trim() }}", offending.isEmpty())
+        assertTrue("payload or origin logged at: ${offending.map { it.index + 1 to it.value.trim() }}", offending.isEmpty())
     }
 }

@@ -65,14 +65,22 @@ class CircuitZkPresenterTest {
         birth: String? = "2000-06-15",
         psc: ByteArray? = goodPsc,
         withX5chain: Boolean = true,
+        /** Namespace holding the claims; the credential's doctype by default. */
+        claimsNamespace: String = docType,
+        /** Elements of a namespace that precedes the claims namespace (a decoy). */
+        decoyFirst: List<CBORObject> = emptyList(),
+        /** Repeat birth_date inside the claims namespace. */
+        duplicateBirth: Boolean = false,
     ): ByteArray {
         val items = CBORObject.NewArray()
         var id = 0
         if (birth != null) items.Add(item(id++, "birth_date", CBORObject.FromObjectAndTag(birth, 1004)))
         items.Add(item(id++, "ssc", cbor(ByteArray(32) { 9 })))
         if (psc != null) items.Add(item(id, "psc", cbor(psc)))
+        if (duplicateBirth) items.Add(item(90, "birth_date", CBORObject.FromObjectAndTag("2000-06-15", 1004)))
         val ns = CBORObject.NewMap()
-        ns[cbor(docType)] = items
+        if (decoyFirst.isNotEmpty()) ns[cbor("org.example.decoy")] = CBORObject.NewArray().also { a -> decoyFirst.forEach { a.Add(it) } }
+        ns[cbor(claimsNamespace)] = items
         val mso = CBORObject.NewMap()
         mso[cbor("docType")] = cbor(docType)
         val unprotected = CBORObject.NewMap()
@@ -205,6 +213,32 @@ class CircuitZkPresenterTest {
         assertDenied(CircuitZkStep.COMMITMENT) { present(presenter(prover), request(cred = credential(psc = ByteArray(32)))) }
         assertDenied(CircuitZkStep.COMMITMENT) { present(presenter(prover), request(cred = credential(psc = null))) }
         assertDenied(CircuitZkStep.COMMITMENT) { present(presenter(prover), request(cred = credential(psc = goodPsc.copyOf(31)))) }
+        assertEquals(0, prover.calls)
+    }
+
+    @Test
+    fun `an element of another namespace is never read in place of the doctype namespace`() {
+        val prover = CountingProver(FakeCircuitZkProver.optIn())
+        // A decoy birth_date of a younger holder, in a namespace listed first: the doctype namespace says 2000-06-15.
+        val decoyBirth = item(70, "birth_date", CBORObject.FromObjectAndTag("2015-01-01", 1004))
+        val c = credential(decoyFirst = listOf(decoyBirth))
+        present(presenter(prover), request(cred = c, p = plan(ageFn("""{"le":"2005-01-01"}"""))))
+        assertDenied(CircuitZkStep.PREDICATE) { present(presenter(prover), request(cred = c, p = plan(ageFn("""{"ge":"2010-01-01"}""")))) }
+        // A decoy psc matching this wallet's seed does not stand in for a wrong psc in the doctype namespace.
+        val decoyPsc = item(71, "psc", cbor(goodPsc))
+        assertDenied(CircuitZkStep.COMMITMENT) {
+            present(presenter(prover), request(cred = credential(psc = ByteArray(32), decoyFirst = listOf(decoyPsc))))
+        }
+    }
+
+    @Test
+    fun `claims present only outside the doctype namespace, or repeated inside it, are refused`() {
+        val prover = CountingProver(FakeCircuitZkProver.optIn())
+        assertDenied(CircuitZkStep.COMMITMENT) { present(presenter(prover), request(cred = credential(claimsNamespace = "org.example.other"))) }
+        assertDenied(CircuitZkStep.PREDICATE) {
+            present(presenter(prover), request(cred = credential(claimsNamespace = "org.example.other"), p = plan(ageFn())))
+        }
+        assertDenied(CircuitZkStep.PREDICATE) { present(presenter(prover), request(cred = credential(duplicateBirth = true), p = plan(ageFn()))) }
         assertEquals(0, prover.calls)
     }
 
