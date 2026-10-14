@@ -5,6 +5,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -12,6 +13,8 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import uniffi.siros_dc_matcher_ffi.CircuitZkPlanException
+import uniffi.siros_dc_matcher_ffi.circuitZkPlan
 
 /**
  * [SharedCircuitZkPlanner] against the matcher's own conformance vectors
@@ -36,6 +39,12 @@ class SharedCircuitZkPlannerInstrumentedTest {
     private fun JsonObject.query() = this["query"] as? JsonObject
     private fun JsonObject.clientMetadata() = this["client_metadata"] as? JsonObject
 
+    /** The vector as the FFI takes it: raw text where the vector is raw text. */
+    private fun JsonObject.queryText(): String =
+        (this["query_text"] as? JsonPrimitive)?.content ?: this["query"].toString()
+    private fun JsonObject.clientMetadataText(): String? =
+        (this["client_metadata_text"] as? JsonPrimitive)?.content ?: this["client_metadata"]?.toString()
+
     @Test
     fun the_vector_set_is_there() {
         val all = vectors()
@@ -59,17 +68,58 @@ class SharedCircuitZkPlannerInstrumentedTest {
         }
     }
 
+    /** Every err vector, raw-text ones included, is refused with the planner's own code. */
     @Test
-    fun rejects_every_err_vector() {
+    fun rejects_every_err_vector_with_the_vectors_code() {
+        val errors = vectors().filter { it.first.startsWith("err_") }
+        for ((name, v) in errors) {
+            val code = ((v["expect"] as JsonObject)["error"] as JsonPrimitive).content
+            val e = try {
+                circuitZkPlan(v.queryText(), v.clientMetadataText())
+                null
+            } catch (e: CircuitZkPlanException.InvalidRequest) {
+                e
+            }
+            assertNotNull("$name was planned", e)
+            assertEquals(name, code, e!!.code)
+        }
+        // The ones that can reach the typed boundary are refused there too.
         var typed = 0
-        for ((name, v) in vectors().filter { it.first.startsWith("err_") }) {
-            val query = v.query() ?: continue // raw text or a non-object query cannot reach the typed boundary
+        for ((name, v) in errors) {
+            val query = v.query() ?: continue
             if (v.containsKey("client_metadata_text")) continue
             typed++
             assertNull("$name was planned", SharedCircuitZkPlanner.planJson(query, v.clientMetadata()))
             assertTrue("$name", SharedCircuitZkPlanner().plan(query, v.clientMetadata()) is CircuitZkPlanResult.InvalidRequest)
         }
-        assertTrue("only $typed error vectors reached the planner", typed >= 30)
+        assertTrue("only $typed error vectors reached the typed boundary", typed >= 30)
+    }
+
+    private fun query(extra: String = "", meta: String = """{"doctype_value":"d"}""", id: String? = "q") = Json.parseToJsonElement(
+        """{${id?.let { "\"id\":\"$it\"," } ?: ""}"format":"circuit_zk","meta":$meta,"req":[{"id":"age_check","return":"h","params":{"ge":"2008-10-10"}}]$extra}""",
+    ).jsonObject
+
+    private fun planned(q: JsonObject, clientMetadata: JsonObject? = null) =
+        (SharedCircuitZkPlanner().plan(q, clientMetadata) as CircuitZkPlanResult.Plan).plan
+
+    /**
+     * What the probe could not do and the planner now does: a request with
+     * empty circuit lists, an empty `vct_values`, or no `id` is planned as the
+     * matcher plans it.
+     */
+    @Test
+    fun plans_the_requests_the_old_probe_could_not() {
+        fun cm(lists: String) = Json.parseToJsonElement("""{"vp_formats_supported":{"circuit_zk":$lists}}""").jsonObject
+        assertEquals(emptyList<CircuitZkCircuitRef>(), planned(query(), cm("""{"circuit_id_values":[]}""")).circuitFilter)
+        assertEquals(emptyList<CircuitZkCircuitRef>(), planned(query(), cm("""{"circuit_proof_system_values":[],"circuit_id_values":["c"]}""")).circuitFilter)
+        assertEquals(1, planned(query(meta = """{"vct_values":[]}""")).functions.size)
+        assertEquals(1, planned(query(id = null)).functions.size)
+        // Plain and envelope shapes of the verifier's lists both reach the plan.
+        val plain = cm("""{"circuit_proof_system_values":["s1"],"circuit_id_values":["c1"]}""")
+        assertEquals(listOf(CircuitZkCircuitRef("s1", "c1")), planned(query(), plain).circuitFilter)
+        val envelope = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("""{"circuit_proof_system_values":["s1"],"circuit_id_values":["c>?"]}""".toByteArray())
+        assertEquals(listOf(CircuitZkCircuitRef("s1", "c>?")), planned(query(), cm("""{"fn_id":"x","input":"$envelope"}""")).circuitFilter)
     }
 
     /** What a request's two circuit lists become in the SDK's plan, end to end. */

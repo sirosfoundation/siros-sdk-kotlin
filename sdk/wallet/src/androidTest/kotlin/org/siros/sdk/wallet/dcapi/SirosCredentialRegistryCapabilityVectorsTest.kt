@@ -1,0 +1,178 @@
+// Copyright 2026 SIROS Foundation. BSD 2-Clause License.
+package org.siros.sdk.wallet.dcapi
+
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.siros.sdk.credentials.CircuitZkCircuit
+import org.siros.sdk.credentials.CredentialMetadata
+import org.siros.sdk.credentials.StoredCredential
+import uniffi.siros_dc_matcher_ffi.matchDcqlWithContext
+
+/**
+ * The matcher's circuit capability vectors (`spec/circuit-capabilities-vectors/`,
+ * copied verbatim; see its `SOURCE.md`), through [SirosCredentialRegistry].
+ *
+ * The SDK does not implement the capability rule, the matcher does. What this
+ * proves is that a circuit registered with its `capabilities` reaches the
+ * matcher unaltered: each case's circuits are registered one at a time, the
+ * case's request is matched through the real native library, and the circuits
+ * the matcher offers must be exactly the case's `expect` (as a set; ranking is
+ * the catalog's). A device test because the matcher is native.
+ *
+ * A vector speaks of a generic presentation, credential format and type; the
+ * matcher's are fixed (`circuit_zk`, stored `mso_mdoc`, `meta.doctype_value`).
+ * So the vector's own presentation and format are rewritten to those wherever
+ * a circuit or the request repeats them, and a circuit that names something
+ * else keeps naming it and must not be offered. Cases the matcher cannot be
+ * asked (a malformed request, an empty `req`, which its planner refuses
+ * before matching) are checked to offer nothing, whatever the vector expects.
+ *
+ * NOT run by `./gradlew test`: needs a device or emulator.
+ */
+@RunWith(AndroidJUnit4::class)
+class SirosCredentialRegistryCapabilityVectorsTest {
+
+    private fun vectors(): JsonObject {
+        val assets = InstrumentationRegistry.getInstrumentation().context.assets
+        return Json.parseToJsonElement(
+            assets.open("circuit-capabilities-vectors/match.json").bufferedReader().readText(),
+        ).jsonObject
+    }
+
+    @Test
+    fun the_registry_offers_exactly_the_circuits_the_vectors_expect() {
+        val cases = checkNotNull(vectors()["cases"]).jsonArray
+        assertTrue("vectors went missing: ${cases.size}", cases.size >= 40)
+        val failures = cases.map { it.jsonObject }.mapNotNull { case ->
+            // The vectors' `expectError` cases, and `empty-req`, are not requests
+            // the matcher is ever asked: its planner refuses an empty `req`
+            // (the vectors' README says so), so nothing is offered for them.
+            val unaskable = case["expectError"]?.jsonPrimitive?.content == "true" ||
+                case["request"]!!.jsonObject["req"]!!.jsonArray.isEmpty()
+            val want = if (unaskable) {
+                emptySet()
+            } else {
+                case["expect"]!!.jsonArray.map { it.jsonPrimitive.content }.toSet()
+            }
+            val got = offered(case)
+            if (got == want) null else "${case["name"]!!.jsonPrimitive.content}: want $want, got $got"
+        }
+        assertTrue("\n" + failures.joinToString("\n"), failures.isEmpty())
+    }
+
+    /** Guards against a harness that offers nothing, or everything, whatever the case. */
+    @Test
+    fun the_harness_offers_some_cases_and_refuses_others() {
+        val byName = vectors()["cases"]!!.jsonArray.map { it.jsonObject }.associateBy { it["name"]!!.jsonPrimitive.content }
+        assertEquals(setOf("c1"), offered(byName.getValue("baseline")))
+        assertEquals(setOf("b"), offered(byName.getValue("system-filter")))
+        assertEquals(emptySet<String>(), offered(byName.getValue("id-filter-no-hit")))
+    }
+
+    private val circuitZkFormat = "circuit_zk"
+    private val storedFormat = "mso_mdoc"
+
+    /** The ids of the case's circuits the matcher offers for its request. */
+    private fun offered(case: JsonObject): Set<String> {
+        val request = case["request"]!!.jsonObject
+        val presentation = request["presentation"]?.jsonPrimitive?.content.orEmpty()
+        val credential = request["credential"]?.jsonObject
+        val format = credential?.get("format")?.jsonPrimitive?.content.orEmpty()
+        val type = credential?.get("type")?.jsonPrimitive?.content.orEmpty()
+        val items = request["req"]!!.jsonArray
+        // No presentation, format or type is a malformed request, and an empty
+        // `req` is refused by the matcher's planner before it matches.
+        if (presentation.isEmpty() || format.isEmpty() || type.isEmpty() || items.isEmpty()) return emptySet()
+
+        val req = JsonArray(
+            items.mapIndexed { i, item ->
+                val o = item.jsonObject
+                JsonObject(
+                    buildMap {
+                        put("id", o["id"]!!)
+                        put("return", JsonPrimitive("r$i"))
+                        o["params"]?.let { put("params", it) }
+                    },
+                )
+            },
+        )
+        val query = JsonObject(
+            mapOf(
+                "credentials" to JsonArray(
+                    listOf(
+                        JsonObject(
+                            mapOf(
+                                "id" to JsonPrimitive("q"),
+                                "format" to JsonPrimitive(circuitZkFormat),
+                                "meta" to JsonObject(mapOf("doctype_value" to JsonPrimitive(type))),
+                                "req" to req,
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ).toString()
+        val lists = buildMap {
+            request["proofSystems"]?.takeIf { it is JsonArray && it.jsonArray.isNotEmpty() }
+                ?.let { put("circuit_proof_system_values", it) }
+            request["circuitIds"]?.takeIf { it is JsonArray && it.jsonArray.isNotEmpty() }
+                ?.let { put("circuit_id_values", it) }
+        }
+        val clientMetadata = lists.takeIf { it.isNotEmpty() }?.let {
+            JsonObject(mapOf("vp_formats_supported" to JsonObject(mapOf("circuit_zk" to JsonObject(it))))).toString()
+        }
+
+        val credential1 = StoredCredential(
+            id = 1L, format = storedFormat, raw = "",
+            metadata = CredentialMetadata(doctype = type), batchId = 1L, instanceId = 0,
+        )
+        return case["circuits"]!!.jsonArray.map { it.jsonObject }.filter { c ->
+            // The wallet's side: a revoked circuit is not registered, and a
+            // circuit without capabilities has none to register.
+            c["status"]?.jsonPrimitive?.content in setOf("active", "deprecated") && c["capabilities"] != null
+        }.filter { c ->
+            val circuit = CircuitZkCircuit(
+                system = c["system"]!!.jsonPrimitive.content,
+                circuitId = c["id"]!!.jsonPrimitive.content,
+                docTypes = setOf(type),
+                aliases = c["aliases"]?.jsonArray?.map { it.jsonPrimitive.content }?.toSet().orEmpty(),
+                capabilities = rewritten(c["capabilities"]!!, presentation, format).toString(),
+            )
+            val blob = SirosCredentialRegistry.buildBlob(
+                listOf(credential1), emptyList(), icons = mapOf(1L to byteArrayOf(1)), circuitZkCircuits = listOf(circuit),
+            )
+            matchDcqlWithContext(blob, query, clientMetadata).satisfiable
+        }.map { it["id"]!!.jsonPrimitive.content }.toSet()
+    }
+
+    /** [capabilities] with the vector's presentation and format replaced by the matcher's, where they are the request's. */
+    private fun rewritten(capabilities: JsonElement, presentation: String, format: String): JsonElement {
+        val o = capabilities as? JsonObject ?: return capabilities
+        return JsonObject(
+            o.mapValues { (key, value) ->
+                when {
+                    key == "presentation" && value.isString(presentation) -> JsonPrimitive(circuitZkFormat)
+                    key == "credential" && value is JsonObject -> JsonObject(
+                        value.mapValues { (k, v) -> if (k == "format" && v.isString(format)) JsonPrimitive(storedFormat) else v },
+                    )
+                    else -> value
+                }
+            },
+        )
+    }
+
+    private fun JsonElement.isString(s: String) = this is JsonPrimitive && this !is JsonNull && isString && content == s
+}

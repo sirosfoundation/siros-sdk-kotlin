@@ -12,8 +12,8 @@ import org.siros.sdk.credentials.NonDisclosurePolicy
  * verifier cannot accept what it makes.
  */
 internal object SampleCircuitZk {
-    /** The circuit table of the demo: one circuit serving nym_auth, from the fake proof system. */
+    /** The circuit table of the demo: one circuit serving nym_auth (and declaring that credential type), from the fake proof system. */
     val circuits = CircuitZkCircuitSource {
-        listOf(CircuitZkCircuit(system = "demo-fake", circuitId = "demo-fake-circuit-v1", docTypes = setOf(NonDisclosurePolicy.NYM_AUTH_DOCTYPE)))
+        listOf(CircuitZkCircuit(system = "demo-fake", circuitId = "demo-fake-circuit-v1", docTypes = setOf(NonDisclosurePolicy.NYM_AUTH_DOCTYPE), credentialType = NonDisclosurePolicy.NYM_AUTH_DOCTYPE))
     }
 }

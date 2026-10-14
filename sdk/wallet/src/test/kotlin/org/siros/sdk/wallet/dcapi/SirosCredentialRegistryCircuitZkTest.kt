@@ -30,4 +30,24 @@ class SirosCredentialRegistryCircuitZkTest {
         val undeclared = CircuitZkCircuit("sys", "c1", setOf("d"))
         assertEquals(mapOf("circuit_id" to "c1"), SirosCredentialRegistry.circuitCapabilities(undeclared).single().params)
     }
+
+    @Test
+    fun credentialTypeAndCapabilitiesArePassedThroughVerbatim() {
+        val caps = """{"schema":1,"unknown":"not read here"}"""
+        val c = CircuitZkCircuit("sys", "c1", setOf("d"), functions = setOf("f"), credentialType = "d", capabilities = caps)
+        assertEquals(
+            mapOf("circuit_id" to "c1", "functions" to "f", "credential_type" to "d", "capabilities" to caps),
+            SirosCredentialRegistry.circuitCapabilities(c).single().params,
+        )
+        // Each alias is registered with the same values.
+        val aliased = SirosCredentialRegistry.circuitCapabilities(c.copy(aliases = setOf("old")))
+        assertEquals(listOf("c1", "old"), aliased.map { it.params["circuit_id"] })
+        assertEquals(listOf(caps, caps), aliased.map { it.params["capabilities"] })
+    }
+
+    @Test
+    fun neitherIsRegisteredWhenTheCircuitHasNone() {
+        val params = SirosCredentialRegistry.circuitCapabilities(CircuitZkCircuit("sys", "c1", setOf("d"))).single().params
+        assertEquals(setOf("circuit_id"), params.keys)
+    }
 }

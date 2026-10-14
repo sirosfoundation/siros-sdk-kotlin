@@ -1,6 +1,5 @@
 package org.siros.sdk.credentials
 
-import java.util.Base64
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -11,8 +10,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The parts of [SharedCircuitZkPlanner] that run without the native matcher: reading its plan JSON into the SDK's
- * plan, and choosing the probe's circuit. What the matcher answers is checked on a device, against its own vectors
+ * The part of [SharedCircuitZkPlanner] that runs without the native matcher: reading its plan JSON into the SDK's
+ * plan. What the matcher answers is checked on a device, against its own vectors
  * (`SharedCircuitZkPlannerInstrumentedTest`).
  */
 class SharedCircuitZkPlannerTest {
@@ -73,31 +72,5 @@ class SharedCircuitZkPlannerTest {
         assertThrows(IllegalArgumentException::class.java) {
             SharedCircuitZkPlanner.toPlan(obj("""{"functions":[],"circuit_filter":{"circuit_ids":[1]},"raw":{}}"""))
         }
-    }
-
-    private fun cm(circuitZk: String) = obj("""{"vp_formats_supported":{"circuit_zk":$circuitZk}}""")
-
-    @Test
-    fun theProbeCircuitTakesTheFirstOfEachListSent() {
-        assertEquals("s1" to "c1", SharedCircuitZkPlanner.circuitSeed(cm("""{"circuit_proof_system_values":["s1","s2"],"circuit_id_values":["c1","c2"]}""")))
-        // A list not sent is satisfied by a placeholder.
-        val onlyIds = SharedCircuitZkPlanner.circuitSeed(cm("""{"circuit_id_values":["c1"]}"""))
-        assertEquals("c1", onlyIds.second)
-        assertEquals(SharedCircuitZkPlanner.circuitSeed(null).first, onlyIds.first)
-    }
-
-    @Test
-    fun theEnvelopeFormIsReadWhateverItsBase64() {
-        val inner = """{"circuit_proof_system_values":["s1"],"circuit_id_values":["c>?"]}"""
-        val bytes = inner.toByteArray()
-        for (encoded in listOf(
-            Base64.getEncoder().encodeToString(bytes),
-            Base64.getUrlEncoder().encodeToString(bytes),
-            Base64.getUrlEncoder().withoutPadding().encodeToString(bytes),
-        )) {
-            assertEquals(encoded, "s1" to "c>?", SharedCircuitZkPlanner.circuitSeed(cm("""{"fn_id":"x","input":"$encoded"}""")))
-        }
-        // Unreadable: placeholders, and the matcher decides.
-        assertEquals(SharedCircuitZkPlanner.circuitSeed(null), SharedCircuitZkPlanner.circuitSeed(cm("""{"fn_id":"x","input":"!!!"}""")))
     }
 }

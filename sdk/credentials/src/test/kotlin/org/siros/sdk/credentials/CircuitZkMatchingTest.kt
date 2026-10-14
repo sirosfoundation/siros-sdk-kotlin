@@ -280,6 +280,15 @@ class CircuitZkMatchingTest {
     }
 
     @Test
+    fun `a descriptor's capabilities reach the circuit as JSON, and a credential type is never derived`() {
+        val d = descriptor("a").copy(capabilities = json.parseToJsonElement("""{"schema":1,"functions":[]}""").jsonObject)
+        val circuits = CircuitZkCircuitSource.fromManifest(ZkManifest(circuits = listOf(d, descriptor("b"))))
+        assertEquals(json.parseToJsonElement("""{"schema":1,"functions":[]}"""), json.parseToJsonElement(circuits[0].capabilities!!))
+        assertNull(circuits[1].capabilities)
+        assertNull(circuits[0].credentialType)
+    }
+
+    @Test
     fun `the doctypes served through circuit_zk are derived from the circuit table`() {
         val source = CircuitZkCircuitSource { listOf(circuit("a", docTypes = setOf("x", "y")), circuit("b", docTypes = setOf("z"))) }
         assertEquals(setOf("x", "y", "z"), source.docTypes())

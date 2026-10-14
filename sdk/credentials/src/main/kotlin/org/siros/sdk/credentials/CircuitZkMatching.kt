@@ -87,6 +87,15 @@ fun interface CircuitZkRequestValidator {
  * A circuit this wallet can prove with. [functions] is null when the catalog
  * does not say which functions the circuit supports, in which case no
  * function filtering applies to it.
+ *
+ * [credentialType] and [capabilities] are opaque strings passed to the matcher
+ * when the circuit is registered (siros-dc-matcher 0.9.0) and never read by
+ * the SDK. [credentialType] restricts the circuit to a request naming that
+ * doctype or vct. [capabilities] is the catalog's `capabilities` object as a
+ * JSON string; when present the matcher applies its capability rule and reads
+ * neither [functions] nor [credentialType]. A value the matcher cannot parse
+ * leaves the circuit not offered. Both null: the circuit is registered as
+ * before.
  */
 data class CircuitZkCircuit(
     val system: String,
@@ -94,6 +103,8 @@ data class CircuitZkCircuit(
     val docTypes: Set<String>,
     val functions: Set<String>? = null,
     val aliases: Set<String> = emptySet(),
+    val credentialType: String? = null,
+    val capabilities: String? = null,
 ) {
     /**
      * Whether this circuit can prove [plan] for a credential of [docType]: the
@@ -125,6 +136,7 @@ fun interface CircuitZkCircuitSource {
                     functions = (d.params["functions"] as? JsonArray)
                         ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.toSet(),
                     aliases = d.aliases.toSet(),
+                    capabilities = d.capabilities?.toString(),
                 )
             }
     }

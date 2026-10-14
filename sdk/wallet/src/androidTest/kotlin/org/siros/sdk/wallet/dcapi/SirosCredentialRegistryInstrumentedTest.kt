@@ -133,4 +133,25 @@ class SirosCredentialRegistryInstrumentedTest {
         val other = query.replace("age_check", "pseudonym-v1-sha256")
         assertEquals(false, satisfiable(listOf(circuit), null, other))
     }
+
+    /** A circuit's `credential_type` reaches the matcher: it is offered only for a request naming that type. */
+    @Test
+    fun a_circuits_credential_type_restricts_what_it_is_offered_for() {
+        val nym = "eu.europa.ec.eudi.nym_auth.1"
+        val credential = org.siros.sdk.credentials.StoredCredential(
+            id = 7L, format = "mso_mdoc", raw = "",
+            metadata = org.siros.sdk.credentials.CredentialMetadata(doctype = nym), batchId = 7L, instanceId = 0,
+        )
+        fun satisfiable(credentialType: String?, meta: String): Boolean {
+            val circuit = org.siros.sdk.credentials.CircuitZkCircuit("longfellow-libzk-v1", "urn:c:1", setOf(nym), credentialType = credentialType)
+            val blob = SirosCredentialRegistry.buildBlob(listOf(credential), emptyList(), icons = mapOf(7L to byteArrayOf(1)), circuitZkCircuits = listOf(circuit))
+            val q = """{"credentials":[{"id":"q","format":"circuit_zk","meta":$meta,
+                "req":[{"id":"age_check","return":"a","params":{"ge":"2008-10-10"}}]}]}"""
+            return uniffi.siros_dc_matcher_ffi.matchDcqlWithContext(blob, q, null).satisfiable
+        }
+        assertTrue(satisfiable(nym, """{"doctype_value":"$nym"}"""))
+        assertEquals("a circuit for another type", false, satisfiable("eu.example.other.1", """{"doctype_value":"$nym"}"""))
+        assertEquals("a restricted circuit needs the request to name a type", false, satisfiable(nym, "{}"))
+        assertTrue("unrestricted, as before", satisfiable(null, "{}"))
+    }
 }

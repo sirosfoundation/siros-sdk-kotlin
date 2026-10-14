@@ -383,13 +383,17 @@ object SirosCredentialRegistry {
      * verifier's `circuit_id_values` with one registered `circuit_id` and knows
      * nothing of aliases. `functions` is declared only when the catalog says
      * which functions the circuit supports; a circuit that declares none is
-     * not filtered by function.
+     * not filtered by function. `credential_type` and `capabilities` are
+     * registered when the circuit carries them, as given: the matcher reads
+     * them, the SDK does not.
      */
     internal fun circuitCapabilities(circuit: CircuitZkCircuit): List<FfiCapability> =
         (listOf(circuit.circuitId) + circuit.aliases.sorted()).distinct().map { id ->
             val params = buildMap {
                 put("circuit_id", id)
                 circuit.functions?.let { put("functions", it.sorted().joinToString(",")) }
+                circuit.credentialType?.let { put("credential_type", it) }
+                circuit.capabilities?.let { put("capabilities", it) }
             }
             FfiCapability(circuit.system, params)
         }

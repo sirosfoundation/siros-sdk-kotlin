@@ -51,7 +51,7 @@ dependencies {
     //
     // `api`, because :sdk:wallet registers the blob and ships the asset, and
     // consumers of the SDK see the matcher's types through CredentialMatcher.
-    api("org.siros:siros-dc-matcher:0.8.0")
+    api("org.siros:siros-dc-matcher:0.9.0")
 
     implementation("org.siros:zk-cred-longfellow:0.1.1")
 

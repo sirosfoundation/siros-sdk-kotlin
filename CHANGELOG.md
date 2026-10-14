@@ -18,8 +18,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Behaviour changes: `CircuitZkCircuitRef.circuitId` is nullable and an empty
   `CircuitZkPlan.circuitFilter` now admits no circuit (null still means "any");
   a request repeating a DCQL credential-query or claim `id` offers nothing.
-  The matcher AAR is 0.8.0 (0.7.0: `zk_required` absent means optional,
+  The matcher AAR is 0.9.0 (0.7.0: `zk_required` absent means optional,
   duplicate ids rejected, holder binding and `multiple` honoured). (#271)
+- **siros-dc-matcher 0.9.0: the planner is read directly, and circuits can
+  declare a credential type or `capabilities`.** `SharedCircuitZkPlanner` calls
+  the matcher's new `circuit_zk_plan` export instead of matching a throwaway
+  probe blob, so the limits that existed only because of the probe are gone:
+  a request whose circuit lists are present but empty, with `vct_values: []`,
+  or without an `id` is planned as the matcher plans it (the plan JSON is
+  unchanged, and a rejected request is still `InvalidRequest`). The planner's
+  conformance vectors are now checked to the error code.
+  `CircuitZkCircuit` gains two optional opaque strings, `credentialType` and
+  `capabilities`, which `SirosCredentialRegistry` registers as the matcher's
+  `credential_type` and `capabilities` params, verbatim (the SDK never reads
+  them). `credentialType` restricts the circuit to a request naming that
+  doctype or vct; `capabilities` (the catalog's capabilities object as JSON)
+  makes the matcher apply its capability rule and replaces `functions` and
+  `credentialType`; a value it cannot parse leaves the circuit not offered.
+  `ZkCircuitDescriptor.capabilities` carries the catalog's object and
+  `CircuitZkCircuitSource.fromManifest` passes it through. The matcher's
+  capability vectors are in `spec/circuit-capabilities-vectors`. API note:
+  `CircuitZkCircuit` and `ZkCircuitDescriptor` gain a trailing constructor
+  parameter (source compatible, not binary compatible). The sample app's demo
+  circuit declares its credential type. (#271)
 - **`NymPseudonym.derive`: the nym_auth rulebook pseudonym function
   (`pseudonym-v1-sha256`), pure and driven by one config table.** Computes
   `SHA256(DST || seed || prover_input || verifier_input)` for the four

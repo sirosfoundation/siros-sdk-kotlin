@@ -100,6 +100,8 @@ data class ZkCircuitDescriptor(
     val publishedAt: String = "",
     val deprecatedAt: String? = null,
     val notes: String? = null,
+    /** The circuit's structured `capabilities`, when the catalog has them. Passed to the matcher verbatim, never read here. */
+    val capabilities: JsonObject? = null,
 )
 
 /**
