@@ -112,4 +112,23 @@ class RulebookCircuitZkValidatorTest {
     fun `an empty plan with no query members is satisfiable`() {
         assertTrue(RulebookCircuitZkValidator().validate(CircuitZkPlan(emptyList())) === CircuitZkVerdict.Ok)
     }
+
+    @Test
+    fun `a matcher-constrained circuit is not subject to the legacy functions check, an unconstrained one is`() {
+        val rules = CircuitZkRuleSet(
+            planRules = CircuitZkRuleSet.rulebookV03().planRules,
+            functions = mapOf("my_fn" to CircuitZkFunctionRules(1, "my-fn-count", emptyList())),
+        )
+        val plan = CircuitZkPlan(
+            listOf(CircuitZkFunction("my_fn", "h")),
+            raw = Json.parseToJsonElement("""{"meta":{"doctype_value":"d.1"}}""").jsonObject,
+        )
+        fun verdict(c: CircuitZkCircuit) = RulebookCircuitZkValidator(rules, circuits = CircuitZkCircuitSource { listOf(c) }).validate(plan)
+        val stale = setOf("other_fn")
+        assertTrue(verdict(CircuitZkCircuit("s", "c", setOf("d.1"), functions = stale, capabilities = "{}")) === CircuitZkVerdict.Ok)
+        assertTrue(verdict(CircuitZkCircuit("s", "c", setOf("d.1"), functions = stale, credentialType = "t")) === CircuitZkVerdict.Ok)
+        val denied = verdict(CircuitZkCircuit("s", "c", setOf("d.1"), functions = stale))
+        assertEquals("function-not-declared", (denied as CircuitZkVerdict.AccessDenied).ruleId)
+        assertTrue(verdict(CircuitZkCircuit("s", "c", setOf("d.1"), functions = setOf("my_fn"))) === CircuitZkVerdict.Ok)
+    }
 }

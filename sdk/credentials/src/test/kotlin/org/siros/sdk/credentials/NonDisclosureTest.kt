@@ -252,6 +252,25 @@ class NonDisclosureTest {
     }
 
     @Test
+    fun `a protected path whose segment contains a dot is neither displayed nor registered`() {
+        CredentialDisclosureGuard.policy = NonDisclosurePolicy(mapOf("my.vct" to setOf(listOf("a.b", "secret"))))
+        val payload = b64("""{"vct":"my.vct","a.b":{"secret":"hush","ok":"fine"}}""")
+        val raw = "${b64("""{"alg":"ES256"}""")}.$payload.c2ln~"
+        val c = StoredCredential(
+            id = 8, format = "dc+sd-jwt", raw = raw, batchId = 8, instanceId = 0,
+            metadata = CredentialMetadata(
+                vct = "my.vct",
+                claims = listOf(ClaimMeta(path = listOf("a.b", "secret")), ClaimMeta(path = listOf("a.b", "ok"))),
+            ),
+        )
+        val shown = CredentialUtils.extractClaims(c)
+        assertFalse(shown.any { it.value == "hush" })
+        assertTrue(shown.any { it.value == "fine" })
+        assertTrue(SharedDcqlMatcher.buildFfiClaims(c).none { it.value == "hush" })
+        assertTrue(SharedDcqlMatcher.buildFfiClaims(c).any { it.value == "fine" })
+    }
+
+    @Test
     fun `an object holding a protected nested sd-jwt claim is not displayed or matched`() {
         CredentialDisclosureGuard.policy = NonDisclosurePolicy(mapOf("my.vct" to setOf(listOf("address", "secret"))))
         val n = nestedSdJwt("my.vct")

@@ -3859,7 +3859,9 @@ class SirosWallet private constructor(
         // text below (which reaches the verifier) is never used for it.
         val candidates = matchResults.flatMap { it.candidates }.distinctBy { it.id }
         val circuitZkResults = matchResults.filter { CredentialUtils.isCircuitZkFormat(it.format) }
-        if (circuitZkResults.any { it.candidates.isNotEmpty() } || (circuitZkResults.isNotEmpty() && candidates.isEmpty())) {
+        // Any circuit_zk result still here (matched or not, alone or mixed with an ordinary query)
+        // was not answered by the supported path: the whole request is refused, never partly answered.
+        if (circuitZkResults.isNotEmpty()) {
             Timber.w("DC API circuit_zk request not answered (protocol=${request.protocol})")
             throw org.siros.sdk.wallet.dcapi.DCAPIRequestRefused(
                 request.protocol,

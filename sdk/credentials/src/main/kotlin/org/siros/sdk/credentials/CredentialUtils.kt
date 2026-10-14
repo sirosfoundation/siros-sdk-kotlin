@@ -108,10 +108,12 @@ object CredentialUtils {
         // nests everything under credentialSubject) - each claim must be
         // resolved by walking its own full path, not just matched by its first
         // segment against a top-level key.
+        // Each display claim travels with its ORIGINAL path segments: the dotted display key
+        // cannot be split back into them (a segment may itself contain a dot).
         val vctmResolved = vctmClaims.mapNotNull { claim ->
             if (claim.path.isEmpty()) return@mapNotNull null
             val value = resolveClaimPath(payload, claim.path) ?: return@mapNotNull null
-            DisplayClaim(
+            claim.path to DisplayClaim(
                 key = claim.path.joinToString("."),
                 label = claim.label ?: formatClaimKey(claim.path.last()),
                 value = formatClaimValue(value),
@@ -128,7 +130,7 @@ object CredentialUtils {
         val uncovered = payload.entries
             .filter { it.key !in JWT_SKIP_KEYS && it.key !in coveredTopLevelKeys }
             .map { (key, value) ->
-                DisplayClaim(
+                listOf(key) to DisplayClaim(
                     key = key,
                     label = formatClaimKey(key),
                     value = formatClaimValue(value),
@@ -137,11 +139,10 @@ object CredentialUtils {
 
         // Protected claims (see [CredentialDisclosureGuard]) are never displayed, registered or matched on.
         val vct = vctOf(credential)
-        return (vctmResolved + uncovered).filterNot { c ->
+        return (vctmResolved + uncovered)
             // Ancestor-aware: an object holding a protected descendant is not displayed either.
-            CredentialDisclosureGuard.requestsProtected(vct, listOf(c.key.split("."))) ||
-                CredentialDisclosureGuard.requestsProtected(vct, listOf(listOf(c.key)))
-        }
+            .filterNot { (path, _) -> CredentialDisclosureGuard.requestsProtected(vct, listOf(path)) }
+            .map { it.second }
     }
 
     /**

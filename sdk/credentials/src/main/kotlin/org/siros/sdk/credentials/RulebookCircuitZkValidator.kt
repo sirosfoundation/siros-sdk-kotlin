@@ -166,7 +166,9 @@ class CircuitZkRuleSet(
         /**
          * When some circuit fits the plan's doctype and circuit list, at least
          * one of them must support every function: it declares none (no
-         * function filtering) or declares all of them.
+         * function filtering) or declares all of them. A circuit constrained
+         * by the matcher ([CircuitZkCircuit.constrainedByMatcher]) is not
+         * subject to this legacy check.
          */
         private fun functionsDeclared(plan: CircuitZkPlan, env: CircuitZkRuleEnv): Boolean {
             val source = env.circuits ?: return true
@@ -176,7 +178,8 @@ class CircuitZkRuleSet(
                     (plan.circuitFilter == null || plan.circuitFilter.any { it.admits(c) })
             }
             if (relevant.isEmpty()) return true
-            return relevant.any { c -> c.functions == null || plan.functions.all { it.id in c.functions } }
+            // A matcher-constrained circuit's legacy `functions` are not read (as in CircuitZkMatching.fits).
+        return relevant.any { c -> c.constrainedByMatcher || c.functions == null || plan.functions.all { it.id in c.functions } }
         }
     }
 }

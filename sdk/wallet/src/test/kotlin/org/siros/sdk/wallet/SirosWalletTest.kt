@@ -5102,11 +5102,11 @@ class SirosWalletTest {
         coVerify(exactly = 0) { apiClient.evaluateTrust(any()) }
     }
 
-    private fun signedCircuitZkRequest(origin: String): String {
+    private fun signedCircuitZkRequest(origin: String, extraQueries: String = ""): String {
         val ecKey = com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256).generate()
         val claims = com.nimbusds.jwt.JWTClaimsSet.parse(
             """{"client_id":"x509_san_dns:rp.example","nonce":"n","expected_origins":["$origin"],""" +
-                """"dcql_query":{"credentials":[{"id":"q","format":"circuit_zk","meta":{"doctype_value":"test.doctype.1"}}]}}"""
+                """"dcql_query":{"credentials":[{"id":"q","format":"circuit_zk","meta":{"doctype_value":"test.doctype.1"}}$extraQueries]}}"""
         )
         val jwt = com.nimbusds.jwt.SignedJWT(
             com.nimbusds.jose.JWSHeader.Builder(com.nimbusds.jose.JWSAlgorithm.ES256).jwk(ecKey.toPublicJWK()).build(), claims,
@@ -5168,6 +5168,23 @@ class SirosWalletTest {
             kotlinx.coroutines.runBlocking {
                 wallet.handleDCAPIRequest(signedCircuitZkRequest("https://rp.example"), origin = "https://rp.example")
             }
+        }
+        assertEquals("DC API request refused (protocol=openid4vp-v1-signed)", e.message)
+        coVerify(exactly = 0) { keystore.signVpToken(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun handleDCAPIRequest_mixedCircuitZkAndOrdinaryQuery_withTheFlagOff_isRefusedNotPartlyAnswered() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        val wallet = circuitZkWallet(null, keystore)
+
+        val mixed = signedCircuitZkRequest(
+            "https://rp.example",
+            extraQueries = """,{"id":"p","format":"mso_mdoc","meta":{"doctype_value":"test.doctype.1"}}""",
+        )
+        val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+            kotlinx.coroutines.runBlocking { wallet.handleDCAPIRequest(mixed, origin = "https://rp.example") }
         }
         assertEquals("DC API request refused (protocol=openid4vp-v1-signed)", e.message)
         coVerify(exactly = 0) { keystore.signVpToken(any(), any(), any(), any()) }
