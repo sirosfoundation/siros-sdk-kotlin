@@ -2,6 +2,7 @@
 package org.siros.sdk.wallet.dcapi
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
@@ -158,7 +159,10 @@ class DCAPIGetCredentialActivity : Activity() {
             } catch (e: DCAPIRequestRefused) {
                 // The request does not meet the wallet's signed-request rules. Answered with
                 // access_denied and no description, so the verifier learns nothing about why.
-                finishWithProtocolError(null)
+                // The user is told, in coarse plain language, before the screen closes: a refusal
+                // they cannot see reads as a broken wallet.
+                Timber.w("DC API request refused for the user (reason=${e.reason})")
+                finishWithProtocolError(null, userMessageRes = e.reason.userMessageRes)
             } catch (e: WalletException) {
                 // A decline (untrusted verifier, no matching/eligible
                 // credential, missing encryption key, ...) is a normal
@@ -209,7 +213,11 @@ class DCAPIGetCredentialActivity : Activity() {
      * and OpenID4VP doesn't define a more specific code for most of them
      * anyway.
      */
-    private fun finishWithProtocolError(description: String?, error: String = "access_denied") {
+    private fun finishWithProtocolError(
+        description: String?,
+        error: String = "access_denied",
+        userMessageRes: Int? = null,
+    ) {
         val errorJson = buildJsonObject {
             put("error", JsonPrimitive(error))
             if (description != null) put("error_description", JsonPrimitive(description))
@@ -221,7 +229,18 @@ class DCAPIGetCredentialActivity : Activity() {
             GetCredentialResponse(DigitalCredential(errorJson)),
         )
         setResult(RESULT_OK, responseIntent)
-        finish()
+        // The verifier's answer is already set and byte-identical with or without the dialog;
+        // the dialog only holds the screen open until the user has read why.
+        if (userMessageRes == null || isFinishing || isDestroyed) {
+            finish()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.siros_dcapi_refused_title)
+            .setMessage(userMessageRes)
+            .setPositiveButton(R.string.siros_dcapi_refused_ok, null)
+            .setOnDismissListener { finish() }
+            .show()
     }
 
     private fun loadPrivilegedAllowlist(): String =

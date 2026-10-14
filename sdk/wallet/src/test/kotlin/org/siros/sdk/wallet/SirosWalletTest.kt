@@ -5291,6 +5291,8 @@ class SirosWalletTest {
         flagOn: Boolean = true,
         cachedTrust: Boolean = false,
         localOnlyTrust: Boolean = false,
+        /** Replaces the default single credential (id 1). */
+        credentials: List<StoredCredential>? = null,
     ): CzkSetup {
         val apiClient = mockk<BackendApiClient>()
         coEvery { apiClient.evaluateTrust(any()) } coAnswers { trust() }
@@ -5300,10 +5302,10 @@ class SirosWalletTest {
         every { (keystore as org.siros.sdk.keystore.RootSecret).deriveSecret(any(), any()) } answers {
             CzkFixtures.hkdf(firstArg(), secondArg())
         }
-        val store = FakeCredentialStore(mutableListOf(
+        val store = FakeCredentialStore((credentials ?: listOf(
             StoredCredential(id = 1L, format = "mso_mdoc", raw = CzkFixtures.mdoc(psc, birth),
                 metadata = CredentialMetadata(name = "Nym"), batchId = 1L, instanceId = 0),
-        ))
+        )).toMutableList())
         val registry = VerifierIdRegistry(sources)
         val circuits = org.siros.sdk.credentials.CircuitZkCircuitSource {
             listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf(CzkFixtures.DOCTYPE)))
@@ -5342,9 +5344,16 @@ class SirosWalletTest {
     private fun czkRun(s: CzkSetup, raw: String, origin: String = CzkFixtures.ORIGIN) =
         kotlinx.coroutines.runBlocking { s.wallet.handleDCAPIRequest(raw, origin) }
 
-    private fun czkRefused(s: CzkSetup, raw: String, origin: String = CzkFixtures.ORIGIN) {
+    private fun czkRefused(
+        s: CzkSetup,
+        raw: String,
+        origin: String = CzkFixtures.ORIGIN,
+        reason: org.siros.sdk.wallet.dcapi.DCAPIRefusalReason? = null,
+    ) {
         val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) { czkRun(s, raw, origin) }
+        // The message (and so anything that reaches a log or the verifier) is the same for every reason.
         assertEquals("DC API request refused (protocol=${e.protocol})", e.message)
+        if (reason != null) assertEquals(reason, e.reason)
         assertTrue(s.history.isEmpty())
     }
 
@@ -5399,7 +5408,7 @@ class SirosWalletTest {
             czkRequest(protocol = "openid4vp-v1-multisigned"),
         )) {
             val s = czkSetup()
-            czkRefused(s, raw)
+            czkRefused(s, raw, reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.REQUEST_NOT_VERIFIED)
             coVerify(exactly = 0) { s.apiClient.evaluateTrust(any()) }
         }
     }
@@ -5421,7 +5430,7 @@ class SirosWalletTest {
     @Test
     fun circuitZkDcApi_clientIdDnsNotInCertificateSan_isRefused() = runTest(dispatcher) {
         val s = czkSetup()
-        czkRefused(s, czkRequest(clientId = "x509_san_dns:not-in-cert.example"))
+        czkRefused(s, czkRequest(clientId = "x509_san_dns:not-in-cert.example"), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE)
         assertEquals(0, s.prover.calls)
     }
 
@@ -5439,11 +5448,11 @@ class SirosWalletTest {
     @Test
     fun circuitZkDcApi_trustFailureAndPdpOutage_areRefused_withNoLocalOrCachedFallback() = runTest(dispatcher) {
         val untrusted = czkSetup(trust = { buildJsonObject { put("decision", false) } })
-        czkRefused(untrusted, czkRequest())
+        czkRefused(untrusted, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NOT_TRUSTED)
 
         // An outage: the request is refused even with a positive cache entry and the local-only mode.
         val outage = czkSetup(trust = { throw java.io.IOException("PDP unreachable") }, cachedTrust = true)
-        czkRefused(outage, czkRequest())
+        czkRefused(outage, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.TRUST_UNAVAILABLE)
         coVerify(exactly = 1) { outage.apiClient.evaluateTrust(any()) }
 
         val rejected = czkSetup(trust = { throw IllegalStateException("403") })
@@ -5476,6 +5485,13 @@ class SirosWalletTest {
     fun circuitZkDcApi_pscMismatch_isRefused() = runTest(dispatcher) {
         val s = czkSetup(psc = ByteArray(32))
         czkRefused(s, czkRequest())
+        assertEquals(0, s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkDcApi_noCredentialInTheWallet_isRefusedWithTheNoMatchReason() = runTest(dispatcher) {
+        val s = czkSetup(credentials = emptyList())
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NO_MATCHING_CREDENTIAL)
         assertEquals(0, s.prover.calls)
     }
 

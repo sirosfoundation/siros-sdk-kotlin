@@ -7,6 +7,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.siros.sdk.credentials.SirosException
+import org.siros.sdk.wallet.R
 
 /**
  * How strictly the wallet enforces a signed request's `expected_origins`
@@ -40,13 +41,63 @@ fun interface DCAPIEntryPolicy {
 }
 
 /**
- * Raised when no entry of `requests[]` is acceptable under the wallet's
- * [DCAPIRequestRules]. The wallet answers it with `access_denied` and no
- * description. The message names only the protocol of the entry that was
- * refused, never any request content.
+ * Why the wallet refused a DC API request, in terms coarse enough to tell the
+ * USER and nothing else. It never reaches the verifier: the verifier is always
+ * answered with a bare `access_denied`. It also never carries request
+ * content, the verifier id, a pseudonym or a seed - the user is shown a fixed
+ * localised sentence per value (see [userMessageRes]).
  */
-class DCAPIRequestRefused(val protocol: String) :
-    SirosException("DC API request refused (protocol=$protocol)", errorCode = "dcapi_request_refused")
+enum class DCAPIRefusalReason {
+    /** The verifier is not trusted (the policy decision point said no). */
+    NOT_TRUSTED,
+
+    /** Trust could not be established right now (policy decision point unreachable or failing). */
+    TRUST_UNAVAILABLE,
+
+    /** No credential in the wallet satisfies the request. */
+    NO_MATCHING_CREDENTIAL,
+
+    /** The credential the user picked cannot be used for this request, or no usable copy of one is left. */
+    SELECTED_CREDENTIAL_UNAVAILABLE,
+
+    /** The request is not one this wallet can or will answer (wrong shape, feature off, missing key). */
+    UNSUPPORTED_REQUEST,
+
+    /** The request was not delivered the way the wallet requires (unsigned, or not from the page's origin). */
+    REQUEST_NOT_VERIFIED,
+
+    /** The identifier the pseudonym is scoped to could not be determined. */
+    VERIFIER_ID_UNAVAILABLE,
+
+    /** Building the proof failed. */
+    PROOF_FAILED,
+    ;
+
+    /** The string resource with the plain-language sentence shown to the user. */
+    val userMessageRes: Int
+        get() = when (this) {
+            NOT_TRUSTED -> R.string.siros_dcapi_refused_not_trusted
+            TRUST_UNAVAILABLE -> R.string.siros_dcapi_refused_trust_unavailable
+            NO_MATCHING_CREDENTIAL -> R.string.siros_dcapi_refused_no_matching_credential
+            SELECTED_CREDENTIAL_UNAVAILABLE -> R.string.siros_dcapi_refused_selected_unavailable
+            UNSUPPORTED_REQUEST -> R.string.siros_dcapi_refused_unsupported_request
+            REQUEST_NOT_VERIFIED -> R.string.siros_dcapi_refused_request_not_verified
+            VERIFIER_ID_UNAVAILABLE -> R.string.siros_dcapi_refused_verifier_id_unavailable
+            PROOF_FAILED -> R.string.siros_dcapi_refused_proof_failed
+        }
+}
+
+/**
+ * Raised when the wallet refuses a DC API request (no entry of `requests[]` is
+ * acceptable under the wallet's [DCAPIRequestRules], or a `circuit_zk` request
+ * cannot be answered). The wallet answers the verifier with `access_denied` and
+ * no description; [reason] is for the user only. The message names only the
+ * protocol of the entry that was refused, never any request content.
+ */
+class DCAPIRequestRefused(
+    val protocol: String,
+    val reason: DCAPIRefusalReason = DCAPIRefusalReason.REQUEST_NOT_VERIFIED,
+) : SirosException("DC API request refused (protocol=$protocol)", errorCode = "dcapi_request_refused")
 
 /**
  * The wallet's rules for a DC API request: whether a request must be signed

@@ -3820,7 +3820,10 @@ class SirosWallet private constructor(
         val circuitZkResults = matchResults.filter { CredentialUtils.isCircuitZkFormat(it.format) }
         if (circuitZkResults.any { it.candidates.isNotEmpty() } || (circuitZkResults.isNotEmpty() && candidates.isEmpty())) {
             Timber.w("DC API circuit_zk request not answered (protocol=${request.protocol})")
-            throw org.siros.sdk.wallet.dcapi.DCAPIRequestRefused(request.protocol)
+            throw org.siros.sdk.wallet.dcapi.DCAPIRequestRefused(
+                request.protocol,
+                if (candidates.isEmpty()) org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NO_MATCHING_CREDENTIAL else org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST,
+            )
         }
 
         // Which query result actually governs each candidate - same
@@ -4096,9 +4099,10 @@ class SirosWallet private constructor(
     /**
      * The `circuit_zk` branch of [handleDCAPIRequest]: request hardening has
      * already passed (signed protocol, origin in `expected_origins`). Every
-     * failure is a silent refusal - [org.siros.sdk.wallet.dcapi.DCAPIRequestRefused], which the DC API
-     * activity answers with `access_denied` and no description - and nothing
-     * here logs request contents or the verifier id.
+     * failure is a refusal - [org.siros.sdk.wallet.dcapi.DCAPIRequestRefused], which the DC API
+     * activity answers to the verifier with `access_denied` and no description. Its
+     * [org.siros.sdk.wallet.dcapi.DCAPIRequestRefused.reason] is a coarse category shown to the
+     * USER only. Nothing here logs request contents or the verifier id.
      *
      * Trust is the policy decision point's answer alone: no local certificate
      * check and no trust cache, so an outage is a refusal. Consent was the
@@ -4108,14 +4112,14 @@ class SirosWallet private constructor(
         request: org.siros.sdk.wallet.dcapi.DCAPIRequest,
         origin: String,
     ): DCAPIPresentationResult {
-        fun refuse(step: String): Nothing {
-            Timber.w("DC API circuit_zk request refused (protocol=${request.protocol}, step=$step)")
-            throw org.siros.sdk.wallet.dcapi.DCAPIRequestRefused(request.protocol)
+        fun refuse(step: String, reason: org.siros.sdk.wallet.dcapi.DCAPIRefusalReason): Nothing {
+            Timber.w("DC API circuit_zk request refused (protocol=${request.protocol}, step=$step, reason=$reason)")
+            throw org.siros.sdk.wallet.dcapi.DCAPIRequestRefused(request.protocol, reason)
         }
-        val support = circuitZkSupport ?: refuse("disabled")
-        val prover = circuitZkProver ?: refuse("no-prover")
-        val registry = verifierIdRegistry ?: refuse("no-sources")
-        val query = request.dcqlQuery ?: refuse("no-query")
+        val support = circuitZkSupport ?: refuse("disabled", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+        val prover = circuitZkProver ?: refuse("no-prover", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+        val registry = verifierIdRegistry ?: refuse("no-sources", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+        val query = request.dcqlQuery ?: refuse("no-query", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
 
         // Trust: the PDP only. The request is signed (the rules guarantee it), so its client id is bound to the key.
         val subjectId = request.clientId ?: origin
@@ -4138,18 +4142,18 @@ class SirosWallet private constructor(
                 allowLocalFallback = false,
             )
         } catch (e: Exception) {
-            refuse("trust-unavailable")
+            refuse("trust-unavailable", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.TRUST_UNAVAILABLE)
         }
-        if (!trust.trusted) refuse("trust")
+        if (!trust.trusted) refuse("trust", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NOT_TRUSTED)
 
         // Plan, validate, match.
         val allCreds = credentialStore.getAll()
         val results = CredentialMatcher.matchDcql(query, allCreds, zkSystemIds, support, request.clientMetadata).queryResults
-        if (results.isEmpty() || results.any { !CredentialUtils.isCircuitZkFormat(it.format) }) refuse("query-shape")
-        if (results.any { it.circuitZkPlan == null || it.candidates.isEmpty() }) refuse("no-match")
+        if (results.isEmpty() || results.any { !CredentialUtils.isCircuitZkFormat(it.format) }) refuse("query-shape", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+        if (results.any { it.circuitZkPlan == null || it.candidates.isEmpty() }) refuse("no-match", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NO_MATCHING_CREDENTIAL)
 
         val encryptionJwk = if (request.responseMode == "dc_api.jwt") {
-            findEncryptionJwk(request.clientMetadata) ?: refuse("no-encryption-key")
+            findEncryptionJwk(request.clientMetadata) ?: refuse("no-encryption-key", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
         } else {
             null
         }
@@ -4168,11 +4172,11 @@ class SirosWallet private constructor(
         val tokensByQueryId = linkedMapOf<String, List<String>>()
         val usedIds = mutableListOf<Long>()
         for (result in results) {
-            val plan = result.circuitZkPlan ?: refuse("no-plan")
-            val cred = eligibleInstances(result.candidates).firstOrNull() ?: refuse("no-eligible-copy")
+            val plan = result.circuitZkPlan ?: refuse("no-plan", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+            val cred = eligibleInstances(result.candidates).firstOrNull() ?: refuse("no-eligible-copy", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
             val pseudonym = plan.functions.firstOrNull { it.id == org.siros.sdk.credentials.CircuitZkRuleSet.PSEUDONYM }
             val type = (pseudonym?.params?.get("verifier_id_type") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
-            val verifierId = if (type != null) registry.resolve(type, verifierContext) ?: refuse("verifier-id") else null
+            val verifierId = if (type != null) registry.resolve(type, verifierContext) ?: refuse("verifier-id", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE) else null
             val context = (pseudonym?.params?.get("verifier_context") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
             val kid = cred.kid ?: keystore.listKeys().firstOrNull()?.keyId
             val presented = try {
@@ -4190,7 +4194,7 @@ class SirosWallet private constructor(
                     },
                 )
             } catch (e: org.siros.sdk.keystore.CircuitZkError) {
-                refuse("presenter")
+                refuse("presenter", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.PROOF_FAILED)
             }
             tokensByQueryId[result.queryId] = listOf(presented.base64Url)
             usedIds += cred.id
