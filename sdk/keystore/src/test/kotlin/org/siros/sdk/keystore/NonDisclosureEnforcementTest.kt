@@ -225,6 +225,30 @@ class NonDisclosureEnforcementTest {
     }
 
     @Test
+    fun `the public zk response builders refuse a protected element, called directly`() {
+        val spec = org.siros.sdk.credentials.ZkSystemSpec(id = "s", system = "longfellow-libzk-v1")
+        val result = org.siros.sdk.credentials.ZkProofResult(proofBytes = ByteArray(4), timestamp = "2026-01-01T00:00:00Z")
+        val p = ZkMdocPresentation(ZkProofSystemRegistry(emptyList()))
+        assertThrows(DisclosureRefusedException::class.java) {
+            p.buildDeviceResponse(mdocBytes(nym), nym, spec, listOf("birth_date", "ssc"), result)
+        }
+        assertThrows(DisclosureRefusedException::class.java) {
+            MdocDeviceResponseBuilder.buildZkDeviceResponse(
+                proofBytes = ByteArray(4), zkSystemId = "s", docType = nym, timestamp = "2026-01-01T00:00:00Z", namespace = nym,
+                disclosedClaims = mapOf("psc" to CBORObject.FromObject(ByteArray(32))), issuerAuth = CBORObject.NewArray(),
+            )
+        }
+        // An unprotected element, and a type with no policy entry, still build.
+        assertTrue(p.buildDeviceResponse(mdocBytes(nym), nym, spec, listOf("birth_date"), result).isNotEmpty())
+        assertTrue(
+            MdocDeviceResponseBuilder.buildZkDeviceResponse(
+                proofBytes = ByteArray(4), zkSystemId = "s", docType = "other.doctype", timestamp = "2026-01-01T00:00:00Z", namespace = "other.doctype",
+                disclosedClaims = mapOf("ssc" to CBORObject.FromObject(ByteArray(32))), issuerAuth = CBORObject.NewArray(),
+            ).isNotEmpty(),
+        )
+    }
+
+    @Test
     fun `a private zk witness is not a disclosure, the builder's public paths are`() = runTest {
         val b = MdocDeviceResponseBuilder(mdocBytes(nym))
         val transcript = CBORObject.NewArray().EncodeToBytes()

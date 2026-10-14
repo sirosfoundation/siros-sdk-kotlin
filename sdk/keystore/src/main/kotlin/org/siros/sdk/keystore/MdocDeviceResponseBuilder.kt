@@ -505,6 +505,12 @@ class MdocDeviceResponseBuilder(
             issuerSignedItemBytes: Map<String, ByteArray> = emptyMap(),
             claimSlotDigestIds: List<UInt>? = null,
         ): ByteArray {
+            // Fail closed at the final ZK response builder too: it is public, so a host running its
+            // own prover or replaying a proof reaches it without going through present().
+            org.siros.sdk.credentials.CredentialDisclosureGuard.requireNoneProtected(
+                docType,
+                mapOf(namespace to disclosedClaims.keys),
+            )
             val documentData = CBORObject.NewMap()
             documentData["zkSystemId"] = CBORObject.FromObject(zkSystemId)
             documentData["docType"] = CBORObject.FromObject(docType)
