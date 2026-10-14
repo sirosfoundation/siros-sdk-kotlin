@@ -20,6 +20,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import org.siros.sdk.credentials.CircuitZkCircuit
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.StoredCredential
 import timber.log.Timber
@@ -100,6 +101,7 @@ object SirosCredentialRegistry {
         val zkSystems: List<ZkSystem>,
         val useStockMatcher: Boolean,
         val claimlessDoctypes: Set<String> = emptySet(),
+        val circuitZkCircuits: List<CircuitZkCircuit> = emptyList(),
     )
 
     /**
@@ -127,6 +129,11 @@ object SirosCredentialRegistry {
      *   (see [SirosWallet.circuitZkDocTypes]): their credentials are registered
      *   with no claims, because they are answered with a proof, never with
      *   claim values. Empty by default.
+     * @param circuitZkCircuits The circuits this wallet can prove `circuit_zk`
+     *   requests with (see [SirosWallet.circuitZkCircuits]). Each is registered
+     *   with the matcher, so the picker shows `circuit_zk` rows and honours the
+     *   verifier's circuit lists. Empty by default: such a request then matches
+     *   nothing.
      */
     suspend fun refresh(
         context: Context,
@@ -134,12 +141,13 @@ object SirosCredentialRegistry {
         zkSystems: List<ZkSystem> = emptyList(),
         useStockMatcher: Boolean = false,
         claimlessDoctypes: Set<String> = emptySet(),
+        circuitZkCircuits: List<CircuitZkCircuit> = emptyList(),
     ) {
         if (credentials.isEmpty()) {
             clear(context)
             return
         }
-        latestRequest.set(RefreshRequest(credentials, zkSystems, useStockMatcher, claimlessDoctypes))
+        latestRequest.set(RefreshRequest(credentials, zkSystems, useStockMatcher, claimlessDoctypes, circuitZkCircuits))
         try {
             if (useStockMatcher) {
                 registerWithStockMatcher(context, credentials)
@@ -148,7 +156,7 @@ object SirosCredentialRegistry {
             val iconCache = PickerIconCache(context)
             // File reads only (PickerIconCache hops to IO itself); no network here.
             val icons = cachedIcons(iconCache, credentials)
-            val blob = buildBlob(credentials, zkSystems, icons, debug = context.isDebuggable(), claimlessDoctypes = claimlessDoctypes)
+            val blob = buildBlob(credentials, zkSystems, icons, debug = context.isDebuggable(), claimlessDoctypes = claimlessDoctypes, circuitZkCircuits = circuitZkCircuits)
             val matcher = context.assets.open(MATCHER_ASSET).use { it.readBytes() }
             RegistryManager.create(context).registerCredentials(
                 SirosRegistry(credentials = blob, matcher = matcher),
@@ -291,7 +299,7 @@ object SirosCredentialRegistry {
                 return@launch
             }
             Timber.i("Re-registering DC API credentials with $landed newly rendered logo icon(s)")
-            refresh(appContext, latest.credentials, latest.zkSystems, latest.useStockMatcher, latest.claimlessDoctypes)
+            refresh(appContext, latest.credentials, latest.zkSystems, latest.useStockMatcher, latest.claimlessDoctypes, latest.circuitZkCircuits)
         }
     }
 
@@ -370,6 +378,23 @@ object SirosCredentialRegistry {
     data class ZkSystem(val system: String, val params: Map<String, String>)
 
     /**
+     * The matcher capabilities that register [circuit]: one per id the circuit
+     * answers to (its id, then each alias), because the matcher compares a
+     * verifier's `circuit_id_values` with one registered `circuit_id` and knows
+     * nothing of aliases. `functions` is declared only when the catalog says
+     * which functions the circuit supports; a circuit that declares none is
+     * not filtered by function.
+     */
+    internal fun circuitCapabilities(circuit: CircuitZkCircuit): List<FfiCapability> =
+        (listOf(circuit.circuitId) + circuit.aliases.sorted()).distinct().map { id ->
+            val params = buildMap {
+                put("circuit_id", id)
+                circuit.functions?.let { put("functions", it.sorted().joinToString(",")) }
+            }
+            FfiCapability(circuit.system, params)
+        }
+
+    /**
      * Encode the blob to register.
      *
      * Built by the Rust encoder rather than assembled here: the matcher reads
@@ -382,12 +407,13 @@ object SirosCredentialRegistry {
         icons: Map<Long, ByteArray> = emptyMap(),
         debug: Boolean = false,
         claimlessDoctypes: Set<String> = emptySet(),
+        circuitZkCircuits: List<CircuitZkCircuit> = emptyList(),
     ): ByteArray {
         // `use`, not a bare call: the builder holds a native handle, and
         // leaving it to the Cleaner means the handle survives until a GC that
         // may never come under memory pressure. Registration runs on every
         // credential change, so a leak here accumulates.
-        return SirosBlobBuilder().use { builder -> buildWith(builder, credentials, zkSystems, icons, debug, claimlessDoctypes) }
+        return SirosBlobBuilder().use { builder -> buildWith(builder, credentials, zkSystems, icons, debug, claimlessDoctypes, circuitZkCircuits) }
     }
 
     private fun buildWith(
@@ -397,6 +423,7 @@ object SirosCredentialRegistry {
         icons: Map<Long, ByteArray>,
         debug: Boolean,
         claimlessDoctypes: Set<String>,
+        circuitZkCircuits: List<CircuitZkCircuit>,
     ): ByteArray {
         // With this on, a request that matches nothing gets one picker entry
         // naming why (see the matcher's `Diagnostics`). Only ever for a
@@ -405,6 +432,7 @@ object SirosCredentialRegistry {
         // exist.
         builder.setDebug(debug)
         zkSystems.forEach { builder.addZkSystem(FfiCapability(it.system, it.params)) }
+        circuitZkCircuits.forEach { circuit -> circuitCapabilities(circuit).forEach(builder::addCircuitZkSystem) }
 
         credentials.forEach { cred ->
             val iconId = cred.id.toString()

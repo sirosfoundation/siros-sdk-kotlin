@@ -960,6 +960,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                             zkSystems = wallet.zkSystemIds
                                 .map { SirosCredentialRegistry.ZkSystem(it, emptyMap()) },
                             useStockMatcher = BuildConfig.STOCK_DC_MATCHER,
+                            // circuit_zk: the types answered with a proof, and the
+                            // circuits that prove them. Empty while the policy
+                            // setting is off.
+                            claimlessDoctypes = wallet.circuitZkDocTypes,
+                            circuitZkCircuits = wallet.circuitZkCircuits,
                         )
                         refreshCredentialStatuses(newState.credentialsOrEmpty())
                         refreshWscdTofuMapping()
@@ -2683,7 +2688,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             },
         )
         // The user's request-policy settings (non-disclosure, circuit_zk, DC API origin rules, verifier ids).
-        return _walletPolicy.value.applyTo(base, SampleCircuitZk.planner, SampleCircuitZk.circuits)
+        return _walletPolicy.value.applyTo(base, circuits = SampleCircuitZk.circuits)
     }
 
     companion object {

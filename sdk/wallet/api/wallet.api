@@ -418,6 +418,7 @@ public final class org/siros/sdk/wallet/SirosWallet {
 	public final fun getAuthenticationFactorsProvider ()Lorg/siros/sdk/wallet/AuthenticationFactorsProvider;
 	public final fun getAvailableCredentials (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun getCapabilities ()Lorg/siros/sdk/wallet/WalletCapabilities;
+	public final fun getCircuitZkCircuits ()Ljava/util/List;
 	public final fun getCircuitZkDocTypes ()Ljava/util/Set;
 	public final fun getCredentialConsumptionPolicy ()Lorg/siros/sdk/credentials/CredentialConsumptionPolicy;
 	public final fun getCredentials (ZLkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -1273,8 +1274,8 @@ public final class org/siros/sdk/wallet/dcapi/SirosCredentialRegistry {
 	public static final field INSTANCE Lorg/siros/sdk/wallet/dcapi/SirosCredentialRegistry;
 	public static final field REGISTRY_ID Ljava/lang/String;
 	public final fun clear (Landroid/content/Context;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public final fun refresh (Landroid/content/Context;Ljava/util/List;Ljava/util/List;ZLjava/util/Set;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun refresh$default (Lorg/siros/sdk/wallet/dcapi/SirosCredentialRegistry;Landroid/content/Context;Ljava/util/List;Ljava/util/List;ZLjava/util/Set;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun refresh (Landroid/content/Context;Ljava/util/List;Ljava/util/List;ZLjava/util/Set;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun refresh$default (Lorg/siros/sdk/wallet/dcapi/SirosCredentialRegistry;Landroid/content/Context;Ljava/util/List;Ljava/util/List;ZLjava/util/Set;Ljava/util/List;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }
 
 public final class org/siros/sdk/wallet/dcapi/SirosCredentialRegistry$ZkSystem {

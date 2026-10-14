@@ -150,6 +150,8 @@ class CircuitZkMatchingTest {
     fun `the verifier's circuit list filters, by id, alias and system`() {
         fun planWith(vararg refs: CircuitZkCircuitRef) =
             support(planner = FakePlanner { CircuitZkPlanResult.Plan(plan.copy(circuitFilter = refs.toList())) }, circuits = listOf(circuit(aliases = setOf("old-id"))))
+        // A null filter: the verifier named no circuits.
+        val unfiltered = support(planner = FakePlanner { CircuitZkPlanResult.Plan(plan) }, circuits = listOf(circuit(aliases = setOf("old-id"))))
         val creds = listOf(mdoc(1, doctype))
         assertEquals(1, match(query(), creds, planWith(CircuitZkCircuitRef("sys", "c1"))).candidates.size)
         assertEquals(1, match(query(), creds, planWith(CircuitZkCircuitRef(null, "c1"))).candidates.size)
@@ -157,8 +159,13 @@ class CircuitZkMatchingTest {
         assertEquals(1, match(query(), creds, planWith(CircuitZkCircuitRef("sys", "nope"), CircuitZkCircuitRef("sys", "c1"))).candidates.size)
         assertTrue(match(query(), creds, planWith(CircuitZkCircuitRef("sys", "nope"))).candidates.isEmpty())
         assertTrue(match(query(), creds, planWith(CircuitZkCircuitRef("other-sys", "c1"))).candidates.isEmpty())
-        // An empty or absent list is not a constraint.
-        assertEquals(1, match(query(), creds, planWith()).candidates.size)
+        // A list the verifier did not send is not a constraint; an empty list is one nothing satisfies
+        // (the matcher's reading: it is for wallets to conclude that nothing can match).
+        assertEquals(1, match(query(), creds, unfiltered).candidates.size)
+        assertTrue(match(query(), creds, planWith()).candidates.isEmpty())
+        // Only a proof-system list, or only an id list: a null on the other side of every pair.
+        assertEquals(1, match(query(), creds, planWith(CircuitZkCircuitRef("sys", null))).candidates.size)
+        assertTrue(match(query(), creds, planWith(CircuitZkCircuitRef("other-sys", null))).candidates.isEmpty())
     }
 
     @Test

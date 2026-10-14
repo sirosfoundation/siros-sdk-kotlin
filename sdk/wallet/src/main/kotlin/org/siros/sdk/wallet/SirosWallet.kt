@@ -232,9 +232,10 @@ class SirosWallet private constructor(
     }
     private val circuitZkProver: org.siros.sdk.keystore.CircuitZkProver? = config.circuitZkProver
     private val circuitZkSupport: org.siros.sdk.credentials.CircuitZkSupport? =
-        if (config.circuitZk && config.circuitZkPlanner != null && config.circuitZkCircuits != null) {
+        if (config.circuitZk && config.circuitZkCircuits != null) {
             org.siros.sdk.credentials.CircuitZkSupport(
-                config.circuitZkPlanner,
+                // The shared matcher's planner unless the app brings its own.
+                config.circuitZkPlanner ?: org.siros.sdk.credentials.SharedCircuitZkPlanner(),
                 config.circuitZkValidator ?: org.siros.sdk.credentials.RulebookCircuitZkValidator(
                     verifierIdTypes = VerifierIdRegistry(config.circuitZkVerifierIdSources),
                     circuits = config.circuitZkCircuits,
@@ -252,6 +253,19 @@ class SirosWallet private constructor(
      */
     val circuitZkDocTypes: Set<String>
         get() = circuitZkSupport?.circuits?.docTypes().orEmpty()
+
+    /**
+     * The circuits served through `circuit_zk` (empty while it is off). Pass to
+     * `SirosCredentialRegistry.refresh` as `circuitZkCircuits`, so the OS
+     * picker offers `circuit_zk` rows and honours the verifier's circuit lists.
+     */
+    val circuitZkCircuits: List<org.siros.sdk.credentials.CircuitZkCircuit>
+        get() = try {
+            circuitZkSupport?.circuits?.circuits().orEmpty()
+        } catch (e: Exception) {
+            // A failing catalog registers no circuits: nothing is offered.
+            emptyList()
+        }
 
     // ── Public API ──────────────────────────────────────────────────
 

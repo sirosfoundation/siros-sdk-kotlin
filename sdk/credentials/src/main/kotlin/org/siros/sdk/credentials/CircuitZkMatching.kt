@@ -13,14 +13,27 @@ data class CircuitZkFunction(
     val params: JsonObject = JsonObject(emptyMap()),
 )
 
-/** One entry of a request's circuit list; a null [system] matches any proof system. */
-data class CircuitZkCircuitRef(val system: String?, val circuitId: String)
+/**
+ * One entry of a request's circuit list: a null [system] matches any proof
+ * system, a null [circuitId] any circuit id. The verifier's two independent
+ * lists (`circuit_proof_system_values`, `circuit_id_values`) are expressed as
+ * their pairs: a circuit is admitted when its system is in the first list AND
+ * its id in the second, which is "some pair admits it", and a list the
+ * verifier did not send is a null on every pair.
+ */
+data class CircuitZkCircuitRef(val system: String?, val circuitId: String?) {
+    /** Whether [circuit] is the circuit this entry names (its id, or one of its aliases). */
+    fun admits(circuit: CircuitZkCircuit): Boolean =
+        (system == null || system == circuit.system) &&
+            (circuitId == null || circuitId == circuit.circuitId || circuitId in circuit.aliases)
+}
 
 /**
  * What a `circuit_zk` credential query asks for, as plain data: the matcher's
  * plan, without its types. [circuitFilter] is the verifier's own list of
- * acceptable circuits, null or empty meaning any. [raw] is the credential
- * query the plan was made from.
+ * acceptable circuits: null means the verifier named none (any circuit fits),
+ * and an EMPTY list means it named an empty list, which no circuit satisfies
+ * (the matcher's reading). [raw] is the credential query the plan was made from.
  */
 data class CircuitZkPlan(
     val functions: List<CircuitZkFunction>,
@@ -38,9 +51,9 @@ sealed interface CircuitZkPlanResult {
 }
 
 /**
- * Turns a `circuit_zk` credential query into a [CircuitZkPlan]. The
- * implementation backed by the shared matcher is a later change; tests use a
- * fake.
+ * Turns a `circuit_zk` credential query into a [CircuitZkPlan]. The default
+ * implementation, backed by the shared matcher, is [SharedCircuitZkPlanner];
+ * tests use a fake.
  */
 fun interface CircuitZkPlanner {
     /** May throw; the matcher treats that as [CircuitZkPlanResult.InvalidRequest]. */
@@ -175,13 +188,8 @@ internal object CircuitZkMatching {
 
     internal fun fits(circuit: CircuitZkCircuit, plan: CircuitZkPlan): Boolean {
         val filter = plan.circuitFilter
-        if (!filter.isNullOrEmpty() && filter.none { ref ->
-                (ref.system == null || ref.system == circuit.system) &&
-                    (ref.circuitId == circuit.circuitId || ref.circuitId in circuit.aliases)
-            }
-        ) {
-            return false
-        }
+        // Null: the verifier named no circuits. An empty list is a list nothing is in.
+        if (filter != null && filter.none { it.admits(circuit) }) return false
         val declared = circuit.functions ?: return true
         return plan.functions.all { it.id in declared }
     }

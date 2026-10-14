@@ -100,4 +100,37 @@ class SirosCredentialRegistryInstrumentedTest {
                 .clearCredentialRegistry(ClearCredentialRegistryRequest(true))
         }
     }
+
+    /**
+     * The circuits the wallet registers decide what the matcher offers for a
+     * `circuit_zk` request: with the circuit registered a request is
+     * satisfiable, the verifier's `circuit_id_values` are honoured (by id and
+     * by alias), and with no circuit registered nothing is offered.
+     */
+    @Test
+    fun registered_circuits_decide_circuit_zk_matching() {
+        val nym = "eu.europa.ec.eudi.nym_auth.1"
+        val credential = org.siros.sdk.credentials.StoredCredential(
+            id = 7L, format = "mso_mdoc", raw = "",
+            metadata = org.siros.sdk.credentials.CredentialMetadata(doctype = nym), batchId = 7L, instanceId = 0,
+        )
+        val circuit = org.siros.sdk.credentials.CircuitZkCircuit(
+            "longfellow-libzk-v1", "urn:c:1", setOf(nym), functions = setOf("age_check"), aliases = setOf("urn:c:old"),
+        )
+        val query = """{"credentials":[{"id":"q","format":"circuit_zk","meta":{"doctype_value":"$nym"},
+            "req":[{"id":"age_check","return":"a","params":{"ge":"2008-10-10"}}]}]}"""
+        fun satisfiable(circuits: List<org.siros.sdk.credentials.CircuitZkCircuit>, circuitIds: String?, q: String = query): Boolean {
+            val blob = SirosCredentialRegistry.buildBlob(listOf(credential), emptyList(), icons = mapOf(7L to byteArrayOf(1)), circuitZkCircuits = circuits)
+            val cm = circuitIds?.let { """{"vp_formats_supported":{"circuit_zk":{"circuit_id_values":$it}}}""" }
+            return uniffi.siros_dc_matcher_ffi.matchDcqlWithContext(blob, q, cm).satisfiable
+        }
+        assertTrue(satisfiable(listOf(circuit), null))
+        assertTrue(satisfiable(listOf(circuit), """["urn:c:1"]"""))
+        assertTrue("an alias is registered too", satisfiable(listOf(circuit), """["urn:c:old"]"""))
+        assertEquals(false, satisfiable(listOf(circuit), """["urn:other"]"""))
+        assertEquals(false, satisfiable(emptyList(), null))
+        // The declared functions bound what is offered.
+        val other = query.replace("age_check", "pseudonym-v1-sha256")
+        assertEquals(false, satisfiable(listOf(circuit), null, other))
+    }
 }

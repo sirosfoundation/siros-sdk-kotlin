@@ -173,10 +173,7 @@ class CircuitZkRuleSet(
             val doctype = ((plan.raw["meta"] as? JsonObject)?.get("doctype_value") as? JsonPrimitive)?.content
             val relevant = source.circuits().filter { c ->
                 (doctype == null || doctype in c.docTypes) &&
-                    (plan.circuitFilter.isNullOrEmpty() || plan.circuitFilter.any { ref ->
-                        (ref.system == null || ref.system == c.system) &&
-                            (ref.circuitId == c.circuitId || ref.circuitId in c.aliases)
-                    })
+                    (plan.circuitFilter == null || plan.circuitFilter.any { it.admits(c) })
             }
             if (relevant.isEmpty()) return true
             return relevant.any { c -> c.functions == null || plan.functions.all { it.id in c.functions } }

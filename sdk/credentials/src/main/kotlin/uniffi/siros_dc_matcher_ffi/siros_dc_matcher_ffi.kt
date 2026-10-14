@@ -732,6 +732,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -757,6 +761,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun uniffi_siros_dc_matcher_ffi_fn_constructor_sirosblobbuilder_new(uniffi_out_err: UniffiRustCallStatus, 
     ): Pointer
+    fun uniffi_siros_dc_matcher_ffi_fn_method_sirosblobbuilder_add_circuit_zk_system(`ptr`: Pointer,`capability`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     fun uniffi_siros_dc_matcher_ffi_fn_method_sirosblobbuilder_add_credential(`ptr`: Pointer,`credential`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_siros_dc_matcher_ffi_fn_method_sirosblobbuilder_add_icon(`ptr`: Pointer,`id`: RustBuffer.ByValue,`bytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -770,6 +776,8 @@ internal interface UniffiLib : Library {
     fun uniffi_siros_dc_matcher_ffi_fn_func_match_dc_api_request(`blob`: RustBuffer.ByValue,`requestJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_siros_dc_matcher_ffi_fn_func_match_dcql(`blob`: RustBuffer.ByValue,`dcqlJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    fun uniffi_siros_dc_matcher_ffi_fn_func_match_dcql_with_context(`blob`: RustBuffer.ByValue,`dcqlJson`: RustBuffer.ByValue,`clientMetadataJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun ffi_siros_dc_matcher_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -887,6 +895,10 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_siros_dc_matcher_ffi_checksum_func_match_dcql(
     ): Short
+    fun uniffi_siros_dc_matcher_ffi_checksum_func_match_dcql_with_context(
+    ): Short
+    fun uniffi_siros_dc_matcher_ffi_checksum_method_sirosblobbuilder_add_circuit_zk_system(
+    ): Short
     fun uniffi_siros_dc_matcher_ffi_checksum_method_sirosblobbuilder_add_credential(
     ): Short
     fun uniffi_siros_dc_matcher_ffi_checksum_method_sirosblobbuilder_add_icon(
@@ -920,6 +932,12 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_siros_dc_matcher_ffi_checksum_func_match_dcql() != 1962.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_siros_dc_matcher_ffi_checksum_func_match_dcql_with_context() != 35792.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_siros_dc_matcher_ffi_checksum_method_sirosblobbuilder_add_circuit_zk_system() != 2672.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_siros_dc_matcher_ffi_checksum_method_sirosblobbuilder_add_credential() != 64015.toShort()) {
@@ -1283,6 +1301,19 @@ private class AndroidSystemCleanable(
 public interface SirosBlobBuilderInterface {
     
     /**
+     * Register a `circuit_zk` circuit this wallet can prove with.
+     *
+     * `system` is the proof system (for example `longfellow-libzk-v1`). The
+     * params are opaque strings the matcher reads only as follows:
+     * `circuit_id` is matched against a verifier's `circuit_id_values`, and
+     * `functions`, if given as a comma-separated list of function ids, limits
+     * which requested functions this circuit is offered for. A circuit that
+     * declares no `functions` is not filtered by function. Call once per
+     * circuit; with none registered, `circuit_zk` requests match nothing.
+     */
+    fun `addCircuitZkSystem`(`capability`: FfiCapability)
+    
+    /**
      * Add a credential.
      */
     fun `addCredential`(`credential`: FfiCredential)
@@ -1428,6 +1459,28 @@ open class SirosBlobBuilder: Disposable, AutoCloseable, SirosBlobBuilderInterfac
             UniffiLib.INSTANCE.uniffi_siros_dc_matcher_ffi_fn_clone_sirosblobbuilder(pointer!!, status)
         }
     }
+
+    
+    /**
+     * Register a `circuit_zk` circuit this wallet can prove with.
+     *
+     * `system` is the proof system (for example `longfellow-libzk-v1`). The
+     * params are opaque strings the matcher reads only as follows:
+     * `circuit_id` is matched against a verifier's `circuit_id_values`, and
+     * `functions`, if given as a comma-separated list of function ids, limits
+     * which requested functions this circuit is offered for. A circuit that
+     * declares no `functions` is not filtered by function. Call once per
+     * circuit; with none registered, `circuit_zk` requests match nothing.
+     */override fun `addCircuitZkSystem`(`capability`: FfiCapability)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_siros_dc_matcher_ffi_fn_method_sirosblobbuilder_add_circuit_zk_system(
+        it, FfiConverterTypeFfiCapability.lower(`capability`),_status)
+}
+    }
+    
+    
 
     
     /**
@@ -1672,7 +1725,21 @@ data class FfiCombination (
     /**
      * The credentials making up this option.
      */
-    var `members`: List<FfiMatchedCredential>
+    var `members`: List<FfiMatchedCredential>, 
+    /**
+     * Why the verifier asked for this, from the `purpose` of each credential
+     * set it satisfies (§6.2), ready to display.
+     *
+     * §6.2 allows a string, an integer or an object. A string arrives
+     * unchanged; anything else is compact JSON, because a purpose exists to
+     * be shown to a user and dropping the ones that are not strings would
+     * leave the wallet unable to say why for exactly the verifiers that were
+     * most specific about it.
+     *
+     * Empty when the verifier gave no reason — including every request with
+     * no `credential_sets` at all.
+     */
+    var `purposes`: List<kotlin.String>
 ) {
     
     companion object
@@ -1685,15 +1752,18 @@ public object FfiConverterTypeFfiCombination: FfiConverterRustBuffer<FfiCombinat
     override fun read(buf: ByteBuffer): FfiCombination {
         return FfiCombination(
             FfiConverterSequenceTypeFfiMatchedCredential.read(buf),
+            FfiConverterSequenceString.read(buf),
         )
     }
 
     override fun allocationSize(value: FfiCombination) = (
-            FfiConverterSequenceTypeFfiMatchedCredential.allocationSize(value.`members`)
+            FfiConverterSequenceTypeFfiMatchedCredential.allocationSize(value.`members`) +
+            FfiConverterSequenceString.allocationSize(value.`purposes`)
     )
 
     override fun write(value: FfiCombination, buf: ByteBuffer) {
             FfiConverterSequenceTypeFfiMatchedCredential.write(value.`members`, buf)
+            FfiConverterSequenceString.write(value.`purposes`, buf)
     }
 }
 
@@ -1808,8 +1878,21 @@ data class FfiMatchOutcome (
     var `combinations`: List<FfiCombination>, 
     /**
      * How many further combinations existed beyond the returned ones.
+     *
+     * A lower bound rather than a count when the exactness field beside it
+     * says so — which covers both an unknowable engine count and one too
+     * large to narrow to this width.
      */
-    var `dropped`: kotlin.UInt
+    var `dropped`: kotlin.UInt, 
+    /**
+     * Whether the dropped count is the true number rather than a floor.
+     *
+     * The combination count is a product of the per-query candidate counts,
+     * and a wallet holding enough credentials overflows it. Showing someone
+     * "4294967295 more options" is worse than showing them "more options":
+     * the first makes them doubt the rest of the screen.
+     */
+    var `droppedIsExact`: kotlin.Boolean
 ) {
     
     companion object
@@ -1825,6 +1908,7 @@ public object FfiConverterTypeFfiMatchOutcome: FfiConverterRustBuffer<FfiMatchOu
             FfiConverterBoolean.read(buf),
             FfiConverterSequenceTypeFfiCombination.read(buf),
             FfiConverterUInt.read(buf),
+            FfiConverterBoolean.read(buf),
         )
     }
 
@@ -1832,7 +1916,8 @@ public object FfiConverterTypeFfiMatchOutcome: FfiConverterRustBuffer<FfiMatchOu
             FfiConverterSequenceTypeFfiQueryMatch.allocationSize(value.`matches`) +
             FfiConverterBoolean.allocationSize(value.`satisfiable`) +
             FfiConverterSequenceTypeFfiCombination.allocationSize(value.`combinations`) +
-            FfiConverterUInt.allocationSize(value.`dropped`)
+            FfiConverterUInt.allocationSize(value.`dropped`) +
+            FfiConverterBoolean.allocationSize(value.`droppedIsExact`)
     )
 
     override fun write(value: FfiMatchOutcome, buf: ByteBuffer) {
@@ -1840,6 +1925,7 @@ public object FfiConverterTypeFfiMatchOutcome: FfiConverterRustBuffer<FfiMatchOu
             FfiConverterBoolean.write(value.`satisfiable`, buf)
             FfiConverterSequenceTypeFfiCombination.write(value.`combinations`, buf)
             FfiConverterUInt.write(value.`dropped`, buf)
+            FfiConverterBoolean.write(value.`droppedIsExact`, buf)
     }
 }
 
@@ -1878,7 +1964,19 @@ data class FfiMatchedCredential (
      * A pseudonym context changes what is produced, not which credential can
      * produce it, so it is carried rather than matched on.
      */
-    var `meta`: Map<kotlin.String, kotlin.String>
+    var `meta`: Map<kotlin.String, kotlin.String>, 
+    /**
+     * For a `circuit_zk` query: a JSON object `{"circuit": {...}, "plan":
+     * {...}}` holding the circuit this wallet chose (its registered
+     * capability: `system` and string `params`) and the request as the
+     * matcher normalised it. `None` for every other format.
+     *
+     * JSON strings, not records, so the planner's shape can follow the
+     * rulebook without a binding regeneration each time. The plan's `raw`
+     * member is the verifier's request as sent and is **not authenticated**
+     * here. A `circuit_zk` match has an empty `claims`.
+     */
+    var `circuitZk`: kotlin.String?
 ) {
     
     companion object
@@ -1895,6 +1993,7 @@ public object FfiConverterTypeFfiMatchedCredential: FfiConverterRustBuffer<FfiMa
             FfiConverterSequenceSequenceString.read(buf),
             FfiConverterSequenceTypeFfiCapability.read(buf),
             FfiConverterMapStringString.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
@@ -1903,7 +2002,8 @@ public object FfiConverterTypeFfiMatchedCredential: FfiConverterRustBuffer<FfiMa
             FfiConverterString.allocationSize(value.`credentialId`) +
             FfiConverterSequenceSequenceString.allocationSize(value.`claims`) +
             FfiConverterSequenceTypeFfiCapability.allocationSize(value.`capabilities`) +
-            FfiConverterMapStringString.allocationSize(value.`meta`)
+            FfiConverterMapStringString.allocationSize(value.`meta`) +
+            FfiConverterOptionalString.allocationSize(value.`circuitZk`)
     )
 
     override fun write(value: FfiMatchedCredential, buf: ByteBuffer) {
@@ -1912,6 +2012,7 @@ public object FfiConverterTypeFfiMatchedCredential: FfiConverterRustBuffer<FfiMa
             FfiConverterSequenceSequenceString.write(value.`claims`, buf)
             FfiConverterSequenceTypeFfiCapability.write(value.`capabilities`, buf)
             FfiConverterMapStringString.write(value.`meta`, buf)
+            FfiConverterOptionalString.write(value.`circuitZk`, buf)
     }
 }
 
@@ -2509,6 +2610,30 @@ public object FfiConverterMapStringString: FfiConverterRustBuffer<Map<kotlin.Str
     uniffiRustCallWithError(MatchException) { _status ->
     UniffiLib.INSTANCE.uniffi_siros_dc_matcher_ffi_fn_func_match_dcql(
         FfiConverterByteArray.lower(`blob`),FfiConverterString.lower(`dcqlJson`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * Match a bare DCQL query, with the request's `client_metadata`.
+         *
+         * What [`match_dcql`] does, for a caller that also has the verifier's
+         * `client_metadata` (as JSON). A `circuit_zk` query is matched against the
+         * circuit lists in its `vp_formats_supported`; with `None` those are absent
+         * and impose no constraint. A `circuit_zk` query with `claims` as an object
+         * (the rulebook example shape) is accepted here although it is not DCQL.
+         *
+         * # Errors
+         *
+         * See the match error type — `MatchError` in Rust and Swift,
+         * `MatchException` in Kotlin.
+         */
+    @Throws(MatchException::class) fun `matchDcqlWithContext`(`blob`: kotlin.ByteArray, `dcqlJson`: kotlin.String, `clientMetadataJson`: kotlin.String?): FfiMatchOutcome {
+            return FfiConverterTypeFfiMatchOutcome.lift(
+    uniffiRustCallWithError(MatchException) { _status ->
+    UniffiLib.INSTANCE.uniffi_siros_dc_matcher_ffi_fn_func_match_dcql_with_context(
+        FfiConverterByteArray.lower(`blob`),FfiConverterString.lower(`dcqlJson`),FfiConverterOptionalString.lower(`clientMetadataJson`),_status)
 }
     )
     }

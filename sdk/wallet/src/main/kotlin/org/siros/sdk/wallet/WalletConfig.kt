@@ -350,12 +350,16 @@ data class WalletConfig(
      * Turns on `circuit_zk` matching. `false` (default): a `circuit_zk` query
      * matches nothing, exactly as before. With `true` it is matched through
      * [circuitZkPlanner], [circuitZkValidator] and [circuitZkCircuits]; without
-     * a planner and a circuit source it still matches nothing (fail closed).
+     * a circuit source it still matches nothing (fail closed).
      * Until the DC API presentation branch exists, a matched `circuit_zk`
      * request is answered with access-denied.
      */
     val circuitZk: Boolean = false,
-    /** Turns a `circuit_zk` credential query into a plan; see [circuitZk]. */
+    /**
+     * Turns a `circuit_zk` credential query into a plan; see [circuitZk]. `null`
+     * (default) means the shared matcher's planner,
+     * [org.siros.sdk.credentials.SharedCircuitZkPlanner].
+     */
     val circuitZkPlanner: CircuitZkPlanner? = null,
     /**
      * The wallet's satisfiability rules for a plan. `null` (default) means the

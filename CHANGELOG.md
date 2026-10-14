@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`SharedCircuitZkPlanner`: the default `circuit_zk` planner, backed by
+  siros-dc-matcher 0.8.0.** Used when `WalletConfig.circuitZk` is on and no
+  `circuitZkPlanner` is given. The wallet's circuits are registered with the
+  matcher (`SirosCredentialRegistry.refresh(circuitZkCircuits = wallet.circuitZkCircuits)`,
+  one `add_circuit_zk_system` per circuit id and alias, `functions` only when
+  the catalog declares them), so the OS picker offers `circuit_zk` rows. The
+  matcher's planner conformance vectors are in `spec/circuit-zk-planner-vectors`.
+  Behaviour changes: `CircuitZkCircuitRef.circuitId` is nullable and an empty
+  `CircuitZkPlan.circuitFilter` now admits no circuit (null still means "any");
+  a request repeating a DCQL credential-query or claim `id` offers nothing.
+  The matcher AAR is 0.8.0 (0.7.0: `zk_required` absent means optional,
+  duplicate ids rejected, holder binding and `multiple` honoured). (#271)
 - **`NymPseudonym.derive`: the nym_auth rulebook pseudonym function
   (`pseudonym-v1-sha256`), pure and driven by one config table.** Computes
   `SHA256(DST || seed || prover_input || verifier_input)` for the four

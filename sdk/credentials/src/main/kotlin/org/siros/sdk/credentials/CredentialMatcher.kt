@@ -222,10 +222,23 @@ object CredentialMatcher {
         // does not know the format: the planner is what decides those queries
         // (fail closed, see [matchCircuitZkQuery]), and the other queries of
         // such a request keep the built-in matcher's answer.
-        val shared = if (hasCircuitZk) null else SharedDcqlMatcher.evaluate(
+        //
+        // A request repeating a credential query `id` or a claim `id` (§6.1,
+        // §6.3) is malformed, and the engine rejects it as such (matcher
+        // 0.7.0). Rejecting is not an engine failure to fall back from: the
+        // built-in matcher would answer it, resolving each reference to
+        // whichever entry came first, which is how a request for two
+        // credentials used to be quietly answered with one. Fail closed.
+        val malformed = hasDuplicateDcqlIds(credentialQueries)
+        val shared = if (hasCircuitZk || malformed) null else SharedDcqlMatcher.evaluate(
             dcqlQuery, credentials, zkSystemIds, circuitZk?.circuits?.docTypes().orEmpty(),
         )
         val queryResults = when {
+            malformed -> {
+                Timber.w("DCQL query repeats a credential or claim id (OID4VP 1.0 §6.1/§6.3); offering nothing")
+                parsed.map { it.copy(candidates = emptyList()) }
+            }
+
             shared == null -> {
                 // No answer, not an empty answer. Falling back keeps
                 // presentations working where the engine cannot decide, which
@@ -279,6 +292,19 @@ object CredentialMatcher {
             credentialSets = credentialSets,
             satisfiableOptions = satisfiableOptions,
         )
+    }
+
+    /** Whether two credential queries share an `id`, or two claims of one query do (§6.1, §6.3). */
+    internal fun hasDuplicateDcqlIds(credentialQueries: JsonArray): Boolean {
+        fun repeats(ids: List<String>) = ids.size != ids.toSet().size
+        val queries = credentialQueries.mapNotNull { it as? JsonObject }
+        if (repeats(queries.mapNotNull { (it["id"] as? JsonPrimitive)?.contentOrNull })) return true
+        return queries.any { query ->
+            repeats(
+                (query["claims"] as? JsonArray).orEmpty()
+                    .mapNotNull { ((it as? JsonObject)?.get("id") as? JsonPrimitive)?.contentOrNull },
+            )
+        }
     }
 
     /**
