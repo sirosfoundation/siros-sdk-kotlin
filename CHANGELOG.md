@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The wallet's DC API trust path no longer logs the verifier id or a
+  throwable.** `handleDCAPIRequest` and the trust call it shares with the
+  `circuit_zk` branch (`evaluateTrustDirect`) logged the verifier's subject id
+  and passed the exception to Timber, whose message can carry the verifier id
+  or the backend's refusal text. They now log the exception class only. This
+  changes existing log output; a test scans the wallet's DC API path so it
+  cannot return. (#266)
+
 ### Added
 - **`SharedCircuitZkPlanner`: the default `circuit_zk` planner, backed by
   siros-dc-matcher 0.8.0.** Used when `WalletConfig.circuitZk` is on and no

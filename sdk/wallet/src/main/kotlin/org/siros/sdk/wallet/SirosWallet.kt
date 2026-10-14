@@ -3816,10 +3816,10 @@ class SirosWallet private constructor(
         } catch (e: TrustEvaluationFailedClosedException) {
             // Deliberately ahead of the cache: a refusal, or REMOTE_ONLY with
             // an unreachable backend, must not be answered by a stale positive.
-            Timber.e(e, "DC API trust evaluation failed closed for $subjectId - not consulting the trust cache")
+            Timber.e("DC API trust evaluation failed closed (${e.javaClass.simpleName}) - not consulting the trust cache")
             TrustResult(trusted = false, identifier = subjectId, reason = e.message)
         } catch (e: Exception) {
-            Timber.w(e, "DC API trust evaluation failed for $subjectId")
+            Timber.w("DC API trust evaluation failed (${e.javaClass.simpleName})")
             trustCache.get(subjectId) ?: TrustResult(trusted = false, identifier = subjectId, reason = e.message)
         }
 
@@ -7955,7 +7955,7 @@ class SirosWallet private constructor(
 
         return try {
             // Not for circuit_zk (no local fallback): its log lines never carry the verifier id.
-            if (allowLocalFallback) Timber.d("Calling /v1/evaluate for $subjectId")
+            if (allowLocalFallback) Timber.d("Calling /v1/evaluate for a $subjectType subject")
             val response = client.evaluateTrust(evaluationRequest)
 
             val decision = response["decision"]?.jsonPrimitive?.boolean ?: false
@@ -7983,7 +7983,7 @@ class SirosWallet private constructor(
             // REMOTE_ONLY entirely, so a wallet configured to fail closed
             // still accepted a locally-trusted certificate on the DC API path.
             if (!isRemoteTrustEvaluationUnreachable(e)) {
-                Timber.e(e, "Remote trust evaluation was rejected by the backend (not unreachable) - failing closed rather than falling back to local $registryName root validation")
+                Timber.e("Remote trust evaluation was rejected by the backend (${e.javaClass.simpleName}, not unreachable) - failing closed rather than falling back to local $registryName root validation")
                 throw TrustEvaluationFailedClosedException(
                     "Remote trust evaluation was rejected by the backend: ${e.message}",
                     e,
@@ -7995,13 +7995,13 @@ class SirosWallet private constructor(
                 effectiveIssuerTrustEvaluationMode
             }
             if (mode == MdocTrustEvaluationMode.REMOTE_ONLY) {
-                Timber.e(e, "Remote trust evaluation is unreachable and this wallet is configured for remote-only evaluation - not attempting local $registryName root validation")
+                Timber.e("Remote trust evaluation is unreachable (${e.javaClass.simpleName}) and this wallet is configured for remote-only evaluation - not attempting local $registryName root validation")
                 throw TrustEvaluationFailedClosedException(
                     "Remote trust evaluation is unreachable and this wallet is configured for remote-only evaluation: ${e.message}",
                     e,
                 )
             }
-            Timber.w(e, "Remote trust evaluation unreachable, falling back to local $registryName root validation")
+            Timber.w("Remote trust evaluation unreachable (${e.javaClass.simpleName}), falling back to local $registryName root validation")
             if (isVerifier) evaluateReaderTrustLocally(x5chain) else evaluateIssuerTrustLocally(x5chain)
         }
     }
