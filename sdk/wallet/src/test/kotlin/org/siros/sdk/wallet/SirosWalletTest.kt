@@ -7368,6 +7368,9 @@ class SirosWalletTest {
         val (sent, _) = sendEngineSignRequest(fx)
 
         assertTrue(sent.isEmpty())
+        // the log is written on the IO dispatcher, outside the test scheduler: wait for it
+        val deadline = System.currentTimeMillis() + 5_000
+        while (fx.log.items.size < 2 && System.currentTimeMillis() < deadline) Thread.sleep(20)
         assertEquals(listOf(TransactionOutcome.DECLINED, TransactionOutcome.CONSENTED), fx.log.items.map { it.outcome })
         assertEquals("declined", fx.log.items.first().reason)
     }
