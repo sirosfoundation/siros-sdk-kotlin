@@ -553,6 +553,7 @@ public final class org/siros/sdk/auth/LocalAuthProvider : org/siros/sdk/auth/Aut
 	public synthetic fun <init> (Landroid/content/Context;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun authenticate (Lorg/siros/sdk/auth/AuthenticateOptions;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun deleteAllCredentials ()V
+	public final fun forgetCredential ([B)V
 	public final fun getLastCredentialId ()[B
 	public final fun getLastPrfOutput ()Lorg/siros/sdk/auth/PrfOutput;
 	public fun getPrfOutput ([B[BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;

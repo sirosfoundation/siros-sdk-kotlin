@@ -6971,6 +6971,51 @@ class SirosWalletTest {
     }
 
     @Test
+    fun addPasskey_discards_a_mid_creation_race_without_touching_the_keystore_and_targets_the_right_credential() = runTest(dispatcher) {
+        // A session switch landing during the CREATION ceremony (not just
+        // during the later finish() round-trip) must also be caught, before
+        // preparePrfKey/finish ever touch the (by-then different account's)
+        // live keystore - and the rollback must target exactly the
+        // credential THIS call created (authProvider.forgetCredential),
+        // never the provider's mutable "last registration" (rollbackLastRegistration),
+        // which another session's own ceremony may since have overwritten.
+        val client = mockk<BackendApiClient>(relaxed = true)
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns true
+        val authProvider = mockk<org.siros.sdk.auth.LocalAuthProvider>(relaxed = true)
+        val enrollment = org.siros.sdk.auth.PasskeyEnrollmentChallenge(
+            "enr-1", "alice",
+            org.siros.sdk.auth.RegisterOptions("rp.example", "RP", byteArrayOf(1), "alice", "Alice", byteArrayOf(2)),
+            null,
+        )
+        coEvery { client.passkeyRegisterBegin() } returns org.siros.sdk.auth.AddPasskeyBegin.Ready(enrollment)
+        val createdForA = org.siros.sdk.auth.RegisterResult(
+            credentialId = byteArrayOf(5, 5), attestationObject = byteArrayOf(6), clientDataJSON = byteArrayOf(7),
+            prfOutput = org.siros.sdk.auth.PrfOutput(ByteArray(32) { 3 }),
+        )
+        val wallet = newWallet(
+            "apiClient" to client, "authProvider" to authProvider, "keystore" to keystore,
+            "sessionStore" to mockk<SessionStore>(relaxed = true), "accountRegistry" to mockk<AccountRegistry>(relaxed = true),
+        )
+        val bump = SirosWallet::class.declaredMemberFunctions.first { it.name == "bumpSessionGeneration" }
+        bump.isAccessible = true
+        coEvery { authProvider.register(any()) } coAnswers {
+            // Account B logs in on this same wallet while A's creation
+            // ceremony is still suspended.
+            bump.call(wallet)
+            createdForA
+        }
+
+        val result = wallet.addPasskey("Phone")
+
+        assertTrue(result is AddPasskeyResult.SessionRevoked)
+        coVerify(exactly = 0) { keystore.preparePrfKey(any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { client.passkeyRegisterFinish(any(), any(), any(), any(), any(), any()) }
+        verify(exactly = 1) { authProvider.forgetCredential(match { it.contentEquals(createdForA.credentialId) }) }
+        verify(exactly = 0) { authProvider.rollbackLastRegistration() }
+    }
+
+    @Test
     fun addPasskey_discards_a_late_completion_after_a_cross_account_session_switch() = runTest(dispatcher) {
         // If the user logs out of this account and into another while
         // passkeyRegisterFinish's network round-trip is still in flight, the
@@ -7391,6 +7436,14 @@ class SirosWalletTest {
         }
         if ("terminatedFlowIds" !in values) {
             values["terminatedFlowIds"] = mutableSetOf<String>()
+        }
+        // allocateInstance bypasses property initializers entirely, so
+        // privateDataWriteMutex's default (a fresh Mutex()) never runs unless
+        // set here explicitly - without this, addPasskey's commit and
+        // syncPrivateDataToBackend (persistAndSyncKeystore, deleteCredential,
+        // ...) NPE on the null backing field.
+        if ("privateDataWriteMutex" !in values) {
+            values["privateDataWriteMutex"] = kotlinx.coroutines.sync.Mutex()
         }
         // allocateInstance bypasses property initializers entirely, so
         // pendingMatchResultsByFlow's default (empty map) never runs unless

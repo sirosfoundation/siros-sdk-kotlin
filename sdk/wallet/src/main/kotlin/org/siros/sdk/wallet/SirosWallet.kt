@@ -568,11 +568,26 @@ class SirosWallet private constructor(
         require(nickname.isNotBlank() && nickname.length <= 256) { "nickname must be 1-256 characters" }
         val client = apiClient ?: throw AuthException(NOT_LOGGED_IN)
         if (!keystore.isUnlocked) return AddPasskeyResult.WalletLocked(null)
+        // Captured before ANY of the suspending ceremony steps below, not
+        // just before the finish() network call: [keystore] and
+        // [authProvider] are long-lived fields reused across sessions (a
+        // logout/login does not replace them, only lock/unlock or mutate
+        // their "last" state), so a session switch landing during
+        // authorization or creation - not only during finish() - would
+        // otherwise let this call keep going against the NEW session's live
+        // keystore/authProvider state. [sessionChanged] is re-checked after
+        // every one of them; see [sessionGeneration]'s doc comment for why
+        // this counter identifies "which session" the same way it does for
+        // the self-driven re-login.
+        val initiatingGeneration = sessionGeneration
+        fun sessionChanged() = sessionGeneration != initiatingGeneration || isDestroyed
+
         val challenge = when (val begin = client.passkeyRegisterBegin()) {
             is AddPasskeyBegin.Ready -> begin.challenge
             is AddPasskeyBegin.Forbidden -> return AddPasskeyResult.InsufficientScope(begin.message)
             is AddPasskeyBegin.SessionRevoked -> return AddPasskeyResult.SessionRevoked(begin.message)
         }
+        if (sessionChanged()) return AddPasskeyResult.SessionRevoked("Session changed before the passkey could be added")
         val authorization = challenge.authorization?.let { options ->
             try {
                 authorizer.assert(options)
@@ -583,6 +598,7 @@ class SirosWallet private constructor(
                 return AddPasskeyResult.AuthorizerUnavailable(e.message)
             }
         }
+        if (sessionChanged()) return AddPasskeyResult.SessionRevoked("Session changed before the passkey could be added")
 
         val prfSalt = ByteArray(32).also { SecureRandom().nextBytes(it) }
         val hkdfSalt = ByteArray(32).also { SecureRandom().nextBytes(it) }
@@ -594,6 +610,16 @@ class SirosWallet private constructor(
         } catch (e: Exception) {
             Timber.w(e, "Add passkey: creating the passkey failed")
             return AddPasskeyResult.PasskeyCreationUnavailable(e.message)
+        }
+        if (sessionChanged()) {
+            // The just-created local credential record may already belong to
+            // whatever authProvider/keystore state now reflects a DIFFERENT,
+            // now-active session: discard it by its own captured id (never
+            // "whatever was last", which could by now be someone else's
+            // credential - see [rollbackLocalCredential]) and touch nothing
+            // else of this wallet's current state.
+            rollbackLocalCredential(created.credentialId)
+            return AddPasskeyResult.SessionRevoked("Session changed before the passkey could be added")
         }
         // A missing PRF result at CREATION is not conclusive: some
         // authenticators only evaluate the PRF extension during an
@@ -612,22 +638,20 @@ class SirosWallet private constructor(
             Timber.w(e, "Add passkey: PRF assertion fallback after creation also failed")
             null
         }
+        if (sessionChanged()) {
+            rollbackLocalCredential(created.credentialId)
+            return AddPasskeyResult.SessionRevoked("Session changed before the passkey could be added")
+        }
         if (prfOutput == null) {
-            rollbackLocalCredential()
+            rollbackLocalCredential(created.credentialId)
             return AddPasskeyResult.PrfUnsupported("PRF not supported by authenticator - cannot encrypt wallet data")
         }
 
         val prepared = keystore.preparePrfKey(created.credentialId, prfOutput.first, prfSalt, hkdfSalt, hkdfInfo)
-        // Captured right before the suspending network round-trip below, so a
-        // cross-account race can be detected once it returns: see
-        // [sessionGeneration]'s doc comment for why this counter identifies
-        // "which session" the same way it does for the self-driven re-login.
-        // Without this, a finish() that completes AFTER the user has logged
-        // out of this account and into another would otherwise commit this
-        // account's freshly-prepared key material, container and passkey
-        // record straight into the other account's now-unlocked keystore and
-        // session store.
-        val initiatingGeneration = sessionGeneration
+        if (sessionChanged()) {
+            rollbackLocalCredential(created.credentialId)
+            return AddPasskeyResult.SessionRevoked("Session changed before the passkey could be committed")
+        }
         val outcome = try {
             client.passkeyRegisterFinish(
                 challengeId = challenge.challengeId,
@@ -637,35 +661,43 @@ class SirosWallet private constructor(
                 authorization = authorization,
             )
         } catch (e: Exception) {
-            rollbackLocalCredential()
+            rollbackLocalCredential(created.credentialId)
             throw e
         }
-        if (outcome !is AddPasskeyOutcome.Added) rollbackLocalCredential()
-        // The check is as close to the writes as a suspend function allows
-        // (commitPrfKey itself suspends on an internal mutex, so this cannot
-        // be made fully atomic with them - same "cannot be atomic with the
-        // call" trade-off [reloginAfterCutOff] documents) but it closes the
-        // dominant window, the finish() round-trip itself, which is where a
-        // real logout-and-switch-account race has time to land.
-        if (outcome is AddPasskeyOutcome.Added && (sessionGeneration != initiatingGeneration || isDestroyed)) {
-            Timber.w("Add passkey: discarding a completion for a session that ended while it was in flight")
-            rollbackLocalCredential()
-            return AddPasskeyResult.SessionRevoked("Session changed before the new passkey could be committed")
-        }
-        return when (outcome) {
-            is AddPasskeyOutcome.Added -> {
-                keystore.commitPrfKey(prepared)
-                sessionStore.privateDataJwe = String(prepared.container, Charsets.UTF_8)
-                persistPrivateDataEtag()
-                recordAddedPasskey(created.credentialId, prfSalt, nickname)
-                AddPasskeyResult.Added(outcome.credentialId)
+        // The commit below is serialized against every other private-data
+        // writer (privateDataWriteMutex: see persistAndSyncKeystore/
+        // syncPrivateDataToBackend) and re-checks sessionChanged() inside the
+        // lock, as close to the writes as a suspend function allows
+        // (commitPrfKey itself suspends on its own internal mutex, so even
+        // this cannot be made fully atomic with the check that gates it -
+        // same "cannot be atomic with the call" trade-off [reloginAfterCutOff]
+        // documents). Without the mutex, an unrelated concurrent sync
+        // (another passkey's rename, a credential delete, ...) could export
+        // and upload the container from BEFORE this commit after this
+        // finishes, silently dropping the just-added entry despite an
+        // `Added` result.
+        return privateDataWriteMutex.withLock {
+            if (outcome !is AddPasskeyOutcome.Added) rollbackLocalCredential(created.credentialId)
+            if (outcome is AddPasskeyOutcome.Added && sessionChanged()) {
+                Timber.w("Add passkey: discarding a completion for a session that ended while it was in flight")
+                rollbackLocalCredential(created.credentialId)
+                return@withLock AddPasskeyResult.SessionRevoked("Session changed before the new passkey could be committed")
             }
-            is AddPasskeyOutcome.AuthorizationRequired -> AddPasskeyResult.AuthorizationRequired(outcome.message)
-            is AddPasskeyOutcome.AuthorizationFailed -> AddPasskeyResult.AuthorizationFailed(outcome.message)
-            is AddPasskeyOutcome.RetryNeeded -> AddPasskeyResult.RetryNeeded(outcome.message)
-            is AddPasskeyOutcome.PrivateDataConflict -> AddPasskeyResult.PrivateDataConflict(null)
-            is AddPasskeyOutcome.RegistrationRejected -> AddPasskeyResult.RegistrationRejected(outcome.message)
-            is AddPasskeyOutcome.SessionRevoked -> AddPasskeyResult.SessionRevoked(outcome.message)
+            when (outcome) {
+                is AddPasskeyOutcome.Added -> {
+                    keystore.commitPrfKey(prepared)
+                    sessionStore.privateDataJwe = String(prepared.container, Charsets.UTF_8)
+                    persistPrivateDataEtag()
+                    recordAddedPasskey(created.credentialId, prfSalt, nickname)
+                    AddPasskeyResult.Added(outcome.credentialId)
+                }
+                is AddPasskeyOutcome.AuthorizationRequired -> AddPasskeyResult.AuthorizationRequired(outcome.message)
+                is AddPasskeyOutcome.AuthorizationFailed -> AddPasskeyResult.AuthorizationFailed(outcome.message)
+                is AddPasskeyOutcome.RetryNeeded -> AddPasskeyResult.RetryNeeded(outcome.message)
+                is AddPasskeyOutcome.PrivateDataConflict -> AddPasskeyResult.PrivateDataConflict(null)
+                is AddPasskeyOutcome.RegistrationRejected -> AddPasskeyResult.RegistrationRejected(outcome.message)
+                is AddPasskeyOutcome.SessionRevoked -> AddPasskeyResult.SessionRevoked(outcome.message)
+            }
         }
     }
 
@@ -3024,6 +3056,19 @@ class SirosWallet private constructor(
 
     /** Serialises first-use instance-key creation; see [ensureInstanceKeyId]. */
     private val instanceKeyMutex = Mutex()
+
+    /**
+     * Serialises every writer of the account's private-data container
+     * (export/merge, backend sync, local commit) - [addPasskey]'s commit and
+     * [syncPrivateDataToBackend] (so also [persistAndSyncKeystore] and
+     * anything else that funnels through it). Without this, two private-data
+     * mutations racing on the same session (addPasskey finishing while an
+     * unrelated credential change is also syncing, for example) can
+     * interleave their read-modify-write and have the later network response
+     * silently overwrite the earlier one's write with a stale snapshot, even
+     * though each individually behaved correctly.
+     */
+    private val privateDataWriteMutex = Mutex()
 
     /**
      * Obtain (fetching + caching, refreshing before expiry) a Wallet Instance
@@ -5466,10 +5511,24 @@ class SirosWallet private constructor(
     /**
      * Roll back a locally-stored credential after a failed registration.
      * Prevents orphaned passkeys from appearing in the "Welcome back" picker.
+     *
+     * @param credentialId when given, forgets exactly this credential
+     *   ([LocalAuthProvider.forgetCredential]) rather than whatever the
+     *   provider's mutable "last registration" currently points at - that
+     *   shared state can be overwritten by any OTHER register/authenticate
+     *   call on the same provider (e.g. a second account logging in while
+     *   this one's addPasskey is still in flight), so "last" may no longer
+     *   be the credential this call is trying to undo. [addPasskey] always
+     *   passes its own captured id; callers with no such race to worry about
+     *   (e.g. [register]'s own failure path) can omit it.
      */
-    private fun rollbackLocalCredential() {
+    private fun rollbackLocalCredential(credentialId: ByteArray? = null) {
         if (authProvider is LocalAuthProvider) {
-            authProvider.rollbackLastRegistration()
+            if (credentialId != null) {
+                authProvider.forgetCredential(credentialId)
+            } else {
+                authProvider.rollbackLastRegistration()
+            }
         }
     }
 
@@ -5569,9 +5628,9 @@ class SirosWallet private constructor(
         }
     }
 
-    private suspend fun syncPrivateDataToBackend() {
-        val client = apiClient ?: return
-        val containerJson = sessionStore.privateDataJwe ?: return
+    private suspend fun syncPrivateDataToBackend() = privateDataWriteMutex.withLock {
+        val client = apiClient ?: return@withLock
+        val containerJson = sessionStore.privateDataJwe ?: return@withLock
         try {
             // Send the full container JSON as the POST body,
             // matching the wallet-frontend's format.
