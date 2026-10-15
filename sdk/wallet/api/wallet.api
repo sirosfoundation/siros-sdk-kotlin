@@ -1114,14 +1114,6 @@ public final class org/siros/sdk/wallet/WscdUserOverrideStore$DefaultImpls {
 	public static fun remove (Lorg/siros/sdk/wallet/WscdUserOverrideStore;Ljava/lang/String;Ljava/lang/String;)V
 }
 
-public final class org/siros/sdk/wallet/X509SanDnsSource : org/siros/sdk/wallet/VerifierIdSource {
-	public static final field PREFIX Ljava/lang/String;
-	public static final field SAN_DNS_NAME I
-	public fun <init> ()V
-	public fun getType ()Ljava/lang/String;
-	public fun resolve (Lorg/siros/sdk/wallet/VerifierIdContext;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
 public final class org/siros/sdk/wallet/ZkIssuanceInput {
 	public fun <init> (Ljava/lang/String;Ljava/util/List;Lorg/siros/sdk/credentials/ZkWitnessSigner;[B)V
 	public synthetic fun <init> (Ljava/lang/String;Ljava/util/List;Lorg/siros/sdk/credentials/ZkWitnessSigner;[BILkotlin/jvm/internal/DefaultConstructorMarker;)V

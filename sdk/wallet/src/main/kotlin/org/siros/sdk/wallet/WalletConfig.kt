@@ -382,14 +382,13 @@ data class WalletConfig(
      * An EMPTY list means no type is supported: a request needing a pseudonym is refused.
      *
      * The strings are opaque and must equal what the policy decision point returns in
-     * `context.verifier_ids`; go-trust (PR #204) currently returns `dns`, not `x509_san_dns`
-     * (open alignment item: with such a PDP the default `x509_san_dns` yields nothing).
+     * `context.verifier_ids`; go-trust is aligning its names and values to the trust framework.
      */
     val circuitZkVerifierIdTypes: List<String> = VerifierIdTypeOrder.DEFAULT,
     /**
-     * Additional (optional) sources of `verifier_id`, such as the local [X509SanDnsSource]. The
-     * policy decision point ([AuthZENSource]) is always the first source for every supported type;
-     * these are tried after it, for the types they produce. Empty by default.
+     * Additional (optional) sources of `verifier_id`, for hosts that want their own. The
+     * policy decision point ([AuthZENSource]) is the default source for every supported type and
+     * is always tried first; these are tried after it, for the types they produce. Empty by default.
      */
     val circuitZkVerifierIdSources: List<VerifierIdSource> = emptyList(),
     /**

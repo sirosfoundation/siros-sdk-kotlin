@@ -13,11 +13,12 @@ package org.siros.sdk.wallet
  *
  * The strings are OPAQUE: they are compared for equality with the
  * `verifier_id_type` the policy decision point returns, never aliased or
- * mapped. The names here must therefore match what the PDP returns.
- * go-trust (PR #204) currently returns `semantic`, `dns`, `uri`, `did` and
- * `oidf_entity`, while the default below uses the rulebook's `x509_san_dns`:
- * with a go-trust-backed PDP that default type yields nothing until the names
- * are aligned.
+ * mapped. The names in the wallet's list must therefore match what the PDP
+ * returns; go-trust is aligning its type names and value forms to the trust
+ * framework (the `x509_san_dns` value is the bare DNS name, derived by the PDP,
+ * so the default below, `semantic` then `x509_san_dns`, is supplied by it). The
+ * PDP is the single default source of verifier ids: the wallet derives nothing
+ * from the request itself.
  *
  * An EMPTY list is valid and means "no verifier-id type is supported": every
  * request that needs a pseudonym is refused (fail closed).

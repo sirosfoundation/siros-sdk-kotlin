@@ -304,7 +304,7 @@
     <string name="settings_policy_signed_circuit_zk_only">vain circuit_zk-pyynnöille (oletus)</string>
     <string name="settings_policy_signed_always">Kaikille pyynnöille</string>
     <string name="settings_policy_verifier_ids">Tarkastajatunnisteen tyypit, tärkeysjärjestyksessä</string>
-    <string name="settings_policy_verifier_ids_description">Käytetään ensimmäistä tyyppiä, jolle luottamuspalvelu antaa tunnisteen. Nimien on vastattava luottamuspalvelun palauttamia (go-trust palauttaa tällä hetkellä dns, ei x509_san_dns). Tulee voimaan seuraavan kerran, kun lompakko luodaan.</string>
+    <string name="settings_policy_verifier_ids_description">Käytetään ensimmäistä tyyppiä, jolle luottamuspalvelu antaa tunnisteen. Luettelon nimien on vastattava luottamuspalvelun palauttamia; go-trust mukautetaan luottamuskehykseen. Tulee voimaan seuraavan kerran, kun lompakko luodaan.</string>
     <string name="settings_policy_verifier_ids_empty">Tyhjä: pseudonyymipyynnöt hylätään.</string>
     <string name="settings_policy_verifier_ids_up">Ylös</string>
     <string name="settings_policy_verifier_ids_down">Alas</string>

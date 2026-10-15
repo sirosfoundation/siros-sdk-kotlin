@@ -304,7 +304,7 @@
     <string name="settings_policy_signed_circuit_zk_only">μόνο αιτήματα circuit_zk (προεπιλογή)</string>
     <string name="settings_policy_signed_always">Όλα τα αιτήματα</string>
     <string name="settings_policy_verifier_ids">Τύποι αναγνωριστικού επαληθευτή, κατά σειρά προτεραιότητας</string>
-    <string name="settings_policy_verifier_ids_description">Χρησιμοποιείται ο πρώτος τύπος για τον οποίο η υπηρεσία εμπιστοσύνης δίνει αναγνωριστικό. Τα ονόματα πρέπει να ταιριάζουν με όσα επιστρέφει η υπηρεσία εμπιστοσύνης (το go-trust επιστρέφει προς το παρόν dns, όχι x509_san_dns). Ισχύει την επόμενη φορά που θα δημιουργηθεί το πορτοφόλι.</string>
+    <string name="settings_policy_verifier_ids_description">Χρησιμοποιείται ο πρώτος τύπος για τον οποίο η υπηρεσία εμπιστοσύνης δίνει αναγνωριστικό. Τα ονόματα στη λίστα πρέπει να ταιριάζουν με όσα επιστρέφει η υπηρεσία εμπιστοσύνης· το go-trust ευθυγραμμίζεται με το πλαίσιο εμπιστοσύνης. Ισχύει την επόμενη φορά που θα δημιουργηθεί το πορτοφόλι.</string>
     <string name="settings_policy_verifier_ids_empty">Κενό: τα αιτήματα ψευδωνύμου θα απορρίπτονται.</string>
     <string name="settings_policy_verifier_ids_up">Πάνω</string>
     <string name="settings_policy_verifier_ids_down">Κάτω</string>

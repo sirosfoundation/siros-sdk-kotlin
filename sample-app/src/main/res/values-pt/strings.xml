@@ -304,7 +304,7 @@
     <string name="settings_policy_signed_circuit_zk_only">apenas pedidos circuit_zk (predefinição)</string>
     <string name="settings_policy_signed_always">Todos os pedidos</string>
     <string name="settings_policy_verifier_ids">Tipos de id do verificador, por ordem de preferência</string>
-    <string name="settings_policy_verifier_ids_description">É usado o primeiro tipo para o qual o serviço de confiança fornece um identificador. Os nomes têm de coincidir com os devolvidos pelo serviço de confiança (o go-trust devolve atualmente dns, não x509_san_dns). Produz efeito da próxima vez que a carteira for criada.</string>
+    <string name="settings_policy_verifier_ids_description">É usado o primeiro tipo para o qual o serviço de confiança fornece um identificador. Os nomes da lista têm de coincidir com os devolvidos pelo serviço de confiança; o go-trust está a alinhar-se com o quadro de confiança. Produz efeito da próxima vez que a carteira for criada.</string>
     <string name="settings_policy_verifier_ids_empty">Vazio: os pedidos de pseudónimo serão recusados.</string>
     <string name="settings_policy_verifier_ids_up">Subir</string>
     <string name="settings_policy_verifier_ids_down">Descer</string>

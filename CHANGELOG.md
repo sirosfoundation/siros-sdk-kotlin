@@ -17,8 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   construction). `VerifierIdRegistry.resolve` walks it in order and uses the
   first type for which the policy decision point's `context.verifier_ids` holds
   an identifier (AuthZEN first for every supported type, then any optional
-  `circuitZkVerifierIdSources` such as the local `X509SanDnsSource`, whose default
-  is now empty). Conflicting DISTINCT values for a type decline that type and the
+  `circuitZkVerifierIdSources` for hosts that want their own; the default
+  is empty and the PDP is the single default source). Conflicting DISTINCT values for a type decline that type and the
   next is tried; empty ids are ignored; `basis` is ignored. An EMPTY list means no
   type is supported and a pseudonym request is refused (fail closed); so is a
   request where no type resolves (bare `access_denied`, reason
@@ -30,11 +30,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   list (add, remove, up/down, reset), stored as the comma-separated
   `verifier_id_types` (unparseable falls back to the default; the empty string
   is the deliberate empty list); applies at next wallet creation.
-  **Open alignment item:** type strings are opaque and must equal what the PDP
-  returns; go-trust PR #204 currently returns `semantic`, `dns`, `uri`, `did`,
-  `oidf_entity`, so with a go-trust-backed PDP the default `x509_san_dns`
-  yields nothing until the names are aligned (nothing is mapped or aliased
-  here). Replaces `VerifierIdSourceKind` / `WalletPolicyOptions.verifierIdSources`
+  Type strings are opaque: the names in the wallet's list must match what the
+  PDP returns; go-trust is aligning to the trust framework (the `x509_san_dns`
+  value is the bare DNS name, derived by the PDP), and nothing is mapped or
+  aliased here. The local `X509SanDnsSource` (which parsed the request's
+  client id and `x5c` leaf) is DROPPED: the PDP is the single source of
+  verifier ids and the SDK no longer parses the request for this. It was new
+  in this PR, so removing it is not a binary-compatibility break against any
+  release; the pluggable `VerifierIdSource` interface and
+  `circuitZkVerifierIdSources` remain. Replaces `VerifierIdSourceKind` / `WalletPolicyOptions.verifierIdSources`
   (stored key `verifier_id_sources` is no longer read) and the type-keyed
   `VerifierIdRegistry`/`VerifierIdTypes` role (all new in this PR). The Swift
   port needs the same change; not done here.
@@ -207,7 +211,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the policy decision point alone (no local certificate check, no trust cache:
   an outage is a refusal), plan and validate, resolve the verifier id through
   the new `VerifierIdSource` registry (`WalletConfig.circuitZkVerifierIdSources`;
-  shipped: `X509SanDnsSource`, `AuthZENSource`), present, and return the token
+  shipped: `AuthZENSource`), present, and return the token
   in `vp_token`. `TrustResult` gains an optional read-only `context`. Every
   failure is `access_denied` with no description; the history record has
   `zkProof = true` and no claim names. `WalletConfig.circuitZkValidator` now

@@ -304,7 +304,7 @@
     <string name="settings_policy_signed_circuit_zk_only">endast circuit_zk-begäranden (standard)</string>
     <string name="settings_policy_signed_always">Alla begäranden</string>
     <string name="settings_policy_verifier_ids">Typer av verifierar-id, i prioritetsordning</string>
-    <string name="settings_policy_verifier_ids_description">Den första typen som förtroendetjänsten ger en identifierare för används. Namnen måste stämma med vad förtroendetjänsten returnerar (go-trust returnerar för närvarande dns, inte x509_san_dns). Gäller nästa gång plånboken skapas.</string>
+    <string name="settings_policy_verifier_ids_description">Den första typen som förtroendetjänsten ger en identifierare för används. Namnen i listan måste stämma med vad förtroendetjänsten returnerar; go-trust anpassas till förtroenderamverket. Gäller nästa gång plånboken skapas.</string>
     <string name="settings_policy_verifier_ids_empty">Tom: pseudonymbegäranden avvisas.</string>
     <string name="settings_policy_verifier_ids_up">Upp</string>
     <string name="settings_policy_verifier_ids_down">Ned</string>

@@ -1,10 +1,6 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.wallet
 
-import java.io.ByteArrayInputStream
-import java.security.cert.CertificateFactory
-import java.security.cert.X509Certificate
-import java.util.Base64
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -48,7 +44,7 @@ interface VerifierIdSource {
  *  1. the policy decision point's answer, [AuthZENSource] (the default source,
  *     built implicitly for every supported type), then
  *  2. any [extraSources] registered for that type, in the order given (for
- *     example the optional local [X509SanDnsSource]).
+ *     example a host's own source).
  * The first non-null identifier wins, and the first type that yields one ends
  * the search. A type for which nothing resolves (absent, or conflicting
  * DISTINCT values) is skipped and the next type is tried.
@@ -85,44 +81,6 @@ class VerifierIdRegistry(
 }
 
 /**
- * Type `x509_san_dns`: the request's client identifier must be
- * `x509_san_dns:<dns name>` and the DNS name must equal a `dNSName` Subject
- * Alternative Name of the request's `x5c` leaf certificate (compared
- * case-insensitively, no wildcard matching). The result is the client
- * identifier string as received. Any other prefix, including `x509_hash`,
- * and any request without an `x5c` chain are declined.
- */
-class X509SanDnsSource : VerifierIdSource {
-    override val type = "x509_san_dns"
-
-    override suspend fun resolve(context: VerifierIdContext): String? {
-        val clientId = context.request.clientId ?: return null
-        if (!clientId.startsWith(PREFIX)) return null
-        val dns = clientId.removePrefix(PREFIX)
-        if (dns.isEmpty()) return null
-        val leaf = context.request.keyMaterial?.x5c?.firstOrNull() ?: return null
-        val cert = try {
-            CertificateFactory.getInstance("X.509")
-                .generateCertificate(ByteArrayInputStream(Base64.getDecoder().decode(leaf))) as X509Certificate
-        } catch (e: Exception) {
-            return null
-        }
-        val sans = try {
-            cert.subjectAlternativeNames
-        } catch (e: Exception) {
-            null
-        } ?: return null
-        val listed = sans.any { it.size >= 2 && it[0] == SAN_DNS_NAME && (it[1] as? String)?.equals(dns, ignoreCase = true) == true }
-        return if (listed) clientId else null
-    }
-
-    private companion object {
-        const val PREFIX = "x509_san_dns:"
-        const val SAN_DNS_NAME = 2
-    }
-}
-
-/**
  * Reads the identifier from the policy decision point's response. go-trust
  * (#203) returns `context.verifier_ids` as a LIST of objects
  * `{"verifier_id_type": ..., "verifier_id": ..., "basis": ...}` (`basis` is
@@ -133,11 +91,12 @@ class X509SanDnsSource : VerifierIdSource {
  * values exist the source declines rather than choose, because the value is
  * hashed into a pseudonym and a guess would be a different pseudonym. Malformed
  * entries and empty `verifier_id`s are ignored. Declines when the context, the
- * member (not a list) or a matching entry is absent. Type names are opaque and
- * must match what the PDP returns: go-trust (PR #204) currently emits `semantic`,
- * `dns`, `uri`, `did` and `oidf_entity`, so the default `x509_san_dns` finds nothing
- * there until the names are aligned (open item; nothing is mapped here). Also not
- * [X509SanDnsSource]'s value: that source returns the `x509_san_dns:` client id as received.
+ * member (not a list) or a matching entry is absent. Type names and value forms are
+ * opaque here and owned by the PDP: the names in the wallet's list must match what the
+ * PDP returns, and go-trust is aligning to the trust framework (for `x509_san_dns` the
+ * value is the bare DNS name, without a prefix, derived by the PDP). The wallet derives
+ * nothing itself from the request's client id or `x5c` chain; the PDP is the single
+ * default source of verifier ids.
  */
 class AuthZENSource(override val type: String) : VerifierIdSource {
     override suspend fun resolve(context: VerifierIdContext): String? {

@@ -5334,11 +5334,12 @@ class SirosWalletTest {
                 Json.parseToJsonElement("""{"config":"known-offender-matching-psc","verifier_id_type":"x509_san_dns"}""").jsonObject,
             ),
         ),
-        trust: suspend () -> JsonObject = { buildJsonObject { put("decision", true) } },
+        /** Default: the PDP supplies the x509_san_dns identifier (the bare DNS name, as go-trust derives it). */
+        trust: suspend () -> JsonObject = czkIds("x509_san_dns" to "rp.example"),
         /** The wallet's ORDERED supported verifier-id types. */
         types: List<String> = VerifierIdTypeOrder.DEFAULT,
-        /** Optional extra (local) sources; the PDP's AuthZEN source is always first. */
-        sources: List<VerifierIdSource> = listOf(X509SanDnsSource()),
+        /** Optional host-registered sources; the PDP's AuthZEN source is always tried first per type. */
+        sources: List<VerifierIdSource> = emptyList(),
         psc: ByteArray = CzkFixtures.psc,
         birth: String = "2000-06-15",
         flagOn: Boolean = true,
@@ -5438,7 +5439,7 @@ class SirosWalletTest {
             val token = envelope["data"]!!.jsonObject["vp_token"]!!.jsonObject["q"]!!.jsonArray.single().jsonPrimitive.content
             val decoded = org.siros.sdk.credentials.CircuitZkPresentationCodec.decodeBase64Url(token)
             assertEquals(
-                org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("x509_san_dns:rp.example")),
+                org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("rp.example")),
                 decoded.results["n"],
             )
             assertEquals(setOf("n"), decoded.results.keys)
@@ -5532,17 +5533,25 @@ class SirosWalletTest {
     }
 
     @Test
-    fun circuitZkDcApi_x509HashClientId_withX509SanDnsType_isRefused() = runTest(dispatcher) {
-        val s = czkSetup()
-        czkRefused(s, czkRequest(clientId = "x509_hash:abcdef"))
-        assertEquals(0, s.prover.calls)
+    fun circuitZkDcApi_pdpAnswerOnly_resolves_andTheRequestsClientIdIsNotAnInput() = runTest(dispatcher) {
+        // The only id comes from the PDP list; the client id (an x509_hash one here) is not parsed for it.
+        val s = czkSetup(trust = czkIds("x509_san_dns" to "pdp.example"))
+        assertEquals(
+            org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("pdp.example")),
+            czkPseudonymOf(czkRun(s, czkRequest(clientId = "x509_hash:abcdef"))),
+        )
     }
 
     @Test
-    fun circuitZkDcApi_clientIdDnsNotInCertificateSan_isRefused() = runTest(dispatcher) {
-        val s = czkSetup()
-        czkRefused(s, czkRequest(clientId = "x509_san_dns:not-in-cert.example"), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE)
-        assertEquals(0, s.prover.calls)
+    fun circuitZkDcApi_noPdpEntryForAnyListedType_isRefused_nothingIsDerivedLocally() = runTest(dispatcher) {
+        // The request carries a client id and an x5c chain whose SAN matches it, but nothing is derived from them.
+        val none = czkSetup(trust = { buildJsonObject { put("decision", true) } })
+        czkRefused(none, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE)
+        assertEquals(0, none.prover.calls)
+        // The PDP lists only types outside the wallet's list.
+        val other = czkSetup(trust = czkIds("dns" to "rp.example", "uri" to "https://rp.example"))
+        czkRefused(other, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE)
+        assertEquals(0, other.prover.calls)
     }
 
     private fun czkPseudonymOf(result: SirosWallet.DCAPIPresentationResult): org.siros.sdk.credentials.ResultValue? {
@@ -5596,13 +5605,13 @@ class SirosWalletTest {
 
     @Test
     fun circuitZkDcApi_theWalletsOrderIsRespected_firstTypeWinsWhenBothArePresent_theSecondWhenTheFirstIsAbsent() = runTest(dispatcher) {
-        val both = czkSetup(trust = czkIds("x509_san_dns" to "dns:second", "semantic" to "semantic_id:first"), sources = emptyList())
+        val both = czkSetup(trust = czkIds("x509_san_dns" to "dns:second", "semantic" to "semantic_id:first"))
         assertEquals(org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("semantic_id:first")), czkPseudonymOf(czkRun(both, czkRequest())))
-        val onlySecond = czkSetup(trust = czkIds("x509_san_dns" to "dns:second"), sources = emptyList())
+        val onlySecond = czkSetup(trust = czkIds("x509_san_dns" to "dns:second"))
         assertEquals(org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("dns:second")), czkPseudonymOf(czkRun(onlySecond, czkRequest())))
         // Reordering the wallet's list flips the winner for the same PDP answer.
         val reordered = czkSetup(
-            types = listOf("x509_san_dns", "semantic"), sources = emptyList(),
+            types = listOf("x509_san_dns", "semantic"),
             trust = czkIds("x509_san_dns" to "dns:second", "semantic" to "semantic_id:first"),
         )
         assertEquals(org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("dns:second")), czkPseudonymOf(czkRun(reordered, czkRequest())))
@@ -5611,37 +5620,45 @@ class SirosWalletTest {
     @Test
     fun circuitZkDcApi_aTypeWithConflictingDistinctValuesIsDeclined_andTheNextTypeIsTried() = runTest(dispatcher) {
         val s = czkSetup(
-            sources = emptyList(),
             trust = czkIds("semantic" to "semantic_id:1", "semantic" to "semantic_id:2", "x509_san_dns" to "dns:ok"),
         )
         assertEquals(org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("dns:ok")), czkPseudonymOf(czkRun(s, czkRequest())))
         // Conflict on the only available type: nothing resolves, refused.
         czkRefused(
-            czkSetup(sources = emptyList(), trust = czkIds("semantic" to "semantic_id:1", "semantic" to "semantic_id:2")),
+            czkSetup(trust = czkIds("semantic" to "semantic_id:1", "semantic" to "semantic_id:2")),
             czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE,
         )
     }
 
     @Test
-    fun circuitZkDcApi_anEmptyTypeList_refusesAPseudonymRequest_evenWhenThePdpAndALocalSourceHaveIds() = runTest(dispatcher) {
+    fun circuitZkDcApi_anEmptyTypeList_refusesAPseudonymRequest_evenWhenThePdpHasIds() = runTest(dispatcher) {
         val s = czkSetup(types = emptyList(), trust = czkIds("semantic" to "semantic_id:A"))
         czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE)
         assertEquals(0, s.prover.calls)
     }
 
     @Test
-    fun circuitZkDcApi_aLocalSourceIsUsableWhenRegistered_forASupportedType_butNotForAnUnsupportedOne() = runTest(dispatcher) {
-        // Default setup: PDP says nothing, the registered local X509SanDnsSource answers for x509_san_dns.
-        val s = czkSetup()
+    fun circuitZkDcApi_aHostRegisteredSourceIsUsable_forASupportedType_butNotForAnUnsupportedOne() = runTest(dispatcher) {
+        val none: suspend () -> JsonObject = { buildJsonObject { put("decision", true) } }
+        val calls = mutableListOf<String>()
+        // The PDP says nothing: the registered source answers for x509_san_dns.
+        val s = czkSetup(trust = none, sources = listOf(FixedSource("x509_san_dns", "host-id", calls)))
         assertEquals(
-            org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("x509_san_dns:rp.example")),
+            org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("host-id")),
             czkPseudonymOf(czkRun(s, czkRequest())),
         )
         // The type is not in the wallet's list: the source is never consulted.
-        czkRefused(czkSetup(types = listOf("semantic")), czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE)
-        // The PDP wins over a registered local source for the same type.
-        val both = czkSetup(trust = czkIds("x509_san_dns" to "from-pdp"))
+        calls.clear()
+        czkRefused(
+            czkSetup(trust = none, types = listOf("semantic"), sources = listOf(FixedSource("x509_san_dns", "host-id", calls))),
+            czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE,
+        )
+        assertTrue(calls.isEmpty())
+        // The PDP wins over a registered source for the same type, which is then not consulted.
+        calls.clear()
+        val both = czkSetup(trust = czkIds("x509_san_dns" to "from-pdp"), sources = listOf(FixedSource("x509_san_dns", "host-id", calls)))
         assertEquals(org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("from-pdp")), czkPseudonymOf(czkRun(both, czkRequest())))
+        assertTrue(calls.isEmpty())
     }
 
     @Test
@@ -5790,7 +5807,7 @@ class SirosWalletTest {
     @Test
     fun circuitZkDcApi_sourcesForOneTypeAreTriedInOrder_andADecliningSourceFallsThrough() = runTest(dispatcher) {
         val calls = mutableListOf<String>()
-        val s = czkSetup(sources = listOf(
+        val s = czkSetup(trust = { buildJsonObject { put("decision", true) } }, sources = listOf(
             FixedSource("x509_san_dns", null, calls),
             FixedSource("x509_san_dns", "second-id", calls),
             FixedSource("x509_san_dns", "third-id", calls),
@@ -5808,7 +5825,7 @@ class SirosWalletTest {
             "pseudonym-v1-sha256", "n",
             Json.parseToJsonElement("""{"config":"known-offender-matching-psc","verifier_id_type":"semantic"}""").jsonObject,
         )
-        val withContext = czkSetup(functions = listOf(semantic), sources = emptyList(), trust = {
+        val withContext = czkSetup(functions = listOf(semantic), trust = {
             buildJsonObject {
                 put("decision", true)
                 // go-trust #203: a LIST of {verifier_id_type, verifier_id, basis}. Entries of other types
@@ -5844,7 +5861,7 @@ class SirosWalletTest {
             // The pre-contract map form is not the contract.
             { buildJsonObject { put("decision", true); putJsonObject("context") { putJsonObject("verifier_ids") { put("semantic", "semantic_id:LEIXG-5299") } } } },
         )) {
-            czkRefused(czkSetup(functions = listOf(semantic), sources = emptyList(), trust = trust), czkRequest())
+            czkRefused(czkSetup(functions = listOf(semantic), trust = trust), czkRequest())
         }
     }
 
@@ -5935,36 +5952,6 @@ class SirosWalletTest {
     @Test
     fun trustResult_contextIsAbsentByDefault() {
         assertNull(TrustResult(trusted = true).context)
-    }
-
-    @Test
-    fun x509SanDnsSource_declinesOtherPrefixesAndUnsignedRequests() = runTest(dispatcher) {
-        fun ctx(clientId: String?, x5c: List<String>?) = VerifierIdContext(
-            org.siros.sdk.wallet.dcapi.DCAPIRequest(
-                clientId = clientId, responseMode = "dc_api", nonce = "n", dcqlQuery = null, clientMetadata = null,
-                keyMaterial = x5c?.let { org.siros.sdk.wallet.dcapi.DCAPIRequestKeyMaterial(x5c = it) }, protocol = "openid4vp-v1-signed", state = null,
-            ),
-            TrustResult(trusted = true), "https://rp.example",
-        )
-        val leaf = listOf(java.util.Base64.getEncoder().encodeToString(CzkFixtures.leafDer))
-        val src = X509SanDnsSource()
-        assertEquals("x509_san_dns:rp.example", src.resolve(ctx("x509_san_dns:rp.example", leaf)))
-        assertEquals("x509_san_dns:RP.example", src.resolve(ctx("x509_san_dns:RP.example", leaf)))
-        assertEquals("x509_san_dns:other.example", src.resolve(ctx("x509_san_dns:other.example", leaf)))
-        assertNull(src.resolve(ctx("x509_hash:rp.example", leaf)))
-        assertNull(src.resolve(ctx("rp.example", leaf)))
-        assertNull(src.resolve(ctx("x509_san_dns:", leaf)))
-        assertNull(src.resolve(ctx("x509_san_dns:nope.example", leaf)))
-        assertNull(src.resolve(ctx("x509_san_dns:*.example", leaf)))
-        // A SAN of another type (an IP address) with the same text is not a dNSName.
-        val ipSan = listOf(java.util.Base64.getEncoder().encodeToString(
-            java.util.Base64.getMimeDecoder().decode(CzkFixtures.resource("leaf-ip-san.pem").lines().filter { !it.startsWith("-----") }.joinToString("")),
-        ))
-        assertEquals("x509_san_dns:rp.example", src.resolve(ctx("x509_san_dns:rp.example", ipSan)))
-        assertNull(src.resolve(ctx("x509_san_dns:1.2.3.4", ipSan)))
-        assertNull(src.resolve(ctx("x509_san_dns:rp.example", null)))
-        assertNull(src.resolve(ctx("x509_san_dns:rp.example", listOf("AAAA"))))
-        assertNull(src.resolve(ctx(null, leaf)))
     }
 
     @Test
