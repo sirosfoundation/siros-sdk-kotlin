@@ -1596,24 +1596,20 @@ class SirosWallet private constructor(
     ) {
         val privateData = prefetchedPrivateData ?: fetchPrivateData()
 
-        // An account with several passkeys has one PRF entry (with its own
-        // HKDF salt) per passkey; the session store only holds the first
-        // one's. The entry of the passkey that just logged in wins.
-        val ownEntry = if (privateData.isEmpty()) null else runCatching {
-            EncryptedContainer.parse(privateData).prfKeys.firstOrNull { it.credentialId.contentEquals(credId) }
-        }.getOrNull()
-        val hkdfSalt = recoveredHkdfSalt
-            ?: ownEntry?.hkdfSalt
-            ?: sessionStore.hkdfSalt?.let { b64Decode(it) }
-            ?: ByteArray(32).also { SecureRandom().nextBytes(it) }
-        val hkdfInfo = recoveredHkdfInfo
-            ?: ownEntry?.hkdfInfo
-            ?: sessionStore.hkdfInfo?.let { b64Decode(it) }
-            ?: HKDF_INFO.toByteArray(Charsets.UTF_8)
-        val prfSaltBytes = recoveredPrfSalt
-            ?: ownEntry?.prfSalt
-            ?: sessionStore.prfSalt?.let { b64Decode(it) }
-            ?: ByteArray(32).also { SecureRandom().nextBytes(it) }
+        val params = resolveLoginPrfParams(
+            privateData = privateData,
+            credId = credId,
+            recovered = if (recoveredPrfSalt != null && recoveredHkdfSalt != null && recoveredHkdfInfo != null) {
+                PrfParams(recoveredPrfSalt, recoveredHkdfSalt, recoveredHkdfInfo)
+            } else null,
+            storedPrfSalt = sessionStore.prfSalt?.let { b64Decode(it) },
+            storedHkdfSalt = sessionStore.hkdfSalt?.let { b64Decode(it) },
+            storedHkdfInfo = sessionStore.hkdfInfo?.let { b64Decode(it) },
+            defaultHkdfInfo = HKDF_INFO.toByteArray(Charsets.UTF_8),
+        )
+        val hkdfSalt = params.hkdfSalt
+        val hkdfInfo = params.hkdfInfo
+        val prfSaltBytes = params.prfSalt
 
         keystore.unlock(prfOutput.first, privateData, hkdfSalt, hkdfInfo, prfSaltBytes)
         unlockAvailableKeystores(prfOutput.first, privateData, hkdfSalt, hkdfInfo, prfSaltBytes)
@@ -2024,11 +2020,17 @@ class SirosWallet private constructor(
         val refusedAccountId = accountRegistry.activeAccountId
         try {
             val storedPrfSalt = sessionStore.prfSalt?.let { b64Decode(it) }
-            val prfOutput = if (authMode == AuthMode.LEGACY_AS) {
+            // Which passkey answered, and for which RP: the stored salt only
+            // fits the stored passkey (see [resolveUnlockPrf]).
+            var answeredCredId: ByteArray? = null
+            var answeredRpId: String? = null
+            val ceremonyPrfOutput = if (authMode == AuthMode.LEGACY_AS) {
                 // Legacy backend: re-authenticate via the wallet-backend endpoint
                 val session = legacyAuthClient.login(prfSalt = storedPrfSalt)
                 legacyAppToken = session.appToken
                 sessionStore.appToken = session.appToken
+                answeredCredId = extractLastCredentialId()
+                answeredRpId = legacyAuthClient.lastRpId
                 extractLastPrfOutput()
                     ?: throw WalletException("PRF not available from authenticator")
             } else {
@@ -2074,20 +2076,28 @@ class SirosWallet private constructor(
                 // bind the instance to. The store is already scoped to the
                 // resumed account here.
                 sessionStore.credentialId = b64UrlEncode(result.credentialId)
+                answeredCredId = result.credentialId
+                answeredRpId = rpId
 
                 extractLastPrfOutput()
                     ?: throw WalletException("PRF not available from authenticator")
             }
 
             val storedJwe = sessionStore.privateDataJwe
-            val hkdfSalt = sessionStore.hkdfSalt?.let { b64Decode(it) }
-                ?: throw WalletException("Missing HKDF salt")
-            val hkdfInfo = sessionStore.hkdfInfo?.let { b64Decode(it) }
-                ?: HKDF_INFO.toByteArray(Charsets.UTF_8)
-
             val privateData = storedJwe?.toByteArray(Charsets.UTF_8) ?: ByteArray(0)
-            keystore.unlock(prfOutput.first, privateData, hkdfSalt, hkdfInfo)
-            unlockAvailableKeystores(prfOutput.first, privateData, hkdfSalt, hkdfInfo)
+            val unlock = resolveUnlockPrf(
+                privateData = privateData,
+                credId = answeredCredId,
+                rpId = answeredRpId,
+                ceremonyPrfSalt = storedPrfSalt,
+                ceremonyPrfOutput = ceremonyPrfOutput,
+                storedHkdfSalt = sessionStore.hkdfSalt?.let { b64Decode(it) },
+                storedHkdfInfo = sessionStore.hkdfInfo?.let { b64Decode(it) },
+                defaultHkdfInfo = HKDF_INFO.toByteArray(Charsets.UTF_8),
+                reEvaluate = { id, salt, rp -> authProvider.getPrfOutput(id, salt, rp) },
+            )
+            keystore.unlock(unlock.prfOutput.first, privateData, unlock.hkdfSalt, unlock.hkdfInfo)
+            unlockAvailableKeystores(unlock.prfOutput.first, privateData, unlock.hkdfSalt, unlock.hkdfInfo)
 
             _state.value = WalletState.Ready(
                 userId = current.userId,

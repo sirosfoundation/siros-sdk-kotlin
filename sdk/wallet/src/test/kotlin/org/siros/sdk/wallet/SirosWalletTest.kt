@@ -22,6 +22,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlin.reflect.full.callSuspend
+import kotlin.reflect.full.callSuspendBy
 import kotlin.reflect.full.declaredMemberFunctions
 import kotlin.reflect.jvm.isAccessible
 import kotlinx.coroutines.test.resetMain
@@ -6843,6 +6844,103 @@ class SirosWalletTest {
             coVerify(exactly = 0) { keystore.commitPrfKey(any()) }
             verify(exactly = 0) { sessionStore.privateDataJwe = any() }
             verify(exactly = 0) { accountRegistry.upsertAccount(any()) }
+        }
+    }
+
+    // ── second-passkey login/unlock: the call sites ─────────────────
+
+    private class StopHere : RuntimeException()
+
+    @Test
+    fun finishLogin_unlocks_with_the_logging_in_passkeys_own_hkdf_values() = runTest(dispatcher) {
+        val a = TwoPasskeyAccount()
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        // The session store holds the FIRST passkey's values, as after a first login.
+        every { sessionStore.hkdfSalt } returns java.util.Base64.getEncoder().encodeToString(a.firstHkdfSalt)
+        every { sessionStore.hkdfInfo } returns java.util.Base64.getEncoder().encodeToString(a.firstHkdfInfo)
+        every { sessionStore.prfSalt } returns java.util.Base64.getEncoder().encodeToString(a.firstPrfSalt)
+        // Stop right after the unlock: nothing later is under test.
+        every { sessionStore.activeAccountId = any() } throws StopHere()
+        val wallet = newWallet(
+            "keystore" to keystore, "sessionStore" to sessionStore,
+            "config" to mockk<WalletConfig>(relaxed = true), "accountRegistry" to mockk<AccountRegistry>(relaxed = true),
+        )
+        val method = SirosWallet::class.declaredMemberFunctions.first { it.name == "finishLogin" }
+        method.isAccessible = true
+        val params = method.parameters.associateWith<kotlin.reflect.KParameter, Any?> {
+            when (it.name) {
+                null -> wallet
+                "userId" -> "u1"
+                "credId" -> a.secondCred
+                "prfOutput" -> org.siros.sdk.auth.PrfOutput(a.secondPrf)
+                "prefetchedPrivateData" -> a.container
+                else -> null
+            }
+        }.filter { (p, v) -> v != null || p.name == null || !p.isOptional }
+        try {
+            method.callSuspendBy(params)
+            org.junit.Assert.fail("expected to stop after unlock")
+        } catch (e: java.lang.reflect.InvocationTargetException) {
+            // The default-arguments bridge wraps what finishLogin threw.
+            if (e.cause !is StopHere) throw e
+        } catch (_: StopHere) {
+        }
+
+        coVerify(exactly = 1) {
+            keystore.unlock(
+                match { it.contentEquals(a.secondPrf) },
+                a.container,
+                match { it.contentEquals(a.secondHkdfSalt) },
+                match { it.contentEquals(a.secondHkdfInfo) },
+                match { it.contentEquals(a.secondPrfSalt) },
+            )
+        }
+    }
+
+    @Test
+    fun unlockKeystore_after_the_second_passkey_answers_uses_its_prf_and_hkdf_values() = runTest(dispatcher) {
+        val a = TwoPasskeyAccount()
+        val b64 = java.util.Base64.getEncoder()
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        every { sessionStore.privateDataJwe } returns String(a.container, Charsets.UTF_8)
+        every { sessionStore.hkdfSalt } returns b64.encodeToString(a.firstHkdfSalt)
+        every { sessionStore.hkdfInfo } returns b64.encodeToString(a.firstHkdfInfo)
+        every { sessionStore.prfSalt } returns b64.encodeToString(a.firstPrfSalt)
+        val authProvider = mockk<org.siros.sdk.auth.LocalAuthProvider>(relaxed = true)
+        // The user answers with the SECOND passkey, whose PRF was evaluated with the first one's salt.
+        every { authProvider.lastCredentialId } returns a.secondCred
+        every { authProvider.lastPrfOutput } returns org.siros.sdk.auth.PrfOutput(a.firstPrf)
+        coEvery { authProvider.authenticate(any()) } returns AuthenticateResult(
+            credentialId = a.secondCred, authenticatorData = byteArrayOf(), clientDataJSON = byteArrayOf(),
+            signature = byteArrayOf(), userHandle = null,
+        )
+        coEvery { authProvider.getPrfOutput(any(), any(), any()) } answers {
+            if ((secondArg<ByteArray>()).contentEquals(a.secondPrfSalt)) org.siros.sdk.auth.PrfOutput(a.secondPrf)
+            else org.siros.sdk.auth.PrfOutput(ByteArray(32))
+        }
+        val authServer = mockk<AuthServerClient>(relaxed = true)
+        coEvery { authServer.loginBegin() } returns kotlinx.serialization.json.Json.parseToJsonElement(
+            """{"challengeId":"c","getOptions":{"publicKey":{"rpId":"rp","challenge":"AQ"}}}""",
+        ) as kotlinx.serialization.json.JsonObject
+        val state = MutableStateFlow<WalletState>(WalletState.KeystoreLocked(userId = "u1", displayName = "A"))
+        val wallet = newWallet(
+            "_state" to state, "keystore" to keystore, "sessionStore" to sessionStore, "authProvider" to authProvider,
+            "authServerClient" to authServer, "config" to mockk<WalletConfig>(relaxed = true),
+            "accountRegistry" to mockk<AccountRegistry>(relaxed = true), "credentialStore" to mockk<org.siros.sdk.credentials.CredentialStore>(relaxed = true),
+            "_presentationHistory" to mutableListOf<org.siros.sdk.credentials.PresentationRecord>(),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+        )
+
+        wallet.unlockKeystore()
+
+        coVerify(exactly = 1) {
+            keystore.unlock(
+                match { it.contentEquals(a.secondPrf) }, a.container,
+                match { it.contentEquals(a.secondHkdfSalt) }, match { it.contentEquals(a.secondHkdfInfo) },
+                any(),
+            )
         }
     }
 
