@@ -56,6 +56,32 @@ interface KeystoreManager {
      */
     fun setCredentialId(credentialId: ByteArray) {}
 
+    /**
+     * Wrap this unlocked keystore's main key for an additional passkey
+     * (the wallet-frontend's `keystore.addPrf`), without changing anything yet.
+     *
+     * Returns the container that includes the new passkey's PRF entry, to be
+     * sent to the backend. Only once the backend has accepted it is
+     * [commitPrfKey] called, so a refused enrolment leaves the keystore as it
+     * was. The main key and the wallet state are unchanged: the other passkeys
+     * keep working.
+     *
+     * @throws UnsupportedOperationException for a keystore with no PRF container.
+     * @throws KeystoreException when the keystore is locked.
+     */
+    suspend fun preparePrfKey(
+        credentialId: ByteArray,
+        prfOutput: ByteArray,
+        prfSalt: ByteArray,
+        hkdfSalt: ByteArray,
+        hkdfInfo: ByteArray,
+    ): PreparedPrfKey = throw UnsupportedOperationException("This keystore cannot add a passkey")
+
+    /** Makes the [prepared] PRF entry part of this keystore's container, once the backend stored it. */
+    suspend fun commitPrfKey(prepared: PreparedPrfKey) {
+        throw UnsupportedOperationException("This keystore cannot add a passkey")
+    }
+
     /** Generate a new keypair and return the key ID. */
     suspend fun generateKey(algorithm: String = "ES256"): String
 
@@ -440,4 +466,14 @@ data class KeyInfo(
 data class KeypairInfo(
     val keyId: String,
     val publicKeyJWK: kotlinx.serialization.json.JsonObject,
+)
+
+/**
+ * A container carrying a new passkey's PRF entry that has not been committed
+ * to the keystore yet; see [KeystoreManager.preparePrfKey].
+ */
+class PreparedPrfKey(
+    /** The serialized container to store on the backend. */
+    val container: ByteArray,
+    internal val entry: PrfKeyInfo,
 )

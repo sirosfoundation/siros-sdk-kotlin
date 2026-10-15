@@ -6802,6 +6802,159 @@ class SirosWalletTest {
         }
     }
 
+    // ── addPasskey (go-wallet-backend#453) ──────────────────────────
+
+    private class AddPasskeyFixture(withAuthorization: Boolean = true) {
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val accountRegistry = mockk<AccountRegistry>(relaxed = true)
+        val authProvider = mockk<org.siros.sdk.auth.AuthProvider>(relaxed = true)
+        val assertion = AuthenticateResult(
+            credentialId = byteArrayOf(1), authenticatorData = byteArrayOf(2),
+            clientDataJSON = byteArrayOf(3), signature = byteArrayOf(4), userHandle = null,
+        )
+        val authOptions = AuthenticateOptions(rpId = "rp.example", challenge = byteArrayOf(9))
+        val created = org.siros.sdk.auth.RegisterResult(
+            credentialId = byteArrayOf(5, 5), attestationObject = byteArrayOf(6), clientDataJSON = byteArrayOf(7),
+            prfOutput = org.siros.sdk.auth.PrfOutput(ByteArray(32) { 3 }),
+        )
+        val prepared = org.siros.sdk.keystore.PreparedPrfKey("container".toByteArray(), mockk(relaxed = true))
+        val calls = mutableListOf<String>()
+        val authorizer = org.siros.sdk.auth.StepUpAuthenticator { calls += "authorize"; assertion }
+
+        init {
+            every { keystore.isUnlocked } returns true
+            coEvery { keystore.preparePrfKey(any(), any(), any(), any(), any()) } returns prepared
+            val enrollment = org.siros.sdk.auth.PasskeyEnrollmentChallenge(
+                "enr-1", "alice",
+                org.siros.sdk.auth.RegisterOptions("rp.example", "RP", byteArrayOf(1), "alice", "Alice", byteArrayOf(2)),
+                if (withAuthorization) authOptions else null,
+            )
+            coEvery { apiClient.passkeyRegisterBegin() } returns org.siros.sdk.auth.AddPasskeyBegin.Ready(enrollment)
+            coEvery { authProvider.register(any()) } answers { calls += "create"; created }
+        }
+
+        fun respond(outcome: org.siros.sdk.auth.AddPasskeyOutcome) {
+            coEvery { apiClient.passkeyRegisterFinish(any(), any(), any(), any(), any(), any()) } returns outcome
+        }
+
+        fun verifyNothingChanged() {
+            coVerify(exactly = 0) { keystore.commitPrfKey(any()) }
+            verify(exactly = 0) { sessionStore.privateDataJwe = any() }
+            verify(exactly = 0) { accountRegistry.upsertAccount(any()) }
+        }
+    }
+
+    private fun TestScope.addPasskeyWallet(f: AddPasskeyFixture) = newWallet(
+        "apiClient" to f.apiClient,
+        "authProvider" to f.authProvider,
+        "keystore" to f.keystore,
+        "sessionStore" to f.sessionStore,
+        "accountRegistry" to f.accountRegistry,
+    )
+
+    @Test
+    fun addPasskey_authorizes_first_then_creates_then_finishes_in_one_request_and_commits() = runTest(dispatcher) {
+        val f = AddPasskeyFixture()
+        f.respond(org.siros.sdk.auth.AddPasskeyOutcome.Added("cred-1"))
+        every { f.accountRegistry.activeAccountId } returns "default:u1"
+        every { f.accountRegistry.findAccount("default:u1") } returns CachedAccount(
+            userId = "u1", tenantId = "default", displayName = "Alice", backendUrl = "https://b",
+            passkeys = listOf(CachedPasskey("old", "salt")),
+        )
+        val wallet = addPasskeyWallet(f)
+
+        val result = wallet.addPasskey("Phone", f.authorizer)
+
+        assertEquals(AddPasskeyResult.Added("cred-1"), result)
+        assertEquals(listOf("authorize", "create"), f.calls)
+        coVerify(exactly = 1) {
+            f.apiClient.passkeyRegisterFinish("enr-1", f.created, "Phone", f.prepared.container, f.assertion, any())
+        }
+        coVerify(exactly = 1) { f.keystore.commitPrfKey(f.prepared) }
+        verify { f.sessionStore.privateDataJwe = "container" }
+        verify {
+            f.accountRegistry.upsertAccount(match { it.passkeys.map { p -> p.credentialId } == listOf("old", "BQU") && it.passkeys[1].nickname == "Phone" })
+        }
+    }
+
+    @Test
+    fun addPasskey_skips_the_authorizer_for_an_account_without_a_passkey() = runTest(dispatcher) {
+        val f = AddPasskeyFixture(withAuthorization = false)
+        f.respond(org.siros.sdk.auth.AddPasskeyOutcome.Added(null))
+        val result = addPasskeyWallet(f).addPasskey("Phone", f.authorizer)
+        assertTrue(result is AddPasskeyResult.Added)
+        assertEquals(listOf("create"), f.calls)
+        coVerify { f.apiClient.passkeyRegisterFinish(any(), any(), any(), any(), null, any()) }
+    }
+
+    @Test
+    fun addPasskey_keeps_everything_when_the_backend_refuses() = runTest(dispatcher) {
+        val refused = listOf(
+            org.siros.sdk.auth.AddPasskeyOutcome.AuthorizationRequired("m") to AddPasskeyResult.AuthorizationRequired("m"),
+            org.siros.sdk.auth.AddPasskeyOutcome.AuthorizationFailed("m") to AddPasskeyResult.AuthorizationFailed("m"),
+            org.siros.sdk.auth.AddPasskeyOutcome.RetryNeeded("m") to AddPasskeyResult.RetryNeeded("m"),
+            org.siros.sdk.auth.AddPasskeyOutcome.PrivateDataConflict("e") to AddPasskeyResult.PrivateDataConflict(null),
+            org.siros.sdk.auth.AddPasskeyOutcome.RegistrationRejected(400, "m") to AddPasskeyResult.RegistrationRejected("m"),
+            org.siros.sdk.auth.AddPasskeyOutcome.SessionRevoked("m") to AddPasskeyResult.SessionRevoked("m"),
+        )
+        for ((outcome, expected) in refused) {
+            val f = AddPasskeyFixture()
+            f.respond(outcome)
+            assertEquals(expected, addPasskeyWallet(f).addPasskey("Phone", f.authorizer))
+            f.verifyNothingChanged()
+        }
+    }
+
+    @Test
+    fun addPasskey_creates_nothing_when_the_authorizer_declines() = runTest(dispatcher) {
+        val f = AddPasskeyFixture()
+        val result = addPasskeyWallet(f).addPasskey("Phone") { throw IllegalStateException("declined") }
+        assertEquals(AddPasskeyResult.AuthorizerUnavailable("declined"), result)
+        coVerify(exactly = 0) { f.authProvider.register(any()) }
+        coVerify(exactly = 0) { f.apiClient.passkeyRegisterFinish(any(), any(), any(), any(), any(), any()) }
+        f.verifyNothingChanged()
+    }
+
+    @Test
+    fun addPasskey_reports_a_declined_creation_without_calling_finish() = runTest(dispatcher) {
+        val f = AddPasskeyFixture()
+        coEvery { f.authProvider.register(any()) } throws IllegalStateException("cancelled")
+        assertEquals(AddPasskeyResult.PasskeyCreationUnavailable("cancelled"), addPasskeyWallet(f).addPasskey("Phone", f.authorizer))
+        coVerify(exactly = 0) { f.apiClient.passkeyRegisterFinish(any(), any(), any(), any(), any(), any()) }
+        f.verifyNothingChanged()
+    }
+
+    @Test
+    fun addPasskey_refuses_an_authenticator_without_prf() = runTest(dispatcher) {
+        val f = AddPasskeyFixture()
+        coEvery { f.authProvider.register(any()) } returns f.created.copy(prfOutput = null)
+        val result = addPasskeyWallet(f).addPasskey("Phone", f.authorizer)
+        assertTrue(result is AddPasskeyResult.PrfUnsupported)
+        coVerify(exactly = 0) { f.apiClient.passkeyRegisterFinish(any(), any(), any(), any(), any(), any()) }
+        f.verifyNothingChanged()
+    }
+
+    @Test
+    fun addPasskey_needs_an_unlocked_keystore_and_maps_begin_refusals() = runTest(dispatcher) {
+        val locked = AddPasskeyFixture()
+        every { locked.keystore.isUnlocked } returns false
+        assertEquals(AddPasskeyResult.WalletLocked(null), addPasskeyWallet(locked).addPasskey("Phone", locked.authorizer))
+        coVerify(exactly = 0) { locked.apiClient.passkeyRegisterBegin() }
+
+        val begin = listOf(
+            org.siros.sdk.auth.AddPasskeyBegin.Forbidden("m") to AddPasskeyResult.InsufficientScope("m"),
+            org.siros.sdk.auth.AddPasskeyBegin.SessionRevoked("m") to AddPasskeyResult.SessionRevoked("m"),
+        )
+        for ((refusal, expected) in begin) {
+            val f = AddPasskeyFixture()
+            coEvery { f.apiClient.passkeyRegisterBegin() } returns refusal
+            assertEquals(expected, addPasskeyWallet(f).addPasskey("Phone", f.authorizer))
+            assertEquals(emptyList<String>(), f.calls)
+        }
+    }
+
     private fun TestScope.deleteWallet(f: DeleteFixture): SirosWallet {
         val activity = mockk<android.app.Activity>(relaxed = true)
         every { activity.applicationContext } returns activity

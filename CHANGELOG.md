@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`SirosWallet.addPasskey(nickname, authorizer)`** adds a passkey to the
+  signed-in account (go-wallet-backend `register-begin`/`register-finish`).
+  An existing passkey authorises it through `authorizer` (a `StepUpAuthenticator`,
+  asked first), the new passkey's PRF output wraps the keystore's main key
+  (`KeystoreManager.preparePrfKey`/`commitPrfKey`), and passkey, assertion and
+  private data go in one request with `X-Private-Data-If-Match`. Every
+  outcome is an `AddPasskeyResult`. Also: a login now reads the logging-in
+  passkey's own HKDF salt from the private data container, which an account
+  with several passkeys needs.
+
 ### Security
 - **A request carrying OpenID4VP `transaction_data` is now refused instead of
   silently ignored.** The DC API path parsed the request and dropped

@@ -880,6 +880,44 @@ class JweKeystore(
     }
 
     override suspend fun exportEncryptedContainer(): ByteArray = mutex.withLock {
+        exportContainerLocked(extraPrfKey = null)
+    }
+
+    override suspend fun preparePrfKey(
+        credentialId: ByteArray,
+        prfOutput: ByteArray,
+        prfSalt: ByteArray,
+        hkdfSalt: ByteArray,
+        hkdfInfo: ByteArray,
+    ): PreparedPrfKey = mutex.withLock {
+        requireUnlocked()
+        val meta = containerMetadata ?: throw KeystoreException("No container metadata")
+        val mainKeyInfo = meta.mainKey ?: throw KeystoreException("Container missing mainKey")
+        val prfKey = EncryptedContainer.derivePrfKey(prfOutput, hkdfSalt, hkdfInfo)
+        val encapsulation = EncryptedContainer.wrapMainKey(prfKey, mainKey!!, mainKeyInfo)
+        val entry = PrfKeyInfo(
+            credentialId = credentialId,
+            transports = null,
+            prfSalt = prfSalt,
+            hkdfSalt = hkdfSalt,
+            hkdfInfo = hkdfInfo,
+            algorithm = AesGcmKeyAlgorithm("AES-GCM", 256),
+            keypair = encapsulation.keypair,
+            unwrapKey = encapsulation.unwrapKey,
+        )
+        PreparedPrfKey(exportContainerLocked(extraPrfKey = entry), entry)
+    }
+
+    override suspend fun commitPrfKey(prepared: PreparedPrfKey) = mutex.withLock {
+        requireUnlocked()
+        val meta = containerMetadata ?: throw KeystoreException("No container metadata")
+        if (meta.prfKeys.none { it.credentialId.contentEquals(prepared.entry.credentialId) }) {
+            containerMetadata = meta.copy(prfKeys = meta.prfKeys + prepared.entry)
+        }
+    }
+
+    /** [exportEncryptedContainer]'s body; the caller holds [mutex]. [extraPrfKey] is serialized but not retained. */
+    private fun exportContainerLocked(extraPrfKey: PrfKeyInfo?): ByteArray {
         requireUnlocked()
         val currentMainKey = mainKey!!
 
@@ -901,7 +939,9 @@ class JweKeystore(
         val updatedContainer = meta.copy(jwe = jweString)
         containerMetadata = updatedContainer
 
-        EncryptedContainer.serialize(updatedContainer)
+        return EncryptedContainer.serialize(
+            if (extraPrfKey == null) updatedContainer else updatedContainer.copy(prfKeys = updatedContainer.prfKeys + extraPrfKey),
+        )
     }
 
     private fun buildWalletStateV3(): kotlinx.serialization.json.JsonObject {
