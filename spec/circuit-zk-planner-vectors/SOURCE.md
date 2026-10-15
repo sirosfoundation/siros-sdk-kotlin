@@ -3,13 +3,12 @@
 These files are a verbatim copy of the `circuit_zk` planner conformance vectors
 of the shared matcher, `crates/siros-dc-matcher-core/tests/vectors/circuit_zk/`
 in [sirosfoundation/siros-dc-matcher](https://github.com/sirosfoundation/siros-dc-matcher),
-at commit `9237638ea8e2673f82cdfe27d52a2e8be67e0921` (`main` after matcher PR #45; NOT a tag: the latest tag,
-`v0.9.0`, predates it). `README.md` beside this file is the matcher's own, and defines the format.
+at tag `v0.9.1` (commit `5630bd6023904c4c84d2496b61befe4ea76d5087`). `README.md` beside this file is the matcher's own, and defines the format.
 
-PR #45 aligned the vectors with the rulebook request shape (no `verifier_id_type`): five request vectors lost the
+The vectors are byte-identical to those at matcher commit `9237638` (main after PR #45), which this directory held before; `v0.9.1` only bumped versions. PR #45 aligned the vectors with the rulebook request shape (no `verifier_id_type`): five request vectors lost the
 parameter and `ok_legacy_verifier_id_type_accepted.json` was added (a request that still carries it is accepted and
-the value passes through opaquely). Planner behaviour did not change, so the SDK's pinned matcher AAR (0.9.0) needs
-no bump; the vectors pass against it.
+the value passes through opaquely). Planner behaviour did not change, so the SDK's pinned matcher AAR (0.9.0, kept: 0.9.1 is
+not yet on Maven Central and behaves the same) needs no bump; the vectors pass against it.
 
 | file | sha256 |
 | --- | --- |

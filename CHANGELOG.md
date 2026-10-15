@@ -45,10 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   independent `tools/gen_nym_pseudonym_vectors.py`; for reuse by the Swift
   port) and `spec/circuit-zk-validator-vectors.json` were regenerated to
   match; the matcher's `circuit_zk` planner vectors were re-copied from
-  siros-dc-matcher `9237638` (main after PR #45, not a tag; no
+  siros-dc-matcher tag `v0.9.1` (`5630bd6`; byte-identical to the earlier
+  `9237638` copy, v0.9.1 only bumped versions; no
   `verifier_id_type` in the requests, a new vector shows a legacy one is still
   accepted and passed through opaquely). The planner behaviour is unchanged, so
-  the SDK's pinned matcher AAR (0.9.0) needs no bump. The sample app's nym demo drops the request parameter and uses the
+  the SDK's pinned matcher AAR (0.9.0) needs no bump and stays pinned (0.9.1 is not yet on Maven Central; behaviour is unchanged). The sample app's nym demo drops the request parameter and uses the
   bare DNS form.
   Type strings are opaque: the names in the wallet's list must match what the
   PDP returns; go-trust is aligning to the trust framework (the `x509_san_dns`
