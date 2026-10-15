@@ -30,6 +30,124 @@ public final class org/siros/sdk/auth/Acr$Companion {
 	public final fun fromValue (Ljava/lang/String;)Lorg/siros/sdk/auth/Acr;
 }
 
+public abstract interface class org/siros/sdk/auth/AddPasskeyBegin {
+}
+
+public final class org/siros/sdk/auth/AddPasskeyBegin$Forbidden : org/siros/sdk/auth/AddPasskeyBegin {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/auth/AddPasskeyBegin$Forbidden;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/AddPasskeyBegin$Forbidden;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/AddPasskeyBegin$Forbidden;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/AddPasskeyBegin$Ready : org/siros/sdk/auth/AddPasskeyBegin {
+	public fun <init> (Lorg/siros/sdk/auth/PasskeyEnrollmentChallenge;)V
+	public final fun component1 ()Lorg/siros/sdk/auth/PasskeyEnrollmentChallenge;
+	public final fun copy (Lorg/siros/sdk/auth/PasskeyEnrollmentChallenge;)Lorg/siros/sdk/auth/AddPasskeyBegin$Ready;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/AddPasskeyBegin$Ready;Lorg/siros/sdk/auth/PasskeyEnrollmentChallenge;ILjava/lang/Object;)Lorg/siros/sdk/auth/AddPasskeyBegin$Ready;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getChallenge ()Lorg/siros/sdk/auth/PasskeyEnrollmentChallenge;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/AddPasskeyBegin$SessionRevoked : org/siros/sdk/auth/AddPasskeyBegin {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/auth/AddPasskeyBegin$SessionRevoked;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/AddPasskeyBegin$SessionRevoked;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/AddPasskeyBegin$SessionRevoked;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class org/siros/sdk/auth/AddPasskeyOutcome {
+}
+
+public final class org/siros/sdk/auth/AddPasskeyOutcome$Added : org/siros/sdk/auth/AddPasskeyOutcome {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/auth/AddPasskeyOutcome$Added;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/AddPasskeyOutcome$Added;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/AddPasskeyOutcome$Added;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCredentialId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/AddPasskeyOutcome$AuthorizationFailed : org/siros/sdk/auth/AddPasskeyOutcome {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/auth/AddPasskeyOutcome$AuthorizationFailed;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/AddPasskeyOutcome$AuthorizationFailed;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/AddPasskeyOutcome$AuthorizationFailed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/AddPasskeyOutcome$AuthorizationRequired : org/siros/sdk/auth/AddPasskeyOutcome {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/auth/AddPasskeyOutcome$AuthorizationRequired;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/AddPasskeyOutcome$AuthorizationRequired;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/AddPasskeyOutcome$AuthorizationRequired;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/AddPasskeyOutcome$PrivateDataConflict : org/siros/sdk/auth/AddPasskeyOutcome {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/auth/AddPasskeyOutcome$PrivateDataConflict;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/AddPasskeyOutcome$PrivateDataConflict;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/AddPasskeyOutcome$PrivateDataConflict;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCurrentEtag ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/AddPasskeyOutcome$RegistrationRejected : org/siros/sdk/auth/AddPasskeyOutcome {
+	public fun <init> (ILjava/lang/String;)V
+	public final fun component1 ()I
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (ILjava/lang/String;)Lorg/siros/sdk/auth/AddPasskeyOutcome$RegistrationRejected;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/AddPasskeyOutcome$RegistrationRejected;ILjava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/AddPasskeyOutcome$RegistrationRejected;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public final fun getStatus ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/AddPasskeyOutcome$RetryNeeded : org/siros/sdk/auth/AddPasskeyOutcome {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/auth/AddPasskeyOutcome$RetryNeeded;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/AddPasskeyOutcome$RetryNeeded;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/AddPasskeyOutcome$RetryNeeded;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/auth/AddPasskeyOutcome$SessionRevoked : org/siros/sdk/auth/AddPasskeyOutcome {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/auth/AddPasskeyOutcome$SessionRevoked;
+	public static synthetic fun copy$default (Lorg/siros/sdk/auth/AddPasskeyOutcome$SessionRevoked;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/auth/AddPasskeyOutcome$SessionRevoked;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class org/siros/sdk/auth/AllowCredential {
 	public fun <init> ([BLjava/lang/String;)V
 	public synthetic fun <init> ([BLjava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
@@ -213,10 +331,14 @@ public final class org/siros/sdk/auth/BackendApiClient {
 	public final fun getIssuerMetadata (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun getIssuers (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun getPrivateData (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getPrivateDataEtag ()Ljava/lang/String;
 	public final fun getTenantConfig (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun getVerifiers (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun healthCheck (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun listWalletInstances (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun passkeyRegisterBegin (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun passkeyRegisterFinish (Ljava/lang/String;Lorg/siros/sdk/auth/RegisterResult;Ljava/lang/String;[BLorg/siros/sdk/auth/AuthenticateResult;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun passkeyRegisterFinish$default (Lorg/siros/sdk/auth/BackendApiClient;Ljava/lang/String;Lorg/siros/sdk/auth/RegisterResult;Ljava/lang/String;[BLorg/siros/sdk/auth/AuthenticateResult;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun refreshSession (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun registerFido2Attestation (Ljava/lang/String;[B[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun requestKeyAttestation (Ljava/util/List;Ljava/lang/String;Lorg/siros/sdk/credentials/SignerSecurityProperties;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -474,6 +596,14 @@ public synthetic class org/siros/sdk/auth/LoginFinishResult$$serializer : kotlin
 
 public final class org/siros/sdk/auth/LoginFinishResult$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/auth/PasskeyEnrollmentChallenge {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/auth/RegisterOptions;Lorg/siros/sdk/auth/AuthenticateOptions;)V
+	public final fun getAuthorization ()Lorg/siros/sdk/auth/AuthenticateOptions;
+	public final fun getChallengeId ()Ljava/lang/String;
+	public final fun getCreateOptions ()Lorg/siros/sdk/auth/RegisterOptions;
+	public final fun getUsername ()Ljava/lang/String;
 }
 
 public final class org/siros/sdk/auth/PersistentCookieJar : okhttp3/CookieJar {

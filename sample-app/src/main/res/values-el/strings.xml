@@ -287,4 +287,19 @@
     <string name="delete_account_not_found">Ο διακομιστής δεν έχει τέτοιο λογαριασμό. Δεν διαγράφηκε τίποτα.</string>
     <string name="delete_account_no_passkey">Ο λογαριασμός δεν έχει passkey και δεν μπορεί να διαγραφεί από το πορτοφόλι. Δεν διαγράφηκε τίποτα.</string>
     <string name="delete_account_insufficient_scope">Αυτή η συνεδρία δεν επιτρέπεται να διαγράψει τον λογαριασμό. Συνδεθείτε με passkey και δοκιμάστε ξανά.</string>
+    <string name="add_passkey_button">Προσθήκη κλειδιού πρόσβασης</string>
+    <string name="add_passkey_nickname">Όνομα για το νέο κλειδί πρόσβασης</string>
+    <string name="add_passkey_confirm">Προσθήκη</string>
+    <string name="add_passkey_cancel">Ακύρωση</string>
+    <string name="add_passkey_done">Το κλειδί πρόσβασης προστέθηκε.</string>
+    <string name="add_passkey_authorizer_unavailable">Το κλειδί πρόσβασης δεν προστέθηκε: η επιβεβαίωση με υπάρχον κλειδί ακυρώθηκε ή δεν είναι διαθέσιμη.</string>
+    <string name="add_passkey_creation_unavailable">Δεν ήταν δυνατή η δημιουργία του νέου κλειδιού πρόσβασης.</string>
+    <string name="add_passkey_authorization_failed">Το κλειδί πρόσβασης απορρίφθηκε. Δεν προστέθηκε τίποτα· δοκιμάστε ξανά.</string>
+    <string name="add_passkey_prf_unsupported">Αυτός ο πιστοποιητής δεν υποστηρίζει PRF, οπότε δεν μπορεί να προστατεύσει τα κλειδιά του πορτοφολιού. Δεν προστέθηκε τίποτα.</string>
+    <string name="add_passkey_retry">Το αίτημα έληξε. Δεν προστέθηκε τίποτα· δοκιμάστε ξανά.</string>
+    <string name="add_passkey_conflict">Τα ιδιωτικά σας δεδομένα άλλαξαν σε άλλη συσκευή. Δεν προστέθηκε τίποτα· συγχρονίστε και δοκιμάστε ξανά.</string>
+    <string name="add_passkey_rejected">Ο διακομιστής απέρριψε το νέο κλειδί πρόσβασης. Δεν προστέθηκε τίποτα.</string>
+    <string name="add_passkey_locked">Το πορτοφόλι είναι κλειδωμένο. Συνδεθείτε ξανά για να προσθέσετε κλειδί πρόσβασης.</string>
+    <string name="add_passkey_insufficient_scope">Αυτή η συνεδρία δεν επιτρέπεται να προσθέσει κλειδί πρόσβασης. Συνδεθείτε με κλειδί πρόσβασης και δοκιμάστε ξανά.</string>
+    <string name="add_passkey_session_revoked">Η συνεδρία σας δεν είναι πλέον έγκυρη. Συνδεθείτε ξανά.</string>
 </resources>

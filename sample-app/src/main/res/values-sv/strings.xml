@@ -287,4 +287,19 @@
     <string name="delete_account_not_found">Servern har inget sådant konto. Ingenting har raderats.</string>
     <string name="delete_account_no_passkey">Kontot saknar passnyckel och kan därför inte raderas från plånboken. Ingenting har raderats.</string>
     <string name="delete_account_insufficient_scope">Den här sessionen får inte radera kontot. Logga in med en passnyckel och försök igen.</string>
+    <string name="add_passkey_button">Lägg till passnyckel</string>
+    <string name="add_passkey_nickname">Namn på den nya passnyckeln</string>
+    <string name="add_passkey_confirm">Lägg till</string>
+    <string name="add_passkey_cancel">Avbryt</string>
+    <string name="add_passkey_done">Passnyckeln har lagts till.</string>
+    <string name="add_passkey_authorizer_unavailable">Passnyckeln lades inte till: bekräftelsen med en befintlig passnyckel avbröts eller är inte tillgänglig.</string>
+    <string name="add_passkey_creation_unavailable">Den nya passnyckeln kunde inte skapas.</string>
+    <string name="add_passkey_authorization_failed">Passnyckeln avvisades. Inget har lagts till; försök igen.</string>
+    <string name="add_passkey_prf_unsupported">Autentiseraren stöder inte PRF och kan därför inte skydda plånbokens nycklar. Inget har lagts till.</string>
+    <string name="add_passkey_retry">Begäran har gått ut. Inget har lagts till; försök igen.</string>
+    <string name="add_passkey_conflict">Dina privata data ändrades på en annan enhet. Inget har lagts till; synkronisera och försök igen.</string>
+    <string name="add_passkey_rejected">Servern avvisade den nya passnyckeln. Inget har lagts till.</string>
+    <string name="add_passkey_locked">Plånboken är låst. Logga in igen för att lägga till en passnyckel.</string>
+    <string name="add_passkey_insufficient_scope">Den här sessionen får inte lägga till passnycklar. Logga in med en passnyckel och försök igen.</string>
+    <string name="add_passkey_session_revoked">Din session är inte längre giltig. Logga in igen.</string>
 </resources>
