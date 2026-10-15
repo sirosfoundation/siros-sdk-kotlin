@@ -224,7 +224,7 @@ class SirosWallet private constructor(
 
     // circuit_zk matching support; null (also for a wallet built without initializers)
     // means the feature is off and a circuit_zk query matches nothing.
-    private val verifierIdRegistry: VerifierIdRegistry? = VerifierIdRegistry(config.circuitZkVerifierIdSources)
+    private val verifierIdRegistry: VerifierIdRegistry? = VerifierIdRegistry(config.circuitZkVerifierIdTypes, config.circuitZkVerifierIdSources)
 
     init {
         // The guard is shared by every enforcement point, which are stateless utilities. This wallet
@@ -237,10 +237,7 @@ class SirosWallet private constructor(
             org.siros.sdk.credentials.CircuitZkSupport(
                 // The shared matcher's planner unless the app brings its own.
                 config.circuitZkPlanner ?: org.siros.sdk.credentials.SharedCircuitZkPlanner(),
-                config.circuitZkValidator ?: org.siros.sdk.credentials.RulebookCircuitZkValidator(
-                    verifierIdTypes = VerifierIdRegistry(config.circuitZkVerifierIdSources),
-                    circuits = config.circuitZkCircuits,
-                ),
+                config.circuitZkValidator ?: defaultCircuitZkValidator(config.circuitZkCircuits),
                 config.circuitZkCircuits,
             )
         } else {
@@ -4189,13 +4186,6 @@ class SirosWallet private constructor(
         val output = CredentialMatcher.matchDcql(query, allCreds, zkSystemIds, support, request.clientMetadata)
         val results = output.queryResults
 
-        // The one verifier_id_type the pseudonym functions ask for, if there is exactly one: sent to the PDP as
-        // context.verifier_id_type so it narrows its answer. Optional; several types means no hint.
-        val verifierIdHint = results.mapNotNull { r ->
-            val f = r.circuitZkPlan?.functions?.firstOrNull { it.id == org.siros.sdk.credentials.CircuitZkRuleSet.PSEUDONYM }
-            (f?.params?.get("verifier_id_type") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
-        }.distinct().singleOrNull()?.let { type -> kotlinx.serialization.json.buildJsonObject { put("verifier_id_type", kotlinx.serialization.json.JsonPrimitive(type)) } }
-
         // Trust: the PDP only. The request is signed (the rules guarantee it), so its client id is bound to the key.
         val subjectId = request.clientId ?: origin
         val trust = try {
@@ -4213,7 +4203,9 @@ class SirosWallet private constructor(
                     }
                 },
                 jwk = request.keyMaterial?.jwk,
-                context = verifierIdHint,
+                // No verifier_id_type narrowing: the PDP returns every identifier it has and the wallet
+                // picks by its own ordered list of supported types.
+                context = null,
                 allowLocalFallback = false,
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -4269,8 +4261,11 @@ class SirosWallet private constructor(
             // Every copy answers as a circuit proof, so CONSUME_NON_ZKP never counts a copy used for one as consumed.
             val cred = eligibleInstances(if (selectedCredentialIds.isEmpty()) result.candidates else pickedHere) { true }.firstOrNull() ?: refuse("no-eligible-copy", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
             val pseudonym = plan.functions.firstOrNull { it.id == org.siros.sdk.credentials.CircuitZkRuleSet.PSEUDONYM }
-            val type = (pseudonym?.params?.get("verifier_id_type") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
-            val verifierId = if (type != null) registry.resolve(type, verifierContext) ?: refuse("verifier-id", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE) else null
+            // The function's verifier_id_type is only the structural signal that a verifier id is needed. It is
+            // NOT used to choose the source: the trust framework fixes the type, and the wallet takes the first
+            // of its own ordered types that resolves. Nothing resolving (or no supported type) is a refusal.
+            val needsVerifierId = pseudonym?.params?.containsKey("verifier_id_type") == true
+            val verifierId = if (needsVerifierId) registry.resolve(verifierContext) ?: refuse("verifier-id", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE) else null
             val context = (pseudonym?.params?.get("verifier_context") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
             val kid = cred.kid ?: keystore.listKeys().firstOrNull()?.keyId
             val presented = try {

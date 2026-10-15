@@ -8,6 +8,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **The wallet, not the request, picks the pseudonym's `verifier_id_type`
+  (ordered list; AuthZEN is the default source).** The type is agreed in the
+  trust framework, so `WalletConfig.circuitZkVerifierIdTypes` /
+  `WalletPolicyOptions.verifierIdTypes` is an ORDERED list of supported types
+  (default `["semantic", "x509_san_dns"]`, helpers in `VerifierIdTypeOrder`:
+  entries non-blank, trimmed, comma-free, unique; invalid lists throw at
+  construction). `VerifierIdRegistry.resolve` walks it in order and uses the
+  first type for which the policy decision point's `context.verifier_ids` holds
+  an identifier (AuthZEN first for every supported type, then any optional
+  `circuitZkVerifierIdSources` such as the local `X509SanDnsSource`, whose default
+  is now empty). Conflicting DISTINCT values for a type decline that type and the
+  next is tried; empty ids are ignored; `basis` is ignored. An EMPTY list means no
+  type is supported and a pseudonym request is refused (fail closed); so is a
+  request where no type resolves (bare `access_denied`, reason
+  `VERIFIER_ID_UNAVAILABLE`). The `verifier_id_type` a request names is still
+  accepted structurally by the planner but is IGNORED for selection and is
+  not refused on mismatch (the default validator accepts any named type).
+  The trust request no longer carries `context.verifier_id_type`, so the PDP
+  returns everything and the wallet picks. Sample app: an ordered, editable
+  list (add, remove, up/down, reset), stored as the comma-separated
+  `verifier_id_types` (unparseable falls back to the default; the empty string
+  is the deliberate empty list); applies at next wallet creation.
+  **Open alignment item:** type strings are opaque and must equal what the PDP
+  returns; go-trust PR #204 currently returns `semantic`, `dns`, `uri`, `did`,
+  `oidf_entity`, so with a go-trust-backed PDP the default `x509_san_dns`
+  yields nothing until the names are aligned (nothing is mapped or aliased
+  here). Replaces `VerifierIdSourceKind` / `WalletPolicyOptions.verifierIdSources`
+  (stored key `verifier_id_sources` is no longer read) and the type-keyed
+  `VerifierIdRegistry`/`VerifierIdTypes` role (all new in this PR). The Swift
+  port needs the same change; not done here.
 - **Ordinary queries beside a `circuit_zk` query are validated by the engine
   too.** `matchDcql` used to skip engine validation for the whole request when
   any `circuit_zk` query was present (the engine did not know the format when
@@ -200,7 +230,9 @@ compatible but change the JVM descriptors, so an already compiled consumer
 must be rebuilt. Not binary compatible, by type (all source compatible unless
 noted):
 - `WalletConfig`: new trailing properties (circuit_zk, DC API, policy
-  options); the constructor, `copy` and `copy$default` descriptors change.
+  options, ordered `circuitZkVerifierIdTypes`); `VerifierIdRegistry`,
+  `VerifierIdSourceKind` and `WalletPolicyOptions.verifierIdSources` are new in
+  this PR and were reworked (no released descriptor changes); the constructor, `copy` and `copy$default` descriptors change.
 - `TrustResult`: trailing `context`; constructor and `copy` change.
 - `DCAPIRequest`: trailing `extensions` and related fields; constructor and
   `copy` change.
@@ -246,9 +278,9 @@ this version.
   candidate of is refused; the first-eligible fallback applies only when no
   selection was supplied.
 - `AuthZENSource` reads go-trust #203's `context.verifier_ids` list of
-  `{verifier_id_type, verifier_id, basis?}`. One distinct value of the requested
-  type is used; several distinct values decline. The trust request carries
-  `context.verifier_id_type` when the request asks for exactly one type.
+  `{verifier_id_type, verifier_id, basis?}`. One distinct value of the type
+  is used; several distinct values decline (the trust request carries no
+  `verifier_id_type` hint; the wallet's ordered type list picks).
   (Trust is now evaluated after matching; the verifier still only sees
   `access_denied`.)
 

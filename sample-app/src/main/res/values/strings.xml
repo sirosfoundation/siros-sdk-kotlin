@@ -321,8 +321,14 @@
     <string name="settings_policy_signed_request">Signed requests required for</string>
     <string name="settings_policy_signed_circuit_zk_only">circuit_zk requests only (default)</string>
     <string name="settings_policy_signed_always">Every request</string>
-    <string name="settings_policy_verifier_ids">Verifier-id sources</string>
-    <string name="settings_policy_source_x509">x509_san_dns (the request\'s certificate)</string>
-    <string name="settings_policy_source_authzen">AuthZEN (the trust service\'s answer)</string>
+    <string name="settings_policy_verifier_ids">Verifier-id types, in order of preference</string>
+    <string name="settings_policy_verifier_ids_description">The first type for which the trust service supplies an identifier is used. The names must match what the trust service returns (go-trust currently returns dns, not x509_san_dns). Applies the next time the wallet is created.</string>
+    <string name="settings_policy_verifier_ids_empty">Empty: pseudonym requests will be refused.</string>
+    <string name="settings_policy_verifier_ids_up">Up</string>
+    <string name="settings_policy_verifier_ids_down">Down</string>
+    <string name="settings_policy_verifier_ids_remove">Remove</string>
+    <string name="settings_policy_verifier_ids_new">New type</string>
+    <string name="settings_policy_verifier_ids_add">Add</string>
+    <string name="settings_policy_verifier_ids_reset">Reset to default</string>
     <string name="settings_policy_applies_next">Takes effect the next time the wallet is created: after Disconnect, or an app restart.</string>
 </resources>

@@ -303,8 +303,14 @@
     <string name="settings_policy_signed_request">Signerade begäranden krävs för</string>
     <string name="settings_policy_signed_circuit_zk_only">endast circuit_zk-begäranden (standard)</string>
     <string name="settings_policy_signed_always">Alla begäranden</string>
-    <string name="settings_policy_verifier_ids">Källor för verifierar-id</string>
-    <string name="settings_policy_source_x509">x509_san_dns (begärans certifikat)</string>
-    <string name="settings_policy_source_authzen">AuthZEN (förtroendetjänstens svar)</string>
+    <string name="settings_policy_verifier_ids">Typer av verifierar-id, i prioritetsordning</string>
+    <string name="settings_policy_verifier_ids_description">Den första typen som förtroendetjänsten ger en identifierare för används. Namnen måste stämma med vad förtroendetjänsten returnerar (go-trust returnerar för närvarande dns, inte x509_san_dns). Gäller nästa gång plånboken skapas.</string>
+    <string name="settings_policy_verifier_ids_empty">Tom: pseudonymbegäranden avvisas.</string>
+    <string name="settings_policy_verifier_ids_up">Upp</string>
+    <string name="settings_policy_verifier_ids_down">Ned</string>
+    <string name="settings_policy_verifier_ids_remove">Ta bort</string>
+    <string name="settings_policy_verifier_ids_new">Ny typ</string>
+    <string name="settings_policy_verifier_ids_add">Lägg till</string>
+    <string name="settings_policy_verifier_ids_reset">Återställ till standard</string>
     <string name="settings_policy_applies_next">Börjar gälla nästa gång plånboken skapas: efter Koppla från, eller en omstart av appen.</string>
 </resources>

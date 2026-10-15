@@ -25,15 +25,6 @@ enum class SignedRequestRule {
     ALWAYS,
 }
 
-/** The built-in sources of a `circuit_zk` verifier id; see [WalletConfig.circuitZkVerifierIdSources]. */
-enum class VerifierIdSourceKind {
-    /** `x509_san_dns`, from the request's signing certificate. */
-    X509_SAN_DNS,
-
-    /** `semantic`, from the policy decision point's response. */
-    AUTHZEN,
-}
-
 /**
  * The wallet's request-handling policy as plain data, for a host that lets the
  * user (or a deployment) choose it: [applyTo] turns it into the [WalletConfig]
@@ -54,8 +45,17 @@ data class WalletPolicyOptions(
      * and testing only: a verifier cannot accept what it makes. Ignored unless [circuitZk].
      */
     val fakeProver: Boolean = false,
-    val verifierIdSources: Set<VerifierIdSourceKind> = setOf(VerifierIdSourceKind.X509_SAN_DNS, VerifierIdSourceKind.AUTHZEN),
+    /**
+     * The ORDERED supported `verifier_id_type`s; see [WalletConfig.circuitZkVerifierIdTypes] and
+     * [VerifierIdTypeOrder]. The first type for which the policy decision point supplies an identifier
+     * is used. Empty means no pseudonym request can be answered. Must satisfy [VerifierIdTypeOrder.isValid].
+     */
+    val verifierIdTypes: List<String> = VerifierIdTypeOrder.DEFAULT,
 ) {
+    init {
+        VerifierIdTypeOrder.require(verifierIdTypes)
+    }
+
     /**
      * [base] with this policy applied. [planner] and [circuits] are what
      * `circuit_zk` needs besides a prover; they are only used when [circuitZk]
@@ -79,10 +79,7 @@ data class WalletPolicyOptions(
         circuitZkPlanner = if (circuitZk) planner else null,
         circuitZkCircuits = if (circuitZk) circuits else null,
         circuitZkProver = if (circuitZk && fakeProver) FakeCircuitZkProver.optIn() else base.circuitZkProver,
-        circuitZkVerifierIdSources = buildList {
-            if (VerifierIdSourceKind.X509_SAN_DNS in verifierIdSources) add(X509SanDnsSource())
-            if (VerifierIdSourceKind.AUTHZEN in verifierIdSources) add(AuthZENSource("semantic"))
-        },
+        circuitZkVerifierIdTypes = verifierIdTypes,
     )
 
     /**
@@ -95,7 +92,7 @@ data class WalletPolicyOptions(
         KEY_EXPECTED_ORIGINS to expectedOrigins.name,
         KEY_SIGNED_REQUEST to signedRequest.name,
         KEY_FAKE_PROVER to fakeProver.toString(),
-        KEY_VERIFIER_ID_SOURCES to verifierIdSources.joinToString(",") { it.name },
+        KEY_VERIFIER_ID_TYPES to VerifierIdTypeOrder.toStored(verifierIdTypes),
     )
 
     companion object {
@@ -104,7 +101,7 @@ data class WalletPolicyOptions(
         private const val KEY_EXPECTED_ORIGINS = "expected_origins"
         private const val KEY_SIGNED_REQUEST = "signed_request"
         private const val KEY_FAKE_PROVER = "fake_prover"
-        private const val KEY_VERIFIER_ID_SOURCES = "verifier_id_sources"
+        private const val KEY_VERIFIER_ID_TYPES = "verifier_id_types"
 
         private val ALWAYS_SIGNED: (kotlinx.serialization.json.JsonObject?) -> Boolean = { true }
 
@@ -121,20 +118,8 @@ data class WalletPolicyOptions(
                 expectedOrigins = get(KEY_EXPECTED_ORIGINS).asEnum<ExpectedOriginsMode>() ?: d.expectedOrigins,
                 signedRequest = get(KEY_SIGNED_REQUEST).asEnum<SignedRequestRule>() ?: d.signedRequest,
                 fakeProver = get(KEY_FAKE_PROVER)?.toBooleanStrictOrNull() ?: d.fakeProver,
-                verifierIdSources = verifierIdSources(get(KEY_VERIFIER_ID_SOURCES)) ?: d.verifierIdSources,
+                verifierIdTypes = VerifierIdTypeOrder.fromStored(get(KEY_VERIFIER_ID_TYPES)) ?: d.verifierIdTypes,
             )
-        }
-
-        /**
-         * The stored sources: an empty string is the deliberate "none" (empty set); a list with any
-         * unrecognised name (a source renamed or removed by an upgrade) is null, so the default applies
-         * rather than silently disabling every source.
-         */
-        private fun verifierIdSources(stored: String?): Set<VerifierIdSourceKind>? {
-            if (stored == null) return null
-            val names = stored.split(',').filter { it.isNotEmpty() }
-            val parsed = names.map { it.asEnum<VerifierIdSourceKind>() ?: return null }
-            return parsed.toSet()
         }
 
         private inline fun <reified E : Enum<E>> String?.asEnum(): E? =

@@ -47,7 +47,9 @@ class WalletPolicyOptionsTest {
         assertEquals(base.dcApiExpectedOrigins, applied.dcApiExpectedOrigins)
         assertFalse(applied.circuitZk)
         assertNull(applied.circuitZkProver)
-        assertEquals(base.circuitZkVerifierIdSources.map { it.type }, applied.circuitZkVerifierIdSources.map { it.type })
+        assertEquals(listOf("semantic", "x509_san_dns"), applied.circuitZkVerifierIdTypes)
+        assertEquals(base.circuitZkVerifierIdTypes, applied.circuitZkVerifierIdTypes)
+        assertEquals(VerifierIdTypeOrder.DEFAULT, WalletPolicyOptions().verifierIdTypes)
         val query = kotlinx.serialization.json.Json.parseToJsonElement(
             """{"credentials":[{"id":"q","format":"circuit_zk"}]}""",
         ) as kotlinx.serialization.json.JsonObject
@@ -66,7 +68,7 @@ class WalletPolicyOptionsTest {
             expectedOrigins = ExpectedOriginsMode.REQUIRED,
             signedRequest = SignedRequestRule.ALWAYS,
             fakeProver = true,
-            verifierIdSources = setOf(VerifierIdSourceKind.AUTHZEN),
+            verifierIdTypes = listOf("uri", "semantic"),
         ).applyTo(base, planner, circuits)
         assertSame(NonDisclosurePolicy.NONE, applied.nonDisclosurePolicy)
         assertTrue(applied.circuitZk)
@@ -75,7 +77,7 @@ class WalletPolicyOptionsTest {
         assertTrue(applied.circuitZkProver!!.isFake)
         assertEquals(ExpectedOriginsMode.REQUIRED, applied.dcApiExpectedOrigins)
         assertTrue(applied.dcApiRequiresSignedRequest(kotlinx.serialization.json.JsonObject(emptyMap())))
-        assertEquals(listOf("semantic"), applied.circuitZkVerifierIdSources.map { it.type })
+        assertEquals(listOf("uri", "semantic"), applied.circuitZkVerifierIdTypes)
     }
 
     @Test
@@ -94,26 +96,34 @@ class WalletPolicyOptionsTest {
         val on = WalletPolicyOptions(circuitZk = true).applyTo(base, planner, circuits)
         assertNull(on.circuitZkProver)
         assertNull(WalletPolicyOptions(circuitZk = false).applyTo(base, planner, circuits).circuitZkPlanner)
-        assertEquals(emptyList<String>(), WalletPolicyOptions(verifierIdSources = emptySet()).applyTo(base).circuitZkVerifierIdSources.map { it.type })
+        assertEquals(emptyList<String>(), WalletPolicyOptions(verifierIdTypes = emptyList()).applyTo(base).circuitZkVerifierIdTypes)
     }
 
     @Test
     fun storedOptionsRoundTrip_andDamagedValuesFallBackPerOption() {
         val chosen = WalletPolicyOptions(
             nonDisclosure = NonDisclosureMode.NONE, circuitZk = true, expectedOrigins = ExpectedOriginsMode.IF_PRESENT,
-            signedRequest = SignedRequestRule.ALWAYS, fakeProver = true, verifierIdSources = setOf(VerifierIdSourceKind.X509_SAN_DNS),
+            signedRequest = SignedRequestRule.ALWAYS, fakeProver = true, verifierIdTypes = listOf("x509_san_dns", "semantic", "uri"),
         )
         val stored = chosen.toStored()
         assertEquals(chosen, WalletPolicyOptions.fromStored { stored[it] })
         assertEquals(WalletPolicyOptions(), WalletPolicyOptions.fromStored { null })
-        assertEquals(emptySet<VerifierIdSourceKind>(), WalletPolicyOptions.fromStored { if (it == "verifier_id_sources") "" else null }.verifierIdSources)
-        // An unrecognised name (a source renamed or removed by an upgrade) falls back to the default, not to "none".
-        val defaults = WalletPolicyOptions().verifierIdSources
+        // The stored form is an ordered, comma-separated list; the order survives.
+        assertEquals("x509_san_dns,semantic,uri", stored["verifier_id_types"])
+        fun typesFrom(value: String?) = WalletPolicyOptions.fromStored { if (it == "verifier_id_types") value else null }.verifierIdTypes
+        // The empty string is the deliberate empty list (no pseudonym possible), not the default.
+        assertEquals(emptyList<String>(), typesFrom(""))
+        assertEquals("", WalletPolicyOptions(verifierIdTypes = emptyList()).toStored()["verifier_id_types"])
+        assertEquals(listOf("uri", "semantic"), typesFrom("uri,semantic"))
+        // Missing or unparseable (blank entry, duplicate, untrimmed) falls back to the default, never to "none".
+        val defaults = WalletPolicyOptions().verifierIdTypes
         assertTrue(defaults.isNotEmpty())
-        for (value in listOf("REMOVED_SOURCE", "X509_SAN_DNS,REMOVED_SOURCE", "REMOVED_SOURCE,AUTHZEN")) {
-            assertEquals(value, defaults, WalletPolicyOptions.fromStored { if (it == "verifier_id_sources") value else null }.verifierIdSources)
+        for (value in listOf(null, ",", "semantic,", ",semantic", "semantic,,uri", "semantic,semantic", " semantic", "semantic, uri")) {
+            assertEquals(value, defaults, typesFrom(value))
         }
-        assertEquals(setOf(VerifierIdSourceKind.AUTHZEN), WalletPolicyOptions.fromStored { if (it == "verifier_id_sources") "AUTHZEN" else null }.verifierIdSources)
+        // An old (pre-ordered-list) stored key is not read: the default applies.
+        assertEquals(defaults, WalletPolicyOptions.fromStored { if (it == "verifier_id_sources") "AUTHZEN" else null }.verifierIdTypes)
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) { WalletPolicyOptions(verifierIdTypes = listOf("a", "a")) }
         val damaged = WalletPolicyOptions.fromStored { if (it == "circuit_zk") "maybe" else stored[it] }
         assertEquals(chosen.copy(circuitZk = false), damaged)
         assertEquals(WalletPolicyOptions().expectedOrigins, WalletPolicyOptions.fromStored { if (it == "expected_origins") "STRICT" else null }.expectedOrigins)

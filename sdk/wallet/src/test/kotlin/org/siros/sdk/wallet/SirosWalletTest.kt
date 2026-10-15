@@ -5335,7 +5335,10 @@ class SirosWalletTest {
             ),
         ),
         trust: suspend () -> JsonObject = { buildJsonObject { put("decision", true) } },
-        sources: List<VerifierIdSource> = listOf(X509SanDnsSource(), AuthZENSource("semantic")),
+        /** The wallet's ORDERED supported verifier-id types. */
+        types: List<String> = VerifierIdTypeOrder.DEFAULT,
+        /** Optional extra (local) sources; the PDP's AuthZEN source is always first. */
+        sources: List<VerifierIdSource> = listOf(X509SanDnsSource()),
         psc: ByteArray = CzkFixtures.psc,
         birth: String = "2000-06-15",
         flagOn: Boolean = true,
@@ -5363,14 +5366,14 @@ class SirosWalletTest {
             StoredCredential(id = 1L, format = "mso_mdoc", raw = CzkFixtures.mdoc(psc, birth),
                 metadata = CredentialMetadata(name = "Nym"), batchId = 1L, instanceId = 0),
         )).toMutableList())
-        val registry = VerifierIdRegistry(sources)
+        val registry = VerifierIdRegistry(types, sources)
         val circuits = org.siros.sdk.credentials.CircuitZkCircuitSource {
             listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf(CzkFixtures.DOCTYPE) + extraDocTypes, capabilities = capabilities))
         }
         val support = org.siros.sdk.credentials.CircuitZkSupport(
             // The plan's raw query is the query itself (its doctype_value is what the presenter checks the credential against).
             planner = { query, _ -> org.siros.sdk.credentials.CircuitZkPlanResult.Plan(org.siros.sdk.credentials.CircuitZkPlan(functions, raw = query)) },
-            validator = org.siros.sdk.credentials.RulebookCircuitZkValidator(verifierIdTypes = registry, circuits = circuits),
+            validator = defaultCircuitZkValidator(circuits),
             circuits = circuits,
             serving = serving,
         )
@@ -5542,15 +5545,103 @@ class SirosWalletTest {
         assertEquals(0, s.prover.calls)
     }
 
+    private fun czkPseudonymOf(result: SirosWallet.DCAPIPresentationResult): org.siros.sdk.credentials.ResultValue? {
+        val token = Json.parseToJsonElement(result.responseJson).jsonObject["data"]!!.jsonObject["vp_token"]!!.jsonObject["q"]!!.jsonArray.single().jsonPrimitive.content
+        return org.siros.sdk.credentials.CircuitZkPresentationCodec.decodeBase64Url(token).results["n"]
+    }
+
+    private fun czkFnOfType(type: String) = org.siros.sdk.credentials.CircuitZkFunction(
+        "pseudonym-v1-sha256", "n",
+        Json.parseToJsonElement("""{"config":"known-offender-matching-psc","verifier_id_type":"$type"}""").jsonObject,
+    )
+
+    private fun czkIds(vararg entries: Pair<String, String>): suspend () -> JsonObject = {
+        buildJsonObject {
+            put("decision", true)
+            putJsonObject("context") {
+                putJsonArray("verifier_ids") { entries.forEach { (t, v) -> add(buildJsonObject { put("verifier_id_type", t); put("verifier_id", v) }) } }
+            }
+        }
+    }
+
     @Test
-    fun circuitZkDcApi_unregisteredVerifierIdType_isRefused() = runTest(dispatcher) {
-        val fn = org.siros.sdk.credentials.CircuitZkFunction(
-            "pseudonym-v1-sha256", "n",
-            Json.parseToJsonElement("""{"config":"known-offender-matching-psc","verifier_id_type":"x509_hash"}""").jsonObject,
+    fun circuitZkDcApi_theTypeTheRequestNames_isIgnoredForSelection_andNotRefusedOnMismatch() = runTest(dispatcher) {
+        // The request names x509_hash, which no source of the wallet produces; the wallet's own order governs.
+        val s = czkSetup(functions = listOf(czkFnOfType("x509_hash")), trust = czkIds("semantic" to "semantic_id:A"))
+        assertEquals(
+            org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("semantic_id:A")),
+            czkPseudonymOf(czkRun(s, czkRequest())),
         )
-        val s = czkSetup(functions = listOf(fn))
-        czkRefused(s, czkRequest())
+        // The request naming "semantic" does not make the wallet use semantic when its list says otherwise.
+        val other = czkSetup(
+            functions = listOf(czkFnOfType("semantic")), types = listOf("uri"),
+            trust = czkIds("semantic" to "semantic_id:A", "uri" to "uri:B"),
+        )
+        assertEquals(
+            org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("uri:B")),
+            czkPseudonymOf(czkRun(other, czkRequest())),
+        )
+    }
+
+    @Test
+    fun theDefaultValidator_acceptsAPseudonymFunctionNamingAnyVerifierIdType() {
+        val circuits = org.siros.sdk.credentials.CircuitZkCircuitSource {
+            listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf(CzkFixtures.DOCTYPE)))
+        }
+        for (type in listOf("x509_hash", "semantic", "x509_san_dns", "anything-else")) {
+            val plan = org.siros.sdk.credentials.CircuitZkPlan(listOf(czkFnOfType(type)), raw = JsonObject(emptyMap()))
+            assertEquals(type, org.siros.sdk.credentials.CircuitZkVerdict.Ok, defaultCircuitZkValidator(circuits).validate(plan))
+        }
+    }
+
+    @Test
+    fun circuitZkDcApi_theWalletsOrderIsRespected_firstTypeWinsWhenBothArePresent_theSecondWhenTheFirstIsAbsent() = runTest(dispatcher) {
+        val both = czkSetup(trust = czkIds("x509_san_dns" to "dns:second", "semantic" to "semantic_id:first"), sources = emptyList())
+        assertEquals(org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("semantic_id:first")), czkPseudonymOf(czkRun(both, czkRequest())))
+        val onlySecond = czkSetup(trust = czkIds("x509_san_dns" to "dns:second"), sources = emptyList())
+        assertEquals(org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("dns:second")), czkPseudonymOf(czkRun(onlySecond, czkRequest())))
+        // Reordering the wallet's list flips the winner for the same PDP answer.
+        val reordered = czkSetup(
+            types = listOf("x509_san_dns", "semantic"), sources = emptyList(),
+            trust = czkIds("x509_san_dns" to "dns:second", "semantic" to "semantic_id:first"),
+        )
+        assertEquals(org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("dns:second")), czkPseudonymOf(czkRun(reordered, czkRequest())))
+    }
+
+    @Test
+    fun circuitZkDcApi_aTypeWithConflictingDistinctValuesIsDeclined_andTheNextTypeIsTried() = runTest(dispatcher) {
+        val s = czkSetup(
+            sources = emptyList(),
+            trust = czkIds("semantic" to "semantic_id:1", "semantic" to "semantic_id:2", "x509_san_dns" to "dns:ok"),
+        )
+        assertEquals(org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("dns:ok")), czkPseudonymOf(czkRun(s, czkRequest())))
+        // Conflict on the only available type: nothing resolves, refused.
+        czkRefused(
+            czkSetup(sources = emptyList(), trust = czkIds("semantic" to "semantic_id:1", "semantic" to "semantic_id:2")),
+            czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE,
+        )
+    }
+
+    @Test
+    fun circuitZkDcApi_anEmptyTypeList_refusesAPseudonymRequest_evenWhenThePdpAndALocalSourceHaveIds() = runTest(dispatcher) {
+        val s = czkSetup(types = emptyList(), trust = czkIds("semantic" to "semantic_id:A"))
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE)
         assertEquals(0, s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkDcApi_aLocalSourceIsUsableWhenRegistered_forASupportedType_butNotForAnUnsupportedOne() = runTest(dispatcher) {
+        // Default setup: PDP says nothing, the registered local X509SanDnsSource answers for x509_san_dns.
+        val s = czkSetup()
+        assertEquals(
+            org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("x509_san_dns:rp.example")),
+            czkPseudonymOf(czkRun(s, czkRequest())),
+        )
+        // The type is not in the wallet's list: the source is never consulted.
+        czkRefused(czkSetup(types = listOf("semantic")), czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE)
+        // The PDP wins over a registered local source for the same type.
+        val both = czkSetup(trust = czkIds("x509_san_dns" to "from-pdp"))
+        assertEquals(org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("from-pdp")), czkPseudonymOf(czkRun(both, czkRequest())))
     }
 
     @Test
@@ -5717,7 +5808,7 @@ class SirosWalletTest {
             "pseudonym-v1-sha256", "n",
             Json.parseToJsonElement("""{"config":"known-offender-matching-psc","verifier_id_type":"semantic"}""").jsonObject,
         )
-        val withContext = czkSetup(functions = listOf(semantic), trust = {
+        val withContext = czkSetup(functions = listOf(semantic), sources = emptyList(), trust = {
             buildJsonObject {
                 put("decision", true)
                 // go-trust #203: a LIST of {verifier_id_type, verifier_id, basis}. Entries of other types
@@ -5753,7 +5844,7 @@ class SirosWalletTest {
             // The pre-contract map form is not the contract.
             { buildJsonObject { put("decision", true); putJsonObject("context") { putJsonObject("verifier_ids") { put("semantic", "semantic_id:LEIXG-5299") } } } },
         )) {
-            czkRefused(czkSetup(functions = listOf(semantic), trust = trust), czkRequest())
+            czkRefused(czkSetup(functions = listOf(semantic), sources = emptyList(), trust = trust), czkRequest())
         }
     }
 
@@ -5792,26 +5883,46 @@ class SirosWalletTest {
             TrustResult(trusted = true), "https://rp.example",
         )
         org.junit.Assert.assertThrows(kotlinx.coroutines.CancellationException::class.java) {
-            kotlinx.coroutines.runBlocking { VerifierIdRegistry(listOf(CancellingSource("t"), FixedSource("t", "later", mutableListOf()))).resolve("t", ctx) }
+            kotlinx.coroutines.runBlocking { VerifierIdRegistry(listOf("t"), listOf(CancellingSource("t"), FixedSource("t", "later", mutableListOf()))).resolve(ctx) }
         }
         val failing = object : VerifierIdSource {
             override val type = "t"
             override suspend fun resolve(context: VerifierIdContext): String? = error("boom")
         }
-        assertEquals("later", VerifierIdRegistry(listOf(failing, FixedSource("t", "later", mutableListOf()))).resolve("t", ctx))
+        assertEquals("later", VerifierIdRegistry(listOf("t"), listOf(failing, FixedSource("t", "later", mutableListOf()))).resolve(ctx))
     }
 
     @Test
-    fun circuitZkDcApi_theTrustRequestCarriesTheVerifierIdTypeHint_onlyWhenOneTypeIsAsked() = runTest(dispatcher) {
+    fun circuitZkDcApi_theTrustRequestNeverNarrowsTheVerifierIdType() = runTest(dispatcher) {
+        // Exactly one type is asked for: the PDP is still not narrowed, so the wallet can pick by its own order.
         val s = czkSetup()
         czkRun(s, czkRequest())
-        assertEquals("x509_san_dns", s.trustRequests.single()["context"]!!.jsonObject["verifier_id_type"]!!.jsonPrimitive.content)
-        // No pseudonym function: no type is known, so no context is sent.
+        assertNull(s.trustRequests.single()["context"])
         val noPseudonym = czkSetup(functions = listOf(org.siros.sdk.credentials.CircuitZkFunction(
             "age_check", "a", Json.parseToJsonElement("""{"ge":"2000-01-01"}""").jsonObject,
         )))
         czkRun(noPseudonym, czkRequest())
         assertNull(noPseudonym.trustRequests.single()["context"])
+    }
+
+    @Test
+    fun verifierIdRegistry_triesSourcesOfATypeInOrder_afterThePdp_andRejectsAnInvalidTypeList() = runTest(dispatcher) {
+        val ctx = VerifierIdContext(
+            org.siros.sdk.wallet.dcapi.DCAPIRequest(
+                clientId = "c", responseMode = "dc_api", nonce = "n", dcqlQuery = null, clientMetadata = null,
+                keyMaterial = null, protocol = "openid4vp-v1-signed", state = null,
+            ),
+            TrustResult(trusted = true), "https://rp.example",
+        )
+        val calls = mutableListOf<String>()
+        val r = VerifierIdRegistry(listOf("a", "b"), listOf(FixedSource("b", "b-id", calls), FixedSource("a", null, calls), FixedSource("a", "a-id", calls)))
+        assertEquals("a-id", r.resolve(ctx))
+        assertEquals(listOf("declined-a", "a-id"), calls)
+        assertNull(VerifierIdRegistry(emptyList(), listOf(FixedSource("a", "x", mutableListOf()))).resolve(ctx))
+        for (bad in listOf(listOf("a", "a"), listOf(" "), listOf(""), listOf(" a"), listOf("a,b"))) {
+            org.junit.Assert.assertThrows(bad.toString(), IllegalArgumentException::class.java) { VerifierIdRegistry(bad) }
+            org.junit.Assert.assertThrows(bad.toString(), IllegalArgumentException::class.java) { WalletConfig(backendUrl = "https://b.example", circuitZkVerifierIdTypes = bad) }
+        }
     }
 
     @Test

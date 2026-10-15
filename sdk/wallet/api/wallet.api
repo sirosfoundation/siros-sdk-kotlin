@@ -728,10 +728,12 @@ public final class org/siros/sdk/wallet/VerifierIdContext {
 	public final fun getTrust ()Lorg/siros/sdk/wallet/TrustResult;
 }
 
-public final class org/siros/sdk/wallet/VerifierIdRegistry : org/siros/sdk/credentials/VerifierIdTypes {
-	public fun <init> (Ljava/util/List;)V
-	public fun isRegistered (Ljava/lang/String;)Z
-	public final fun resolve (Ljava/lang/String;Lorg/siros/sdk/wallet/VerifierIdContext;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+public final class org/siros/sdk/wallet/VerifierIdRegistry {
+	public fun <init> ()V
+	public fun <init> (Ljava/util/List;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/util/List;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getSupportedTypes ()Ljava/util/List;
+	public final fun resolve (Lorg/siros/sdk/wallet/VerifierIdContext;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public abstract interface class org/siros/sdk/wallet/VerifierIdSource {
@@ -739,12 +741,17 @@ public abstract interface class org/siros/sdk/wallet/VerifierIdSource {
 	public abstract fun resolve (Lorg/siros/sdk/wallet/VerifierIdContext;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
-public final class org/siros/sdk/wallet/VerifierIdSourceKind : java/lang/Enum {
-	public static final field AUTHZEN Lorg/siros/sdk/wallet/VerifierIdSourceKind;
-	public static final field X509_SAN_DNS Lorg/siros/sdk/wallet/VerifierIdSourceKind;
-	public static fun getEntries ()Lkotlin/enums/EnumEntries;
-	public static fun valueOf (Ljava/lang/String;)Lorg/siros/sdk/wallet/VerifierIdSourceKind;
-	public static fun values ()[Lorg/siros/sdk/wallet/VerifierIdSourceKind;
+public final class org/siros/sdk/wallet/VerifierIdTypeOrder {
+	public static final field INSTANCE Lorg/siros/sdk/wallet/VerifierIdTypeOrder;
+	public final fun add (Ljava/util/List;Ljava/lang/String;)Ljava/util/List;
+	public final fun fromStored (Ljava/lang/String;)Ljava/util/List;
+	public final fun getDEFAULT ()Ljava/util/List;
+	public final fun isValid (Ljava/util/List;)Z
+	public final fun move (Ljava/util/List;II)Ljava/util/List;
+	public final fun problem (Ljava/util/List;)Ljava/lang/String;
+	public final fun remove (Ljava/util/List;I)Ljava/util/List;
+	public final fun require (Ljava/util/List;)Ljava/util/List;
+	public final fun toStored (Ljava/util/List;)Ljava/lang/String;
 }
 
 public final class org/siros/sdk/wallet/WalletCapabilities {
@@ -762,8 +769,8 @@ public final class org/siros/sdk/wallet/WalletCapabilities {
 
 public final class org/siros/sdk/wallet/WalletConfig {
 	public static final field Companion Lorg/siros/sdk/wallet/WalletConfig$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLorg/siros/sdk/credentials/CredentialStore;Lokhttp3/OkHttpClient;Lkotlin/jvm/functions/Function1;ZLorg/siros/sdk/keystore/KeystoreManager;Lorg/siros/sdk/keystore/NativeAttestationProvider;Ljava/lang/String;ZLjava/util/Map;Ljava/util/Map;Lkotlin/jvm/functions/Function4;Ljava/lang/String;Ljava/util/List;Ljava/util/Set;Ljava/util/List;ZLjava/util/List;ZLkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function1;Lorg/siros/sdk/wallet/MdocTrustEvaluationMode;Lorg/siros/sdk/wallet/MdocTrustEvaluationMode;ZZLorg/siros/sdk/credentials/interop/InteropProfile;Ljava/util/Map;Lorg/siros/sdk/credentials/interop/DiipProfile;JZLorg/siros/sdk/wallet/dcapi/ExpectedOriginsMode;Lkotlin/jvm/functions/Function1;ZLorg/siros/sdk/credentials/CircuitZkPlanner;Lorg/siros/sdk/credentials/CircuitZkRequestValidator;Lorg/siros/sdk/keystore/CircuitZkProver;Ljava/util/List;Lorg/siros/sdk/credentials/NonDisclosurePolicy;Lorg/siros/sdk/credentials/CircuitZkCircuitSource;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLorg/siros/sdk/credentials/CredentialStore;Lokhttp3/OkHttpClient;Lkotlin/jvm/functions/Function1;ZLorg/siros/sdk/keystore/KeystoreManager;Lorg/siros/sdk/keystore/NativeAttestationProvider;Ljava/lang/String;ZLjava/util/Map;Ljava/util/Map;Lkotlin/jvm/functions/Function4;Ljava/lang/String;Ljava/util/List;Ljava/util/Set;Ljava/util/List;ZLjava/util/List;ZLkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function1;Lorg/siros/sdk/wallet/MdocTrustEvaluationMode;Lorg/siros/sdk/wallet/MdocTrustEvaluationMode;ZZLorg/siros/sdk/credentials/interop/InteropProfile;Ljava/util/Map;Lorg/siros/sdk/credentials/interop/DiipProfile;JZLorg/siros/sdk/wallet/dcapi/ExpectedOriginsMode;Lkotlin/jvm/functions/Function1;ZLorg/siros/sdk/credentials/CircuitZkPlanner;Lorg/siros/sdk/credentials/CircuitZkRequestValidator;Lorg/siros/sdk/keystore/CircuitZkProver;Ljava/util/List;Lorg/siros/sdk/credentials/NonDisclosurePolicy;Lorg/siros/sdk/credentials/CircuitZkCircuitSource;IILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLorg/siros/sdk/credentials/CredentialStore;Lokhttp3/OkHttpClient;Lkotlin/jvm/functions/Function1;ZLorg/siros/sdk/keystore/KeystoreManager;Lorg/siros/sdk/keystore/NativeAttestationProvider;Ljava/lang/String;ZLjava/util/Map;Ljava/util/Map;Lkotlin/jvm/functions/Function4;Ljava/lang/String;Ljava/util/List;Ljava/util/Set;Ljava/util/List;ZLjava/util/List;ZLkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function1;Lorg/siros/sdk/wallet/MdocTrustEvaluationMode;Lorg/siros/sdk/wallet/MdocTrustEvaluationMode;ZZLorg/siros/sdk/credentials/interop/InteropProfile;Ljava/util/Map;Lorg/siros/sdk/credentials/interop/DiipProfile;JZLorg/siros/sdk/wallet/dcapi/ExpectedOriginsMode;Lkotlin/jvm/functions/Function1;ZLorg/siros/sdk/credentials/CircuitZkPlanner;Lorg/siros/sdk/credentials/CircuitZkRequestValidator;Lorg/siros/sdk/keystore/CircuitZkProver;Ljava/util/List;Ljava/util/List;Lorg/siros/sdk/credentials/NonDisclosurePolicy;Lorg/siros/sdk/credentials/CircuitZkCircuitSource;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLorg/siros/sdk/credentials/CredentialStore;Lokhttp3/OkHttpClient;Lkotlin/jvm/functions/Function1;ZLorg/siros/sdk/keystore/KeystoreManager;Lorg/siros/sdk/keystore/NativeAttestationProvider;Ljava/lang/String;ZLjava/util/Map;Ljava/util/Map;Lkotlin/jvm/functions/Function4;Ljava/lang/String;Ljava/util/List;Ljava/util/Set;Ljava/util/List;ZLjava/util/List;ZLkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function1;Lorg/siros/sdk/wallet/MdocTrustEvaluationMode;Lorg/siros/sdk/wallet/MdocTrustEvaluationMode;ZZLorg/siros/sdk/credentials/interop/InteropProfile;Ljava/util/Map;Lorg/siros/sdk/credentials/interop/DiipProfile;JZLorg/siros/sdk/wallet/dcapi/ExpectedOriginsMode;Lkotlin/jvm/functions/Function1;ZLorg/siros/sdk/credentials/CircuitZkPlanner;Lorg/siros/sdk/credentials/CircuitZkRequestValidator;Lorg/siros/sdk/keystore/CircuitZkProver;Ljava/util/List;Ljava/util/List;Lorg/siros/sdk/credentials/NonDisclosurePolicy;Lorg/siros/sdk/credentials/CircuitZkCircuitSource;IILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component10 ()Lorg/siros/sdk/keystore/NativeAttestationProvider;
 	public final fun component11 ()Ljava/lang/String;
@@ -799,15 +806,16 @@ public final class org/siros/sdk/wallet/WalletConfig {
 	public final fun component39 ()Lorg/siros/sdk/keystore/CircuitZkProver;
 	public final fun component4 ()Z
 	public final fun component40 ()Ljava/util/List;
-	public final fun component41 ()Lorg/siros/sdk/credentials/NonDisclosurePolicy;
-	public final fun component42 ()Lorg/siros/sdk/credentials/CircuitZkCircuitSource;
+	public final fun component41 ()Ljava/util/List;
+	public final fun component42 ()Lorg/siros/sdk/credentials/NonDisclosurePolicy;
+	public final fun component43 ()Lorg/siros/sdk/credentials/CircuitZkCircuitSource;
 	public final fun component5 ()Lorg/siros/sdk/credentials/CredentialStore;
 	public final fun component6 ()Lokhttp3/OkHttpClient;
 	public final fun component7 ()Lkotlin/jvm/functions/Function1;
 	public final fun component8 ()Z
 	public final fun component9 ()Lorg/siros/sdk/keystore/KeystoreManager;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLorg/siros/sdk/credentials/CredentialStore;Lokhttp3/OkHttpClient;Lkotlin/jvm/functions/Function1;ZLorg/siros/sdk/keystore/KeystoreManager;Lorg/siros/sdk/keystore/NativeAttestationProvider;Ljava/lang/String;ZLjava/util/Map;Ljava/util/Map;Lkotlin/jvm/functions/Function4;Ljava/lang/String;Ljava/util/List;Ljava/util/Set;Ljava/util/List;ZLjava/util/List;ZLkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function1;Lorg/siros/sdk/wallet/MdocTrustEvaluationMode;Lorg/siros/sdk/wallet/MdocTrustEvaluationMode;ZZLorg/siros/sdk/credentials/interop/InteropProfile;Ljava/util/Map;Lorg/siros/sdk/credentials/interop/DiipProfile;JZLorg/siros/sdk/wallet/dcapi/ExpectedOriginsMode;Lkotlin/jvm/functions/Function1;ZLorg/siros/sdk/credentials/CircuitZkPlanner;Lorg/siros/sdk/credentials/CircuitZkRequestValidator;Lorg/siros/sdk/keystore/CircuitZkProver;Ljava/util/List;Lorg/siros/sdk/credentials/NonDisclosurePolicy;Lorg/siros/sdk/credentials/CircuitZkCircuitSource;)Lorg/siros/sdk/wallet/WalletConfig;
-	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/WalletConfig;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLorg/siros/sdk/credentials/CredentialStore;Lokhttp3/OkHttpClient;Lkotlin/jvm/functions/Function1;ZLorg/siros/sdk/keystore/KeystoreManager;Lorg/siros/sdk/keystore/NativeAttestationProvider;Ljava/lang/String;ZLjava/util/Map;Ljava/util/Map;Lkotlin/jvm/functions/Function4;Ljava/lang/String;Ljava/util/List;Ljava/util/Set;Ljava/util/List;ZLjava/util/List;ZLkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function1;Lorg/siros/sdk/wallet/MdocTrustEvaluationMode;Lorg/siros/sdk/wallet/MdocTrustEvaluationMode;ZZLorg/siros/sdk/credentials/interop/InteropProfile;Ljava/util/Map;Lorg/siros/sdk/credentials/interop/DiipProfile;JZLorg/siros/sdk/wallet/dcapi/ExpectedOriginsMode;Lkotlin/jvm/functions/Function1;ZLorg/siros/sdk/credentials/CircuitZkPlanner;Lorg/siros/sdk/credentials/CircuitZkRequestValidator;Lorg/siros/sdk/keystore/CircuitZkProver;Ljava/util/List;Lorg/siros/sdk/credentials/NonDisclosurePolicy;Lorg/siros/sdk/credentials/CircuitZkCircuitSource;IILjava/lang/Object;)Lorg/siros/sdk/wallet/WalletConfig;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLorg/siros/sdk/credentials/CredentialStore;Lokhttp3/OkHttpClient;Lkotlin/jvm/functions/Function1;ZLorg/siros/sdk/keystore/KeystoreManager;Lorg/siros/sdk/keystore/NativeAttestationProvider;Ljava/lang/String;ZLjava/util/Map;Ljava/util/Map;Lkotlin/jvm/functions/Function4;Ljava/lang/String;Ljava/util/List;Ljava/util/Set;Ljava/util/List;ZLjava/util/List;ZLkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function1;Lorg/siros/sdk/wallet/MdocTrustEvaluationMode;Lorg/siros/sdk/wallet/MdocTrustEvaluationMode;ZZLorg/siros/sdk/credentials/interop/InteropProfile;Ljava/util/Map;Lorg/siros/sdk/credentials/interop/DiipProfile;JZLorg/siros/sdk/wallet/dcapi/ExpectedOriginsMode;Lkotlin/jvm/functions/Function1;ZLorg/siros/sdk/credentials/CircuitZkPlanner;Lorg/siros/sdk/credentials/CircuitZkRequestValidator;Lorg/siros/sdk/keystore/CircuitZkProver;Ljava/util/List;Ljava/util/List;Lorg/siros/sdk/credentials/NonDisclosurePolicy;Lorg/siros/sdk/credentials/CircuitZkCircuitSource;)Lorg/siros/sdk/wallet/WalletConfig;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/WalletConfig;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLorg/siros/sdk/credentials/CredentialStore;Lokhttp3/OkHttpClient;Lkotlin/jvm/functions/Function1;ZLorg/siros/sdk/keystore/KeystoreManager;Lorg/siros/sdk/keystore/NativeAttestationProvider;Ljava/lang/String;ZLjava/util/Map;Ljava/util/Map;Lkotlin/jvm/functions/Function4;Ljava/lang/String;Ljava/util/List;Ljava/util/Set;Ljava/util/List;ZLjava/util/List;ZLkotlin/jvm/functions/Function2;Lkotlin/jvm/functions/Function1;Lorg/siros/sdk/wallet/MdocTrustEvaluationMode;Lorg/siros/sdk/wallet/MdocTrustEvaluationMode;ZZLorg/siros/sdk/credentials/interop/InteropProfile;Ljava/util/Map;Lorg/siros/sdk/credentials/interop/DiipProfile;JZLorg/siros/sdk/wallet/dcapi/ExpectedOriginsMode;Lkotlin/jvm/functions/Function1;ZLorg/siros/sdk/credentials/CircuitZkPlanner;Lorg/siros/sdk/credentials/CircuitZkRequestValidator;Lorg/siros/sdk/keystore/CircuitZkProver;Ljava/util/List;Ljava/util/List;Lorg/siros/sdk/credentials/NonDisclosurePolicy;Lorg/siros/sdk/credentials/CircuitZkCircuitSource;IILjava/lang/Object;)Lorg/siros/sdk/wallet/WalletConfig;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAvailableKeystores ()Ljava/util/Map;
 	public final fun getBackendUrl ()Ljava/lang/String;
@@ -818,6 +826,7 @@ public final class org/siros/sdk/wallet/WalletConfig {
 	public final fun getCircuitZkProver ()Lorg/siros/sdk/keystore/CircuitZkProver;
 	public final fun getCircuitZkValidator ()Lorg/siros/sdk/credentials/CircuitZkRequestValidator;
 	public final fun getCircuitZkVerifierIdSources ()Ljava/util/List;
+	public final fun getCircuitZkVerifierIdTypes ()Ljava/util/List;
 	public final fun getClockToleranceSeconds ()J
 	public final fun getCredentialStore ()Lorg/siros/sdk/credentials/CredentialStore;
 	public final fun getDcApiExpectedOrigins ()Lorg/siros/sdk/wallet/dcapi/ExpectedOriginsMode;
@@ -893,8 +902,8 @@ public final class org/siros/sdk/wallet/WalletEventListener$DefaultImpls {
 public final class org/siros/sdk/wallet/WalletPolicyOptions {
 	public static final field Companion Lorg/siros/sdk/wallet/WalletPolicyOptions$Companion;
 	public fun <init> ()V
-	public fun <init> (Lorg/siros/sdk/wallet/NonDisclosureMode;ZLorg/siros/sdk/wallet/dcapi/ExpectedOriginsMode;Lorg/siros/sdk/wallet/SignedRequestRule;ZLjava/util/Set;)V
-	public synthetic fun <init> (Lorg/siros/sdk/wallet/NonDisclosureMode;ZLorg/siros/sdk/wallet/dcapi/ExpectedOriginsMode;Lorg/siros/sdk/wallet/SignedRequestRule;ZLjava/util/Set;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lorg/siros/sdk/wallet/NonDisclosureMode;ZLorg/siros/sdk/wallet/dcapi/ExpectedOriginsMode;Lorg/siros/sdk/wallet/SignedRequestRule;ZLjava/util/List;)V
+	public synthetic fun <init> (Lorg/siros/sdk/wallet/NonDisclosureMode;ZLorg/siros/sdk/wallet/dcapi/ExpectedOriginsMode;Lorg/siros/sdk/wallet/SignedRequestRule;ZLjava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun applyTo (Lorg/siros/sdk/wallet/WalletConfig;Lorg/siros/sdk/credentials/CircuitZkPlanner;Lorg/siros/sdk/credentials/CircuitZkCircuitSource;)Lorg/siros/sdk/wallet/WalletConfig;
 	public static synthetic fun applyTo$default (Lorg/siros/sdk/wallet/WalletPolicyOptions;Lorg/siros/sdk/wallet/WalletConfig;Lorg/siros/sdk/credentials/CircuitZkPlanner;Lorg/siros/sdk/credentials/CircuitZkCircuitSource;ILjava/lang/Object;)Lorg/siros/sdk/wallet/WalletConfig;
 	public final fun component1 ()Lorg/siros/sdk/wallet/NonDisclosureMode;
@@ -902,16 +911,16 @@ public final class org/siros/sdk/wallet/WalletPolicyOptions {
 	public final fun component3 ()Lorg/siros/sdk/wallet/dcapi/ExpectedOriginsMode;
 	public final fun component4 ()Lorg/siros/sdk/wallet/SignedRequestRule;
 	public final fun component5 ()Z
-	public final fun component6 ()Ljava/util/Set;
-	public final fun copy (Lorg/siros/sdk/wallet/NonDisclosureMode;ZLorg/siros/sdk/wallet/dcapi/ExpectedOriginsMode;Lorg/siros/sdk/wallet/SignedRequestRule;ZLjava/util/Set;)Lorg/siros/sdk/wallet/WalletPolicyOptions;
-	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/WalletPolicyOptions;Lorg/siros/sdk/wallet/NonDisclosureMode;ZLorg/siros/sdk/wallet/dcapi/ExpectedOriginsMode;Lorg/siros/sdk/wallet/SignedRequestRule;ZLjava/util/Set;ILjava/lang/Object;)Lorg/siros/sdk/wallet/WalletPolicyOptions;
+	public final fun component6 ()Ljava/util/List;
+	public final fun copy (Lorg/siros/sdk/wallet/NonDisclosureMode;ZLorg/siros/sdk/wallet/dcapi/ExpectedOriginsMode;Lorg/siros/sdk/wallet/SignedRequestRule;ZLjava/util/List;)Lorg/siros/sdk/wallet/WalletPolicyOptions;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/WalletPolicyOptions;Lorg/siros/sdk/wallet/NonDisclosureMode;ZLorg/siros/sdk/wallet/dcapi/ExpectedOriginsMode;Lorg/siros/sdk/wallet/SignedRequestRule;ZLjava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/wallet/WalletPolicyOptions;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getCircuitZk ()Z
 	public final fun getExpectedOrigins ()Lorg/siros/sdk/wallet/dcapi/ExpectedOriginsMode;
 	public final fun getFakeProver ()Z
 	public final fun getNonDisclosure ()Lorg/siros/sdk/wallet/NonDisclosureMode;
 	public final fun getSignedRequest ()Lorg/siros/sdk/wallet/SignedRequestRule;
-	public final fun getVerifierIdSources ()Ljava/util/Set;
+	public final fun getVerifierIdTypes ()Ljava/util/List;
 	public fun hashCode ()I
 	public final fun toStored ()Ljava/util/Map;
 	public fun toString ()Ljava/lang/String;

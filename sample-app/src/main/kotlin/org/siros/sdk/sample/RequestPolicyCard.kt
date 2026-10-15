@@ -13,12 +13,17 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -27,7 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.siros.sdk.wallet.NonDisclosureMode
 import org.siros.sdk.wallet.SignedRequestRule
-import org.siros.sdk.wallet.VerifierIdSourceKind
+import org.siros.sdk.wallet.VerifierIdTypeOrder
 import org.siros.sdk.wallet.WalletPolicyOptions
 import org.siros.sdk.wallet.dcapi.ExpectedOriginsMode
 
@@ -106,23 +111,59 @@ fun RequestPolicyCard(
                 stringResource(R.string.settings_policy_verifier_ids),
                 style = MaterialTheme.typography.bodyLarge,
             )
-            for (kind in VerifierIdSourceKind.entries) {
-                val on = kind in policy.verifierIdSources
+            Text(
+                stringResource(R.string.settings_policy_verifier_ids_description),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            val types = policy.verifierIdTypes
+            if (types.isEmpty()) {
+                Text(
+                    stringResource(R.string.settings_policy_verifier_ids_empty),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            types.forEachIndexed { index, type ->
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Checkbox(
-                        checked = on,
-                        onCheckedChange = { update(policy.copy(verifierIdSources = if (it) policy.verifierIdSources + kind else policy.verifierIdSources - kind)) },
+                    Text("${index + 1}. $type", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    TextButton(
+                        onClick = { update(policy.copy(verifierIdTypes = VerifierIdTypeOrder.move(types, index, -1))) },
+                        enabled = enabled && index > 0,
+                    ) { Text(stringResource(R.string.settings_policy_verifier_ids_up)) }
+                    TextButton(
+                        onClick = { update(policy.copy(verifierIdTypes = VerifierIdTypeOrder.move(types, index, 1))) },
+                        enabled = enabled && index < types.lastIndex,
+                    ) { Text(stringResource(R.string.settings_policy_verifier_ids_down)) }
+                    TextButton(
+                        onClick = { update(policy.copy(verifierIdTypes = VerifierIdTypeOrder.remove(types, index))) },
                         enabled = enabled,
-                    )
-                    Text(
-                        stringResource(if (kind == VerifierIdSourceKind.X509_SAN_DNS) R.string.settings_policy_source_x509 else R.string.settings_policy_source_authzen),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
+                    ) { Text(stringResource(R.string.settings_policy_verifier_ids_remove)) }
                 }
             }
+            var draft by remember { mutableStateOf("") }
+            val added = VerifierIdTypeOrder.add(types, draft)
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    label = { Text(stringResource(R.string.settings_policy_verifier_ids_new)) },
+                    singleLine = true,
+                    enabled = enabled,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    onClick = { added?.let { update(policy.copy(verifierIdTypes = it)); draft = "" } },
+                    enabled = enabled && added != null,
+                ) { Text(stringResource(R.string.settings_policy_verifier_ids_add)) }
+            }
+            TextButton(
+                onClick = { update(policy.copy(verifierIdTypes = VerifierIdTypeOrder.DEFAULT)) },
+                enabled = enabled && types != VerifierIdTypeOrder.DEFAULT,
+            ) { Text(stringResource(R.string.settings_policy_verifier_ids_reset)) }
             Spacer(Modifier.height(8.dp))
             Text(
                 stringResource(R.string.settings_policy_applies_next),

@@ -366,18 +366,32 @@ data class WalletConfig(
     /**
      * The wallet's satisfiability rules for a plan. `null` (default) means the
      * rulebook rules ([org.siros.sdk.credentials.RulebookCircuitZkValidator]),
-     * with the verifier-id types of [circuitZkVerifierIdSources].
+     * accepting any `verifier_id_type` the request names (the wallet picks the
+     * type itself, see [circuitZkVerifierIdTypes]).
      */
     val circuitZkValidator: CircuitZkRequestValidator? = null,
     /** The prover behind `circuit_zk` presentations. Without one, a matched request is refused. */
     val circuitZkProver: org.siros.sdk.keystore.CircuitZkProver? = null,
     /**
-     * The sources of `verifier_id`, in order: for a type, the first source
-     * that does not decline wins. The defaults produce the rulebook's two
-     * types: `x509_san_dns` from the request's certificate and `semantic`
-     * from the policy decision point's response.
+     * The wallet's ORDERED supported `verifier_id_type`s (default
+     * `["semantic", "x509_san_dns"]`, see [VerifierIdTypeOrder]). The type is agreed in the
+     * trust framework, so for a pseudonym the wallet walks this list in order and uses the first
+     * type for which an identifier is available; the `verifier_id_type` a request names is
+     * IGNORED for selection (and a request naming another type is not refused for that).
+     * Entries must be non-blank, trimmed, comma-free and unique (checked at construction).
+     * An EMPTY list means no type is supported: a request needing a pseudonym is refused.
+     *
+     * The strings are opaque and must equal what the policy decision point returns in
+     * `context.verifier_ids`; go-trust (PR #204) currently returns `dns`, not `x509_san_dns`
+     * (open alignment item: with such a PDP the default `x509_san_dns` yields nothing).
      */
-    val circuitZkVerifierIdSources: List<VerifierIdSource> = listOf(X509SanDnsSource(), AuthZENSource("semantic")),
+    val circuitZkVerifierIdTypes: List<String> = VerifierIdTypeOrder.DEFAULT,
+    /**
+     * Additional (optional) sources of `verifier_id`, such as the local [X509SanDnsSource]. The
+     * policy decision point ([AuthZENSource]) is always the first source for every supported type;
+     * these are tried after it, for the types they produce. Empty by default.
+     */
+    val circuitZkVerifierIdSources: List<VerifierIdSource> = emptyList(),
     /**
      * The claims the wallet never matches on, registers, presents or displays,
      * by credential type. The default protects the nym_auth `ssc` and `psc`;
@@ -388,6 +402,10 @@ data class WalletConfig(
     /** The circuits the wallet can prove with, from the circuit catalog. */
     val circuitZkCircuits: CircuitZkCircuitSource? = null,
 ) {
+    init {
+        VerifierIdTypeOrder.require(circuitZkVerifierIdTypes)
+    }
+
     /**
      * The reader-trust mode actually in force: [readerTrustEvaluationMode] if
      * one was chosen, otherwise whatever the deprecated
