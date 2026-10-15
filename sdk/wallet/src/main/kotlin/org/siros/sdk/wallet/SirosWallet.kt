@@ -696,42 +696,54 @@ class SirosWallet private constructor(
         // NonCancellable below closes (2), since by the time they run the
         // backend has unconditionally committed to this passkey and the
         // local state must catch up regardless of what cancelled the caller.
-        return privateDataWriteMutex.withLock {
-            val outcome = try {
-                client.passkeyRegisterFinish(
-                    challengeId = challenge.challengeId,
-                    credential = created,
-                    nickname = nickname,
-                    privateData = prepared.container,
-                    authorization = authorization,
-                )
-            } catch (e: Exception) {
-                rollbackLocalCredential(created.credentialId)
-                throw e
-            }
-            if (outcome !is AddPasskeyOutcome.Added) rollbackLocalCredential(created.credentialId)
-            if (outcome is AddPasskeyOutcome.Added && sessionChanged()) {
-                Timber.w("Add passkey: discarding a completion for a session that ended while it was in flight")
-                rollbackLocalCredential(created.credentialId)
-                return@withLock AddPasskeyResult.SessionRevoked("Session changed before the new passkey could be committed")
-            }
-            when (outcome) {
-                is AddPasskeyOutcome.Added -> {
-                    withContext(kotlinx.coroutines.NonCancellable) {
-                        keystore.commitPrfKey(prepared)
-                        sessionStore.privateDataJwe = String(prepared.container, Charsets.UTF_8)
-                        persistPrivateDataEtag()
-                        recordAddedPasskey(created.credentialId, prfSalt, nickname)
-                    }
-                    AddPasskeyResult.Added(outcome.credentialId)
+        return try {
+            privateDataWriteMutex.withLock {
+                val outcome = try {
+                    client.passkeyRegisterFinish(
+                        challengeId = challenge.challengeId,
+                        credential = created,
+                        nickname = nickname,
+                        privateData = prepared.container,
+                        authorization = authorization,
+                    )
+                } catch (e: Exception) {
+                    rollbackLocalCredential(created.credentialId)
+                    throw e
                 }
-                is AddPasskeyOutcome.AuthorizationRequired -> AddPasskeyResult.AuthorizationRequired(outcome.message)
-                is AddPasskeyOutcome.AuthorizationFailed -> AddPasskeyResult.AuthorizationFailed(outcome.message)
-                is AddPasskeyOutcome.RetryNeeded -> AddPasskeyResult.RetryNeeded(outcome.message)
-                is AddPasskeyOutcome.PrivateDataConflict -> AddPasskeyResult.PrivateDataConflict(null)
-                is AddPasskeyOutcome.RegistrationRejected -> AddPasskeyResult.RegistrationRejected(outcome.message)
-                is AddPasskeyOutcome.SessionRevoked -> AddPasskeyResult.SessionRevoked(outcome.message)
+                if (outcome !is AddPasskeyOutcome.Added) rollbackLocalCredential(created.credentialId)
+                if (outcome is AddPasskeyOutcome.Added && sessionChanged()) {
+                    Timber.w("Add passkey: discarding a completion for a session that ended while it was in flight")
+                    rollbackLocalCredential(created.credentialId)
+                    return@withLock AddPasskeyResult.SessionRevoked("Session changed before the new passkey could be committed")
+                }
+                when (outcome) {
+                    is AddPasskeyOutcome.Added -> {
+                        withContext(kotlinx.coroutines.NonCancellable) {
+                            keystore.commitPrfKey(prepared)
+                            sessionStore.privateDataJwe = String(prepared.container, Charsets.UTF_8)
+                            persistPrivateDataEtag()
+                            recordAddedPasskey(created.credentialId, prfSalt, nickname)
+                        }
+                        AddPasskeyResult.Added(outcome.credentialId)
+                    }
+                    is AddPasskeyOutcome.AuthorizationRequired -> AddPasskeyResult.AuthorizationRequired(outcome.message)
+                    is AddPasskeyOutcome.AuthorizationFailed -> AddPasskeyResult.AuthorizationFailed(outcome.message)
+                    is AddPasskeyOutcome.RetryNeeded -> AddPasskeyResult.RetryNeeded(outcome.message)
+                    is AddPasskeyOutcome.PrivateDataConflict -> AddPasskeyResult.PrivateDataConflict(null)
+                    is AddPasskeyOutcome.RegistrationRejected -> AddPasskeyResult.RegistrationRejected(outcome.message)
+                    is AddPasskeyOutcome.SessionRevoked -> AddPasskeyResult.SessionRevoked(outcome.message)
+                }
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // A cancellation arriving while still SUSPENDED WAITING for
+            // privateDataWriteMutex (before the block above - and so none of
+            // its own rollback paths - ever runs) would otherwise leave the
+            // credential authProvider.register() already created as an
+            // orphan with nothing to roll it back: finish() was never even
+            // sent, so there is no "accepted enrollment" to preserve here,
+            // unlike the NonCancellable section above.
+            rollbackLocalCredential(created.credentialId)
+            throw e
         }
     }
 

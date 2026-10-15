@@ -7297,6 +7297,50 @@ class SirosWalletTest {
     }
 
     @Test
+    fun addPasskey_rolls_back_if_cancelled_while_waiting_for_the_writer_lock() = runTest(dispatcher) {
+        // Cancellation landing while still suspended waiting for
+        // privateDataWriteMutex happens BEFORE the locked block (and so
+        // before any of its own rollback paths) ever runs. finish() was
+        // never sent, so there is nothing accepted server-side to preserve -
+        // the credential authProvider.register() already created locally
+        // must still be rolled back.
+        val client = mockk<BackendApiClient>(relaxed = true)
+        every { client.privateDataEtag } returns "\"etag\""
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns true
+        val prepared = org.siros.sdk.keystore.PreparedPrfKey("container".toByteArray(), mockk(relaxed = true))
+        coEvery { keystore.preparePrfKey(any(), any(), any(), any(), any()) } returns prepared
+        val authProvider = mockk<org.siros.sdk.auth.LocalAuthProvider>(relaxed = true)
+        val created = org.siros.sdk.auth.RegisterResult(
+            credentialId = byteArrayOf(5, 5), attestationObject = byteArrayOf(6), clientDataJSON = byteArrayOf(7),
+            prfOutput = org.siros.sdk.auth.PrfOutput(ByteArray(32) { 3 }),
+        )
+        coEvery { authProvider.register(any()) } returns created
+        val enrollment = org.siros.sdk.auth.PasskeyEnrollmentChallenge(
+            "enr-1", "alice",
+            org.siros.sdk.auth.RegisterOptions("rp.example", "RP", byteArrayOf(1), "alice", "Alice", byteArrayOf(2)),
+            null,
+        )
+        coEvery { client.passkeyRegisterBegin() } returns org.siros.sdk.auth.AddPasskeyBegin.Ready(enrollment)
+        val wallet = newWallet(
+            "apiClient" to client, "authProvider" to authProvider, "keystore" to keystore,
+            "sessionStore" to mockk<SessionStore>(relaxed = true), "accountRegistry" to mockk<AccountRegistry>(relaxed = true),
+        )
+        // Hold the writer lock externally so addPasskey has to suspend
+        // waiting for it, the way a concurrent persistAndSyncKeystore would.
+        val mutex = getField(wallet, "privateDataWriteMutex") as kotlinx.coroutines.sync.Mutex
+        mutex.lock()
+
+        val job = launch { wallet.addPasskey("Phone") }
+        advanceUntilIdle()
+        job.cancel()
+        job.join()
+
+        coVerify(exactly = 0) { client.passkeyRegisterFinish(any(), any(), any(), any(), any(), any()) }
+        verify(exactly = 1) { authProvider.forgetCredential(match { it.contentEquals(created.credentialId) }) }
+    }
+
+    @Test
     fun addPasskey_needs_an_unlocked_keystore_and_maps_begin_refusals() = runTest(dispatcher) {
         val locked = AddPasskeyFixture()
         every { locked.keystore.isUnlocked } returns false
