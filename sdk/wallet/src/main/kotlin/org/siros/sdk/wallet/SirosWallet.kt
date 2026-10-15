@@ -3919,7 +3919,7 @@ class SirosWallet private constructor(
                     deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
                 )
             } else {
-                val binding = scaPlan?.bindingFor(queryId)
+                val binding = scaPlan?.bindingFor(queryId, cred)
                 if (binding != null) {
                     signScaVp(cred, disclosedClaims, request.nonce, audience, binding, scaPlan)
                 } else {
@@ -6017,7 +6017,7 @@ class SirosWallet private constructor(
                 org.siros.sdk.credentials.TransactionDataReason.INVALID_ENTRY,
                 "A selected credential is not in the wallet",
             )
-            val binding = plan.bindingFor(ref.credentialQueryId)
+            val binding = plan.bindingFor(ref.credentialQueryId, c)
             tokens += if (binding != null) {
                 signScaVp(c, ref.disclosedClaims, nonce, audience, binding, plan)
             } else {

@@ -665,6 +665,26 @@ class WscdKeystoreAdapterTest {
     }
 
     @Test
+    fun signVpToken_sca_comparesTheReportWithTheFactorsThatWereSerialised_notWithAGetterRead_afterSigning() = runTest {
+        // A session whose declared list changes once the sign has started: the JWT carries
+        // [key, pin6], and the report [key, face] is what the changed list would now match.
+        val face = AuthenticationFactor(AuthenticationCategory.INHERENCE, "face_device")
+        var current = listOf(keyFactor, pinFactor)
+        val s = object : ScaSignSession {
+            override val declaredFactors get() = current
+            override suspend fun sign(data: ByteArray): ScaSignature {
+                current = listOf(keyFactor, face)
+                return ScaSignature(ByteArray(64), listOf(keyFactor, face))
+            }
+        }
+        val (adapter, _) = scaAdapter(s)
+
+        val e = runCatching { adapter.signVpToken(fakeSdJwtVc(), null, "n", "aud", "key-b", scaBinding) }.exceptionOrNull()
+
+        assertEquals(TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS, (e as TransactionDataError).reason)
+    }
+
+    @Test
     fun signVpToken_sca_isRefused_whenTheSignAppliedOnlyOneCategory() = runTest {
         val s = session(listOf(keyFactor, pinFactor), listOf(keyFactor))
         val (adapter, _) = scaAdapter(s)

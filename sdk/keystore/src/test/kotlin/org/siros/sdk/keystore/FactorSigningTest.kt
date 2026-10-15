@@ -47,7 +47,9 @@ class FactorSigningTest {
     ) : FactorSigningBackend {
         var seenOptions: FfiSignOptions? = null
         var seenData: ByteArray? = null
-        val pinsHandedToPlugin = mutableListOf<ByteArray>()
+        /** The buffers given to the plugin, and what each held at the moment it was given. */
+        val pinBuffers = mutableListOf<ByteArray>()
+        val pinsAsSeen = mutableListOf<String>()
         var capabilityThrows = false
         override fun capability(kid: String): FfiFactorCapability {
             if (capabilityThrows) throw IllegalStateException("no such key")
@@ -57,7 +59,11 @@ class FactorSigningTest {
         override fun signWithFactors(kid: String, data: ByteArray, options: FfiSignOptions, auth: FfiAuthCallback): FfiSignOutcome {
             seenOptions = options
             seenData = data
-            repeat(pinRequests) { pinsHandedToPlugin += auth.requestPin(plugin ?: "?") }
+            repeat(pinRequests) {
+                val p = auth.requestPin(plugin ?: "?")
+                pinBuffers += p
+                pinsAsSeen += String(p)
+            }
             return result()
         }
     }
@@ -105,6 +111,8 @@ class FactorSigningTest {
     fun `classifySecret does not guess for an empty or non-UTF-8 secret`() {
         assertNull(FactorSigning.classifySecret(ByteArray(0)))
         assertNull(FactorSigning.classifySecret(byteArrayOf(0xC3.toByte(), 0x28)))
+        // a truncated multi-byte sequence at the end is malformed too
+        assertNull(FactorSigning.classifySecret(byteArrayOf('1'.code.toByte(), 0xE2.toByte(), 0x82.toByte())))
     }
 
     // ── capability ──
@@ -137,25 +145,42 @@ class FactorSigningTest {
         }
 
         assertEquals("the user is prompted once, not once for the claim and once for the sign", 1, prompts.asked)
-        assertEquals("123456", String(b.pinsHandedToPlugin.single()))
+        assertEquals("123456", b.pinsAsSeen.single())
         assertTrue(b.seenOptions!!.requireFreshUserAuthentication)
         assertNull(b.seenOptions!!.hostVerifiedFactor)
         assertArrayEquals(byteArrayOf(1, 2, 3), b.seenData)
     }
 
     @Test
-    fun `the PIN typed ahead is wiped after use and on close`() = runTest {
-        val prompts = Prompts("123456")
-        val b = FakeBackend { outcome(ffi(AuthenticationCategory.POSSESSION, "key_in_remote_wscd"), ffi(AuthenticationCategory.KNOWLEDGE, "pin_6_or_more_digits")) }
+    fun `every PIN buffer given to the plugin is wiped when the sign ends, and the SDK's own copy too`() = runTest {
+        val prompts = Prompts("123456", "654321")
+        val b = FakeBackend(pinRequests = 2) {
+            outcome(ffi(AuthenticationCategory.POSSESSION, "key_in_remote_wscd"), ffi(AuthenticationCategory.KNOWLEDGE, "pin_6_or_more_digits"))
+        }
 
         FactorSigning(b, prompts).begin("k", null).use { it.sign(ByteArray(1)) }
 
-        assertTrue("the SDK's copy is zeroed", prompts.handedOut.single().all { it == 0.toByte() })
+        assertEquals(listOf("123456", "654321"), b.pinsAsSeen)
+        assertEquals(2, b.pinBuffers.size)
+        assertTrue("the buffers the plugin was given are zeroed", b.pinBuffers.all { buf -> buf.all { it == 0.toByte() } })
+        assertTrue("the host's array the SDK held is zeroed", prompts.handedOut.all { buf -> buf.all { it == 0.toByte() } })
+    }
 
-        // A session that never signs also wipes it.
-        val p2 = Prompts("123456")
-        FactorSigning(b, p2).begin("k", null).close()
-        assertTrue(p2.handedOut.single().all { it == 0.toByte() })
+    @Test
+    fun `buffers are wiped even when the sign fails`() = runTest {
+        val prompts = Prompts("123456")
+        val b = FakeBackend { throw FfiWscdException.AuthCancelled("cancelled") }
+
+        FactorSigning(b, prompts).begin("k", null).use { runCatching { it.sign(ByteArray(1)) } }
+
+        assertTrue(b.pinBuffers.single().all { it == 0.toByte() })
+    }
+
+    @Test
+    fun `a session that never signs wipes the PIN typed ahead on close`() {
+        val prompts = Prompts("123456")
+        FactorSigning(FakeBackend { outcome() }, prompts).begin("k", null).close()
+        assertTrue(prompts.handedOut.single().all { it == 0.toByte() })
     }
 
     @Test

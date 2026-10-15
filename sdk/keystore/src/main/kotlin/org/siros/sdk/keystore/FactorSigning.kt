@@ -9,7 +9,7 @@ import uniffi.siros_wscd_manager.FfiSignOptions
 import uniffi.siros_wscd_manager.FfiSignOutcome
 import uniffi.siros_wscd_manager.FfiWscdException
 import java.nio.ByteBuffer
-import java.nio.charset.CharacterCodingException
+import java.nio.CharBuffer
 import java.nio.charset.CodingErrorAction
 
 /** The part of the WSCD manager SCA signing needs; a seam so the logic is testable without the native library. */
@@ -101,10 +101,14 @@ internal class FactorSigning(
                 requireFreshUserAuthentication = true,
                 hostVerifiedFactor = host?.let { FfiAuthFactor(it.category.toFfi(), it.method) },
             )
+            val handedToPlugin = mutableListOf<ByteArray>()
             val outcome = try {
-                backend.signWithFactors(kid, data, options, oneShotPin())
+                backend.signWithFactors(kid, data, options, oneShotPin(handedToPlugin))
             } catch (e: FfiWscdException.Unsupported) {
                 throw ScaSignSession.insufficient("This authenticator cannot guarantee a fresh user authentication for the sign")
+            } finally {
+                // The native call copies a returned PIN and never clears ours: wipe every buffer given to it.
+                handedToPlugin.forEach { it.fill(0) }
             }
             val applied = try {
                 outcome.factors.factors.map { AuthenticationFactor(it.category.toSdk(), it.method) }
@@ -122,16 +126,22 @@ internal class FactorSigning(
             pin = null
         }
 
-        /** Serves the PIN typed ahead of the sign to its FIRST request; any later request asks the user normally. */
-        private fun oneShotPin(): FfiAuthCallback = object : FfiAuthCallback {
+        /**
+         * Serves the PIN typed ahead of the sign to its FIRST request; any later request asks the user
+         * normally. Every buffer returned is recorded in [handedOut] so it can be wiped when the sign ends.
+         */
+        private fun oneShotPin(handedOut: MutableList<ByteArray>): FfiAuthCallback = object : FfiAuthCallback {
             override fun requestPin(pluginId: String): ByteArray {
                 val held = pin
-                if (held != null) {
+                val answer = if (held != null) {
                     pin = null
-                    // The plugin takes ownership of this copy; the held one is wiped.
-                    return held.copyOf().also { held.fill(0) }
+                    // The plugin gets its own copy; the held one is wiped.
+                    held.copyOf().also { held.fill(0) }
+                } else {
+                    callbacks.requestPin(pluginId)
                 }
-                return callbacks.requestPin(pluginId)
+                handedOut += answer
+                return answer
             }
 
             override fun requestWebauthnAssertion(
@@ -151,22 +161,28 @@ internal class FactorSigning(
          * Null for an empty or non-UTF-8 secret: the class is then unknown, never guessed.
          */
         fun classifySecret(secret: ByteArray): String? {
-            val text = try {
-                Charsets.UTF_8.newDecoder()
+            // Decoded into a buffer this function owns and wipes on every path; no String (an
+            // immutable copy of the secret that cannot be erased) is ever made.
+            val chars = CharBuffer.allocate(secret.size)
+            try {
+                val decoder = Charsets.UTF_8.newDecoder()
                     .onMalformedInput(CodingErrorAction.REPORT)
                     .onUnmappableCharacter(CodingErrorAction.REPORT)
-                    .decode(ByteBuffer.wrap(secret)).toString()
-            } catch (_: CharacterCodingException) {
-                return null
-            }
-            val n = text.codePointCount(0, text.length)
-            if (n == 0) return null
-            return if (text.all { it in '0'..'9' }) {
-                if (n < 6) "pin_less_than_6_digits" else "pin_6_or_more_digits"
-            } else when {
-                n < 8 -> "passphrase_less_than_8_chars"
-                n < 12 -> "passphrase_8_to_11_chars"
-                else -> "passphrase_12_or_more_chars"
+                val input = ByteBuffer.wrap(secret)
+                if (decoder.decode(input, chars, true).isError || decoder.flush(chars).isError) return null
+                val array = chars.array()
+                val length = chars.position()
+                val n = Character.codePointCount(array, 0, length)
+                if (n == 0) return null
+                return if ((0 until length).all { array[it] in '0'..'9' }) {
+                    if (n < 6) "pin_less_than_6_digits" else "pin_6_or_more_digits"
+                } else when {
+                    n < 8 -> "passphrase_less_than_8_chars"
+                    n < 12 -> "passphrase_8_to_11_chars"
+                    else -> "passphrase_12_or_more_chars"
+                }
+            } finally {
+                chars.array().fill('\u0000')
             }
         }
 

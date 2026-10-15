@@ -461,34 +461,41 @@ class WscdKeystoreAdapter private constructor(
             .claim("nonce", nonce)
             .claim("sd_hash", sdHash)
 
-        // SCA: the factors are settled by the signing operation, which is started
-        // here (after consent) so a PIN asked for ahead of it is for THIS sign. The
-        // KB-JWT claims exactly those factors, and the signature is discarded unless
-        // the sign itself reports the same ones.
-        val session = if (transaction != null) signer.beginScaSign(key.keyId, transaction.hostVerifiedFactor) else null
+        val kbJwt = if (transaction != null) {
+            signScaKbJwt(key.keyId, header, claims, transaction)
+        } else {
+            addLegacyAuthenticationClaims(claims, key.keyId)
+            val signingInput = "${base64Url(header.toJSONObject())}.${base64Url(claims.build().toJSONObject())}"
+            val signature = signer.sign(key.keyId, signingInput.toByteArray(Charsets.UTF_8))
+            "$signingInput.${base64UrlEncode(signature)}"
+        }
+
+        return sdJwtPresentation + kbJwt
+    }
+
+    /**
+     * Signs an SCA KB-JWT. The factors are settled by the signing operation, which is
+     * started here (after consent) so a PIN asked for ahead of it is for THIS sign. The
+     * KB-JWT claims exactly those factors, and the signature is discarded unless the sign
+     * itself reports the same ones. The claim is snapshotted once: the report is compared
+     * with the very list that was serialised, whatever the session's getter returns later.
+     */
+    private suspend fun signScaKbJwt(
+        keyId: String,
+        header: JWSHeader,
+        claims: JWTClaimsSet.Builder,
+        transaction: TransactionBinding,
+    ): String {
+        val session = signer.beginScaSign(keyId, transaction.hostVerifiedFactor)
         try {
-            if (transaction != null && session != null) {
-                transaction.applyTo(claims, session.declaredFactors)
-            } else {
-                addLegacyAuthenticationClaims(claims, key.keyId)
-            }
-
-            val claimsSet = claims.build()
-
-            val signingInput = "${base64Url(header.toJSONObject())}.${base64Url(claimsSet.toJSONObject())}"
-            val signingBytes = signingInput.toByteArray(Charsets.UTF_8)
-            val signature = if (session != null) {
-                val signed = session.sign(signingBytes)
-                ScaSignSession.requireMatching(session.declaredFactors, signed.factors)
-                signed.signature
-            } else {
-                signer.sign(key.keyId, signingBytes)
-            }
-            val kbJwt = "$signingInput.${base64UrlEncode(signature)}"
-
-            return sdJwtPresentation + kbJwt
+            val declared = session.declaredFactors.toList()
+            transaction.applyTo(claims, declared)
+            val signingInput = "${base64Url(header.toJSONObject())}.${base64Url(claims.build().toJSONObject())}"
+            val signed = session.sign(signingInput.toByteArray(Charsets.UTF_8))
+            ScaSignSession.requireMatching(declared, signed.factors)
+            return "$signingInput.${base64UrlEncode(signed.signature)}"
         } finally {
-            session?.close()
+            session.close()
         }
     }
 

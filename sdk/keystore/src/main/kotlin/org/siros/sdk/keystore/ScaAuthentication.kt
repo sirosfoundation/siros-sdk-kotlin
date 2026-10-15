@@ -46,7 +46,9 @@ class ScaSignature(val signature: ByteArray, val factors: List<AuthenticationFac
 interface ScaSignSession : AutoCloseable {
     val declaredFactors: List<AuthenticationFactor>
     suspend fun sign(data: ByteArray): ScaSignature
-    override fun close() {}
+    override fun close() {
+        // Nothing secret is held by default; a session that holds a PIN overrides this to wipe it.
+    }
 
     companion object {
         /**

@@ -29,7 +29,8 @@ import timber.log.Timber
 
 /**
  * What a successful [TransactionDataCoordinator.process] hands to signing:
- * the KB-JWT binding for each DCQL query id an entry is bound to. A query not
+ * the KB-JWT binding for each DCQL query id an entry is bound to, resolved per
+ * credential just before each sign ([bindingFor]). A query not
  * in it is presented without transaction data.
  *
  * Signing must use exactly the credentials that were validated and shown (the
@@ -40,9 +41,38 @@ import timber.log.Timber
  */
 internal class ScaPresentationPlan(
     private val bindings: Map<String, TransactionBinding>,
+    /** Ids of the credentials whose signer needs a host-verified factor for each sign. */
+    private val needsHostFactor: Set<Long> = emptySet(),
+    private val hostVerifier: suspend (StoredCredential) -> AuthenticationFactor? = { null },
     private val onSigningFailed: suspend () -> Unit = {},
 ) {
-    fun bindingFor(queryId: String?): TransactionBinding? = queryId?.let { bindings[it] }
+    /**
+     * The binding to sign [credential] with, or null when no entry is bound to [queryId].
+     * Where the credential's signer needs the host's user verification it is performed
+     * HERE, once per credential and just before that credential's sign (after consent),
+     * so a factor is never reused across signs. No answer, a possession factor or a
+     * failure refuses and records the signing failure.
+     */
+    suspend fun bindingFor(queryId: String?, credential: StoredCredential): TransactionBinding? {
+        val base = queryId?.let { bindings[it] } ?: return null
+        if (credential.id !in needsHostFactor) return base
+        val factor = try {
+            hostVerifier(credential)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.w("The host's user verification failed (${e.javaClass.simpleName})")
+            null
+        }
+        if (factor == null || factor.category == AuthenticationCategory.POSSESSION) {
+            onSigningFailed()
+            throw TransactionDataError(
+                TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS,
+                "The user verification needed for a second authentication category was not confirmed",
+            )
+        }
+        return base.withHostVerifiedFactor(factor)
+    }
 
     /** Records that signing failed after consent (outcome `refused`, reason `signingFailed`). */
     suspend fun signingFailed() = onSigningFailed()
@@ -111,7 +141,7 @@ internal class TransactionDataCoordinator(
             // One warning per validation, now that display has fetched what it needs.
             validated.trust.warnOnce()
 
-            val needsHostFactor = requireFactorsCanBeEstablished(validated, request)
+            val needsHost = requireFactorsCanBeEstablished(validated, request)
             val handler = consentHandler() ?: throw TransactionDataError(
                 TransactionDataReason.NO_CONSENT_HANDLER,
                 "No consent handler is registered, so the transaction cannot be shown to the user",
@@ -119,9 +149,12 @@ internal class TransactionDataCoordinator(
             if (!askUser(handler, consentModel)) {
                 throw TransactionDataError(TransactionDataReason.DECLINED, "The user did not confirm the transaction")
             }
-            val bindings = bind(needsHostFactor, validated, request)
+            val bindings = bind(validated)
             record(request, validated, TransactionOutcome.CONSENTED, null)
-            return ScaPresentationPlan(bindings) {
+            return ScaPresentationPlan(
+                bindings, needsHost,
+                { credential -> hostFactorProvider()?.verify(SigningOperation(credential)) },
+            ) {
                 record(request, validated, TransactionOutcome.REFUSED, SIGNING_FAILED)
             }
         } catch (e: TransactionDataError) {
@@ -136,30 +169,33 @@ internal class TransactionDataCoordinator(
 
     /**
      * Refuses before the user reads anything if no two-category authentication can
-     * possibly follow. Returns the query ids whose signer needs a host-verified factor.
-     * A capability that cannot be determined is a refusal.
+     * possibly follow, for EVERY credential presented for a bound query. Returns the
+     * ids of the credentials whose signer needs a host-verified factor. A capability
+     * that cannot be determined is a refusal.
      */
     private suspend fun requireFactorsCanBeEstablished(
         validated: ValidatedTransactionData,
         request: TransactionDataRequest,
-    ): Set<String> {
-        val needsHost = LinkedHashSet<String>()
+    ): Set<Long> {
+        val needsHost = LinkedHashSet<Long>()
         for (queryId in validated.boundQueryIds()) {
-            val c = try {
-                capability(request.credentials.getValue(queryId).first())
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                null
+            for (credential in request.credentials.getValue(queryId)) {
+                val c = try {
+                    capability(credential)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    null
+                }
+                val hostOnly = c != null && !c.canReachTwoCategories && c.requiresHostVerifiedFactor
+                if (c == null || !(c.canReachTwoCategories || (hostOnly && hostFactorProvider() != null))) {
+                    throw TransactionDataError(
+                        TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS,
+                        "No two-category authentication can be established for this operation",
+                    )
+                }
+                if (hostOnly) needsHost += credential.id
             }
-            val possible = c != null && (c.canReachTwoCategories || (c.requiresHostVerifiedFactor && hostFactorProvider() != null))
-            if (!possible) {
-                throw TransactionDataError(
-                    TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS,
-                    "No two-category authentication can be established for this operation",
-                )
-            }
-            if (c!!.requiresHostVerifiedFactor && !c.canReachTwoCategories) needsHost += queryId
         }
         return needsHost
     }
@@ -181,41 +217,9 @@ internal class TransactionDataCoordinator(
         false
     }
 
-    /**
-     * The KB-JWT binding per bound query. Where the signer needs a host-verified
-     * factor ([needsHostFactor]), the host verifies the user NOW, after consent;
-     * no answer, a wrong category or a failure is a refusal. Nothing is asked
-     * of a signer that reaches two categories itself.
-     */
-    private suspend fun bind(
-        needsHostFactor: Set<String>,
-        validated: ValidatedTransactionData,
-        request: TransactionDataRequest,
-    ): Map<String, TransactionBinding> {
-        val bindings = LinkedHashMap<String, TransactionBinding>()
-        for (queryId in validated.boundQueryIds()) {
-            var host: AuthenticationFactor? = null
-            if (queryId in needsHostFactor) {
-                val provider = hostFactorProvider() ?: throw insufficientFactors()
-                host = try {
-                    provider.verify(SigningOperation(request.credentials.getValue(queryId).first()))
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    Timber.w("The host's user verification failed (${e.javaClass.simpleName})")
-                    null
-                }
-                if (host == null || host.category == AuthenticationCategory.POSSESSION) throw insufficientFactors()
-            }
-            bindings[queryId] = validated.bindingFor(queryId, host)!!
-        }
-        return bindings
-    }
-
-    private fun insufficientFactors() = TransactionDataError(
-        TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS,
-        "The user verification needed for a second authentication category was not confirmed",
-    )
+    /** The KB-JWT binding per bound query. The `amr` and any host factor come later, per sign. */
+    private fun bind(validated: ValidatedTransactionData): Map<String, TransactionBinding> =
+        validated.boundQueryIds().associateWith { validated.bindingFor(it) ?: error("no binding for a bound query") }
 
     /**
      * Writes the log record(s). A refusal is ONE record per request (the first
