@@ -28,7 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now a read-only list.
 - **BREAKING:** the zero-argument, local-only `SirosWallet.deleteAccount()`. The
   name now belongs to the server-side deletion below; to forget a cached
-  account without deleting it use `forgetAccount(accountId)`.
+  account without deleting it use `forgetAccount(accountId)` (unchanged, and
+  the same name as in the Swift SDK and the web wallet's `forgetCachedUser`).
+  A `DeprecationLevel.ERROR` stub of `deleteAccount()` stays for one release so
+  existing callers get a compile error that says what to call instead.
 - **BREAKING:** `WscdKeystoreAdapter.signVpToken(..., transactionData:
   List<TransactionDataItem>, ...)` and `TransactionDataItem`. The overload was
   never called and hashed a re-serialisation of the entry instead of the

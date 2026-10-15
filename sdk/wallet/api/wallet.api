@@ -552,6 +552,7 @@ public final class org/siros/sdk/wallet/SirosWallet {
 	public final fun credentialStatus (Lorg/siros/sdk/credentials/StoredCredential;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun currentGlobalUserOverride ()Ljava/lang/String;
 	public final fun currentUserOverrides ()Ljava/util/Map;
+	public final fun deleteAccount ()Ljava/lang/Void;
 	public final fun deleteAccount (Ljava/lang/String;Lorg/siros/sdk/auth/StepUpAuthenticator;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun deleteAccount$default (Lorg/siros/sdk/wallet/SirosWallet;Ljava/lang/String;Lorg/siros/sdk/auth/StepUpAuthenticator;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun deleteCredential (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;

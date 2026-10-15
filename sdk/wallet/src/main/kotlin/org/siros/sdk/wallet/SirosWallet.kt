@@ -476,6 +476,20 @@ class SirosWallet private constructor(
     }
 
     /**
+     * The zero-argument, local-only `deleteAccount()` of earlier releases. The
+     * name now means server-side deletion, so this fails to compile rather than
+     * quietly doing something else.
+     */
+    @Deprecated(
+        "deleteAccount() only forgot the account on this device. Use forgetAccount(accountId) for that, or " +
+            "deleteAccount(confirmation) to delete the account on the server.",
+        level = DeprecationLevel.ERROR,
+    )
+    @Suppress("UNUSED")
+    fun deleteAccount(): Nothing =
+        throw UnsupportedOperationException("deleteAccount() was removed; use forgetAccount(accountId) or deleteAccount(confirmation)")
+
+    /**
      * Permanently delete this account (`POST /user/session/delete-begin`, then
      * `DELETE /user/session`).
      *
