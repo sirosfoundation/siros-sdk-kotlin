@@ -73,18 +73,15 @@ class AuthenticationFactor(val category: AuthenticationCategory, val method: Str
  *
  * The `amr` is NOT part of the binding: the factors are established by the
  * keystore's own signing operation ([ScaSignSession]) and only the factors that
- * operation backs are claimed. [hostVerifiedFactor] is the one input the host
- * contributes: a knowledge or inherence factor it verified for this sign (a
- * biometric prompt it ran, say), for signers that report possession alone.
+ * operation backs are claimed.
  *
  * @throws IllegalArgumentException for an empty [hashes], an unknown
- *   [hashAlg], a blank [responseMode] or a possession [hostVerifiedFactor].
+ *   [hashAlg] or a blank [responseMode].
  */
 class TransactionBinding(
     hashes: List<String>,
     val hashAlg: String,
     val responseMode: String,
-    val hostVerifiedFactor: AuthenticationFactor? = null,
 ) {
     /** Copied on construction: the caller's list cannot change what gets signed. */
     val hashes: List<String> = hashes.toList()
@@ -93,13 +90,7 @@ class TransactionBinding(
         require(hashes.isNotEmpty() && hashes.none { it.isEmpty() }) { "transaction_data_hashes must be non-empty" }
         require(hashAlg in HASH_ALGS) { "unsupported transaction_data_hashes_alg '$hashAlg'" }
         require(responseMode.isNotBlank()) { "response_mode is required" }
-        require(hostVerifiedFactor?.category != AuthenticationCategory.POSSESSION) {
-            "a host-verified factor must be knowledge or inherence"
-        }
     }
-
-    /** A copy carrying [factor] as the factor the host verified for this sign. */
-    fun withHostVerifiedFactor(factor: AuthenticationFactor?) = TransactionBinding(hashes, hashAlg, responseMode, factor)
 
     /** Adds this binding's claims, and [factors] as the `amr`, to a key binding JWT under construction. */
     internal fun applyTo(claims: JWTClaimsSet.Builder, factors: List<AuthenticationFactor>) {

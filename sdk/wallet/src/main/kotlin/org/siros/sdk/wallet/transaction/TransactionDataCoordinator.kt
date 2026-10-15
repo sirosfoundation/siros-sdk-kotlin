@@ -13,13 +13,9 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import org.siros.sdk.credentials.TransactionDataError
 import org.siros.sdk.credentials.TransactionDataReason
-import org.siros.sdk.keystore.AuthenticationCategory
-import org.siros.sdk.keystore.AuthenticationFactor
 import org.siros.sdk.keystore.TransactionBinding
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.keystore.ScaAuthenticationCapability
-import org.siros.sdk.wallet.HostVerifiedFactorProvider
-import org.siros.sdk.wallet.SigningOperation
 import org.siros.sdk.wallet.TransactionConsentHandler
 import org.siros.sdk.wallet.TransactionConsentRequest
 import org.siros.sdk.wallet.TransactionLogEntry
@@ -29,8 +25,7 @@ import timber.log.Timber
 
 /**
  * What a successful [TransactionDataCoordinator.process] hands to signing:
- * the KB-JWT binding for each DCQL query id an entry is bound to, resolved per
- * credential just before each sign ([bindingFor]). A query not
+ * the KB-JWT binding for each DCQL query id an entry is bound to. A query not
  * in it is presented without transaction data.
  *
  * Signing must use exactly the credentials that were validated and shown (the
@@ -41,42 +36,9 @@ import timber.log.Timber
  */
 internal class ScaPresentationPlan(
     private val bindings: Map<String, TransactionBinding>,
-    /** Ids of the credentials whose signer needs a host-verified factor for each sign. */
-    private val needsHostFactor: Set<Long> = emptySet(),
-    private val hostVerifier: suspend (StoredCredential) -> AuthenticationFactor? = { null },
     private val onSigningFailed: suspend () -> Unit = {},
 ) {
-    /**
-     * The binding to sign [credential] with, or null when no entry is bound to [queryId].
-     * Where the credential's signer needs the host's user verification it is performed
-     * HERE, once per credential and just before that credential's sign (after consent),
-     * so a factor is never reused across signs. No answer, a possession factor or a
-     * failure refuses and records the signing failure.
-     */
-    suspend fun bindingFor(queryId: String?, credential: StoredCredential): TransactionBinding? {
-        val base = queryId?.let { bindings[it] } ?: return null
-        if (credential.id !in needsHostFactor) return base
-        val factor = try {
-            hostVerifier(credential)
-        } catch (e: CancellationException) {
-            // Only the wallet's own coroutine being cancelled propagates; a provider that cancelled
-            // itself (a timeout, say) has not confirmed anything, which is a refusal.
-            currentCoroutineContext().ensureActive()
-            Timber.w("The host's user verification was cancelled; treating it as not confirmed")
-            null
-        } catch (e: Exception) {
-            Timber.w("The host's user verification failed (${e.javaClass.simpleName})")
-            null
-        }
-        if (factor == null || factor.category == AuthenticationCategory.POSSESSION) {
-            onSigningFailed()
-            throw TransactionDataError(
-                TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS,
-                "The user verification needed for a second authentication category was not confirmed",
-            )
-        }
-        return base.withHostVerifiedFactor(factor)
-    }
+    fun bindingFor(queryId: String?): TransactionBinding? = queryId?.let { bindings[it] }
 
     /** Records that signing failed after consent (outcome `refused`, reason `signingFailed`). */
     suspend fun signingFailed() = onSigningFailed()
@@ -85,8 +47,7 @@ internal class ScaPresentationPlan(
 /**
  * The whole `transaction_data` pipeline for one request (contract section 4):
  * validate, check before consent that two authentication categories are
- * reachable, show and obtain consent, collect the host's verified factor where
- * the signer needs one, and log the outcome. The factors themselves are never
+ * reachable, show and obtain consent, and log the outcome. The factors themselves are never
  * established here: the signing operation reports them and the KB-JWT claims
  * only those. Throws a [TransactionDataError] to refuse or decline, with
  * nothing signed; returns the plan to sign with otherwise.
@@ -105,7 +66,6 @@ internal class TransactionDataCoordinator(
     private val consentHandler: () -> TransactionConsentHandler?,
     /** Asks the keystore whether the key behind a credential could reach two categories; never prompts. */
     private val capability: suspend (StoredCredential) -> ScaAuthenticationCapability,
-    private val hostFactorProvider: () -> HostVerifiedFactorProvider?,
     private val log: () -> TransactionLogStore,
     private val nowMillis: () -> Long = System::currentTimeMillis,
     private val consentTimeoutMillis: Long = CONSENT_TIMEOUT_MILLIS,
@@ -145,7 +105,7 @@ internal class TransactionDataCoordinator(
             // One warning per validation, now that display has fetched what it needs.
             validated.trust.warnOnce()
 
-            val needsHost = requireFactorsCanBeEstablished(validated, request)
+            requireFactorsCanBeEstablished(validated, request)
             val handler = consentHandler() ?: throw TransactionDataError(
                 TransactionDataReason.NO_CONSENT_HANDLER,
                 "No consent handler is registered, so the transaction cannot be shown to the user",
@@ -155,10 +115,7 @@ internal class TransactionDataCoordinator(
             }
             val bindings = bind(validated)
             record(request, validated, TransactionOutcome.CONSENTED, null)
-            return ScaPresentationPlan(
-                bindings, needsHost,
-                { credential -> hostFactorProvider()?.verify(SigningOperation(credential)) },
-            ) {
+            return ScaPresentationPlan(bindings) {
                 record(request, validated, TransactionOutcome.REFUSED, SIGNING_FAILED)
             }
         } catch (e: TransactionDataError) {
@@ -180,39 +137,26 @@ internal class TransactionDataCoordinator(
     private suspend fun requireFactorsCanBeEstablished(
         validated: ValidatedTransactionData,
         request: TransactionDataRequest,
-    ): Set<Long> {
-        val needsHost = LinkedHashSet<Long>()
+    ) {
         for (queryId in validated.boundQueryIds()) {
             for (credential in request.credentials.getValue(queryId)) {
-                when (classify(credential)) {
-                    Reach.OWN -> Unit
-                    Reach.HOST -> needsHost += credential.id
-                    Reach.NONE -> throw TransactionDataError(
+                if (!canReachTwoCategories(credential)) {
+                    throw TransactionDataError(
                         TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS,
                         "No two-category authentication can be established for this operation",
                     )
                 }
             }
         }
-        return needsHost
     }
 
-    private enum class Reach { OWN, HOST, NONE }
-
-    /** How [credential]'s signer reaches two categories; a capability that cannot be determined is [Reach.NONE]. */
-    private suspend fun classify(credential: StoredCredential): Reach {
-        val c = try {
-            capability(credential)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            return Reach.NONE
-        }
-        return when {
-            c.canReachTwoCategories -> Reach.OWN
-            c.requiresHostVerifiedFactor && hostFactorProvider() != null -> Reach.HOST
-            else -> Reach.NONE
-        }
+    /** Whether [credential]'s signer reaches two categories itself; a capability that cannot be determined is no. */
+    private suspend fun canReachTwoCategories(credential: StoredCredential): Boolean = try {
+        capability(credential).canReachTwoCategories
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        false
     }
 
     /**
@@ -232,7 +176,7 @@ internal class TransactionDataCoordinator(
         false
     }
 
-    /** The KB-JWT binding per bound query. The `amr` and any host factor come later, per sign. */
+    /** The KB-JWT binding per bound query. The `amr` comes later, from each sign. */
     private fun bind(validated: ValidatedTransactionData): Map<String, TransactionBinding> =
         validated.boundQueryIds().associateWith { validated.bindingFor(it) ?: error("no binding for a bound query") }
 

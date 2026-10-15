@@ -22,14 +22,7 @@ import org.siros.sdk.keystore.SignerKeyInfo
  * verifier does. [scaFactors] are what its SCA sign reports having applied, and what
  * the KB-JWT may therefore claim; null models a signer that cannot reach two categories.
  */
-class ScaTestSigner(
-    private val scaFactors: List<AuthenticationFactor>?,
-    /** Models a signer that reaches possession alone and needs the host's verified factor for the second category. */
-    private val needsHostFactor: Boolean = false,
-) : Signer {
-    /** The host factor the last SCA sign was given. */
-    var lastHostFactor: AuthenticationFactor? = null
-        private set
+class ScaTestSigner(private val scaFactors: List<AuthenticationFactor>?) : Signer {
     private val keys = LinkedHashMap<String, ECKey>()
     var scaSigns = 0
         private set
@@ -51,22 +44,10 @@ class ScaTestSigner(
         ECDSASigner(keys.getValue(keyId)).sign(JWSHeader(JWSAlgorithm.ES256), data).decode()
 
     override suspend fun scaAuthenticationCapability(keyId: String) =
-        when {
-            needsHostFactor -> ScaAuthenticationCapability(false, true, "UV observed, method unknown")
-            scaFactors == null -> ScaAuthenticationCapability.cannot("single factor")
-            else -> ScaAuthenticationCapability(true, false)
-        }
+        if (scaFactors == null) ScaAuthenticationCapability.cannot("single factor") else ScaAuthenticationCapability(true)
 
-    override suspend fun beginScaSign(keyId: String, hostVerifiedFactor: AuthenticationFactor?): ScaSignSession {
-        lastHostFactor = hostVerifiedFactor
-        val applied = if (needsHostFactor) {
-            listOf(
-                AuthenticationFactor(org.siros.sdk.keystore.AuthenticationCategory.POSSESSION, "key_in_local_external_wscd"),
-                hostVerifiedFactor ?: throw ScaSignSession.insufficient("no host factor"),
-            )
-        } else {
-            scaFactors ?: throw ScaSignSession.insufficient("single factor")
-        }
+    override suspend fun beginScaSign(keyId: String): ScaSignSession {
+        val applied = scaFactors ?: throw ScaSignSession.insufficient("single factor")
         return object : ScaSignSession {
             override val declaredFactors = applied
             override suspend fun sign(data: ByteArray): ScaSignature {

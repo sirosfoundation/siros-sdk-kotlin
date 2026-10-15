@@ -272,16 +272,13 @@ class TransactionDataValidatorTest {
     }
 
     @Test
-    fun `the binding carries the hashes and the host-verified factor, not an amr`() {
+    fun `the binding carries the hashes, not an amr`() {
         val v = validate(request(listOf(entry())))
-        val face = AuthenticationFactor(AuthenticationCategory.INHERENCE, "face_device")
 
         val ok = v.bindingFor("pay")!!
         assertEquals("sha-256", ok.hashAlg)
         assertEquals("direct_post", ok.responseMode)
         assertEquals(v.hashesFor("pay")!!.hashes, ok.hashes)
-        assertNull(ok.hostVerifiedFactor)
-        assertEquals(face, v.bindingFor("pay", face)!!.hostVerifiedFactor)
     }
 
     @Test

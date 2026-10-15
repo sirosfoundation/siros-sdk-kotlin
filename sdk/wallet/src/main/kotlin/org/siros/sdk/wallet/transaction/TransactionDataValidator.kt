@@ -7,7 +7,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.credentials.TransactionDataError
 import org.siros.sdk.credentials.TransactionDataReason
-import org.siros.sdk.keystore.AuthenticationFactor
 import org.siros.sdk.keystore.TransactionBinding
 
 /**
@@ -75,12 +74,11 @@ internal class ValidatedTransactionData(
     /**
      * The KB-JWT binding for the credential answering [queryId], or `null`
      * when no entry is bound to it (that presentation is then unchanged).
-     * [hostVerifiedFactor] is the user verification the host performed for the
-     * sign, when the signer needs one; the `amr` itself comes from the sign.
+     * The `amr` comes from the signing operation itself.
      */
-    fun bindingFor(queryId: String, hostVerifiedFactor: AuthenticationFactor? = null): TransactionBinding? {
+    fun bindingFor(queryId: String): TransactionBinding? {
         val h = byQuery[queryId] ?: return null
-        return TransactionBinding(h.hashes, h.hashAlg, responseMode, hostVerifiedFactor)
+        return TransactionBinding(h.hashes, h.hashAlg, responseMode)
     }
 }
 

@@ -29,13 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`key_in_local_external_wscd`). `JweKeystore` (software keys, no user
   authentication of its own) now refuses an SCA sign. Non-SCA signing is
   unchanged.
-- New `SirosWallet.hostVerifiedFactorProvider` (`HostVerifiedFactorProvider`):
-  for signers that reach possession alone (R2PS WebAuthn, a UV-performing FIDO2
-  transport) the host performs its own user verification after consent and
-  returns the factor it verified (null, a possession factor, or a failure
-  refuses). Without a provider such signers are refused before consent. Those
-  two signers cannot yet honour a fresh-authentication sign, so they are still
-  refused by the WSCD manager (`Unsupported`); the hook is ready for when they can.
+- A signer that reaches possession alone and would need the host to vouch for
+  a second factor (R2PS WebAuthn, a UV-performing FIDO2 transport) is reported
+  as not possible and refused BEFORE consent: the manager refuses a
+  fresh-authentication sign for exactly those, so offering them would let the
+  user consent and verify before a certain refusal. There is no host-verified
+  factor hook. Cancelling the PIN prompt (or a prompt that fails) declines the
+  transaction (`declined`, `access_denied`) rather than reporting insufficient
+  factors.
 
 ## [0.20.5] - 2026-10-12
 

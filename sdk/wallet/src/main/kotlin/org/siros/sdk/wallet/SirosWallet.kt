@@ -253,17 +253,6 @@ class SirosWallet private constructor(
         get() = transactionDataEnabled &&
             transactionConsentHandler != null
 
-    /**
-     * Contributes the user verification the HOST performs (a biometric prompt)
-     * for an SCA signing operation whose signer reaches possession alone; see
-     * [HostVerifiedFactorProvider]. Null (the default) means the host verifies
-     * nothing, so such a signer is refused before the user is shown the
-     * transaction. The `amr` of an SCA presentation always comes from the
-     * signing operation itself (siros-wscd-manager `signWithFactors`).
-     */
-    @Volatile
-    var hostVerifiedFactorProvider: HostVerifiedFactorProvider? = null
-
     @Volatile
     private var customTransactionLogStore: TransactionLogStore? = null
 
@@ -334,7 +323,6 @@ class SirosWallet private constructor(
                     org.siros.sdk.keystore.ScaAuthenticationCapability.cannot("This keystore does not report the authentication it applies")
                 }
             },
-            hostFactorProvider = { hostVerifiedFactorProvider },
             log = { transactionLogStore },
         )
     }
@@ -3919,7 +3907,7 @@ class SirosWallet private constructor(
                     deviceResponse, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP
                 )
             } else {
-                val binding = scaPlan?.bindingFor(queryId, cred)
+                val binding = scaPlan?.bindingFor(queryId)
                 if (binding != null) {
                     signScaVp(cred, disclosedClaims, request.nonce, audience, binding, scaPlan)
                 } else {
@@ -6017,7 +6005,7 @@ class SirosWallet private constructor(
                 org.siros.sdk.credentials.TransactionDataReason.INVALID_ENTRY,
                 "A selected credential is not in the wallet",
             )
-            val binding = plan.bindingFor(ref.credentialQueryId, c)
+            val binding = plan.bindingFor(ref.credentialQueryId)
             tokens += if (binding != null) {
                 signScaVp(c, ref.disclosedClaims, nonce, audience, binding, plan)
             } else {

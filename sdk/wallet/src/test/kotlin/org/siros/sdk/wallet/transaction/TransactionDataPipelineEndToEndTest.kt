@@ -35,7 +35,7 @@ class TransactionDataPipelineEndToEndTest {
         val signer = mockk<org.siros.sdk.keystore.Signer>(relaxed = true)
         coEvery { signer.listKeys() } returns listOf(org.siros.sdk.keystore.SignerKeyInfo("k1", "ES256"))
         coEvery { signer.exportPublicKey(any()) } returns ec.toPublicJWK().toJSONString().toByteArray()
-        coEvery { signer.beginScaSign(any(), any()) } answers {
+        coEvery { signer.beginScaSign(any()) } answers {
             object : org.siros.sdk.keystore.ScaSignSession {
                 override val declaredFactors = applied
                 override suspend fun sign(data: ByteArray) = org.siros.sdk.keystore.ScaSignature(

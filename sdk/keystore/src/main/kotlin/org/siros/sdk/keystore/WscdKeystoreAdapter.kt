@@ -486,7 +486,7 @@ class WscdKeystoreAdapter private constructor(
         claims: JWTClaimsSet.Builder,
         transaction: TransactionBinding,
     ): String {
-        val session = signer.beginScaSign(keyId, transaction.hostVerifiedFactor)
+        val session = signer.beginScaSign(keyId)
         try {
             val declared = session.declaredFactors.toList()
             transaction.applyTo(claims, declared)

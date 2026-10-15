@@ -16,7 +16,6 @@ import org.siros.sdk.credentials.TransactionDataReason
 import org.siros.sdk.keystore.AuthenticationCategory
 import org.siros.sdk.keystore.AuthenticationFactor
 import org.siros.sdk.keystore.ScaAuthenticationCapability
-import org.siros.sdk.wallet.HostVerifiedFactorProvider
 import org.siros.sdk.wallet.TransactionConsentHandler
 import org.siros.sdk.wallet.TransactionConsentRequest
 import org.siros.sdk.wallet.TransactionLogEntry
@@ -36,17 +35,15 @@ class TransactionDataCoordinatorTest {
     }
 
     private val CAN: suspend (org.siros.sdk.credentials.StoredCredential) -> ScaAuthenticationCapability =
-        { ScaAuthenticationCapability(canReachTwoCategories = true, requiresHostVerifiedFactor = false) }
+        { ScaAuthenticationCapability(true) }
     private val CANNOT: suspend (org.siros.sdk.credentials.StoredCredential) -> ScaAuthenticationCapability =
         { ScaAuthenticationCapability.cannot("softkey is single factor") }
-    private val NEEDS_HOST: suspend (org.siros.sdk.credentials.StoredCredential) -> ScaAuthenticationCapability =
-        { ScaAuthenticationCapability(canReachTwoCategories = false, requiresHostVerifiedFactor = true, reason = "UV observed, method unknown") }
-    private val face = AuthenticationFactor(AuthenticationCategory.INHERENCE, "face_device")
+    private val HOST_ONLY: suspend (org.siros.sdk.credentials.StoredCredential) -> ScaAuthenticationCapability =
+        { ScaAuthenticationCapability.cannot("reaches a second category only through a host-verified factor") }
 
     private class Harness(
         val handler: TransactionConsentHandler?,
         val capability: suspend (org.siros.sdk.credentials.StoredCredential) -> ScaAuthenticationCapability,
-        val host: HostVerifiedFactorProvider? = null,
         val log: MemoryLog = MemoryLog(),
         source: TransactionMetadataSource = FakeSource(metadata(types = PAYMENT_TYPES)),
         timeoutMs: Long = 5_000,
@@ -56,7 +53,6 @@ class TransactionDataCoordinatorTest {
             display = TransactionDisplayBuilder(source, "en"),
             consentHandler = { handler },
             capability = capability,
-            hostFactorProvider = { host },
             log = { log },
             nowMillis = { 1234L },
             consentTimeoutMillis = timeoutMs,
@@ -84,9 +80,9 @@ class TransactionDataCoordinatorTest {
 
         val plan = run(h, req(raw)).getOrThrow()
 
-        assertEquals(TransactionDataHashing.hash(raw, "sha-256"), runBlocking { plan.bindingFor("pay", cred) }!!.hashes.single())
-        assertNull(runBlocking { plan.bindingFor("other", cred) })
-        assertNull(runBlocking { plan.bindingFor(null, cred) })
+        assertEquals(TransactionDataHashing.hash(raw, "sha-256"), plan.bindingFor("pay")!!.hashes.single())
+        assertNull(plan.bindingFor("other"))
+        assertNull(plan.bindingFor(null))
         assertEquals("Payee", seen!!.entries.single().fields.first().label)
         val entry = h.log.items.single()
         assertEquals(TransactionOutcome.CONSENTED, entry.outcome)
@@ -181,7 +177,7 @@ class TransactionDataCoordinatorTest {
     @Test
     fun `the capability is asked per bound credential`() {
         val probed = mutableListOf<Long>()
-        val h = Harness(TransactionConsentHandler { true }, { probed += it.id; ScaAuthenticationCapability(true, false) })
+        val h = Harness(TransactionConsentHandler { true }, { probed += it.id; ScaAuthenticationCapability(true) })
 
         run(h, req(raw())).getOrThrow()
 
@@ -189,43 +185,17 @@ class TransactionDataCoordinatorTest {
     }
 
     @Test
-    fun `a signer that needs a host factor is refused before consent when none is registered`() {
+    fun `a signer that needs a host-verified factor is refused before consent`() {
         var asked = false
-        val h = Harness(TransactionConsentHandler { asked = true; true }, NEEDS_HOST, host = null)
+        val h = Harness(TransactionConsentHandler { asked = true; true }, HOST_ONLY)
 
         assertEquals(TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS, reason(run(h, req(raw()))))
-        assertTrue(!asked)
+        assertTrue("the user must not read and confirm what a sign will refuse", !asked)
+        assertEquals(TransactionOutcome.REFUSED, h.log.items.single().outcome)
     }
 
     @Test
-    fun `the host verifies the user per credential just before each sign, after consent, and only for a signer that needs it`() {
-        val order = mutableListOf<String>()
-        val h = Harness(
-            TransactionConsentHandler { order += "consent"; true }, NEEDS_HOST,
-            host = HostVerifiedFactorProvider { order += "verify-${it.credential.id}"; face },
-        )
-        val cred = TransactionTestFixtures.credential()
-
-        val plan = run(h, req(raw())).getOrThrow()
-        assertEquals("nothing is verified until a sign is about to happen", listOf("consent"), order)
-        val b1 = runBlocking { plan.bindingFor("pay", cred) }!!
-        val b2 = runBlocking { plan.bindingFor("pay", cred) }!!
-
-        assertEquals(listOf("consent", "verify-1", "verify-1"), order)
-        assertEquals(face, b1.hostVerifiedFactor)
-        assertEquals("a fresh verification for each sign", 2, order.count { it == "verify-1" })
-        assertNull(runBlocking { plan.bindingFor("other", cred) })
-
-        var called = false
-        val noNeed = Harness(TransactionConsentHandler { true }, CAN, host = HostVerifiedFactorProvider { called = true; face })
-        val p2 = run(noNeed, req(raw())).getOrThrow()
-        assertNull(runBlocking { p2.bindingFor("pay", cred) }!!.hostVerifiedFactor)
-        assertTrue("a signer that reaches two categories itself is never given a host factor", !called)
-        assertNotNull(b2)
-    }
-
-    @Test
-    fun `capability is checked for every credential presented for a query, and host verification follows the credential that needs it`() {
+    fun `capability is checked for every credential presented for a query`() {
         val a = TransactionTestFixtures.credential(1)
         val b = TransactionTestFixtures.credential(2)
         val twoCreds = TransactionDataRequest(
@@ -233,40 +203,9 @@ class TransactionDataCoordinatorTest {
             credentials = mapOf("pay" to listOf(a, b)), verifier = "Shop",
         )
         // credential 2 cannot reach two categories: refused although credential 1 can
-        val mixedBad = Harness(TransactionConsentHandler { true }, { if (it.id == 1L) ScaAuthenticationCapability(true, false) else ScaAuthenticationCapability.cannot("x") })
+        val mixedBad = Harness(TransactionConsentHandler { true }, { if (it.id == 1L) ScaAuthenticationCapability(true) else ScaAuthenticationCapability.cannot("x") })
         assertEquals(TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS, reason(run(mixedBad, twoCreds)))
-
-        // only credential 2 needs the host: it alone gets a verification, and credential 1 never does
-        val verified = mutableListOf<Long>()
-        val h = Harness(
-            TransactionConsentHandler { true },
-            { if (it.id == 2L) ScaAuthenticationCapability(false, true, "UV") else ScaAuthenticationCapability(true, false) },
-            host = HostVerifiedFactorProvider { verified += it.credential.id; face },
-        )
-        val plan = run(h, twoCreds).getOrThrow()
-        assertNull(runBlocking { plan.bindingFor("pay", a) }!!.hostVerifiedFactor)
-        assertEquals(face, runBlocking { plan.bindingFor("pay", b) }!!.hostVerifiedFactor)
-        assertEquals(listOf(2L), verified)
-    }
-
-    @Test
-    fun `an unconfirmed, wrong-category or failing host verification refuses at the sign and is logged`() {
-        for (provider in listOf(
-            HostVerifiedFactorProvider { null },
-            HostVerifiedFactorProvider { AuthenticationFactor(AuthenticationCategory.POSSESSION, "other") },
-            HostVerifiedFactorProvider { throw IllegalStateException("biometric hardware error") },
-            // a provider that timed itself out: its own cancellation, not the wallet's
-            HostVerifiedFactorProvider { throw kotlinx.coroutines.CancellationException("provider timeout") },
-        )) {
-            val h = Harness(TransactionConsentHandler { true }, NEEDS_HOST, host = provider)
-            val plan = run(h, req(raw())).getOrThrow()
-
-            val e = runCatching { runBlocking { plan.bindingFor("pay", TransactionTestFixtures.credential()) } }.exceptionOrNull()
-
-            assertEquals(TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS, (e as TransactionDataError).reason)
-            assertEquals(listOf(TransactionOutcome.CONSENTED, TransactionOutcome.REFUSED), h.log.items.map { it.outcome })
-            assertEquals("signingFailed", h.log.items.last().reason)
-        }
+        assertTrue(runCatching { run(Harness(TransactionConsentHandler { true }, CAN), twoCreds).getOrThrow() }.isSuccess)
     }
 
     @Test
@@ -299,7 +238,7 @@ class TransactionDataCoordinatorTest {
         val source = FakeSource(metadata(types = PAYMENT_TYPES))
         val c = TransactionDataCoordinator(
             TransactionDataValidator(source), TransactionDisplayBuilder(source, "en"),
-            { TransactionConsentHandler { true } }, CAN, { null }, { failing },
+            { TransactionConsentHandler { true } }, CAN, { failing },
         )
 
         assertNotNull(runBlocking { c.process(req(raw())) })
@@ -426,7 +365,7 @@ class TransactionDataCoordinatorTest {
             }
             run(Harness(TransactionConsentHandler { true }, CAN, log = MemoryLog()), req(e))
             val src = FakeSource(metadata(types = PAYMENT_TYPES))
-            TransactionDataCoordinator(TransactionDataValidator(src), TransactionDisplayBuilder(src, "en"), { TransactionConsentHandler { true } }, CAN, { null }, { failing })
+            TransactionDataCoordinator(TransactionDataValidator(src), TransactionDisplayBuilder(src, "en"), { TransactionConsentHandler { true } }, CAN, { failing })
                 .let { runCatching { runBlocking { it.process(req(e)) } } }
         } finally {
             timber.log.Timber.uproot(tree)
@@ -454,7 +393,7 @@ class TransactionDataCoordinatorTest {
         val caller = Thread.currentThread().name
         val c = TransactionDataCoordinator(
             TransactionDataValidator(src), TransactionDisplayBuilder(src, "en"),
-            { TransactionConsentHandler { true } }, CAN, { null }, { log },
+            { TransactionConsentHandler { true } }, CAN, { log },
         )
 
         runBlocking { c.process(req(raw())) }

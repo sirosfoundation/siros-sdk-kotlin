@@ -149,7 +149,7 @@ class UniFFISigner(
     override suspend fun scaAuthenticationCapability(keyId: String): ScaAuthenticationCapability =
         withContext(Dispatchers.IO) { factorSigning.capability(keyId) }
 
-    override suspend fun beginScaSign(keyId: String, hostVerifiedFactor: AuthenticationFactor?): ScaSignSession {
+    override suspend fun beginScaSign(keyId: String): ScaSignSession {
         // The session may hold a PIN typed ahead of the sign. If the caller is cancelled
         // after it was acquired on the IO dispatcher, withContext throws and the session
         // never reaches the caller, so it is closed here rather than left holding the PIN.
@@ -157,7 +157,7 @@ class UniFFISigner(
         var handedOver = false
         try {
             val session = withContext(Dispatchers.IO) {
-                factorSigning.begin(keyId, hostVerifiedFactor).also { acquired = it }
+                factorSigning.begin(keyId).also { acquired = it }
             }
             handedOver = true
             return object : ScaSignSession by session {

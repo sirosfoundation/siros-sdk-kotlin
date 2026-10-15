@@ -119,12 +119,4 @@ class TransactionBindingTest {
         assertEquals(listOf("h1"), b.hashes)
         assertEquals(listOf("h1"), claims(b)["transaction_data_hashes"])
     }
-
-    @Test
-    fun `a host-verified factor must be knowledge or inherence`() {
-        assertThrows(IllegalArgumentException::class.java) { TransactionBinding(listOf("h"), "sha-256", "m", key) }
-        assertEquals(face, TransactionBinding(listOf("h"), "sha-256", "m", face).hostVerifiedFactor)
-        assertEquals(face, binding().withHostVerifiedFactor(face).hostVerifiedFactor)
-        assertThrows(IllegalArgumentException::class.java) { binding().withHostVerifiedFactor(key) }
-    }
 }

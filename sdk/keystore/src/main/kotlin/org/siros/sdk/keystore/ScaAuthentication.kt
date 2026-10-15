@@ -9,24 +9,25 @@ import org.siros.sdk.credentials.TransactionDataReason
  * sign (EC TS12 v1.0.1 3.6), asked BEFORE the user is shown the transaction.
  * Asking never prompts and never signs.
  *
- * @property canReachTwoCategories the signer's own means (a PIN it will ask
- *   for) reach two categories.
- * @property requiresHostVerifiedFactor the signer reaches possession only,
- *   and a second category only if the host supplies a user-verification factor
- *   it performed for this sign.
- * @property reason why not, when neither holds.
+ * Only a signer that reaches two categories by its own means (a PIN it asks
+ * for) is possible. A signer that reaches possession alone and would need the
+ * host to vouch for a second factor is reported as [cannot]: the manager
+ * refuses a fresh-authentication sign for exactly those signers, so offering
+ * them would let the user consent and verify before a certain refusal.
+ *
+ * @property canReachTwoCategories the signer's own means reach two categories.
+ * @property reason why not, when it cannot.
  */
 class ScaAuthenticationCapability(
     val canReachTwoCategories: Boolean,
-    val requiresHostVerifiedFactor: Boolean,
     val reason: String? = null,
 ) {
-    /** Whether an SCA sign can possibly follow: own means, or a host-verified factor. */
-    val isPossible: Boolean get() = canReachTwoCategories || requiresHostVerifiedFactor
+    /** Whether an SCA sign can possibly follow. */
+    val isPossible: Boolean get() = canReachTwoCategories
 
     companion object {
         /** No two-category authentication can be established, for [reason]. */
-        fun cannot(reason: String) = ScaAuthenticationCapability(false, false, reason)
+        fun cannot(reason: String) = ScaAuthenticationCapability(false, reason)
     }
 }
 

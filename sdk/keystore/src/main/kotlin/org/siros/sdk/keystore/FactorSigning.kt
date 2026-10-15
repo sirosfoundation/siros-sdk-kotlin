@@ -1,8 +1,9 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.keystore
 
+import org.siros.sdk.credentials.TransactionDataError
+import org.siros.sdk.credentials.TransactionDataReason
 import uniffi.siros_wscd_manager.FfiAuthCallback
-import uniffi.siros_wscd_manager.FfiAuthFactor
 import uniffi.siros_wscd_manager.FfiFactorCapability
 import uniffi.siros_wscd_manager.FfiFactorCategory
 import uniffi.siros_wscd_manager.FfiSignOptions
@@ -42,16 +43,21 @@ internal class FactorSigning(
 ) {
     fun capability(kid: String): ScaAuthenticationCapability = try {
         val c = backend.capability(kid)
-        if (c.canReachTwoCategories && !canAskForPin) {
-            ScaAuthenticationCapability.cannot("The signer needs a PIN and no AuthProvider is configured to ask for one")
-        } else {
-            ScaAuthenticationCapability(c.canReachTwoCategories, c.requiresHostVerifiedFactor, c.reason)
+        when {
+            c.canReachTwoCategories && !canAskForPin ->
+                ScaAuthenticationCapability.cannot("The signer needs a PIN and no AuthProvider is configured to ask for one")
+            c.canReachTwoCategories -> ScaAuthenticationCapability(true)
+            // Possession alone plus a host-vouched factor: the manager refuses a fresh-authentication sign for
+            // exactly these signers, so refuse now, before the user is shown the transaction.
+            c.requiresHostVerifiedFactor ->
+                ScaAuthenticationCapability.cannot("The signer reaches a second category only through a host-verified factor, which a fresh-authentication sign does not support")
+            else -> ScaAuthenticationCapability.cannot(c.reason ?: "The signer cannot reach two authentication categories")
         }
     } catch (e: Exception) {
         ScaAuthenticationCapability.cannot("The signer could not say which authentication it can perform (${e.javaClass.simpleName})")
     }
 
-    fun begin(kid: String, hostVerifiedFactor: AuthenticationFactor?): ScaSignSession {
+    fun begin(kid: String): ScaSignSession {
         val capability = capability(kid)
         if (!capability.isPossible) {
             throw ScaSignSession.insufficient(capability.reason ?: "The signer cannot reach two authentication categories")
@@ -63,28 +69,20 @@ internal class FactorSigning(
             "fido2" -> AuthenticationFactor(AuthenticationCategory.POSSESSION, "key_in_local_external_wscd")
             else -> throw ScaSignSession.insufficient("The '$pluginId' plugin establishes no possession factor")
         }
-        return if (capability.canReachTwoCategories) {
-            pinSession(kid, pluginId, possession)
-        } else {
-            val host = hostVerifiedFactor
-                ?: throw ScaSignSession.insufficient("A host-verified authentication factor is required and none was supplied")
-            if (host.category == AuthenticationCategory.POSSESSION) {
-                throw ScaSignSession.insufficient("A host-verified factor must be knowledge or inherence")
-            }
-            Session(kid, listOf(possession, host), host, null)
-        }
+        return pinSession(kid, pluginId, possession)
     }
 
     private fun pinSession(kid: String, pluginId: String, possession: AuthenticationFactor): ScaSignSession {
         val pin = try {
             callbacks.requestPin(pluginId)
-        } catch (e: FfiWscdException) {
-            throw ScaSignSession.insufficient("The user did not enter a PIN")
+        } catch (e: Exception) {
+            // The user cancelled the PIN prompt, or the host's prompt failed: the transaction is not confirmed.
+            throw declined()
         }
         try {
             val method = classifySecret(pin)
                 ?: throw ScaSignSession.insufficient("The class of the entered secret cannot be determined")
-            return Session(kid, listOf(possession, AuthenticationFactor(AuthenticationCategory.KNOWLEDGE, method)), null, pin)
+            return Session(kid, listOf(possession, AuthenticationFactor(AuthenticationCategory.KNOWLEDGE, method)), pin)
         } catch (e: Throwable) {
             pin.fill(0)
             throw e
@@ -94,7 +92,6 @@ internal class FactorSigning(
     private inner class Session(
         private val kid: String,
         override val declaredFactors: List<AuthenticationFactor>,
-        private val host: AuthenticationFactor?,
         /** The PIN typed for this sign; served once to the plugin, wiped on close. */
         private var pin: ByteArray?,
     ) : ScaSignSession {
@@ -103,13 +100,14 @@ internal class FactorSigning(
         override suspend fun sign(data: ByteArray): ScaSignature {
             check(!used) { "An SCA sign session signs once" }
             used = true
-            val options = FfiSignOptions(
-                requireFreshUserAuthentication = true,
-                hostVerifiedFactor = host?.let { FfiAuthFactor(it.category.toFfi(), it.method) },
-            )
+            // Always a fresh user authentication; the host never supplies a factor (the manager refuses
+            // a fresh sign for exactly the signers that would need one, and the capability says so up front).
+            val options = FfiSignOptions(requireFreshUserAuthentication = true, hostVerifiedFactor = null)
             val handedToPlugin = mutableListOf<ByteArray>()
             val outcome = try {
                 backend.signWithFactors(kid, data, options, oneShotPin(handedToPlugin))
+            } catch (e: FfiWscdException.AuthCancelled) {
+                throw declined()
             } catch (e: FfiWscdException.Unsupported) {
                 throw ScaSignSession.insufficient("This authenticator cannot guarantee a fresh user authentication for the sign")
             } finally {
@@ -144,7 +142,14 @@ internal class FactorSigning(
                     // The plugin gets its own copy; the held one is wiped.
                     held.copyOf().also { held.fill(0) }
                 } else {
-                    callbacks.requestPin(pluginId)
+                    try {
+                        callbacks.requestPin(pluginId)
+                    } catch (e: FfiWscdException) {
+                        throw e
+                    } catch (e: Exception) {
+                        // A host prompt that fails is a cancelled authentication, not a crash across the native boundary.
+                        throw FfiWscdException.AuthCancelled("The PIN prompt failed")
+                    }
                 }
                 handedOut += answer
                 return answer
@@ -158,6 +163,9 @@ internal class FactorSigning(
             ): ByteArray = callbacks.requestWebauthnAssertion(pluginId, challenge, rpId, allowedCredentials)
         }
     }
+
+    private fun declined() =
+        TransactionDataError(TransactionDataReason.DECLINED, "The user did not complete the authentication")
 
     companion object {
         /**
@@ -190,12 +198,6 @@ internal class FactorSigning(
             } finally {
                 chars.array().fill('\u0000')
             }
-        }
-
-        private fun AuthenticationCategory.toFfi() = when (this) {
-            AuthenticationCategory.KNOWLEDGE -> FfiFactorCategory.KNOWLEDGE
-            AuthenticationCategory.POSSESSION -> FfiFactorCategory.POSSESSION
-            AuthenticationCategory.INHERENCE -> FfiFactorCategory.INHERENCE
         }
 
         private fun FfiFactorCategory.toSdk() = when (this) {

@@ -34,14 +34,12 @@ interface Signer {
 
     /**
      * Starts one SCA sign with [keyId]: a fresh user authentication whose factors
-     * are reported by the signature itself (see [ScaSignSession]). [hostVerifiedFactor]
-     * is a knowledge or inherence factor the host verified for this sign, used only
-     * where [scaAuthenticationCapability] says it is required. The default refuses.
+     * are reported by the signature itself (see [ScaSignSession]). The default refuses.
      *
      * @throws org.siros.sdk.credentials.TransactionDataError with
      *   `INSUFFICIENT_AUTHENTICATION_FACTORS` when two categories cannot be established.
      */
-    suspend fun beginScaSign(keyId: String, hostVerifiedFactor: AuthenticationFactor?): ScaSignSession =
+    suspend fun beginScaSign(keyId: String): ScaSignSession =
         throw ScaSignSession.insufficient("This signer does not report the authentication it applies")
 
     /** List all keys managed by this signer. */

@@ -119,10 +119,9 @@ class FactorSigningTest {
 
     @Test
     fun `capability is the managers answer, and never a guess when it cannot be had`() {
-        val b = FakeBackend(capability = FfiFactorCapability(false, true, "why")) { outcome() }
+        val b = FakeBackend(capability = FfiFactorCapability(false, false, "why")) { outcome() }
         val c = FactorSigning(b, Prompts()).capability("k")
         assertFalse(c.canReachTwoCategories)
-        assertTrue(c.requiresHostVerifiedFactor)
         assertEquals("why", c.reason)
 
         b.capabilityThrows = true
@@ -130,15 +129,13 @@ class FactorSigningTest {
     }
 
     @Test
-    fun `a PIN-based capability is cannot when no way to ask for a PIN is configured, a host-factor one is kept`() {
+    fun `a PIN-based capability is cannot when no way to ask for a PIN is configured`() {
         val pinBased = FakeBackend(capability = FfiFactorCapability(true, false, null)) { outcome() }
         val noPin = FactorSigning(pinBased, Prompts(), canAskForPin = false).capability("k")
         assertFalse(noPin.isPossible)
         assertTrue(noPin.reason!!.contains("AuthProvider"))
-        refused { FactorSigning(pinBased, Prompts(), canAskForPin = false).begin("k", null) }
+        refused { FactorSigning(pinBased, Prompts(), canAskForPin = false).begin("k") }
 
-        val hostOnly = FakeBackend(capability = FfiFactorCapability(false, true, "uv")) { outcome() }
-        assertTrue(FactorSigning(hostOnly, Prompts(), canAskForPin = false).capability("k").requiresHostVerifiedFactor)
     }
 
     // ── a signer that reaches two categories itself (PIN) ──
@@ -149,7 +146,7 @@ class FactorSigningTest {
         val b = FakeBackend(plugin = "r2ps") { outcome(ffi(AuthenticationCategory.POSSESSION, "key_in_remote_wscd"), ffi(AuthenticationCategory.KNOWLEDGE, "pin_6_or_more_digits")) }
         val fs = FactorSigning(b, prompts)
 
-        fs.begin("k", null).use { s ->
+        fs.begin("k").use { s ->
             assertEquals(setOf(remote, pin6), s.declaredFactors.toSet())
             val signed = s.sign(byteArrayOf(1, 2, 3))
             ScaSignSession.requireMatching(s.declaredFactors, signed.factors)
@@ -159,7 +156,7 @@ class FactorSigningTest {
         assertEquals("the user is prompted once, not once for the claim and once for the sign", 1, prompts.asked)
         assertEquals("123456", b.pinsAsSeen.single())
         assertTrue(b.seenOptions!!.requireFreshUserAuthentication)
-        assertNull(b.seenOptions!!.hostVerifiedFactor)
+        assertNull("the host never supplies a factor", b.seenOptions!!.hostVerifiedFactor)
         assertArrayEquals(byteArrayOf(1, 2, 3), b.seenData)
     }
 
@@ -170,7 +167,7 @@ class FactorSigningTest {
             outcome(ffi(AuthenticationCategory.POSSESSION, "key_in_remote_wscd"), ffi(AuthenticationCategory.KNOWLEDGE, "pin_6_or_more_digits"))
         }
 
-        FactorSigning(b, prompts).begin("k", null).use { it.sign(ByteArray(1)) }
+        FactorSigning(b, prompts).begin("k").use { it.sign(ByteArray(1)) }
 
         assertEquals(listOf("123456", "654321"), b.pinsAsSeen)
         assertEquals(2, b.pinBuffers.size)
@@ -183,7 +180,7 @@ class FactorSigningTest {
         val prompts = Prompts("123456")
         val b = FakeBackend { throw FfiWscdException.AuthCancelled("cancelled") }
 
-        FactorSigning(b, prompts).begin("k", null).use { runCatching { it.sign(ByteArray(1)) } }
+        FactorSigning(b, prompts).begin("k").use { runCatching { it.sign(ByteArray(1)) } }
 
         assertTrue(b.pinBuffers.single().all { it == 0.toByte() })
     }
@@ -191,7 +188,7 @@ class FactorSigningTest {
     @Test
     fun `a session that never signs wipes the PIN typed ahead on close`() {
         val prompts = Prompts("123456")
-        FactorSigning(FakeBackend { outcome() }, prompts).begin("k", null).close()
+        FactorSigning(FakeBackend { outcome() }, prompts).begin("k").close()
         assertTrue(prompts.handedOut.single().all { it == 0.toByte() })
     }
 
@@ -203,7 +200,7 @@ class FactorSigningTest {
             outcome(ffi(AuthenticationCategory.POSSESSION, "key_in_remote_wscd"), ffi(AuthenticationCategory.KNOWLEDGE, "pin_less_than_6_digits"))
         }
 
-        FactorSigning(b, prompts).begin("k", null).use { s ->
+        FactorSigning(b, prompts).begin("k").use { s ->
             val signed = s.sign(ByteArray(1))
             assertEquals(2, prompts.asked)
             refused { ScaSignSession.requireMatching(s.declaredFactors, signed.factors) }
@@ -213,7 +210,7 @@ class FactorSigningTest {
     @Test
     fun `a FIDO2 key claims the external-token possession`() {
         val b = FakeBackend(plugin = "fido2") { outcome() }
-        FactorSigning(b, Prompts("123456")).begin("k", null).use {
+        FactorSigning(b, Prompts("123456")).begin("k").use {
             assertEquals(setOf(external, pin6), it.declaredFactors.toSet())
         }
     }
@@ -223,7 +220,7 @@ class FactorSigningTest {
         val prompts = Prompts("123456")
         val b = FakeBackend(capability = FfiFactorCapability(false, false, "softkey is single factor")) { outcome() }
 
-        val e = refused { FactorSigning(b, prompts).begin("k", null) }
+        val e = refused { FactorSigning(b, prompts).begin("k") }
 
         assertTrue(e.message!!.contains("softkey"))
         assertEquals(0, prompts.asked)
@@ -234,7 +231,7 @@ class FactorSigningTest {
         for (plugin in listOf("softkey", "mystery", null)) {
             val prompts = Prompts("123456")
             val b = FakeBackend(plugin = plugin) { outcome() }
-            refused { FactorSigning(b, prompts).begin("k", null) }
+            refused { FactorSigning(b, prompts).begin("k") }
             assertEquals("no PIN is asked for a key that cannot satisfy SCA", 0, prompts.asked)
         }
     }
@@ -242,52 +239,69 @@ class FactorSigningTest {
     @Test
     fun `begin refuses when the class of the typed secret cannot be determined`() {
         val b = FakeBackend { outcome() }
-        refused { FactorSigning(b, Prompts("")).begin("k", null) }
+        refused { FactorSigning(b, Prompts("")).begin("k") }
     }
 
     @Test
-    fun `begin refuses when the user does not enter a PIN`() {
-        refused { FactorSigning(FakeBackend { outcome() }, Prompts()).begin("k", null) }
+    fun `begin is declined when the user does not enter a PIN`() {
+        val e = runCatching { FactorSigning(FakeBackend { outcome() }, Prompts()).begin("k") }.exceptionOrNull()
+        assertEquals(TransactionDataReason.DECLINED, (e as TransactionDataError).reason)
     }
 
-    // ── a signer that needs the host's factor ──
+    // ── a signer that would need the host's factor ──
 
     private val needsHost = FfiFactorCapability(false, true, "UV observed, method unknown")
 
     @Test
-    fun `a host session claims the host factor and passes it to the sign without asking for a PIN`() = runTest {
-        val prompts = Prompts("123456")
-        val b = FakeBackend(capability = needsHost, plugin = "fido2", pinRequests = 0) {
-            outcome(ffi(AuthenticationCategory.POSSESSION, "key_in_local_external_wscd"), ffi(AuthenticationCategory.INHERENCE, "face_device"))
-        }
+    fun `a host-only capability is refused up front, before any prompt, with the reason`() {
+        for (plugin in listOf("r2ps", "fido2")) {
+            val prompts = Prompts("123456")
+            val b = FakeBackend(capability = needsHost, plugin = plugin) { outcome() }
+            val fs = FactorSigning(b, prompts)
 
-        FactorSigning(b, prompts).begin("k", face).use { s ->
-            assertEquals(setOf(external, face), s.declaredFactors.toSet())
-            ScaSignSession.requireMatching(s.declaredFactors, s.sign(ByteArray(1)).factors)
-        }
+            val c = fs.capability("k")
 
-        assertEquals(0, prompts.asked)
-        assertEquals(FfiAuthFactor(FfiFactorCategory.INHERENCE, "face_device"), b.seenOptions!!.hostVerifiedFactor)
-        assertTrue(b.seenOptions!!.requireFreshUserAuthentication)
+            assertFalse(c.isPossible)
+            assertTrue(c.reason!!.contains("host-verified"))
+            refused { fs.begin("k") }
+            assertEquals("nothing is prompted for a signer that cannot sign", 0, prompts.asked)
+            assertNull("no sign was attempted", b.seenOptions)
+        }
     }
 
     @Test
-    fun `a host session is refused without a host factor or with a possession one`() {
-        val b = FakeBackend(capability = needsHost, plugin = "r2ps") { outcome() }
-        refused { FactorSigning(b, Prompts()).begin("k", null) }
-        refused { FactorSigning(b, Prompts()).begin("k", remote) }
+    fun `cancelling the PIN prompt is a declined transaction, as is a prompt that fails`() {
+        for (cancel in listOf<() -> ByteArray>(
+            { throw FfiWscdException.AuthCancelled("user cancelled") },
+            { throw IllegalStateException("dialog crashed") },
+        )) {
+            val cb = object : FfiAuthCallback {
+                override fun requestPin(pluginId: String): ByteArray = cancel()
+                override fun requestWebauthnAssertion(pluginId: String, challenge: ByteArray, rpId: String, allowedCredentials: List<ByteArray>): ByteArray = ByteArray(0)
+            }
+            val e = runCatching { FactorSigning(FakeBackend { outcome() }, cb).begin("k") }.exceptionOrNull()
+            assertEquals(TransactionDataReason.DECLINED, (e as TransactionDataError).reason)
+        }
     }
 
     @Test
-    fun `a host factor is not passed to a signer that reaches two categories itself`() = runTest {
-        val b = FakeBackend { outcome(ffi(AuthenticationCategory.POSSESSION, "key_in_remote_wscd"), ffi(AuthenticationCategory.KNOWLEDGE, "pin_6_or_more_digits")) }
-
-        FactorSigning(b, Prompts("123456")).begin("k", face).use { s ->
-            assertEquals(setOf(remote, pin6), s.declaredFactors.toSet())
-            s.sign(ByteArray(1))
+    fun `a cancelled or failing prompt during the sign is declined too`() = runTest {
+        var calls = 0
+        val cb = object : FfiAuthCallback {
+            override fun requestPin(pluginId: String): ByteArray = if (calls++ == 0) "123456".toByteArray() else throw IllegalStateException("dialog crashed")
+            override fun requestWebauthnAssertion(pluginId: String, challenge: ByteArray, rpId: String, allowedCredentials: List<ByteArray>): ByteArray = ByteArray(0)
         }
-
-        assertNull(b.seenOptions!!.hostVerifiedFactor)
+        // the plugin asks twice; the second request reaches the failing host prompt
+        val b = FakeBackend(pinRequests = 2) { outcome() }
+        FactorSigning(b, cb).begin("k").use { s ->
+            val e = runCatching { s.sign(ByteArray(1)) }.exceptionOrNull()
+            assertEquals(TransactionDataReason.DECLINED, (e as TransactionDataError).reason)
+        }
+        // a plugin-reported cancellation is declined as well
+        FactorSigning(FakeBackend { throw FfiWscdException.AuthCancelled("cancelled") }, Prompts("123456")).begin("k").use { s ->
+            val e = runCatching { s.sign(ByteArray(1)) }.exceptionOrNull()
+            assertEquals(TransactionDataReason.DECLINED, (e as TransactionDataError).reason)
+        }
     }
 
     // ── the sign's own report ──
@@ -295,7 +309,7 @@ class FactorSigningTest {
     @Test
     fun `a flagged sign the plugin cannot honour is a refusal`() = runTest {
         val b = FakeBackend { throw FfiWscdException.Unsupported("no fresh auth") }
-        FactorSigning(b, Prompts("123456")).begin("k", null).use { s ->
+        FactorSigning(b, Prompts("123456")).begin("k").use { s ->
             val e = runCatching { s.sign(ByteArray(1)) }.exceptionOrNull()
             assertEquals(TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS, (e as TransactionDataError).reason)
         }
@@ -307,7 +321,7 @@ class FactorSigningTest {
             { outcome(ffi(AuthenticationCategory.POSSESSION, "key_in_remote_wscd"), two = false) },
             { outcome(ffi(AuthenticationCategory.POSSESSION, "key_in_remote_wscd"), FfiAuthFactor(FfiFactorCategory.KNOWLEDGE, "pwd")) },
         )) {
-            FactorSigning(FakeBackend(result = r), Prompts("123456")).begin("k", null).use { s ->
+            FactorSigning(FakeBackend(result = r), Prompts("123456")).begin("k").use { s ->
                 val e = runCatching { s.sign(ByteArray(1)) }.exceptionOrNull()
                 assertEquals(TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS, (e as TransactionDataError).reason)
             }
@@ -316,17 +330,17 @@ class FactorSigningTest {
 
     @Test
     fun `other plugin failures propagate and are not turned into a signature`() = runTest {
-        val b = FakeBackend { throw FfiWscdException.AuthCancelled("user cancelled") }
-        FactorSigning(b, Prompts("123456")).begin("k", null).use { s ->
+        val b = FakeBackend { throw FfiWscdException.NoPlugin("gone") }
+        FactorSigning(b, Prompts("123456")).begin("k").use { s ->
             val e = runCatching { s.sign(ByteArray(1)) }.exceptionOrNull()
-            assertTrue(e.toString(), e is FfiWscdException.AuthCancelled)
+            assertTrue(e.toString(), e is FfiWscdException.NoPlugin)
         }
     }
 
     @Test
     fun `a session signs once`() = runTest {
         val b = FakeBackend { outcome(ffi(AuthenticationCategory.POSSESSION, "key_in_remote_wscd"), ffi(AuthenticationCategory.KNOWLEDGE, "pin_6_or_more_digits")) }
-        FactorSigning(b, Prompts("123456")).begin("k", null).use { s ->
+        FactorSigning(b, Prompts("123456")).begin("k").use { s ->
             s.sign(ByteArray(1))
             assertTrue(runCatching { s.sign(ByteArray(1)) }.exceptionOrNull() is IllegalStateException)
         }

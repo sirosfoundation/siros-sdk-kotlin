@@ -7240,10 +7240,9 @@ class SirosWalletTest {
         declaredEngine: Boolean = enabled,
         declaredWmp: Boolean = enabled,
         extra: Array<Pair<String, Any?>> = emptyArray(),
-        signerNeedsHostFactor: Boolean = false,
         keystoreWrapper: ((org.siros.sdk.keystore.WscdKeystoreAdapter) -> KeystoreManager)? = null,
     ): ScaFixture {
-        val signer = ScaTestSigner(factors, signerNeedsHostFactor)
+        val signer = ScaTestSigner(factors)
         val keystore = org.siros.sdk.keystore.WscdKeystoreAdapter(signer)
         runBlocking { keystore.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0)) }
         val kid = runBlocking { keystore.generateKey() }
@@ -7359,38 +7358,6 @@ class SirosWalletTest {
         assertTrue(sent.isEmpty())
         assertEquals(TransactionOutcome.DECLINED, fx.log.items.single().outcome)
         verify(exactly = 1) { listener.onTransactionDataRefused("flow-sca", org.siros.sdk.credentials.TransactionDataReason.DECLINED) }
-    }
-
-    @Test
-    fun scaEngine_aSignerNeedingAHostFactor_getsTheOneTheHostVerifiedAfterConsent_andTheAmrClaimsIt() = runTest(dispatcher) {
-        val face = org.siros.sdk.keystore.AuthenticationFactor(org.siros.sdk.keystore.AuthenticationCategory.INHERENCE, "face_device")
-        val events = mutableListOf<String>()
-        val fx = scaFixture(signerNeedsHostFactor = true)
-        fx.wallet.hostVerifiedFactorProvider = HostVerifiedFactorProvider { events += "verify"; face }
-        fx.wallet.transactionConsentHandler = TransactionConsentHandler { events += "consent"; true }
-
-        val (sent, _) = sendEngineSignRequest(fx)
-
-        assertEquals(listOf("consent", "verify"), events)
-        assertEquals(face, fx.signer.lastHostFactor)
-        val kb = SignedJWT.parse(sent.single()!!.split("~").last())
-        assertEquals(
-            setOf(mapOf("possession" to "key_in_local_external_wscd"), mapOf("inherence" to "face_device")),
-            (kb.jwtClaimsSet.claims["amr"] as List<*>).toSet(),
-        )
-        assertEquals(1, fx.signer.scaSigns)
-        assertEquals("the SCA sign never falls back to a plain sign", 0, fx.signer.plainSigns)
-    }
-
-    @Test
-    fun scaEngine_aSignerNeedingAHostFactor_isRefusedBeforeConsentWithoutAHostProvider() = runTest(dispatcher) {
-        val fx = scaFixture(signerNeedsHostFactor = true)
-
-        val (sent, _) = sendEngineSignRequest(fx)
-
-        assertTrue(sent.isEmpty())
-        assertTrue(fx.consent.isEmpty())
-        assertEquals("insufficientAuthenticationFactors", fx.log.items.single().reason)
     }
 
     @Test
@@ -7632,9 +7599,8 @@ class SirosWalletTest {
     // ── review fixes: ordering, defaults, TOCTOU, isolation, wording ──
 
     @Test
-    fun scaDefaults_aSignerThatCannotReachTwoCategoriesRefusesBeforeConsent_andNoHostFactorIsRegistered() = runTest(dispatcher) {
+    fun scaDefaults_aSignerThatCannotReachTwoCategoriesRefusesBeforeConsent() = runTest(dispatcher) {
         val fx = scaFixture(factors = null)
-        assertNull(fx.wallet.hostVerifiedFactorProvider)
 
         val (sent, _) = sendEngineSignRequest(fx)
 

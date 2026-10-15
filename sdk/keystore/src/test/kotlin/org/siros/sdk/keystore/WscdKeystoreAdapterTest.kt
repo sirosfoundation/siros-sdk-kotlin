@@ -625,7 +625,7 @@ class WscdKeystoreAdapterTest {
         coEvery { signer.securityProperties(any()) } returns SignerSecurityProperties(
             keyStorage = listOf("hardware"), amr = listOf("hwk", "pin"),
         )
-        if (session != null) coEvery { signer.beginScaSign(any(), any()) } returns session
+        if (session != null) coEvery { signer.beginScaSign(any()) } returns session
         val adapter = WscdKeystoreAdapter(signer)
         adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
         return adapter to signer
@@ -707,7 +707,7 @@ class WscdKeystoreAdapterTest {
     @Test
     fun signVpToken_sca_withASignerThatReportsNoFactors_isRefused_andNeverSignsPlainly() = runTest {
         val (adapter, signer) = scaAdapter(null)
-        coEvery { signer.beginScaSign(any(), any()) } throws ScaSignSession.insufficient("no factors")
+        coEvery { signer.beginScaSign(any()) } throws ScaSignSession.insufficient("no factors")
 
         val e = runCatching { adapter.signVpToken(fakeSdJwtVc(), null, "n", "aud", "key-b", scaBinding) }.exceptionOrNull()
 
@@ -716,20 +716,9 @@ class WscdKeystoreAdapterTest {
     }
 
     @Test
-    fun signVpToken_sca_passesTheHostVerifiedFactorToTheSigner() = runTest {
-        val face = AuthenticationFactor(AuthenticationCategory.INHERENCE, "face_device")
-        val s = session(listOf(keyFactor, face), listOf(keyFactor, face))
-        val (adapter, signer) = scaAdapter(s)
-
-        adapter.signVpToken(fakeSdJwtVc(), null, "n", "aud", "key-b", scaBinding.withHostVerifiedFactor(face))
-
-        coVerify { signer.beginScaSign("key-b", face) }
-    }
-
-    @Test
     fun scaAuthenticationCapability_comesFromTheSignerForTheCredentialsKey() = runTest {
         val (adapter, signer) = scaAdapter(null)
-        coEvery { signer.scaAuthenticationCapability("key-b") } returns ScaAuthenticationCapability(true, false)
+        coEvery { signer.scaAuthenticationCapability("key-b") } returns ScaAuthenticationCapability(true)
 
         assertTrue(adapter.scaAuthenticationCapability(fakeSdJwtVc(), "key-b").canReachTwoCategories)
     }
