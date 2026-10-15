@@ -75,13 +75,12 @@ internal class ValidatedTransactionData(
     /**
      * The KB-JWT binding for the credential answering [queryId], or `null`
      * when no entry is bound to it (that presentation is then unchanged).
-     *
-     * @throws TransactionDataError `INSUFFICIENT_AUTHENTICATION_FACTORS`
-     *   when [factors] span fewer than two categories.
+     * [hostVerifiedFactor] is the user verification the host performed for the
+     * sign, when the signer needs one; the `amr` itself comes from the sign.
      */
-    fun bindingFor(queryId: String, factors: List<AuthenticationFactor>): TransactionBinding? {
+    fun bindingFor(queryId: String, hostVerifiedFactor: AuthenticationFactor? = null): TransactionBinding? {
         val h = byQuery[queryId] ?: return null
-        return TransactionBinding(h.hashes, h.hashAlg, responseMode, factors)
+        return TransactionBinding(h.hashes, h.hashAlg, responseMode, hostVerifiedFactor)
     }
 }
 

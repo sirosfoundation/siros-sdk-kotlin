@@ -268,24 +268,20 @@ class TransactionDataValidatorTest {
         val v = validate(request(listOf(entry(ids = """["pay"]""")), creds))
 
         assertNull(v.hashesFor("age"))
-        assertNull(v.bindingFor("age", emptyList()))
+        assertNull(v.bindingFor("age"))
     }
 
     @Test
-    fun `the binding needs two authentication categories`() {
+    fun `the binding carries the hashes and the host-verified factor, not an amr`() {
         val v = validate(request(listOf(entry())))
-        val pin = AuthenticationFactor(AuthenticationCategory.KNOWLEDGE, "other")
-        val key = AuthenticationFactor(AuthenticationCategory.POSSESSION, "key_in_remote_wscd")
+        val face = AuthenticationFactor(AuthenticationCategory.INHERENCE, "face_device")
 
-        val ok = v.bindingFor("pay", listOf(pin, key))!!
+        val ok = v.bindingFor("pay")!!
         assertEquals("sha-256", ok.hashAlg)
         assertEquals("direct_post", ok.responseMode)
         assertEquals(v.hashesFor("pay")!!.hashes, ok.hashes)
-
-        for (factors in listOf(emptyList(), listOf(pin), listOf(pin, pin))) {
-            val e = runCatching { v.bindingFor("pay", factors) }.exceptionOrNull() as TransactionDataError
-            assertEquals(TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS, e.reason)
-        }
+        assertNull(ok.hostVerifiedFactor)
+        assertEquals(face, v.bindingFor("pay", face)!!.hostVerifiedFactor)
     }
 
     @Test

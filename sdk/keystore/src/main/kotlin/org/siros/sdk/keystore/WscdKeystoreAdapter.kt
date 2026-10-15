@@ -358,21 +358,11 @@ class WscdKeystoreAdapter private constructor(
     ): String = buildVpToken(credential, disclosedClaims, nonce, audience, kid, transaction)
 
     /**
-     * The `amr` side of a KB-JWT. SCA: the TS12 claims (hashes, `jti`,
-     * `response_mode`, and a two-category `amr` built for this operation); the
-     * RFC 8176 string array describes the PREVIOUS authentication and is the
-     * wrong shape for TS12, so it is not emitted. Non-SCA presentations are
-     * unchanged: the signer's last-operation `amr`, when it reports one.
+     * The `amr` side of a non-SCA KB-JWT, unchanged: the signer's last-operation
+     * `amr`, when it reports one. (An SCA KB-JWT takes its `amr` from the signing
+     * operation itself; see [buildVpToken].)
      */
-    private suspend fun addAuthenticationClaims(
-        claims: JWTClaimsSet.Builder,
-        keyId: String,
-        transaction: TransactionBinding?,
-    ) {
-        if (transaction != null) {
-            transaction.applyTo(claims)
-            return
-        }
+    private suspend fun addLegacyAuthenticationClaims(claims: JWTClaimsSet.Builder, keyId: String) {
         try {
             val props = signer.securityProperties(keyId)
             if (props.amr.isNotEmpty()) {
@@ -380,6 +370,21 @@ class WscdKeystoreAdapter private constructor(
             }
         } catch (_: Exception) {
             // Security properties not available: omit amr
+        }
+    }
+
+    override suspend fun scaAuthenticationCapability(credential: String, kid: String?): ScaAuthenticationCapability {
+        checkUnlocked()
+        val key = try {
+            val cnfKid = resolveCnfKid(cnfOf(credential))
+            selectSigningKey(signer.listKeys(), kid ?: cnfKid)
+        } catch (e: Exception) {
+            return ScaAuthenticationCapability.cannot("The key for the credential could not be determined")
+        }
+        return try {
+            signer.scaAuthenticationCapability(key.keyId)
+        } catch (e: Exception) {
+            ScaAuthenticationCapability.cannot("The signer could not say which authentication it can perform")
         }
     }
 
@@ -456,15 +461,35 @@ class WscdKeystoreAdapter private constructor(
             .claim("nonce", nonce)
             .claim("sd_hash", sdHash)
 
-        addAuthenticationClaims(claims, key.keyId, transaction)
+        // SCA: the factors are settled by the signing operation, which is started
+        // here (after consent) so a PIN asked for ahead of it is for THIS sign. The
+        // KB-JWT claims exactly those factors, and the signature is discarded unless
+        // the sign itself reports the same ones.
+        val session = if (transaction != null) signer.beginScaSign(key.keyId, transaction.hostVerifiedFactor) else null
+        try {
+            if (transaction != null && session != null) {
+                transaction.applyTo(claims, session.declaredFactors)
+            } else {
+                addLegacyAuthenticationClaims(claims, key.keyId)
+            }
 
-        val claimsSet = claims.build()
+            val claimsSet = claims.build()
 
-        val signingInput = "${base64Url(header.toJSONObject())}.${base64Url(claimsSet.toJSONObject())}"
-        val signature = signer.sign(key.keyId, signingInput.toByteArray(Charsets.UTF_8))
-        val kbJwt = "$signingInput.${base64UrlEncode(signature)}"
+            val signingInput = "${base64Url(header.toJSONObject())}.${base64Url(claimsSet.toJSONObject())}"
+            val signingBytes = signingInput.toByteArray(Charsets.UTF_8)
+            val signature = if (session != null) {
+                val signed = session.sign(signingBytes)
+                ScaSignSession.requireMatching(session.declaredFactors, signed.factors)
+                signed.signature
+            } else {
+                signer.sign(key.keyId, signingBytes)
+            }
+            val kbJwt = "$signingInput.${base64UrlEncode(signature)}"
 
-        return sdJwtPresentation + kbJwt
+            return sdJwtPresentation + kbJwt
+        } finally {
+            session?.close()
+        }
     }
 
     override suspend fun signMdocPresentation(

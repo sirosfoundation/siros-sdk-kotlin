@@ -13,8 +13,12 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import org.siros.sdk.credentials.TransactionDataError
 import org.siros.sdk.credentials.TransactionDataReason
+import org.siros.sdk.keystore.AuthenticationCategory
+import org.siros.sdk.keystore.AuthenticationFactor
 import org.siros.sdk.keystore.TransactionBinding
-import org.siros.sdk.wallet.AuthenticationFactorsProvider
+import org.siros.sdk.credentials.StoredCredential
+import org.siros.sdk.keystore.ScaAuthenticationCapability
+import org.siros.sdk.wallet.HostVerifiedFactorProvider
 import org.siros.sdk.wallet.SigningOperation
 import org.siros.sdk.wallet.TransactionConsentHandler
 import org.siros.sdk.wallet.TransactionConsentRequest
@@ -46,8 +50,11 @@ internal class ScaPresentationPlan(
 
 /**
  * The whole `transaction_data` pipeline for one request (contract section 4):
- * validate, show and obtain consent, establish authentication factors, and
- * log the outcome. Throws a [TransactionDataError] to refuse or decline, with
+ * validate, check before consent that two authentication categories are
+ * reachable, show and obtain consent, collect the host's verified factor where
+ * the signer needs one, and log the outcome. The factors themselves are never
+ * established here: the signing operation reports them and the KB-JWT claims
+ * only those. Throws a [TransactionDataError] to refuse or decline, with
  * nothing signed; returns the plan to sign with otherwise.
  *
  * Validation and display (schema validation, hashing, document fetches) run
@@ -62,7 +69,9 @@ internal class TransactionDataCoordinator(
     private val validator: TransactionDataValidator,
     private val display: TransactionDisplayBuilder,
     private val consentHandler: () -> TransactionConsentHandler?,
-    private val factorsProvider: () -> AuthenticationFactorsProvider,
+    /** Asks the keystore whether the key behind a credential could reach two categories; never prompts. */
+    private val capability: suspend (StoredCredential) -> ScaAuthenticationCapability,
+    private val hostFactorProvider: () -> HostVerifiedFactorProvider?,
     private val log: () -> TransactionLogStore,
     private val nowMillis: () -> Long = System::currentTimeMillis,
     private val consentTimeoutMillis: Long = CONSENT_TIMEOUT_MILLIS,
@@ -102,8 +111,7 @@ internal class TransactionDataCoordinator(
             // One warning per validation, now that display has fetched what it needs.
             validated.trust.warnOnce()
 
-            val provider = factorsProvider()
-            requireFactorsCanBeEstablished(provider, validated, request)
+            val needsHostFactor = requireFactorsCanBeEstablished(validated, request)
             val handler = consentHandler() ?: throw TransactionDataError(
                 TransactionDataReason.NO_CONSENT_HANDLER,
                 "No consent handler is registered, so the transaction cannot be shown to the user",
@@ -111,7 +119,7 @@ internal class TransactionDataCoordinator(
             if (!askUser(handler, consentModel)) {
                 throw TransactionDataError(TransactionDataReason.DECLINED, "The user did not confirm the transaction")
             }
-            val bindings = bind(provider, validated, request)
+            val bindings = bind(needsHostFactor, validated, request)
             record(request, validated, TransactionOutcome.CONSENTED, null)
             return ScaPresentationPlan(bindings) {
                 record(request, validated, TransactionOutcome.REFUSED, SIGNING_FAILED)
@@ -126,21 +134,34 @@ internal class TransactionDataCoordinator(
         }
     }
 
-    /** Refuses before the user reads anything if no two-category authentication can possibly follow. */
+    /**
+     * Refuses before the user reads anything if no two-category authentication can
+     * possibly follow. Returns the query ids whose signer needs a host-verified factor.
+     * A capability that cannot be determined is a refusal.
+     */
     private suspend fun requireFactorsCanBeEstablished(
-        provider: AuthenticationFactorsProvider,
         validated: ValidatedTransactionData,
         request: TransactionDataRequest,
-    ) {
+    ): Set<String> {
+        val needsHost = LinkedHashSet<String>()
         for (queryId in validated.boundQueryIds()) {
-            val operation = SigningOperation(request.credentials.getValue(queryId).first())
-            if (!canEstablish(provider, operation)) {
+            val c = try {
+                capability(request.credentials.getValue(queryId).first())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+            val possible = c != null && (c.canReachTwoCategories || (c.requiresHostVerifiedFactor && hostFactorProvider() != null))
+            if (!possible) {
                 throw TransactionDataError(
                     TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS,
                     "No two-category authentication can be established for this operation",
                 )
             }
+            if (c!!.requiresHostVerifiedFactor && !c.canReachTwoCategories) needsHost += queryId
         }
+        return needsHost
     }
 
     /**
@@ -160,36 +181,41 @@ internal class TransactionDataCoordinator(
         false
     }
 
-    /** The KB-JWT binding per bound query, with the factors established for each credential. */
+    /**
+     * The KB-JWT binding per bound query. Where the signer needs a host-verified
+     * factor ([needsHostFactor]), the host verifies the user NOW, after consent;
+     * no answer, a wrong category or a failure is a refusal. Nothing is asked
+     * of a signer that reaches two categories itself.
+     */
     private suspend fun bind(
-        provider: AuthenticationFactorsProvider,
+        needsHostFactor: Set<String>,
         validated: ValidatedTransactionData,
         request: TransactionDataRequest,
     ): Map<String, TransactionBinding> {
         val bindings = LinkedHashMap<String, TransactionBinding>()
         for (queryId in validated.boundQueryIds()) {
-            val credential = request.credentials.getValue(queryId).first()
-            // A provider that fails has established nothing.
-            val factors = try {
-                provider.factorsFor(SigningOperation(credential))
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Timber.w("The authentication factors provider failed (${e.javaClass.simpleName})")
-                emptyList()
+            var host: AuthenticationFactor? = null
+            if (queryId in needsHostFactor) {
+                val provider = hostFactorProvider() ?: throw insufficientFactors()
+                host = try {
+                    provider.verify(SigningOperation(request.credentials.getValue(queryId).first()))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Timber.w("The host's user verification failed (${e.javaClass.simpleName})")
+                    null
+                }
+                if (host == null || host.category == AuthenticationCategory.POSSESSION) throw insufficientFactors()
             }
-            bindings[queryId] = validated.bindingFor(queryId, factors)!!
+            bindings[queryId] = validated.bindingFor(queryId, host)!!
         }
         return bindings
     }
 
-    private suspend fun canEstablish(provider: AuthenticationFactorsProvider, operation: SigningOperation): Boolean = try {
-        provider.canEstablish(operation)
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        false
-    }
+    private fun insufficientFactors() = TransactionDataError(
+        TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS,
+        "The user verification needed for a second authentication category was not confirmed",
+    )
 
     /**
      * Writes the log record(s). A refusal is ONE record per request (the first

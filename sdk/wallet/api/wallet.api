@@ -24,15 +24,6 @@ public final class org/siros/sdk/wallet/AmbiguousWscdPluginException : org/siros
 	public final fun getIssuer ()Ljava/lang/String;
 }
 
-public abstract interface class org/siros/sdk/wallet/AuthenticationFactorsProvider {
-	public abstract fun canEstablish (Lorg/siros/sdk/wallet/SigningOperation;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun factorsFor (Lorg/siros/sdk/wallet/SigningOperation;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
-public final class org/siros/sdk/wallet/AuthenticationFactorsProvider$DefaultImpls {
-	public static fun canEstablish (Lorg/siros/sdk/wallet/AuthenticationFactorsProvider;Lorg/siros/sdk/wallet/SigningOperation;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
 public final class org/siros/sdk/wallet/CachedAccount {
 	public static final field Companion Lorg/siros/sdk/wallet/CachedAccount$Companion;
 	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;)V
@@ -207,12 +198,6 @@ public final class org/siros/sdk/wallet/ClientIdScheme$X509SanUri : org/siros/sd
 	public fun toString ()Ljava/lang/String;
 }
 
-public final class org/siros/sdk/wallet/ConservativeAuthenticationFactorsProvider : org/siros/sdk/wallet/AuthenticationFactorsProvider {
-	public static final field INSTANCE Lorg/siros/sdk/wallet/ConservativeAuthenticationFactorsProvider;
-	public fun canEstablish (Lorg/siros/sdk/wallet/SigningOperation;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun factorsFor (Lorg/siros/sdk/wallet/SigningOperation;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
 public final class org/siros/sdk/wallet/DeepLinkClassifierKt {
 	public static final fun classifyDeepLink (Landroid/net/Uri;Ljava/lang/String;)Lorg/siros/sdk/wallet/DeepLinkType;
 	public static final fun classifyDeepLink (Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/wallet/DeepLinkType;
@@ -274,6 +259,10 @@ public final class org/siros/sdk/wallet/FileFetchCache : org/siros/sdk/credentia
 }
 
 public final class org/siros/sdk/wallet/FileFetchCache$Companion {
+}
+
+public abstract interface class org/siros/sdk/wallet/HostVerifiedFactorProvider {
+	public abstract fun verify (Lorg/siros/sdk/wallet/SigningOperation;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public abstract class org/siros/sdk/wallet/IssuanceStart {
@@ -388,7 +377,6 @@ public final class org/siros/sdk/wallet/SirosWallet {
 	public final fun evaluateReaderTrust (Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun forgetAccount (Ljava/lang/String;)V
 	public final fun getAccessToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public final fun getAuthenticationFactorsProvider ()Lorg/siros/sdk/wallet/AuthenticationFactorsProvider;
 	public final fun getAvailableCredentials (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun getCapabilities ()Lorg/siros/sdk/wallet/WalletCapabilities;
 	public final fun getCredentialConsumptionPolicy ()Lorg/siros/sdk/credentials/CredentialConsumptionPolicy;
@@ -396,6 +384,7 @@ public final class org/siros/sdk/wallet/SirosWallet {
 	public static synthetic fun getCredentials$default (Lorg/siros/sdk/wallet/SirosWallet;ZLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun getDidResolver ()Lorg/siros/sdk/credentials/interop/DidResolver;
 	public final fun getDiipProfile ()Lorg/siros/sdk/credentials/interop/DiipProfile;
+	public final fun getHostVerifiedFactorProvider ()Lorg/siros/sdk/wallet/HostVerifiedFactorProvider;
 	public final fun getIssuerMetadata (Ljava/lang/String;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun getIssuerMetadata$default (Lorg/siros/sdk/wallet/SirosWallet;Ljava/lang/String;Ljava/util/List;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun getIssuers (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -431,10 +420,10 @@ public final class org/siros/sdk/wallet/SirosWallet {
 	public static synthetic fun resolveIssuerMetadata$default (Lorg/siros/sdk/wallet/SirosWallet;Ljava/lang/String;Ljava/util/List;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun resumeSession (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun saveWscdCredentials (Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public final fun setAuthenticationFactorsProvider (Lorg/siros/sdk/wallet/AuthenticationFactorsProvider;)V
 	public final fun setCredentialConsumptionPolicy (Lorg/siros/sdk/credentials/CredentialConsumptionPolicy;)V
 	public final fun setEventListener (Lorg/siros/sdk/wallet/WalletEventListener;)V
 	public final fun setGlobalUserOverride (Ljava/lang/String;)V
+	public final fun setHostVerifiedFactorProvider (Lorg/siros/sdk/wallet/HostVerifiedFactorProvider;)V
 	public final fun setRenewThresholds (Ljava/util/Map;)V
 	public final fun setTransactionConsentHandler (Lorg/siros/sdk/wallet/TransactionConsentHandler;)V
 	public final fun setTransactionDataEnabled (Z)V

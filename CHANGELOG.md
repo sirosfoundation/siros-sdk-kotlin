@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING (unreleased TS12 API): payment SCA takes its authentication
+  factors from the signing operation, not from a provider.**
+  `siros-wscd-manager` 0.9.1 -> 0.10.0 (UniFFI bindings regenerated:
+  `signWithFactors`, `authenticationCapability`, fresh user authentication).
+  `AuthenticationFactorsProvider`, `ConservativeAuthenticationFactorsProvider`
+  and `SirosWallet.authenticationFactorsProvider` are removed. Before the user
+  is shown a transaction the wallet asks the key's signer whether two
+  authentication categories are reachable (`KeystoreManager.scaAuthenticationCapability`,
+  never prompts) and refuses (`insufficientAuthenticationFactors`) if not or if
+  that cannot be determined. After consent the SCA sign is a fresh user
+  authentication (`requireFreshUserAuthentication`; a cached OPAQUE session or
+  token is never reused) and the KB-JWT `amr` is exactly the factors that sign
+  applied, with the PIN class measured from the PIN typed for it. Because the
+  `amr` is inside the signed bytes it is stated before the signature; the sign's
+  own report must then equal it (as a set) or the presentation is discarded and
+  refused. `TransactionBinding` no longer takes factors. `Signer` gains
+  `scaAuthenticationCapability` and `beginScaSign` (defaults refuse), implemented
+  by `UniFFISigner` for R2PS (`key_in_remote_wscd`) and FIDO2
+  (`key_in_local_external_wscd`). `JweKeystore` (software keys, no user
+  authentication of its own) now refuses an SCA sign. Non-SCA signing is
+  unchanged.
+- New `SirosWallet.hostVerifiedFactorProvider` (`HostVerifiedFactorProvider`):
+  for signers that reach possession alone (R2PS WebAuthn, a UV-performing FIDO2
+  transport) the host performs its own user verification after consent and
+  returns the factor it verified (null, a possession factor, or a failure
+  refuses). Without a provider such signers are refused before consent. Those
+  two signers cannot yet honour a fresh-authentication sign, so they are still
+  refused by the WSCD manager (`Unsupported`); the hook is ready for when they can.
+
 ## [0.20.5] - 2026-10-12
 
 ### Fixed

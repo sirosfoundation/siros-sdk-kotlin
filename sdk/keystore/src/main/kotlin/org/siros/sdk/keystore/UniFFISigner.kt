@@ -128,6 +128,35 @@ class UniFFISigner(
         result.data
     }
 
+    private val factorSigning: FactorSigning by lazy {
+        FactorSigning(
+            object : FactorSigningBackend {
+                override fun capability(kid: String) = ffi.authenticationCapability(kid)
+                override fun pluginIdOf(kid: String): String? =
+                    ffi.listKeys().firstOrNull { it.kid == kid }?.pluginId
+                override fun signWithFactors(
+                    kid: String,
+                    data: ByteArray,
+                    options: uniffi.siros_wscd_manager.FfiSignOptions,
+                    auth: FfiAuthCallback,
+                ) = ffi.signWithFactors(kid, data, FfiAlgorithm.ES256, options, auth, noOpProgress())
+            },
+            authCallbackBridge(),
+        )
+    }
+
+    override suspend fun scaAuthenticationCapability(keyId: String): ScaAuthenticationCapability =
+        withContext(Dispatchers.IO) { factorSigning.capability(keyId) }
+
+    override suspend fun beginScaSign(keyId: String, hostVerifiedFactor: AuthenticationFactor?): ScaSignSession =
+        withContext(Dispatchers.IO) {
+            val session = factorSigning.begin(keyId, hostVerifiedFactor)
+            object : ScaSignSession by session {
+                override suspend fun sign(data: ByteArray): ScaSignature =
+                    withContext(Dispatchers.IO) { session.sign(data) }
+            }
+        }
+
     override suspend fun listKeys(): List<SignerKeyInfo> = withContext(Dispatchers.IO) {
         ffi.listKeys().map { keyInfo ->
             SignerKeyInfo(
