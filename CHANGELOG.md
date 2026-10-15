@@ -51,6 +51,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is step 1 of the EC TS12 rollout; the handling itself follows.
 
 ### Removed
+- **BREAKING:** `SirosWallet.deactivateWallet()`, `SirosWallet.setWalletInstanceStatus()`
+  (both overloads), `BackendApiClient.revokeAllWalletInstances()`,
+  `BackendApiClient.setWalletInstanceStatus()` (both overloads),
+  `DeactivationOutcome` and `ERROR_ERASURE_INCOMPLETE`. They called
+  `POST /user/session/instances/revoke-all` and
+  `PUT /user/session/instances/{id}/status`, which the backend no longer
+  serves. `listWalletInstances()` stays. The sample app's Devices screen is
+  now a read-only list.
+- **BREAKING:** the zero-argument, local-only `SirosWallet.deleteAccount()`. The
+  name now belongs to the server-side deletion below; to forget a cached
+  account without deleting it use `forgetAccount(accountId)` (unchanged, and
+  the same name as in the Swift SDK and the web wallet's `forgetCachedUser`).
+  A `DeprecationLevel.ERROR` stub of `deleteAccount()` stays for one release so
+  existing callers get a compile error that says what to call instead.
 - **BREAKING:** `WscdKeystoreAdapter.signVpToken(..., transactionData:
   List<TransactionDataItem>, ...)` and `TransactionDataItem`. The overload was
   never called and hashed a re-serialisation of the entry instead of the
@@ -58,6 +72,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transaction: TransactionBinding)`.
 
 ### Added
+- **Account deletion (SID-AUTH-06, go-wallet-backend#352).**
+  `SirosWallet.deleteAccount(confirmation, stepUp)` authorises the deletion
+  with a fresh passkey assertion (`BackendApiClient.deleteAccountBegin()` then
+  `deleteAccount(challengeId, credential, confirm)`) and the typed
+  confirmation `DELETE`. It returns a `DeleteAccountResult` instead of
+  throwing for backend outcomes: `Deleted`, `CleanupPending`,
+  `OperatorRequired`, `RetryNeeded`, and typed refusals (`StepUpFailed`,
+  `StepUpExpired`, `ConfirmationRequired`, `NoPasskey`, ...). Only the first
+  three wipe the device (keystore and credentials, presentation records,
+  session, account registry, transaction log, caches, WSCD choices, local
+  passkeys, DC API registry); a failing store does not stop the rest and is
+  reported in `LocalWipeReport`. `StepUpAuthenticator` lets an app supply the
+  assertion; by default the wallet's own passkey provider is used. Needs a
+  backend with go-wallet-backend#453.
+- Sample app: a settings action for account deletion (typed `DELETE`, passkey
+  step-up, a message per outcome).
 - Sample app: a settings toggle for payment confirmation (EC TS12) requests
   applied at runtime, a consent dialog rendering the SDK's model (level 1
   prominent, 2 and 3 below, 4 omitted, unsigned-request warning), a
