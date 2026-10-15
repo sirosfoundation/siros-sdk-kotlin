@@ -75,8 +75,6 @@ def oracle(case):
                 v = p["verifier_context"]
                 if not isinstance(v, str) or not 1 <= len(v.encode("utf-8")) <= 64:
                     return "verifier-context-length"
-            if uses_vi and "verifier_id_type" not in p:
-                return "verifier-id-type-required"
             if not uses_vi and "verifier_id_type" in p:
                 return "verifier-id-type-forbidden"
             if "verifier_id_type" in p and (not isinstance(p["verifier_id_type"], str) or p["verifier_id_type"] not in types):
@@ -186,8 +184,9 @@ case("ok: 32 two-byte characters are 64 bytes", [pseud("account-recovery-ssc", v
 case("fail: 33 two-byte characters are 66 bytes (33 characters)", [pseud("account-recovery-ssc", verifier_context="å" * 33)], "verifier-context-length")
 case("fail: verifier_context not a string", [pseud("account-recovery-ssc", verifier_context=7)], "verifier-context-length")
 # --- verifier_id_type ---
-case("fail: known-offender without verifier_id_type", [pseud(_no_vit=True)], "verifier-id-type-required")
-case("fail: account-recovery without verifier_id_type", [pseud("account-recovery-ssc", verifier_context="c", _no_vit=True)], "verifier-id-type-required")
+# The request no longer carries verifier_id_type (the wallet picks the type); absent is satisfiable.
+case("ok: known-offender without verifier_id_type", [pseud(_no_vit=True)], None)
+case("ok: account-recovery without verifier_id_type", [pseud("account-recovery-ssc", verifier_context="c", _no_vit=True)], None)
 case("fail: xsite with verifier_id_type", [pseud("user-managed-pseudonym-xsite-ssc", verifier_id_type="semantic")], "verifier-id-type-forbidden")
 case("fail: unregistered verifier_id_type", [pseud(verifier_id_type="x509_hash")], "verifier-id-type-unregistered")
 case("fail: verifier_id_type not a string", [pseud(verifier_id_type=1)], "verifier-id-type-unregistered")

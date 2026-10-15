@@ -132,6 +132,9 @@ object NymPseudonym {
      * @param seed The `secret_seed` or `private_seed` the config uses, at that seed's exact length.
      * @param proverInput The user-supplied value, for configs that hash one; otherwise must be null.
      * @param verifierId The opaque `verifier_id` string, for configs that use one; otherwise must be null.
+     *   Its value form is defined by the rulebook / trust framework and produced by the PDP (for example
+     *   `x509_san_dns`: the lower-case DNS name, no prefix; `semantic`: `semantic_id:` plus the ETSI id).
+     *   It is hashed byte-for-byte as UTF-8: no lower-casing, trimming or prefix handling happens here.
      * @param verifierContext The `verifier_context` string, for configs that use one; otherwise must be null.
      *   Any length is accepted; the rulebook's 1-64 byte limit is the wallet's satisfiability check.
      * @throws NymPseudonymError on an unknown config, a missing or unused input, or a wrong seed length.

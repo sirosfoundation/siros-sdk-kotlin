@@ -42,22 +42,41 @@ def pseudonym(config, seed, user_value=None, vid=None, vctx=None):
     return h(("nym_auth/v1/" + config).encode(), seed, prover, verifier)
 
 
-# (name, config, seed, inputs)
+# Verifier id VALUE FORMS are defined by the nym_auth rulebook ("Verifier identity") and
+# produced by the PDP; the derivation hashes the string verbatim. Types (informational,
+# not an input): semantic or an OpenID4VP client_id_type name.
+#   x509_san_dns            dNSName SAN, ASCII lower case, no trailing dot, NO prefix
+#   x509_san_uri            URI SAN as bound
+#   decentralized_identifier DID without fragment
+#   openid_federation       entity id as in the chain
+#   semantic                "semantic_id:" + ETSI id
+DNS = "verifier.example.com"
+SEM = "semantic_id:VATSE-556000000101"
+SEM_LEI = "semantic_id:LEIXG-529900T8BM49AURSDO55"
+URI = "https://verifier.example.com/rp"
+DID = "did:web:verifier.example.com"
+FED = "https://verifier.example.com/federation/entity"
+
+# (name, config, seed, inputs); "type" is informational and kept out of the derivation.
 CASES = [
-    ("known-offender ssc, x509_san_dns prefix", "known-offender-matching-ssc", SEED_A, {"verifier_id": "x509_san_dns:verifier.example.com"}),
-    ("known-offender ssc, semantic_id prefix", "known-offender-matching-ssc", SEED_A, {"verifier_id": "semantic_id:LEIXG-529900T8BM49AURSDO55"}),
-    ("known-offender ssc, no prefix", "known-offender-matching-ssc", SEED_A, {"verifier_id": "verifier.example.com"}),
-    ("known-offender ssc, other seed", "known-offender-matching-ssc", SEED_B, {"verifier_id": "verifier.example.com"}),
-    ("known-offender psc, x509_san_dns prefix", "known-offender-matching-psc", SEED_A, {"verifier_id": "x509_san_dns:verifier.example.com"}),
-    ("known-offender psc, no prefix", "known-offender-matching-psc", SEED_B, {"verifier_id": "verifier.example.com"}),
-    ("known-offender psc vs ssc, same seed and id differ by DST", "known-offender-matching-psc", SEED_A, {"verifier_id": "verifier.example.com"}),
-    ("account-recovery, ascii context", "account-recovery-ssc", SEED_A, {"verifier_id": "x509_san_dns:verifier.example.com", "verifier_context": "account-1234"}),
-    ("account-recovery, no-prefix id", "account-recovery-ssc", SEED_B, {"verifier_id": "verifier.example.com", "verifier_context": "account-1234"}),
-    ("account-recovery, multi-byte UTF-8 context", "account-recovery-ssc", SEED_A, {"verifier_id": "x509_san_dns:verifier.example.com", "verifier_context": "könto-€-日本-\U0001F512"}),
-    ("account-recovery, 64-byte context (boundary)", "account-recovery-ssc", SEED_A, {"verifier_id": "x509_san_dns:verifier.example.com", "verifier_context": "c" * 64}),
-    ("account-recovery, 65-byte context (derivation accepts any length)", "account-recovery-ssc", SEED_A, {"verifier_id": "x509_san_dns:verifier.example.com", "verifier_context": "c" * 65}),
-    ("account-recovery, 64-byte multi-byte context (16 x 4-byte chars)", "account-recovery-ssc", SEED_A, {"verifier_id": "x509_san_dns:verifier.example.com", "verifier_context": "\U0001F512" * 16}),
-    ("account-recovery, empty context (derivation accepts any length)", "account-recovery-ssc", SEED_A, {"verifier_id": "x509_san_dns:verifier.example.com", "verifier_context": ""}),
+    ("known-offender ssc, x509_san_dns (bare lower-case DNS name)", "known-offender-matching-ssc", SEED_A, {"verifier_id_type": "x509_san_dns", "verifier_id": DNS}),
+    ("known-offender ssc, semantic (VAT)", "known-offender-matching-ssc", SEED_A, {"verifier_id_type": "semantic", "verifier_id": SEM}),
+    ("known-offender ssc, semantic (LEI)", "known-offender-matching-ssc", SEED_A, {"verifier_id_type": "semantic", "verifier_id": SEM_LEI}),
+    ("known-offender ssc, x509_san_uri", "known-offender-matching-ssc", SEED_A, {"verifier_id_type": "x509_san_uri", "verifier_id": URI}),
+    ("known-offender ssc, decentralized_identifier", "known-offender-matching-ssc", SEED_A, {"verifier_id_type": "decentralized_identifier", "verifier_id": DID}),
+    ("known-offender ssc, openid_federation", "known-offender-matching-ssc", SEED_A, {"verifier_id_type": "openid_federation", "verifier_id": FED}),
+    ("known-offender ssc, other seed", "known-offender-matching-ssc", SEED_B, {"verifier_id_type": "x509_san_dns", "verifier_id": DNS}),
+    ("known-offender ssc, verbatim hashing: a mixed-case value is NOT lower-cased by the derivation", "known-offender-matching-ssc", SEED_A, {"verifier_id_type": "x509_san_dns", "verifier_id": "Verifier.Example.COM"}),
+    ("known-offender psc, x509_san_dns", "known-offender-matching-psc", SEED_A, {"verifier_id_type": "x509_san_dns", "verifier_id": DNS}),
+    ("known-offender psc, semantic, other seed", "known-offender-matching-psc", SEED_B, {"verifier_id_type": "semantic", "verifier_id": SEM}),
+    ("known-offender psc vs ssc, same seed and id differ by DST", "known-offender-matching-psc", SEED_A, {"verifier_id_type": "semantic", "verifier_id": SEM_LEI}),
+    ("account-recovery, ascii context", "account-recovery-ssc", SEED_A, {"verifier_id_type": "x509_san_dns", "verifier_id": DNS, "verifier_context": "account-1234"}),
+    ("account-recovery, semantic id", "account-recovery-ssc", SEED_B, {"verifier_id_type": "semantic", "verifier_id": SEM, "verifier_context": "account-1234"}),
+    ("account-recovery, multi-byte UTF-8 context", "account-recovery-ssc", SEED_A, {"verifier_id_type": "x509_san_dns", "verifier_id": DNS, "verifier_context": "könto-€-日本-\U0001F512"}),
+    ("account-recovery, 64-byte context (boundary)", "account-recovery-ssc", SEED_A, {"verifier_id_type": "x509_san_dns", "verifier_id": DNS, "verifier_context": "c" * 64}),
+    ("account-recovery, 65-byte context (derivation accepts any length)", "account-recovery-ssc", SEED_A, {"verifier_id_type": "x509_san_dns", "verifier_id": DNS, "verifier_context": "c" * 65}),
+    ("account-recovery, 64-byte multi-byte context (16 x 4-byte chars)", "account-recovery-ssc", SEED_A, {"verifier_id_type": "x509_san_dns", "verifier_id": DNS, "verifier_context": "\U0001F512" * 16}),
+    ("account-recovery, empty context (derivation accepts any length)", "account-recovery-ssc", SEED_A, {"verifier_id_type": "x509_san_dns", "verifier_id": DNS, "verifier_context": ""}),
     ("xsite, 16-byte user value", "user-managed-pseudonym-xsite-ssc", SEED_A, {"prover_input_hex": "000102030405060708090a0b0c0d0e0f"}),
     ("xsite, UTF-8 user value", "user-managed-pseudonym-xsite-ssc", SEED_B, {"prover_input_hex": "my shared värde".encode().hex()}),
     ("xsite, 100-byte user value", "user-managed-pseudonym-xsite-ssc", SEED_A, {"prover_input_hex": ("ab" * 100)}),
@@ -87,7 +106,7 @@ def build():
     vectors = []
     for name, config, seed, inp in CASES:
         uv = bytes.fromhex(inp["prover_input_hex"]) if "prover_input_hex" in inp else None
-        exp = pseudonym(config, seed, uv, inp.get("verifier_id"), inp.get("verifier_context"))
+        exp = pseudonym(config, seed, uv, inp.get("verifier_id"), inp.get("verifier_context"))  # verifier_id_type is not an input
         vectors.append({"name": name, "config": config, "seed_hex": seed.hex(), **inp, "expected_hex": exp.hex()})
     rejects = [
         {"name": n, "config": c, "seed_hex": s.hex(), **i, "error": e} for n, c, s, i, e in REJECT

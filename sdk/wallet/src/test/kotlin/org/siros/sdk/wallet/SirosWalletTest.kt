@@ -5543,6 +5543,33 @@ class SirosWalletTest {
     }
 
     @Test
+    fun circuitZkDcApi_theVerifierIdFromThePdpIsHashedByteForByte_notNormalisedByTheWallet() = runTest(dispatcher) {
+        // Canonicalisation (lower case, no trailing dot, no prefix) is the PDP's job; the wallet must not redo it.
+        val mixed = "Rp.Example.COM"
+        val s = czkSetup(trust = czkIds("x509_san_dns" to mixed))
+        val got = czkPseudonymOf(czkRun(s, czkRequest()))
+        assertEquals(org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym(mixed)), got)
+        assertTrue(got != org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym(mixed.lowercase())))
+    }
+
+    @Test
+    fun circuitZkDcApi_aPseudonymFunctionWithoutVerifierIdType_stillNeedsAndGetsAVerifierId() = runTest(dispatcher) {
+        // The request no longer carries verifier_id_type: the config alone says a verifier id is needed.
+        val bare = listOf(org.siros.sdk.credentials.CircuitZkFunction(
+            "pseudonym-v1-sha256", "n", Json.parseToJsonElement("""{"config":"known-offender-matching-psc"}""").jsonObject,
+        ))
+        val s = czkSetup(functions = bare, trust = czkIds("x509_san_dns" to "pdp.example"))
+        assertEquals(
+            org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("pdp.example")),
+            czkPseudonymOf(czkRun(s, czkRequest())),
+        )
+        czkRefused(
+            czkSetup(functions = bare, trust = { buildJsonObject { put("decision", true) } }),
+            czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE,
+        )
+    }
+
+    @Test
     fun circuitZkDcApi_noPdpEntryForAnyListedType_isRefused_nothingIsDerivedLocally() = runTest(dispatcher) {
         // The request carries a client id and an x5c chain whose SAN matches it, but nothing is derived from them.
         val none = czkSetup(trust = { buildJsonObject { put("decision", true) } })

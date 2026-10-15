@@ -33,7 +33,7 @@ Rule ids: `meta-vct-values-reserved`, `holder-binding-false`,
 `function-not-declared`, `unknown-function`, `pseudonym-count`,
 `age-check-count`, `pseudonym-config-unsupported`,
 `verifier-context-required`, `verifier-context-forbidden`,
-`verifier-context-length` (1-64 UTF-8 bytes), `verifier-id-type-required`,
+`verifier-context-length` (1-64 UTF-8 bytes),
 `verifier-id-type-forbidden`, `verifier-id-type-unregistered`,
 `age-check-no-bounds`, `age-check-bad-date`, `age-check-le-before-ge`,
 `age-check-span-short` (`le - ge + 1` below 365 calendar days).

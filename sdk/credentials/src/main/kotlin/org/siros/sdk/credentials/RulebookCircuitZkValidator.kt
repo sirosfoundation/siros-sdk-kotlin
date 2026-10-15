@@ -108,10 +108,6 @@ class CircuitZkRuleSet(
                                 val bytes = str(f.params, "verifier_context")?.toByteArray(Charsets.UTF_8)?.size
                                 bytes != null && bytes in 1..MAX_CONTEXT_BYTES
                             },
-                            CircuitZkFunctionRule("verifier-id-type-required") { f, _ ->
-                                val cfg = byId[str(f.params, "config")] ?: return@CircuitZkFunctionRule true
-                                !cfg.usesVerifierInput || f.params.containsKey("verifier_id_type")
-                            },
                             CircuitZkFunctionRule("verifier-id-type-forbidden") { f, _ ->
                                 val cfg = byId[str(f.params, "config")] ?: return@CircuitZkFunctionRule true
                                 cfg.usesVerifierInput || !f.params.containsKey("verifier_id_type")

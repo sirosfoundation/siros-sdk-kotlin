@@ -92,7 +92,8 @@ class VerifierIdRegistry(
  * hashed into a pseudonym and a guess would be a different pseudonym. Malformed
  * entries and empty `verifier_id`s are ignored. Declines when the context, the
  * member (not a list) or a matching entry is absent. Type names and value forms are
- * opaque here and owned by the PDP: the names in the wallet's list must match what the
+ * defined by the rulebook / trust framework, produced by the PDP, and opaque here (the
+ * wallet hashes the value byte-for-byte and never lower-cases, trims or strips it): the names in the wallet's list must match what the
  * PDP returns, and go-trust is aligning to the trust framework (for `x509_san_dns` the
  * value is the bare DNS name, without a prefix, derived by the PDP). The wallet derives
  * nothing itself from the request's client id or `x5c` chain; the PDP is the single

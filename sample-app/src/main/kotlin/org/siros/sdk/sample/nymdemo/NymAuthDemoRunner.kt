@@ -99,7 +99,6 @@ class NymAuthDemoRunner(private val rootKey: ByteArray) {
                         handle = "nym",
                         params = buildJsonObject {
                             put("config", config)
-                            put("verifier_id_type", "x509_san_dns")
                         },
                     ),
                     CircuitZkFunction(

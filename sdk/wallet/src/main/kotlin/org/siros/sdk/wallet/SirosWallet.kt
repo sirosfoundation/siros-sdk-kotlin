@@ -4261,10 +4261,12 @@ class SirosWallet private constructor(
             // Every copy answers as a circuit proof, so CONSUME_NON_ZKP never counts a copy used for one as consumed.
             val cred = eligibleInstances(if (selectedCredentialIds.isEmpty()) result.candidates else pickedHere) { true }.firstOrNull() ?: refuse("no-eligible-copy", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
             val pseudonym = plan.functions.firstOrNull { it.id == org.siros.sdk.credentials.CircuitZkRuleSet.PSEUDONYM }
-            // The function's verifier_id_type is only the structural signal that a verifier id is needed. It is
-            // NOT used to choose the source: the trust framework fixes the type, and the wallet takes the first
-            // of its own ordered types that resolves. Nothing resolving (or no supported type) is a refusal.
-            val needsVerifierId = pseudonym?.params?.containsKey("verifier_id_type") == true
+            // Whether a verifier id is needed follows from the pseudonym config (the request no longer carries a
+            // verifier_id_type, and one it names is ignored). The trust framework fixes the type, and the wallet
+            // takes the first of its own ordered types that resolves. Nothing resolving (or no supported type)
+            // is a refusal. The resolved value is used verbatim: only the PDP canonicalises it.
+            val needsVerifierId = (pseudonym?.params?.get("config") as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull?.let { org.siros.sdk.credentials.NymPseudonym.describe(it)?.verifierId } == true
             val verifierId = if (needsVerifierId) registry.resolve(verifierContext) ?: refuse("verifier-id", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE) else null
             val context = (pseudonym?.params?.get("verifier_context") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
             val kid = cred.kid ?: keystore.listKeys().firstOrNull()?.keyId

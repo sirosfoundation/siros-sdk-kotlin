@@ -1064,7 +1064,7 @@
       }
     },
     {
-      "name": "fail: known-offender without verifier_id_type",
+      "name": "ok: known-offender without verifier_id_type",
       "plan": {
         "query": {
           "id": "nym",
@@ -1084,11 +1084,11 @@
         ]
       },
       "verdict": {
-        "access_denied": "verifier-id-type-required"
+        "ok": true
       }
     },
     {
-      "name": "fail: account-recovery without verifier_id_type",
+      "name": "ok: account-recovery without verifier_id_type",
       "plan": {
         "query": {
           "id": "nym",
@@ -1109,7 +1109,7 @@
         ]
       },
       "verdict": {
-        "access_denied": "verifier-id-type-required"
+        "ok": true
       }
     },
     {

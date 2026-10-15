@@ -12,7 +12,7 @@ class NymAuthDemoRunnerTest {
         birthDate = "1990-05-17",
         ge = "1900-01-01",
         le = "2008-10-14",
-        verifierId = "x509_san_dns:verifier.example.org",
+        verifierId = "verifier.example.org",
     )
 
     @Test
@@ -27,7 +27,7 @@ class NymAuthDemoRunnerTest {
     @Test
     fun `the pseudonym differs per verifier id`() = runTest {
         val a = runner.run(base) as NymAuthDemoRunner.Outcome.Presented
-        val b = runner.run(base.copy(verifierId = "x509_san_dns:other.example.org")) as NymAuthDemoRunner.Outcome.Presented
+        val b = runner.run(base.copy(verifierId = "other.example.org")) as NymAuthDemoRunner.Outcome.Presented
         assertTrue(a.pseudonymHex != b.pseudonymHex)
     }
 

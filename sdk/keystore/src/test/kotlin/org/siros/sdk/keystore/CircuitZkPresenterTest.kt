@@ -124,7 +124,7 @@ class CircuitZkPresenterTest {
         userValue: ByteArray? = null,
     ) = CircuitZkPresenter(prover, { circuits }, validator, HolderWitnessProvider(seeds, userValue))
 
-    private fun request(cred: ByteArray = credential(), p: CircuitZkPlan = plan(pseudonymFn(), ageFn()), verifierId: String? = "x509_san_dns:rp.example") =
+    private fun request(cred: ByteArray = credential(), p: CircuitZkPlan = plan(pseudonymFn(), ageFn()), verifierId: String? = "rp.example") =
         CircuitZkPresenter.Request(cred, p, verifierId, null, byteArrayOf(1, 2, 3))
 
     private fun present(pr: CircuitZkPresenter, r: CircuitZkPresenter.Request) = runBlocking { pr.present(r, signer) }
@@ -161,7 +161,7 @@ class CircuitZkPresenterTest {
         val result = present(presenter(), request())
         val decoded = CircuitZkPresentationCodec.decodeBase64Url(result.base64Url)
 
-        val expected = NymPseudonym.derive("known-offender-matching-psc", seed16, verifierId = "x509_san_dns:rp.example")
+        val expected = NymPseudonym.derive("known-offender-matching-psc", seed16, verifierId = "rp.example")
         assertEquals(ResultValue.Pseudonym(expected), decoded.results["n"])
         assertEquals(ResultValue.Predicate, decoded.results["a"])
         assertEquals("circuit-1", decoded.circuitId)
