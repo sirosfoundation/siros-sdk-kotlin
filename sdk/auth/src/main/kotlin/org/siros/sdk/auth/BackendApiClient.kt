@@ -393,6 +393,24 @@ class BackendApiClient(
         private set
 
     /**
+     * Restores [privateDataEtag] after a process restart, from whatever this
+     * account's SDK-side session storage persisted alongside the cached
+     * private-data container.
+     *
+     * A fresh [BackendApiClient] otherwise starts with a null
+     * [privateDataEtag] even when the cached container it will be used
+     * against is actually current, so [passkeyRegisterFinish]'s default
+     * `ifMatch` omits `X-Private-Data-If-Match` entirely and the backend
+     * skips its optimistic-concurrency check - letting this device's
+     * enrollment silently clobber a newer write from another device. Call
+     * this right after constructing the client for a resumed session, before
+     * any private-data-affecting call.
+     */
+    fun restorePrivateDataEtag(etag: String?) {
+        privateDataEtag = etag
+    }
+
+    /**
      * POST /user/session/webauthn/register-begin - start adding a passkey to
      * the caller's account. On [AddPasskeyBegin.Ready] run the create ceremony
      * and, if [PasskeyEnrollmentChallenge.authorization] is set, the
@@ -511,7 +529,12 @@ class BackendApiClient(
             }
             404 -> AddPasskeyOutcome.RetryNeeded(message)
             412 -> {
-                etag?.let { privateDataEtag = it }
+                // Do NOT adopt the server's newer ETag here: this device's cached
+                // container has not been updated to match it, so trusting the new
+                // version would let a later retry submit stale private data tagged
+                // as current, silently clobbering another device's concurrent
+                // write. Surface the remote ETag only as data on the conflict so
+                // callers can fetch-and-reconcile before retrying with it.
                 AddPasskeyOutcome.PrivateDataConflict(etag)
             }
             400, 403 -> AddPasskeyOutcome.RegistrationRejected(status, fields.string("error") ?: message)

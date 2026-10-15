@@ -595,13 +595,39 @@ class SirosWallet private constructor(
             Timber.w(e, "Add passkey: creating the passkey failed")
             return AddPasskeyResult.PasskeyCreationUnavailable(e.message)
         }
-        val prfOutput = created.prfOutput ?: extractLastPrfOutput()
+        // A missing PRF result at CREATION is not conclusive: some
+        // authenticators only evaluate the PRF extension during an
+        // ASSERTION, never during the creation ceremony itself. Treating
+        // that as PrfUnsupported right away would both report a false
+        // negative and orphan the passkey this call just created (no local
+        // rollback ran yet, so it may also already exist server-side/on the
+        // authenticator with no usable PRF-wrapped key). So retry with an
+        // assertion against the credential this ceremony just made, using
+        // the same salt and the creation RP ID, before giving up.
+        val prfOutput = created.prfOutput ?: extractLastPrfOutput() ?: try {
+            authProvider.getPrfOutput(created.credentialId, prfSalt, challenge.createOptions.rpId)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.w(e, "Add passkey: PRF assertion fallback after creation also failed")
+            null
+        }
         if (prfOutput == null) {
             rollbackLocalCredential()
             return AddPasskeyResult.PrfUnsupported("PRF not supported by authenticator - cannot encrypt wallet data")
         }
 
         val prepared = keystore.preparePrfKey(created.credentialId, prfOutput.first, prfSalt, hkdfSalt, hkdfInfo)
+        // Captured right before the suspending network round-trip below, so a
+        // cross-account race can be detected once it returns: see
+        // [sessionGeneration]'s doc comment for why this counter identifies
+        // "which session" the same way it does for the self-driven re-login.
+        // Without this, a finish() that completes AFTER the user has logged
+        // out of this account and into another would otherwise commit this
+        // account's freshly-prepared key material, container and passkey
+        // record straight into the other account's now-unlocked keystore and
+        // session store.
+        val initiatingGeneration = sessionGeneration
         val outcome = try {
             client.passkeyRegisterFinish(
                 challengeId = challenge.challengeId,
@@ -615,10 +641,22 @@ class SirosWallet private constructor(
             throw e
         }
         if (outcome !is AddPasskeyOutcome.Added) rollbackLocalCredential()
+        // The check is as close to the writes as a suspend function allows
+        // (commitPrfKey itself suspends on an internal mutex, so this cannot
+        // be made fully atomic with them - same "cannot be atomic with the
+        // call" trade-off [reloginAfterCutOff] documents) but it closes the
+        // dominant window, the finish() round-trip itself, which is where a
+        // real logout-and-switch-account race has time to land.
+        if (outcome is AddPasskeyOutcome.Added && (sessionGeneration != initiatingGeneration || isDestroyed)) {
+            Timber.w("Add passkey: discarding a completion for a session that ended while it was in flight")
+            rollbackLocalCredential()
+            return AddPasskeyResult.SessionRevoked("Session changed before the new passkey could be committed")
+        }
         return when (outcome) {
             is AddPasskeyOutcome.Added -> {
                 keystore.commitPrfKey(prepared)
                 sessionStore.privateDataJwe = String(prepared.container, Charsets.UTF_8)
+                persistPrivateDataEtag()
                 recordAddedPasskey(created.credentialId, prfSalt, nickname)
                 AddPasskeyResult.Added(outcome.credentialId)
             }
@@ -2020,13 +2058,28 @@ class SirosWallet private constructor(
         val refusedAccountId = accountRegistry.activeAccountId
         try {
             val storedPrfSalt = sessionStore.prfSalt?.let { b64Decode(it) }
+            // Per-credential salts for every passkey this account has
+            // locally cached (mirrors [loginCandidates]/the full-login path):
+            // a resumed unlock also offers "any selectable passkey" at the OS
+            // level, and sessionStore.prfSalt/hkdfSalt only ever hold ONE
+            // passkey's values (whichever was active when the session was
+            // last persisted). Without evalByCredential, picking a passkey
+            // added later gets its PRF evaluated with an earlier passkey's
+            // salt, and HKDF derivation below would then also use the wrong
+            // wrapping parameters unless resolved from the ANSWERING
+            // credential's own container entry - which this candidate list is
+            // also used to identify.
+            val unlockCandidates = loginCandidates(accountRegistry.activeAccountId ?: sessionStore.activeAccountId)
             // Which passkey answered, and for which RP: the stored salt only
             // fits the stored passkey (see [resolveUnlockPrf]).
             var answeredCredId: ByteArray? = null
             var answeredRpId: String? = null
             val ceremonyPrfOutput = if (authMode == AuthMode.LEGACY_AS) {
                 // Legacy backend: re-authenticate via the wallet-backend endpoint
-                val session = legacyAuthClient.login(prfSalt = storedPrfSalt)
+                val session = legacyAuthClient.login(
+                    prfSalt = storedPrfSalt,
+                    prfSaltsByCredential = unlockCandidates.ifEmpty { null },
+                )
                 legacyAppToken = session.appToken
                 sessionStore.appToken = session.appToken
                 answeredCredId = extractLastCredentialId()
@@ -2052,6 +2105,7 @@ class SirosWallet private constructor(
                         rpId = rpId,
                         challenge = challenge,
                         prfSalt = storedPrfSalt,
+                        prfSaltsByCredential = unlockCandidates.ifEmpty { null },
                     )
                 )
 
@@ -2085,11 +2139,20 @@ class SirosWallet private constructor(
 
             val storedJwe = sessionStore.privateDataJwe
             val privateData = storedJwe?.toByteArray(Charsets.UTF_8) ?: ByteArray(0)
+            // The salt the ceremony actually evaluated PRF with for the
+            // credential that answered: its own entry in [unlockCandidates]
+            // when evalByCredential found one (the normal case for any
+            // passkey, old or newly added), else [storedPrfSalt] (the
+            // single-salt fallback CredentialManagerAuthProvider itself falls
+            // back to when no candidates were supplied).
+            val answeredPrfSalt = answeredCredId
+                ?.let { id -> unlockCandidates.firstOrNull { it.first.contentEquals(id) }?.second }
+                ?: storedPrfSalt
             val unlock = resolveUnlockPrf(
                 privateData = privateData,
                 credId = answeredCredId,
                 rpId = answeredRpId,
-                ceremonyPrfSalt = storedPrfSalt,
+                ceremonyPrfSalt = answeredPrfSalt,
                 ceremonyPrfOutput = ceremonyPrfOutput,
                 storedHkdfSalt = sessionStore.hkdfSalt?.let { b64Decode(it) },
                 storedHkdfInfo = sessionStore.hkdfInfo?.let { b64Decode(it) },
@@ -5423,6 +5486,12 @@ class SirosWallet private constructor(
         Timber.d("setupApiClient: legacy authenticated session established")
         apiClient = BackendApiClient(config.backendUrl, config.tenantId, httpClient = httpClient).apply {
             setAppToken(session.appToken)
+            // Restore the private-data ETag this account last persisted (see
+            // [persistPrivateDataEtag]) - a brand-new client otherwise starts
+            // with none, even across a mere process restart where the cached
+            // container is still current. sessionStore is already scoped to
+            // the right account by every caller of this method.
+            restorePrivateDataEtag(sessionStore.privateDataETag)
         }
     }
 
@@ -5430,7 +5499,20 @@ class SirosWallet private constructor(
         Timber.d("setupApiClient: using AuthTokens for automatic token management")
         apiClient = BackendApiClient(config.backendUrl, config.tenantId, httpClient = httpClient).apply {
             setAuthTokens(authTokens)
+            restorePrivateDataEtag(sessionStore.privateDataETag)
         }
+    }
+
+    /**
+     * Persists the API client's current [BackendApiClient.privateDataEtag]
+     * alongside the cached container ([SessionStore.privateDataJwe]), so
+     * [setupApiClient]/[setupApiClientWithTokens] can restore it into a fresh
+     * client after a process restart instead of leaving it null (see
+     * [BackendApiClient.restorePrivateDataEtag]). Call after any successful
+     * fetch or write of private data.
+     */
+    private fun persistPrivateDataEtag() {
+        sessionStore.privateDataETag = apiClient?.privateDataEtag
     }
 
     /**
@@ -5475,6 +5557,7 @@ class SirosWallet private constructor(
                 }
                 if (containerBytes.isNotEmpty()) {
                     sessionStore.privateDataJwe = String(containerBytes, Charsets.UTF_8)
+                    persistPrivateDataEtag()
                 }
                 return containerBytes
             }
@@ -5494,6 +5577,7 @@ class SirosWallet private constructor(
             // matching the wallet-frontend's format.
             val body = Json.parseToJsonElement(containerJson).jsonObject
             client.updatePrivateData(body)
+            persistPrivateDataEtag()
             Timber.d("Private data synced to backend")
         } catch (e: Exception) {
             Timber.e(e, "Failed to sync private data to backend")

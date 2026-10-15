@@ -348,6 +348,7 @@ public final class org/siros/sdk/auth/BackendApiClient {
 	public final fun resolveIssuer (Ljava/lang/String;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun resolveIssuer$default (Lorg/siros/sdk/auth/BackendApiClient;Ljava/lang/String;Ljava/util/List;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun resolveKey (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun restorePrivateDataEtag (Ljava/lang/String;)V
 	public final fun setAppToken (Ljava/lang/String;)V
 	public final fun setAuthTokens (Lorg/siros/sdk/auth/AuthTokens;)V
 	public final fun storeCredential (Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;

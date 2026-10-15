@@ -46,6 +46,7 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.putJsonObject
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -6944,6 +6945,130 @@ class SirosWalletTest {
         }
     }
 
+    @Test
+    fun resumed_api_client_restores_the_persisted_private_data_etag() {
+        // A fresh BackendApiClient built on resume (no refetch of private
+        // data) must not start with a null ETag when this account's last
+        // session already persisted one (SessionStore.privateDataETag) -
+        // otherwise passkeyRegisterFinish's defaulted `ifMatch` silently
+        // omits X-Private-Data-If-Match and the backend's optimistic
+        // concurrency check never runs.
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        every { sessionStore.privateDataETag } returns "\"from-last-session\""
+        val wallet = newWallet(
+            "sessionStore" to sessionStore,
+            "authTokens" to mockk<org.siros.sdk.auth.AuthTokens>(relaxed = true),
+            "httpClient" to OkHttpClient(),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+
+        val method = wallet.javaClass.getDeclaredMethod("setupApiClientWithTokens")
+        method.isAccessible = true
+        method.invoke(wallet)
+
+        val apiClient = getField(wallet, "apiClient") as BackendApiClient
+        assertEquals("\"from-last-session\"", apiClient.privateDataEtag)
+    }
+
+    @Test
+    fun addPasskey_discards_a_late_completion_after_a_cross_account_session_switch() = runTest(dispatcher) {
+        // If the user logs out of this account and into another while
+        // passkeyRegisterFinish's network round-trip is still in flight, the
+        // completion must be discarded rather than committed into whatever
+        // account/session is active by the time it lands.
+        val f = AddPasskeyFixture()
+        val wallet = addPasskeyWallet(f)
+        val bump = SirosWallet::class.declaredMemberFunctions.first { it.name == "bumpSessionGeneration" }
+        bump.isAccessible = true
+        coEvery { f.apiClient.passkeyRegisterFinish(any(), any(), any(), any(), any(), any()) } coAnswers {
+            // Simulate a logout + login to a different account completing
+            // while this call was suspended waiting on the backend.
+            bump.call(wallet)
+            org.siros.sdk.auth.AddPasskeyOutcome.Added("cred-1")
+        }
+
+        val result = wallet.addPasskey("Phone", f.authorizer)
+
+        assertTrue(result is AddPasskeyResult.SessionRevoked)
+        f.verifyNothingChanged()
+    }
+
+    @Test
+    fun unlockKeystore_offers_every_cached_passkeys_own_salt_so_a_newer_one_unlocks_in_one_ceremony() = runTest(dispatcher) {
+        // Mirrors the full-login path's loginCandidates(): a resumed unlock
+        // must also offer evalByCredential salts for EVERY passkey this
+        // account has cached, not just the one SessionStore happened to hold
+        // - otherwise picking a passkey added after the session was last
+        // persisted evaluates PRF with the WRONG salt and needs a second,
+        // reEvaluate ceremony (or fails outright) to recover.
+        val a = TwoPasskeyAccount()
+        val b64 = java.util.Base64.getEncoder()
+        val b64Url = java.util.Base64.getUrlEncoder().withoutPadding()
+        val firstCredB64 = b64Url.encodeToString(a.firstCred)
+        val secondCredB64 = b64Url.encodeToString(a.secondCred)
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        every { sessionStore.privateDataJwe } returns String(a.container, Charsets.UTF_8)
+        every { sessionStore.hkdfSalt } returns b64.encodeToString(a.firstHkdfSalt)
+        every { sessionStore.hkdfInfo } returns b64.encodeToString(a.firstHkdfInfo)
+        every { sessionStore.prfSalt } returns b64.encodeToString(a.firstPrfSalt)
+        every { sessionStore.activeAccountId } returns "default:u1"
+        val accountRegistry = mockk<AccountRegistry>(relaxed = true)
+        every { accountRegistry.activeAccountId } returns "default:u1"
+        every { accountRegistry.findAccount("default:u1") } returns CachedAccount(
+            userId = "u1", tenantId = "default", displayName = "Alice", backendUrl = "https://b",
+            passkeys = listOf(
+                CachedPasskey(firstCredB64, b64.encodeToString(a.firstPrfSalt)),
+                CachedPasskey(secondCredB64, b64.encodeToString(a.secondPrfSalt)),
+            ),
+        )
+        val authProvider = mockk<org.siros.sdk.auth.LocalAuthProvider>(relaxed = true)
+        val seenOptions = mutableListOf<AuthenticateOptions>()
+        // The user picks the SECOND (newer) passkey; a real authenticator
+        // given evalByCredential evaluates PRF with THAT credential's own
+        // salt, so the ceremony's own output is already correct.
+        coEvery { authProvider.authenticate(any()) } answers {
+            seenOptions += firstArg<AuthenticateOptions>()
+            AuthenticateResult(
+                credentialId = a.secondCred, authenticatorData = byteArrayOf(),
+                clientDataJSON = byteArrayOf(), signature = byteArrayOf(), userHandle = null,
+                prfOutput = org.siros.sdk.auth.PrfOutput(a.secondPrf),
+            )
+        }
+        every { authProvider.lastCredentialId } returns a.secondCred
+        every { authProvider.lastPrfOutput } returns org.siros.sdk.auth.PrfOutput(a.secondPrf)
+        val authServer = mockk<AuthServerClient>(relaxed = true)
+        coEvery { authServer.loginBegin() } returns kotlinx.serialization.json.Json.parseToJsonElement(
+            """{"challengeId":"c","getOptions":{"publicKey":{"rpId":"rp","challenge":"AQ"}}}""",
+        ) as kotlinx.serialization.json.JsonObject
+        val state = MutableStateFlow<WalletState>(WalletState.KeystoreLocked(userId = "u1", displayName = "A"))
+        val wallet = newWallet(
+            "_state" to state, "keystore" to keystore, "sessionStore" to sessionStore, "authProvider" to authProvider,
+            "authServerClient" to authServer, "config" to mockk<WalletConfig>(relaxed = true),
+            "accountRegistry" to accountRegistry, "credentialStore" to mockk<org.siros.sdk.credentials.CredentialStore>(relaxed = true),
+            "_presentationHistory" to mutableListOf<org.siros.sdk.credentials.PresentationRecord>(),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+        )
+
+        wallet.unlockKeystore()
+
+        // Both passkeys' own salts were offered via evalByCredential...
+        val sentSalts = seenOptions.single().prfSaltsByCredential!!
+            .associate { (id, salt) -> java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(id) to salt }
+        assertTrue(sentSalts.keys.containsAll(listOf(firstCredB64, secondCredB64)))
+        assertArrayEquals(a.secondPrfSalt, sentSalts[secondCredB64])
+        // ...so the ceremony's own PRF output already decrypts the answering
+        // passkey's own entry correctly - no second (reEvaluate) ceremony.
+        coVerify(exactly = 0) { authProvider.getPrfOutput(any(), any(), any()) }
+        coVerify(exactly = 1) {
+            keystore.unlock(
+                match { it.contentEquals(a.secondPrf) }, a.container,
+                match { it.contentEquals(a.secondHkdfSalt) }, match { it.contentEquals(a.secondHkdfInfo) },
+                any(),
+            )
+        }
+    }
+
     private fun TestScope.addPasskeyWallet(f: AddPasskeyFixture) = newWallet(
         "apiClient" to f.apiClient,
         "authProvider" to f.authProvider,
@@ -7028,10 +7153,35 @@ class SirosWalletTest {
     fun addPasskey_refuses_an_authenticator_without_prf() = runTest(dispatcher) {
         val f = AddPasskeyFixture()
         coEvery { f.authProvider.register(any()) } returns f.created.copy(prfOutput = null)
+        // The PRF-via-assertion fallback (see
+        // addPasskey_recovers_prf_via_assertion_when_creation_omits_it) is
+        // tried first and also fails here, so this authenticator genuinely
+        // never produces PRF.
+        coEvery { f.authProvider.getPrfOutput(any(), any(), any()) } throws IllegalStateException("not supported")
         val result = addPasskeyWallet(f).addPasskey("Phone", f.authorizer)
         assertTrue(result is AddPasskeyResult.PrfUnsupported)
         coVerify(exactly = 0) { f.apiClient.passkeyRegisterFinish(any(), any(), any(), any(), any(), any()) }
         f.verifyNothingChanged()
+    }
+
+    @Test
+    fun addPasskey_recovers_prf_via_assertion_when_creation_omits_it() = runTest(dispatcher) {
+        // Some authenticators only evaluate PRF during an assertion, never
+        // during creation - a null prfOutput at creation must not be the
+        // final word.
+        val f = AddPasskeyFixture()
+        coEvery { f.authProvider.register(any()) } returns f.created.copy(prfOutput = null)
+        val recoveredPrf = org.siros.sdk.auth.PrfOutput(ByteArray(32) { 9 })
+        coEvery { f.authProvider.getPrfOutput(f.created.credentialId, any(), "rp.example") } returns recoveredPrf
+        f.respond(org.siros.sdk.auth.AddPasskeyOutcome.Added("cred-1"))
+
+        val result = addPasskeyWallet(f).addPasskey("Phone", f.authorizer)
+
+        assertEquals(AddPasskeyResult.Added("cred-1"), result)
+        coVerify(exactly = 1) { f.authProvider.getPrfOutput(f.created.credentialId, any(), "rp.example") }
+        coVerify(exactly = 1) {
+            f.keystore.preparePrfKey(f.created.credentialId, match { it.contentEquals(recoveredPrf.first) }, any(), any(), any())
+        }
     }
 
     @Test

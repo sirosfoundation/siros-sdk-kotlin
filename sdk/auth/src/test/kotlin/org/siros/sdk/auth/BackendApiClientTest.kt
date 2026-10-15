@@ -771,6 +771,28 @@ class BackendApiClientTest {
     }
 
     @Test
+    fun passkey_finish_412_does_not_adopt_the_remote_etag() = runBlocking {
+        // This device's cache is at "mine"; another device has since written
+        // "newer", which the 412 response reports back.
+        server.enqueue(MockResponse().setBody("{}").setHeader("X-Private-Data-ETag", "\"mine\""))
+        server.enqueue(MockResponse().setResponseCode(412).setHeader("X-Private-Data-ETag", "\"newer-from-another-device\""))
+        val client = newClient().apply { setAppToken("tok") }
+        client.getPrivateData()
+        assertEquals("\"mine\"", client.privateDataEtag)
+
+        val outcome = client.passkeyRegisterFinish("enr-1", created, "Phone", byteArrayOf(1, 2), assertion, ifMatch = "\"mine\"")
+
+        assertEquals(AddPasskeyOutcome.PrivateDataConflict("\"newer-from-another-device\""), outcome)
+        // The cached ETag must NOT move to the server's newer value: this
+        // device's cached container was never updated to match it, so a
+        // later retry using the adopted ETag as If-Match would submit stale
+        // data tagged as current, silently overwriting the other device's
+        // write. The remote value is only ever surfaced via the conflict
+        // result above, for the caller to fetch-and-reconcile explicitly.
+        assertEquals("\"mine\"", client.privateDataEtag)
+    }
+
+    @Test
     fun passkey_finish_throws_on_an_unexpected_status() = runBlocking {
         try {
             finishWith(body(500))
