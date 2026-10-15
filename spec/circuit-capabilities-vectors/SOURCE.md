@@ -4,7 +4,8 @@
 match vectors of the shared matcher,
 `crates/siros-dc-matcher-core/tests/vectors/circuit_capabilities/` in
 [sirosfoundation/siros-dc-matcher](https://github.com/sirosfoundation/siros-dc-matcher),
-at tag `v0.9.0` (commit `d0a8e2245895532ee2f29d24c50f2bf930190bc6`).
+at commit `9237638ea8e2673f82cdfe27d52a2e8be67e0921` (`main` after matcher PR #45; NOT a tag: the latest tag,
+`v0.9.0`, predates it). The files are byte-identical to those at `v0.9.0`; only the recorded commit changes.
 
 | file | sha256 |
 | --- | --- |
