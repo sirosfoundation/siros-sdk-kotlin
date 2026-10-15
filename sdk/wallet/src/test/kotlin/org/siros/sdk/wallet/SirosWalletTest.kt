@@ -6827,6 +6827,10 @@ class SirosWalletTest {
 
         init {
             every { keystore.isUnlocked } returns true
+            // A known ETag, as any session that has completed a login or a
+            // prior private-data round-trip would have - the dedicated
+            // "unknown ETag" test overrides this to null itself.
+            every { apiClient.privateDataEtag } returns "\"etag\""
             coEvery { keystore.preparePrfKey(any(), any(), any(), any(), any()) } returns prepared
             val enrollment = org.siros.sdk.auth.PasskeyEnrollmentChallenge(
                 "enr-1", "alice",
@@ -7227,6 +7231,69 @@ class SirosWalletTest {
         coVerify(exactly = 1) {
             f.keystore.preparePrfKey(f.created.credentialId, match { it.contentEquals(recoveredPrf.first) }, any(), any(), any())
         }
+    }
+
+    @Test
+    fun addPasskey_refuses_and_refetches_when_the_private_data_etag_is_unknown() = runTest(dispatcher) {
+        // An existing installation upgrading to this feature can have a
+        // cached session with no persisted ETag at all (SessionStore.privateDataETag
+        // is new), even though the backend has a real version. Enrolling
+        // against an unknown version is the exact hazard If-Match exists to
+        // prevent, so this must refuse and fetch a known-current one instead
+        // of silently proceeding with no concurrency protection.
+        val f = AddPasskeyFixture()
+        every { f.apiClient.privateDataEtag } returns null
+        coEvery { f.apiClient.getPrivateData() } returns kotlinx.serialization.json.JsonObject(emptyMap())
+
+        val result = addPasskeyWallet(f).addPasskey("Phone", f.authorizer)
+
+        assertTrue(result is AddPasskeyResult.RetryNeeded)
+        coVerify(exactly = 1) { f.apiClient.getPrivateData() }
+        assertEquals(emptyList<String>(), f.calls)
+        coVerify(exactly = 0) { f.apiClient.passkeyRegisterBegin() }
+        f.verifyNothingChanged()
+    }
+
+    @Test
+    fun addPasskey_rolls_back_when_preparePrfKey_fails() = runTest(dispatcher) {
+        // A failure preparing the PRF-wrapped key (a KeystoreManager that
+        // doesn't support it, or cancellation on its internal mutex) must
+        // still roll back the credential authProvider.register() already
+        // created locally - the existing try/catch only wrapped the LATER
+        // finish() call, leaving this one uncovered. Uses a LocalAuthProvider
+        // mock (unlike AddPasskeyFixture's generic AuthProvider) so the
+        // rollback call itself is verifiable.
+        val client = mockk<BackendApiClient>(relaxed = true)
+        every { client.privateDataEtag } returns "\"etag\""
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns true
+        coEvery { keystore.preparePrfKey(any(), any(), any(), any(), any()) } throws IllegalStateException("prepare failed")
+        val authProvider = mockk<org.siros.sdk.auth.LocalAuthProvider>(relaxed = true)
+        val created = org.siros.sdk.auth.RegisterResult(
+            credentialId = byteArrayOf(5, 5), attestationObject = byteArrayOf(6), clientDataJSON = byteArrayOf(7),
+            prfOutput = org.siros.sdk.auth.PrfOutput(ByteArray(32) { 3 }),
+        )
+        coEvery { authProvider.register(any()) } returns created
+        val enrollment = org.siros.sdk.auth.PasskeyEnrollmentChallenge(
+            "enr-1", "alice",
+            org.siros.sdk.auth.RegisterOptions("rp.example", "RP", byteArrayOf(1), "alice", "Alice", byteArrayOf(2)),
+            null,
+        )
+        coEvery { client.passkeyRegisterBegin() } returns org.siros.sdk.auth.AddPasskeyBegin.Ready(enrollment)
+        val wallet = newWallet(
+            "apiClient" to client, "authProvider" to authProvider, "keystore" to keystore,
+            "sessionStore" to mockk<SessionStore>(relaxed = true), "accountRegistry" to mockk<AccountRegistry>(relaxed = true),
+        )
+
+        try {
+            wallet.addPasskey("Phone")
+            org.junit.Assert.fail("expected preparePrfKey's failure to propagate")
+        } catch (e: IllegalStateException) {
+            assertEquals("prepare failed", e.message)
+        }
+        coVerify(exactly = 0) { client.passkeyRegisterFinish(any(), any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { keystore.commitPrfKey(any()) }
+        verify(exactly = 1) { authProvider.forgetCredential(match { it.contentEquals(created.credentialId) }) }
     }
 
     @Test

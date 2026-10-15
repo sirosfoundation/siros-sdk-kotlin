@@ -568,6 +568,24 @@ class SirosWallet private constructor(
         require(nickname.isNotBlank() && nickname.length <= 256) { "nickname must be 1-256 characters" }
         val client = apiClient ?: throw AuthException(NOT_LOGGED_IN)
         if (!keystore.isUnlocked) return AddPasskeyResult.WalletLocked(null)
+        if (client.privateDataEtag == null) {
+            // This account's cached session may predate persisted ETags
+            // entirely (SessionStore.privateDataETag and the restore into a
+            // freshly built client are both new in this feature set) - an
+            // existing installation upgrading can reach here with a real
+            // backend version but no known value for it. Enrolling against
+            // an unknown version is exactly the hazard If-Match exists to
+            // prevent, so refuse rather than guess: fetch private data to
+            // populate a known-current ETag (and refresh the local cache)
+            // for the retry this asks for, instead of silently enrolling
+            // with no concurrency protection at all.
+            return try {
+                fetchPrivateData()
+                AddPasskeyResult.RetryNeeded("Refreshed the private data version - please retry")
+            } catch (e: WalletException) {
+                AddPasskeyResult.RetryNeeded(e.message)
+            }
+        }
         // Captured before ANY of the suspending ceremony steps below, not
         // just before the finish() network call: [keystore] and
         // [authProvider] are long-lived fields reused across sessions (a
@@ -647,36 +665,50 @@ class SirosWallet private constructor(
             return AddPasskeyResult.PrfUnsupported("PRF not supported by authenticator - cannot encrypt wallet data")
         }
 
-        val prepared = keystore.preparePrfKey(created.credentialId, prfOutput.first, prfSalt, hkdfSalt, hkdfInfo)
-        if (sessionChanged()) {
+        val prepared = try {
+            keystore.preparePrfKey(created.credentialId, prfOutput.first, prfSalt, hkdfSalt, hkdfInfo)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // preparePrfKey suspends on the keystore's own internal mutex and
+            // can be cancelled while waiting for it (or simply throw, for a
+            // KeystoreManager implementation that doesn't support this at
+            // all) - either way the credential this ceremony already created
+            // must not be left as an orphan with no rollback.
             rollbackLocalCredential(created.credentialId)
-            return AddPasskeyResult.SessionRevoked("Session changed before the passkey could be committed")
-        }
-        val outcome = try {
-            client.passkeyRegisterFinish(
-                challengeId = challenge.challengeId,
-                credential = created,
-                nickname = nickname,
-                privateData = prepared.container,
-                authorization = authorization,
-            )
+            throw e
         } catch (e: Exception) {
             rollbackLocalCredential(created.credentialId)
             throw e
         }
-        // The commit below is serialized against every other private-data
-        // writer (privateDataWriteMutex: see persistAndSyncKeystore/
-        // syncPrivateDataToBackend) and re-checks sessionChanged() inside the
-        // lock, as close to the writes as a suspend function allows
-        // (commitPrfKey itself suspends on its own internal mutex, so even
-        // this cannot be made fully atomic with the check that gates it -
-        // same "cannot be atomic with the call" trade-off [reloginAfterCutOff]
-        // documents). Without the mutex, an unrelated concurrent sync
-        // (another passkey's rename, a credential delete, ...) could export
-        // and upload the container from BEFORE this commit after this
-        // finishes, silently dropping the just-added entry despite an
-        // `Added` result.
+        if (sessionChanged()) {
+            rollbackLocalCredential(created.credentialId)
+            return AddPasskeyResult.SessionRevoked("Session changed before the passkey could be committed")
+        }
+        // finish(), the session re-check and the commit all run as ONE
+        // privateDataWriteMutex-held operation (not just the commit): an
+        // earlier version acquired the lock only after finish() returned,
+        // which left two gaps - (1) a concurrent sync could run between
+        // finish() succeeding and the lock being acquired here, uploading an
+        // older snapshot that the backend would then (wrongly) keep over the
+        // one finish() just wrote, and (2) a cancellation arriving exactly in
+        // that window would skip the local commit despite the backend having
+        // already accepted the enrollment. Holding the lock across finish()
+        // itself closes (1); wrapping the actual local writes in
+        // NonCancellable below closes (2), since by the time they run the
+        // backend has unconditionally committed to this passkey and the
+        // local state must catch up regardless of what cancelled the caller.
         return privateDataWriteMutex.withLock {
+            val outcome = try {
+                client.passkeyRegisterFinish(
+                    challengeId = challenge.challengeId,
+                    credential = created,
+                    nickname = nickname,
+                    privateData = prepared.container,
+                    authorization = authorization,
+                )
+            } catch (e: Exception) {
+                rollbackLocalCredential(created.credentialId)
+                throw e
+            }
             if (outcome !is AddPasskeyOutcome.Added) rollbackLocalCredential(created.credentialId)
             if (outcome is AddPasskeyOutcome.Added && sessionChanged()) {
                 Timber.w("Add passkey: discarding a completion for a session that ended while it was in flight")
@@ -685,10 +717,12 @@ class SirosWallet private constructor(
             }
             when (outcome) {
                 is AddPasskeyOutcome.Added -> {
-                    keystore.commitPrfKey(prepared)
-                    sessionStore.privateDataJwe = String(prepared.container, Charsets.UTF_8)
-                    persistPrivateDataEtag()
-                    recordAddedPasskey(created.credentialId, prfSalt, nickname)
+                    withContext(kotlinx.coroutines.NonCancellable) {
+                        keystore.commitPrfKey(prepared)
+                        sessionStore.privateDataJwe = String(prepared.container, Charsets.UTF_8)
+                        persistPrivateDataEtag()
+                        recordAddedPasskey(created.credentialId, prfSalt, nickname)
+                    }
                     AddPasskeyResult.Added(outcome.credentialId)
                 }
                 is AddPasskeyOutcome.AuthorizationRequired -> AddPasskeyResult.AuthorizationRequired(outcome.message)
@@ -5628,9 +5662,17 @@ class SirosWallet private constructor(
         }
     }
 
-    private suspend fun syncPrivateDataToBackend() = privateDataWriteMutex.withLock {
-        val client = apiClient ?: return@withLock
-        val containerJson = sessionStore.privateDataJwe ?: return@withLock
+    /**
+     * POSTs the cached container to the backend. Caller MUST already hold
+     * [privateDataWriteMutex] - this does not acquire it itself, so it
+     * composes with other locked steps (an export, a local write) as one
+     * atomic operation instead of each separately racing the others. See
+     * [syncPrivateDataToBackend] (the locking entry point for a standalone
+     * sync), [persistAndSyncKeystore] and [addPasskey].
+     */
+    private suspend fun syncPrivateDataToBackendLocked() {
+        val client = apiClient ?: return
+        val containerJson = sessionStore.privateDataJwe ?: return
         try {
             // Send the full container JSON as the POST body,
             // matching the wallet-frontend's format.
@@ -5644,17 +5686,29 @@ class SirosWallet private constructor(
         }
     }
 
+    /** Locking entry point for a standalone sync; see [syncPrivateDataToBackendLocked]. */
+    private suspend fun syncPrivateDataToBackend() = privateDataWriteMutex.withLock { syncPrivateDataToBackendLocked() }
+
     /**
      * Persist the current keystore state to local storage and sync to backend.
      *
      * Called after any credential mutation to minimise the data-loss window.
+     *
+     * The export, the local cache write and the backend sync run as one
+     * [privateDataWriteMutex]-held operation: exporting first and acquiring
+     * the lock only for the sync (as an earlier version of this did) leaves
+     * a window where a concurrent writer's export could be based on a
+     * snapshot from before this one's local write, and whichever POST lands
+     * last would silently win regardless of which export was newer.
      */
     private suspend fun persistAndSyncKeystore() {
         if (!keystore.isUnlocked) return
         try {
-            val container = keystore.exportEncryptedContainer()
-            sessionStore.privateDataJwe = String(container, Charsets.UTF_8)
-            syncPrivateDataToBackend()
+            privateDataWriteMutex.withLock {
+                val container = keystore.exportEncryptedContainer()
+                sessionStore.privateDataJwe = String(container, Charsets.UTF_8)
+                syncPrivateDataToBackendLocked()
+            }
         } catch (e: Exception) {
             // Unlike syncPrivateDataToBackend's own catch, this previously
             // only logged - a credential saved just before this failed would
