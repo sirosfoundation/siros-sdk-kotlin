@@ -25,7 +25,12 @@ internal object DCAPISelection {
         } catch (e: Exception) {
             return listOf(NO_SUCH_CREDENTIAL)
         }
-        if (!fromSet.isNullOrEmpty()) return fromSet.map { it.toLongOrNull() ?: NO_SUCH_CREDENTIAL }
+        if (!fromSet.isNullOrEmpty()) {
+            // Fail closed: one unreadable id refuses the whole selection. A readable subset must never
+            // authorise a response the user's full pick did not (two queries may share a candidate).
+            val ids = fromSet.map { it.toLongOrNull() ?: return listOf(NO_SUCH_CREDENTIAL) }
+            return ids
+        }
         val entry = try {
             selectedEntry()
         } catch (e: Exception) {

@@ -5794,6 +5794,31 @@ class SirosWalletTest {
     }
 
     @Test
+    fun circuitZkDcApi_multiQuery_aPartlyUnreadableOrForeignSelectionIsRefused_theReadableSubsetNeverAuthorises() = runTest(dispatcher) {
+        val raw = czkRequest(queryIds = listOf("q", "q2"))
+        // Both queries accept credential 2; the second pick is the unreadable sentinel or an unknown id.
+        for (pick in listOf(longArrayOf(2L, -1L), longArrayOf(-1L, 2L), longArrayOf(2L, 99L))) {
+            val s = czkSelectionSetup()
+            val e = org.junit.Assert.assertThrows(pick.toList().toString(), org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+                czkRunSelected(s, *pick, raw = raw)
+            }
+            assertEquals(org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE, e.reason)
+            assertEquals(0, s.prover.calls)
+            assertTrue(s.history.isEmpty())
+        }
+    }
+
+    @Test
+    fun circuitZkDcApi_multiQuery_aDuplicatedPickIsRefused() = runTest(dispatcher) {
+        val s = czkSelectionSetup()
+        val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+            czkRunSelected(s, 2L, 2L, raw = czkRequest(queryIds = listOf("q", "q2")))
+        }
+        assertEquals(org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE, e.reason)
+        assertEquals(0, s.prover.calls)
+    }
+
+    @Test
     fun circuitZkDcApi_multiQuery_aPickMatchingNoQueryIsStillRefused() = runTest(dispatcher) {
         val s = czkSelectionSetup()
         org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {

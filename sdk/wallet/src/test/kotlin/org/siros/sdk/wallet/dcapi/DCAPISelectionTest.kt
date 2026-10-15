@@ -11,7 +11,8 @@ class DCAPISelectionTest {
     @Test
     fun `a selected set wins and a foreign id becomes an id no credential has`() {
         assertEquals(listOf(4L, 9L), DCAPISelection.resolve({ listOf("4", "9") }, { "1" }))
-        assertEquals(listOf(4L, none), DCAPISelection.resolve({ listOf("4", "debug") }, { null }))
+        assertEquals(listOf(none), DCAPISelection.resolve({ listOf("4", "debug") }, { null }))
+        assertEquals(listOf(none), DCAPISelection.resolve({ listOf("debug", "4") }, { "4" }))
     }
 
     @Test

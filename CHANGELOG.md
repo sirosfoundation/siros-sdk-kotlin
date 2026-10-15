@@ -86,7 +86,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   returned an empty selection, which the wallet reads as "present the first
   eligible credential". The decision is now `DCAPISelection.resolve` (JVM
   testable), which yields an id no credential has; the no-selection fallback
-  remains only for callers that pass no `selectedCredentialIds`. (#266)
+  remains only for callers that pass no `selectedCredentialIds`. A selection with ANY
+  unreadable id resolves to that id alone (a readable subset never authorises a
+  response), and `handleCircuitZkDcApi` refuses a selection in which any id is
+  unknown or a candidate of none of the queries, or that lists an id twice. (#266)
 - **The SD-JWT non-disclosure guard also covers the issuer payload.**
   `CredentialDisclosureGuard.requireNoneProtectedSdJwt` checked only the
   selected disclosures, but every presentation carries the issuer JWT

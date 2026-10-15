@@ -4223,9 +4223,16 @@ class SirosWallet private constructor(
         // The user's pick: the credential ids, plus every other copy of the same credential (batch).
         val pickedBatches = selectedCredentialIds.mapNotNull { id -> allCreds.firstOrNull { it.id == id }?.batchId }.toSet()
         fun picked(c: StoredCredential) = c.id in selectedCredentialIds || (c.batchId != null && c.batchId in pickedBatches)
-        // Fail closed: a pick that is a candidate of none of the queries is never answered with another credential.
-        if (selectedCredentialIds.isNotEmpty() && results.none { r -> r.candidates.any(::picked) }) {
-            refuse("selection-not-candidate", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+        // Fail closed: EVERY picked id must be a candidate of some query (an id that is unknown, unreadable
+        // (the sentinel) or a candidate of none of them refuses the whole selection, so the matching subset
+        // never authorises a response), and a pick listed twice is ambiguous.
+        if (selectedCredentialIds.isNotEmpty()) {
+            if (selectedCredentialIds.toSet().size != selectedCredentialIds.size) {
+                refuse("selection-duplicate", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+            }
+            if (selectedCredentialIds.any { id -> results.none { r -> r.candidates.any { it.id == id } } }) {
+                refuse("selection-not-candidate", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+            }
         }
 
         val encryptionJwk = if (request.responseMode == "dc_api.jwt") {
