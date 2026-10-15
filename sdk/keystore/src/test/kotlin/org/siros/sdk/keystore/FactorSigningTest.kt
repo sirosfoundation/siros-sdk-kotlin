@@ -51,6 +51,8 @@ class FactorSigningTest {
         val pinBuffers = mutableListOf<ByteArray>()
         val pinsAsSeen = mutableListOf<String>()
         var capabilityThrows = false
+        /** Models the native bridge, which turns an exception from a callback into its own error kind. */
+        var wrapCallbackErrors = false
         override fun capability(kid: String): FfiFactorCapability {
             if (capabilityThrows) throw IllegalStateException("no such key")
             return capability
@@ -60,7 +62,11 @@ class FactorSigningTest {
             seenOptions = options
             seenData = data
             repeat(pinRequests) {
-                val p = auth.requestPin(plugin ?: "?")
+                val p = try {
+                    auth.requestPin(plugin ?: "?")
+                } catch (e: Exception) {
+                    if (wrapCallbackErrors) throw FfiWscdException.NoPlugin("callback: ${e.message}") else throw e
+                }
                 pinBuffers += p
                 pinsAsSeen += String(p)
             }
@@ -294,6 +300,18 @@ class FactorSigningTest {
         // the plugin asks twice; the second request reaches the failing host prompt
         val b = FakeBackend(pinRequests = 2) { outcome() }
         FactorSigning(b, cb).begin("k").use { s ->
+            val e = runCatching { s.sign(ByteArray(1)) }.exceptionOrNull()
+            assertEquals(TransactionDataReason.DECLINED, (e as TransactionDataError).reason)
+        }
+        // the native bridge wraps a callback failure in a different error kind: still declined
+        var asks = 0
+        val cb2 = object : FfiAuthCallback {
+            override fun requestPin(pluginId: String): ByteArray = if (asks++ == 0) "123456".toByteArray() else throw FfiWscdException.AuthCancelled("user cancelled")
+            override fun requestWebauthnAssertion(pluginId: String, challenge: ByteArray, rpId: String, allowedCredentials: List<ByteArray>): ByteArray = ByteArray(0)
+        }
+        val wrapping = FakeBackend(pinRequests = 2) { outcome() }
+        wrapping.wrapCallbackErrors = true
+        FactorSigning(wrapping, cb2).begin("k").use { s ->
             val e = runCatching { s.sign(ByteArray(1)) }.exceptionOrNull()
             assertEquals(TransactionDataReason.DECLINED, (e as TransactionDataError).reason)
         }

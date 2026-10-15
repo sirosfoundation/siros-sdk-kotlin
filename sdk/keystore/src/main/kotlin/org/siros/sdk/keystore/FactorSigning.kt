@@ -97,6 +97,9 @@ internal class FactorSigning(
     ) : ScaSignSession {
         private var used = false
 
+        /** Set when the host's PIN prompt failed or was cancelled during the sign, however the native layer wraps the error. */
+        private var promptFailed = false
+
         override suspend fun sign(data: ByteArray): ScaSignature {
             check(!used) { "An SCA sign session signs once" }
             used = true
@@ -110,6 +113,10 @@ internal class FactorSigning(
                 throw declined()
             } catch (e: FfiWscdException.Unsupported) {
                 throw ScaSignSession.insufficient("This authenticator cannot guarantee a fresh user authentication for the sign")
+            } catch (e: FfiWscdException) {
+                // The native bridge wraps a callback failure in its own error kind, so ask the callback, not the type.
+                if (promptFailed) throw declined()
+                throw e
             } finally {
                 // The native call copies a returned PIN and never clears ours: wipe every buffer given to it.
                 handedToPlugin.forEach { it.fill(0) }
@@ -144,11 +151,10 @@ internal class FactorSigning(
                 } else {
                     try {
                         callbacks.requestPin(pluginId)
-                    } catch (e: FfiWscdException) {
-                        throw e
                     } catch (e: Exception) {
-                        // A host prompt that fails is a cancelled authentication, not a crash across the native boundary.
-                        throw FfiWscdException.AuthCancelled("The PIN prompt failed")
+                        // A cancelled or failing host prompt is a cancelled authentication, not a crash across the native boundary.
+                        promptFailed = true
+                        throw if (e is FfiWscdException) e else FfiWscdException.AuthCancelled("The PIN prompt failed")
                     }
                 }
                 handedOut += answer
