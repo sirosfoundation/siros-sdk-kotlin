@@ -36,12 +36,16 @@ import timber.log.Timber
  */
 internal class ScaPresentationPlan(
     private val bindings: Map<String, TransactionBinding>,
-    private val onSigningFailed: suspend () -> Unit = {},
+    private val onSigningFailed: suspend (declined: Boolean) -> Unit = {},
 ) {
     fun bindingFor(queryId: String?): TransactionBinding? = queryId?.let { bindings[it] }
 
-    /** Records that signing failed after consent (outcome `refused`, reason `signingFailed`). */
-    suspend fun signingFailed() = onSigningFailed()
+    /**
+     * Records that signing failed after consent: outcome `refused` / `signingFailed`, except that a
+     * [TransactionDataReason.DECLINED] error (the user cancelled the authentication) is recorded as `declined`.
+     */
+    suspend fun signingFailed(error: Throwable? = null) =
+        onSigningFailed((error as? TransactionDataError)?.reason == TransactionDataReason.DECLINED)
 }
 
 /**
@@ -115,8 +119,12 @@ internal class TransactionDataCoordinator(
             }
             val bindings = bind(validated)
             record(request, validated, TransactionOutcome.CONSENTED, null)
-            return ScaPresentationPlan(bindings) {
-                record(request, validated, TransactionOutcome.REFUSED, SIGNING_FAILED)
+            return ScaPresentationPlan(bindings) { declined ->
+                if (declined) {
+                    record(request, validated, TransactionOutcome.DECLINED, TransactionDataReason.DECLINED.code)
+                } else {
+                    record(request, validated, TransactionOutcome.REFUSED, SIGNING_FAILED)
+                }
             }
         } catch (e: TransactionDataError) {
             record(

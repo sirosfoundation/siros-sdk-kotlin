@@ -22,7 +22,11 @@ import org.siros.sdk.keystore.SignerKeyInfo
  * verifier does. [scaFactors] are what its SCA sign reports having applied, and what
  * the KB-JWT may therefore claim; null models a signer that cannot reach two categories.
  */
-class ScaTestSigner(private val scaFactors: List<AuthenticationFactor>?) : Signer {
+class ScaTestSigner(
+    private val scaFactors: List<AuthenticationFactor>?,
+    /** Models the user cancelling the PIN prompt that starts the sign. */
+    private val userCancels: Boolean = false,
+) : Signer {
     private val keys = LinkedHashMap<String, ECKey>()
     var scaSigns = 0
         private set
@@ -47,6 +51,7 @@ class ScaTestSigner(private val scaFactors: List<AuthenticationFactor>?) : Signe
         if (scaFactors == null) ScaAuthenticationCapability.cannot("single factor") else ScaAuthenticationCapability(true)
 
     override suspend fun beginScaSign(keyId: String): ScaSignSession {
+        if (userCancels) throw org.siros.sdk.credentials.TransactionDataError(org.siros.sdk.credentials.TransactionDataReason.DECLINED, "cancelled")
         val applied = scaFactors ?: throw ScaSignSession.insufficient("single factor")
         return object : ScaSignSession {
             override val declaredFactors = applied

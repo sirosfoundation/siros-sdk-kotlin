@@ -7240,9 +7240,10 @@ class SirosWalletTest {
         declaredEngine: Boolean = enabled,
         declaredWmp: Boolean = enabled,
         extra: Array<Pair<String, Any?>> = emptyArray(),
+        userCancelsAuthentication: Boolean = false,
         keystoreWrapper: ((org.siros.sdk.keystore.WscdKeystoreAdapter) -> KeystoreManager)? = null,
     ): ScaFixture {
-        val signer = ScaTestSigner(factors)
+        val signer = ScaTestSigner(factors, userCancelsAuthentication)
         val keystore = org.siros.sdk.keystore.WscdKeystoreAdapter(signer)
         runBlocking { keystore.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0)) }
         val kid = runBlocking { keystore.generateKey() }
@@ -7358,6 +7359,17 @@ class SirosWalletTest {
         assertTrue(sent.isEmpty())
         assertEquals(TransactionOutcome.DECLINED, fx.log.items.single().outcome)
         verify(exactly = 1) { listener.onTransactionDataRefused("flow-sca", org.siros.sdk.credentials.TransactionDataReason.DECLINED) }
+    }
+
+    @Test
+    fun scaEngine_cancellingTheAuthenticationAfterConsent_isLoggedAsDeclined_notRefused() = runTest(dispatcher) {
+        val fx = scaFixture(userCancelsAuthentication = true)
+
+        val (sent, _) = sendEngineSignRequest(fx)
+
+        assertTrue(sent.isEmpty())
+        assertEquals(listOf(TransactionOutcome.DECLINED, TransactionOutcome.CONSENTED), fx.log.items.map { it.outcome })
+        assertEquals("declined", fx.log.items.first().reason)
     }
 
     @Test

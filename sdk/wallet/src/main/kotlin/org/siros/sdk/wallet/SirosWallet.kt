@@ -345,7 +345,7 @@ class SirosWallet private constructor(
         keystore.signVpToken(cred.raw, disclosedClaims, nonce, audience, cred.kid, binding)
     } catch (e: Throwable) {
         // Consent was given but nothing could be presented: the log must not stay "consented" alone.
-        plan.signingFailed()
+        plan.signingFailed(e)
         if (e is AbstractMethodError) {
             throw KeystoreException(
                 "This keystore cannot bind transaction_data to a presentation",
