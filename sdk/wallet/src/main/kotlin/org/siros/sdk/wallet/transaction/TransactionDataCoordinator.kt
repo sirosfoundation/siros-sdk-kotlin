@@ -59,7 +59,11 @@ internal class ScaPresentationPlan(
         val factor = try {
             hostVerifier(credential)
         } catch (e: CancellationException) {
-            throw e
+            // Only the wallet's own coroutine being cancelled propagates; a provider that cancelled
+            // itself (a timeout, say) has not confirmed anything, which is a refusal.
+            currentCoroutineContext().ensureActive()
+            Timber.w("The host's user verification was cancelled; treating it as not confirmed")
+            null
         } catch (e: Exception) {
             Timber.w("The host's user verification failed (${e.javaClass.simpleName})")
             null
@@ -180,24 +184,35 @@ internal class TransactionDataCoordinator(
         val needsHost = LinkedHashSet<Long>()
         for (queryId in validated.boundQueryIds()) {
             for (credential in request.credentials.getValue(queryId)) {
-                val c = try {
-                    capability(credential)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    null
-                }
-                val hostOnly = c != null && !c.canReachTwoCategories && c.requiresHostVerifiedFactor
-                if (c == null || !(c.canReachTwoCategories || (hostOnly && hostFactorProvider() != null))) {
-                    throw TransactionDataError(
+                when (classify(credential)) {
+                    Reach.OWN -> Unit
+                    Reach.HOST -> needsHost += credential.id
+                    Reach.NONE -> throw TransactionDataError(
                         TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS,
                         "No two-category authentication can be established for this operation",
                     )
                 }
-                if (hostOnly) needsHost += credential.id
             }
         }
         return needsHost
+    }
+
+    private enum class Reach { OWN, HOST, NONE }
+
+    /** How [credential]'s signer reaches two categories; a capability that cannot be determined is [Reach.NONE]. */
+    private suspend fun classify(credential: StoredCredential): Reach {
+        val c = try {
+            capability(credential)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return Reach.NONE
+        }
+        return when {
+            c.canReachTwoCategories -> Reach.OWN
+            c.requiresHostVerifiedFactor && hostFactorProvider() != null -> Reach.HOST
+            else -> Reach.NONE
+        }
     }
 
     /**

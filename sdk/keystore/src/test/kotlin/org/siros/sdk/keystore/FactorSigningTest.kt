@@ -129,6 +129,18 @@ class FactorSigningTest {
         assertFalse(FactorSigning(b, Prompts()).capability("k").isPossible)
     }
 
+    @Test
+    fun `a PIN-based capability is cannot when no way to ask for a PIN is configured, a host-factor one is kept`() {
+        val pinBased = FakeBackend(capability = FfiFactorCapability(true, false, null)) { outcome() }
+        val noPin = FactorSigning(pinBased, Prompts(), canAskForPin = false).capability("k")
+        assertFalse(noPin.isPossible)
+        assertTrue(noPin.reason!!.contains("AuthProvider"))
+        refused { FactorSigning(pinBased, Prompts(), canAskForPin = false).begin("k", null) }
+
+        val hostOnly = FakeBackend(capability = FfiFactorCapability(false, true, "uv")) { outcome() }
+        assertTrue(FactorSigning(hostOnly, Prompts(), canAskForPin = false).capability("k").requiresHostVerifiedFactor)
+    }
+
     // ── a signer that reaches two categories itself (PIN) ──
 
     @Test

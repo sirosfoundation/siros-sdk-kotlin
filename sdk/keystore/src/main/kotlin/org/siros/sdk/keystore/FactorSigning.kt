@@ -37,10 +37,16 @@ internal class FactorSigning(
     private val backend: FactorSigningBackend,
     /** The host's authentication callbacks (PIN, WebAuthn); a PIN the user typed ahead is served before this is asked again. */
     private val callbacks: FfiAuthCallback,
+    /** Whether the host configured a way to ask for a PIN; without one a PIN-based sign is already known to be impossible. */
+    private val canAskForPin: Boolean = true,
 ) {
     fun capability(kid: String): ScaAuthenticationCapability = try {
         val c = backend.capability(kid)
-        ScaAuthenticationCapability(c.canReachTwoCategories, c.requiresHostVerifiedFactor, c.reason)
+        if (c.canReachTwoCategories && !canAskForPin) {
+            ScaAuthenticationCapability.cannot("The signer needs a PIN and no AuthProvider is configured to ask for one")
+        } else {
+            ScaAuthenticationCapability(c.canReachTwoCategories, c.requiresHostVerifiedFactor, c.reason)
+        }
     } catch (e: Exception) {
         ScaAuthenticationCapability.cannot("The signer could not say which authentication it can perform (${e.javaClass.simpleName})")
     }

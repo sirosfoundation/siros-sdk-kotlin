@@ -255,6 +255,8 @@ class TransactionDataCoordinatorTest {
             HostVerifiedFactorProvider { null },
             HostVerifiedFactorProvider { AuthenticationFactor(AuthenticationCategory.POSSESSION, "other") },
             HostVerifiedFactorProvider { throw IllegalStateException("biometric hardware error") },
+            // a provider that timed itself out: its own cancellation, not the wallet's
+            HostVerifiedFactorProvider { throw kotlinx.coroutines.CancellationException("provider timeout") },
         )) {
             val h = Harness(TransactionConsentHandler { true }, NEEDS_HOST, host = provider)
             val plan = run(h, req(raw())).getOrThrow()

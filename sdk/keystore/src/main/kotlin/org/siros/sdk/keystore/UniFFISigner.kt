@@ -142,6 +142,7 @@ class UniFFISigner(
                 ) = ffi.signWithFactors(kid, data, FfiAlgorithm.ES256, options, auth, noOpProgress())
             },
             authCallbackBridge(),
+            canAskForPin = authProvider != null,
         )
     }
 
