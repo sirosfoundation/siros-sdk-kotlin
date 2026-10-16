@@ -9,26 +9,11 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 
 /**
- * The verifier-id types the wallet can resolve a `verifier_id` for. A
- * `verifier_id_type` outside this registry is unsatisfiable. The wallet does
- * not hardcode what verifiers are called: the default is the rulebook's two
- * current values, and a deployment registers whatever its sources support.
+ * What the rules may consult besides the plan itself. There is deliberately no `verifier_id_type`
+ * registry: a request no longer carries the member (the wallet picks the type itself) and one that
+ * still does is accepted and ignored.
  */
-fun interface VerifierIdTypes {
-    /** Whether a verifier-id source is registered for [type]. */
-    fun isRegistered(type: String): Boolean
-
-    companion object {
-        /** The rulebook v0.3 values: `semantic` and `x509_san_dns`. */
-        val RULEBOOK_DEFAULT: VerifierIdTypes = of(setOf("semantic", "x509_san_dns"))
-
-        /** A fixed set of types. */
-        fun of(types: Set<String>): VerifierIdTypes = VerifierIdTypes { it in types }
-    }
-}
-
-/** What the rules may consult besides the plan itself. */
-class CircuitZkRuleEnv(val verifierIdTypes: VerifierIdTypes, val circuits: CircuitZkCircuitSource?)
+class CircuitZkRuleEnv(val circuits: CircuitZkCircuitSource?)
 
 /** A rule over the whole plan: [holds] false makes the request unsatisfiable, reported as [id]. */
 class CircuitZkPlanRule(val id: String, val holds: (CircuitZkPlan, CircuitZkRuleEnv) -> Boolean)
@@ -108,14 +93,6 @@ class CircuitZkRuleSet(
                                 val bytes = str(f.params, "verifier_context")?.toByteArray(Charsets.UTF_8)?.size
                                 bytes != null && bytes in 1..MAX_CONTEXT_BYTES
                             },
-                            CircuitZkFunctionRule("verifier-id-type-forbidden") { f, _ ->
-                                val cfg = byId[str(f.params, "config")] ?: return@CircuitZkFunctionRule true
-                                cfg.usesVerifierInput || !f.params.containsKey("verifier_id_type")
-                            },
-                            CircuitZkFunctionRule("verifier-id-type-unregistered") { f, env ->
-                                if (!f.params.containsKey("verifier_id_type")) return@CircuitZkFunctionRule true
-                                str(f.params, "verifier_id_type")?.let { env.verifierIdTypes.isRegistered(it) } == true
-                            },
                         ),
                     ),
                     AGE_CHECK to CircuitZkFunctionRules(
@@ -186,15 +163,16 @@ class CircuitZkRuleSet(
  * Whether a predicate holds for the holder's `birth_date` is data-dependent
  * and is checked when proving, not here.
  *
+ * A `verifier_id_type` member in a pseudonym item is neither checked nor refused.
+ *
  * Every failure is [CircuitZkVerdict.AccessDenied]. Its `ruleId` is for local
  * logs and tests; it must never reach the verifier.
  */
 class RulebookCircuitZkValidator(
     private val rules: CircuitZkRuleSet = CircuitZkRuleSet.rulebookV03(),
-    verifierIdTypes: VerifierIdTypes = VerifierIdTypes.RULEBOOK_DEFAULT,
     circuits: CircuitZkCircuitSource? = null,
 ) : CircuitZkRequestValidator {
-    private val env = CircuitZkRuleEnv(verifierIdTypes, circuits)
+    private val env = CircuitZkRuleEnv(circuits)
 
     override fun validate(plan: CircuitZkPlan): CircuitZkVerdict {
         for (rule in rules.planRules) {

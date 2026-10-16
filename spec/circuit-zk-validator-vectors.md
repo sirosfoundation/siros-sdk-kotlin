@@ -20,7 +20,6 @@ The rulebook text can still change; that is why the rules are data.
 | `plan.query` | the `circuit_zk` credential query (`meta`, optional `require_cryptographic_holder_binding`) |
 | `plan.functions[]` | the planned `req` items: `id`, `handle`, `params` (raw JSON object) |
 | `plan.circuit_filter` | optional verifier circuit list: `[{system?, circuit_id}]` |
-| `options.registered_verifier_id_types` | the verifier-id types the wallet has a source for; default `default_registered_verifier_id_types` (`semantic`, `x509_san_dns`) |
 | `options.circuits` | the wallet's circuit table: `{system, circuit_id, doc_types, functions?}`; absent means the function-declaration rule has no circuits to consult; `functions` absent means the circuit declares none |
 | `verdict` | `{"ok": true}` or `{"access_denied": "<rule id>"}` |
 
@@ -34,9 +33,14 @@ Rule ids: `meta-vct-values-reserved`, `holder-binding-false`,
 `age-check-count`, `pseudonym-config-unsupported`,
 `verifier-context-required`, `verifier-context-forbidden`,
 `verifier-context-length` (1-64 UTF-8 bytes),
-`verifier-id-type-forbidden`, `verifier-id-type-unregistered`,
 `age-check-no-bounds`, `age-check-bad-date`, `age-check-le-before-ge`,
 `age-check-span-short` (`le - ge + 1` below 365 calendar days).
+
+A `verifier_id_type` member in a pseudonym item is neither checked nor refused: rulebook v0.3 removed it from
+the request (the wallet picks the type itself) and implementations must not reject it, so the vectors expect
+`ok` for any value of it (rulebook PR #5; the earlier `verifier-id-type-forbidden` and
+`verifier-id-type-unregistered` rules and the `default_registered_verifier_id_types` list are gone). Swift
+shares these vectors and must drop the same rules.
 
 Two readings the rulebook text leaves open, chosen here: a date that is not an
 RFC 3339 `full-date` (`YYYY-MM-DD`, a real calendar date) is unsatisfiable

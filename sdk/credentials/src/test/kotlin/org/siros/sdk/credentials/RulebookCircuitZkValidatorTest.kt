@@ -38,8 +38,6 @@ class RulebookCircuitZkValidatorTest {
     )
 
     private fun validatorFor(options: JsonObject?): RulebookCircuitZkValidator {
-        val types = options?.get("registered_verifier_id_types")?.jsonArray?.map { it.jsonPrimitive.content }
-            ?: file["default_registered_verifier_id_types"]!!.jsonArray.map { it.jsonPrimitive.content }
         val circuits = options?.get("circuits")?.jsonArray?.map {
             val o = it.jsonObject
             CircuitZkCircuit(
@@ -50,7 +48,6 @@ class RulebookCircuitZkValidatorTest {
             )
         }
         return RulebookCircuitZkValidator(
-            verifierIdTypes = VerifierIdTypes.of(types.toSet()),
             circuits = circuits?.let { c -> CircuitZkCircuitSource { c } },
         )
     }
@@ -80,11 +77,22 @@ class RulebookCircuitZkValidatorTest {
             "meta-vct-values-reserved", "holder-binding-false", "function-not-declared", "unknown-function",
             "pseudonym-count", "age-check-count", "pseudonym-config-unsupported", "verifier-context-required",
             "verifier-context-forbidden", "verifier-context-length",
-            "verifier-id-type-forbidden", "verifier-id-type-unregistered", "age-check-no-bounds",
+            "age-check-no-bounds",
             "age-check-bad-date", "age-check-le-before-ge", "age-check-span-short",
         )
         assertEquals(allRuleIds, failing)
         assertTrue(cases.any { it["verdict"]!!.jsonObject["ok"] != null })
+    }
+
+    @Test
+    fun `a legacy verifier_id_type is accepted and ignored whatever it holds`() {
+        val rules = RulebookCircuitZkValidator()
+        for (extra in listOf(""","verifier_id_type":"semantic"""", ""","verifier_id_type":"x509_hash"""", ""","verifier_id_type":1""", ""","verifier_id_type":null""")) {
+            for (config in listOf("known-offender-matching-ssc", "user-managed-pseudonym-xsite-ssc")) {
+                val fn = CircuitZkFunction(CircuitZkRuleSet.PSEUDONYM, "n", Json.parseToJsonElement("""{"config":"$config"$extra}""").jsonObject)
+                assertTrue("$config $extra", rules.validate(CircuitZkPlan(listOf(fn), raw = JsonObject(emptyMap()))) === CircuitZkVerdict.Ok)
+            }
+        }
     }
 
     @Test

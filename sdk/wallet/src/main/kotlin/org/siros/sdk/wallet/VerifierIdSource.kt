@@ -111,12 +111,11 @@ class AuthZENSource(override val type: String) : VerifierIdSource {
 }
 
 /**
- * The wallet's default `circuit_zk` validator: the rulebook rules with every `verifier_id_type` accepted
- * structurally. The wallet picks the type itself from [WalletConfig.circuitZkVerifierIdTypes], so the type
+ * The wallet's default `circuit_zk` validator: the rulebook rules, which ignore a `verifier_id_type` the
+ * request still carries. The wallet picks the type itself from [WalletConfig.circuitZkVerifierIdTypes], so the type
  * a request names is neither a selection input nor a reason to refuse.
  */
 internal fun defaultCircuitZkValidator(circuits: org.siros.sdk.credentials.CircuitZkCircuitSource?): org.siros.sdk.credentials.CircuitZkRequestValidator =
     org.siros.sdk.credentials.RulebookCircuitZkValidator(
-        verifierIdTypes = org.siros.sdk.credentials.VerifierIdTypes { true },
         circuits = circuits,
     )

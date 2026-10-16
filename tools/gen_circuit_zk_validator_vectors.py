@@ -23,7 +23,6 @@ CONFIGS = {  # config -> (uses verifier_input, requires verifier_context)
     "account-recovery-ssc": (True, True),
     "user-managed-pseudonym-xsite-ssc": (False, False),
 }
-DEFAULT_TYPES = ["semantic", "x509_san_dns"]
 PSEUDONYM, AGE = "pseudonym-v1-sha256", "age_check"
 
 
@@ -40,7 +39,6 @@ def oracle(case):
     """Return None when satisfiable, else the id of the first violated rule."""
     q, fns = case["plan"]["query"], case["plan"]["functions"]
     opts = case.get("options", {})
-    types = opts.get("registered_verifier_id_types", DEFAULT_TYPES)
     if "vct_values" in q.get("meta", {}):
         return "meta-vct-values-reserved"
     if q.get("require_cryptographic_holder_binding", True) is not True:
@@ -75,10 +73,7 @@ def oracle(case):
                 v = p["verifier_context"]
                 if not isinstance(v, str) or not 1 <= len(v.encode("utf-8")) <= 64:
                     return "verifier-context-length"
-            if not uses_vi and "verifier_id_type" in p:
-                return "verifier-id-type-forbidden"
-            if "verifier_id_type" in p and (not isinstance(p["verifier_id_type"], str) or p["verifier_id_type"] not in types):
-                return "verifier-id-type-unregistered"
+            # A verifier_id_type member is neither checked nor refused: the wallet picks the type itself.
         else:
             if "ge" not in p and "le" not in p:
                 return "age-check-no-bounds"
@@ -187,12 +182,10 @@ case("fail: verifier_context not a string", [pseud("account-recovery-ssc", verif
 # The request no longer carries verifier_id_type (the wallet picks the type); absent is satisfiable.
 case("ok: known-offender without verifier_id_type", [pseud(_no_vit=True)], None)
 case("ok: account-recovery without verifier_id_type", [pseud("account-recovery-ssc", verifier_context="c", _no_vit=True)], None)
-case("fail: xsite with verifier_id_type", [pseud("user-managed-pseudonym-xsite-ssc", verifier_id_type="semantic")], "verifier-id-type-forbidden")
-case("fail: unregistered verifier_id_type", [pseud(verifier_id_type="x509_hash")], "verifier-id-type-unregistered")
-case("fail: verifier_id_type not a string", [pseud(verifier_id_type=1)], "verifier-id-type-unregistered")
-case("ok: a type registered by the deployment", [pseud(verifier_id_type="did_web")], None, options={"registered_verifier_id_types": ["did_web"]})
-case("fail: a default type that this deployment did not register", [pseud(verifier_id_type="semantic")], "verifier-id-type-unregistered",
-     options={"registered_verifier_id_types": ["did_web"]})
+# A request that still carries verifier_id_type is accepted and the member ignored (rulebook v0.3 removed it).
+case("ok: legacy verifier_id_type is accepted and ignored (xsite, which has no verifier input)", [pseud("user-managed-pseudonym-xsite-ssc", verifier_id_type="semantic")], None)
+case("ok: legacy verifier_id_type of an unknown value is ignored", [pseud(verifier_id_type="x509_hash")], None)
+case("ok: legacy verifier_id_type that is not a string is ignored", [pseud(verifier_id_type=1)], None)
 # --- age_check ---
 case("fail: age_check with no bounds", [age()], "age-check-no-bounds")
 case("ok: ge only", [age(ge="2000-01-01")], None)
@@ -233,7 +226,6 @@ def build():
         "status": "self-generated, not yet cross-checked with the circuit developers",
         "rulebook": "nym_auth v0.3, satisfiability rules (query structure, pseudonym and age_check functions)",
         "generator": "tools/gen_circuit_zk_validator_vectors.py",
-        "default_registered_verifier_id_types": DEFAULT_TYPES,
         "cases": out,
     }
 

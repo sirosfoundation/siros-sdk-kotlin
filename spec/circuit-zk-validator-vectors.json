@@ -2,10 +2,6 @@
   "status": "self-generated, not yet cross-checked with the circuit developers",
   "rulebook": "nym_auth v0.3, satisfiability rules (query structure, pseudonym and age_check functions)",
   "generator": "tools/gen_circuit_zk_validator_vectors.py",
-  "default_registered_verifier_id_types": [
-    "semantic",
-    "x509_san_dns"
-  ],
   "cases": [
     {
       "name": "ok: known-offender ssc, x509_san_dns",
@@ -1113,7 +1109,7 @@
       }
     },
     {
-      "name": "fail: xsite with verifier_id_type",
+      "name": "ok: legacy verifier_id_type is accepted and ignored (xsite, which has no verifier input)",
       "plan": {
         "query": {
           "id": "nym",
@@ -1134,11 +1130,11 @@
         ]
       },
       "verdict": {
-        "access_denied": "verifier-id-type-forbidden"
+        "ok": true
       }
     },
     {
-      "name": "fail: unregistered verifier_id_type",
+      "name": "ok: legacy verifier_id_type of an unknown value is ignored",
       "plan": {
         "query": {
           "id": "nym",
@@ -1159,11 +1155,11 @@
         ]
       },
       "verdict": {
-        "access_denied": "verifier-id-type-unregistered"
+        "ok": true
       }
     },
     {
-      "name": "fail: verifier_id_type not a string",
+      "name": "ok: legacy verifier_id_type that is not a string is ignored",
       "plan": {
         "query": {
           "id": "nym",
@@ -1184,67 +1180,7 @@
         ]
       },
       "verdict": {
-        "access_denied": "verifier-id-type-unregistered"
-      }
-    },
-    {
-      "name": "ok: a type registered by the deployment",
-      "plan": {
-        "query": {
-          "id": "nym",
-          "format": "circuit_zk",
-          "meta": {
-            "doctype_value": "eu.europa.ec.eudi.nym_auth.1"
-          }
-        },
-        "functions": [
-          {
-            "id": "pseudonym-v1-sha256",
-            "handle": "n",
-            "params": {
-              "config": "known-offender-matching-ssc",
-              "verifier_id_type": "did_web"
-            }
-          }
-        ]
-      },
-      "options": {
-        "registered_verifier_id_types": [
-          "did_web"
-        ]
-      },
-      "verdict": {
         "ok": true
-      }
-    },
-    {
-      "name": "fail: a default type that this deployment did not register",
-      "plan": {
-        "query": {
-          "id": "nym",
-          "format": "circuit_zk",
-          "meta": {
-            "doctype_value": "eu.europa.ec.eudi.nym_auth.1"
-          }
-        },
-        "functions": [
-          {
-            "id": "pseudonym-v1-sha256",
-            "handle": "n",
-            "params": {
-              "config": "known-offender-matching-ssc",
-              "verifier_id_type": "semantic"
-            }
-          }
-        ]
-      },
-      "options": {
-        "registered_verifier_id_types": [
-          "did_web"
-        ]
-      },
-      "verdict": {
-        "access_denied": "verifier-id-type-unregistered"
       }
     },
     {
