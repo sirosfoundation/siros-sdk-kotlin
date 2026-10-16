@@ -316,6 +316,26 @@ class OpenID4xProfileTest {
     }
 
     @Test
+    fun flowCompleteResultDecodesDeliveredCredentialMetadata() {
+        val result = kotlinx.serialization.json.Json.parseToJsonElement(
+            """{"type":"flow_complete","flow_id":"f","credentials":[{"format":"mso_mdoc","credential":"AA",""" +
+                """"credential_metadata":[{"type":"org.siros.NS.secret_seed","value":"00112233445566778899aabbccddeeff"}],""" +
+                """"credential_metadata_encrypted_response":true},{"format":"dc+sd-jwt","credential":"x"}]}""",
+        ) as JsonObject
+        val decoded = FlowCompleteResult.decode(result)!!
+        val first = decoded.credentials!![0]
+        assertEquals("org.siros.NS.secret_seed", first.credentialMetadata!!.single().type)
+        assertEquals(
+            "00112233445566778899aabbccddeeff",
+            (first.credentialMetadata!!.single().value as JsonPrimitive).content,
+        )
+        assertTrue(first.credentialMetadataEncryptedResponse)
+        assertNull(decoded.credentials!![1].credentialMetadata)
+        assertEquals(false, decoded.credentials!![1].credentialMetadataEncryptedResponse)
+        assertNull(FlowCompleteResult.decode(null))
+    }
+
+    @Test
     fun handleCompleteCallsOnComplete() = runBlocking {
         var capturedFlowId: String? = null
         var capturedResult: JsonObject? = null

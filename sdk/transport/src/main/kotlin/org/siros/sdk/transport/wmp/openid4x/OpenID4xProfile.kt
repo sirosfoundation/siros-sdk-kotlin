@@ -10,6 +10,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import org.siros.sdk.credentials.TransactionDataError
+import org.siros.sdk.transport.CredentialResponseMetadataEntry
+import org.siros.sdk.transport.CredentialResultMetadata
 import org.siros.sdk.transport.StringOrStringListSerializer
 import org.siros.sdk.transport.engine.CredentialRef
 import org.siros.sdk.transport.wmp.*
@@ -146,7 +148,34 @@ data class CredentialResult(
     val vct: String? = null,
     @SerialName("c_nonce") val cNonce: String? = null,
     @SerialName("notification_id") val notificationId: String? = null,
-)
+    /** See [org.siros.sdk.transport.engine.CredentialResult.credentialMetadata]. */
+    @SerialName("credential_metadata")
+    override val credentialMetadata: List<CredentialResponseMetadataEntry>? = null,
+    /** See [org.siros.sdk.transport.engine.CredentialResult.credentialMetadataEncryptedResponse]. */
+    @SerialName("credential_metadata_encrypted_response")
+    override val credentialMetadataEncryptedResponse: Boolean = false,
+) : CredentialResultMetadata
+
+/**
+ * The typed view of a `wmp.flow.complete` `result`, which is the whole
+ * engine `FlowCompleteMessage` object. [FlowCompleteParams.result] arrives as
+ * a raw [JsonObject]; [decode] is the one place it is read into typed
+ * [CredentialResult]s.
+ */
+@Serializable
+data class FlowCompleteResult(
+    val credentials: List<CredentialResult>? = null,
+    @SerialName("credential_issuer") val credentialIssuer: String? = null,
+    @SerialName("redirect_uri") val redirectUri: String? = null,
+) {
+    companion object {
+        private val lenient = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
+        /** Decode [result]; null when absent. Throws on a malformed member (fail closed). */
+        fun decode(result: JsonObject?): FlowCompleteResult? =
+            result?.let { lenient.decodeFromJsonElement(serializer(), it) }
+    }
+}
 
 @Serializable
 data class VPTokenResult(

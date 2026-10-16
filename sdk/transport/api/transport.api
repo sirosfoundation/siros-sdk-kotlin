@@ -6,6 +6,40 @@ public final class org/siros/sdk/transport/CredentialNotifier$DefaultImpls {
 	public static synthetic fun sendCredentialNotification$default (Lorg/siros/sdk/transport/CredentialNotifier;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)V
 }
 
+public final class org/siros/sdk/transport/CredentialResponseMetadataEntry {
+	public static final field Companion Lorg/siros/sdk/transport/CredentialResponseMetadataEntry$Companion;
+	public fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Lkotlinx/serialization/json/JsonElement;
+	public final fun copy (Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;)Lorg/siros/sdk/transport/CredentialResponseMetadataEntry;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/CredentialResponseMetadataEntry;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;ILjava/lang/Object;)Lorg/siros/sdk/transport/CredentialResponseMetadataEntry;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getType ()Ljava/lang/String;
+	public final fun getValue ()Lkotlinx/serialization/json/JsonElement;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/CredentialResponseMetadataEntry$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/CredentialResponseMetadataEntry$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/CredentialResponseMetadataEntry;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/CredentialResponseMetadataEntry;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/CredentialResponseMetadataEntry$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract interface class org/siros/sdk/transport/CredentialResultMetadata {
+	public abstract fun getCredentialMetadata ()Ljava/util/List;
+	public abstract fun getCredentialMetadataEncryptedResponse ()Z
+}
+
 public abstract interface class org/siros/sdk/transport/Transport {
 	public abstract fun connect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun disconnect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -595,19 +629,23 @@ public final class org/siros/sdk/transport/engine/CredentialRef$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
-public final class org/siros/sdk/transport/engine/CredentialResult {
+public final class org/siros/sdk/transport/engine/CredentialResult : org/siros/sdk/transport/CredentialResultMetadata {
 	public static final field Companion Lorg/siros/sdk/transport/engine/CredentialResult$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/util/List;Z)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/util/List;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/lang/String;
 	public final fun component4 ()Lkotlinx/serialization/json/JsonElement;
 	public final fun component5 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/CredentialResult;
-	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/CredentialResult;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/CredentialResult;
+	public final fun component6 ()Ljava/util/List;
+	public final fun component7 ()Z
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/util/List;Z)Lorg/siros/sdk/transport/engine/CredentialResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/CredentialResult;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/util/List;ZILjava/lang/Object;)Lorg/siros/sdk/transport/engine/CredentialResult;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getCredential ()Ljava/lang/String;
+	public fun getCredentialMetadata ()Ljava/util/List;
+	public fun getCredentialMetadataEncryptedResponse ()Z
 	public final fun getFormat ()Ljava/lang/String;
 	public final fun getNotificationId ()Ljava/lang/String;
 	public final fun getTypeMetadata ()Lkotlinx/serialization/json/JsonElement;
@@ -2600,20 +2638,24 @@ public final class org/siros/sdk/transport/wmp/openid4x/CredentialMatch$Companio
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
-public final class org/siros/sdk/transport/wmp/openid4x/CredentialResult {
+public final class org/siros/sdk/transport/wmp/openid4x/CredentialResult : org/siros/sdk/transport/CredentialResultMetadata {
 	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/CredentialResult$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Z)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/lang/String;
 	public final fun component4 ()Ljava/lang/String;
 	public final fun component5 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/CredentialResult;
-	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/CredentialResult;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/CredentialResult;
+	public final fun component6 ()Ljava/util/List;
+	public final fun component7 ()Z
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Z)Lorg/siros/sdk/transport/wmp/openid4x/CredentialResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/CredentialResult;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;ZILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/CredentialResult;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getCNonce ()Ljava/lang/String;
 	public final fun getCredential ()Ljava/lang/String;
+	public fun getCredentialMetadata ()Ljava/util/List;
+	public fun getCredentialMetadataEncryptedResponse ()Z
 	public final fun getFormat ()Ljava/lang/String;
 	public final fun getNotificationId ()Ljava/lang/String;
 	public final fun getVct ()Ljava/lang/String;
@@ -2633,6 +2675,40 @@ public synthetic class org/siros/sdk/transport/wmp/openid4x/CredentialResult$$se
 }
 
 public final class org/siros/sdk/transport/wmp/openid4x/CredentialResult$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/FlowCompleteResult {
+	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/FlowCompleteResult$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/util/List;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/util/List;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Ljava/util/List;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/FlowCompleteResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/FlowCompleteResult;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/FlowCompleteResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCredentialIssuer ()Ljava/lang/String;
+	public final fun getCredentials ()Ljava/util/List;
+	public final fun getRedirectUri ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public synthetic class org/siros/sdk/transport/wmp/openid4x/FlowCompleteResult$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/FlowCompleteResult$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lorg/siros/sdk/transport/wmp/openid4x/FlowCompleteResult;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lorg/siros/sdk/transport/wmp/openid4x/FlowCompleteResult;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/FlowCompleteResult$Companion {
+	public final fun decode (Lkotlinx/serialization/json/JsonObject;)Lorg/siros/sdk/transport/wmp/openid4x/FlowCompleteResult;
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
