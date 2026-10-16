@@ -89,6 +89,17 @@ class NymPseudonymTest {
     }
 
     @Test
+    fun `describe names the seed kind of every config explicitly`() {
+        assertEquals(NymSeedKind.SECRET, NymPseudonym.describe("known-offender-matching-ssc")!!.seedKind)
+        assertEquals(NymSeedKind.PRIVATE, NymPseudonym.describe("known-offender-matching-psc")!!.seedKind)
+        assertEquals(NymSeedKind.SECRET, NymPseudonym.describe("account-recovery-ssc")!!.seedKind)
+        val xsite = NymPseudonym.describe("user-managed-pseudonym-xsite-ssc")!!
+        assertEquals(NymSeedKind.SECRET, xsite.seedKind)
+        assertTrue(xsite.userValue)
+        assertEquals(null, NymPseudonym.describe("made-up"))
+    }
+
+    @Test
     fun `output is 32 bytes and the seed is left untouched`() {
         val seed = ByteArray(16) { it.toByte() }
         val copy = seed.copyOf()

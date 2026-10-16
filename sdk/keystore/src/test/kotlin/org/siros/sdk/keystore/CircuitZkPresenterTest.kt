@@ -71,11 +71,16 @@ class CircuitZkPresenterTest {
         decoyFirst: List<CBORObject> = emptyList(),
         /** Repeat birth_date inside the claims namespace. */
         duplicateBirth: Boolean = false,
+        /** The `ssc` value; null leaves the element out. */
+        ssc: CBORObject? = cbor(ByteArray(32) { 9 }),
+        /** Repeat ssc inside the claims namespace, with this value. */
+        duplicateSsc: CBORObject? = null,
     ): ByteArray {
         val items = CBORObject.NewArray()
         var id = 0
         if (birth != null) items.Add(item(id++, "birth_date", CBORObject.FromObjectAndTag(birth, 1004)))
-        items.Add(item(id++, "ssc", cbor(ByteArray(32) { 9 })))
+        if (ssc != null) items.Add(item(id++, "ssc", ssc))
+        if (duplicateSsc != null) items.Add(item(91, "ssc", duplicateSsc))
         if (psc != null) items.Add(item(id, "psc", cbor(psc)))
         if (duplicateBirth) items.Add(item(90, "birth_date", CBORObject.FromObjectAndTag("2000-06-15", 1004)))
         val ns = CBORObject.NewMap()
@@ -124,8 +129,20 @@ class CircuitZkPresenterTest {
         userValue: ByteArray? = null,
     ) = CircuitZkPresenter(prover, { circuits }, validator, HolderWitnessProvider(seeds, userValue))
 
-    private fun request(cred: ByteArray = credential(), p: CircuitZkPlan = plan(pseudonymFn(), ageFn()), verifierId: String? = "rp.example") =
-        CircuitZkPresenter.Request(cred, p, verifierId, null, byteArrayOf(1, 2, 3))
+    private fun request(
+        cred: ByteArray = credential(),
+        p: CircuitZkPlan = plan(pseudonymFn(), ageFn()),
+        verifierId: String? = "rp.example",
+        secretSeed: ByteArray? = null,
+        verifierContext: String? = null,
+    ) = CircuitZkPresenter.Request(cred, p, verifierId, verifierContext, byteArrayOf(1, 2, 3), secretSeed)
+
+    /** A delivered secret_seed (16 bytes) and the ssc it opens; independent of the presenter. */
+    private val secretSeedA get() = ByteArray(16) { it.toByte() }
+    private val secretSeedB get() = ByteArray(16) { (0xA0 + it).toByte() }
+    private fun sha256(b: ByteArray) = MessageDigest.getInstance("SHA-256").digest(b)
+    private fun sscCred(seed: ByteArray = secretSeedA, ssc: CBORObject? = cbor(sha256(seed))) = credential(ssc = ssc)
+    private val sscPlan get() = plan(pseudonymFn("known-offender-matching-ssc"), ageFn())
 
     private fun present(pr: CircuitZkPresenter, r: CircuitZkPresenter.Request) = runBlocking { pr.present(r, signer) }
 
@@ -289,7 +306,7 @@ class CircuitZkPresenterTest {
     }
 
     @Test
-    fun `a witness the wallet cannot supply is refused, including every config on a seed it does not hold`() {
+    fun `a witness the wallet cannot supply is refused, including every secret-seed config without a seed`() {
         val prover = CountingProver(FakeCircuitZkProver.optIn())
         for (config in listOf("known-offender-matching-ssc", "account-recovery-ssc", "user-managed-pseudonym-xsite-ssc", "made-up")) {
             assertDenied(CircuitZkStep.WITNESS) { present(presenter(prover), request(p = plan(pseudonymFn(config)))) }
@@ -364,6 +381,205 @@ class CircuitZkPresenterTest {
         assertEquals("CircuitZkFunctionWitness(redacted)", CircuitZkFunctionWitness(seed16).toString())
     }
 
+    // -------- secret_seed (issuer-delivered), checked against ssc --------
+
+    private fun sscRequest(
+        seed: ByteArray? = secretSeedA,
+        cred: ByteArray = sscCred(),
+        config: String = "known-offender-matching-ssc",
+    ) = request(cred = cred, p = plan(pseudonymFn(config), ageFn()), secretSeed = seed)
+
+    @Test
+    fun `each secret-seed config presents with a seed that opens ssc and equals an independent recompute`() {
+        val seed = secretSeedA
+        val kom = CircuitZkPresentationCodec.decodeBase64Url(present(presenter(), sscRequest(seed)).base64Url)
+        assertEquals(
+            ResultValue.Pseudonym(NymPseudonym.derive("known-offender-matching-ssc", seed, verifierId = "rp.example")),
+            kom.results["n"],
+        )
+        val recovery = CircuitZkPresentationCodec.decodeBase64Url(
+            present(
+                presenter(),
+                request(sscCred(), plan(pseudonymFn("account-recovery-ssc"), ageFn()), secretSeed = seed, verifierContext = "ctx-1"),
+            ).base64Url,
+        )
+        assertEquals(
+            ResultValue.Pseudonym(NymPseudonym.derive("account-recovery-ssc", seed, verifierId = "rp.example", verifierContext = "ctx-1")),
+            recovery.results["n"],
+        )
+        val userValue = byteArrayOf(5, 6, 7)
+        val xsite = CircuitZkPresentationCodec.decodeBase64Url(
+            present(
+                presenter(userValue = userValue),
+                request(sscCred(), plan(pseudonymFn("user-managed-pseudonym-xsite-ssc"), ageFn()), verifierId = null, secretSeed = seed),
+            ).base64Url,
+        )
+        assertEquals(
+            ResultValue.Pseudonym(NymPseudonym.derive("user-managed-pseudonym-xsite-ssc", seed, proverInput = userValue)),
+            xsite.results["n"],
+        )
+    }
+
+    @Test
+    fun `a secret-seed config without a seed, or with a seed of the wrong length, is refused at the witness step`() {
+        val prover = CountingProver(FakeCircuitZkProver.optIn())
+        for (bad in listOf<ByteArray?>(null, ByteArray(0), ByteArray(15), ByteArray(17), ByteArray(32))) {
+            assertDenied(CircuitZkStep.WITNESS) { present(presenter(prover), sscRequest(bad)) }
+        }
+        // The xsite config also needs the user value; a missing one is a witness refusal as well.
+        assertDenied(CircuitZkStep.WITNESS) {
+            present(presenter(prover), sscRequest(secretSeedA, config = "user-managed-pseudonym-xsite-ssc"))
+        }
+        assertEquals(0, prover.calls)
+    }
+
+    @Test
+    fun `a seed that does not open ssc is refused and the prover is never called`() {
+        val prover = CountingProver(FakeCircuitZkProver.optIn())
+        // The seed of another credential, a flipped bit, and an ssc that is the seed itself.
+        assertDenied(CircuitZkStep.SECRET_COMMITMENT) { present(presenter(prover), sscRequest(secretSeedB)) }
+        val flipped = secretSeedA.also { it[3] = (it[3].toInt() xor 1).toByte() }
+        assertDenied(CircuitZkStep.SECRET_COMMITMENT) { present(presenter(prover), sscRequest(flipped)) }
+        assertDenied(CircuitZkStep.SECRET_COMMITMENT) {
+            present(presenter(prover), sscRequest(cred = sscCred(ssc = cbor(ByteArray(32)))))
+        }
+        assertEquals(0, prover.calls)
+    }
+
+    @Test
+    fun `an ssc that is absent, not a bstr, the wrong length or duplicated is refused and nothing is proved`() {
+        val prover = CountingProver(FakeCircuitZkProver.optIn())
+        val good = sha256(secretSeedA)
+        val cases = mapOf(
+            "absent" to credential(ssc = null),
+            "text" to credential(ssc = cbor(hex(good))),
+            "31 bytes" to credential(ssc = cbor(good.copyOf(31))),
+            "33 bytes" to credential(ssc = cbor(good + byteArrayOf(0))),
+            "empty" to credential(ssc = cbor(ByteArray(0))),
+            "duplicate, both valid" to credential(ssc = cbor(good), duplicateSsc = cbor(good)),
+            "duplicate, decoy second" to credential(ssc = cbor(good), duplicateSsc = cbor(ByteArray(32))),
+        )
+        for ((name, cred) in cases) {
+            try {
+                present(presenter(prover), sscRequest(cred = cred))
+                fail("$name: expected a refusal")
+            } catch (e: CircuitZkError.AccessDenied) {
+                assertEquals(name, CircuitZkStep.SECRET_COMMITMENT, e.step)
+            }
+        }
+        assertEquals(0, prover.calls)
+    }
+
+    @Test
+    fun `an ssc in another namespace is never consulted`() {
+        val prover = CountingProver(FakeCircuitZkProver.optIn())
+        val decoySsc = item(72, "ssc", cbor(sha256(secretSeedA)))
+        assertDenied(CircuitZkStep.NAMESPACE) {
+            present(presenter(prover), sscRequest(cred = credential(ssc = cbor(ByteArray(32)), decoyFirst = listOf(decoySsc))))
+        }
+        assertEquals(0, prover.calls)
+    }
+
+    @Test
+    fun `a supplied seed does not weaken a psc config and is not used by it`() {
+        // A psc request still needs the right psc, whatever seed rides along.
+        assertDenied(CircuitZkStep.COMMITMENT) {
+            present(presenter(), request(cred = credential(psc = ByteArray(32)), secretSeed = secretSeedA))
+        }
+        val witnessSeen = mutableListOf<CircuitZkFunctionWitness>()
+        val spy = object : CircuitZkProver {
+            override suspend fun prove(input: CircuitZkProveInput): CircuitZkProveOutput {
+                witnessSeen += input.witnesses.getValue("n")
+                return FakeCircuitZkProver.optIn().prove(input)
+            }
+        }
+        present(presenter(spy), request(secretSeed = secretSeedA))
+        assertNull(witnessSeen.single().secretSeed)
+    }
+
+    @Test
+    fun `the presenter zeroes its copy of the seed and leaves the caller's array alone`() {
+        val callers = secretSeedA
+        val seen = mutableListOf<ByteArray>()
+        val spy = object : CircuitZkProver {
+            override suspend fun prove(input: CircuitZkProveInput): CircuitZkProveOutput {
+                val s = input.witnesses.getValue("n").secretSeed!!
+                assertArrayEquals(secretSeedA, s) // live while proving
+                seen += s
+                return FakeCircuitZkProver.optIn().prove(input)
+            }
+        }
+        present(presenter(spy), sscRequest(callers))
+        assertEquals(1, seen.size)
+        assertTrue(seen.single().all { it == 0.toByte() })
+        assertArrayEquals(secretSeedA, callers)
+        assertTrue(seen.single() !== callers)
+        // The copy is zeroed on a failing prover as well.
+        val seen2 = mutableListOf<ByteArray>()
+        val boom = object : CircuitZkProver {
+            override suspend fun prove(input: CircuitZkProveInput): CircuitZkProveOutput {
+                seen2 += input.witnesses.getValue("n").secretSeed!!
+                error("prover crash")
+            }
+        }
+        assertDenied(CircuitZkStep.PROVE) { present(presenter(boom), sscRequest(secretSeedA)) }
+        assertTrue(seen2.single().all { it == 0.toByte() })
+    }
+
+    @Test
+    fun `the secret seed and its hex appear in no log, error, witness or token`() {
+        val seed = secretSeedA
+        val secrets = listOf(hex(seed), hex(seed).uppercase(), java.util.Base64.getEncoder().encodeToString(seed))
+        val boom = CountingProver(FakeCircuitZkProver.optIn(), override = { error("x") })
+        val results = mutableListOf<String>()
+        for (r in listOf(sscRequest(secretSeedB), sscRequest(seed.copyOf(15)), sscRequest(seed, boom.let { sscCred(ssc = null) }))) {
+            try {
+                present(presenter(), r)
+            } catch (e: CircuitZkError) {
+                results += e.toString() + (e.message ?: "")
+            }
+        }
+        try { present(presenter(boom), sscRequest(seed)) } catch (e: CircuitZkError) { results += e.toString() }
+        val ok = present(presenter(), sscRequest(seed))
+        results += ok.base64Url
+        results += ok.results.toString()
+        results += CircuitZkFunctionWitness(secretSeed = seed).toString()
+        results += logs
+        for (line in results) for (s in secrets) assertFalse(line, line.contains(s))
+        // The seed is not even in the encoded presentation bytes.
+        val raw = java.util.Base64.getUrlDecoder().decode(ok.base64Url)
+        assertTrue(indexOf(raw, seed) < 0)
+    }
+
+    private fun indexOf(hay: ByteArray, needle: ByteArray): Int {
+        outer@ for (i in 0..hay.size - needle.size) {
+            for (j in needle.indices) if (hay[i + j] != needle[j]) continue@outer
+            return i
+        }
+        return -1
+    }
+
+    @Test
+    fun `witness needs name the seed kind of each config and the default provider never supplies a secret seed`() {
+        fun needs(config: String) = PseudonymFunctionHandler.witnessNeeds(pseudonymFn(config))
+        assertEquals(setOf(CircuitZkWitnessKind.PRIVATE_SEED), needs("known-offender-matching-psc"))
+        assertEquals(setOf(CircuitZkWitnessKind.SECRET_SEED), needs("known-offender-matching-ssc"))
+        assertEquals(setOf(CircuitZkWitnessKind.SECRET_SEED), needs("account-recovery-ssc"))
+        assertEquals(setOf(CircuitZkWitnessKind.SECRET_SEED, CircuitZkWitnessKind.USER_VALUE), needs("user-managed-pseudonym-xsite-ssc"))
+        assertEquals(setOf(CircuitZkWitnessKind.NOT_HELD_BY_WALLET), needs("made-up"))
+        val provider = HolderWitnessProvider(seeds, byteArrayOf(1))
+        assertNull(provider.witness(pseudonymFn("known-offender-matching-ssc"), setOf(CircuitZkWitnessKind.SECRET_SEED), docType))
+        assertNull(provider.witness(pseudonymFn("known-offender-matching-ssc"), setOf(CircuitZkWitnessKind.NOT_HELD_BY_WALLET), docType))
+    }
+
+    @Test
+    fun `a witness has identity equality so two witnesses with one seed are not equal`() {
+        val a = CircuitZkFunctionWitness(secretSeed = secretSeedA)
+        val b = CircuitZkFunctionWitness(secretSeed = secretSeedA)
+        assertFalse(a == b)
+        assertTrue(a == a)
+    }
+
     @Test
     fun `an error never names a rule or a reason`() {
         for (e in listOf<CircuitZkError>(CircuitZkError.AccessDenied(CircuitZkStep.PREDICATE), CircuitZkError.InvalidRequest())) {
@@ -393,17 +609,31 @@ class CircuitZkPresenterTest {
     }
 
     @Test
-    fun `the fake refuses a config whose witness is not the private seed even when called directly`() {
-        val input = CircuitZkProveInput(
-            circuit, plan(pseudonymFn("known-offender-matching-ssc")), credential(), byteArrayOf(), "v", null,
-            mapOf("n" to CircuitZkFunctionWitness(privateSeed = seed16)), signer,
-        )
-        try {
-            runBlocking { FakeCircuitZkProver.optIn().prove(input) }
-            fail()
-        } catch (e: CircuitZkError.AccessDenied) {
-            assertEquals(CircuitZkStep.PROVE, e.step)
+    fun `the fake refuses a config whose seed is not in the witness even when called directly`() {
+        fun prove(config: String, w: CircuitZkFunctionWitness) = runBlocking {
+            FakeCircuitZkProver.optIn().prove(
+                CircuitZkProveInput(circuit, plan(pseudonymFn(config)), credential(), byteArrayOf(), "v", null, mapOf("n" to w), signer),
+            )
         }
+        // An ssc config given only the private seed, a psc config given only the secret seed, and no seed at all.
+        for ((config, w) in listOf(
+            "known-offender-matching-ssc" to CircuitZkFunctionWitness(privateSeed = seed16),
+            "known-offender-matching-psc" to CircuitZkFunctionWitness(secretSeed = secretSeedA),
+            "known-offender-matching-ssc" to CircuitZkFunctionWitness(),
+        )) {
+            try {
+                prove(config, w)
+                fail("$config")
+            } catch (e: CircuitZkError.AccessDenied) {
+                assertEquals(CircuitZkStep.PROVE, e.step)
+            }
+        }
+        // And it derives from the right seed.
+        val ok = prove("known-offender-matching-ssc", CircuitZkFunctionWitness(secretSeed = secretSeedA))
+        assertEquals(
+            ResultValue.Pseudonym(NymPseudonym.derive("known-offender-matching-ssc", secretSeedA, verifierId = "v")),
+            ok.results["n"],
+        )
     }
 
     @Test

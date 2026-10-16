@@ -358,6 +358,13 @@ class SirosWallet private constructor(
     @Volatile
     internal var transactionMetadataSourceOverride: org.siros.sdk.wallet.transaction.TransactionMetadataSource? = null
 
+    /**
+     * Where a credential's `secret_seed` comes from for the ssc-based pseudonym configs. Defaults to
+     * none (every such request is refused); the storage side is a follow-up. Internal seam.
+     */
+    @Volatile
+    internal var credentialSecretSeedSource: CredentialSecretSeedSource = CredentialSecretSeedSource.NONE
+
     private fun transactionCoordinator(
         consentOverride: TransactionConsentHandler? = null,
     ): org.siros.sdk.wallet.transaction.TransactionDataCoordinator {
@@ -4268,6 +4275,11 @@ class SirosWallet private constructor(
             val verifierId = if (needsVerifierId) registry.resolve(verifierContext) ?: refuse("verifier-id", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE) else null
             val context = (pseudonym?.params?.get("verifier_context") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
             val kid = cred.kid ?: keystore.listKeys().firstOrNull()?.keyId
+            // Fetched only when the chosen config derives from the secret seed; the presenter verifies it
+            // against ssc, and this copy is zeroed whatever happens.
+            val needsSecretSeed = (pseudonym?.params?.get("config") as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull?.let { org.siros.sdk.credentials.NymPseudonym.describe(it)?.seedKind } == org.siros.sdk.credentials.NymSeedKind.SECRET
+            val secretSeed = if (needsSecretSeed) credentialSecretSeedSource.secretSeed(cred.id) else null
             val presented = try {
                 presenter.present(
                     org.siros.sdk.keystore.CircuitZkPresenter.Request(
@@ -4276,6 +4288,7 @@ class SirosWallet private constructor(
                         verifierId = verifierId,
                         verifierContext = context,
                         sessionTranscript = transcript,
+                        secretSeed = secretSeed,
                     ),
                     signer = { algorithm, data ->
                         require(algorithm == COSE_ALG_ES256) { "This keystore signs ES256 only" }
@@ -4284,6 +4297,8 @@ class SirosWallet private constructor(
                 )
             } catch (e: org.siros.sdk.keystore.CircuitZkError) {
                 refuse("presenter", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.PROOF_FAILED)
+            } finally {
+                secretSeed?.fill(0)
             }
             tokensByQueryId[result.queryId] = listOf(presented.base64Url)
             usedIds += cred.id
@@ -4304,7 +4319,10 @@ class SirosWallet private constructor(
         return DCAPIPresentationResult(responseJson = finalResponseJson, credentialIds = usedIds)
     }
 
-    /** No wallet-held private input: used when the keystore cannot derive seeds. */
+    /**
+     * No wallet-held private input: used when the keystore cannot derive seeds. It supplies nothing for
+     * any need; the presenter takes a `secret_seed` from the request, never from a provider.
+     */
     private object NoWitnessProvider : org.siros.sdk.keystore.CircuitZkWitnessProvider {
         override fun witness(
             function: org.siros.sdk.credentials.CircuitZkFunction,

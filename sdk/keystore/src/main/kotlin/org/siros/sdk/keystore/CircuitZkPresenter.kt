@@ -41,45 +41,79 @@ sealed class CircuitZkError(message: String, errorCode: String) : SirosException
     ) : CircuitZkError("circuit_zk request refused", "circuit_zk_access_denied")
 }
 
+private const val SECRET_SEED_BYTES = 16
+private const val COMMITMENT_BYTES = 32
+
 /** The steps of [CircuitZkPresenter.present], in order. Internal. */
-internal enum class CircuitZkStep { VALIDATE, DOCTYPE, NAMESPACE, WITNESS, COMMITMENT, PREDICATE, CIRCUIT, PROVE, BUILD }
+internal enum class CircuitZkStep { VALIDATE, DOCTYPE, NAMESPACE, WITNESS, COMMITMENT, SECRET_COMMITMENT, PREDICATE, CIRCUIT, PROVE, BUILD }
 
 /** What kind of wallet-held private input a function needs. */
 enum class CircuitZkWitnessKind {
-    /** The holder's `private_seed` for the credential's type. */
+    /** The holder's `private_seed` for the credential's type: derived on the device, opened from `psc`. */
     PRIVATE_SEED,
+
+    /**
+     * The issuer-delivered `secret_seed` of the credential: opened from `ssc`, not derivable from any
+     * wallet key. The presenter takes it from [CircuitZkPresenter.Request.secretSeed] and checks
+     * `SHA256(seed) == ssc` itself before it reaches a prover; a [CircuitZkWitnessProvider] is never
+     * asked for it (it is removed from the `needs` a provider sees).
+     */
+    SECRET_SEED,
 
     /** The user-supplied value. */
     USER_VALUE,
 
-    /** Something the wallet does not hold; no default provider can supply it. */
+    /**
+     * An input that no provider and no request can supply, for example because the function's config is
+     * unknown to this SDK. Always refused.
+     */
     NOT_HELD_BY_WALLET,
 }
 
 /**
  * The private inputs for one planned function. Never logged or inspected by
- * the presenter; [toString] is redacted.
+ * the presenter; [toString] is redacted and there is no value-based `equals`
+ * (identity only), so no seed reaches a string or a comparison.
+ *
+ * @property secretSeed The issuer-delivered `secret_seed`, set by the presenter only after it verified
+ *   `SHA256(secretSeed) == ssc`; a provider never sets it. The presenter zeroes it once proving ends.
  */
-class CircuitZkFunctionWitness(val privateSeed: ByteArray? = null, val userValue: ByteArray? = null) {
+class CircuitZkFunctionWitness(
+    val privateSeed: ByteArray? = null,
+    val userValue: ByteArray? = null,
+    val secretSeed: ByteArray? = null,
+) {
     override fun toString() = "CircuitZkFunctionWitness(redacted)"
+
+    override fun equals(other: Any?) = this === other
+
+    override fun hashCode() = System.identityHashCode(this)
 }
 
 /** Supplies the wallet-held private inputs a function needs, or null when it cannot. */
 interface CircuitZkWitnessProvider {
-    /** The witness for [function], or null when [needs] includes something this provider cannot supply. */
+    /**
+     * The witness for [function], or null when [needs] includes something this provider cannot supply.
+     * [needs] never contains [CircuitZkWitnessKind.SECRET_SEED]: the issuer-delivered seed is not derivable
+     * from key material and comes with the request, so the presenter handles it itself.
+     */
     fun witness(function: CircuitZkFunction, needs: Set<CircuitZkWitnessKind>, credentialType: String): CircuitZkFunctionWitness?
 
     /** Whether [psc] is the commitment this provider's `private_seed` has for [credentialType]. */
     fun privateSeedMatches(credentialType: String, psc: ByteArray): Boolean
 }
 
-/** The default provider: the K-S `private_seed` per credential type, and the user-supplied value if any. */
+/**
+ * The default provider: the K-S `private_seed` per credential type, and the user-supplied value if any.
+ * The `secret_seed` is not derivable from the main key (the issuer delivers it), so this provider returns
+ * null for [CircuitZkWitnessKind.SECRET_SEED]; the presenter supplies it from the request.
+ */
 class HolderWitnessProvider internal constructor(
     private val seeds: PrivateSeed,
     private val userValue: ByteArray? = null,
 ) : CircuitZkWitnessProvider {
     override fun witness(function: CircuitZkFunction, needs: Set<CircuitZkWitnessKind>, credentialType: String): CircuitZkFunctionWitness? {
-        if (CircuitZkWitnessKind.NOT_HELD_BY_WALLET in needs) return null
+        if (CircuitZkWitnessKind.NOT_HELD_BY_WALLET in needs || CircuitZkWitnessKind.SECRET_SEED in needs) return null
         if (CircuitZkWitnessKind.USER_VALUE in needs && userValue == null) return null
         return CircuitZkFunctionWitness(
             privateSeed = if (CircuitZkWitnessKind.PRIVATE_SEED in needs) seeds.derive(credentialType) else null,
@@ -105,7 +139,10 @@ interface CircuitZkFunctionHandler {
     fun holds(function: CircuitZkFunction, credential: DocumentMdoc): Boolean
 }
 
-/** `pseudonym-v1-sha256`: needs the private seed (and a user value where the config takes one). */
+/**
+ * `pseudonym-v1-sha256`: needs the seed its config derives from (the device `private_seed` or the
+ * issuer-delivered `secret_seed`) and a user value where the config takes one.
+ */
 object PseudonymFunctionHandler : CircuitZkFunctionHandler {
     override val functionId = "pseudonym-v1-sha256"
 
@@ -114,7 +151,12 @@ object PseudonymFunctionHandler : CircuitZkFunctionHandler {
             ?.takeIf { it.isString }?.content?.let(NymPseudonym::describe)
             ?: return setOf(CircuitZkWitnessKind.NOT_HELD_BY_WALLET)
         return buildSet {
-            if (info.holderPrivateSeed) add(CircuitZkWitnessKind.PRIVATE_SEED) else add(CircuitZkWitnessKind.NOT_HELD_BY_WALLET)
+            add(
+                when (info.seedKind) {
+                    org.siros.sdk.credentials.NymSeedKind.PRIVATE -> CircuitZkWitnessKind.PRIVATE_SEED
+                    org.siros.sdk.credentials.NymSeedKind.SECRET -> CircuitZkWitnessKind.SECRET_SEED
+                },
+            )
             if (info.userValue) add(CircuitZkWitnessKind.USER_VALUE)
         }
     }
@@ -230,6 +272,14 @@ class CircuitZkPresenter(
         val verifierContext: String? = null,
         /** The session transcript the proof is bound to, built by the caller. */
         val sessionTranscript: ByteArray,
+        /**
+         * The credential's issuer-delivered `secret_seed` (16 bytes), for the configs that derive from it;
+         * null when the wallet holds none. The presenter does not trust it: it refuses unless
+         * `SHA256(secretSeed)` equals the credential's `ssc`, works on its own copy and zeroes that copy
+         * afterwards. The caller owns this array and should zero it after [present]. Never put it in a
+         * log, a history record or a response.
+         */
+        val secretSeed: ByteArray? = null,
     )
 
     /** A presentation: the `vp_token` entry, its results, and the circuit used. */
@@ -262,6 +312,16 @@ class CircuitZkPresenter(
     }
 
     private suspend fun presentInternal(request: Request, signer: ZkWitnessSigner): Result {
+        // Our own copy of the seed, zeroed on every exit path (the caller's array is theirs to zero).
+        val seed = request.secretSeed?.copyOf()
+        try {
+            return presentWithSeed(request, seed, signer)
+        } finally {
+            seed?.fill(0)
+        }
+    }
+
+    private suspend fun presentWithSeed(request: Request, seed: ByteArray?, signer: ZkWitnessSigner): Result {
         val plan = request.plan
         if (plan.functions.isEmpty() || plan.functions.map { it.handle }.toSet().size != plan.functions.size) {
             throw CircuitZkError.InvalidRequest()
@@ -293,13 +353,33 @@ class CircuitZkPresenter(
         for ((function, handler) in plan.functions.zip(functionHandlers)) {
             val n = handler.witnessNeeds(function)
             needs[function.handle] = n
-            witnesses[function.handle] = witnessProvider.witness(function, n, document.docType) ?: refuse(CircuitZkStep.WITNESS)
+            // The secret seed comes with the request, not from the provider: it must be present and exactly
+            // 16 bytes (its commitment is checked in step 4b).
+            if (CircuitZkWitnessKind.SECRET_SEED in n && (seed == null || seed.size != SECRET_SEED_BYTES)) refuse(CircuitZkStep.WITNESS)
+            val fromProvider = witnessProvider.witness(function, n - CircuitZkWitnessKind.SECRET_SEED, document.docType) ?: refuse(CircuitZkStep.WITNESS)
+            witnesses[function.handle] = if (CircuitZkWitnessKind.SECRET_SEED in n) {
+                CircuitZkFunctionWitness(fromProvider.privateSeed, fromProvider.userValue, seed)
+            } else {
+                fromProvider
+            }
         }
 
         // 4. The commitment in the credential must be the one this wallet derives.
         if (needs.values.any { CircuitZkWitnessKind.PRIVATE_SEED in it }) {
             val psc = elementBytes(document, "psc") ?: refuse(CircuitZkStep.COMMITMENT)
             if (!witnessProvider.privateSeedMatches(document.docType, psc)) refuse(CircuitZkStep.COMMITMENT)
+        }
+
+        // 4b. The delivered secret_seed must open the credential's ssc: SHA256(seed) == ssc. The seed is
+        // caller-supplied, so it is never used on trust; a mismatch (a seed of another credential, a stale or
+        // corrupted one) refuses before any prover runs. ssc is read from the doctype namespace only, as one
+        // 32-byte bstr, so the value checked is the value the circuit binds.
+        if (needs.values.any { CircuitZkWitnessKind.SECRET_SEED in it }) {
+            val ssc = elementBytes(document, "ssc")?.takeIf { it.size == COMMITMENT_BYTES } ?: refuse(CircuitZkStep.SECRET_COMMITMENT)
+            val digest = java.security.MessageDigest.getInstance("SHA-256").digest(seed ?: refuse(CircuitZkStep.SECRET_COMMITMENT))
+            val ok = java.security.MessageDigest.isEqual(digest, ssc)
+            digest.fill(0)
+            if (!ok) refuse(CircuitZkStep.SECRET_COMMITMENT)
         }
 
         // 5. Data-dependent predicates: a false one means no presentation.
@@ -369,10 +449,12 @@ class CircuitZkPresenter(
 
 /**
  * A prover that produces no real proof, for tests and development. It
- * computes the pseudonym with [NymPseudonym] for the configs whose witness
- * the wallet can supply (those on the holder's `private_seed`), reports the
- * predicates as `true` (the presenter has already checked them), and puts a
- * recognisable dummy in `proof`. It refuses everything else.
+ * computes the pseudonym with [NymPseudonym] for every config, from the
+ * witness the presenter supplies: the holder's `private_seed` for the psc
+ * configs, the (already commitment-checked) `secret_seed` for the ssc configs.
+ * It reports the predicates as `true` (the presenter has already checked them)
+ * and puts a recognisable dummy in `proof`. It refuses a config whose seed is
+ * absent from the witness, and anything it does not know.
  *
  * Never registered by default: a host gets one only by calling [optIn], and
  * [isFake] (reported through [CircuitZkPresenter.usesFakeProver]) says so.
@@ -389,8 +471,12 @@ class FakeCircuitZkProver private constructor() : CircuitZkProver {
                         ?: throw CircuitZkError.AccessDenied(CircuitZkStep.PROVE)
                     val info = NymPseudonym.describe(config)
                     val witness = input.witnesses[function.handle]
-                    val seed = witness?.privateSeed
-                    if (info == null || !info.holderPrivateSeed || seed == null) throw CircuitZkError.AccessDenied(CircuitZkStep.PROVE)
+                    val seed = when (info?.seedKind) {
+                        org.siros.sdk.credentials.NymSeedKind.PRIVATE -> witness?.privateSeed
+                        org.siros.sdk.credentials.NymSeedKind.SECRET -> witness?.secretSeed
+                        null -> null
+                    }
+                    if (info == null || witness == null || seed == null) throw CircuitZkError.AccessDenied(CircuitZkStep.PROVE)
                     ResultValue.Pseudonym(
                         NymPseudonym.derive(
                             config = config,

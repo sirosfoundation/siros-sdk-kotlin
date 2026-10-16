@@ -31,12 +31,16 @@ class NymPseudonymError(
     message: String,
 ) : SirosException(message, errorCode = "nym_pseudonym_${reason.name.lowercase()}")
 
-/** Which of the `nym_auth` attestation's two seeds a config derives from. */
-internal enum class NymSeedKind(val bytes: Int) {
-    /** `secret_seed`, opened from `ssc`; shared with the issuer. Rulebook: 16 bytes. */
+/**
+ * Which of the `nym_auth` attestation's two seeds a config derives from. Both are held by the wallet:
+ * the `private_seed` is derived on the device, the `secret_seed` is delivered by the issuer (it is
+ * shared with the issuer by design) and checked against `ssc` before every use.
+ */
+enum class NymSeedKind(val bytes: Int) {
+    /** `secret_seed`, opened from `ssc`; shared with the issuer, delivered to the wallet. Rulebook: 16 bytes. */
     SECRET(16),
 
-    /** `private_seed`, opened from `psc`; known only to the prover. Rulebook: 16 bytes. */
+    /** `private_seed`, opened from `psc`; derived on the device, never leaves it. Rulebook: 16 bytes. */
     PRIVATE(16),
 }
 
@@ -73,14 +77,14 @@ internal data class NymConfig(
  * What a pseudonym config needs from the caller, for code that has to decide
  * whether it can supply it.
  *
- * @property holderPrivateSeed The seed is the holder's `private_seed`; false
- *   when the config derives from a seed the holder does not hold.
+ * @property seedKind Which seed the config derives from: the holder's device-derived
+ *   `private_seed` ([NymSeedKind.PRIVATE]) or the issuer-delivered `secret_seed` ([NymSeedKind.SECRET]).
  * @property userValue The config takes a user-supplied value as `prover_input`.
  * @property verifierId The config uses a `verifier_id`.
  * @property verifierContext The config also uses a `verifier_context`.
  */
 data class NymConfigInfo(
-    val holderPrivateSeed: Boolean,
+    val seedKind: NymSeedKind,
     val userValue: Boolean,
     val verifierId: Boolean,
     val verifierContext: Boolean,
@@ -118,7 +122,7 @@ object NymPseudonym {
     /** What [config] needs from the caller, or null for an unknown config. */
     fun describe(config: String): NymConfigInfo? = configs[config]?.let {
         NymConfigInfo(
-            holderPrivateSeed = it.seed == NymSeedKind.PRIVATE,
+            seedKind = it.seed,
             userValue = it.proverInput != NymProverInput.NONE,
             verifierId = it.verifierInput != NymVerifierInput.NONE,
             verifierContext = it.verifierInput == NymVerifierInput.SHA256_OF_ID_AND_CONTEXT,
