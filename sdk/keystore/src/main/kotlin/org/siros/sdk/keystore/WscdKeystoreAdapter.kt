@@ -158,6 +158,14 @@ class WscdKeystoreAdapter private constructor(
     suspend fun setCredentialRefreshToken(batchId: Long, entry: CredentialRefreshTokenEntry) =
         credentialsKeystore.setCredentialRefreshToken(batchId, entry)
 
+    /** See [JweKeystore.getCredentialMetadata]. */
+    suspend fun getCredentialMetadata(id: Long): kotlinx.serialization.json.JsonArray? =
+        credentialsKeystore.getCredentialMetadata(id)
+
+    /** See [JweKeystore.setCredentialMetadata]. */
+    suspend fun setCredentialMetadata(id: Long, metadata: kotlinx.serialization.json.JsonArray?) =
+        credentialsKeystore.setCredentialMetadata(id, metadata)
+
     /** See [JweKeystore.removeCredentialRefreshToken]. */
     suspend fun removeCredentialRefreshToken(batchId: Long) =
         credentialsKeystore.removeCredentialRefreshToken(batchId)
