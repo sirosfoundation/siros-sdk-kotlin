@@ -359,11 +359,19 @@ class SirosWallet private constructor(
     internal var transactionMetadataSourceOverride: org.siros.sdk.wallet.transaction.TransactionMetadataSource? = null
 
     /**
-     * Where a credential's `secret_seed` comes from for the ssc-based pseudonym configs. Defaults to
-     * none (every such request is refused); the storage side is a follow-up. Internal seam.
+     * Where a credential's `secret_seed` comes from for the ssc-based pseudonym configs: by default the
+     * seed the issuer delivered with that credential, read from the keystore ([KeystoreSecretSeedSource]);
+     * a keystore that cannot hold one yields none, and every such request is refused. Internal seam,
+     * replaceable in tests.
      */
     @Volatile
-    internal var credentialSecretSeedSource: CredentialSecretSeedSource = CredentialSecretSeedSource.NONE
+    internal var credentialSecretSeedSource: CredentialSecretSeedSource =
+        KeystoreSecretSeedSource(config.secretSeedMetadataType) { id -> storedCredentialMetadata(id) }
+
+    /** The delivered `metadata` of a stored credential. Never display it, log it or put it in a presentation. */
+    internal suspend fun storedCredentialMetadata(id: Long): kotlinx.serialization.json.JsonArray? =
+        (keystore as? JweKeystore)?.getCredentialMetadata(id)
+            ?: (keystore as? WscdKeystoreAdapter)?.getCredentialMetadata(id)
 
     private fun transactionCoordinator(
         consentOverride: TransactionConsentHandler? = null,

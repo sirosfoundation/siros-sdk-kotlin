@@ -5255,7 +5255,7 @@ class SirosWalletTest {
         val psc get() = pscFor(DOCTYPE)
         fun pscFor(docType: String) = java.security.MessageDigest.getInstance("SHA-256").digest(hkdf("org.siros.private_seed/v1$docType".toByteArray(), 16))
 
-        fun mdoc(psc: ByteArray = this.psc, birth: String = "2000-06-15", docType: String = DOCTYPE): String {
+        fun mdoc(psc: ByteArray = this.psc, birth: String = "2000-06-15", docType: String = DOCTYPE, ssc: ByteArray = ByteArray(32) { 9 }): String {
             fun c(o: Any) = com.upokecenter.cbor.CBORObject.FromObject(o)
             fun item(id: Long, name: String, v: com.upokecenter.cbor.CBORObject): com.upokecenter.cbor.CBORObject {
                 val m = com.upokecenter.cbor.CBORObject.NewMap()
@@ -5264,7 +5264,7 @@ class SirosWalletTest {
             }
             val items = com.upokecenter.cbor.CBORObject.NewArray()
             items.Add(item(0, "birth_date", com.upokecenter.cbor.CBORObject.FromObjectAndTag(birth, 1004)))
-            items.Add(item(1, "ssc", c(ByteArray(32) { 9 })))
+            items.Add(item(1, "ssc", c(ssc)))
             items.Add(item(2, "psc", c(psc)))
             val ns = com.upokecenter.cbor.CBORObject.NewMap(); ns[c(docType)] = items
             val mso = com.upokecenter.cbor.CBORObject.NewMap(); mso[c("docType")] = c(docType)
@@ -5352,6 +5352,8 @@ class SirosWalletTest {
         /** The circuit declares these `capabilities`, so only the matcher ([serving]) can select it. */
         capabilities: String? = null,
         serving: org.siros.sdk.credentials.CircuitZkServing? = null,
+        /** Replaces the wallet's seed source (the allocated test wallet has none). */
+        secretSeedSource: CredentialSecretSeedSource? = null,
     ): CzkSetup {
         val apiClient = mockk<BackendApiClient>()
         val trustRequests = mutableListOf<JsonObject>()
@@ -5397,6 +5399,7 @@ class SirosWalletTest {
             "circuitZkSupport" to (if (flagOn) support else null),
             "circuitZkProver" to prover,
             "verifierIdRegistry" to registry,
+            *(if (secretSeedSource != null) arrayOf("credentialSecretSeedSource" to secretSeedSource) else emptyArray()),
         )
         return CzkSetup(wallet, apiClient, history, prover, trustRequests)
     }
@@ -5530,6 +5533,63 @@ class SirosWalletTest {
         val s = czkSetup()
         czkRefused(s, czkRequest(), origin = "https://evil.example")
         coVerify(exactly = 0) { s.apiClient.evaluateTrust(any()) }
+    }
+
+    private fun czkSscFunction(config: String = "known-offender-matching-ssc", extra: String = "") =
+        listOf(org.siros.sdk.credentials.CircuitZkFunction(
+            "pseudonym-v1-sha256", "n", Json.parseToJsonElement("""{"config":"$config"$extra}""").jsonObject,
+        ))
+
+    private fun czkSscSetup(source: CredentialSecretSeedSource?, config: String = "known-offender-matching-ssc", extra: String = "", ssc: ByteArray = NymTestCredentials.goodSsc) =
+        czkSetup(
+            functions = czkSscFunction(config, extra),
+            credentials = listOf(StoredCredential(
+                id = 1L, format = "mso_mdoc", raw = CzkFixtures.mdoc(ssc = ssc),
+                metadata = CredentialMetadata(name = "Nym"), batchId = 1L, instanceId = 0,
+            )),
+            secretSeedSource = source,
+        )
+
+    @Test
+    fun circuitZkDcApi_sscConfig_isProvenWithTheDeliveredSeed_andTheSeedIsZeroedAndNeverPresented() = runTest(dispatcher) {
+        val handedOut = mutableListOf<ByteArray>()
+        val source = CredentialSecretSeedSource { id ->
+            if (id == 1L) NymTestCredentials.seed.copyOf().also { handedOut += it } else null
+        }
+        val s = czkSscSetup(source)
+        val result = czkRun(s, czkRequest())
+        assertEquals(
+            org.siros.sdk.credentials.ResultValue.Pseudonym(
+                org.siros.sdk.credentials.NymPseudonym.derive("known-offender-matching-ssc", NymTestCredentials.seed, verifierId = "rp.example"),
+            ),
+            czkPseudonymOf(result),
+        )
+        assertEquals(1, handedOut.size)
+        assertTrue("the wallet must zero the seed it fetched", handedOut.single().all { it == 0.toByte() })
+        assertNoSecretIn(result.responseJson)
+        assertNoSecretIn(s.history.toString())
+    }
+
+    @Test
+    fun circuitZkDcApi_accountRecoverySsc_isProvenWithTheDeliveredSeed() = runTest(dispatcher) {
+        val s = czkSscSetup({ NymTestCredentials.seed.copyOf() }, "account-recovery-ssc", ""","verifier_context":"ctx-1"""")
+        assertEquals(
+            org.siros.sdk.credentials.ResultValue.Pseudonym(
+                org.siros.sdk.credentials.NymPseudonym.derive(
+                    "account-recovery-ssc", NymTestCredentials.seed, verifierId = "rp.example", verifierContext = "ctx-1",
+                ),
+            ),
+            czkPseudonymOf(czkRun(s, czkRequest())),
+        )
+    }
+
+    @Test
+    fun circuitZkDcApi_sscConfig_isRefusedWithoutAFittingSeed() = runTest(dispatcher) {
+        // No seed held, a seed of another credential, and an ssc the seed does not open.
+        czkRefused(czkSscSetup(CredentialSecretSeedSource.NONE), czkRequest())
+        czkRefused(czkSscSetup({ ByteArray(16) { 3 } }), czkRequest())
+        czkRefused(czkSscSetup({ NymTestCredentials.seed.copyOf() }, ssc = NymTestCredentials.wrongSsc), czkRequest())
+        czkRefused(czkSscSetup({ NymTestCredentials.seed.copyOf(15) }), czkRequest())
     }
 
     @Test
