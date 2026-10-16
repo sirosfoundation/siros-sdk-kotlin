@@ -3,7 +3,6 @@ package org.siros.sdk.wallet
 
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
 import org.siros.sdk.credentials.SecretSeedCommitment
 import org.siros.sdk.transport.CredentialResultMetadata
 
@@ -61,14 +60,8 @@ internal object DeliveredCredentialMetadata {
         if (entries.isNullOrEmpty()) return DeliveredMetadataVerdict.None
         // An entry the container could not store (blank type) refuses rather than being dropped.
         if (entries.any { it.type.isEmpty() }) return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.MALFORMED)
-        val all = JsonArray(
-            entries.map { e ->
-                buildJsonObject {
-                    put("type", JsonPrimitive(e.type))
-                    put("value", e.value)
-                }
-            },
-        )
+        // The entries as received: all members, member values verbatim.
+        val all = JsonArray(entries.map { it.raw })
         val seeds = entries.filter { it.type == secretSeedType }
         if (seeds.isEmpty()) return DeliveredMetadataVerdict.Accept(all)
         if (seeds.size > 1) return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.DUPLICATE)

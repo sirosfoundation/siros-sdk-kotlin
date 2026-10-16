@@ -9085,6 +9085,41 @@ class SirosWalletTest {
         assertEquals(1, s.keystore.getCredentialMetadata(stored.id)!!.size)
     }
 
+    private fun decodedEntries(json: String): List<org.siros.sdk.transport.CredentialResponseMetadataEntry> =
+        kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+            .decodeFromString<List<org.siros.sdk.transport.CredentialResponseMetadataEntry>>(json)
+
+    @Test
+    fun deliveredMetadata_entryMembersBeyondTypeAndValue_areStoredExactlyAsReceived() = runTest(dispatcher) {
+        val wire = """[{"type":"example.other","value":1,"scope":"issuer","n":1.50,"nested":{"a":[1,2.0,null]}}]"""
+        val s = deliveredScenario(listOf(deliveredResult(entries = decodedEntries(wire), encrypted = false), deliveredResult(entries = decodedEntries(wire), encrypted = false)))
+        val expected = kotlinx.serialization.json.Json.parseToJsonElement(wire)
+        val all = s.store.getAll()
+        assertEquals(2, all.size)
+        for (c in all) {
+            val stored = s.keystore.getCredentialMetadata(c.id)!!
+            assertEquals(expected, stored)
+            // Literals are verbatim: 1.50 and 2.0 keep their spelling, 1 stays an integer.
+            val text = stored[0].toString()
+            assertTrue(text, "\"n\":1.50" in text && "[1,2.0,null]" in text && "\"value\":1}" in text)
+        }
+    }
+
+    @Test
+    fun deliveredSeed_entryWithAnExtraMember_isStillValidatedAndStoredWhole() = runTest(dispatcher) {
+        val wire = """[{"type":"$deliveredType","value":"${NymTestCredentials.seedHex}","scope":"issuer"}]"""
+        val s = deliveredScenario(listOf(deliveredResult(entries = decodedEntries(wire))))
+        val stored = s.keystore.getCredentialMetadata(s.store.getAll().single().id)!!
+        assertEquals(kotlinx.serialization.json.Json.parseToJsonElement(wire), stored)
+    }
+
+    @Test
+    fun deliveredSeed_wrongSeedWithAnExtraMember_isStillRefused() = runTest(dispatcher) {
+        val bad = """[{"type":"$deliveredType","value":"${NymTestCredentials.seedHex.map { if (it == 'a') 'b' else 'a' }.joinToString("")}","scope":"issuer"}]"""
+        val s = deliveredScenario(listOf(deliveredResult(entries = decodedEntries(bad))))
+        assertNothingStored(s)
+    }
+
     @Test
     fun deliveredSeed_mismatchingSsc_failsTheIssuance_storesNothing_andNotifiesFailure() = runTest(dispatcher) {
         val wrong = NymTestCredentials.sdJwt(sscValues = listOf(NymTestCredentials.hex(NymTestCredentials.wrongSsc)))

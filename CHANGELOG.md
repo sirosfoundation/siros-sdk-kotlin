@@ -315,7 +315,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ssc pseudonym configs are provable from the stored `secret_seed`.**
   Transport: both `CredentialResult` DTOs (legacy engine and WMP OpenID4x) carry
   `credentialMetadata` (`credential_metadata`, entries `{type, value}` as
-  `CredentialResponseMetadataEntry`, the value a raw `JsonElement`) and
+  `CredentialResponseMetadataEntry`, the value a raw `JsonElement`, any further
+  members retained in `additionalMembers`) and
   `credentialMetadataEncryptedResponse` (`credential_metadata_encrypted_response`,
   default false; set by the engine only when the issuer's response was
   JWE-decrypted). The `wmp.flow.complete` result, a raw `JsonObject`, decodes with
@@ -351,8 +352,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the picked credential's seed for the ssc configs, the presenter re-verifies the
   commitment, and the wallet zeroes its copy. Guard tests keep the metadata out
   of logs, history, presentations and stored credentials.
-  Known limit: a `credential_metadata` entry member other than `type`/`value`
-  is not relayed by the DTO.
+  Entries are stored exactly as received: a `credential_metadata` entry keeps
+  every member beyond `type`/`value` (`CredentialResponseMetadataEntry.additionalMembers`,
+  `raw`), values verbatim (number literals keep their spelling). Only
+  `type`/`value` are interpreted. Cross-repo note: go-wallet-backend engine
+  PR #463 still rejects entries with members other than `type`/`value`, so extra
+  members arrive today only on the WMP path or from a future engine.
 - **Validator cleanup: a legacy `verifier_id_type` is accepted and ignored.**
   Rulebook v0.3 removed it from the request and implementations must not reject
   it. `verifier-id-type-forbidden` and `verifier-id-type-unregistered`, the

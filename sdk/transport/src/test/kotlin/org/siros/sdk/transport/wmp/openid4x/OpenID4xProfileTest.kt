@@ -316,6 +316,18 @@ class OpenID4xProfileTest {
     }
 
     @Test
+    fun deliveredMetadataEntryKeepsUnknownMembers() {
+        val wire = """{"format":"dc+sd-jwt","credential":"x","credential_metadata":[{"type":"other","value":1,"scope":"issuer","n":1.50}]}"""
+        val r = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+            .decodeFromString<org.siros.sdk.transport.wmp.openid4x.CredentialResult>(wire)
+        val e = r.credentialMetadata!!.single()
+        assertEquals("other", e.type)
+        assertEquals(JsonPrimitive("issuer"), e.raw["scope"])
+        assertEquals("1.50", (e.raw["n"] as JsonPrimitive).content)
+        assertEquals("1", (e.raw["value"] as JsonPrimitive).content)
+    }
+
+    @Test
     fun flowCompleteResultDecodesDeliveredCredentialMetadata() {
         val result = kotlinx.serialization.json.Json.parseToJsonElement(
             """{"type":"flow_complete","flow_id":"f","credentials":[{"format":"mso_mdoc","credential":"AA",""" +

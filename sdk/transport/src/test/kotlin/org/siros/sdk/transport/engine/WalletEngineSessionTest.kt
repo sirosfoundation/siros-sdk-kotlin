@@ -242,6 +242,25 @@ class WalletEngineSessionTest {
     }
 
     @Test
+    fun flow_complete_keeps_unknown_members_of_a_delivered_metadata_entry() = runTest {
+        val session = WalletEngineSession(baseUrl = "https://wallet.example.com", tenantId = "tenant-42", client = client)
+        session.connect("app-token")
+        session.flowComplete().test {
+            listener.onMessage(
+                webSocket,
+                """{"type":"flow_complete","flow_id":"flow-1","credentials":[{"format":"dc+sd-jwt","credential":"j",""" +
+                    """"credential_metadata":[{"type":"other","value":1,"scope":"issuer","n":1.50}]}]}""",
+            )
+            val e = awaitItem().credentials!![0].credentialMetadata!!.single()
+            assertEquals("other", e.type)
+            assertEquals(kotlinx.serialization.json.JsonPrimitive("issuer"), e.raw["scope"])
+            assertEquals("1.50", (e.raw["n"] as kotlinx.serialization.json.JsonPrimitive).content)
+            assertEquals("1", (e.raw["value"] as kotlinx.serialization.json.JsonPrimitive).content)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
     fun flow_error_message_emits_to_error_flow() = runTest {
         val session = WalletEngineSession(
             baseUrl = "https://wallet.example.com",
