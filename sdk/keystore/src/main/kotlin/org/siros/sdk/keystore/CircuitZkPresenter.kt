@@ -85,7 +85,7 @@ class CircuitZkFunctionWitness(
 ) {
     override fun toString() = "CircuitZkFunctionWitness(redacted)"
 
-    override fun equals(other: Any?) = this === other
+    override fun equals(other: Any?) = other is CircuitZkFunctionWitness && this === other
 
     override fun hashCode() = System.identityHashCode(this)
 }
