@@ -470,6 +470,56 @@ class CircuitZkPresenterTest {
         assertEquals(0, prover.calls)
     }
 
+    /** `spec/secret-seed-commitment-vectors.json`, from tools/gen_secret_seed_commitment_vectors.py (hashlib only). */
+    private val sscVectors: JsonObject by lazy {
+        val f = java.io.File("../../spec/secret-seed-commitment-vectors.json")
+        require(f.isFile) { "vector file not found at ${f.absolutePath}" }
+        Json.parseToJsonElement(f.readText()).jsonObject
+    }
+
+    private fun unhex(s: String) = ByteArray(s.length / 2) { s.substring(2 * it, 2 * it + 2).toInt(16).toByte() }
+
+    private fun vec(e: kotlinx.serialization.json.JsonElement, key: String) =
+        unhex((e.jsonObject.getValue(key) as kotlinx.serialization.json.JsonPrimitive).content)
+
+    @Test
+    fun `every shared ssc commitment vector is presented`() {
+        val vectors = sscVectors.getValue("vectors") as kotlinx.serialization.json.JsonArray
+        assertTrue(vectors.size >= 4)
+        for (v in vectors) {
+            val seed = vec(v, "seed_hex")
+            val ssc = vec(v, "ssc_hex")
+            assertArrayEquals(sha256(seed), ssc) // the vector itself is the relation
+            val out = present(presenter(), sscRequest(seed, credential(ssc = cbor(ssc))))
+            val decoded = CircuitZkPresentationCodec.decodeBase64Url(out.base64Url)
+            assertEquals(
+                ResultValue.Pseudonym(NymPseudonym.derive("known-offender-matching-ssc", seed, verifierId = "rp.example")),
+                decoded.results["n"],
+            )
+        }
+    }
+
+    @Test
+    fun `every shared ssc commitment rejection is refused at its step and never proved`() {
+        val rejections = sscVectors.getValue("rejections") as kotlinx.serialization.json.JsonArray
+        assertTrue(rejections.size >= 10)
+        val steps = mutableSetOf<String>()
+        for (r in rejections) {
+            val prover = CountingProver(FakeCircuitZkProver.optIn())
+            val step = (r.jsonObject.getValue("step") as kotlinx.serialization.json.JsonPrimitive).content
+            steps += step
+            val name = (r.jsonObject.getValue("name") as kotlinx.serialization.json.JsonPrimitive).content
+            try {
+                present(presenter(prover), sscRequest(vec(r, "seed_hex"), credential(ssc = cbor(vec(r, "ssc_hex")))))
+                fail("$name: expected a refusal")
+            } catch (e: CircuitZkError.AccessDenied) {
+                assertEquals(name, CircuitZkStep.valueOf(step), e.step)
+            }
+            assertEquals(name, 0, prover.calls)
+        }
+        assertEquals(setOf("WITNESS", "SECRET_COMMITMENT"), steps)
+    }
+
     @Test
     fun `an ssc in another namespace is never consulted`() {
         val prover = CountingProver(FakeCircuitZkProver.optIn())
