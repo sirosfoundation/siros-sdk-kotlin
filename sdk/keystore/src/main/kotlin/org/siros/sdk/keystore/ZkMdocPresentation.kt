@@ -143,7 +143,15 @@ class ZkMdocPresentation(
      * @throws NoMatchingProofSystem when nothing registered can serve the request.
      */
     suspend fun present(request: Request, signer: ZkWitnessSigner): Result {
-        val docType = MdocCbor.parseStoredCredential(request.credentialBytes).docType
+        val parsed = MdocCbor.parseStoredCredential(request.credentialBytes)
+        // Fail closed: a proof that discloses a protected element is refused.
+        org.siros.sdk.credentials.CredentialDisclosureGuard.requireNoneProtected(
+            parsed.docType,
+            parsed.issuerSigned.nameSpaces.mapValues { (_, items) ->
+                items.map { it.item.elementIdentifier }.filter { it in request.requestedClaims }
+            },
+        )
+        val docType = parsed.docType
         val (system, spec) = resolve(docType, request.requestedSystems, request.requestedClaims.size)
             ?: throw NoMatchingProofSystem(docType)
         val proof = system.generateProof(

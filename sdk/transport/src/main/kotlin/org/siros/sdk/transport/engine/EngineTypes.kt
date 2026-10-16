@@ -6,6 +6,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import org.siros.sdk.credentials.interop.AuthorizationDetail
+import org.siros.sdk.transport.CredentialResponseMetadataEntry
+import org.siros.sdk.transport.CredentialResultMetadata
 import org.siros.sdk.transport.wmp.openid4x.TransactionData
 
 /** Message types used in the wallet backend engine WebSocket protocol. */
@@ -347,7 +349,22 @@ data class CredentialResult(
     val vct: String? = null,
     @SerialName("type_metadata") val typeMetadata: JsonElement? = null,
     @SerialName("notification_id") val notificationId: String? = null,
-)
+    /**
+     * Per-credential metadata the issuer delivered beside this credential
+     * (`credential_metadata` of the OID4VCI credential response), exactly as
+     * the engine relays it. Not display metadata. See
+     * [CredentialResponseMetadataEntry].
+     */
+    @SerialName("credential_metadata")
+    override val credentialMetadata: List<CredentialResponseMetadataEntry>? = null,
+    /**
+     * Set by the engine only when [credentialMetadata] is present and the
+     * issuer's response was JWE-decrypted. Metadata without it came over
+     * plain JSON.
+     */
+    @SerialName("credential_metadata_encrypted_response")
+    override val credentialMetadataEncryptedResponse: Boolean = false,
+) : CredentialResultMetadata
 
 @Serializable
 data class FlowErrorMessage(

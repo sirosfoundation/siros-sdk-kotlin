@@ -22,6 +22,10 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    // The matcher's circuit_zk planner vectors (spec/circuit-zk-planner-vectors)
+    // are read by the instrumented planner test as assets of the test APK.
+    sourceSets.getByName("androidTest").assets.srcDir("../../spec")
 }
 
 dependencies {
@@ -47,7 +51,7 @@ dependencies {
     //
     // `api`, because :sdk:wallet registers the blob and ships the asset, and
     // consumers of the SDK see the matcher's types through CredentialMatcher.
-    api("org.siros:siros-dc-matcher:0.6.2")
+    api("org.siros:siros-dc-matcher:0.9.0")
 
     implementation("org.siros:zk-cred-longfellow:0.1.1")
 
