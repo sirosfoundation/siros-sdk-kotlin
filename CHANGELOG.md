@@ -252,9 +252,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   request that matches nothing is now answered with `access_denied` and no
   description, never the "no credential matches" text. (#267)
 - **`CircuitZkPresenter`: assembles and encodes a `circuit_zk` presentation
-  from a validated request.** Eight fail-closed steps (validator re-run,
+  from a validated request.** Fail-closed steps (validator re-run,
   doctype, witness, `psc` check, data-dependent predicates, circuit selection,
-  prover, assembly) with function handlers registered per function id
+  prover, assembly; the `ssc` check for the issuer-delivered `secret_seed` was
+  added later, see the secret-seed entry below) with function handlers registered per function id
   (`pseudonym-v1-sha256`, `age_check`), a `CircuitZkProver` interface and the
   same `ZkWitnessSigner` / residency handling as `ZkMdocPresentation`. Refusals
   are `CircuitZkError` with no description. `FakeCircuitZkProver.optIn()` is a
@@ -278,6 +279,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a presentation that would disclose a protected claim
   (`DisclosureRefusedException`). A type with no entry is unaffected.
   `circuitZkConsentSummary` gives hosts a summary with no credential values. (#270)
+- **The wallet now holds the issuer-delivered `secret_seed`; the ssc pseudonym
+  configs are provable when a seed is available (presenter side only).**
+  Earlier entries (#263, #268, #270) and the `holderPrivateSeed` /
+  `NOT_HELD_BY_WALLET` KDocs said the wallet never holds the `secret_seed` and
+  refuses `known-offender-matching-ssc`, `account-recovery-ssc` and
+  `user-managed-pseudonym-xsite-ssc` by design; that is superseded. The issuer
+  delivers the seed (16 bytes, lowercase hex of 32 chars on the wire) in the
+  OID4VCI credential response `credential_metadata`, to be stored per credential
+  in privatedata. `CircuitZkPresenter.Request.secretSeed` carries it; the
+  presenter never trusts it: the seed must be exactly 16 bytes (else refused at
+  the witness step), and `SHA256(seed)` must equal the credential's `ssc` (one
+  32-byte bstr in the doctype namespace; absent, non-bstr, wrong length or
+  duplicated refuses), compared in constant time in a new step before the
+  predicates and the prover. Any failure is `access_denied` with no description
+  and the prover is never called. The presenter works on its own copy of the
+  seed and zeroes it on every exit path; the seed is in no log, exception
+  message, history record or response. `CircuitZkWitnessKind.SECRET_SEED` and
+  `CircuitZkFunctionWitness.secretSeed` (redacted `toString`, identity
+  `equals`) are new; witness providers are never asked for the seed (it is not
+  derivable from `mainKey`, so the keystore providers return null for it).
+  `NymConfigInfo.seedKind` (`NymSeedKind.PRIVATE` / `SECRET`, now public)
+  replaces `holderPrivateSeed`. `FakeCircuitZkProver` derives the ssc configs
+  from the witness's `secretSeed`. `NOT_HELD_BY_WALLET` remains only for configs
+  this SDK does not know. `SirosWallet` has an internal
+  `CredentialSecretSeedSource` seam, default none, so every ssc request is still
+  refused in the wallet until the storage side exists.
+  **Follow-up, not in this change:** receiving the seed from the credential
+  response, the transport DTOs, the per-credential privatedata storage and the
+  wallet-side lookup (the `CredentialSecretSeedSource` implementation).
+  Shared vectors `spec/secret-seed-commitment-vectors.json` (generator
+  `tools/gen_secret_seed_commitment_vectors.py`, hashlib only) cover
+  `ssc = SHA256(secret_seed)` and the rejections. The nym demo issuer now issues
+  `ssc = SHA256(random 16-byte seed)` and the sample has an ssc scenario plus a
+  "wrong seed must refuse" button.
 
 ### Binary compatibility (this PR, against 0.x main)
 The SDK is 0.x and `apiCheck` tracks every signature (`api/*.api` are dumped in
@@ -301,7 +336,10 @@ noted):
 - `SirosCredentialRegistry.refresh`: trailing `claimlessDoctypes` and
   `circuitZkCircuits`.
 - `ZkCircuitDescriptor`: trailing `capabilities`.
-- `CircuitZkCircuit`, `CircuitZkSupport`, `CircuitZkPresenter` and
+- `CircuitZkCircuit`, `CircuitZkSupport`, `CircuitZkPresenter` (including
+  `Request.secretSeed`, `CircuitZkFunctionWitness.secretSeed`,
+  `CircuitZkWitnessKind.SECRET_SEED` and `NymConfigInfo.seedKind` /
+  `NymSeedKind`, which replace `holderPrivateSeed`) and
   `HolderWitnessSource.circuitZkPresenter`: new in this PR, so no released
   descriptor changes.
 - The generated matcher bindings (`uniffi.siros_dc_matcher_ffi.FfiCombination`,
