@@ -5297,6 +5297,71 @@ class SirosWallet private constructor(
         (keystore as? WscdKeystoreAdapter)?.setCredentialRefreshToken(batchId, entry)
     }
 
+    /** Whether the active keystore can hold `S.credentials[].metadata` (the two shipped container keystores). */
+    private fun keystoreCanHoldCredentialMetadata(): Boolean =
+        keystore is JweKeystore || keystore is WscdKeystoreAdapter
+
+    /**
+     * Stores [entries] (verbatim) as credential [id]'s delivered metadata. True when there was nothing to
+     * store or it was stored. On failure the just-stored credential is deleted and false is returned: a
+     * credential whose delivered secret could not be kept is not kept either. Logs no value.
+     */
+    private suspend fun attachDeliveredMetadata(id: Long, entries: kotlinx.serialization.json.JsonArray?): Boolean {
+        if (entries == null) return true
+        return try {
+            (keystore as? JweKeystore)?.setCredentialMetadata(id, entries)
+                ?: (keystore as? WscdKeystoreAdapter)?.setCredentialMetadata(id, entries)
+                ?: throw KeystoreException("Keystore cannot hold credential metadata")
+            true
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.e("Storing delivered credential metadata failed (${e.javaClass.simpleName})")
+            try {
+                credentialStore.delete(id)
+            } catch (d: kotlinx.coroutines.CancellationException) {
+                throw d
+            } catch (d: Exception) {
+                Timber.e("Rolling back a credential after a metadata failure failed (${d.javaClass.simpleName})")
+            }
+            false
+        }
+    }
+
+    /**
+     * Fails an issuance whose delivered metadata was refused: nothing was stored. Reports the failure to
+     * the issuer through the active transport's notification path (once per `notification_id`, no value in
+     * it), resets the issuance state and surfaces the error. Without a `notification_id` there is no channel
+     * to the issuer: the issuance still fails locally and the error says so.
+     */
+    private suspend fun rejectDeliveredMetadata(flowId: String, notificationIds: List<String>, refusal: DeliveredMetadataRefusal) {
+        val ids = notificationIds.distinct()
+        Timber.e("Flow $flowId refused: delivered credential metadata rejected (${refusal.name})")
+        val notifier = credentialNotifier
+        if (notifier != null) {
+            ids.forEach { id ->
+                notifier.sendCredentialNotification(
+                    flowId = flowId,
+                    notificationId = id,
+                    event = CredentialNotificationEvent.FAILURE,
+                    eventDescription = "credential_metadata_rejected",
+                )
+            }
+        }
+        val reported = notifier != null && ids.isNotEmpty()
+        val reason = "The issuer's delivered credential data was rejected: ${refusal.text}" +
+            if (reported) "" else " (the issuer could not be notified: no notification channel)"
+        // The superseded batch of a renewal stays: nothing replaced it.
+        pendingRenewalSourceBatchId = null
+        resetIssuanceGuards()
+        discardZkIssuancePreparation(flowId)
+        eventListener?.onFlowError(flowId, reason)
+        val current = _state.value
+        val userId = (current as? WalletState.FlowActive)?.userId ?: (current as? WalletState.Ready)?.userId ?: ""
+        val displayName = (current as? WalletState.FlowActive)?.displayName ?: (current as? WalletState.Ready)?.displayName
+        _state.value = WalletState.Ready(userId = userId, displayName = displayName, credentials = credentialStore.getAll())
+    }
+
     private suspend fun removeCredentialRefreshToken(batchId: Long) {
         (keystore as? JweKeystore)?.removeCredentialRefreshToken(batchId)
         (keystore as? WscdKeystoreAdapter)?.removeCredentialRefreshToken(batchId)
@@ -7130,12 +7195,38 @@ class SirosWallet private constructor(
                 terminatedFlowIds.add(msg.flowId)
                 pendingMatchResultsByFlow.remove(msg.flowId)
 
+                // Issuer-delivered credential_metadata (a secret_seed, say) is checked for EVERY
+                // credential before anything is stored or replaced: one refusal fails the whole
+                // issuance, so a batch is never stored in part and a renewal never supersedes
+                // the old batch with nothing. The entries to store are kept per credential.
+                val canStoreDelivered = keystoreCanHoldCredentialMetadata()
+                val deliveredByIndex = HashMap<Int, kotlinx.serialization.json.JsonArray>()
+                var deliveredRefusal: DeliveredMetadataRefusal? = null
+                msg.credentials?.forEachIndexed { index, cred ->
+                    when (val verdict = DeliveredCredentialMetadata.check(
+                        format = cred.format,
+                        credential = cred.credential,
+                        delivered = cred,
+                        secretSeedType = config.secretSeedMetadataType,
+                        canStoreSecret = canStoreDelivered,
+                    )) {
+                        DeliveredMetadataVerdict.None -> Unit
+                        is DeliveredMetadataVerdict.Accept -> if (canStoreDelivered) deliveredByIndex[index] = verdict.entries
+                        is DeliveredMetadataVerdict.Refuse -> if (deliveredRefusal == null) deliveredRefusal = verdict.reason
+                    }
+                }
+                deliveredRefusal?.let { refusal ->
+                    rejectDeliveredMetadata(msg.flowId, msg.credentials.orEmpty().mapNotNull { it.notificationId }, refusal)
+                    return@collect
+                }
+
                 // Tracks whether any credential in this batch actually made it
                 // into the store, so a flow that "completes" per the engine
                 // but whose only credential(s) failed to parse doesn't get
                 // silently reported as success - see storeFailureReason below.
                 var storedCount = 0
                 var storeFailureReason: String? = null
+                var deliveredStoreFailed = false
 
                 // Shared across every copy in this response so the UI can group
                 // them into one card (see StoredCredential.batchId) - ALWAYS
@@ -7252,6 +7343,10 @@ class SirosWallet private constructor(
                             kid = activeAttestedKeyIds?.getOrNull(index),
                         )
                         credentialStore.save(stored)
+                        if (!attachDeliveredMetadata(stored.id, deliveredByIndex[index])) {
+                            deliveredStoreFailed = true
+                            return@forEachIndexed
+                        }
                         storedCount++
                         eventListener?.onCredentialReceived(stored)
                         Timber.d("Stored mdoc credential docType=${parsed.docType}")
@@ -7334,6 +7429,11 @@ class SirosWallet private constructor(
                             storeFailureReason = "Credential could not be stored"
                             return@forEachIndexed
                         }
+                        if (!attachDeliveredMetadata(stored.id, deliveredByIndex[index])) {
+                            bbsHolderStateVault?.remove(credentialId.toString())
+                            deliveredStoreFailed = true
+                            return@forEachIndexed
+                        }
                         storedCount++
                         eventListener?.onCredentialReceived(stored)
                         cred.notificationId?.let { notificationId ->
@@ -7396,6 +7496,10 @@ class SirosWallet private constructor(
                         kid = activeAttestedKeyIds?.getOrNull(index),
                     )
                     credentialStore.save(stored)
+                    if (!attachDeliveredMetadata(stored.id, deliveredByIndex[index])) {
+                        deliveredStoreFailed = true
+                        return@forEachIndexed
+                    }
                     storedCount++
                     eventListener?.onCredentialReceived(stored)
 
@@ -7408,6 +7512,18 @@ class SirosWallet private constructor(
                             event = CredentialNotificationEvent.ACCEPTED,
                         )
                     }
+                }
+
+                // The keystore refused to hold delivered metadata for a credential that was just
+                // stored (locked, say): the issuance fails as a whole, and nothing of this batch stays.
+                if (deliveredStoreFailed) {
+                    credentialStore.getAll().filter { it.batchId == batchId }.forEach {
+                        credentialStore.delete(it.id)
+                        bbsHolderStateVault?.remove(it.id.toString())
+                    }
+                    persistAndSyncKeystore()
+                    rejectDeliveredMetadata(msg.flowId, msg.credentials.orEmpty().mapNotNull { it.notificationId }, DeliveredMetadataRefusal.NO_STORAGE)
+                    return@collect
                 }
 
                 // Credential re-issuance/renewal plan (Phase 2): durably

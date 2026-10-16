@@ -8881,6 +8881,272 @@ class SirosWalletTest {
         override suspend fun clear() { items.clear() }
     }
 
+    // ── Issuer-delivered credential_metadata (secret_seed) receipt ───────────
+
+    /** A store that, like the production one, keeps the credential in the keystore too. */
+    private class KeystoreMirroringStore(
+        private val keystore: org.siros.sdk.keystore.JweKeystore,
+        val inner: FakeCredentialStore = FakeCredentialStore(mutableListOf()),
+        private val mirror: Boolean = true,
+    ) : CredentialStore by inner {
+        override suspend fun save(credential: StoredCredential) {
+            inner.save(credential)
+            if (mirror) keystore.saveCredential(credential.id, Json.encodeToString(StoredCredential.serializer(), credential))
+        }
+
+        override suspend fun delete(id: Long) {
+            inner.delete(id)
+            keystore.deleteCredential(id)
+        }
+    }
+
+    private class DeliveredScenario(
+        val wallet: SirosWallet,
+        val store: KeystoreMirroringStore,
+        val keystore: org.siros.sdk.keystore.JweKeystore,
+        val listener: WalletEventListener,
+        val engine: WalletEngineSession,
+    )
+
+    private val deliveredType = "org.siros.NS.secret_seed"
+
+    private fun deliveredEntries(hex: String = NymTestCredentials.seedHex) = listOf(
+        org.siros.sdk.transport.CredentialResponseMetadataEntry(deliveredType, JsonPrimitive(hex)),
+        org.siros.sdk.transport.CredentialResponseMetadataEntry("example.other", JsonPrimitive("kept as is")),
+    )
+
+    private fun deliveredResult(
+        credential: String = NymTestCredentials.sdJwt(),
+        entries: List<org.siros.sdk.transport.CredentialResponseMetadataEntry>? = deliveredEntries(),
+        encrypted: Boolean = true,
+        notificationId: String? = "notif-1",
+        format: String = "dc+sd-jwt",
+    ) = CredentialResult(
+        format = format,
+        credential = credential,
+        notificationId = notificationId,
+        credentialMetadata = entries,
+        credentialMetadataEncryptedResponse = encrypted,
+    )
+
+    private suspend fun kotlinx.coroutines.test.TestScope.deliveredScenario(
+        results: List<CredentialResult>,
+        preexisting: List<StoredCredential> = emptyList(),
+        renewalSourceBatchId: Long? = null,
+        configure: (WalletConfig) -> WalletConfig = { it },
+        mirrorToKeystore: Boolean = true,
+    ): DeliveredScenario {
+        val flowId = "flow-delivered"
+        val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val keystore = org.siros.sdk.keystore.JweKeystore()
+        keystore.unlock(ByteArray(32) { it.toByte() }, ByteArray(0), ByteArray(32) { 5 }, "info".toByteArray())
+        val store = KeystoreMirroringStore(keystore, mirror = mirrorToKeystore)
+        preexisting.forEach { store.save(it) }
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        every { sessionStore.privateDataJwe } returns null
+        coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+        val engine = mockEngineConstructor(flowComplete = completeFlow)
+        every { engine.sendCredentialNotification(any(), any(), any(), any()) } just runs
+        val fields = mutableListOf<Pair<String, Any?>>(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.FlowActive(
+                    userId = "user-1", displayName = "Alice", flowId = flowId,
+                    flowType = "issuance", status = "in_progress", credentials = emptyList(),
+                ),
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to configure(WalletConfig(backendUrl = "https://wallet.example.com")),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to sessionStore,
+            "apiClient" to apiClient,
+            "eventListener" to listener,
+        )
+        if (renewalSourceBatchId != null) fields += "pendingRenewalSourceBatchId" to renewalSourceBatchId
+        val wallet = newWallet(*fields.toTypedArray())
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        completeFlow.emit(FlowCompleteMessage(flowId = flowId, credentials = results))
+        advanceUntilIdle()
+        return DeliveredScenario(wallet, store, keystore, listener, engine)
+    }
+
+    private fun storedCopy(id: Long, batchId: Long) = StoredCredential(
+        id = id, format = "dc+sd-jwt", raw = NymTestCredentials.sdJwt(), batchId = batchId, instanceId = 0,
+    )
+
+    private suspend fun assertNothingStored(s: DeliveredScenario) {
+        assertEquals(0, s.store.getAll().size)
+        assertEquals(0, s.keystore.getAllCredentials().size)
+        verify(exactly = 0) { s.listener.onCredentialReceived(any()) }
+        verify(exactly = 0) { s.listener.onFlowComplete(any(), any()) }
+    }
+
+    private fun assertNoSecretIn(text: String?) {
+        val t = text.orEmpty()
+        assertFalse(t.contains(NymTestCredentials.seedHex))
+        assertFalse(t.contains(NymTestCredentials.hex(NymTestCredentials.goodSsc)))
+        assertFalse(t.contains(NymTestCredentials.hex(NymTestCredentials.wrongSsc)))
+    }
+
+    @Test
+    fun deliveredSeed_matchingSsc_storesCredentialAndMetadata_andAccepts() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult()))
+        val stored = s.store.getAll().single()
+        val md = s.keystore.getCredentialMetadata(stored.id)!!
+        assertEquals(2, md.size)
+        assertEquals(JsonPrimitive(NymTestCredentials.seedHex), md[0].jsonObject["value"])
+        assertEquals(JsonPrimitive("kept as is"), md[1].jsonObject["value"])
+        // The secret never reaches the stored credential JSON, display metadata or the wallet state.
+        assertNoSecretIn(s.keystore.getCredential(stored.id))
+        assertNoSecretIn(Json.encodeToString(StoredCredential.serializer(), stored))
+        assertNoSecretIn((s.wallet.state.value as WalletState.Ready).credentials.toString())
+        verify(exactly = 1) {
+            s.engine.sendCredentialNotification(flowId = "flow-delivered", notificationId = "notif-1", event = CredentialNotificationEvent.ACCEPTED)
+        }
+        verify(exactly = 1) { s.listener.onFlowComplete("flow-delivered", any()) }
+    }
+
+    @Test
+    fun deliveredSeed_everyCopyOfABatchCarriesTheMetadata() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult(), deliveredResult()))
+        val all = s.store.getAll()
+        assertEquals(2, all.size)
+        for (c in all) assertEquals(2, s.keystore.getCredentialMetadata(c.id)!!.size)
+    }
+
+    @Test
+    fun deliveredMetadata_withoutTheSeedType_isStoredUninterpreted_overPlainJson() = runTest(dispatcher) {
+        val entries = listOf(org.siros.sdk.transport.CredentialResponseMetadataEntry("example.other", JsonPrimitive("v")))
+        val s = deliveredScenario(listOf(deliveredResult(entries = entries, encrypted = false)))
+        val stored = s.store.getAll().single()
+        assertEquals(1, s.keystore.getCredentialMetadata(stored.id)!!.size)
+    }
+
+    @Test
+    fun deliveredSeed_mismatchingSsc_failsTheIssuance_storesNothing_andNotifiesFailure() = runTest(dispatcher) {
+        val wrong = NymTestCredentials.sdJwt(sscValues = listOf(NymTestCredentials.hex(NymTestCredentials.wrongSsc)))
+        val s = deliveredScenario(listOf(deliveredResult(credential = wrong)))
+        assertNothingStored(s)
+        verify(exactly = 1) {
+            s.engine.sendCredentialNotification(
+                flowId = "flow-delivered", notificationId = "notif-1",
+                event = CredentialNotificationEvent.FAILURE, eventDescription = any(),
+            )
+        }
+        verify(exactly = 0) {
+            s.engine.sendCredentialNotification(any(), any(), CredentialNotificationEvent.ACCEPTED, any())
+        }
+        val message = slot<String>()
+        verify(exactly = 1) { s.listener.onFlowError("flow-delivered", capture(message), any()) }
+        assertNoSecretIn(message.captured)
+        assertTrue(s.wallet.state.value is WalletState.Ready)
+    }
+
+    @Test
+    fun deliveredSeed_inAPlainJsonResponse_failsTheIssuance() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult(encrypted = false)))
+        assertNothingStored(s)
+        verify(exactly = 1) {
+            s.engine.sendCredentialNotification(any(), "notif-1", CredentialNotificationEvent.FAILURE, any())
+        }
+    }
+
+    @Test
+    fun deliveredSeed_malformedValue_failsTheIssuance() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult(entries = deliveredEntries(hex = NymTestCredentials.seedHex.uppercase()))))
+        assertNothingStored(s)
+    }
+
+    @Test
+    fun deliveredSeed_failureWithoutNotificationId_stillFailsLocally_andSaysSo() = runTest(dispatcher) {
+        val wrong = NymTestCredentials.sdJwt(sscValues = listOf(NymTestCredentials.hex(NymTestCredentials.wrongSsc)))
+        val s = deliveredScenario(listOf(deliveredResult(credential = wrong, notificationId = null)))
+        assertNothingStored(s)
+        verify(exactly = 0) { s.engine.sendCredentialNotification(any(), any(), any(), any()) }
+        val message = slot<String>()
+        verify(exactly = 1) { s.listener.onFlowError("flow-delivered", capture(message), any()) }
+        assertTrue(message.captured, message.captured.contains("could not be notified"))
+        assertNoSecretIn(message.captured)
+    }
+
+    @Test
+    fun deliveredSeed_oneBadCopyFailsTheWholeBatch() = runTest(dispatcher) {
+        val wrong = NymTestCredentials.sdJwt(sscValues = listOf(NymTestCredentials.hex(NymTestCredentials.wrongSsc)))
+        val s = deliveredScenario(listOf(deliveredResult(), deliveredResult(credential = wrong)))
+        assertNothingStored(s)
+        verify(exactly = 1) { s.engine.sendCredentialNotification(any(), "notif-1", CredentialNotificationEvent.FAILURE, any()) }
+    }
+
+    @Test
+    fun deliveredSeed_failedRenewalKeepsTheOldBatch() = runTest(dispatcher) {
+        val wrong = NymTestCredentials.sdJwt(sscValues = listOf(NymTestCredentials.hex(NymTestCredentials.wrongSsc)))
+        val s = deliveredScenario(
+            listOf(deliveredResult(credential = wrong)),
+            preexisting = listOf(storedCopy(id = 41L, batchId = 77L)),
+            renewalSourceBatchId = 77L,
+        )
+        assertEquals(listOf(41L), s.store.getAll().map { it.id })
+        verify(exactly = 0) { s.listener.onFlowComplete(any(), any()) }
+    }
+
+    @Test
+    fun deliveredSeed_aKeystoreThatRefusesTheMetadata_rollsBackTheWholeBatch() = runTest(dispatcher) {
+        // The store never put the credentials into the keystore, so attaching their metadata fails.
+        val s = deliveredScenario(listOf(deliveredResult(), deliveredResult()), mirrorToKeystore = false)
+        assertEquals(0, s.store.getAll().size)
+        verify(exactly = 0) { s.listener.onCredentialReceived(match { false }) }
+        verify(exactly = 0) { s.listener.onFlowComplete(any(), any()) }
+        verify(exactly = 1) { s.engine.sendCredentialNotification(any(), "notif-1", CredentialNotificationEvent.FAILURE, any()) }
+        verify(exactly = 0) { s.engine.sendCredentialNotification(any(), any(), CredentialNotificationEvent.ACCEPTED, any()) }
+    }
+
+    @Test
+    fun deliveredSeed_aConfiguredTypeIsTheOneInterpreted() = runTest(dispatcher) {
+        val entries = listOf(org.siros.sdk.transport.CredentialResponseMetadataEntry("example.my_seed", JsonPrimitive(NymTestCredentials.seedHex)))
+        val s = deliveredScenario(
+            listOf(deliveredResult(entries = entries, encrypted = false)),
+            configure = { it.copy(secretSeedMetadataType = "example.my_seed") },
+        )
+        assertNothingStored(s)
+    }
+
+    @Test
+    fun deliveredSeed_aKeystoreThatCannotHoldItFailsClosed() = runTest(dispatcher) {
+        // The shared mock keystore of the older tests is neither a JweKeystore nor a WscdKeystoreAdapter.
+        val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val store = FakeCredentialStore(mutableListOf())
+        val keystore = mockk<KeystoreManager>()
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        every { keystore.isUnlocked } returns true
+        coEvery { keystore.exportEncryptedContainer() } returns """{"prfKeys":[],"jwe":"j"}""".toByteArray()
+        coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+        val engine = mockEngineConstructor(flowComplete = completeFlow)
+        every { engine.sendCredentialNotification(any(), any(), any(), any()) } just runs
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.FlowActive(userId = "u", displayName = null, flowId = "f", flowType = "issuance", status = "in_progress", credentials = emptyList()),
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to sessionStore,
+            "apiClient" to apiClient,
+            "eventListener" to listener,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        completeFlow.emit(FlowCompleteMessage(flowId = "f", credentials = listOf(deliveredResult())))
+        advanceUntilIdle()
+        assertEquals(0, store.getAll().size)
+        verify(exactly = 1) { engine.sendCredentialNotification("f", "notif-1", CredentialNotificationEvent.FAILURE, any()) }
+    }
+
     private class FakeCredentialStore(
         private val credentials: MutableList<StoredCredential>,
         /** When set, [save] throws it instead of storing — a host store that refuses. */

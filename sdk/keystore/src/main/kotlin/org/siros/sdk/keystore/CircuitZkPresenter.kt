@@ -170,10 +170,8 @@ object PseudonymFunctionHandler : CircuitZkFunctionHandler {
  * is absent or the element occurs more than once there. The same element name in another namespace is
  * never consulted, so a pre-check cannot read a different value than the circuit proves.
  */
-internal fun doctypeElement(document: DocumentMdoc, name: String): CBORObject? {
-    val matches = document.issuerSigned.nameSpaces[document.docType].orEmpty().filter { it.item.elementIdentifier == name }
-    return matches.singleOrNull()?.item?.elementValue
-}
+internal fun doctypeElement(document: DocumentMdoc, name: String): CBORObject? =
+    org.siros.sdk.credentials.SecretSeedCommitment.doctypeElement(document, name)
 
 /** `age_check`: `birth_date` must lie within `ge`..`le`. Needs no private input from the wallet. */
 object AgeCheckFunctionHandler : CircuitZkFunctionHandler {
