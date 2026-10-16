@@ -32,6 +32,7 @@ import java.util.Base64
  */
 object NymAuthDemoIssuer {
     const val DOC_TYPE = "eu.europa.ec.eudi.nym_auth.1"
+    private const val SECRET_SEED_BYTES = 16
 
     // PKCS#8 P-256 private key and self-signed certificate of the demo
     // "issuer". Public by design - see the class comment.
@@ -52,9 +53,19 @@ object NymAuthDemoIssuer {
     fun newDeviceKey(): java.security.KeyPair =
         KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair()
 
+    /** A fresh random 16-byte `secret_seed`, as the rulebook's issuer would generate and deliver it. */
+    fun newSecretSeed(): ByteArray = ByteArray(SECRET_SEED_BYTES).also(random::nextBytes)
+
+    /** The `ssc` that commits to [secretSeed]: `SHA256(secret_seed)`. */
+    fun commitmentTo(secretSeed: ByteArray): ByteArray {
+        require(secretSeed.size == SECRET_SEED_BYTES) { "secret_seed must be $SECRET_SEED_BYTES bytes" }
+        return MessageDigest.getInstance("SHA-256").digest(secretSeed)
+    }
+
     /**
      * @param birthDate ISO full-date, e.g. `2000-01-31`
-     * @param ssc 32-byte issuer seed commitment (the demo uses random bytes)
+     * @param ssc 32-byte issuer seed commitment, `SHA256(secret_seed)` (see [commitmentTo]); the demo
+     *   delivers the seed to the wallet out of band, through the presenter request
      * @param psc 32-byte holder seed commitment, or null to leave it out
      */
     fun issue(birthDate: String, ssc: ByteArray, psc: ByteArray?, deviceKey: ECPublicKey, now: Instant = Instant.now()): ByteArray {

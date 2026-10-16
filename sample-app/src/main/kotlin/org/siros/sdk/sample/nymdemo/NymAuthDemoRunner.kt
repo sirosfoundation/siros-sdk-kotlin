@@ -35,7 +35,11 @@ import org.siros.sdk.keystore.FixedRootHolderWitnessSource
  * predicate, circuit selection, the pseudonym derivation and the CBOR
  * encoding of the presentation.
  */
-class NymAuthDemoRunner(private val rootKey: ByteArray) {
+class NymAuthDemoRunner(
+    private val rootKey: ByteArray,
+    /** Source of the demo issuer's `secret_seed`s; a test replaces it to know the seed. */
+    private val newSecretSeed: () -> ByteArray = NymAuthDemoIssuer::newSecretSeed,
+) {
     private companion object {
         /** The label privatedata-spec fixes for the holder private seed; the demo recomputes with it independently. */
         const val PRIVATE_SEED_LABEL = "org.siros.private_seed/v1"
@@ -51,7 +55,19 @@ class NymAuthDemoRunner(private val rootKey: ByteArray) {
         val verifierId: String,
         /** Issue the credential with a `psc` that is not this wallet's, to show the commitment check refusing. */
         val foreignPsc: Boolean = false,
+        /**
+         * The pseudonym config to prove: the device `private_seed` (psc) one, or the issuer-delivered
+         * `secret_seed` (ssc) one, for which the demo passes the seed through the presenter request.
+         */
+        val scenario: Scenario = Scenario.KNOWN_OFFENDER_PSC,
+        /** ssc scenario only: deliver a seed that does not open the credential's `ssc` (must refuse). */
+        val wrongSeed: Boolean = false,
     )
+
+    enum class Scenario(val config: String) {
+        KNOWN_OFFENDER_PSC("known-offender-matching-psc"),
+        KNOWN_OFFENDER_SSC("known-offender-matching-ssc"),
+    }
 
     sealed interface Outcome {
         class Presented(
@@ -75,7 +91,9 @@ class NymAuthDemoRunner(private val rootKey: ByteArray) {
     suspend fun run(p: Params): Outcome {
         return try {
             val deviceKey = NymAuthDemoIssuer.newDeviceKey()
-            val ssc = ByteArray(32).also(java.security.SecureRandom()::nextBytes)
+            // The issuer generates a random 16-byte secret_seed and commits to it: ssc = SHA256(seed).
+            val issuerSeed = newSecretSeed()
+            val ssc = NymAuthDemoIssuer.commitmentTo(issuerSeed)
             val psc = if (p.foreignPsc) ByteArray(32).also(java.security.SecureRandom()::nextBytes) else source.privateSeedCommitment(NymAuthDemoIssuer.DOC_TYPE)
             val credential = NymAuthDemoIssuer.issue(p.birthDate, ssc, psc, deviceKey.public as ECPublicKey)
 
@@ -91,7 +109,7 @@ class NymAuthDemoRunner(private val rootKey: ByteArray) {
                 validator = RulebookCircuitZkValidator(circuits = circuits),
             )
 
-            val config = "known-offender-matching-psc"
+            val config = p.scenario.config
             val plan = CircuitZkPlan(
                 functions = listOf(
                     CircuitZkFunction(
@@ -125,22 +143,38 @@ class NymAuthDemoRunner(private val rootKey: ByteArray) {
                 }
             }
 
-            val result = presenter.present(
-                CircuitZkPresenter.Request(
-                    credentialBytes = credential,
-                    plan = plan,
-                    verifierId = p.verifierId,
-                    sessionTranscript = transcript,
-                ),
-                signer,
-            )
+            // The wallet's copy of the delivered seed (the demo has no storage side yet): the real one, or
+            // a different random seed to show the commitment check refusing.
+            val delivered = when {
+                p.scenario != Scenario.KNOWN_OFFENDER_SSC -> null
+                p.wrongSeed -> newSecretSeed().also { if (it.contentEquals(issuerSeed)) it[0] = (it[0].toInt() xor 1).toByte() }
+                else -> issuerSeed.copyOf()
+            }
+            val result = try {
+                presenter.present(
+                    CircuitZkPresenter.Request(
+                        credentialBytes = credential,
+                        plan = plan,
+                        verifierId = p.verifierId,
+                        sessionTranscript = transcript,
+                        secretSeed = delivered,
+                    ),
+                    signer,
+                )
+            } finally {
+                delivered?.fill(0)
+            }
 
             // Decode what was produced, and recompute the pseudonym independently of the presenter.
             val decoded = CircuitZkPresentationCodec.decodeBase64Url(result.base64Url)
             decoded.requireResultHandles(setOf("nym", "age"))
             val pseudonym = (decoded.results["nym"] as ResultValue.Pseudonym)
-            val seed = hkdf(rootKey, (PRIVATE_SEED_LABEL + NymAuthDemoIssuer.DOC_TYPE).toByteArray(Charsets.UTF_8), 16)
+            val seed = when (p.scenario) {
+                Scenario.KNOWN_OFFENDER_PSC -> hkdf(rootKey, (PRIVATE_SEED_LABEL + NymAuthDemoIssuer.DOC_TYPE).toByteArray(Charsets.UTF_8), 16)
+                Scenario.KNOWN_OFFENDER_SSC -> issuerSeed
+            }
             val recomputed = NymPseudonym.derive(config = config, seed = seed, verifierId = p.verifierId)
+            issuerSeed.fill(0)
             Outcome.Presented(
                 circuitId = decoded.circuitId,
                 token = result.base64Url,

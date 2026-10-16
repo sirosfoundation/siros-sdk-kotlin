@@ -52,4 +52,53 @@ class NymAuthDemoRunnerTest {
     fun `an unsatisfiable age span is refused`() = runTest {
         assertEquals(NymAuthDemoRunner.Outcome.Refused, runner.run(base.copy(ge = "2000-01-01", le = "2000-06-01")))
     }
+
+    // -------- the issuer-delivered secret_seed (ssc) scenario --------
+
+    private val seedA = ByteArray(16) { it.toByte() }
+    private val sscRunner = NymAuthDemoRunner(ByteArray(32) { it.toByte() }, newSecretSeed = { seedA.copyOf() })
+    private val ssc = base.copy(scenario = NymAuthDemoRunner.Scenario.KNOWN_OFFENDER_SSC)
+
+    private fun hex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
+
+    @Test
+    fun `the ssc scenario presents with the delivered seed and the pseudonym equals a recompute from it`() = runTest {
+        val presented = sscRunner.run(ssc) as NymAuthDemoRunner.Outcome.Presented
+        assertTrue(presented.pseudonymMatches)
+        assertEquals(
+            hex(org.siros.sdk.credentials.NymPseudonym.derive("known-offender-matching-ssc", seedA, verifierId = base.verifierId)),
+            presented.pseudonymHex,
+        )
+    }
+
+    @Test
+    fun `a wrong delivered seed is refused`() = runTest {
+        assertEquals(NymAuthDemoRunner.Outcome.Refused, sscRunner.run(ssc.copy(wrongSeed = true)))
+    }
+
+    @Test
+    fun `the seed and its hex appear nowhere in what the demo returns`() = runTest {
+        val presented = sscRunner.run(ssc) as NymAuthDemoRunner.Outcome.Presented
+        val shown = listOf(presented.token, presented.pseudonymHex, presented.recomputedHex, presented.proofAscii, presented.decodedHandles.toString())
+        for (line in shown) assertTrue(line, !line.contains(hex(seedA)))
+    }
+
+    @Test
+    fun `the demo issuer commits to a random 16-byte seed with ssc = SHA256 of it`() {
+        val a = NymAuthDemoIssuer.newSecretSeed()
+        val b = NymAuthDemoIssuer.newSecretSeed()
+        assertEquals(16, a.size)
+        assertTrue(!a.contentEquals(b))
+        assertEquals(
+            hex(java.security.MessageDigest.getInstance("SHA-256").digest(a)),
+            hex(NymAuthDemoIssuer.commitmentTo(a)),
+        )
+        assertTrue(runCatching { NymAuthDemoIssuer.commitmentTo(ByteArray(15)) }.isFailure)
+    }
+
+    @Test
+    fun `the psc scenario still refuses a foreign psc and is unaffected by the seed`() = runTest {
+        assertEquals(NymAuthDemoRunner.Outcome.Refused, sscRunner.run(base.copy(foreignPsc = true)))
+        assertTrue(sscRunner.run(base) is NymAuthDemoRunner.Outcome.Presented)
+    }
 }

@@ -67,11 +67,11 @@ private fun Screen(runner: NymAuthDemoRunner) {
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    fun go(foreignPsc: Boolean) {
+    fun go(foreignPsc: Boolean, scenario: NymAuthDemoRunner.Scenario = NymAuthDemoRunner.Scenario.KNOWN_OFFENDER_PSC, wrongSeed: Boolean = false) {
         busy = true
         scope.launch {
             val outcome = withContext(Dispatchers.Default) {
-                runner.run(NymAuthDemoRunner.Params(birth, ge, le, verifier, foreignPsc))
+                runner.run(NymAuthDemoRunner.Params(birth, ge, le, verifier, foreignPsc, scenario, wrongSeed))
             }
             output = when (outcome) {
                 is NymAuthDemoRunner.Outcome.Presented -> buildString {
@@ -111,6 +111,9 @@ private fun Screen(runner: NymAuthDemoRunner) {
         OutlinedTextField(verifier, { verifier = it }, label = { Text("verifier_id (x509_san_dns form: lower-case DNS name, no prefix)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         Button({ go(false) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Present") }
         OutlinedButton({ go(true) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Present with a foreign psc (must refuse)") }
+        val ssc = NymAuthDemoRunner.Scenario.KNOWN_OFFENDER_SSC
+        Button({ go(false, ssc) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Present known-offender-matching-ssc (issuer-delivered secret_seed)") }
+        OutlinedButton({ go(false, ssc, wrongSeed = true) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Present ssc with a wrong seed (must refuse)") }
         SelectionContainer { Text(output, style = MaterialTheme.typography.bodySmall) }
     }
 }
