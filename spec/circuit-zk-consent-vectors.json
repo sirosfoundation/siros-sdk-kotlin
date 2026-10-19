@@ -1,0 +1,1875 @@
+{
+  "status": "self-generated; the Kotlin and Swift SDKs test against this file byte-for-byte",
+  "generator": "tools/gen_circuit_zk_consent_vectors.py",
+  "note": "Locale-free: the SDK-owned wording is generated from these items and is not part of this file.",
+  "cases": [
+    {
+      "name": "ssc pseudonym: per verifier, the issuer can remap it",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "pseudonym-v1-sha256",
+                "handle": "n",
+                "params": {
+                  "config": "known-offender-matching-ssc"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": "rp.example",
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "pseudonym",
+                  "config": "known-offender-matching-ssc",
+                  "scope": "per_verifier",
+                  "remappable_by_issuer": true,
+                  "cross_site": false,
+                  "verifier_id": "rp.example",
+                  "verifier_context": null
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "psc pseudonym: per verifier, the issuer cannot remap it",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "pseudonym-v1-sha256",
+                "handle": "n",
+                "params": {
+                  "config": "known-offender-matching-psc"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": "rp.example",
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "pseudonym",
+                  "config": "known-offender-matching-psc",
+                  "scope": "per_verifier",
+                  "remappable_by_issuer": false,
+                  "cross_site": false,
+                  "verifier_id": "rp.example",
+                  "verifier_context": null
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "pseudonym and age keep the plan's order",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "pseudonym-v1-sha256",
+                "handle": "n",
+                "params": {
+                  "config": "known-offender-matching-ssc"
+                }
+              },
+              {
+                "id": "age_check",
+                "handle": "a",
+                "params": {
+                  "ge": "1990-01-01",
+                  "le": "2008-10-19"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": "rp.example",
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "pseudonym",
+                  "config": "known-offender-matching-ssc",
+                  "scope": "per_verifier",
+                  "remappable_by_issuer": true,
+                  "cross_site": false,
+                  "verifier_id": "rp.example",
+                  "verifier_context": null
+                },
+                {
+                  "kind": "age_range",
+                  "ge": "1990-01-01",
+                  "le": "2008-10-19",
+                  "form": {
+                    "kind": "between",
+                    "from": "1990-01-01",
+                    "to": "2008-10-19",
+                    "min_years": 18,
+                    "max_years": 36
+                  }
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "age first, then pseudonym",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "age_check",
+                "handle": "a",
+                "params": {
+                  "ge": "1990-01-01",
+                  "le": "2008-10-19"
+                }
+              },
+              {
+                "id": "pseudonym-v1-sha256",
+                "handle": "n",
+                "params": {
+                  "config": "known-offender-matching-ssc"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": "rp.example",
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "age_range",
+                  "ge": "1990-01-01",
+                  "le": "2008-10-19",
+                  "form": {
+                    "kind": "between",
+                    "from": "1990-01-01",
+                    "to": "2008-10-19",
+                    "min_years": 18,
+                    "max_years": 36
+                  }
+                },
+                {
+                  "kind": "pseudonym",
+                  "config": "known-offender-matching-ssc",
+                  "scope": "per_verifier",
+                  "remappable_by_issuer": true,
+                  "cross_site": false,
+                  "verifier_id": "rp.example",
+                  "verifier_context": null
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "age: both bounds",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "age_check",
+                "handle": "a",
+                "params": {
+                  "ge": "1990-01-01",
+                  "le": "2008-10-19"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": null,
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "age_range",
+                  "ge": "1990-01-01",
+                  "le": "2008-10-19",
+                  "form": {
+                    "kind": "between",
+                    "from": "1990-01-01",
+                    "to": "2008-10-19",
+                    "min_years": 18,
+                    "max_years": 36
+                  }
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "age: at least (only le); birthday is today",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "age_check",
+                "handle": "a",
+                "params": {
+                  "le": "2008-10-19"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": null,
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "age_range",
+                  "ge": null,
+                  "le": "2008-10-19",
+                  "form": {
+                    "kind": "at_least",
+                    "years": 18
+                  }
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "age: at least, birthday is tomorrow (one year less)",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "age_check",
+                "handle": "a",
+                "params": {
+                  "le": "2008-10-20"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": null,
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "age_range",
+                  "ge": null,
+                  "le": "2008-10-20",
+                  "form": {
+                    "kind": "at_least",
+                    "years": 17
+                  }
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "age: at most (only ge)",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "age_check",
+                "handle": "a",
+                "params": {
+                  "ge": "2000-01-01"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": null,
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "age_range",
+                  "ge": "2000-01-01",
+                  "le": null,
+                  "form": {
+                    "kind": "at_most",
+                    "years": 26
+                  }
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "age: leap-day bound",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "age_check",
+                "handle": "a",
+                "params": {
+                  "le": "2008-02-29"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": null,
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "age_range",
+                  "ge": null,
+                  "le": "2008-02-29",
+                  "form": {
+                    "kind": "at_least",
+                    "years": 18
+                  }
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "age: bound in the future clamps to 0",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "age_check",
+                "handle": "a",
+                "params": {
+                  "le": "2030-01-01"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": null,
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "age_range",
+                  "ge": null,
+                  "le": "2030-01-01",
+                  "form": {
+                    "kind": "at_least",
+                    "years": 0
+                  }
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "age: other today",
+      "today": "2027-10-18",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "age_check",
+                "handle": "a",
+                "params": {
+                  "ge": "1990-01-01",
+                  "le": "2008-10-19"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": null,
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "age_range",
+                  "ge": "1990-01-01",
+                  "le": "2008-10-19",
+                  "form": {
+                    "kind": "between",
+                    "from": "1990-01-01",
+                    "to": "2008-10-19",
+                    "min_years": 18,
+                    "max_years": 37
+                  }
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "age: no bound is refused",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "age_check",
+                "handle": "a",
+                "params": {}
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "refused": true
+      }
+    },
+    {
+      "name": "age: unknown parameter is refused",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "age_check",
+                "handle": "a",
+                "params": {
+                  "ge": "2000-01-01",
+                  "gt": "1999-01-01"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "refused": true
+      }
+    },
+    {
+      "name": "age: malformed date is refused",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "age_check",
+                "handle": "a",
+                "params": {
+                  "ge": "2000-1-1"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "refused": true
+      }
+    },
+    {
+      "name": "age: impossible date is refused",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "age_check",
+                "handle": "a",
+                "params": {
+                  "ge": "2000-02-30"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "refused": true
+      }
+    },
+    {
+      "name": "pseudonym without a verifier_id is refused",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "pseudonym-v1-sha256",
+                "handle": "n",
+                "params": {
+                  "config": "known-offender-matching-ssc"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": null,
+        "verifier_id_type": null
+      },
+      "expected": {
+        "refused": true
+      }
+    },
+    {
+      "name": "account-recovery-ssc is not modelled: refused",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "pseudonym-v1-sha256",
+                "handle": "n",
+                "params": {
+                  "config": "account-recovery-ssc",
+                  "verifier_context": "acct"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "refused": true
+      }
+    },
+    {
+      "name": "user-managed-pseudonym-xsite-ssc is not modelled: refused",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "pseudonym-v1-sha256",
+                "handle": "n",
+                "params": {
+                  "config": "user-managed-pseudonym-xsite-ssc"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "refused": true
+      }
+    },
+    {
+      "name": "a verifier_context on a per-verifier config is refused",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "pseudonym-v1-sha256",
+                "handle": "n",
+                "params": {
+                  "config": "known-offender-matching-ssc",
+                  "verifier_context": "x"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "refused": true
+      }
+    },
+    {
+      "name": "unknown config is refused",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "pseudonym-v1-sha256",
+                "handle": "n",
+                "params": {
+                  "config": "nope"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "refused": true
+      }
+    },
+    {
+      "name": "unknown function is refused",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "mystery",
+                "handle": "m",
+                "params": {}
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "refused": true
+      }
+    },
+    {
+      "name": "empty plan is refused",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "refused": true
+      }
+    },
+    {
+      "name": "legacy claim disclosure lists the claim names",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "zk-claim-disclosure-v1",
+                "handle": "d",
+                "params": {
+                  "claims": [
+                    "family_name",
+                    "given_name"
+                  ],
+                  "systems": [
+                    {
+                      "id": "c",
+                      "system": "longfellow-libzk-v1"
+                    }
+                  ]
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": null,
+        "verifier_id_type": null
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": null,
+            "verifier_id_type": null,
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "claim",
+                  "name": "family_name"
+                },
+                {
+                  "kind": "claim",
+                  "name": "given_name"
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "legacy claim disclosure with a pseudonym",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "zk-claim-disclosure-v1",
+                "handle": "d",
+                "params": {
+                  "claims": [
+                    "age_over_18"
+                  ],
+                  "systems": [
+                    {
+                      "id": "c",
+                      "system": "longfellow-libzk-v1"
+                    }
+                  ],
+                  "pseudonym": true,
+                  "verifier_context": "ctx-1"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": "rp.example",
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "claim",
+                  "name": "age_over_18"
+                },
+                {
+                  "kind": "legacy_pseudonym",
+                  "verifier_context": "ctx-1"
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "two queries: one request, both queries' items",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "pseudonym-v1-sha256",
+                "handle": "n",
+                "params": {
+                  "config": "known-offender-matching-ssc"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          },
+          {
+            "plan": [
+              {
+                "id": "age_check",
+                "handle": "a",
+                "params": {
+                  "le": "2008-10-19"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Other",
+              "issuer": null
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": "rp.example",
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "pseudonym",
+                  "config": "known-offender-matching-ssc",
+                  "scope": "per_verifier",
+                  "remappable_by_issuer": true,
+                  "cross_site": false,
+                  "verifier_id": "rp.example",
+                  "verifier_context": null
+                }
+              ]
+            },
+            {
+              "credential": {
+                "name": "Other",
+                "issuer": null
+              },
+              "items": [
+                {
+                  "kind": "age_range",
+                  "ge": null,
+                  "le": "2008-10-19",
+                  "form": {
+                    "kind": "at_least",
+                    "years": 18
+                  }
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "credential without a name or issuer",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "pseudonym-v1-sha256",
+                "handle": "n",
+                "params": {
+                  "config": "known-offender-matching-ssc"
+                }
+              }
+            ],
+            "credential": {
+              "name": null,
+              "issuer": null
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": "rp.example",
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": null,
+                "issuer": null
+              },
+              "items": [
+                {
+                  "kind": "pseudonym",
+                  "config": "known-offender-matching-ssc",
+                  "scope": "per_verifier",
+                  "remappable_by_issuer": true,
+                  "cross_site": false,
+                  "verifier_id": "rp.example",
+                  "verifier_context": null
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "label: trust entity name wins",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "pseudonym-v1-sha256",
+                "handle": "n",
+                "params": {
+                  "config": "known-offender-matching-ssc"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "client.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": "rp.example",
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "pseudonym",
+                  "config": "known-offender-matching-ssc",
+                  "scope": "per_verifier",
+                  "remappable_by_issuer": true,
+                  "cross_site": false,
+                  "verifier_id": "rp.example",
+                  "verifier_context": null
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "label: verified client-id display name when the trust decision has no name",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "pseudonym-v1-sha256",
+                "handle": "n",
+                "params": {
+                  "config": "known-offender-matching-ssc"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": null,
+          "framework": "etsi-tl",
+          "identifier": "rp.example"
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "rp.example",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": "rp.example",
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "pseudonym",
+                  "config": "known-offender-matching-ssc",
+                  "scope": "per_verifier",
+                  "remappable_by_issuer": true,
+                  "cross_site": false,
+                  "verifier_id": "rp.example",
+                  "verifier_context": null
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "label: blank entity name is no name",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "pseudonym-v1-sha256",
+                "handle": "n",
+                "params": {
+                  "config": "known-offender-matching-ssc"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "  ",
+          "framework": null,
+          "identifier": null
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "rp.example",
+            "trust_framework": null,
+            "trust_identifier": null,
+            "verifier_id": "rp.example",
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "pseudonym",
+                  "config": "known-offender-matching-ssc",
+                  "scope": "per_verifier",
+                  "remappable_by_issuer": true,
+                  "cross_site": false,
+                  "verifier_id": "rp.example",
+                  "verifier_context": null
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "label: attested origin for an unsigned request (client id is unauthenticated)",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "pseudonym-v1-sha256",
+                "handle": "n",
+                "params": {
+                  "config": "known-offender-matching-ssc"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": null,
+          "framework": null,
+          "identifier": null
+        },
+        "verified_client_id_display_name": null,
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "https://rp.example",
+            "trust_framework": null,
+            "trust_identifier": null,
+            "verifier_id": "rp.example",
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "pseudonym",
+                  "config": "known-offender-matching-ssc",
+                  "scope": "per_verifier",
+                  "remappable_by_issuer": true,
+                  "cross_site": false,
+                  "verifier_id": "rp.example",
+                  "verifier_context": null
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "a long DID verifier id is carried whole",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "pseudonym-v1-sha256",
+                "handle": "n",
+                "params": {
+                  "config": "known-offender-matching-ssc"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "did:web:verifier.example.org:very:long:path:segment:identifying:this:verifier",
+        "verifier_id_type": "semantic"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": "did:web:verifier.example.org:very:long:path:segment:identifying:this:verifier",
+            "verifier_id_type": "semantic",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "pseudonym",
+                  "config": "known-offender-matching-ssc",
+                  "scope": "per_verifier",
+                  "remappable_by_issuer": true,
+                  "cross_site": false,
+                  "verifier_id": "did:web:verifier.example.org:very:long:path:segment:identifying:this:verifier",
+                  "verifier_context": null
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "intermediary risk flag",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "pseudonym-v1-sha256",
+                "handle": "n",
+                "params": {
+                  "config": "known-offender-matching-ssc"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            }
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": true
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": "rp.example",
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": true
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "pseudonym",
+                  "config": "known-offender-matching-ssc",
+                  "scope": "per_verifier",
+                  "remappable_by_issuer": true,
+                  "cross_site": false,
+                  "verifier_id": "rp.example",
+                  "verifier_context": null
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    }
+  ],
+  "verifier_id_shortening": [
+    {
+      "id": "rp.example",
+      "display": "rp.example"
+    },
+    {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "display": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "display": "aaaaaaaaaaaaaaaaaa…aaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "id": "did:web:verifier.example.org:very:long:path:segment:identifying:this:verifier",
+      "display": "did:web:verifier.e…ying:this:verifier"
+    },
+    {
+      "id": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+      "display": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀…😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+    }
+  ]
+}
