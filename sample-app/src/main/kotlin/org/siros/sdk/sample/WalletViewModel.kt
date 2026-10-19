@@ -305,11 +305,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val presentationConsentGate = PresentationConsentGate()
 
     /** A `circuit_zk` presentation consent the SDK asked to show, until the user answers. */
-    val pendingPresentationConsent: StateFlow<org.siros.sdk.credentials.PresentationConsentRequest?> = presentationConsentGate.pending
+    val pendingPresentationConsent: StateFlow<PendingPresentationConsent?> = presentationConsentGate.pending
 
-    /** The user's answer to [request], which must be the pending one (a stale dialog's answer is ignored). */
-    fun answerPresentationConsent(request: org.siros.sdk.credentials.PresentationConsentRequest, agreed: Boolean) =
-        presentationConsentGate.answer(request, agreed)
+    /** The user's answer to [shown], which must be the pending one (a stale dialog's answer is ignored). */
+    fun answerPresentationConsent(shown: PendingPresentationConsent, agreed: Boolean) =
+        presentationConsentGate.answer(shown, agreed)
 
     /** Applies the persisted setting and the consent hook to [target]. */
     private fun configureTransactionData(target: SirosWallet) {

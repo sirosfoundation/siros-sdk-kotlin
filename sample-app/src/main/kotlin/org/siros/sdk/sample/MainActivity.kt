@@ -460,7 +460,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
             pendingPresentationConsent != null -> pendingPresentationConsent!!.let { shown ->
                 // The answer names the request this dialog showed.
                 PresentationConsentDialog(
-                    request = shown,
+                    request = shown.request,
                     onAgree = { viewModel.answerPresentationConsent(shown, true) },
                     onDecline = { viewModel.answerPresentationConsent(shown, false) },
                 )

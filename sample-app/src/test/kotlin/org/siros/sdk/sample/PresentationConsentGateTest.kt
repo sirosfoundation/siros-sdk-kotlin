@@ -32,8 +32,8 @@ class PresentationConsentGateTest {
         val shown = request()
         val result = async { gate.handler.confirm(shown) }
         advanceUntilIdle()
-        assertEquals("Shop", gate.pending.value?.verifier?.label)
-        gate.answer(shown, true)
+        assertEquals("Shop", gate.pending.value?.request?.verifier?.label)
+        gate.answer(gate.pending.value!!, true)
         assertEquals(true, result.await())
         assertNull(gate.pending.value)
     }
@@ -41,11 +41,10 @@ class PresentationConsentGateTest {
     @Test
     fun `a decline is passed on, and an answer with nothing waiting is ignored`() = runTest(StandardTestDispatcher()) {
         val gate = PresentationConsentGate()
-        gate.answer(request(), true)
-        val shown = request()
+                val shown = request()
         val result = async { gate.handler.confirm(shown) }
         advanceUntilIdle()
-        gate.answer(shown, false)
+        gate.answer(gate.pending.value!!, false)
         assertEquals(false, result.await())
     }
 
@@ -61,28 +60,28 @@ class PresentationConsentGateTest {
     }
 
     @Test
-    fun `an overlapping request waits its turn, and a stale dialog cannot approve it`() = runTest(StandardTestDispatcher()) {
+    fun `an overlapping request waits its turn, and a stale dialog cannot approve it - even with equal content`() = runTest(StandardTestDispatcher()) {
         val gate = PresentationConsentGate()
+        // Equal content (a data class): identity, not equality, tells them apart.
         val a = request()
         val b = request()
+        assertEquals(a, b)
         val first = async { gate.handler.confirm(a) }
         val second = async { gate.handler.confirm(b) }
         advanceUntilIdle()
-        // Only A is on screen; B has not replaced it.
-        assertEquals(true, gate.pending.value === a)
-        // An answer naming B (not on screen) is ignored.
-        gate.answer(b, true)
-        advanceUntilIdle()
-        assertEquals(true, gate.pending.value === a)
-        gate.answer(a, false)
+        val onScreenA = gate.pending.value!!
+        assertEquals(true, onScreenA.request === a)
+        gate.answer(onScreenA, false)
         assertEquals(false, first.await())
         advanceUntilIdle()
-        // Now B is on screen, and A's late callback cannot approve it.
-        assertEquals(true, gate.pending.value === b)
-        gate.answer(a, true)
+        // B is shown even though its content equals A's, and A's late callback cannot approve it.
+        val onScreenB = gate.pending.value
+        assertNotNull(onScreenB)
+        assertEquals(true, onScreenB!!.request === b)
+        gate.answer(onScreenA, true)
         advanceUntilIdle()
-        assertEquals(true, gate.pending.value === b)
-        gate.answer(b, true)
+        assertEquals(true, gate.pending.value === onScreenB)
+        gate.answer(onScreenB, true)
         assertEquals(true, second.await())
     }
 }
