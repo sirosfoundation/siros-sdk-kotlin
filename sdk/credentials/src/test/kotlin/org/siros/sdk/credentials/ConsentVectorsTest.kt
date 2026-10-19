@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -135,13 +136,6 @@ class ConsentVectorsTest {
                 })
             }
             assertEquals(c["name"]!!.jsonPrimitive.content, c["expected_ok"]!!.jsonPrimitive.boolean, ConsentItems.combinedAgeBoundsOk(plans))
-        }
-    }
-}
-
-private typealias JsonObjectBuilderScope = kotlinx.serialization.json.JsonObjectBuilder
-fused")))
-            }
         }
     }
 }
