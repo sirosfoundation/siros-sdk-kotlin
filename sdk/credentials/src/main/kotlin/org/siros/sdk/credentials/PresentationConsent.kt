@@ -190,6 +190,29 @@ object ConsentItems {
         return items.takeIf { it.isNotEmpty() }
     }
 
+    /** The rulebook's minimum span of an `age_check` (`le - ge + 1`, in calendar days). */
+    private const val MIN_SPAN_DAYS = 365L
+
+    /**
+     * Whether the age bounds of [plans], all proved with the SAME credential, still leave the rulebook's minimum
+     * span once combined: the proofs of one request together reveal the intersection of their bounds, so two
+     * queries `ge=D` and `le=D` would disclose the exact birth date although each plan alone passes the rule.
+     * A plan with an unreadable bound makes it false (never "cannot compare, so fine").
+     */
+    fun combinedAgeBoundsOk(plans: List<CircuitZkPlan>): Boolean {
+        var lower: LocalDate? = null
+        var upper: LocalDate? = null
+        for (f in plans.flatMap { it.functions }.filter { it.id == CircuitZkRuleSet.AGE_CHECK }) {
+            val ge = text(f, "ge")
+            val le = text(f, "le")
+            val g = if (ge != null) date(ge) ?: return false else null
+            val l = if (le != null) date(le) ?: return false else null
+            if (g != null && (lower == null || g.isAfter(lower))) lower = g
+            if (l != null && (upper == null || l.isBefore(upper))) upper = l
+        }
+        return lower == null || upper == null || ChronoUnit.DAYS.between(lower, upper) + 1 >= MIN_SPAN_DAYS
+    }
+
     private fun text(f: CircuitZkFunction, key: String): String? =
         (f.params[key] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
 

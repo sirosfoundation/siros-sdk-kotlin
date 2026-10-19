@@ -4,7 +4,6 @@ package org.siros.sdk.wallet.dcapi
 import android.app.Activity
 import android.app.AlertDialog
 import android.graphics.Typeface
-import android.text.InputType
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -35,8 +34,9 @@ internal suspend fun showPresentationConsentDialog(activity: Activity, request: 
                 .setNegativeButton(screen.cancelLabel) { _, _ -> if (cont.isActive) cont.resume(false) }
                 .setOnCancelListener { if (cont.isActive) cont.resume(false) }
                 .create()
-            cont.invokeOnCancellation { activity.runOnUiThread { dialog.dismiss() } }
             dialog.show()
+            // Registered after show(): a continuation that is already cancelled dismisses the visible dialog at once.
+            cont.invokeOnCancellation { activity.runOnUiThread { dialog.dismiss() } }
         }
     }
 
@@ -44,7 +44,6 @@ private fun text(activity: Activity, s: String, bold: Boolean = false, size: Flo
     this.text = s
     textSize = size
     if (bold) setTypeface(typeface, Typeface.BOLD)
-    inputType = InputType.TYPE_NULL
     setPadding(0, (topDp * activity.resources.displayMetrics.density).toInt(), 0, 0)
 }
 

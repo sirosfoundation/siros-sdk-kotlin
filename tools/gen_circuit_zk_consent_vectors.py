@@ -207,6 +207,38 @@ SHORTENING = [
 ]
 
 
+def combined_ok(plans):
+    """Age bounds of plans proved with one credential, intersected: lower = max ge, upper = min le; with both,
+    upper - lower + 1 must be >= 365 days. An unreadable bound is not ok."""
+    lo = hi = None
+    for plan in plans:
+        for f in plan:
+            if f["id"] != "age_check":
+                continue
+            p = f.get("params", {})
+            for k in ("ge", "le"):
+                if k in p and parse_date(p[k]) is None:
+                    return False
+            if "ge" in p:
+                d = parse_date(p["ge"]); lo = d if lo is None or d > lo else lo
+            if "le" in p:
+                d = parse_date(p["le"]); hi = d if hi is None or d < hi else hi
+    return lo is None or hi is None or (hi - lo).days + 1 >= 365
+
+
+COMBINED = [
+    {"name": "no age bounds", "plans": [[SSC]]},
+    {"name": "one query, one-sided", "plans": [[age(le="2008-10-19")]]},
+    {"name": "two queries that together pin the date: ge=D and le=D", "plans": [[age(ge="2000-01-01")], [age(le="2000-01-01")]]},
+    {"name": "two queries leaving exactly 365 days", "plans": [[age(ge="2000-01-01")], [age(le="2000-12-30")]]},
+    {"name": "two queries leaving 364 days", "plans": [[age(ge="2000-01-01")], [age(le="2000-12-29")]]},
+    {"name": "wide intersection", "plans": [[age(ge="1990-01-01")], [age(le="2008-10-19")]]},
+    {"name": "an unreadable bound is not ok", "plans": [[age(ge="2000-1-1")], [age(le="2008-10-19")]]},
+]
+for c in COMBINED:
+    c["expected_ok"] = combined_ok(c["plans"])
+
+
 def build():
     return {
         "status": "self-generated; the Kotlin and Swift SDKs test against this file byte-for-byte",
@@ -214,6 +246,7 @@ def build():
         "note": "Locale-free: the SDK-owned wording is generated from these items and is not part of this file.",
         "cases": CASES,
         "verifier_id_shortening": SHORTENING,
+        "combined_age_bounds": COMBINED,
     }
 
 

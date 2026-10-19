@@ -1871,5 +1871,157 @@
       "id": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
       "display": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀…😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
     }
+  ],
+  "combined_age_bounds": [
+    {
+      "name": "no age bounds",
+      "plans": [
+        [
+          {
+            "id": "pseudonym-v1-sha256",
+            "handle": "n",
+            "params": {
+              "config": "known-offender-matching-ssc"
+            }
+          }
+        ]
+      ],
+      "expected_ok": true
+    },
+    {
+      "name": "one query, one-sided",
+      "plans": [
+        [
+          {
+            "id": "age_check",
+            "handle": "a",
+            "params": {
+              "le": "2008-10-19"
+            }
+          }
+        ]
+      ],
+      "expected_ok": true
+    },
+    {
+      "name": "two queries that together pin the date: ge=D and le=D",
+      "plans": [
+        [
+          {
+            "id": "age_check",
+            "handle": "a",
+            "params": {
+              "ge": "2000-01-01"
+            }
+          }
+        ],
+        [
+          {
+            "id": "age_check",
+            "handle": "a",
+            "params": {
+              "le": "2000-01-01"
+            }
+          }
+        ]
+      ],
+      "expected_ok": false
+    },
+    {
+      "name": "two queries leaving exactly 365 days",
+      "plans": [
+        [
+          {
+            "id": "age_check",
+            "handle": "a",
+            "params": {
+              "ge": "2000-01-01"
+            }
+          }
+        ],
+        [
+          {
+            "id": "age_check",
+            "handle": "a",
+            "params": {
+              "le": "2000-12-30"
+            }
+          }
+        ]
+      ],
+      "expected_ok": true
+    },
+    {
+      "name": "two queries leaving 364 days",
+      "plans": [
+        [
+          {
+            "id": "age_check",
+            "handle": "a",
+            "params": {
+              "ge": "2000-01-01"
+            }
+          }
+        ],
+        [
+          {
+            "id": "age_check",
+            "handle": "a",
+            "params": {
+              "le": "2000-12-29"
+            }
+          }
+        ]
+      ],
+      "expected_ok": false
+    },
+    {
+      "name": "wide intersection",
+      "plans": [
+        [
+          {
+            "id": "age_check",
+            "handle": "a",
+            "params": {
+              "ge": "1990-01-01"
+            }
+          }
+        ],
+        [
+          {
+            "id": "age_check",
+            "handle": "a",
+            "params": {
+              "le": "2008-10-19"
+            }
+          }
+        ]
+      ],
+      "expected_ok": true
+    },
+    {
+      "name": "an unreadable bound is not ok",
+      "plans": [
+        [
+          {
+            "id": "age_check",
+            "handle": "a",
+            "params": {
+              "ge": "2000-1-1"
+            }
+          }
+        ],
+        [
+          {
+            "id": "age_check",
+            "handle": "a",
+            "params": {
+              "le": "2008-10-19"
+            }
+          }
+        ]
+      ],
+      "expected_ok": false
+    }
   ]
 }

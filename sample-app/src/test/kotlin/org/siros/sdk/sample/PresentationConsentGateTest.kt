@@ -29,10 +29,11 @@ class PresentationConsentGateTest {
     fun `the gate shows the SDK's request and returns the user's answer`() = runTest(StandardTestDispatcher()) {
         val gate = PresentationConsentGate()
         assertNull(gate.pending.value)
-        val result = async { gate.handler.confirm(request()) }
+        val shown = request()
+        val result = async { gate.handler.confirm(shown) }
         advanceUntilIdle()
         assertEquals("Shop", gate.pending.value?.verifier?.label)
-        gate.answer(true)
+        gate.answer(shown, true)
         assertEquals(true, result.await())
         assertNull(gate.pending.value)
     }
@@ -40,10 +41,11 @@ class PresentationConsentGateTest {
     @Test
     fun `a decline is passed on, and an answer with nothing waiting is ignored`() = runTest(StandardTestDispatcher()) {
         val gate = PresentationConsentGate()
-        gate.answer(true)
-        val result = async { gate.handler.confirm(request()) }
+        gate.answer(request(), true)
+        val shown = request()
+        val result = async { gate.handler.confirm(shown) }
         advanceUntilIdle()
-        gate.answer(false)
+        gate.answer(shown, false)
         assertEquals(false, result.await())
     }
 
@@ -56,5 +58,31 @@ class PresentationConsentGateTest {
         result.cancel()
         advanceUntilIdle()
         assertNull(gate.pending.value)
+    }
+
+    @Test
+    fun `an overlapping request waits its turn, and a stale dialog cannot approve it`() = runTest(StandardTestDispatcher()) {
+        val gate = PresentationConsentGate()
+        val a = request()
+        val b = request()
+        val first = async { gate.handler.confirm(a) }
+        val second = async { gate.handler.confirm(b) }
+        advanceUntilIdle()
+        // Only A is on screen; B has not replaced it.
+        assertEquals(true, gate.pending.value === a)
+        // An answer naming B (not on screen) is ignored.
+        gate.answer(b, true)
+        advanceUntilIdle()
+        assertEquals(true, gate.pending.value === a)
+        gate.answer(a, false)
+        assertEquals(false, first.await())
+        advanceUntilIdle()
+        // Now B is on screen, and A's late callback cannot approve it.
+        assertEquals(true, gate.pending.value === b)
+        gate.answer(a, true)
+        advanceUntilIdle()
+        assertEquals(true, gate.pending.value === b)
+        gate.answer(b, true)
+        assertEquals(true, second.await())
     }
 }

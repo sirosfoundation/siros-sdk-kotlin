@@ -4358,6 +4358,14 @@ class SirosWallet private constructor(
             prepared += Prepared(result.queryId, plan, cred, resolved?.id, context, needsSecretSeed)
         }
 
+        // The proofs of one request together reveal the intersection of their age bounds. Queries answered with the
+        // same credential (any copy of it) must still leave the rulebook's minimum span, else the request is refused.
+        for ((_, group) in prepared.groupBy { it.cred.batchId ?: it.cred.id }) {
+            if (!org.siros.sdk.credentials.ConsentItems.combinedAgeBoundsOk(group.map { it.plan })) {
+                refuse("age-bounds-combined", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+            }
+        }
+
         // ── Consent: ONE call for the whole request, before anything is signed or proved. ──
         // What the verifier would receive; a function or config the consent cannot describe is refused, not hidden.
         val consentRequest = org.siros.sdk.credentials.ConsentRequests.build(
@@ -4494,24 +4502,37 @@ class SirosWallet private constructor(
     /**
      * As [handleDCAPIRequest], with [consentHandler] showing a payment
      * confirmation (`transaction_data`) for this request in place of
-     * [transactionConsentHandler], and [presentationConsentHandler] asking for
+     * [transactionConsentHandler], and, optionally, [presentationConsentHandler] asking for
      * consent to a `circuit_zk` presentation in place of the wallet-level
      * [SirosWallet.presentationConsentHandler]. The DC API activity passes handlers that
      * show a dialog in the activity itself, because the app's own screens
-     * are not in front of the user during a DC API request. A null handler leaves the wallet-level one in force.
+     * are not in front of the user during a DC API request.
      */
     suspend fun handleDCAPIRequest(
         rawRequestJson: String,
         origin: String,
-        consentHandler: TransactionConsentHandler?,
+        consentHandler: TransactionConsentHandler,
         selectedCredentialIds: List<Long>? = null,
         presentationConsentHandler: PresentationConsentHandler? = null,
     ): DCAPIPresentationResult {
-        var context: kotlin.coroutines.CoroutineContext = kotlin.coroutines.EmptyCoroutineContext
-        if (consentHandler != null) context += DcApiConsentHandler(consentHandler)
+        var context: kotlin.coroutines.CoroutineContext = DcApiConsentHandler(consentHandler)
         if (presentationConsentHandler != null) context += DcApiPresentationConsentHandler(presentationConsentHandler)
         return withContext(context) { handleDCAPIRequest(rawRequestJson, origin, selectedCredentialIds) }
     }
+
+    /**
+     * As [handleDCAPIRequest], with [presentationConsentHandler] asking for consent to a `circuit_zk`
+     * presentation for this request in place of the wallet-level [SirosWallet.presentationConsentHandler].
+     */
+    suspend fun handleDCAPIRequest(
+        rawRequestJson: String,
+        origin: String,
+        presentationConsentHandler: PresentationConsentHandler,
+        selectedCredentialIds: List<Long>? = null,
+    ): DCAPIPresentationResult =
+        withContext(DcApiPresentationConsentHandler(presentationConsentHandler)) {
+            handleDCAPIRequest(rawRequestJson, origin, selectedCredentialIds)
+        }
 
     /** Refuses (and logs) a DC API request carrying `transaction_data` this wallet is not set up to process. */
     private suspend fun refuseDcApiTransactionData(request: org.siros.sdk.wallet.dcapi.DCAPIRequest, origin: String) {

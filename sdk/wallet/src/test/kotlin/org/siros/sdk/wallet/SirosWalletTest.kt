@@ -5377,7 +5377,10 @@ class SirosWalletTest {
         noConsentHandler: Boolean = false,
         /** The prover asks the signer for a signature, like a real one. */
         proverSigns: Boolean = false,
+        /** Plans each query differently: the functions of the query at this index (overrides [functions]). */
+        functionsPerQuery: ((Int) -> List<org.siros.sdk.credentials.CircuitZkFunction>)? = null,
     ): CzkSetup {
+        var plannedQueries = 0
         val consents = mutableListOf<org.siros.sdk.credentials.PresentationConsentRequest>()
         val events = mutableListOf<String>()
         val apiClient = mockk<BackendApiClient>()
@@ -5401,7 +5404,10 @@ class SirosWalletTest {
         }
         val support = org.siros.sdk.credentials.CircuitZkSupport(
             // The plan's raw query is the query itself (its doctype_value is what the presenter checks the credential against).
-            planner = { query, _ -> org.siros.sdk.credentials.CircuitZkPlanResult.Plan(org.siros.sdk.credentials.CircuitZkPlan(functions, raw = query)) },
+            planner = { query, _ ->
+                val fs = functionsPerQuery?.invoke(plannedQueries++) ?: functions
+                org.siros.sdk.credentials.CircuitZkPlanResult.Plan(org.siros.sdk.credentials.CircuitZkPlan(fs, raw = query))
+            },
             validator = defaultCircuitZkValidator(circuits),
             circuits = circuits,
             serving = serving,
@@ -6012,21 +6018,21 @@ class SirosWalletTest {
         val own = mutableListOf<org.siros.sdk.credentials.PresentationConsentRequest>()
         val s = czkSscSetup(czkSeedSource())
         kotlinx.coroutines.runBlocking {
-            s.wallet.handleDCAPIRequest(czkRequest(), CzkFixtures.ORIGIN, null, listOf(1L), PresentationConsentHandler { own += it; true })
+            s.wallet.handleDCAPIRequest(czkRequest(), CzkFixtures.ORIGIN, PresentationConsentHandler { own += it; true }, listOf(1L))
         }
         assertEquals(1, own.size)
         assertTrue("the wallet-level handler was not asked", s.consents.isEmpty())
         // With no wallet-level handler, the per-request one is all that is needed.
         val bare = czkSscSetup(czkSeedSource(), noConsentHandler = true)
         kotlinx.coroutines.runBlocking {
-            bare.wallet.handleDCAPIRequest(czkRequest(), CzkFixtures.ORIGIN, null, listOf(1L), PresentationConsentHandler { true })
+            bare.wallet.handleDCAPIRequest(czkRequest(), CzkFixtures.ORIGIN, PresentationConsentHandler { true }, listOf(1L))
         }
         assertEquals(1, bare.prover.calls)
         // A per-request handler that declines is a decline, whatever the wallet-level one would say.
         val declined = czkSscSetup(czkSeedSource())
         org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
             kotlinx.coroutines.runBlocking {
-                declined.wallet.handleDCAPIRequest(czkRequest(), CzkFixtures.ORIGIN, null, listOf(1L), PresentationConsentHandler { false })
+                declined.wallet.handleDCAPIRequest(czkRequest(), CzkFixtures.ORIGIN, PresentationConsentHandler { false }, listOf(1L))
             }
         }
         assertEquals(0, declined.prover.calls)
@@ -6095,6 +6101,16 @@ class SirosWalletTest {
         czkRun(ok, czkRequest())
         val age = ok.consents.single().entries.single().items.single() as org.siros.sdk.credentials.ConsentItem.AgeRange
         assertTrue(age.form is org.siros.sdk.credentials.AgeForm.Between)
+    }
+
+    @Test
+    fun circuitZkConsent_twoQueriesWhoseAgeBoundsTogetherPinTheBirthDate_areRefusedBeforeConsent() = runTest(dispatcher) {
+        // Each plan alone is one-sided and passes the rulebook; ge=D and le=D together would reveal the exact date.
+        val plans = listOf("""{"ge":"2000-06-15"}""", """{"le":"2000-06-15"}""")
+        val s = czkSetup(functionsPerQuery = { listOf(czkAgeFunction(plans[it])) })
+        czkRefused(s, czkRequest(queryIds = listOf("q", "q2")), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST, ids = listOf(1L))
+        assertTrue(s.consents.isEmpty())
+        assertTrue(s.events.isEmpty())
     }
 
     @Test

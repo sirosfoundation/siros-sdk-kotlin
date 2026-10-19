@@ -457,11 +457,14 @@ fun WalletScreen(viewModel: WalletViewModel) {
             )
 
             // circuit_zk presentation (what the verifier will receive) - the SDK built the request and owns the wording
-            pendingPresentationConsent != null -> PresentationConsentDialog(
-                request = pendingPresentationConsent!!,
-                onAgree = { viewModel.answerPresentationConsent(true) },
-                onDecline = { viewModel.answerPresentationConsent(false) },
-            )
+            pendingPresentationConsent != null -> pendingPresentationConsent!!.let { shown ->
+                // The answer names the request this dialog showed.
+                PresentationConsentDialog(
+                    request = shown,
+                    onAgree = { viewModel.answerPresentationConsent(shown, true) },
+                    onDecline = { viewModel.answerPresentationConsent(shown, false) },
+                )
+            }
 
             showTransactionLog -> TransactionLogScreen(
                 entries = viewModel.transactionLog.collectAsState().value,

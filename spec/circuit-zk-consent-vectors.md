@@ -31,3 +31,8 @@ the first and last 18 joined by U+2026). The value used for hashing is never alt
 
 The trust framework and `verifier_id_type` are in the model for hosts and tests; they never appear in the
 default dialog text.
+
+`combined_age_bounds[]` pins the check over queries answered with the SAME credential: the proofs of one
+request together reveal the intersection of their age bounds (lower = latest `ge`, upper = earliest `le`),
+which must still span at least 365 days (`upper - lower + 1`), else the request is refused. An unreadable
+bound is not ok.

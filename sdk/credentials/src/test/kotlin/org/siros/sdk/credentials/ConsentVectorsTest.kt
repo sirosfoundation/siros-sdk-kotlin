@@ -122,6 +122,28 @@ class ConsentVectorsTest {
             }
         }
     }
+
+    @Test
+    fun combinedAgeBoundsOfOneCredential_followTheSharedVectors() {
+        val cases = file["combined_age_bounds"]!!.jsonArray.map { it.jsonObject }
+        assertTrue(cases.size >= 7)
+        for (c in cases) {
+            val plans = c["plans"]!!.jsonArray.map { plan ->
+                CircuitZkPlan(plan.jsonArray.map {
+                    val f = it.jsonObject
+                    CircuitZkFunction(f["id"]!!.jsonPrimitive.content, f["handle"]!!.jsonPrimitive.content, f["params"]!!.jsonObject)
+                })
+            }
+            assertEquals(c["name"]!!.jsonPrimitive.content, c["expected_ok"]!!.jsonPrimitive.boolean, ConsentItems.combinedAgeBoundsOk(plans))
+        }
+    }
+}
+
+private typealias JsonObjectBuilderScope = kotlinx.serialization.json.JsonObjectBuilder
+fused")))
+            }
+        }
+    }
 }
 
 private typealias JsonObjectBuilderScope = kotlinx.serialization.json.JsonObjectBuilder
