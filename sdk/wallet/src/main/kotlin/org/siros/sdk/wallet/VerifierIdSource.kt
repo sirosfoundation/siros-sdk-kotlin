@@ -117,5 +117,8 @@ class AuthZENSource(override val type: String) : VerifierIdSource {
  */
 internal fun defaultCircuitZkValidator(circuits: org.siros.sdk.credentials.CircuitZkCircuitSource?): org.siros.sdk.credentials.CircuitZkRequestValidator =
     org.siros.sdk.credentials.RulebookCircuitZkValidator(
+        // The rulebook rules plus the proposed legacy claim-disclosure function (see CircuitZkLegacyDisclosure).
+        rules = org.siros.sdk.credentials.CircuitZkRuleSet.rulebookV03()
+            .withFunction(org.siros.sdk.credentials.CircuitZkLegacyDisclosure.FUNCTION_ID, org.siros.sdk.credentials.CircuitZkLegacyDisclosure.RULES),
         circuits = circuits,
     )

@@ -101,6 +101,8 @@ class NymAuthDemoRunner(
                 system = "demo-fake",
                 circuitId = "demo-fake-circuit-v1",
                 docTypes = setOf(NymAuthDemoIssuer.DOC_TYPE),
+                // A circuit that declares no functions fits no plan.
+                functions = setOf("pseudonym-v1-sha256", "age_check"),
             )
             val circuits = CircuitZkCircuitSource { listOf(circuit) }
             val presenter = source.circuitZkPresenter(

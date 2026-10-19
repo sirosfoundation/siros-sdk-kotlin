@@ -140,6 +140,29 @@ interface CircuitZkFunctionHandler {
 }
 
 /**
+ * The PROPOSED legacy claim-disclosure function ([org.siros.sdk.credentials.CircuitZkLegacyDisclosure]): needs
+ * no wallet-held private input, and holds when every claim it names is an element of the credential's one
+ * namespace. The proof systems apply the non-disclosure guard themselves when they prove.
+ */
+object LegacyDisclosureFunctionHandler : CircuitZkFunctionHandler {
+    override val functionId = org.siros.sdk.credentials.CircuitZkLegacyDisclosure.FUNCTION_ID
+
+    override fun witnessNeeds(function: CircuitZkFunction): Set<CircuitZkWitnessKind> = emptySet()
+
+    override fun holds(function: CircuitZkFunction, credential: DocumentMdoc): Boolean {
+        val request = org.siros.sdk.credentials.CircuitZkLegacyDisclosure.parse(function) ?: return false
+        val namespaces = credential.issuerSigned.nameSpaces.values
+        if (namespaces.size != 1) return false
+        val present = namespaces.single().map { it.item.elementIdentifier }.toSet()
+        return request.claims.all { it in present }
+    }
+}
+
+/** The handlers a presenter has unless it is given others: the rulebook's two functions and the proposed legacy one. */
+val DEFAULT_CIRCUIT_ZK_HANDLERS: List<CircuitZkFunctionHandler> =
+    listOf(PseudonymFunctionHandler, AgeCheckFunctionHandler, LegacyDisclosureFunctionHandler)
+
+/**
  * `pseudonym-v1-sha256`: needs the seed its config derives from (the device `private_seed` or the
  * issuer-delivered `secret_seed`) and a user value where the config takes one.
  */
@@ -228,6 +251,12 @@ interface CircuitZkProver {
     /** Whether this prover is a fake that produces no real proof. */
     val isFake: Boolean get() = false
 
+    /**
+     * Whether this prover can serve [plan] with [circuit]; the presenter only picks among circuits that pass.
+     * Defaults to true: a prover that is not bound to a catalog registry has nothing to add.
+     */
+    fun admits(circuit: CircuitZkCircuit, plan: CircuitZkPlan): Boolean = true
+
     /** Proves [input]. A refusal or failure is an exception; the presenter turns any into a silent refusal. */
     suspend fun prove(input: CircuitZkProveInput): CircuitZkProveOutput
 }
@@ -246,7 +275,7 @@ class CircuitZkPresenter(
     private val circuits: CircuitZkCircuitSource,
     private val validator: CircuitZkRequestValidator,
     private val witnessProvider: CircuitZkWitnessProvider,
-    handlers: List<CircuitZkFunctionHandler> = listOf(PseudonymFunctionHandler, AgeCheckFunctionHandler),
+    handlers: List<CircuitZkFunctionHandler> = DEFAULT_CIRCUIT_ZK_HANDLERS,
     private val residency: ZkProverResidency? = null,
     private val serving: org.siros.sdk.credentials.CircuitZkServing? = org.siros.sdk.credentials.SharedCircuitZkServing,
 ) {
@@ -343,7 +372,12 @@ class CircuitZkPresenter(
         // namespace named by its doctype, and the circuit reads birth_date and ssc from that one; it does not
         // check that no other namespace holds an attribute of the same name. So the doctype namespace must be
         // present and the only one: a credential with a decoy or extra namespace is never proved.
-        if (document.issuerSigned.nameSpaces.keys != setOf(document.docType)) refuse(CircuitZkStep.NAMESPACE)
+        // (The legacy claim-disclosure function is not nym_auth: it works on the credential's one namespace.)
+        if (plan.functions.any { it.id != org.siros.sdk.credentials.CircuitZkLegacyDisclosure.FUNCTION_ID } &&
+            document.issuerSigned.nameSpaces.keys != setOf(document.docType)
+        ) {
+            refuse(CircuitZkStep.NAMESPACE)
+        }
 
         // 3. Wallet-held private inputs; a function whose witness cannot be supplied is refused.
         val witnesses = LinkedHashMap<String, CircuitZkFunctionWitness>()
@@ -386,7 +420,7 @@ class CircuitZkPresenter(
         }
 
         // 6. A circuit that fits the plan.
-        val circuit = circuits.circuits().firstOrNull { it.supports(plan, document.docType, serving) } ?: refuse(CircuitZkStep.CIRCUIT)
+        val circuit = circuits.circuits().firstOrNull { it.supports(plan, document.docType, serving) && prover.admits(it, plan) } ?: refuse(CircuitZkStep.CIRCUIT)
 
         // 7. Prove.
         val output = prover.prove(

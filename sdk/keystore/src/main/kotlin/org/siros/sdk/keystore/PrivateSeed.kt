@@ -118,7 +118,7 @@ interface HolderWitnessSource {
         prover: CircuitZkProver,
         circuits: org.siros.sdk.credentials.CircuitZkCircuitSource,
         validator: org.siros.sdk.credentials.CircuitZkRequestValidator,
-        handlers: List<CircuitZkFunctionHandler> = listOf(PseudonymFunctionHandler, AgeCheckFunctionHandler),
+        handlers: List<CircuitZkFunctionHandler> = DEFAULT_CIRCUIT_ZK_HANDLERS,
         residency: ZkProverResidency? = null,
         userValue: ByteArray? = null,
         serving: org.siros.sdk.credentials.CircuitZkServing? = org.siros.sdk.credentials.SharedCircuitZkServing,

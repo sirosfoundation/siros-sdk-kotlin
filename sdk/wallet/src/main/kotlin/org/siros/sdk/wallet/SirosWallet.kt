@@ -234,7 +234,7 @@ class SirosWallet private constructor(
     // The real catalog prover unless the host set one; built on first use because it needs the circuit
     // client, which is declared further down. Never the fake: that is an explicit opt-in through the config.
     private val defaultCircuitZkProverHolder = lazy {
-        org.siros.sdk.keystore.CatalogCircuitZkProver(zkCircuitClient, config.circuitZkNativeProver)
+        org.siros.sdk.keystore.CatalogCircuitZkProver.standard(zkCircuitClient, zkPresentation, config.circuitZkNativeProver)
     }
     private val circuitZkProver: org.siros.sdk.keystore.CircuitZkProver? = config.circuitZkProver
 
@@ -262,6 +262,15 @@ class SirosWallet private constructor(
      */
     val circuitZkDocTypes: Set<String>
         get() = circuitZkSupport?.circuits?.docTypes().orEmpty()
+
+    /**
+     * The circuits of a catalog [manifest] as the default `circuit_zk` prover can serve them: pass the result as
+     * [WalletConfig.circuitZkCircuits]. Legacy Longfellow and Vega-mc entries are offered for the proposed
+     * claim-disclosure function only; any entry no adapter claims, and that declares no functions or
+     * capabilities, is offered for nothing.
+     */
+    fun circuitZkCircuitsOf(manifest: org.siros.sdk.credentials.ZkManifest): List<org.siros.sdk.credentials.CircuitZkCircuit> =
+        defaultCircuitZkProverHolder.value.circuitsOf(manifest)
 
     /**
      * The circuits served through `circuit_zk` (empty while it is off). Pass to
@@ -4289,7 +4298,9 @@ class SirosWallet private constructor(
             // verifier_id_type, and one it names is ignored). The trust framework fixes the type, and the wallet
             // takes the first of its own ordered types that resolves. Nothing resolving (or no supported type)
             // is a refusal. The resolved value is used verbatim: only the PDP canonicalises it.
-            val needsVerifierId = (pseudonym?.params?.get("config") as? kotlinx.serialization.json.JsonPrimitive)
+            // A legacy claim-disclosure function that asks for the proof system's pseudonym needs one as well.
+            val legacyPseudonym = plan.functions.any { f -> org.siros.sdk.credentials.CircuitZkLegacyDisclosure.parse(f)?.pseudonym == true }
+            val needsVerifierId = legacyPseudonym || (pseudonym?.params?.get("config") as? kotlinx.serialization.json.JsonPrimitive)
                 ?.contentOrNull?.let { org.siros.sdk.credentials.NymPseudonym.describe(it)?.verifierId } == true
             val verifierId = if (needsVerifierId) registry.resolve(verifierContext) ?: refuse("verifier-id", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE) else null
             val context = (pseudonym?.params?.get("verifier_context") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull

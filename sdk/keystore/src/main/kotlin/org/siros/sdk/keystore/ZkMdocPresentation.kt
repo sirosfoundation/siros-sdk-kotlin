@@ -60,6 +60,9 @@ class ZkMdocPresentation(
         residency?.release()
     }
 
+    /** The residency the proof systems share, if they do; another prover may use it so the process still holds one prover at a time. */
+    val proverResidency: ZkProverResidency? get() = residency
+
     /** Identifiers of every proof system available here - what a host advertises as its ZK capability. */
     val systemIds: List<String> get() = registry.systemIds
 

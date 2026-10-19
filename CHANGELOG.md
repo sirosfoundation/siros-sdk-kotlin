@@ -12,27 +12,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default.** `WalletConfig.circuitZkProver = null` now means the catalog prover
   (it was "refuse every request"); `FakeCircuitZkProver` stays an explicit
   opt-in (`WalletPolicyOptions.fakeProver`) for tests and development. The
-  prover is real for everything that can be done in Kotlin: it fetches the
-  circuit's catalog descriptor and requires the chosen, published, current
-  `nymauth-longfellow-mdoc-v1` / `nymauth-vega-mdoc-v1` entry (system
-  `longfellow-nymauth` / `vega-nymauth`, format `mdoc`, configuration
-  `known-offender-matching-ssc`), downloads the artifact verified against the
-  catalog hash, checks the decompressed bytes against `uncompressed.hash`, keeps
-  it resident in a `ZkProverResidency` (released with the other provers on memory
-  pressure), has the device key sign the challenge through `ZkWitnessSigner`
-  (`e2` is the digest of exactly the signed bytes; the key never reaches the
-  prover), assembles the inputs (issuer key Q from the `x5chain` leaf, `T`, `E`,
-  `C` from the `age_check` bounds, `SHA-256(verifier_id)`), and refuses a
-  pseudonym the circuit reports that differs from `NymPseudonym`'s. It refuses
-  an SD-JWT circuit, any other config or function, and any `age_check`
-  parameter the circuit cannot prove. The witness construction and the proof
-  system run behind one narrow seam, `NymAuthNativeProver`
-  (`WalletConfig.circuitZkNativeProver`): no binding implements it yet (the
-  vendored `zk_cred_longfellow` / `zk_cred_vega` crates have no nymauth entry
-  point), so until one does the default prover refuses every request and never
-  falls back to the fake.
+  prover fetches the chosen circuit's catalog descriptor (it must be published,
+  `active` and not deprecated) and dispatches to the `CircuitZkSystemAdapter`
+  registered for its (`system`, `systemVersion`) in a `CircuitZkSystemRegistry`;
+  a system or version nobody claims is refused, never routed to a default or to
+  the fake. Two adapters ship. `NymAuthCircuitZkAdapter`: the `nymauth-*` mdoc
+  circuits (`pseudonym-v1-sha256` with `known-offender-matching-ssc`, `age_check`);
+  everything that can be done in Kotlin is real (descriptor checks, hash-verified
+  and decompressed-hash-verified artifact, residency, device-key signing of the
+  challenge through `ZkWitnessSigner`, issuer key, T/E/C, verifier input,
+  pseudonym cross-check against `NymPseudonym`), and the witness construction
+  and proof run behind one seam, `NymAuthNativeProver`
+  (`WalletConfig.circuitZkNativeProver`): until a native binding implements it
+  this adapter refuses. `LegacyZkCircuitZkAdapter`: Longfellow (`longfellow`
+  6-8) and Vega-mc (`vega-mc` 12) through the existing `ZkMdocPresentation`, so
+  the real proof systems, their shared `ZkProverResidency` and `VegaProofCache`.
+- **PROPOSAL: `zk-claim-disclosure-v1`, a `circuit_zk` function for the legacy
+  proof systems** (`CircuitZkLegacyDisclosure`; the id is one constant, the
+  rulebook owners decide the name). Params `claims`, `systems` (the verifier's
+  `zk_system_type` specs), optional `pseudonym` (+ `verifier_context`). Result:
+  `true`, or the proof system's legacy 32-byte pseudonym (not the rulebook's;
+  a system that returns none is refused). `proof` is the ZK `DeviceResponse`
+  the `mso_mdoc_zk` path builds. `age_check` and `pseudonym-v1-sha256` stay
+  nymauth-only. The default validator accepts it
+  (`CircuitZkRuleSet.withFunction`); `SirosWallet.circuitZkCircuitsOf(manifest)`
+  builds a circuit table in which legacy catalog entries are offered for it.
 
 ### Changed
+- **A `circuit_zk` circuit that declares no `functions` and no `capabilities`
+  now fits no plan** (`CircuitZkCircuit.supports`; it used to fit every plan).
+  `CircuitZkCircuitSource.fromManifest` takes an optional `declare` for entries a
+  registered prover adapter claims, and `CircuitZkCircuit` gains `systemVersion`.
+  `CircuitZkProver` gains `admits(circuit, plan)`, which the presenter applies
+  when picking the circuit. The validator's `function-not-declared` rule (shared
+  test vectors) is unchanged.
 - **BREAKING (unreleased TS12 API): payment SCA takes its authentication
   factors from the signing operation, not from a provider.**
   `siros-wscd-manager` 0.9.1 -> 0.10.0 (UniFFI bindings regenerated:

@@ -70,7 +70,7 @@ class CircuitZkMatchingTest {
         }
     }
 
-    private fun circuit(id: String = "c1", system: String = "sys", docTypes: Set<String> = setOf(doctype), functions: Set<String>? = null, aliases: Set<String> = emptySet()) =
+    private fun circuit(id: String = "c1", system: String = "sys", docTypes: Set<String> = setOf(doctype), functions: Set<String>? = setOf("fn-a"), aliases: Set<String> = emptySet()) =
         CircuitZkCircuit(system, id, docTypes, functions, aliases)
 
     private fun support(
@@ -223,9 +223,10 @@ class CircuitZkMatchingTest {
     }
 
     @Test
-    fun `functions filter only when the circuit declares them`() {
+    fun `functions filter, and a circuit declaring none fits no plan`() {
         val creds = listOf(mdoc(1, doctype))
-        assertEquals(1, match(query(), creds, support(circuits = listOf(circuit(functions = null)))).candidates.size)
+        // The loose behaviour (no declared functions = every plan) is gone: such a circuit is offered for nothing.
+        assertTrue(match(query(), creds, support(circuits = listOf(circuit(functions = null)))).candidates.isEmpty())
         assertEquals(1, match(query(), creds, support(circuits = listOf(circuit(functions = setOf("fn-a", "fn-b"))))).candidates.size)
         assertTrue(match(query(), creds, support(circuits = listOf(circuit(functions = setOf("fn-b"))))).candidates.isEmpty())
         assertTrue(match(query(), creds, support(circuits = listOf(circuit(functions = emptySet())))).candidates.isEmpty())
@@ -332,6 +333,29 @@ class CircuitZkMatchingTest {
         assertNull(circuits[1].functions)
         assertEquals(setOf("a-alias"), circuits[0].aliases)
         assertEquals("sys", circuits[0].system)
+    }
+
+    @Test
+    fun `a manifest entry no adapter claims is offered for no plan, one an adapter claims only for the functions it declares`() {
+        val manifest = ZkManifest(circuits = listOf(descriptor("unclaimed"), descriptor("claimed").copy(systemVersion = "7")))
+        val declare: (ZkCircuitDescriptor) -> Set<String>? = { if (it.systemVersion == "7") setOf("fn-a") else null }
+        val circuits = CircuitZkCircuitSource.fromManifest(manifest, declare)
+        assertNull(circuits[0].functions)
+        assertEquals(setOf("fn-a"), circuits[1].functions)
+        assertEquals("7", circuits[1].systemVersion)
+        val creds = listOf(mdoc(1, doctype))
+        // Only the claimed circuit makes the credential a candidate; before the tightening the unclaimed one did too.
+        assertTrue(match(query(), creds, support(circuits = listOf(circuits[0]))).candidates.isEmpty())
+        assertEquals(1, match(query(), creds, support(circuits = listOf(circuits[1]))).candidates.size)
+        assertTrue(match(query(), creds, support(circuits = CircuitZkCircuitSource.fromManifest(manifest))).candidates.isEmpty())
+    }
+
+    @Test
+    fun `a circuit declaring no functions and no capabilities supports no plan`() {
+        val bare = CircuitZkCircuit("sys", "c1", setOf(doctype))
+        assertFalse(bare.supports(plan, doctype))
+        assertFalse(bare.supports(plan.copy(functions = emptyList()), doctype))
+        assertTrue(CircuitZkCircuit("sys", "c1", setOf(doctype), functions = setOf("fn-a")).supports(plan, doctype))
     }
 
     @Test

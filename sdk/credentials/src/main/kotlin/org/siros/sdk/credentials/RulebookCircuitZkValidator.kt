@@ -40,6 +40,9 @@ class CircuitZkRuleSet(
     val planRules: List<CircuitZkPlanRule>,
     val functions: Map<String, CircuitZkFunctionRules>,
 ) {
+    /** This rule set plus the function [id] with [rules]. */
+    fun withFunction(id: String, rules: CircuitZkFunctionRules): CircuitZkRuleSet = CircuitZkRuleSet(planRules, functions + (id to rules))
+
     companion object {
         const val PSEUDONYM = "pseudonym-v1-sha256"
         const val AGE_CHECK = "age_check"
@@ -139,7 +142,8 @@ class CircuitZkRuleSet(
         /**
          * When some circuit fits the plan's doctype and circuit list, at least
          * one of them must support every function: it declares none (no
-         * function filtering) or declares all of them. A circuit constrained
+         * function filtering) or declares all of them. This is a satisfiability rule shared with the other SDKs'
+         * vectors; whether a circuit declaring none is ever offered is decided by [CircuitZkMatching] (it is not). A circuit constrained
          * by the matcher ([CircuitZkCircuit.constrainedByMatcher]) is not
          * subject to this legacy check.
          */

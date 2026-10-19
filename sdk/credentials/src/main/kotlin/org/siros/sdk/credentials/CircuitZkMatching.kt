@@ -107,6 +107,8 @@ data class CircuitZkCircuit(
     val aliases: Set<String> = emptySet(),
     val credentialType: String? = null,
     val capabilities: String? = null,
+    /** The catalog `systemVersion`, for a prover that gates per (system, version); null when the source does not know it. */
+    val systemVersion: String? = null,
 ) {
     /** Whether the matcher, not this SDK, decides if the circuit serves a request: it declares [capabilities] or a [credentialType]. */
     val constrainedByMatcher: Boolean get() = capabilities != null || credentialType != null
@@ -189,9 +191,11 @@ fun interface CircuitZkCircuitSource {
         /**
          * The circuits of a catalog [manifest]: published, not deprecated.
          * `functions`, when a descriptor's `params` carries a string array of
-         * that name, is the circuit's declared function set; otherwise null.
+         * that name, is the circuit's declared function set; otherwise what [declare]
+         * says for the descriptor (a registered prover adapter's claim), otherwise null,
+         * and a circuit with neither functions nor capabilities is offered for no plan.
          */
-        fun fromManifest(manifest: ZkManifest): List<CircuitZkCircuit> = manifest.circuits
+        fun fromManifest(manifest: ZkManifest, declare: (ZkCircuitDescriptor) -> Set<String>? = { null }): List<CircuitZkCircuit> = manifest.circuits
             .filter { it.published && it.deprecatedAt == null }
             .map { d ->
                 CircuitZkCircuit(
@@ -199,9 +203,11 @@ fun interface CircuitZkCircuitSource {
                     circuitId = d.id,
                     docTypes = d.docTypes.toSet(),
                     functions = (d.params["functions"] as? JsonArray)
-                        ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.toSet(),
+                        ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.toSet()
+                        ?: declare(d),
                     aliases = d.aliases.toSet(),
                     capabilities = d.capabilities?.toString(),
+                    systemVersion = d.systemVersion.ifEmpty { null },
                 )
             }
     }
@@ -270,7 +276,7 @@ internal object CircuitZkMatching {
      * Whether [circuit] fits [plan] for a credential of [docType]. The verifier's circuit list is
      * applied here. A circuit that declares `capabilities` or a `credential_type` is judged by the
      * matcher alone ([serving]; no answer is a no), and its legacy `functions` are not read, as the
-     * matcher does not read them. Any other circuit is filtered by its declared `functions`.
+     * matcher does not read them. Any other circuit is filtered by its declared `functions`; one that declares none fits no plan.
      */
     internal fun fits(circuit: CircuitZkCircuit, plan: CircuitZkPlan, docType: String, serving: CircuitZkServing?): Boolean {
         val filter = plan.circuitFilter
@@ -283,7 +289,9 @@ internal object CircuitZkMatching {
                 false
             }
         }
-        val declared = circuit.functions ?: return true
+        // A circuit that declares no functions and no capabilities fits nothing: it is not offered for
+        // circuit_zk unless a registered adapter claims it (see CircuitZkCircuitSource.fromManifest).
+        val declared = circuit.functions ?: return false
         return plan.functions.all { it.id in declared }
     }
 }

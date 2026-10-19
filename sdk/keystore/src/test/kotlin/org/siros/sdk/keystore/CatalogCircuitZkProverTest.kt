@@ -43,7 +43,7 @@ import timber.log.Timber
 class CatalogCircuitZkProverTest {
     private val docType = "eu.europa.ec.eudi.nym_auth.1"
     private val circuitId = "nymauth-longfellow-mdoc-v1"
-    private val system = CatalogCircuitZkProver.LONGFELLOW_SYSTEM
+    private val system = NymAuthCircuitZkAdapter.LONGFELLOW_SYSTEM
     private val seed = ByteArray(16) { it.toByte() }
     private val verifierId = "verifier.example"
     private val now = Instant.parse("2026-10-19T12:34:56.789Z")
@@ -351,7 +351,7 @@ class CatalogCircuitZkProverTest {
 
     @Test
     fun `a presenter over the catalog prover produces a presentation with the circuit's proof, not the fake's`() {
-        val circuit = CircuitZkCircuit(system, circuitId, setOf(docType))
+        val circuit = CircuitZkCircuit(system, circuitId, setOf(docType), functions = setOf("pseudonym-v1-sha256", "age_check"), systemVersion = "61a8a73")
         val presenter = CircuitZkPresenter(
             prover(honestNative()),
             { listOf(circuit) },

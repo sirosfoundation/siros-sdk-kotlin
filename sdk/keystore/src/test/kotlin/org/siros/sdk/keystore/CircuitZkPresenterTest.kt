@@ -110,7 +110,7 @@ class CircuitZkPresenterTest {
         raw = params("""{"id":"q","format":"circuit_zk","meta":{"doctype_value":"$doctype"}}"""),
     )
 
-    private val circuit = CircuitZkCircuit("sys", "circuit-1", setOf(docType))
+    private val circuit = CircuitZkCircuit("sys", "circuit-1", setOf(docType), functions = setOf("pseudonym-v1-sha256", "age_check"))
     private val signer = ZkWitnessSigner { _, _ -> error("the fake prover never asks for a signature") }
 
     private class CountingProver(val inner: CircuitZkProver, val override: (() -> CircuitZkProveOutput)? = null) : CircuitZkProver {
@@ -702,7 +702,7 @@ class CircuitZkPresenterTest {
             override fun holds(function: CircuitZkFunction, credential: org.siros.sdk.credentials.mdoc.DocumentMdoc) = true
         }
         val prover = CountingProver(FakeCircuitZkProver.optIn(), override = { CircuitZkProveOutput(ByteArray(2), mapOf("c" to ResultValue.Predicate)) })
-        val pr = CircuitZkPresenter(prover, { listOf(circuit) }, CircuitZkRequestValidator.PERMISSIVE, HolderWitnessProvider(seeds),
+        val pr = CircuitZkPresenter(prover, { listOf(CircuitZkCircuit("sys", "circuit-1", setOf(docType), functions = setOf("custom_fn"))) }, CircuitZkRequestValidator.PERMISSIVE, HolderWitnessProvider(seeds),
             handlers = listOf(custom))
         val out = present(pr, request(p = plan(CircuitZkFunction("custom_fn", "c", JsonObject(emptyMap())))))
         assertEquals(setOf("c"), out.results.keys)

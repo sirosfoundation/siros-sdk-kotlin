@@ -5144,7 +5144,7 @@ class SirosWalletTest {
     private fun fittingSupport() = org.siros.sdk.credentials.CircuitZkSupport(
         planner = { _, _ -> org.siros.sdk.credentials.CircuitZkPlanResult.Plan(org.siros.sdk.credentials.CircuitZkPlan(emptyList())) },
         circuits = {
-            listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf("test.doctype.1")))
+            listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf("test.doctype.1"), functions = emptySet()))
         },
     )
 
@@ -5379,7 +5379,7 @@ class SirosWalletTest {
         )).toMutableList())
         val registry = VerifierIdRegistry(types, sources)
         val circuits = org.siros.sdk.credentials.CircuitZkCircuitSource {
-            listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf(CzkFixtures.DOCTYPE) + extraDocTypes, capabilities = capabilities))
+            listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf(CzkFixtures.DOCTYPE) + extraDocTypes, functions = setOf("pseudonym-v1-sha256", "age_check"), capabilities = capabilities))
         }
         val support = org.siros.sdk.credentials.CircuitZkSupport(
             // The plan's raw query is the query itself (its doctype_value is what the presenter checks the credential against).
@@ -5476,9 +5476,9 @@ class SirosWalletTest {
         try {
             val s = czkSetup(defaultProver = true)
             czkRefused(s, czkRequest())
-            // The refusal came from the catalog prover itself (every earlier step passed, as in the success case),
-            // and the fake is never substituted: the test prover that would have answered saw nothing.
-            assertTrue(czkLogs.any { it.contains("no nymauth native prover is wired in") })
+            // The refusal came from the catalog prover's registry (every earlier step passed, as in the success case):
+            // no adapter claims the test circuit's system, so it is not offered. The fake is never substituted.
+            assertTrue(czkLogs.any { it.contains("step=CIRCUIT") })
             assertEquals(0, s.prover.calls)
         } finally {
             timber.log.Timber.uproot(czkTree)
