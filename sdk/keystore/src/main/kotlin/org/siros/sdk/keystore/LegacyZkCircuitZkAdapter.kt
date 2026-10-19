@@ -42,6 +42,10 @@ class LegacyZkCircuitZkAdapter(private val presentation: ZkMdocPresentation) : C
         presentation.releaseProvers()
     }
 
+    override suspend fun retire(descriptor: ZkCircuitDescriptor) {
+        presentation.onCircuitRetired(descriptor)
+    }
+
     override fun admits(circuit: CircuitZkCircuit, plan: CircuitZkPlan): Boolean {
         val request = request(plan) ?: return false
         val docType = docType(plan) ?: return false
@@ -62,7 +66,7 @@ class LegacyZkCircuitZkAdapter(private val presentation: ZkMdocPresentation) : C
         val claims = if (request.pseudonym) request.claims + LongfellowZkProofSystem.PSEUDONYM_CLAIM else request.claims
         val identity = if (request.pseudonym) {
             VerifierIdentity(
-                clientId = input.verifierId ?: throw refuse(),
+                clientId = input.verifierId?.takeIf { it.isNotEmpty() } ?: throw refuse(),
                 ppidContext = request.verifierContext ?: input.verifierContext,
             )
         } else {

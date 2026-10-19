@@ -120,6 +120,11 @@ class CatalogCircuitZkProver(
     /** Whether some adapter can produce a proof; false means every request is refused. */
     val canProve: Boolean get() = registry.canProve
 
+    /** A catalog refresh retired [descriptor]'s circuit: drop what is resident for it (see [ZkCircuitCatalogRefresher]). */
+    suspend fun onCircuitRetired(descriptor: ZkCircuitDescriptor) {
+        registry.retire(descriptor)
+    }
+
     /** Drops every adapter's resident prover memory. */
     fun releaseProvers() {
         registry.release()
@@ -128,7 +133,24 @@ class CatalogCircuitZkProver(
     override fun admits(circuit: CircuitZkCircuit, plan: CircuitZkPlan): Boolean = registry.admits(circuit, plan)
 
     override suspend fun prove(input: CircuitZkProveInput): CircuitZkProveOutput {
+        try {
+            return proveInternal(input)
+        } catch (e: CircuitZkError) {
+            throw e
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            // Throwable, not Exception: an OutOfMemoryError from a hostile artifact or an UnsatisfiedLinkError from a
+            // missing native library is a refusal, not a crash of the host.
+            Timber.w("circuit_zk: proving failed (${e.javaClass.simpleName}); refusing")
+            throw CircuitZkError.AccessDenied(CircuitZkStep.PROVE)
+        }
+    }
+
+    private suspend fun proveInternal(input: CircuitZkProveInput): CircuitZkProveOutput {
         val circuit = input.circuit
+        // NOTE: the proof time is the wallet's clock and is not bounded here; the verifier enforces the tolerance it
+        // accepts on proof_time. A wallet-side sanity window (or a trusted time source) is deferred.
         val descriptor = circuitClient.fetchCircuit(circuit.circuitId) ?: run {
             Timber.w("circuit_zk: no catalog descriptor for the chosen circuit; refusing")
             throw CircuitZkError.AccessDenied(CircuitZkStep.PROVE)

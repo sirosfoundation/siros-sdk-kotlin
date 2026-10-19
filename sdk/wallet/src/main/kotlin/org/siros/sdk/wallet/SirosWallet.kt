@@ -2102,6 +2102,15 @@ class SirosWallet private constructor(
         org.siros.sdk.credentials.CredentialDisclosureGuard.unregister(this)
         bumpSessionGeneration()
         activity.applicationContext.unregisterComponentCallbacks(memoryPressureCallbacks)
+        circuitCatalogRefreshJob?.cancel()
+        circuitCatalogNetworkCallback?.let {
+            try {
+                (activity.applicationContext.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager)
+                    ?.unregisterNetworkCallback(it)
+            } catch (e: Exception) {
+                Timber.w(e, "circuit catalog refresh: unregistering the connectivity callback failed")
+            }
+        }
         releaseAllZkProvers()
         engineSession?.disconnect()
         engineSession = null
@@ -4790,6 +4799,40 @@ class SirosWallet private constructor(
             releaseAllZkProvers()
         }
     }.also { activity.applicationContext.registerComponentCallbacks(it) }
+
+    /**
+     * Keeps the circuit cache in step with the catalog (see [org.siros.sdk.credentials.ZkCircuitCatalogRefresher]):
+     * a refresh at start, one every six hours and one when a network becomes available, only while `circuit_zk` is on.
+     * A circuit the catalog retires is expunged from the cache and from resident prover memory. Background, fail-soft,
+     * no UI; offline it changes nothing.
+     */
+    private val circuitCatalogRefresher = org.siros.sdk.credentials.ZkCircuitCatalogRefresher(
+        zkCircuitClient,
+        onRetired = { d ->
+            zkPresentation.onCircuitRetired(d)
+            if (defaultCircuitZkProverHolder.isInitialized()) defaultCircuitZkProverHolder.value.onCircuitRetired(d)
+        },
+    )
+    private val circuitCatalogRefreshJob: kotlinx.coroutines.Job? =
+        if (config.circuitZk) circuitCatalogRefresher.launchIn(scope) else null
+    private val circuitCatalogNetworkCallback: android.net.ConnectivityManager.NetworkCallback? =
+        if (config.circuitZk) {
+            try {
+                val callback = object : android.net.ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: android.net.Network) {
+                        scope.launch { circuitCatalogRefresher.requestRefresh() }
+                    }
+                }
+                (activity.applicationContext.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager)
+                    ?.registerDefaultNetworkCallback(callback)?.let { callback }
+            } catch (e: Exception) {
+                // No ACCESS_NETWORK_STATE permission, say: the periodic refresh still runs.
+                Timber.w(e, "circuit catalog refresh: no connectivity callback")
+                null
+            }
+        } else {
+            null
+        }
 
     /**
      * The zero-knowledge systems this wallet can prove with.

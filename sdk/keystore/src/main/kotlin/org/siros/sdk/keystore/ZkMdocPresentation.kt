@@ -6,6 +6,7 @@ import org.siros.sdk.credentials.CredentialDocument
 import org.siros.sdk.credentials.CredentialFormat
 import org.siros.sdk.credentials.CredentialTypeRef
 import org.siros.sdk.credentials.ZkCircuitClient
+import org.siros.sdk.credentials.ZkCircuitDescriptor
 import org.siros.sdk.credentials.ZkProofResult
 import org.siros.sdk.credentials.ZkProofSystem
 import org.siros.sdk.credentials.ZkProofSystemRegistry
@@ -48,6 +49,8 @@ class ZkMdocPresentation(
      * and residency is whatever each system does on its own.
      */
     private val residency: ZkProverResidency? = null,
+    /** Drops caches derived from a retired circuit's prover key (Vega's `prep_prove` cache), beyond the resident prover. */
+    private val dropDerivedState: suspend (ZkCircuitDescriptor) -> Unit = {},
 ) {
 
     /**
@@ -62,6 +65,15 @@ class ZkMdocPresentation(
 
     /** The residency the proof systems share, if they do; another prover may use it so the process still holds one prover at a time. */
     val proverResidency: ZkProverResidency? get() = residency
+
+    /**
+     * A catalog refresh retired [descriptor]'s circuit: the resident prover, when it is that circuit's, is dropped
+     * (as soon as an in-flight proof ends), and so is state derived from its key, so the circuit cannot be used again.
+     */
+    suspend fun onCircuitRetired(descriptor: ZkCircuitDescriptor) {
+        residency?.releaseCircuit(descriptor.id)
+        dropDerivedState(descriptor)
+    }
 
     /** Identifiers of every proof system available here - what a host advertises as its ZK capability. */
     val systemIds: List<String> get() = registry.systemIds
@@ -259,14 +271,17 @@ class ZkMdocPresentation(
             // One residency for both systems: whichever proves next evicts
             // the other's prover, so the process holds one at a time.
             val residency = ZkProverResidency()
+            val vegaCache = VegaProofCache()
             return ZkMdocPresentation(
                 ZkProofSystemRegistry(
                     listOf(
                         LongfellowZkProofSystem(circuitClient, residency = residency),
-                        VegaProofSystem(circuitClient, residency = residency, profilingSink = vegaProfilingSink),
+                        VegaProofSystem(circuitClient, residency = residency, proofCache = vegaCache, profilingSink = vegaProfilingSink),
                     ) + extra,
                 ),
                 residency = residency,
+                // A Vega cache entry is state of one prover key: a retired Vega key leaves none behind.
+                dropDerivedState = { d -> if (d.system == "vega-mc") vegaCache.clear() },
             )
         }
     }

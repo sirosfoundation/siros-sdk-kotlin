@@ -707,4 +707,54 @@ class CircuitZkPresenterTest {
         val out = present(pr, request(p = plan(CircuitZkFunction("custom_fn", "c", JsonObject(emptyMap())))))
         assertEquals(setOf("c"), out.results.keys)
     }
+
+    // -------- red team: the presenter checks what any prover returns --------
+
+    private fun okResults(pseudonym: ByteArray) = mapOf("n" to ResultValue.Pseudonym(pseudonym), "a" to ResultValue.Predicate)
+
+    private fun expectedPsc() = NymPseudonym.derive("known-offender-matching-psc", seed16, verifierId = "rp.example")
+
+    @Test
+    fun `an empty proof is refused by the presenter itself`() {
+        val empty = CountingProver(FakeCircuitZkProver.optIn(), override = { CircuitZkProveOutput(ByteArray(0), okResults(expectedPsc())) })
+        assertDenied(CircuitZkStep.PROVE) { present(presenter(empty), request()) }
+    }
+
+    @Test
+    fun `an empty verifier id is an invalid request`() {
+        try {
+            present(presenter(), request(verifierId = ""))
+            fail("expected an invalid request")
+        } catch (e: CircuitZkError.InvalidRequest) {
+            // expected
+        }
+    }
+
+    @Test
+    fun `an OutOfMemoryError or a missing native library in the prover is a refusal, not a crash`() {
+        for (t in listOf<Throwable>(OutOfMemoryError("hostile artifact"), UnsatisfiedLinkError("no lib"))) {
+            val boom = CountingProver(FakeCircuitZkProver.optIn(), override = { throw t })
+            assertDenied(CircuitZkStep.PROVE) { present(presenter(boom), request()) }
+        }
+    }
+
+    @Test
+    fun `the derived private_seed is zeroed once the proof is over`() {
+        var held: ByteArray? = null
+        val provider = object : CircuitZkWitnessProvider {
+            override fun witness(function: CircuitZkFunction, needs: Set<CircuitZkWitnessKind>, credentialType: String) =
+                CircuitZkFunctionWitness(privateSeed = seed16.also { held = it })
+
+            override fun privateSeedMatches(credentialType: String, psc: ByteArray) = true
+        }
+        val pr = CircuitZkPresenter(FakeCircuitZkProver.optIn(), { listOf(circuit) }, CircuitZkRequestValidator.PERMISSIVE, provider)
+        present(pr, request())
+        assertTrue(held!!.all { it == 0.toByte() })
+        // ...and also when the proof fails.
+        held = null
+        val boom = CountingProver(FakeCircuitZkProver.optIn(), override = { error("x") })
+        val pr2 = CircuitZkPresenter(boom, { listOf(circuit) }, CircuitZkRequestValidator.PERMISSIVE, provider)
+        assertDenied(CircuitZkStep.PROVE) { present(pr2, request()) }
+        assertTrue(held!!.all { it == 0.toByte() })
+    }
 }

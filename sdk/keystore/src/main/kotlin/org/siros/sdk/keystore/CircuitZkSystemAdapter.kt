@@ -35,6 +35,9 @@ interface CircuitZkSystemAdapter {
 
     /** Drops resident prover memory. */
     fun release() {}
+
+    /** [descriptor]'s circuit was retired by a catalog refresh: drop resident memory and caches derived from it. */
+    suspend fun retire(descriptor: ZkCircuitDescriptor) {}
 }
 
 /**
@@ -72,5 +75,10 @@ class CircuitZkSystemRegistry(val adapters: List<CircuitZkSystemAdapter>) {
 
     fun release() {
         adapters.forEach { it.release() }
+    }
+
+    /** Tells the adapter that claims [descriptor]'s system that the circuit was retired. */
+    suspend fun retire(descriptor: ZkCircuitDescriptor) {
+        adapterFor(descriptor.system, descriptor.systemVersion)?.retire(descriptor)
     }
 }

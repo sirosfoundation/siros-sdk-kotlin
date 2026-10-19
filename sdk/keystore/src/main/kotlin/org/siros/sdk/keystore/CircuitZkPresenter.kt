@@ -331,8 +331,9 @@ class CircuitZkPresenter(
         } catch (e: kotlinx.coroutines.CancellationException) {
             // A cancelled or timed-out caller gets cancellation, not a refusal.
             throw e
-        } catch (e: Exception) {
-            // Any failure of a collaborator (prover, witness provider, circuit source) is a silent refusal.
+        } catch (e: Throwable) {
+            // Any failure of a collaborator (prover, witness provider, circuit source) is a silent refusal; an
+            // OutOfMemoryError or a missing native library included, never a crash of the host.
             Timber.w("circuit_zk presentation failed (${e.javaClass.simpleName})")
             throw CircuitZkError.AccessDenied(CircuitZkStep.PROVE)
         }
@@ -358,6 +359,8 @@ class CircuitZkPresenter(
         } catch (e: Exception) {
             throw CircuitZkError.InvalidRequest()
         }
+        // An empty verifier id is no identity: it would hash to a pseudonym every verifier-less request shares.
+        if (request.verifierId != null && request.verifierId.isEmpty()) throw CircuitZkError.InvalidRequest()
         val functionHandlers = plan.functions.map { handlersById[it.id] ?: throw CircuitZkError.InvalidRequest() }
 
         // 1. Defence in depth: the validator already ran at matching time.
@@ -423,19 +426,26 @@ class CircuitZkPresenter(
         val circuit = circuits.circuits().firstOrNull { it.supports(plan, document.docType, serving) && prover.admits(it, plan) } ?: refuse(CircuitZkStep.CIRCUIT)
 
         // 7. Prove.
-        val output = prover.prove(
-            CircuitZkProveInput(
-                circuit = circuit,
-                plan = plan,
-                credentialBytes = request.credentialBytes,
-                sessionTranscript = request.sessionTranscript,
-                verifierId = request.verifierId,
-                verifierContext = request.verifierContext,
-                witnesses = witnesses,
-                signer = signer,
-            ),
-        )
-        if (output.results.keys != plan.functions.map { it.handle }.toSet()) refuse(CircuitZkStep.PROVE)
+        val output = try {
+            val out = prover.prove(
+                CircuitZkProveInput(
+                    circuit = circuit,
+                    plan = plan,
+                    credentialBytes = request.credentialBytes,
+                    sessionTranscript = request.sessionTranscript,
+                    verifierId = request.verifierId,
+                    verifierContext = request.verifierContext,
+                    witnesses = witnesses,
+                    signer = signer,
+                ),
+            )
+            if (out.proof.isEmpty()) refuse(CircuitZkStep.PROVE)
+            if (out.results.keys != plan.functions.map { it.handle }.toSet()) refuse(CircuitZkStep.PROVE)
+            out
+        } finally {
+            // The derived private_seed (and the user value) live only for this proof.
+            witnesses.values.forEach { it.privateSeed?.fill(0) }
+        }
 
         // 8. Assemble and encode.
         val keySet = issuerKeySet(document) ?: refuse(CircuitZkStep.BUILD)

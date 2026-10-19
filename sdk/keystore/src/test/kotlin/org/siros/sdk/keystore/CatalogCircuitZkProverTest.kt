@@ -11,12 +11,17 @@ import java.util.Base64
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -549,5 +554,71 @@ class CatalogCircuitZkProverTest {
         prove(p, input())
         assertEquals(2, decompressions)
         assertNotEquals(0, downloads)
+    }
+
+    // -------- red team --------
+
+    @Test
+    fun `a throwable from the native side or the artifact path is a refusal, not a crash`() {
+        for (t in listOf<Throwable>(OutOfMemoryError("hostile"), UnsatisfiedLinkError("no lib"), StackOverflowError())) {
+            assertRefused { prove(prover(Recording { throw t }), input()) }
+        }
+        val boomDecompress: (ByteArray, ZkCircuitDescriptor) -> ByteBuffer = { _, _ -> throw OutOfMemoryError("frame says 4 GB") }
+        assertRefused { prove(CatalogCircuitZkProver(client(), honestNative(), ZkProverResidency(), clock, boomDecompress), input()) }
+    }
+
+    @Test
+    fun `an empty verifier id is refused`() {
+        val native = honestNative()
+        assertRefused { prove(prover(native), input(verifierId = "")) }
+        assertEquals(0, native.calls)
+    }
+
+    // -------- catalog refresh: a retired circuit stops being usable --------
+
+    @Test
+    fun `a circuit the refresh retires is refused afterwards and its resident circuit is dropped`() {
+        var current: ZkCircuitDescriptor = descriptor()
+        val dir = java.nio.file.Files.createTempDirectory("nymrefresh").toFile().also { it.deleteOnExit() }
+        val c = ZkCircuitClient(
+            sources = listOf("https://catalog.test"),
+            httpGet = { url ->
+                when {
+                    url.endsWith("/v1/manifest.json") -> Json.encodeToString(org.siros.sdk.credentials.ZkManifest.serializer(), org.siros.sdk.credentials.ZkManifest(circuits = listOf(current)))
+                    url.endsWith("/v1/circuits/${current.id}.json") -> Json.encodeToString(ZkCircuitDescriptor.serializer(), current)
+                    else -> null
+                }
+            },
+            httpGetBytes = { downloads++; servedBytes },
+            cacheDir = dir,
+        )
+        val native = honestNative()
+        val residency = ZkProverResidency()
+        val p = CatalogCircuitZkProver(c, native, residency, clock, decompress)
+        prove(p, input())
+        assertEquals(1, decompressions)
+        assertTrue(residency.residentKey!!.contains(circuitId))
+        assertTrue(c.isArtifactCached(current))
+
+        // The catalog now says the circuit is deprecated; the refresh expunges it and tells the prover.
+        current = descriptor(deprecatedAt = "2026-10-19T00:00:00Z")
+        val result = runBlocking { org.siros.sdk.credentials.ZkCircuitCatalogRefresher(c, onRetired = p::onCircuitRetired).refreshOnce() }
+        assertTrue(result is org.siros.sdk.credentials.ZkCircuitCatalogRefresher.Result.Refreshed)
+        assertNull("the resident circuit is gone", residency.residentKey)
+        assertFalse(c.isArtifactCached(current))
+        assertRefused { prove(p, input()) }
+        assertEquals(1, native.calls)
+    }
+
+    @Test
+    fun `retiring another circuit leaves the resident one alone`() {
+        val residency = ZkProverResidency()
+        val native = honestNative()
+        val p = CatalogCircuitZkProver(client(), native, residency, clock, decompress)
+        prove(p, input())
+        runBlocking { p.onCircuitRetired(descriptor(id = "nymauth-vega-mdoc-v1")) }
+        assertNotNull(residency.residentKey)
+        runBlocking { p.onCircuitRetired(descriptor()) }
+        assertNull(residency.residentKey)
     }
 }

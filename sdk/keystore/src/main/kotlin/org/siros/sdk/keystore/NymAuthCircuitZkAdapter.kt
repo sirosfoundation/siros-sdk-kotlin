@@ -87,6 +87,10 @@ class NymAuthCircuitZkAdapter(
         residency.release()
     }
 
+    override suspend fun retire(descriptor: ZkCircuitDescriptor) {
+        residency.releaseCircuit(descriptor.id)
+    }
+
     override fun admits(circuit: CircuitZkCircuit, plan: CircuitZkPlan): Boolean =
         plan.functions.none { it.id == CircuitZkLegacyDisclosure.FUNCTION_ID }
 
@@ -106,7 +110,8 @@ class NymAuthCircuitZkAdapter(
         if (info == null || info.seedKind != NymSeedKind.SECRET || info.userValue || !info.verifierId || info.verifierContext) throw refuse()
         val witness = input.witnesses[pseudonymFn.handle] ?: throw refuse()
         val seed = witness.secretSeed?.takeIf { it.size == SECRET_SEED_BYTES } ?: throw refuse()
-        val verifierId = input.verifierId ?: throw refuse()
+        // An empty verifier id is no identity (every verifier-less request would share its pseudonym).
+        val verifierId = input.verifierId?.takeIf { it.isNotEmpty() } ?: throw refuse()
         val (earliest, cutoff) = ageBounds(ageFn)
 
         // 2. The circuit.

@@ -414,4 +414,20 @@ class LegacyZkCircuitZkAdapterTest {
         assertRefused { run(none, input(plan(disclosure()))) }
         assertTrue(logs.any { it.contains("no adapter") })
     }
+
+    @Test
+    fun `a retired circuit drops the presentation's resident prover and derived state through the adapter`() {
+        val residency = ZkProverResidency()
+        val dropped = mutableListOf<String>()
+        val presentation = ZkMdocPresentation(ZkProofSystemRegistry(listOf(FakeLegacy())), residency, dropDerivedState = { dropped += it.id })
+        val p = CatalogCircuitZkProver(client(descriptor()), CircuitZkSystemRegistry(listOf(LegacyZkCircuitZkAdapter(presentation))))
+        runBlocking { residency.use("longfellow-libzk-v1:$circuitId:2", { AutoCloseable {} }) { } }
+        runBlocking { p.onCircuitRetired(descriptor(id = "other")) }
+        assertEquals("longfellow-libzk-v1:$circuitId:2", residency.residentKey)
+        runBlocking { p.onCircuitRetired(descriptor()) }
+        assertNull(residency.residentKey)
+        assertEquals(listOf("other", circuitId), dropped)
+        // A system no adapter claims has nobody to tell.
+        runBlocking { p.onCircuitRetired(descriptor(system = "unknown")) }
+    }
 }

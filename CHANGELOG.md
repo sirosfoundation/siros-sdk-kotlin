@@ -27,6 +27,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   this adapter refuses. `LegacyZkCircuitZkAdapter`: Longfellow (`longfellow`
   6-8) and Vega-mc (`vega-mc` 12) through the existing `ZkMdocPresentation`, so
   the real proof systems, their shared `ZkProverResidency` and `VegaProofCache`.
+- **Catalog refresh: a retired circuit is expunged as soon as the SDK sees it.**
+  `ZkCircuitCatalogRefresher` (started by the wallet while `circuit_zk` is on: at
+  start, every six hours and when a network becomes available; background,
+  fail-soft, no UI) fetches the manifest and makes the cache match it. A circuit
+  the manifest does not list as published, `active` and not deprecated, or no
+  longer lists at all (a complete manifest, `next` absent), loses its cached
+  descriptor and its cached artifact (unless an active circuit uses the same
+  artifact hash) and its resident prover memory (`ZkProverResidency.releaseCircuit`,
+  Vega's proof cache). A partial page (`next` set) retires only what it lists as
+  not active. A cached descriptor of an active circuit is replaced by the
+  manifest's. A proving-path fetch that sees a retired descriptor expunges it
+  too. Offline (no manifest) nothing changes: cached circuits stay usable until a
+  refresh reaches the catalog, with no age limit. Also: artifacts are fetched
+  against the catalog's declared size (absent or over the ceiling is refused),
+  catalog bodies and artifacts are read with a hard limit, the zstd frame's size
+  must equal the catalog's `uncompressed.size`, and an `OutOfMemoryError` or a
+  missing native library in a prover is a refusal, not a crash. The proof time is
+  the device clock and is not bounded by the wallet (the verifier enforces its
+  tolerance on `proof_time`); a sanity window or trusted time is deferred. An empty
+  `verifier_id` is refused, and the derived `private_seed` is zeroed after a
+  presentation.
 - **PROPOSAL: `zk-claim-disclosure-v1`, a `circuit_zk` function for the legacy
   proof systems** (`CircuitZkLegacyDisclosure`; the id is one constant, the
   rulebook owners decide the name). Params `claims`, `systems` (the verifier's
