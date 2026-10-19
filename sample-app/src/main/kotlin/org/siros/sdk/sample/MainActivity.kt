@@ -255,6 +255,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
     val useWmpProtocol by viewModel.useWmpProtocol.collectAsState()
     val showCredentialDetails by viewModel.showCredentialDetails.collectAsState()
     val pendingTransactionConsent by viewModel.pendingTransactionConsent.collectAsState()
+    val pendingPresentationConsent by viewModel.pendingPresentationConsent.collectAsState()
     val showTransactionLog by viewModel.showTransactionLog.collectAsState()
 
     LaunchedEffect(errorMessage) {
@@ -453,6 +454,13 @@ fun WalletScreen(viewModel: WalletViewModel) {
                 request = pendingTransactionConsent!!,
                 onConfirm = { viewModel.answerTransactionConsent(true) },
                 onDeny = { viewModel.answerTransactionConsent(false) },
+            )
+
+            // circuit_zk presentation (what the verifier will receive) - the SDK built the request and owns the wording
+            pendingPresentationConsent != null -> PresentationConsentDialog(
+                request = pendingPresentationConsent!!,
+                onAgree = { viewModel.answerPresentationConsent(true) },
+                onDecline = { viewModel.answerPresentationConsent(false) },
             )
 
             showTransactionLog -> TransactionLogScreen(

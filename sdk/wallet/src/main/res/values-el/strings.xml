@@ -12,4 +12,20 @@
     <string name="siros_dcapi_refused_request_not_verified">Δεν ήταν δυνατό να επαληθευτεί ότι το αίτημα προέρχεται από τον ιστότοπο στον οποίο βρίσκεστε, γι\' αυτό δεν κοινοποιήθηκε τίποτα.</string>
     <string name="siros_dcapi_refused_verifier_id_unavailable">Το πορτοφόλι σας δεν μπόρεσε να καθορίσει ποιος ζητά τα στοιχεία, γι\' αυτό δεν κοινοποιήθηκε τίποτα.</string>
     <string name="siros_dcapi_refused_proof_failed">Το πορτοφόλι σας δεν μπόρεσε να δημιουργήσει την απόδειξη, γι\' αυτό δεν κοινοποιήθηκε τίποτα. Δοκιμάστε ξανά.</string>
+    <!-- circuit_zk consent. Wording approved by leifj except: title, buttons, "share" header, legacy claim/pseudonym lines and the two refusal messages (SDK-authored, translations unreviewed in non-English locales). -->
+    <string name="siros_consent_title">Επιβεβαίωση κοινοποίησης</string>
+    <string name="siros_consent_share">Κοινοποίηση</string>
+    <string name="siros_consent_cancel">Ακύρωση</string>
+    <string name="siros_consent_verifier_prove">Η υπηρεσία %1$s σας ζητά να αποδείξετε:</string>
+    <string name="siros_consent_verifier_share">Η υπηρεσία %1$s σας ζητά να κοινοποιήσετε:</string>
+    <string name="siros_consent_age_between">Έχετε γεννηθεί μεταξύ %1$s και %2$s (περίπου %3$d–%4$d ετών). Η ακριβής ημερομηνία γέννησής σας δεν κοινοποιείται.</string>
+    <string name="siros_consent_age_at_least">Είστε τουλάχιστον %1$d ετών. Η ακριβής ημερομηνία γέννησής σας δεν κοινοποιείται.</string>
+    <string name="siros_consent_age_at_most">Είστε το πολύ %1$d ετών. Η ακριβής ημερομηνία γέννησής σας δεν κοινοποιείται.</string>
+    <string name="siros_consent_pseudonym_issuer">Κοινοποιείται ένα ψευδώνυμο για την υπηρεσία %1$s. Λαμβάνετε το ίδιο ψευδώνυμο κάθε φορά που επισκέπτεστε αυτή την υπηρεσία και διαφορετικό σε κάθε άλλη υπηρεσία. Ο φορέας που εξέδωσε το διαπιστευτήριό σας μπορεί να βρει σε ποιον ανήκει αυτό το ψευδώνυμο.</string>
+    <string name="siros_consent_pseudonym">Κοινοποιείται ένα ψευδώνυμο για την υπηρεσία %1$s. Λαμβάνετε το ίδιο ψευδώνυμο κάθε φορά που επισκέπτεστε αυτή την υπηρεσία και διαφορετικό σε κάθε άλλη υπηρεσία.</string>
+    <string name="siros_consent_footer">Δεν κοινοποιούνται άλλα προσωπικά δεδομένα.</string>
+    <string name="siros_consent_claim">Η τιμή «%1$s» από το διαπιστευτήριό σας κοινοποιείται.</string>
+    <string name="siros_consent_legacy_pseudonym">Κοινοποιείται ένα ψευδώνυμο στην υπηρεσία %1$s.</string>
+    <string name="siros_dcapi_refused_consent_unavailable">Το πορτοφόλι σας δεν μπορεί να ζητήσει την έγκρισή σας αυτή τη στιγμή, οπότε δεν κοινοποιήθηκε τίποτα.</string>
+    <string name="siros_dcapi_refused_user_declined">Δεν εγκρίνατε το αίτημα, οπότε δεν κοινοποιήθηκε τίποτα.</string>
 </resources>

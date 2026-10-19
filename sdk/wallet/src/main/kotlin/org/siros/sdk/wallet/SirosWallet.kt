@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -311,6 +312,20 @@ class SirosWallet private constructor(
      */
     @Volatile
     var transactionConsentHandler: TransactionConsentHandler? = null
+
+    /**
+     * Asks the user to consent to a `circuit_zk` presentation (what the verifier will receive), once per
+     * request and before anything is signed or proved. A sibling of [transactionConsentHandler], not
+     * coupled to [transactionDataEnabled]. `null` (the default) means the wallet cannot ask, so it refuses
+     * every `circuit_zk` request ([org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.CONSENT_UNAVAILABLE]). A DC
+     * API request can bring its own handler, which takes precedence (see [handleDCAPIRequest]). Thread-safe.
+     */
+    @Volatile
+    var presentationConsentHandler: PresentationConsentHandler? = null
+
+    /** How long the user has to answer a presentation consent; `null` is the default of two minutes. For tests. */
+    @Volatile
+    internal var presentationConsentTimeoutMillis: Long? = null
 
     /**
      * Whether `transaction_data` handling is in force: [transactionDataEnabled]
@@ -4189,8 +4204,14 @@ class SirosWallet private constructor(
      * USER only. Nothing here logs request contents or the verifier id.
      *
      * Trust is the policy decision point's answer alone: no local certificate
-     * check and no trust cache, so an outage is a refusal. Consent was the
-     * OS picker's, so there is no in-app consent step.
+     * check and no trust cache, so an outage is a refusal.
+     *
+     * The flow has two phases around ONE consent. Phase 1 touches no secret: validation, trust, the user's
+     * pick (required: nothing is chosen for them), the local age check, the verifier id, and the
+     * [org.siros.sdk.credentials.ConsentItem]s the verifier would receive. Then the [PresentationConsentHandler]
+     * is asked once for ALL queries. Only on `true` does phase 2 fetch the secret seed, sign and prove. A decline,
+     * an exception, a timeout or a cancelled activity is a decline with no seed, signer or prover call; with no
+     * handler at all the request is refused ([org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.CONSENT_UNAVAILABLE]).
      *
      * A request carrying `transaction_data` is refused (reason
      * [org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST]) before anything else: this
@@ -4215,6 +4236,9 @@ class SirosWallet private constructor(
         val prover = circuitZkProver ?: defaultCircuitZkProverHolder.value
         val registry = verifierIdRegistry ?: refuse("no-sources", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
         val query = request.dcqlQuery ?: refuse("no-query", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+        // Consent is the wallet's own step, after the OS picker: with nobody to ask, the request is never answered.
+        val consentHandler = currentCoroutineContext()[DcApiPresentationConsentHandler]?.handler ?: presentationConsentHandler
+            ?: refuse("no-consent-handler", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.CONSENT_UNAVAILABLE)
 
         // Plan, validate, match.
         val allCreds = credentialStore.getAll()
@@ -4255,19 +4279,20 @@ class SirosWallet private constructor(
         if (results.isEmpty() || results.any { !CredentialUtils.isCircuitZkFormat(it.format) }) refuse("query-shape", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
         if (results.any { it.circuitZkPlan == null || it.candidates.isEmpty() }) refuse("no-match", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NO_MATCHING_CREDENTIAL)
 
+        // No silent first-eligible: the credential that is proved is the one the user picked, and the consent
+        // screen names it. A call that names none is refused, never read as "any".
+        if (selectedCredentialIds.isEmpty()) refuse("no-pick", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
         // The user's pick: the credential ids, plus every other copy of the same credential (batch).
         val pickedBatches = selectedCredentialIds.mapNotNull { id -> allCreds.firstOrNull { it.id == id }?.batchId }.toSet()
         fun picked(c: StoredCredential) = c.id in selectedCredentialIds || (c.batchId != null && c.batchId in pickedBatches)
         // Fail closed: EVERY picked id must be a candidate of some query (an id that is unknown, unreadable
         // (the sentinel) or a candidate of none of them refuses the whole selection, so the matching subset
         // never authorises a response), and a pick listed twice is ambiguous.
-        if (selectedCredentialIds.isNotEmpty()) {
-            if (selectedCredentialIds.toSet().size != selectedCredentialIds.size) {
-                refuse("selection-duplicate", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
-            }
-            if (selectedCredentialIds.any { id -> results.none { r -> r.candidates.any { it.id == id } } }) {
-                refuse("selection-not-candidate", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
-            }
+        if (selectedCredentialIds.toSet().size != selectedCredentialIds.size) {
+            refuse("selection-duplicate", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+        }
+        if (selectedCredentialIds.any { id -> results.none { r -> r.candidates.any { it.id == id } } }) {
+            refuse("selection-not-candidate", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
         }
 
         val encryptionJwk = if (request.responseMode == "dc_api.jwt") {
@@ -4285,23 +4310,36 @@ class SirosWallet private constructor(
             ?.circuitZkPresenter(prover, support.circuits, support.validator, serving = support.serving)
             ?: org.siros.sdk.keystore.CircuitZkPresenter(prover, support.circuits, support.validator, NoWitnessProvider, serving = support.serving)
         val verifierContext = VerifierIdContext(request, trust, origin)
+        val today = java.time.LocalDate.now(java.time.ZoneOffset.UTC)
 
-        val tokensByQueryId = linkedMapOf<String, List<String>>()
-        val usedIds = mutableListOf<Long>()
+        // ── Phase 1: decide what would be presented. No secret is touched here: no seed, no signature, no proof. ──
+        class Prepared(
+            val queryId: String,
+            val plan: org.siros.sdk.credentials.CircuitZkPlan,
+            val cred: StoredCredential,
+            val verifierId: String?,
+            val context: String?,
+            val needsSecretSeed: Boolean,
+        )
+        val prepared = mutableListOf<Prepared>()
+        var resolvedVerifier: ResolvedVerifierId? = null
         for ((queryIndex, result) in results.withIndex()) {
             val plan = result.circuitZkPlan ?: refuse("no-plan", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
             // Best effort for a multi-credential selection: when the picker reported one credential per
             // query, the one at this query's position goes first; otherwise picks keep their reported order.
-            val pickedHere = if (selectedCredentialIds.isEmpty()) emptyList() else result.candidates.filter(::picked).sortedBy { c ->
+            val pickedHere = result.candidates.filter(::picked).sortedBy { c ->
                 val position = selectedCredentialIds.indexOf(c.id).let { if (it < 0) selectedCredentialIds.size else it }
                 if (selectedCredentialIds.size == results.size && position == queryIndex) -1 else position
             }
-            // A query the user's pick belongs to presents only that credential. When a pick was made, a
-            // query it does not belong to is refused: the user consented to the credential they picked,
-            // never to another one. Only without any pick does the first eligible candidate answer.
-            if (selectedCredentialIds.isNotEmpty() && pickedHere.isEmpty()) refuse("query-without-pick", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+            // A query the user's pick does not belong to is refused: the user consented to the credential they
+            // picked, never to another one.
+            if (pickedHere.isEmpty()) refuse("query-without-pick", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+            // The age predicate is checked here, against the credential's own birth_date: nothing leaves the
+            // device, and the user is not asked to consent to something that will be refused.
+            val satisfying = pickedHere.filter { circuitZkPredicatesHold(plan, it) }
+            if (satisfying.isEmpty()) refuse("predicate-unsatisfiable", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
             // Every copy answers as a circuit proof, so CONSUME_NON_ZKP never counts a copy used for one as consumed.
-            val cred = eligibleInstances(if (selectedCredentialIds.isEmpty()) result.candidates else pickedHere) { true }.firstOrNull() ?: refuse("no-eligible-copy", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+            val cred = eligibleInstances(satisfying) { true }.firstOrNull() ?: refuse("no-eligible-copy", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
             val pseudonym = plan.functions.firstOrNull { it.id == org.siros.sdk.credentials.CircuitZkRuleSet.PSEUDONYM }
             // Whether a verifier id is needed follows from the pseudonym config (the request no longer carries a
             // verifier_id_type, and one it names is ignored). The trust framework fixes the type, and the wallet
@@ -4311,21 +4349,54 @@ class SirosWallet private constructor(
             val legacyPseudonym = plan.functions.any { f -> org.siros.sdk.credentials.CircuitZkLegacyDisclosure.parse(f)?.pseudonym == true }
             val needsVerifierId = legacyPseudonym || (pseudonym?.params?.get("config") as? kotlinx.serialization.json.JsonPrimitive)
                 ?.contentOrNull?.let { org.siros.sdk.credentials.NymPseudonym.describe(it)?.verifierId } == true
-            val verifierId = if (needsVerifierId) registry.resolve(verifierContext) ?: refuse("verifier-id", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE) else null
+            val resolved = if (needsVerifierId) registry.resolve(verifierContext) ?: refuse("verifier-id", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE) else null
+            if (resolved != null && resolvedVerifier == null) resolvedVerifier = resolved
             val context = (pseudonym?.params?.get("verifier_context") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
-            val kid = cred.kid ?: keystore.listKeys().firstOrNull()?.keyId
-            // Fetched only when the chosen config derives from the secret seed; the presenter verifies it
-            // against ssc, and this copy is zeroed whatever happens.
+            // Only the seed's NEED is decided here; it is fetched in phase 2, after consent.
             val needsSecretSeed = (pseudonym?.params?.get("config") as? kotlinx.serialization.json.JsonPrimitive)
                 ?.contentOrNull?.let { org.siros.sdk.credentials.NymPseudonym.describe(it)?.seedKind } == org.siros.sdk.credentials.NymSeedKind.SECRET
-            val secretSeed = if (needsSecretSeed) credentialSecretSeedSource.secretSeed(cred.id) else null
+            prepared += Prepared(result.queryId, plan, cred, resolved?.id, context, needsSecretSeed)
+        }
+
+        // ── Consent: ONE call for the whole request, before anything is signed or proved. ──
+        // What the verifier would receive; a function or config the consent cannot describe is refused, not hidden.
+        val consentRequest = org.siros.sdk.credentials.ConsentRequests.build(
+            queries = prepared.map { p ->
+                org.siros.sdk.credentials.ConsentRequests.Query(
+                    p.plan,
+                    org.siros.sdk.credentials.CredentialRef(p.cred.metadata?.name, p.cred.metadata?.issuer?.name),
+                    p.verifierId,
+                )
+            },
+            trust = org.siros.sdk.credentials.ConsentRequests.Trust(
+                entityName = trust.entityName,
+                framework = trust.framework,
+                identifier = trust.identifier,
+                intermediaryRisk = (trust.context?.get("intermediary_risk") as? kotlinx.serialization.json.JsonPrimitive)?.booleanOrNull == true,
+            ),
+            verifiedClientIdDisplayName = request.clientId?.takeIf { request.keyMaterial != null }?.let { ClientIdScheme.parse(it).displayName },
+            attestedOrigin = origin,
+            verifierIdType = resolvedVerifier?.type,
+            today = today,
+            locale = java.util.Locale.getDefault().toLanguageTag(),
+        ) ?: refuse("consent-items", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+        if (!askPresentationConsent(consentHandler, consentRequest)) refuse("consent-declined", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.USER_DECLINED)
+
+        // ── Phase 2: the user agreed. Only now is the secret seed fetched and anything signed or proved. ──
+        val tokensByQueryId = linkedMapOf<String, List<String>>()
+        val usedIds = mutableListOf<Long>()
+        for (p in prepared) {
+            val cred = p.cred
+            val kid = cred.kid ?: keystore.listKeys().firstOrNull()?.keyId
+            // The presenter verifies the seed against ssc, and this copy is zeroed whatever happens.
+            val secretSeed = if (p.needsSecretSeed) credentialSecretSeedSource.secretSeed(cred.id) else null
             val presented = try {
                 presenter.present(
                     org.siros.sdk.keystore.CircuitZkPresenter.Request(
                         credentialBytes = Base64.getUrlDecoder().decode(cred.raw),
-                        plan = plan,
-                        verifierId = verifierId,
-                        verifierContext = context,
+                        plan = p.plan,
+                        verifierId = p.verifierId,
+                        verifierContext = p.context,
                         sessionTranscript = transcript,
                         secretSeed = secretSeed,
                     ),
@@ -4339,7 +4410,7 @@ class SirosWallet private constructor(
             } finally {
                 secretSeed?.fill(0)
             }
-            tokensByQueryId[result.queryId] = listOf(presented.base64Url)
+            tokensByQueryId[p.queryId] = listOf(presented.base64Url)
             usedIds += cred.id
         }
 
@@ -4356,6 +4427,43 @@ class SirosWallet private constructor(
             timestamp = System.currentTimeMillis(),
         ))
         return DCAPIPresentationResult(responseJson = finalResponseJson, credentialIds = usedIds)
+    }
+
+    /**
+     * Whether every `age_check` of [plan] holds for [credential]'s own `birth_date`. Local only: nothing is sent
+     * anywhere. A credential that cannot be read, or has no usable `birth_date`, does not satisfy one.
+     */
+    private fun circuitZkPredicatesHold(plan: org.siros.sdk.credentials.CircuitZkPlan, credential: StoredCredential): Boolean {
+        val age = plan.functions.filter { it.id == org.siros.sdk.credentials.CircuitZkRuleSet.AGE_CHECK }
+        if (age.isEmpty()) return true
+        val document = try {
+            org.siros.sdk.credentials.mdoc.MdocCbor.parseStoredCredential(Base64.getUrlDecoder().decode(credential.raw))
+        } catch (e: Exception) {
+            return false
+        }
+        return age.all { org.siros.sdk.keystore.AgeCheckFunctionHandler.holds(it, document) }
+    }
+
+    /**
+     * Asks the user. A handler that throws, is cancelled from its own scope, or does not answer in time is a
+     * decline, never consent; only the wallet's own coroutine being cancelled propagates. Nothing of the
+     * request is logged.
+     */
+    private suspend fun askPresentationConsent(
+        handler: PresentationConsentHandler,
+        request: org.siros.sdk.credentials.PresentationConsentRequest,
+    ): Boolean = try {
+        kotlinx.coroutines.withTimeoutOrNull(presentationConsentTimeoutMillis ?: PRESENTATION_CONSENT_TIMEOUT_MILLIS) {
+            handler.confirm(request)
+        } == true
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        currentCoroutineContext().ensureActive()
+        Timber.w("The presentation consent handler was cancelled; treating it as declined")
+        false
+    } catch (e: Throwable) {
+        if (e is VirtualMachineError) throw e
+        Timber.w("The presentation consent handler failed (${e.javaClass.simpleName}); treating it as declined")
+        false
     }
 
     /**
@@ -4378,20 +4486,32 @@ class SirosWallet private constructor(
         companion object Key : kotlin.coroutines.CoroutineContext.Key<DcApiConsentHandler>
     }
 
+    /** Carries the per-request `circuit_zk` presentation consent handler of [handleDCAPIRequest]'s overload. */
+    private class DcApiPresentationConsentHandler(val handler: PresentationConsentHandler) : kotlin.coroutines.AbstractCoroutineContextElement(Key) {
+        companion object Key : kotlin.coroutines.CoroutineContext.Key<DcApiPresentationConsentHandler>
+    }
+
     /**
      * As [handleDCAPIRequest], with [consentHandler] showing a payment
      * confirmation (`transaction_data`) for this request in place of
-     * [transactionConsentHandler]. The DC API activity passes a handler that
-     * shows a dialog in the activity itself, because the app's own screens
-     * are not in front of the user during a DC API request.
+     * [transactionConsentHandler], and [presentationConsentHandler] asking for
+     * consent to a `circuit_zk` presentation in place of the wallet-level
+     * [SirosWallet.presentationConsentHandler]. The DC API activity passes handlers that
+     * show a dialog in the activity itself, because the app's own screens
+     * are not in front of the user during a DC API request. A null handler leaves the wallet-level one in force.
      */
     suspend fun handleDCAPIRequest(
         rawRequestJson: String,
         origin: String,
-        consentHandler: TransactionConsentHandler,
+        consentHandler: TransactionConsentHandler?,
         selectedCredentialIds: List<Long>? = null,
-    ): DCAPIPresentationResult =
-        withContext(DcApiConsentHandler(consentHandler)) { handleDCAPIRequest(rawRequestJson, origin, selectedCredentialIds) }
+        presentationConsentHandler: PresentationConsentHandler? = null,
+    ): DCAPIPresentationResult {
+        var context: kotlin.coroutines.CoroutineContext = kotlin.coroutines.EmptyCoroutineContext
+        if (consentHandler != null) context += DcApiConsentHandler(consentHandler)
+        if (presentationConsentHandler != null) context += DcApiPresentationConsentHandler(presentationConsentHandler)
+        return withContext(context) { handleDCAPIRequest(rawRequestJson, origin, selectedCredentialIds) }
+    }
 
     /** Refuses (and logs) a DC API request carrying `transaction_data` this wallet is not set up to process. */
     private suspend fun refuseDcApiTransactionData(request: org.siros.sdk.wallet.dcapi.DCAPIRequest, origin: String) {
@@ -8995,6 +9115,9 @@ class SirosWallet private constructor(
 
     companion object {
         internal const val HKDF_INFO = "eDiplomas PRF"
+
+        /** The SDK-side time limit for the user's answer to a `circuit_zk` presentation consent. */
+        private const val PRESENTATION_CONSENT_TIMEOUT_MILLIS = 120L * 1000
 
         /** Thrown wherever a call needs the backend and the wallet has no session yet. */
         private const val NOT_CONNECTED = "Not connected"

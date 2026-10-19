@@ -5322,13 +5322,22 @@ class SirosWalletTest {
         val history: MutableList<PresentationRecord>,
         val prover: CountingCzkProver,
         val trustRequests: MutableList<JsonObject> = mutableListOf(),
+        /** Every consent request the wallet asked, in order. */
+        val consents: MutableList<org.siros.sdk.credentials.PresentationConsentRequest> = mutableListOf(),
+        /** The order of the steps that touch a secret or the user: `consent`, `seed`, `sign`, `prove`. */
+        val events: MutableList<String> = mutableListOf(),
     )
 
     private class CountingCzkProver(val inner: org.siros.sdk.keystore.CircuitZkProver) : org.siros.sdk.keystore.CircuitZkProver {
         var calls = 0
+        var events: MutableList<String>? = null
+        /** When set, the prover asks the signer for a signature first, like a real one. */
+        var signs = false
         override val isFake get() = inner.isFake
         override suspend fun prove(input: org.siros.sdk.keystore.CircuitZkProveInput): org.siros.sdk.keystore.CircuitZkProveOutput {
             calls++
+            events?.add("prove")
+            if (signs) input.signer.sign(-7, byteArrayOf(1, 2, 3))
             return inner.prove(input)
         }
     }
@@ -5362,13 +5371,22 @@ class SirosWalletTest {
         secretSeedSource: CredentialSecretSeedSource? = null,
         /** No prover is configured, so the wallet uses its default (the catalog prover without a native half). */
         defaultProver: Boolean = false,
+        /** The user's answer to the presentation consent; the default consents. */
+        consent: suspend (org.siros.sdk.credentials.PresentationConsentRequest) -> Boolean = { true },
+        /** No presentation consent handler is registered at all. */
+        noConsentHandler: Boolean = false,
+        /** The prover asks the signer for a signature, like a real one. */
+        proverSigns: Boolean = false,
     ): CzkSetup {
+        val consents = mutableListOf<org.siros.sdk.credentials.PresentationConsentRequest>()
+        val events = mutableListOf<String>()
         val apiClient = mockk<BackendApiClient>()
         val trustRequests = mutableListOf<JsonObject>()
         coEvery { apiClient.evaluateTrust(any()) } coAnswers { trustRequests += firstArg<JsonObject>(); trust() }
         val keystore = mockk<KeystoreManager>(moreInterfaces = arrayOf(org.siros.sdk.keystore.HolderWitnessSource::class))
         every { keystore.isUnlocked } returns false
         every { keystore.listKeys() } returns listOf(KeyInfo("kid", "ES256", 0L))
+        coEvery { keystore.sign(any(), any(), any()) } coAnswers { events += "sign"; ByteArray(64) }
         val seedSource = org.siros.sdk.keystore.FixedRootHolderWitnessSource(CzkFixtures.root)
         every { (keystore as org.siros.sdk.keystore.HolderWitnessSource).circuitZkPresenter(any(), any(), any(), any(), any(), any(), any()) } answers {
             seedSource.circuitZkPresenter(arg(0), arg(1), arg(2), arg(3), arg(4), arg(5), arg(6))
@@ -5391,7 +5409,9 @@ class SirosWalletTest {
         val history = mutableListOf<PresentationRecord>()
         val cache = TrustCache()
         if (cachedTrust) cache.put("x509_san_dns:rp.example", TrustResult(trusted = true))
-        val prover = CountingCzkProver(org.siros.sdk.keystore.FakeCircuitZkProver.optIn())
+        val prover = CountingCzkProver(org.siros.sdk.keystore.FakeCircuitZkProver.optIn()).also { it.events = events; it.signs = proverSigns }
+        val trackedSeeds = secretSeedSource?.let { inner -> CredentialSecretSeedSource { id -> events += "seed"; inner.secretSeed(id) } }
+        val consentHandler = PresentationConsentHandler { r -> events += "consent"; consents += r; consent(r) }
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
@@ -5407,21 +5427,24 @@ class SirosWalletTest {
             "circuitZkSupport" to (if (flagOn) support else null),
             *(if (defaultProver) arrayOf("defaultCircuitZkProverHolder" to defaultCatalogProverHolder()) else arrayOf("circuitZkProver" to prover)),
             "verifierIdRegistry" to registry,
-            *(if (secretSeedSource != null) arrayOf("credentialSecretSeedSource" to secretSeedSource) else emptyArray()),
+            *(if (trackedSeeds != null) arrayOf("credentialSecretSeedSource" to trackedSeeds) else emptyArray()),
+            "presentationConsentHandler" to (if (noConsentHandler) null else consentHandler),
         )
-        return CzkSetup(wallet, apiClient, history, prover, trustRequests)
+        return CzkSetup(wallet, apiClient, history, prover, trustRequests, consents, events)
     }
 
-    private fun czkRun(s: CzkSetup, raw: String, origin: String = CzkFixtures.ORIGIN) =
-        kotlinx.coroutines.runBlocking { s.wallet.handleDCAPIRequest(raw, origin) }
+    /** [ids] is what the picker reported; nothing is chosen for the user, so a call without one is refused. */
+    private fun czkRun(s: CzkSetup, raw: String, origin: String = CzkFixtures.ORIGIN, ids: List<Long> = listOf(1L)) =
+        kotlinx.coroutines.runBlocking { s.wallet.handleDCAPIRequest(raw, origin, ids) }
 
     private fun czkRefused(
         s: CzkSetup,
         raw: String,
         origin: String = CzkFixtures.ORIGIN,
         reason: org.siros.sdk.wallet.dcapi.DCAPIRefusalReason? = null,
+        ids: List<Long> = listOf(1L),
     ) {
-        val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) { czkRun(s, raw, origin) }
+        val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) { czkRun(s, raw, origin, ids) }
         // The message (and so anything that reaches a log or the verifier) is the same for every reason.
         assertEquals("DC API request refused (protocol=${e.protocol})", e.message)
         if (reason != null) assertEquals(reason, e.reason)
@@ -5563,8 +5586,17 @@ class SirosWalletTest {
             "pseudonym-v1-sha256", "n", Json.parseToJsonElement("""{"config":"$config"$extra}""").jsonObject,
         ))
 
-    private fun czkSscSetup(source: CredentialSecretSeedSource?, config: String = "known-offender-matching-ssc", extra: String = "", ssc: ByteArray = NymTestCredentials.goodSsc) =
+    private fun czkSscSetup(
+        source: CredentialSecretSeedSource?,
+        config: String = "known-offender-matching-ssc",
+        extra: String = "",
+        ssc: ByteArray = NymTestCredentials.goodSsc,
+        consent: suspend (org.siros.sdk.credentials.PresentationConsentRequest) -> Boolean = { true },
+        noConsentHandler: Boolean = false,
+        proverSigns: Boolean = false,
+    ) =
         czkSetup(
+            consent = consent, noConsentHandler = noConsentHandler, proverSigns = proverSigns,
             functions = czkSscFunction(config, extra),
             credentials = listOf(StoredCredential(
                 id = 1L, format = "mso_mdoc", raw = CzkFixtures.mdoc(ssc = ssc),
@@ -5594,16 +5626,11 @@ class SirosWalletTest {
     }
 
     @Test
-    fun circuitZkDcApi_accountRecoverySsc_isProvenWithTheDeliveredSeed() = runTest(dispatcher) {
+    fun circuitZkDcApi_accountRecoverySsc_isNotModelledByTheConsent_soItIsRefusedBeforeTheSeedIsFetched() = runTest(dispatcher) {
+        // Only per-verifier configs have consent wording; the others are refused for now, before anything is asked or fetched.
         val s = czkSscSetup({ NymTestCredentials.seed.copyOf() }, "account-recovery-ssc", ""","verifier_context":"ctx-1"""")
-        assertEquals(
-            org.siros.sdk.credentials.ResultValue.Pseudonym(
-                org.siros.sdk.credentials.NymPseudonym.derive(
-                    "account-recovery-ssc", NymTestCredentials.seed, verifierId = "rp.example", verifierContext = "ctx-1",
-                ),
-            ),
-            czkPseudonymOf(czkRun(s, czkRequest())),
-        )
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+        assertTrue(s.events.isEmpty())
     }
 
     @Test
@@ -5833,9 +5860,11 @@ class SirosWalletTest {
 
     @Test
     fun circuitZkDcApi_presentsExactlyTheCredentialTheUserPicked() = runTest(dispatcher) {
-        // No pick: the first eligible credential, as before.
-        assertEquals(listOf(1L), czkRun(czkSelectionSetup(), czkRequest()).credentialIds)
-        assertEquals(listOf(1L), czkRunSelected(czkSelectionSetup()).credentialIds)
+        // No pick is refused: nothing is chosen for the user (no silent first-eligible), and nothing is asked or proved.
+        val none = czkSelectionSetup()
+        czkRefused(none, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE, ids = emptyList())
+        assertTrue(none.consents.isEmpty())
+        assertEquals(0, none.prover.calls)
         // A pick of the second credential is what is presented.
         assertEquals(listOf(2L), czkRunSelected(czkSelectionSetup(), 2L).credentialIds)
         // The prover ran once, for the picked credential only.
@@ -5872,8 +5901,10 @@ class SirosWalletTest {
         // One credential per query, in query order.
         assertEquals(listOf(2L, 1L), czkRunSelected(czkSelectionSetup(), 2L, 1L, raw = raw).credentialIds)
         assertEquals(listOf(1L, 2L), czkRunSelected(czkSelectionSetup(), 1L, 2L, raw = raw).credentialIds)
-        // No pick at all: the first eligible for each.
-        assertEquals(listOf(1L, 1L), czkRunSelected(czkSelectionSetup(), raw = raw).credentialIds)
+        // No pick at all is refused, not read as "the first eligible for each".
+        val none = czkSelectionSetup()
+        czkRefused(none, raw, reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE, ids = emptyList())
+        assertEquals(0, none.prover.calls)
     }
 
     @Test
@@ -5923,8 +5954,8 @@ class SirosWalletTest {
         assertEquals(org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE, e.reason)
         assertEquals(0, s.prover.calls)
         assertTrue(s.history.isEmpty())
-        // Without any pick, each query takes its own first eligible candidate, as before.
-        assertEquals(listOf(5L, 1L), czkRunSelected(czkSetup(credentials = listOf(czkCred(1, 1), other), extraDocTypes = setOf(CzkFixtures.OTHER_DOCTYPE)), raw = raw).credentialIds)
+        // One pick per query is served, each from its own query's candidates.
+        assertEquals(listOf(5L, 1L), czkRunSelected(czkSetup(credentials = listOf(czkCred(1, 1), other), extraDocTypes = setOf(CzkFixtures.OTHER_DOCTYPE)), 5L, 1L, raw = raw).credentialIds)
     }
 
     @Test
@@ -5933,6 +5964,150 @@ class SirosWalletTest {
         czkRefused(s, czkRequest())
         // The existing path: trust is evaluated, then nothing matches. The prover is never reached.
         assertEquals(0, s.prover.calls)
+    }
+
+    // ── circuit_zk presentation consent ──
+
+    private fun czkAgeFunction(json: String) = org.siros.sdk.credentials.CircuitZkFunction("age_check", "a", Json.parseToJsonElement(json).jsonObject)
+
+    private fun czkSeedSource() = CredentialSecretSeedSource { NymTestCredentials.seed.copyOf() }
+
+    @Test
+    fun circuitZkConsent_isAskedBeforeAnySeedSignerOrProverCall() = runTest(dispatcher) {
+        val s = czkSscSetup(czkSeedSource(), proverSigns = true)
+        czkRun(s, czkRequest())
+        // Consent first; only then the seed, then the prover, which asks the signer.
+        assertEquals(listOf("consent", "seed", "prove", "sign"), s.events)
+    }
+
+    @Test
+    fun circuitZkConsent_declineThrowTimeoutAndCancelAreAllDeclines_withZeroSeedSignerProverCalls() = runTest(dispatcher) {
+        val variants = mapOf<String, suspend (org.siros.sdk.credentials.PresentationConsentRequest) -> Boolean>(
+            "decline" to { false },
+            "throws" to { throw IllegalStateException("boom") },
+            "handler cancelled (the dialog went away)" to { throw kotlinx.coroutines.CancellationException("dialog dismissed") },
+            "never answers" to { kotlinx.coroutines.awaitCancellation() },
+        )
+        for ((name, answer) in variants) {
+            val s = czkSscSetup(czkSeedSource(), consent = answer, proverSigns = true)
+            s.wallet.presentationConsentTimeoutMillis = 100L
+            czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.USER_DECLINED)
+            assertEquals(name, listOf("consent"), s.events)
+            assertEquals(name, 0, s.prover.calls)
+        }
+    }
+
+    @Test
+    fun circuitZkConsent_withNoHandlerAtAll_isRefusedAsUnavailable_neverProceeds() = runTest(dispatcher) {
+        val s = czkSscSetup(czkSeedSource(), noConsentHandler = true, proverSigns = true)
+        // The TS12 handler is a different consent: it neither enables nor stands in for this one.
+        s.wallet.transactionConsentHandler = TransactionConsentHandler { true }
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.CONSENT_UNAVAILABLE)
+        assertTrue(s.events.isEmpty())
+        coVerify(exactly = 0) { s.apiClient.evaluateTrust(any()) }
+    }
+
+    @Test
+    fun circuitZkConsent_aPerRequestHandlerIsUsedInsteadOfTheWalletOne_andAloneIsEnough() = runTest(dispatcher) {
+        val own = mutableListOf<org.siros.sdk.credentials.PresentationConsentRequest>()
+        val s = czkSscSetup(czkSeedSource())
+        kotlinx.coroutines.runBlocking {
+            s.wallet.handleDCAPIRequest(czkRequest(), CzkFixtures.ORIGIN, null, listOf(1L), PresentationConsentHandler { own += it; true })
+        }
+        assertEquals(1, own.size)
+        assertTrue("the wallet-level handler was not asked", s.consents.isEmpty())
+        // With no wallet-level handler, the per-request one is all that is needed.
+        val bare = czkSscSetup(czkSeedSource(), noConsentHandler = true)
+        kotlinx.coroutines.runBlocking {
+            bare.wallet.handleDCAPIRequest(czkRequest(), CzkFixtures.ORIGIN, null, listOf(1L), PresentationConsentHandler { true })
+        }
+        assertEquals(1, bare.prover.calls)
+        // A per-request handler that declines is a decline, whatever the wallet-level one would say.
+        val declined = czkSscSetup(czkSeedSource())
+        org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+            kotlinx.coroutines.runBlocking {
+                declined.wallet.handleDCAPIRequest(czkRequest(), CzkFixtures.ORIGIN, null, listOf(1L), PresentationConsentHandler { false })
+            }
+        }
+        assertEquals(0, declined.prover.calls)
+        assertTrue(declined.events.isEmpty())
+    }
+
+    @Test
+    fun circuitZkConsent_carriesTheItemsTheVerifierWillReceive_andNoSecret() = runTest(dispatcher) {
+        val s = czkSscSetup(czkSeedSource())
+        czkRun(s, czkRequest())
+        val request = s.consents.single()
+        assertEquals("rp.example", request.verifier.label)
+        assertEquals("rp.example", request.verifier.verifierId)
+        assertEquals("x509_san_dns", request.verifier.verifierIdType)
+        assertTrue(request.requestSigned)
+        val entry = request.entries.single()
+        assertEquals(org.siros.sdk.credentials.CredentialRef("Nym", null), entry.credential)
+        assertEquals(
+            listOf<org.siros.sdk.credentials.ConsentItem>(
+                org.siros.sdk.credentials.ConsentItem.Pseudonym(
+                    config = "known-offender-matching-ssc",
+                    scope = org.siros.sdk.credentials.PseudonymScope.PER_VERIFIER,
+                    remappableByIssuer = true,
+                    crossSite = false,
+                    verifierId = "rp.example",
+                    verifierContext = null,
+                ),
+            ),
+            entry.items,
+        )
+        // Nothing the user is shown carries a seed, a pseudonym value or a birth date.
+        val shown = request.toString()
+        assertFalse(shown.contains(java.util.HexFormat.of().formatHex(NymTestCredentials.seed)))
+        assertFalse(shown.contains("2000-06-15"))
+    }
+
+    @Test
+    fun circuitZkConsent_aTwoQueryRequest_isOneConsentCallCoveringBothQueries() = runTest(dispatcher) {
+        val s = czkSetup(
+            functions = listOf(
+                czkSscFunction("known-offender-matching-psc").single(),
+                czkAgeFunction("""{"ge":"1999-01-01","le":"2005-01-01"}"""),
+            ),
+            credentials = listOf(czkCred(1, 1), czkCred(2, 2)),
+        )
+        val raw = czkRequest(queryIds = listOf("q", "q2"))
+        val result = kotlinx.coroutines.runBlocking { s.wallet.handleDCAPIRequest(raw, CzkFixtures.ORIGIN, listOf(1L, 2L)) }
+        assertEquals(listOf(1L, 2L), result.credentialIds)
+        val request = s.consents.single()
+        assertEquals(listOf("Nym 1", "Nym 2"), request.entries.map { it.credential.name })
+        for (entry in request.entries) assertEquals(listOf("pseudonym", "age_range"), entry.items.map { if (it is org.siros.sdk.credentials.ConsentItem.Pseudonym) "pseudonym" else "age_range" })
+        // One consent, then everything else.
+        assertEquals("consent", s.events.first())
+        assertEquals(1, s.events.count { it == "consent" })
+    }
+
+    @Test
+    fun circuitZkConsent_anUnsatisfiablePredicate_isRefusedLocally_withoutAskingTheUser() = runTest(dispatcher) {
+        // The credential's birth_date is 2000-06-15; the request wants someone born in 1980 or earlier.
+        val s = czkSetup(functions = listOf(czkAgeFunction("""{"le":"1980-01-01"}""")), secretSeedSource = czkSeedSource())
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+        assertTrue("the user was not asked", s.consents.isEmpty())
+        assertTrue(s.events.isEmpty())
+        // A satisfiable one is asked, with the age item in its human form.
+        val ok = czkSetup(functions = listOf(czkAgeFunction("""{"ge":"1999-01-01","le":"2005-01-01"}""")))
+        czkRun(ok, czkRequest())
+        val age = ok.consents.single().entries.single().items.single() as org.siros.sdk.credentials.ConsentItem.AgeRange
+        assertTrue(age.form is org.siros.sdk.credentials.AgeForm.Between)
+    }
+
+    @Test
+    fun circuitZkConsent_aRefusalBeforeThePhaseOneEnds_neverAsks() = runTest(dispatcher) {
+        // Untrusted verifier, and no resolvable verifier id: both refused before the user is asked.
+        val untrusted = czkSscSetup(czkSeedSource())
+        coEvery { untrusted.apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", false) }
+        czkRefused(untrusted, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NOT_TRUSTED)
+        assertTrue(untrusted.consents.isEmpty())
+        val noId = czkSetup(functions = czkSscFunction(), trust = czkIds(), secretSeedSource = czkSeedSource())
+        czkRefused(noId, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE)
+        assertTrue(noId.consents.isEmpty())
+        assertTrue(noId.events.isEmpty())
     }
 
     private class FixedSource(override val type: String, val id: String?, val calls: MutableList<String>) : VerifierIdSource {
@@ -6041,7 +6216,7 @@ class SirosWalletTest {
             override val type = "t"
             override suspend fun resolve(context: VerifierIdContext): String? = error("boom")
         }
-        assertEquals("later", VerifierIdRegistry(listOf("t"), listOf(failing, FixedSource("t", "later", mutableListOf()))).resolve(ctx))
+        assertEquals(ResolvedVerifierId("t", "later"), VerifierIdRegistry(listOf("t"), listOf(failing, FixedSource("t", "later", mutableListOf()))).resolve(ctx))
     }
 
     @Test
@@ -6068,7 +6243,7 @@ class SirosWalletTest {
         )
         val calls = mutableListOf<String>()
         val r = VerifierIdRegistry(listOf("a", "b"), listOf(FixedSource("b", "b-id", calls), FixedSource("a", null, calls), FixedSource("a", "a-id", calls)))
-        assertEquals("a-id", r.resolve(ctx))
+        assertEquals(ResolvedVerifierId("a", "a-id"), r.resolve(ctx))
         assertEquals(listOf("declined-a", "a-id"), calls)
         assertNull(VerifierIdRegistry(emptyList(), listOf(FixedSource("a", "x", mutableListOf()))).resolve(ctx))
         for (bad in listOf(listOf("a", "a"), listOf(" "), listOf(""), listOf(" a"), listOf("a,b"))) {

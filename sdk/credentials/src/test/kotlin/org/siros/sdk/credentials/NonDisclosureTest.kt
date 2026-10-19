@@ -395,22 +395,4 @@ class NonDisclosureTest {
         }
         CredentialDisclosureGuard.requireNoneProtected(nym, mapOf(nym to listOf("birth_date")))
     }
-
-    // ---- consent summary ----
-
-    @Test
-    fun `the consent summary is built from the plan and holds no credential value`() {
-        val plan = CircuitZkPlan(
-            listOf(
-                CircuitZkFunction("pseudonym-v1-sha256", "n", json.parseToJsonElement("""{"config":"known-offender-matching-psc","verifier_id_type":"semantic"}""").jsonObject),
-                CircuitZkFunction("age_check", "a", json.parseToJsonElement("""{"ge":"2000-01-01"}""").jsonObject),
-            ),
-        )
-        val s = CircuitZkConsentSummary.from(plan, "Example RP")
-        assertEquals(PseudonymSummary("known-offender-matching-psc"), s.pseudonym)
-        assertEquals(AgeRangeSummary("2000-01-01", null), s.ageRange)
-        assertEquals("Example RP", s.verifierLabel)
-        val onlyAge = CircuitZkConsentSummary.from(CircuitZkPlan(listOf(plan.functions[1])), "x")
-        assertNull(onlyAge.pseudonym)
-    }
 }

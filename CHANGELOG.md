@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **User consent for `circuit_zk` presentations.** One `PresentationConsentHandler`
+  (a sibling of `TransactionConsentHandler`, not coupled to `transactionDataEnabled`;
+  wallet-level `SirosWallet.presentationConsentHandler`, per request through the new
+  `presentationConsentHandler` parameter of `handleDCAPIRequest(..., consentHandler, ...)`)
+  is asked once for ALL queries of a request, before anything is signed or proved and before
+  the issuer-delivered secret seed is fetched. `handleCircuitZkDcApi` now runs in two phases:
+  phase 1 (validation, trust, the user's pick, local age check, verifier id, consent items)
+  touches no secret; phase 2 (seed, sign, prove) runs only after consent. A decline, a handler
+  that throws, the SDK-side two-minute time limit and a cancelled activity are all a decline
+  (`DCAPIRefusalReason.USER_DECLINED`) with zero seed, signer and prover calls; with no handler
+  the request is refused (`DCAPIRefusalReason.CONSENT_UNAVAILABLE`, answered `access_denied`).
+  The model (`PresentationConsentRequest`, `ConsentVerifier`, `CredentialRef`, `ConsentEntry`,
+  `ConsentItem.{Claim,AgeRange,Pseudonym,LegacyPseudonym}`, `AgeForm`, built by
+  `ConsentRequests.build`) says what the verifier will receive and never carries a claim value,
+  seed, proof or pseudonym value; the age range is precomputed (born between / at least / at most).
+  `PresentationConsentText` is the SDK-owned wording (default, sv, fi, el, pt), parameterised per
+  item; the trust framework and `verifier_id_type` are in the model but never in the text. The DC
+  API activity shows it in a plain dialog after the OS picker. Cross-SDK vectors:
+  `spec/circuit-zk-consent-vectors.json` (generator `tools/gen_circuit_zk_consent_vectors.py`).
+  The sample app renders the same model in Compose (`PresentationConsentDialog`).
 - **`CatalogCircuitZkProver`: the real `circuit_zk` prover, and the wallet's
   default.** `WalletConfig.circuitZkProver = null` now means the catalog prover
   (it was "refuse every request"); `FakeCircuitZkProver` stays an explicit
@@ -71,6 +91,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   builds a circuit table in which legacy catalog entries are offered for it.
 
 ### Changed
+- **`circuit_zk` never presents a credential the user did not pick.** An empty
+  `selectedCredentialIds` no longer means "the first eligible credential": it is refused
+  (`SELECTED_CREDENTIAL_UNAVAILABLE`). Plain OpenID4VP is unchanged. An `age_check` is checked
+  locally against the credential's `birth_date` before the user is asked; an unsatisfiable one is
+  refused without consent. Only per-verifier pseudonym configs (`known-offender-matching-ssc`,
+  `-psc`) have consent wording; any other config is refused (`UNSUPPORTED_REQUEST`) for now.
+- **`VerifierIdRegistry.resolve` returns `ResolvedVerifierId(type, id)`** instead of the bare id
+  string. Removed the unused precursor `CircuitZkConsentSummary` / `circuitZkConsentSummary()`.
 - **A `circuit_zk` circuit that declares no `functions` and no `capabilities`
   now fits no plan** (`CircuitZkCircuit.supports`; it used to fit every plan).
   `CircuitZkCircuitSource.fromManifest` takes an optional `declare` for entries a

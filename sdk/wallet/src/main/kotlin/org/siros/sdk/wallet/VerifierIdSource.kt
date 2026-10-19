@@ -35,6 +35,9 @@ interface VerifierIdSource {
     suspend fun resolve(context: VerifierIdContext): String?
 }
 
+/** A resolved `verifier_id`: the value, verbatim, and the `verifier_id_type` it was resolved under. */
+data class ResolvedVerifierId(val type: String, val id: String)
+
 /**
  * Resolves the opaque `verifier_id` for a pseudonym from the wallet's ORDERED
  * [supportedTypes] (see [VerifierIdTypeOrder]; the trust framework agrees the
@@ -59,8 +62,8 @@ class VerifierIdRegistry(
     /** The supported types, in priority order. */
     val supportedTypes: List<String> = VerifierIdTypeOrder.require(supportedTypes).toList()
 
-    /** The identifier of the first supported type that resolves, or null. A source that throws is skipped. */
-    suspend fun resolve(context: VerifierIdContext): String? {
+    /** The identifier (and its type) of the first supported type that resolves, or null. A source that throws is skipped. */
+    suspend fun resolve(context: VerifierIdContext): ResolvedVerifierId? {
         for (type in supportedTypes) {
             for (source in sourcesFor(type)) {
                 val id = try {
@@ -70,7 +73,7 @@ class VerifierIdRegistry(
                 } catch (e: Exception) {
                     null
                 }
-                if (id != null) return id
+                if (id != null) return ResolvedVerifierId(type, id)
             }
         }
         return null

@@ -16,4 +16,20 @@
     <string name="siros_dcapi_refused_request_not_verified">This request could not be verified as coming from the site you are on, so nothing was shared.</string>
     <string name="siros_dcapi_refused_verifier_id_unavailable">Your wallet could not work out who is asking, so nothing was shared.</string>
     <string name="siros_dcapi_refused_proof_failed">Your wallet could not create the proof, so nothing was shared. Please try again.</string>
+    <!-- circuit_zk consent. Wording approved by leifj except: title, buttons, "share" header, legacy claim/pseudonym lines and the two refusal messages (SDK-authored, translations unreviewed in non-English locales). -->
+    <string name="siros_consent_title">Confirm sharing</string>
+    <string name="siros_consent_share">Share</string>
+    <string name="siros_consent_cancel">Cancel</string>
+    <string name="siros_consent_verifier_prove">%1$s is asking you to prove:</string>
+    <string name="siros_consent_verifier_share">%1$s is asking you to share:</string>
+    <string name="siros_consent_age_between">You were born between %1$s and %2$s (about %3$d–%4$d years old). Your exact birth date is not shared.</string>
+    <string name="siros_consent_age_at_least">You are at least %1$d years old. Your exact birth date is not shared.</string>
+    <string name="siros_consent_age_at_most">You are at most %1$d years old. Your exact birth date is not shared.</string>
+    <string name="siros_consent_pseudonym_issuer">A pseudonym for %1$s is shared. You get the same pseudonym every time you visit this service, and a different one at every other service. The service that issued your credential can work out who this pseudonym belongs to.</string>
+    <string name="siros_consent_pseudonym">A pseudonym for %1$s is shared. You get the same pseudonym every time you visit this service, and a different one at every other service.</string>
+    <string name="siros_consent_footer">No other personal data is shared.</string>
+    <string name="siros_consent_claim">The value of “%1$s” from your credential is shared.</string>
+    <string name="siros_consent_legacy_pseudonym">A pseudonym is shared with %1$s.</string>
+    <string name="siros_dcapi_refused_consent_unavailable">Your wallet cannot ask for your approval right now, so nothing was shared.</string>
+    <string name="siros_dcapi_refused_user_declined">You did not approve this request, so nothing was shared.</string>
 </resources>
