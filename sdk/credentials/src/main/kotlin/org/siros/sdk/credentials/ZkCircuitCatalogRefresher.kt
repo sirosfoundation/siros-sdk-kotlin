@@ -40,6 +40,8 @@ class ZkCircuitCatalogRefresher(
     private val client: ZkCircuitClient,
     /** Called for each retired circuit this client knew, after its cache is gone. Must not throw (a throw is logged). */
     private val onRetired: suspend (ZkCircuitDescriptor) -> Unit = {},
+    /** Called with every manifest a refresh fetched, after the cache was reduced to it: the circuit table follows the catalog. Must not throw (a throw is logged). */
+    private val onManifest: (ZkManifest) -> Unit = {},
     private val nowMillis: () -> Long = System::currentTimeMillis,
     private val intervalMillis: Long = DEFAULT_INTERVAL_MILLIS,
     private val minGapMillis: Long = DEFAULT_MIN_GAP_MILLIS,
@@ -95,6 +97,13 @@ class ZkCircuitCatalogRefresher(
                 } catch (e: Throwable) {
                     Timber.w(e, "circuit catalog refresh: dropping resident state of '${d.id}' failed")
                 }
+            }
+            try {
+                onManifest(manifest)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                Timber.w(e, "circuit catalog refresh: updating the circuit table failed")
             }
             if (retired.isNotEmpty()) Timber.i("circuit catalog refresh: expunged ${retired.size} retired circuit(s)")
             Result.Refreshed(retired, refreshed, complete)

@@ -93,6 +93,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   app version does not support this circuit build": a distinct reason
   (`CIRCUIT_UNSUPPORTED_BY_APP`), the resident circuit is dropped, and
   `NymAuthCircuitZkAdapter.onUnsupportedCircuit` / `unsupportedCircuits` let a wallet say "update the app".
+- **The nymauth native prover is real: `UniffiNymAuthNativeProver`.** It drives the UniFFI bindings of `zk-cred-vega`
+  (`nymauthVegaLoadKeys` then `nymauthVegaProve`; system `vega-nymauth`) and `zk-cred-longfellow`
+  (`nymauthInitializeProver` then `nymauthProve`; system `longfellow-nymauth`, params `block_enc_hash`, `block_enc_sig`,
+  `hash_circuit_id`, `sig_circuit_id` from the catalog descriptor), keeps ONE built circuit resident (keyed by system,
+  circuit id and artifact hash; dropped on memory pressure, on a retired circuit, or when another circuit is loaded), and
+  cross-checks the binding's own challenge-digest derivation against the digest the device key signed. It is the default
+  for `WalletConfig.circuitZkNativeProver = null`; a build whose libraries lack the nymauth entry points refuses instead of
+  crashing. A `CatalogCircuitZkCircuitSource` keeps the `circuit_zk` circuit table in step with the catalog, and the sample
+  app uses it (and the real prover) unless the request policy's fake-prover switch is on. The libraries are PR builds until
+  released: pins, versions (`zk-cred-vega` 0.0.6, `zk-cred-longfellow` 0.1.2), the vendored bindings and the local
+  override (`-PsirosNativeRepo=<dir>`, `tools/build-native-aars.sh`) are in docs/NATIVE_DEV.md.
+- **`sign_client_auth`: a DPoP proof that was asked for and could not be made is no longer answered with a bare key id.**
+  `buildClientAuth` named the key first and then logged and swallowed any exception from `generateDPoPProof`, so the engine
+  saw a key id with no proof and failed the token exchange with the misleading "client returned no DPoP proof". Now, when
+  `htm`/`htu` are set and no proof results, the reply carries no key id (the engine then falls back to its own key or
+  reports a real reason) and a warn line names the reason (`keystore_locked`, or the exception class and a short message):
+  `sign_client_auth for flow <id>: a DPoP proof was asked for ... (reason=...); answering WITHOUT a key id`. The DPoP key
+  is, and stays, the instance key of the default keystore (the WIA's `cnf` key), not the keystore resolved for
+  credential key proofs.
 - **PROPOSAL: `zk-claim-disclosure-v1`, a `circuit_zk` function for the legacy
   proof systems** (`CircuitZkLegacyDisclosure`; the id is one constant, the
   rulebook owners decide the name). Params `claims`, `systems` (the verifier's

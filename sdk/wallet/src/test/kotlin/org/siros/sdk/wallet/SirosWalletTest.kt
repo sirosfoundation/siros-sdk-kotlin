@@ -2516,6 +2516,142 @@ class SirosWalletTest {
         }
     }
 
+    // ---- sign_client_auth: a proof that was asked for and could not be made is never answered with a bare key id ----
+
+    private val ca = StringBuilder()
+    private val caTree = object : timber.log.Timber.Tree() {
+        override fun log(priority: Int, tag: String?, message: String, t: Throwable?) {
+            if (priority >= android.util.Log.WARN) ca.append(message).append('\n')
+        }
+    }
+
+    /** Runs one DPoP-only sign_client_auth against [keystore] and returns the (dpopKeyId, dpopProof) of the reply. */
+    private suspend fun kotlinx.coroutines.test.TestScope.signClientAuthReply(
+        keystore: KeystoreManager,
+        keyIdHint: String? = null,
+        config: WalletConfig = WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+        htm: String? = "POST",
+        htu: String? = "https://as.example.com/token",
+    ): Pair<String?, String?> {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val replies = mutableListOf<Pair<String?, String?>>()
+        every {
+            engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any())
+        } answers {
+            replies += (args[8] as String?) to (args[9] as String?)
+        }
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        every { sessionStore.instanceKeyId } returns "instance-key-1"
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "sessionStore" to sessionStore,
+            "keystore" to keystore,
+            "apiClient" to mockk<BackendApiClient>(relaxed = true),
+            "config" to config,
+            "json" to Json { ignoreUnknownKeys = true },
+            "httpClient" to OkHttpClient(),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-x", messageId = "msg-x", action = "sign_client_auth",
+                params = SignRequestParams(htm = htm, htu = htu, keyId = keyIdHint),
+            ),
+        )
+        repeat(10) {
+            runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(100) }
+            advanceUntilIdle()
+        }
+        assertEquals("exactly one sign_response", 1, replies.size)
+        return replies.single()
+    }
+
+    private fun caKeystore(unlocked: Boolean = true, proof: () -> String): KeystoreManager {
+        val ks = mockk<KeystoreManager>(relaxed = true)
+        every { ks.isUnlocked } returns unlocked
+        every { ks.listKeys() } returns listOf(KeyInfo("instance-key-1", "ES256", 0L))
+        coEvery { ks.generateDPoPProof(keyId = any(), htm = any(), htu = any(), nonce = any(), accessTokenHash = any()) } answers { proof() }
+        return ks
+    }
+
+    @Test
+    fun signClientAuth_success_namesTheKeyAndCarriesTheProof() = runTest(dispatcher) {
+        val (keyId, proof) = signClientAuthReply(caKeystore { "dpop-jwt" })
+        assertEquals("instance-key-1", keyId)
+        assertEquals("dpop-jwt", proof)
+    }
+
+    @Test
+    fun signClientAuth_aLockedKeystore_isAnsweredWithoutAKeyId_andLogsTheReason() = runTest(dispatcher) {
+        timber.log.Timber.plant(caTree)
+        try {
+            val ks = caKeystore(unlocked = false) { throw org.siros.sdk.credentials.KeystoreException("Keystore is locked") }
+            val (keyId, proof) = signClientAuthReply(ks, keyIdHint = "old-key")
+            assertNull("a key id without a proof is the misleading 'no DPoP proof' error", keyId)
+            assertNull(proof)
+            assertTrue(ca.toString(), ca.contains("sign_client_auth for flow flow-x") && ca.contains("keystore_locked"))
+            assertTrue(ca.toString(), ca.contains("answering WITHOUT a key id"))
+        } finally {
+            timber.log.Timber.uproot(caTree)
+        }
+    }
+
+    @Test
+    fun signClientAuth_aKeyThatIsNotThere_isAnsweredWithoutAKeyId_andNamesTheException() = runTest(dispatcher) {
+        timber.log.Timber.plant(caTree)
+        try {
+            val ks = caKeystore { throw org.siros.sdk.credentials.KeystoreException("Key not found: old-key") }
+            val (keyId, proof) = signClientAuthReply(ks, keyIdHint = "old-key")
+            assertNull(keyId)
+            assertNull(proof)
+            assertTrue(ca.toString(), ca.contains("KeystoreException: Key not found: old-key"))
+        } finally {
+            timber.log.Timber.uproot(caTree)
+        }
+    }
+
+    @Test
+    fun signClientAuth_aKeystoreWithoutDpopSupport_isAnsweredWithoutAKeyId() = runTest(dispatcher) {
+        timber.log.Timber.plant(caTree)
+        try {
+            val ks = caKeystore { throw UnsupportedOperationException("generateDPoPProof not supported by this keystore") }
+            val (keyId, proof) = signClientAuthReply(ks)
+            assertNull(keyId)
+            assertNull(proof)
+            assertTrue(ca.toString(), ca.contains("UnsupportedOperationException"))
+        } finally {
+            timber.log.Timber.uproot(caTree)
+        }
+    }
+
+    @Test
+    fun signClientAuth_theDpopKeyComesFromTheDefaultKeystore_notTheOneIssuanceResolves() = runTest(dispatcher) {
+        // availableKeystores holds another keystore (what resolveEffectiveKeystoreForIssuance may pick): it is never asked.
+        val other = mockk<KeystoreManager>(relaxed = true)
+        coEvery { other.generateDPoPProof(any(), any(), any(), any(), any()) } throws IllegalStateException("must not be used")
+        val default = caKeystore { "dpop-jwt" }
+        val (keyId, proof) = signClientAuthReply(
+            default,
+            config = WalletConfig(
+                backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback",
+                availableKeystores = mapOf("other" to other, "default" to default),
+            ),
+        )
+        assertEquals("instance-key-1", keyId)
+        assertEquals("dpop-jwt", proof)
+        coVerify(exactly = 0) { other.generateDPoPProof(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun signClientAuth_whenNoProofWasAsked_aKeyIdWithoutAProofIsStillTheAnswer() = runTest(dispatcher) {
+        val (keyId, proof) = signClientAuthReply(caKeystore { "unused" }, htm = null, htu = null)
+        assertEquals("instance-key-1", keyId)
+        assertNull(proof)
+    }
+
     /**
      * `deactivateWallet()` (SID-AUTH-06): revoke every instance server-side,
      * then forget the local account - the vault it decrypts no longer exists.

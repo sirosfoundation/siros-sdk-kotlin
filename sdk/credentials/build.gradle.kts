@@ -53,7 +53,10 @@ dependencies {
     // consumers of the SDK see the matcher's types through CredentialMatcher.
     api("org.siros:siros-dc-matcher:0.10.0")
 
-    implementation("org.siros:zk-cred-longfellow:0.1.1")
+    // The nymauth entry points (the circuit_zk prover) need the libraries that carry them; the vendored UniFFI
+    // bindings are generated from exactly these builds and check their API checksums at load, so the two move
+    // together. Override for a local build with -PzkCredLongfellowVersion / -PzkCredVegaVersion (docs/NATIVE_DEV.md).
+    implementation("org.siros:zk-cred-longfellow:${providers.gradleProperty("zkCredLongfellowVersion").getOrElse("0.1.2")}")
 
     // zk-cred-vega UniFFI bindings - real GitHub Packages Maven artifact
     // (resolved via GitHubPackagesZkCredVega in settings.gradle.kts), built
@@ -65,7 +68,7 @@ dependencies {
     // v0.0.4 bumps vega-prover to sirosfoundation/vega-prover@2a7dcb3, a
     // real measured ~35-40% prove() speedup on x86_64 (chunk-overhead fix
     // in bind_and_prepare_poly_ABC_inner) - not yet confirmed on-device.
-    implementation("org.siros:zk-cred-vega:0.0.5")
+    implementation("org.siros:zk-cred-vega:${providers.gradleProperty("zkCredVegaVersion").getOrElse("0.0.6")}")
 
     // zk-cred-bbs UniFFI bindings - blind BBS with Schnorr key binding.
     // Same shape as above: AAR from GitHub Packages (or mavenLocal via

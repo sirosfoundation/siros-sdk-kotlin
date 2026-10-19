@@ -96,10 +96,12 @@ class NymAuthCircuitZkAdapter(
 
     override fun release() {
         residency.release()
+        (native as? ResidentNymAuthNativeProver)?.release()
     }
 
     override suspend fun retire(descriptor: ZkCircuitDescriptor) {
         residency.releaseCircuit(descriptor.id)
+        (native as? ResidentNymAuthNativeProver)?.releaseCircuit(descriptor.id)
     }
 
     override fun admits(circuit: CircuitZkCircuit, plan: CircuitZkPlan): Boolean =
@@ -166,6 +168,7 @@ class NymAuthCircuitZkAdapter(
                         NymAuthProveRequest(
                             system = descriptor.system,
                             circuitId = descriptor.id,
+                            artifactHash = artifact.hash,
                             circuitParams = descriptor.params,
                             circuit = circuit.asReadOnlyBuffer(),
                             issuerSigned = issuerSigned,
@@ -228,6 +231,7 @@ class NymAuthCircuitZkAdapter(
         if (reason == CircuitZkRefusalReason.CIRCUIT_UNSUPPORTED_BY_APP) {
             Timber.w("circuit_zk: circuit '${descriptor.id}' is not supported by this app version; refusing")
             residency.releaseCircuit(descriptor.id)
+            (native as? ResidentNymAuthNativeProver)?.releaseCircuit(descriptor.id)
             if (unsupported.add(descriptor.id)) {
                 try {
                     onUnsupportedCircuit(descriptor.id)

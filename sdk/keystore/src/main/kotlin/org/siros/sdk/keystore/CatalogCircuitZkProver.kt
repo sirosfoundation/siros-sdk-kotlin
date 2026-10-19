@@ -26,8 +26,23 @@ import timber.log.Timber
  * seed and the circuit input is private.
  */
 fun interface NymAuthNativeProver {
-    /** Proves [request]; any failure is an exception, which [CatalogCircuitZkProver] turns into a refusal. */
+    /**
+     * Proves [request]; any failure is an exception, which [CatalogCircuitZkProver] turns into a refusal. A failure of
+     * the binding itself is a [NymAuthNativeException].
+     */
     suspend fun prove(request: NymAuthProveRequest): NymAuthProveResponse
+}
+
+/**
+ * An optional extension of [NymAuthNativeProver] for a prover that keeps native state resident between proofs (Vega's
+ * keys and Longfellow's loaded circuits are hundreds of MB): the adapter tells it when to let go.
+ */
+interface ResidentNymAuthNativeProver : NymAuthNativeProver {
+    /** Drops the resident native state (memory pressure, the host leaving the foreground). Never throws. */
+    fun release()
+
+    /** Drops the resident native state if it belongs to the circuit [circuitId] (a retired one). Never throws. */
+    fun releaseCircuit(circuitId: String)
 }
 
 /** The coarse reason a native prover refused to make a proof (never the broken rule, never a value). */
@@ -132,6 +147,8 @@ class NymAuthNativeException(val kind: NymAuthNativeErrorKind, val refusal: NymA
 class NymAuthProveRequest(
     val system: String,
     val circuitId: String,
+    /** The catalog artifact hash the [circuit] bytes were verified against: with [circuitId], what a resident native state is keyed by. */
+    val artifactHash: String,
     val circuitParams: JsonObject,
     val circuit: ByteBuffer,
     val issuerSigned: ByteArray,
@@ -193,6 +210,9 @@ class CatalogCircuitZkProver(
      */
     fun circuitsOf(manifest: org.siros.sdk.credentials.ZkManifest): List<CircuitZkCircuit> =
         org.siros.sdk.credentials.CircuitZkCircuitSource.fromManifest(manifest, registry::declaredFunctions)
+
+    /** What a catalog-backed circuit table should declare for [descriptor]: the functions its adapter claims it for (null: none). */
+    fun declaredFunctions(descriptor: ZkCircuitDescriptor): Set<String>? = registry.declaredFunctions(descriptor)
 
     /** Whether some adapter can produce a proof; false means every request is refused. */
     val canProve: Boolean get() = registry.canProve

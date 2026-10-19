@@ -235,7 +235,7 @@ class SirosWallet private constructor(
     // The real catalog prover unless the host set one; built on first use because it needs the circuit
     // client, which is declared further down. Never the fake: that is an explicit opt-in through the config.
     private val defaultCircuitZkProverHolder = lazy {
-        org.siros.sdk.keystore.CatalogCircuitZkProver.standard(zkCircuitClient, zkPresentation, config.circuitZkNativeProver)
+        org.siros.sdk.keystore.CatalogCircuitZkProver.standard(zkCircuitClient, zkPresentation, config.circuitZkNativeProver ?: org.siros.sdk.keystore.UniffiNymAuthNativeProver())
     }
     private val circuitZkProver: org.siros.sdk.keystore.CircuitZkProver? = config.circuitZkProver
 
@@ -3202,8 +3202,9 @@ class SirosWallet private constructor(
 
     /**
      * What one `sign_client_auth` request produced - see [buildClientAuth].
-     * [keyId] is null only when even naming the key failed, which the engine
-     * reads as "action unsupported" and falls back to its own DPoP key.
+     * [keyId] is null when even naming the key failed, and also when a DPoP proof was asked for and could not be produced
+     * (a key id without the proof is what the engine reports as "no DPoP proof"); the engine reads null as "action
+     * unsupported" and falls back to its own DPoP key or reports a real reason.
      */
     private data class ClientAuthMaterial(
         val keyId: String?,
@@ -3253,13 +3254,18 @@ class SirosWallet private constructor(
         var dpopProof: String? = null
         var wia: String? = null
         var pop: String? = null
+        var failure: String? = null
+        val dpopAsked = !htm.isNullOrBlank() && !htu.isNullOrBlank()
         try {
+            // The DPoP key is the wallet instance key of the DEFAULT keystore (the WIA's `cnf` key, see
+            // ensureInstanceKeyId), and the proof is made in that same keystore; the keystore resolved for credential
+            // key proofs (resolveEffectiveKeystoreForIssuance) is a different thing and is not involved.
             keyId = keyIdHint?.takeIf { it.isNotBlank() } ?: ensureInstanceKeyId()
-            if (!htm.isNullOrBlank() && !htu.isNullOrBlank()) {
+            if (dpopAsked) {
                 dpopProof = keystore.generateDPoPProof(
                     keyId = keyId,
-                    htm = htm,
-                    htu = htu,
+                    htm = htm!!,
+                    htu = htu!!,
                     nonce = dpopNonce?.takeIf { it.isNotBlank() },
                     accessTokenHash = ath?.takeIf { it.isNotBlank() },
                 )
@@ -3275,7 +3281,19 @@ class SirosWallet private constructor(
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            Timber.w(e, "sign_client_auth for flow $flowId failed part-way; answering with what was produced")
+            // The class and a short message only: a keystore's messages name a key id or a state, never key material.
+            failure = if (!keystore.isUnlocked) "keystore_locked (${e.javaClass.simpleName})" else "${e.javaClass.simpleName}: ${e.message?.take(120)}"
+            Timber.w("sign_client_auth for flow $flowId failed part-way ($failure); answering with what was produced")
+        }
+        if (dpopAsked && dpopProof == null) {
+            // A proof was ASKED for and there is none. Naming a key without a proof is what the engine reports as the
+            // misleading "client returned no DPoP proof", so the key id is withheld too: the engine then treats the action
+            // as unsupported (its own key) or reports a real reason, instead of failing the token exchange blind.
+            Timber.w(
+                "sign_client_auth for flow $flowId: a DPoP proof was asked for (htm=$htm) but could not be produced " +
+                    "(reason=${failure ?: "no_proof_returned"}); answering WITHOUT a key id",
+            )
+            keyId = null
         }
         val attested = wia != null && pop != null
         Timber.d(
@@ -4963,7 +4981,24 @@ class SirosWallet private constructor(
             zkPresentation.onCircuitRetired(d)
             if (defaultCircuitZkProverHolder.isInitialized()) defaultCircuitZkProverHolder.value.onCircuitRetired(d)
         },
+        // A catalog-backed circuit table follows the catalog.
+        onManifest = { manifest ->
+            (config.circuitZkCircuits as? org.siros.sdk.credentials.CatalogCircuitZkCircuitSource)
+                ?.update(manifest, defaultCircuitZkProverHolder.value::declaredFunctions)
+        },
     )
+    init {
+        // Offline start: the circuits of the descriptors cached from earlier runs, until a manifest is fetched.
+        if (config.circuitZk) {
+            (config.circuitZkCircuits as? org.siros.sdk.credentials.CatalogCircuitZkCircuitSource)?.let { source ->
+                try {
+                    source.update(zkCircuitClient.knownDescriptors().values.filter { it.isActive() }, defaultCircuitZkProverHolder.value::declaredFunctions)
+                } catch (e: Exception) {
+                    Timber.w("Seeding the circuit table from the cache failed (${e.javaClass.simpleName})")
+                }
+            }
+        }
+    }
     private val circuitCatalogRefreshJob: kotlinx.coroutines.Job? =
         if (config.circuitZk) circuitCatalogRefresher.launchIn(scope) else null
     private val circuitCatalogNetworkCallback: android.net.ConnectivityManager.NetworkCallback? =
