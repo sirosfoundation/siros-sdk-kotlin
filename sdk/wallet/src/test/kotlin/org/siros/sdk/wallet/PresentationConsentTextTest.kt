@@ -14,6 +14,10 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.siros.sdk.credentials.AgeForm
+import org.siros.sdk.credentials.ClaimRef
+import org.siros.sdk.credentials.ComparisonOp
+import org.siros.sdk.credentials.Condition
+import org.siros.sdk.credentials.ValueType
 import org.siros.sdk.credentials.ConsentEntry
 import org.siros.sdk.credentials.ConsentItem
 import org.siros.sdk.credentials.ConsentVerifier
@@ -40,6 +44,11 @@ class PresentationConsentTextTest {
         ConsentString.AGE_AT_MOST to "siros_consent_age_at_most", ConsentString.PSEUDONYM to "siros_consent_pseudonym",
         ConsentString.PSEUDONYM_ISSUER_CAN_LINK to "siros_consent_pseudonym_issuer", ConsentString.FOOTER to "siros_consent_footer",
         ConsentString.CLAIM to "siros_consent_claim", ConsentString.LEGACY_PSEUDONYM to "siros_consent_legacy_pseudonym",
+        ConsentString.PREDICATE_EQ to "siros_consent_predicate_eq", ConsentString.PREDICATE_NE to "siros_consent_predicate_ne",
+        ConsentString.PREDICATE_LT to "siros_consent_predicate_lt", ConsentString.PREDICATE_LE to "siros_consent_predicate_le",
+        ConsentString.PREDICATE_GT to "siros_consent_predicate_gt", ConsentString.PREDICATE_GE to "siros_consent_predicate_ge",
+        ConsentString.PREDICATE_IN to "siros_consent_predicate_in",
+        ConsentString.PREDICATE_VALUE_NOT_SHARED to "siros_consent_predicate_value_not_shared",
     )
 
     private fun textFor(dir: String) = PresentationConsentText({ key, args ->
@@ -68,6 +77,13 @@ class PresentationConsentTextTest {
         }
     }
 
+    private fun age(form: AgeForm, vararg bounds: Pair<String, String>) = ConsentItem.Predicate(
+        "age_check", ClaimRef(listOf("birth_date"), null), ValueType.DATE, bounds.map { (op, v) -> Condition(ComparisonOp.ofWire(op)!!, listOf(v)) }, form,
+    )
+
+    private fun predicate(claim: ClaimRef, type: ValueType, vararg conditions: Condition, function: String = "x_check") =
+        ConsentItem.Predicate(function, claim, type, conditions.toList(), null)
+
     private val ssc = ConsentItem.Pseudonym("known-offender-matching-ssc", PseudonymScope.PER_VERIFIER, true, false, "rp.example", null)
     private val psc = ConsentItem.Pseudonym("known-offender-matching-psc", PseudonymScope.PER_VERIFIER, false, false, "rp.example", null)
 
@@ -81,7 +97,7 @@ class PresentationConsentTextTest {
     @Test
     fun theApprovedEnglishWording_isParameterisedPerItem() {
         val screen = textFor("values").render(
-            request(ssc, ConsentItem.AgeRange("1990-01-01", "2008-10-19", AgeForm.Between("1990-01-01", "2008-10-19", 18, 36))),
+            request(ssc, age(AgeForm.Between("1990-01-01", "2008-10-19", 18, 36), "ge" to "1990-01-01", "le" to "2008-10-19")),
         )
         assertEquals("Example RP is asking you to prove:", screen.header)
         assertEquals(
@@ -95,8 +111,8 @@ class PresentationConsentTextTest {
         assertEquals("No other personal data is shared.", screen.footer)
         assertEquals("Nym", screen.entries.single().credentialName)
         assertEquals("Example Issuer", screen.entries.single().issuerName)
-        assertEquals("You are at least 18 years old. Your exact birth date is not shared.", textFor("values").render(request(ConsentItem.AgeRange(null, "2008-10-19", AgeForm.AtLeast(18)))).entries.single().lines.single())
-        assertEquals("You are at most 26 years old. Your exact birth date is not shared.", textFor("values").render(request(ConsentItem.AgeRange("2000-01-01", null, AgeForm.AtMost(26)))).entries.single().lines.single())
+        assertEquals("You are at least 18 years old. Your exact birth date is not shared.", textFor("values").render(request(age(AgeForm.AtLeast(18), "le" to "2008-10-19"))).entries.single().lines.single())
+        assertEquals("You are at most 26 years old. Your exact birth date is not shared.", textFor("values").render(request(age(AgeForm.AtMost(26), "ge" to "2000-01-01"))).entries.single().lines.single())
     }
 
     @Test
@@ -118,7 +134,7 @@ class PresentationConsentTextTest {
             "values-pt" to "Example RP pede-lhe que prove:",
         )
         for ((dir, line) in expected) {
-            val screen = textFor(dir).render(request(ssc, ConsentItem.AgeRange(null, "2008-10-19", AgeForm.AtLeast(18))))
+            val screen = textFor(dir).render(request(ssc, age(AgeForm.AtLeast(18), "le" to "2008-10-19")))
             assertEquals(dir, line, screen.header)
             // Nothing the dialog shows names the trust framework or the verifier_id_type.
             val all = listOf(screen.title, screen.header, screen.footer, screen.shareLabel, screen.cancelLabel) + screen.entries.flatMap { it.lines }
@@ -134,7 +150,7 @@ class PresentationConsentTextTest {
         val detail = textFor("values").render(request(ssc, verifierId = did)).verifierDetail!!
         assertEquals(did, detail.full)
         assertEquals(did.take(18) + "…" + did.takeLast(18), detail.shortened)
-        assertEquals(null, textFor("values").render(request(ConsentItem.AgeRange(null, "2008-10-19", AgeForm.AtLeast(18)), verifierId = null)).verifierDetail)
+        assertEquals(null, textFor("values").render(request(age(AgeForm.AtLeast(18), "le" to "2008-10-19"), verifierId = null)).verifierDetail)
     }
 
     @Test
@@ -164,5 +180,46 @@ class PresentationConsentTextTest {
         assertThrows(IllegalArgumentException::class.java) { textFor("values").render(request(xsite)) }
         val withContext = ConsentItem.Pseudonym("account-recovery-ssc", PseudonymScope.PER_VERIFIER_CONTEXT, true, false, "rp.example", "acct")
         assertThrows(IllegalArgumentException::class.java) { textFor("values").render(request(withContext)) }
+    }
+
+    @Test
+    fun aGenericPredicate_saysWhatTheVerifierLearns_neverTheValue_inEveryLocale() {
+        val score = ClaimRef(listOf("score"), "Credit score")
+        val en = textFor("values")
+        fun lines(item: ConsentItem) = en.render(request(item)).entries.single().lines
+        assertEquals(
+            listOf("Credit score is at least 10.", "Credit score is at most 20.", "The actual value of Credit score is not shared."),
+            lines(predicate(score, ValueType.NUMBER, Condition(ComparisonOp.GE, listOf("10")), Condition(ComparisonOp.LE, listOf("20")))),
+        )
+        assertEquals(
+            listOf("Country is one of: SE, FI.", "The actual value of Country is not shared."),
+            lines(predicate(ClaimRef(listOf("country"), "Country"), ValueType.STRING, Condition(ComparisonOp.IN, listOf("SE", "FI")))),
+        )
+        // No label: the path is the fallback, never an invented name.
+        assertEquals("address.country is SE.", lines(predicate(ClaimRef(listOf("address", "country"), null), ValueType.STRING, Condition(ComparisonOp.EQ, listOf("SE")))).first())
+        // A date operand is written the way the locale writes dates; a date claim that is not a birth date is not an age.
+        assertEquals(
+            "Issue date is at least January 1, 2020.",
+            lines(predicate(ClaimRef(listOf("issue_date"), "Issue date"), ValueType.DATE, Condition(ComparisonOp.GE, listOf("2020-01-01")))).first(),
+        )
+        // Every operator has its own sentence in every locale, with the claim and the operand filled in and nothing left over.
+        for (dir in locales.keys) {
+            val t = textFor(dir)
+            for (op in ComparisonOp.values()) {
+                val operand = if (op == ComparisonOp.IN) listOf("A", "B") else listOf("A")
+                val screen = t.render(request(predicate(ClaimRef(listOf("c"), "CLAIMLABEL"), ValueType.STRING, Condition(op, operand))))
+                val sentence = screen.entries.single().lines.first()
+                assertTrue("$dir $op: $sentence", sentence.contains("CLAIMLABEL") && sentence.contains("A") && !sentence.contains("%"))
+                assertTrue("$dir $op: the value-not-shared sentence", screen.entries.single().lines.last().contains("CLAIMLABEL"))
+            }
+        }
+    }
+
+    @Test
+    fun aHostRendererForAFunction_takesPrecedenceOverTheGenericWording() {
+        val t = PresentationConsentText({ _, _ -> "generic" }, Locale.ENGLISH, mapOf("x_check" to { _: ConsentItem.Predicate -> listOf("custom") }))
+        val item = predicate(ClaimRef(listOf("c"), null), ValueType.STRING, Condition(ComparisonOp.EQ, listOf("A")))
+        assertEquals(listOf("custom"), t.render(request(item)).entries.single().lines)
+        assertEquals(listOf("generic", "generic"), t.render(request(item.copy(functionId = "other"))).entries.single().lines)
     }
 }

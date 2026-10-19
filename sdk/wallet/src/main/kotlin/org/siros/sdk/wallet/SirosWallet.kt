@@ -4365,10 +4365,11 @@ class SirosWallet private constructor(
             prepared += Prepared(result.queryId, plan, cred, resolved?.id, context, needsSecretSeed)
         }
 
-        // The proofs of one request together reveal the intersection of their age bounds. Queries answered with the
-        // same credential (any copy of it) must still leave the rulebook's minimum span, else the request is refused.
+        // The proofs of one request together reveal the intersection of their predicates on a claim. Queries answered
+        // with the same credential (any copy of it) must still leave the minimum selectivity a function declares
+        // (age_check: 365 days), else the request is refused. Functions that declare none have no merge rule.
         for ((_, group) in prepared.groupBy { it.cred.batchId ?: it.cred.id }) {
-            if (!org.siros.sdk.credentials.ConsentItems.combinedAgeBoundsOk(group.map { it.plan })) {
+            if (!config.circuitZkPredicateFunctions.mergeRuleOk(group.map { it.plan })) {
                 refuse("age-bounds-combined", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
             }
         }
@@ -4381,6 +4382,7 @@ class SirosWallet private constructor(
                     p.plan,
                     org.siros.sdk.credentials.CredentialRef(p.cred.metadata?.name, p.cred.metadata?.issuer?.name),
                     p.verifierId,
+                    p.cred.metadata?.claims.orEmpty(),
                 )
             },
             trust = org.siros.sdk.credentials.ConsentRequests.Trust(
@@ -4394,6 +4396,7 @@ class SirosWallet private constructor(
             verifierIdType = resolvedVerifier?.type,
             today = today,
             locale = java.util.Locale.getDefault().toLanguageTag(),
+            predicates = config.circuitZkPredicateFunctions,
         ) ?: refuse("consent-items", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
         if (!askPresentationConsent(consentHandler, consentRequest)) refuse("consent-declined", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.USER_DECLINED)
 
@@ -4445,18 +4448,18 @@ class SirosWallet private constructor(
     }
 
     /**
-     * Whether every `age_check` of [plan] holds for [credential]'s own `birth_date`. Local only: nothing is sent
-     * anywhere. A credential that cannot be read, or has no usable `birth_date`, does not satisfy one.
+     * The local satisfiability pre-check of [plan] for [credential]: whether every declared predicate function
+     * holds for the credential's own claims ([org.siros.sdk.credentials.PredicateFunctions.precheck]). Local only:
+     * nothing is sent anywhere. A credential that cannot be read does not satisfy; a function or claim path the
+     * reader cannot judge is skipped (the prover decides), never guessed.
      */
     private fun circuitZkPredicatesHold(plan: org.siros.sdk.credentials.CircuitZkPlan, credential: StoredCredential): Boolean {
-        val age = plan.functions.filter { it.id == org.siros.sdk.credentials.CircuitZkRuleSet.AGE_CHECK }
-        if (age.isEmpty()) return true
         val document = try {
             org.siros.sdk.credentials.mdoc.MdocCbor.parseStoredCredential(Base64.getUrlDecoder().decode(credential.raw))
         } catch (e: Exception) {
             return false
         }
-        return age.all { org.siros.sdk.keystore.AgeCheckFunctionHandler.holds(it, document) }
+        return config.circuitZkPredicateFunctions.precheck(plan, org.siros.sdk.credentials.PredicateFunctions.mdocReader(document))
     }
 
     /**

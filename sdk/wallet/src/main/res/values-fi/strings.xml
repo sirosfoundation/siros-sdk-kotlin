@@ -28,4 +28,13 @@
     <string name="siros_consent_legacy_pseudonym">Pseudonyymi jaetaan palvelulle %1$s.</string>
     <string name="siros_dcapi_refused_consent_unavailable">Lompakkosi ei voi tällä hetkellä pyytää hyväksyntääsi, joten mitään ei jaettu.</string>
     <string name="siros_dcapi_refused_user_declined">Et hyväksynyt pyyntöä, joten mitään ei jaettu.</string>
+    <!-- circuit_zk generic predicate wording (any claim). Proposed; translations unreviewed. -->
+    <string name="siros_consent_predicate_eq">%1$s on %2$s.</string>
+    <string name="siros_consent_predicate_ne">%1$s ei ole %2$s.</string>
+    <string name="siros_consent_predicate_lt">%1$s on pienempi kuin %2$s.</string>
+    <string name="siros_consent_predicate_le">%1$s on enintään %2$s.</string>
+    <string name="siros_consent_predicate_gt">%1$s on suurempi kuin %2$s.</string>
+    <string name="siros_consent_predicate_ge">%1$s on vähintään %2$s.</string>
+    <string name="siros_consent_predicate_in">%1$s on jokin seuraavista: %2$s.</string>
+    <string name="siros_consent_predicate_value_not_shared">Kohteen %1$s todellista arvoa ei jaeta.</string>
 </resources>

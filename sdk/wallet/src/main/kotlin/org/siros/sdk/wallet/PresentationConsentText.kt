@@ -7,8 +7,10 @@ import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
 import org.siros.sdk.credentials.AgeForm
+import org.siros.sdk.credentials.ComparisonOp
 import org.siros.sdk.credentials.ConsentItem
 import org.siros.sdk.credentials.PresentationConsentRequest
+import org.siros.sdk.credentials.ValueType
 import org.siros.sdk.credentials.PseudonymScope
 
 /** The consent strings the SDK owns, one key per sentence; arguments are positional (see the string resources). */
@@ -26,6 +28,14 @@ enum class ConsentString(internal val res: Int) {
     FOOTER(R.string.siros_consent_footer),
     CLAIM(R.string.siros_consent_claim),
     LEGACY_PSEUDONYM(R.string.siros_consent_legacy_pseudonym),
+    PREDICATE_EQ(R.string.siros_consent_predicate_eq),
+    PREDICATE_NE(R.string.siros_consent_predicate_ne),
+    PREDICATE_LT(R.string.siros_consent_predicate_lt),
+    PREDICATE_LE(R.string.siros_consent_predicate_le),
+    PREDICATE_GT(R.string.siros_consent_predicate_gt),
+    PREDICATE_GE(R.string.siros_consent_predicate_ge),
+    PREDICATE_IN(R.string.siros_consent_predicate_in),
+    PREDICATE_VALUE_NOT_SHARED(R.string.siros_consent_predicate_value_not_shared),
 }
 
 /** Resolves a [ConsentString] with its arguments. The wallet's implementation reads the SDK's string resources. */
@@ -65,7 +75,16 @@ data class ConsentScreen(
  * locale, sv, fi, el, pt), parameterised per item and never concatenated. The trust framework and the
  * `verifier_id_type` never appear in it. Nothing here logs; callers must not log the result either.
  */
-class PresentationConsentText(private val strings: ConsentStrings, private val locale: Locale = Locale.getDefault()) {
+class PresentationConsentText(
+    private val strings: ConsentStrings,
+    private val locale: Locale = Locale.getDefault(),
+    /**
+     * Specialised renderers of a predicate function, by function id. Without one the function is rendered as an
+     * age when its declaration says so ([ConsentItem.Predicate.age]), else by the generic comparison wording.
+     * A host adds one to word a function in its own domain terms.
+     */
+    private val predicateRenderers: Map<String, (ConsentItem.Predicate) -> List<String>> = emptyMap(),
+) {
 
     /** Fails (throws) on an item this wording does not cover rather than showing a consent that omits it. */
     fun render(request: PresentationConsentRequest): ConsentScreen {
@@ -76,7 +95,7 @@ class PresentationConsentText(private val strings: ConsentStrings, private val l
             title = strings.get(ConsentString.TITLE),
             header = strings.get(if (disclosesClaims) ConsentString.VERIFIER_SHARE else ConsentString.VERIFIER_PROVE, name),
             entries = request.entries.map { e ->
-                ConsentScreenEntry(e.credential.name, e.credential.issuer, e.items.map { line(it, name) })
+                ConsentScreenEntry(e.credential.name, e.credential.issuer, e.items.flatMap { lines(it, name) })
             },
             footer = strings.get(ConsentString.FOOTER),
             verifierDetail = request.verifier.verifierId?.let { ConsentVerifierDetail(shortenMiddle(it), it) },
@@ -85,19 +104,43 @@ class PresentationConsentText(private val strings: ConsentStrings, private val l
         )
     }
 
-    private fun line(item: ConsentItem, verifierName: String): String = when (item) {
-        is ConsentItem.AgeRange -> when (val form = item.form) {
-            is AgeForm.Between -> strings.get(ConsentString.AGE_BETWEEN, date(form.from), date(form.to), form.minYears, form.maxYears)
-            is AgeForm.AtLeast -> strings.get(ConsentString.AGE_AT_LEAST, form.years)
-            is AgeForm.AtMost -> strings.get(ConsentString.AGE_AT_MOST, form.years)
-        }
+    private fun lines(item: ConsentItem, verifierName: String): List<String> = when (item) {
+        is ConsentItem.Predicate -> (predicateRenderers[item.functionId] ?: ::predicateLines)(item)
         is ConsentItem.Pseudonym -> {
             require(item.scope == PseudonymScope.PER_VERIFIER && !item.crossSite && item.verifierContext == null) { "unsupported pseudonym scope" }
-            strings.get(if (item.remappableByIssuer) ConsentString.PSEUDONYM_ISSUER_CAN_LINK else ConsentString.PSEUDONYM, verifierName)
+            listOf(strings.get(if (item.remappableByIssuer) ConsentString.PSEUDONYM_ISSUER_CAN_LINK else ConsentString.PSEUDONYM, verifierName))
         }
-        is ConsentItem.LegacyPseudonym -> strings.get(ConsentString.LEGACY_PSEUDONYM, verifierName)
-        is ConsentItem.Claim -> strings.get(ConsentString.CLAIM, item.name)
+        is ConsentItem.LegacyPseudonym -> listOf(strings.get(ConsentString.LEGACY_PSEUDONYM, verifierName))
+        is ConsentItem.Claim -> listOf(strings.get(ConsentString.CLAIM, item.name))
     }
+
+    /** An age (approved wording) when the item carries one, else one sentence per condition plus "the value is not shared". */
+    private fun predicateLines(item: ConsentItem.Predicate): List<String> {
+        item.age?.let { return listOf(ageLine(it)) }
+        val claim = item.claim.display
+        val sentences = item.conditions.map { c ->
+            val key = when (c.op) {
+                ComparisonOp.EQ -> ConsentString.PREDICATE_EQ
+                ComparisonOp.NE -> ConsentString.PREDICATE_NE
+                ComparisonOp.LT -> ConsentString.PREDICATE_LT
+                ComparisonOp.LE -> ConsentString.PREDICATE_LE
+                ComparisonOp.GT -> ConsentString.PREDICATE_GT
+                ComparisonOp.GE -> ConsentString.PREDICATE_GE
+                ComparisonOp.IN -> ConsentString.PREDICATE_IN
+            }
+            strings.get(key, claim, c.values.joinToString(", ") { value(item.valueType, it) })
+        }
+        return sentences + strings.get(ConsentString.PREDICATE_VALUE_NOT_SHARED, claim)
+    }
+
+    private fun ageLine(form: AgeForm): String = when (form) {
+        is AgeForm.Between -> strings.get(ConsentString.AGE_BETWEEN, date(form.from), date(form.to), form.minYears, form.maxYears)
+        is AgeForm.AtLeast -> strings.get(ConsentString.AGE_AT_LEAST, form.years)
+        is AgeForm.AtMost -> strings.get(ConsentString.AGE_AT_MOST, form.years)
+    }
+
+    /** An operand as the user reads it: a date in the locale's form, anything else as the verifier sent it. */
+    private fun value(type: ValueType, v: String): String = if (type == ValueType.DATE) date(v) else v
 
     /** The date as the user's locale writes it; the input is a validated RFC 3339 full-date. */
     private fun date(iso: String): String =

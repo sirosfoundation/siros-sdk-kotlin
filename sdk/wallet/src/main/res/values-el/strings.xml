@@ -28,4 +28,13 @@
     <string name="siros_consent_legacy_pseudonym">Κοινοποιείται ένα ψευδώνυμο στην υπηρεσία %1$s.</string>
     <string name="siros_dcapi_refused_consent_unavailable">Το πορτοφόλι σας δεν μπορεί να ζητήσει την έγκρισή σας αυτή τη στιγμή, οπότε δεν κοινοποιήθηκε τίποτα.</string>
     <string name="siros_dcapi_refused_user_declined">Δεν εγκρίνατε το αίτημα, οπότε δεν κοινοποιήθηκε τίποτα.</string>
+    <!-- circuit_zk generic predicate wording (any claim). Proposed; translations unreviewed. -->
+    <string name="siros_consent_predicate_eq">Το «%1$s» είναι %2$s.</string>
+    <string name="siros_consent_predicate_ne">Το «%1$s» δεν είναι %2$s.</string>
+    <string name="siros_consent_predicate_lt">Το «%1$s» είναι μικρότερο από %2$s.</string>
+    <string name="siros_consent_predicate_le">Το «%1$s» είναι το πολύ %2$s.</string>
+    <string name="siros_consent_predicate_gt">Το «%1$s» είναι μεγαλύτερο από %2$s.</string>
+    <string name="siros_consent_predicate_ge">Το «%1$s» είναι τουλάχιστον %2$s.</string>
+    <string name="siros_consent_predicate_in">Το «%1$s» είναι ένα από: %2$s.</string>
+    <string name="siros_consent_predicate_value_not_shared">Η πραγματική τιμή του «%1$s» δεν κοινοποιείται.</string>
 </resources>

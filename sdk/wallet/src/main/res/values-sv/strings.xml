@@ -28,4 +28,13 @@
     <string name="siros_consent_legacy_pseudonym">En pseudonym delas med %1$s.</string>
     <string name="siros_dcapi_refused_consent_unavailable">Din plånbok kan inte be om ditt godkännande just nu, så ingenting delades.</string>
     <string name="siros_dcapi_refused_user_declined">Du godkände inte begäran, så ingenting delades.</string>
+    <!-- circuit_zk generic predicate wording (any claim). Proposed; translations unreviewed. -->
+    <string name="siros_consent_predicate_eq">%1$s är %2$s.</string>
+    <string name="siros_consent_predicate_ne">%1$s är inte %2$s.</string>
+    <string name="siros_consent_predicate_lt">%1$s är mindre än %2$s.</string>
+    <string name="siros_consent_predicate_le">%1$s är högst %2$s.</string>
+    <string name="siros_consent_predicate_gt">%1$s är större än %2$s.</string>
+    <string name="siros_consent_predicate_ge">%1$s är minst %2$s.</string>
+    <string name="siros_consent_predicate_in">%1$s är något av: %2$s.</string>
+    <string name="siros_consent_predicate_value_not_shared">Det faktiska värdet av %1$s delas inte.</string>
 </resources>

@@ -30,6 +30,27 @@ class ConsentVectorsTest {
         Json.parseToJsonElement(f.readText()).jsonObject
     }
 
+    /** The vector file declares the predicate functions its cases use: the declarations are data. */
+    private val registry: PredicateFunctions by lazy {
+        PredicateFunctions(file["function_registry"]!!.jsonArray.map { d ->
+            val o = d.jsonObject
+            val claim = o["claim"]!!.jsonObject
+            PredicateFunction(
+                id = o["id"]!!.jsonPrimitive.content,
+                claim = if (claim["param"] != null) ClaimSource.FromParam else ClaimSource.Fixed(claim["path"]!!.jsonArray.map { it.jsonPrimitive.content }),
+                valueType = ValueType.ofWire(o["value_type"]!!.jsonPrimitive.content)!!,
+                comparisons = o["comparisons"]!!.jsonObject.entries.associateTo(LinkedHashMap()) { (k, v) -> k to ComparisonOp.ofWire(v.jsonPrimitive.content)!! },
+                minSpan = o["min_span"]?.jsonPrimitive?.content?.toLong(),
+                ageSpecialisation = o["age_specialisation"]?.jsonPrimitive?.booleanOrNull == true,
+            )
+        })
+    }
+
+    private fun plan(functions: kotlinx.serialization.json.JsonArray) = CircuitZkPlan(functions.map {
+        val f = it.jsonObject
+        CircuitZkFunction(f["id"]!!.jsonPrimitive.content, f["handle"]!!.jsonPrimitive.content, f["params"]!!.jsonObject)
+    })
+
     private fun str(e: JsonElement?): String? = (e as? JsonPrimitive)?.takeIf { it !is JsonNull }?.contentOrNull
 
     private fun runCase(c: JsonObject): PresentationConsentRequest? {
@@ -38,16 +59,14 @@ class ConsentVectorsTest {
         val verifierId = str(input["verifier_id"])
         val queries = input["queries"]!!.jsonArray.map { q ->
             val o = q.jsonObject
-            val plan = CircuitZkPlan(o["plan"]!!.jsonArray.map {
-                val f = it.jsonObject
-                CircuitZkFunction(f["id"]!!.jsonPrimitive.content, f["handle"]!!.jsonPrimitive.content, f["params"]!!.jsonObject)
-            })
+            val plan = plan(o["plan"]!!.jsonArray)
+            val claims = o["claims"]!!.jsonArray.map { c -> ClaimMeta(c.jsonObject["path"]!!.jsonArray.map { it.jsonPrimitive.content }, str(c.jsonObject["label"])) }
             val cred = o["credential"]!!.jsonObject
             // The wallet resolves a verifier_id only for a plan that uses one.
             val needsId = plan.functions.any {
                 it.id == CircuitZkRuleSet.PSEUDONYM || CircuitZkLegacyDisclosure.parse(it)?.pseudonym == true
             }
-            ConsentRequests.Query(plan, CredentialRef(str(cred["name"]), str(cred["issuer"])), if (needsId) verifierId else null)
+            ConsentRequests.Query(plan, CredentialRef(str(cred["name"]), str(cred["issuer"])), if (needsId) verifierId else null, claims)
         }
         return ConsentRequests.build(
             queries = queries,
@@ -60,12 +79,13 @@ class ConsentVectorsTest {
             verifierIdType = str(input["verifier_id_type"]),
             today = LocalDate.parse(c["today"]!!.jsonPrimitive.content),
             locale = "en",
+            predicates = registry,
         )
     }
 
     private fun JsonObjectBuilderScope.nullable(k: String, v: String?) = put(k, if (v == null) JsonNull else JsonPrimitive(v))
 
-    private fun form(f: AgeForm): JsonObject = buildJsonObject {
+    private fun form(f: AgeForm?): JsonElement = if (f == null) JsonNull else buildJsonObject {
         when (f) {
             is AgeForm.Between -> {
                 put("kind", "between"); put("from", f.from); put("to", f.to); put("min_years", f.minYears); put("max_years", f.maxYears)
@@ -82,8 +102,19 @@ class ConsentVectorsTest {
                 put("remappable_by_issuer", i.remappableByIssuer); put("cross_site", i.crossSite)
                 nullable("verifier_id", i.verifierId); nullable("verifier_context", i.verifierContext)
             }
-            is ConsentItem.AgeRange -> {
-                put("kind", "age_range"); nullable("ge", i.ge); nullable("le", i.le); put("form", form(i.form))
+            is ConsentItem.Predicate -> {
+                put("kind", "predicate"); put("function", i.functionId)
+                put("claim", buildJsonObject {
+                    put("path", buildJsonArray { i.claim.path.forEach { add(JsonPrimitive(it)) } })
+                    nullable("label", i.claim.label)
+                })
+                put("value_type", i.valueType.wire)
+                put("conditions", buildJsonArray {
+                    i.conditions.forEach { c ->
+                        add(buildJsonObject { put("op", c.op.wire); put("values", buildJsonArray { c.values.forEach { add(JsonPrimitive(it)) } }) })
+                    }
+                })
+                put("age_form", form(i.age))
             }
             is ConsentItem.Claim -> { put("kind", "claim"); put("name", i.name) }
             is ConsentItem.LegacyPseudonym -> { put("kind", "legacy_pseudonym"); nullable("verifier_context", i.verifierContext) }
@@ -111,7 +142,7 @@ class ConsentVectorsTest {
     @Test
     fun everyVectorBuildsTheExpectedRequestItemForItem() {
         val cases = file["cases"]!!.jsonArray.map { it.jsonObject }
-        assertTrue(cases.size >= 30)
+        assertTrue(cases.size >= 50)
         for (c in cases) {
             val name = c["name"]!!.jsonPrimitive.content
             val expected = c["expected"]!!.jsonObject
@@ -125,17 +156,31 @@ class ConsentVectorsTest {
     }
 
     @Test
-    fun combinedAgeBoundsOfOneCredential_followTheSharedVectors() {
-        val cases = file["combined_age_bounds"]!!.jsonArray.map { it.jsonObject }
-        assertTrue(cases.size >= 7)
+    fun combinedPredicatesOfOneCredential_followTheSharedVectors() {
+        val cases = file["combined_predicate_bounds"]!!.jsonArray.map { it.jsonObject }
+        assertTrue(cases.size >= 16)
         for (c in cases) {
-            val plans = c["plans"]!!.jsonArray.map { plan ->
-                CircuitZkPlan(plan.jsonArray.map {
-                    val f = it.jsonObject
-                    CircuitZkFunction(f["id"]!!.jsonPrimitive.content, f["handle"]!!.jsonPrimitive.content, f["params"]!!.jsonObject)
-                })
+            val plans = c["plans"]!!.jsonArray.map { p -> plan(p.jsonArray) }
+            assertEquals(c["name"]!!.jsonPrimitive.content, c["expected_ok"]!!.jsonPrimitive.boolean, registry.mergeRuleOk(plans))
+        }
+    }
+
+    @Test
+    fun theLocalPrecheck_followsTheSharedVectors() {
+        val cases = file["precheck"]!!.jsonArray.map { it.jsonObject }
+        assertTrue(cases.size >= 20)
+        for (c in cases) {
+            val p = plan(c["functions"]!!.jsonArray)
+            val lookups = ArrayDeque(c["claims"]!!.jsonArray.map { it.jsonObject })
+            val actual = registry.precheck(p) { _, _ ->
+                val l = lookups.removeFirst()
+                when (l["lookup"]!!.jsonPrimitive.content) {
+                    "absent" -> ClaimLookup.Absent
+                    "unsupported" -> ClaimLookup.Unsupported
+                    else -> ClaimLookup.Found(ClaimValue(ValueType.ofWire(l["type"]!!.jsonPrimitive.content)!!, l["text"]!!.jsonPrimitive.content))
+                }
             }
-            assertEquals(c["name"]!!.jsonPrimitive.content, c["expected_ok"]!!.jsonPrimitive.boolean, ConsentItems.combinedAgeBoundsOk(plans))
+            assertEquals(c["name"]!!.jsonPrimitive.content, c["expected"]!!.jsonPrimitive.boolean, actual)
         }
     }
 }

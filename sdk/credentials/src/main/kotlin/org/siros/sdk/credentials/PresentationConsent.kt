@@ -2,8 +2,6 @@
 package org.siros.sdk.credentials
 
 import java.time.LocalDate
-import java.time.format.DateTimeParseException
-import java.time.temporal.ChronoUnit
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
@@ -17,7 +15,8 @@ import kotlinx.serialization.json.contentOrNull
  * @property trustIdentifier The normalized identifier the trust decision was about. Same remark.
  * @property verifierId The `verifier_id` the pseudonym is scoped to, verbatim; null when none is used.
  * @property verifierIdType The `verifier_id_type` of [verifierId]. Never part of the default dialog text.
- * @property intermediaryRisk The policy decision point flagged the verifier as acting for another party.
+ * @property intermediaryRisk The policy decision point flagged the verifier as acting for another party. PROVISIONAL:
+ *   read from the PDP's `context.intermediary_risk` (boolean, optional) until go-trust defines the signal.
  */
 data class ConsentVerifier(
     val label: String,
@@ -81,8 +80,18 @@ sealed interface ConsentItem {
     /** The value of a claim, disclosed (the legacy `zk-claim-disclosure-v1` function only). Carries the NAME, never the value. */
     data class Claim(val name: String) : ConsentItem
 
-    /** The holder's age falls in a range; [ge]/[le] are the requested birth-date bounds as sent. */
-    data class AgeRange(val ge: String?, val le: String?, val form: AgeForm) : ConsentItem
+    /**
+     * What the verifier LEARNS about [claim]: that the claim satisfies every one of [conditions] (all of one
+     * [valueType]). Never the claim's value. [age] is set for a function declared as an age (`age_check`): the
+     * human form (born between / at least / at most) computed once here, so hosts do not redo date maths.
+     */
+    data class Predicate(
+        val functionId: String,
+        val claim: ClaimRef,
+        val valueType: ValueType,
+        val conditions: List<Condition>,
+        val age: AgeForm?,
+    ) : ConsentItem
 
     /** A rulebook pseudonym under [config]; [verifierId] and [verifierContext] are what it is scoped by. */
     data class Pseudonym(
@@ -104,7 +113,13 @@ sealed interface ConsentItem {
  */
 object ConsentRequests {
     /** One query of the request: its plan, the credential that will be proved, and the `verifier_id` resolved for it (null when unused). */
-    class Query(val plan: CircuitZkPlan, val credential: CredentialRef, val verifierId: String?)
+    class Query(
+        val plan: CircuitZkPlan,
+        val credential: CredentialRef,
+        val verifierId: String?,
+        /** The credential's own claim display metadata: labels for the claims a predicate is about. */
+        val claims: List<ClaimMeta> = emptyList(),
+    )
 
     /** What the trust decision said about the verifier; each field is null when the PDP did not supply it. */
     class Trust(val entityName: String?, val framework: String?, val identifier: String?, val intermediaryRisk: Boolean = false)
@@ -128,9 +143,10 @@ object ConsentRequests {
         verifierIdType: String?,
         today: LocalDate,
         locale: String,
+        predicates: PredicateFunctions = PredicateFunctions.DEFAULT,
     ): PresentationConsentRequest? {
         if (queries.isEmpty()) return null
-        val entries = queries.map { q -> ConsentEntry(q.credential, ConsentItems.build(q.plan, q.verifierId, today) ?: return null) }
+        val entries = queries.map { q -> ConsentEntry(q.credential, ConsentItems.build(q.plan, q.verifierId, today, q.claims, predicates) ?: return null) }
         return PresentationConsentRequest(
             verifier = ConsentVerifier(
                 label = label(trust.entityName, verifiedClientIdDisplayName, attestedOrigin),
@@ -166,7 +182,13 @@ object ConsentItems {
     fun supportsConfig(config: String): Boolean = config in CONFIGS
 
     /** The items of [plan], in the plan's order, or null when any function is not one that can be shown. */
-    fun build(plan: CircuitZkPlan, verifierId: String?, today: LocalDate): List<ConsentItem>? {
+    fun build(
+        plan: CircuitZkPlan,
+        verifierId: String?,
+        today: LocalDate,
+        claims: List<ClaimMeta> = emptyList(),
+        predicates: PredicateFunctions = PredicateFunctions.DEFAULT,
+    ): List<ConsentItem>? {
         val items = ArrayList<ConsentItem>()
         for (f in plan.functions) {
             when (f.id) {
@@ -178,65 +200,18 @@ object ConsentItems {
                     if (verifierId.isNullOrEmpty()) return null
                     items += ConsentItem.Pseudonym(config, c.scope, c.remappable, c.scope == PseudonymScope.CROSS_SITE, verifierId, context)
                 }
-                CircuitZkRuleSet.AGE_CHECK -> items += ageRange(f, today) ?: return null
                 CircuitZkLegacyDisclosure.FUNCTION_ID -> {
                     val legacy = CircuitZkLegacyDisclosure.parse(f) ?: return null
                     legacy.claims.forEach { items += ConsentItem.Claim(it) }
                     if (legacy.pseudonym) items += ConsentItem.LegacyPseudonym(legacy.verifierContext)
                 }
-                else -> return null
+                // Any other function must be a declared predicate function: one we cannot describe is refused.
+                else -> items += predicates.item(f, claims, today) ?: return null
             }
         }
         return items.takeIf { it.isNotEmpty() }
     }
 
-    /** The rulebook's minimum span of an `age_check` (`le - ge + 1`, in calendar days). */
-    private const val MIN_SPAN_DAYS = 365L
-
-    /**
-     * Whether the age bounds of [plans], all proved with the SAME credential, still leave the rulebook's minimum
-     * span once combined: the proofs of one request together reveal the intersection of their bounds, so two
-     * queries `ge=D` and `le=D` would disclose the exact birth date although each plan alone passes the rule.
-     * A plan with an unreadable bound makes it false (never "cannot compare, so fine").
-     */
-    fun combinedAgeBoundsOk(plans: List<CircuitZkPlan>): Boolean {
-        var lower: LocalDate? = null
-        var upper: LocalDate? = null
-        for (f in plans.flatMap { it.functions }.filter { it.id == CircuitZkRuleSet.AGE_CHECK }) {
-            val ge = text(f, "ge")
-            val le = text(f, "le")
-            val g = if (ge != null) date(ge) ?: return false else null
-            val l = if (le != null) date(le) ?: return false else null
-            if (g != null && (lower == null || g.isAfter(lower))) lower = g
-            if (l != null && (upper == null || l.isBefore(upper))) upper = l
-        }
-        return lower == null || upper == null || ChronoUnit.DAYS.between(lower, upper) + 1 >= MIN_SPAN_DAYS
-    }
-
     private fun text(f: CircuitZkFunction, key: String): String? =
         (f.params[key] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
-
-    private val FULL_DATE = Regex("\\d{4}-\\d{2}-\\d{2}")
-
-    /** A strict RFC 3339 full-date (`YYYY-MM-DD`), or null. */
-    private fun date(s: String?): LocalDate? =
-        s?.takeIf { FULL_DATE.matches(it) }?.let { try { LocalDate.parse(it) } catch (e: DateTimeParseException) { null } }
-
-    private fun ageRange(f: CircuitZkFunction, today: LocalDate): ConsentItem.AgeRange? {
-        if (f.params.keys.any { it != "ge" && it != "le" }) return null
-        val ge = text(f, "ge")
-        val le = text(f, "le")
-        if (ge == null && le == null) return null
-        val geDate = date(ge)
-        val leDate = date(le)
-        if ((ge != null && geDate == null) || (le != null && leDate == null)) return null
-        // Born on `le` is the youngest holder the range admits, born on `ge` the oldest.
-        fun years(born: LocalDate) = ChronoUnit.YEARS.between(born, today).toInt().coerceAtLeast(0)
-        val form = when {
-            geDate != null && leDate != null -> AgeForm.Between(ge!!, le!!, years(leDate), years(geDate))
-            leDate != null -> AgeForm.AtLeast(years(leDate))
-            else -> AgeForm.AtMost(years(geDate!!))
-        }
-        return ConsentItem.AgeRange(ge, le, form)
-    }
 }

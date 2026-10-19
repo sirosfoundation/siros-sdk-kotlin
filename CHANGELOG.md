@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`DCAPIRefusalReason.USER_DECLINED`) with zero seed, signer and prover calls; with no handler
   the request is refused (`DCAPIRefusalReason.CONSENT_UNAVAILABLE`, answered `access_denied`).
   The model (`PresentationConsentRequest`, `ConsentVerifier`, `CredentialRef`, `ConsentEntry`,
-  `ConsentItem.{Claim,AgeRange,Pseudonym,LegacyPseudonym}`, `AgeForm`, built by
+  `ConsentItem.{Claim,Predicate,Pseudonym,LegacyPseudonym}`, `AgeForm`, built by
   `ConsentRequests.build`) says what the verifier will receive and never carries a claim value,
   seed, proof or pseudonym value; the age range is precomputed (born between / at least / at most).
   `PresentationConsentText` is the SDK-owned wording (default, sv, fi, el, pt), parameterised per
@@ -28,6 +28,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   API activity shows it in a plain dialog after the OS picker. Cross-SDK vectors:
   `spec/circuit-zk-consent-vectors.json` (generator `tools/gen_circuit_zk_consent_vectors.py`).
   The sample app renders the same model in Compose (`PresentationConsentDialog`).
+  Predicates are not about `birth_date` alone: the `circuit_zk` function set is open-ended, so the consent item
+  is a generic `ConsentItem.Predicate` (function, claim with the credential's OWN display label, comparisons
+  `eq ne lt le gt ge in`, operands; what the verifier learns, never the value) and functions are declared as data
+  (`PredicateFunctions`, `WalletConfig.circuitZkPredicateFunctions`, default `age_check`, which keeps the approved
+  "born between / at least / at most" wording). Generic wording per comparison (default, sv, fi, el, pt) says
+  "{claim} is at least {value}" and that the actual value is not shared. A function that is not declared is refused
+  before consent (the wallet cannot describe it). The local pre-check is driven by the same declarations (dates,
+  numbers, strings, bools; a claim path or format the reader cannot judge is skipped, not guessed), and the
+  cross-query rule is generalised: per credential and claim path, predicates are intersected across queries and a
+  function's declared minimum selectivity is enforced (`age_check`: 365 days); functions that declare none have
+  no merge rule. `intermediary_risk` is read from the PDP's `context.intermediary_risk` (boolean, optional) and is
+  PROVISIONAL until go-trust defines it.
+  Known follow-up (not filed): the approved year strings use `%d` with words, so fi/el (and sv/pt as needed)
+  need proper plural resources.
 - **`CatalogCircuitZkProver`: the real `circuit_zk` prover, and the wallet's
   default.** `WalletConfig.circuitZkProver = null` now means the catalog prover
   (it was "refuse every request"); `FakeCircuitZkProver` stays an explicit

@@ -5261,7 +5261,11 @@ class SirosWalletTest {
         val psc get() = pscFor(DOCTYPE)
         fun pscFor(docType: String) = java.security.MessageDigest.getInstance("SHA-256").digest(hkdf("org.siros.private_seed/v1$docType".toByteArray(), 16))
 
-        fun mdoc(psc: ByteArray = this.psc, birth: String = "2000-06-15", docType: String = DOCTYPE, ssc: ByteArray = ByteArray(32) { 9 }): String {
+        fun mdoc(
+            psc: ByteArray = this.psc, birth: String = "2000-06-15", docType: String = DOCTYPE, ssc: ByteArray = ByteArray(32) { 9 },
+            /** Further elements of the doctype namespace (a claim a predicate can be about). */
+            extra: List<Pair<String, com.upokecenter.cbor.CBORObject>> = emptyList(),
+        ): String {
             fun c(o: Any) = com.upokecenter.cbor.CBORObject.FromObject(o)
             fun item(id: Long, name: String, v: com.upokecenter.cbor.CBORObject): com.upokecenter.cbor.CBORObject {
                 val m = com.upokecenter.cbor.CBORObject.NewMap()
@@ -5272,6 +5276,7 @@ class SirosWalletTest {
             items.Add(item(0, "birth_date", com.upokecenter.cbor.CBORObject.FromObjectAndTag(birth, 1004)))
             items.Add(item(1, "ssc", c(ssc)))
             items.Add(item(2, "psc", c(psc)))
+            extra.forEachIndexed { i, (name, v) -> items.Add(item(3L + i, name, v)) }
             val ns = com.upokecenter.cbor.CBORObject.NewMap(); ns[c(docType)] = items
             val mso = com.upokecenter.cbor.CBORObject.NewMap(); mso[c("docType")] = c(docType)
             val unprotected = com.upokecenter.cbor.CBORObject.NewMap(); unprotected[c(33)] = c(leafDer)
@@ -5379,6 +5384,10 @@ class SirosWalletTest {
         proverSigns: Boolean = false,
         /** Plans each query differently: the functions of the query at this index (overrides [functions]). */
         functionsPerQuery: ((Int) -> List<org.siros.sdk.credentials.CircuitZkFunction>)? = null,
+        /** The predicate functions the wallet can describe; null is the wallet's default (age_check only). */
+        predicates: org.siros.sdk.credentials.PredicateFunctions? = null,
+        /** Functions (id) the circuit and the validator accept besides the rulebook ones: their rules are empty. */
+        extraFunctions: Set<String> = emptySet(),
     ): CzkSetup {
         var plannedQueries = 0
         val consents = mutableListOf<org.siros.sdk.credentials.PresentationConsentRequest>()
@@ -5400,7 +5409,7 @@ class SirosWalletTest {
         )).toMutableList())
         val registry = VerifierIdRegistry(types, sources)
         val circuits = org.siros.sdk.credentials.CircuitZkCircuitSource {
-            listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf(CzkFixtures.DOCTYPE) + extraDocTypes, functions = setOf("pseudonym-v1-sha256", "age_check"), capabilities = capabilities))
+            listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf(CzkFixtures.DOCTYPE) + extraDocTypes, functions = setOf("pseudonym-v1-sha256", "age_check") + extraFunctions, capabilities = capabilities))
         }
         val support = org.siros.sdk.credentials.CircuitZkSupport(
             // The plan's raw query is the query itself (its doctype_value is what the presenter checks the credential against).
@@ -5408,7 +5417,12 @@ class SirosWalletTest {
                 val fs = functionsPerQuery?.invoke(plannedQueries++) ?: functions
                 org.siros.sdk.credentials.CircuitZkPlanResult.Plan(org.siros.sdk.credentials.CircuitZkPlan(fs, raw = query))
             },
-            validator = defaultCircuitZkValidator(circuits),
+            validator = if (extraFunctions.isEmpty()) defaultCircuitZkValidator(circuits) else org.siros.sdk.credentials.RulebookCircuitZkValidator(
+                rules = extraFunctions.fold(org.siros.sdk.credentials.CircuitZkRuleSet.rulebookV03()) { r, id ->
+                    r.withFunction(id, org.siros.sdk.credentials.CircuitZkFunctionRules(null, "$id-count", emptyList()))
+                },
+                circuits = circuits,
+            ),
             circuits = circuits,
             serving = serving,
         )
@@ -5429,6 +5443,7 @@ class SirosWalletTest {
             "config" to WalletConfig(
                 backendUrl = "https://backend.example",
                 readerTrustEvaluationMode = if (localOnlyTrust) MdocTrustEvaluationMode.LOCAL_ONLY else null,
+                circuitZkPredicateFunctions = predicates ?: org.siros.sdk.credentials.PredicateFunctions.DEFAULT,
             ),
             "circuitZkSupport" to (if (flagOn) support else null),
             *(if (defaultProver) arrayOf("defaultCircuitZkProverHolder" to defaultCatalogProverHolder()) else arrayOf("circuitZkProver" to prover)),
@@ -6099,8 +6114,9 @@ class SirosWalletTest {
         // A satisfiable one is asked, with the age item in its human form.
         val ok = czkSetup(functions = listOf(czkAgeFunction("""{"ge":"1999-01-01","le":"2005-01-01"}""")))
         czkRun(ok, czkRequest())
-        val age = ok.consents.single().entries.single().items.single() as org.siros.sdk.credentials.ConsentItem.AgeRange
-        assertTrue(age.form is org.siros.sdk.credentials.AgeForm.Between)
+        val age = ok.consents.single().entries.single().items.single() as org.siros.sdk.credentials.ConsentItem.Predicate
+        assertTrue(age.age is org.siros.sdk.credentials.AgeForm.Between)
+        assertEquals(listOf("birth_date"), age.claim.path)
     }
 
     @Test
@@ -6124,6 +6140,60 @@ class SirosWalletTest {
         czkRefused(noId, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE)
         assertTrue(noId.consents.isEmpty())
         assertTrue(noId.events.isEmpty())
+    }
+
+    // ── predicates over any claim ──
+
+    private val numberRange = org.siros.sdk.credentials.PredicateFunction(
+        id = "number_range", claim = org.siros.sdk.credentials.ClaimSource.FromParam, valueType = org.siros.sdk.credentials.ValueType.NUMBER,
+        comparisons = linkedMapOf("ge" to org.siros.sdk.credentials.ComparisonOp.GE, "le" to org.siros.sdk.credentials.ComparisonOp.LE), minSpan = 10,
+    )
+
+    private fun czkScoreSetup(score: Long, params: String = """{"claim":"score","ge":10,"le":20}""", declared: Boolean = true) = czkSetup(
+        functions = listOf(org.siros.sdk.credentials.CircuitZkFunction("number_range", "p", Json.parseToJsonElement(params).jsonObject)),
+        credentials = listOf(StoredCredential(
+            id = 1L, format = "mso_mdoc",
+            raw = CzkFixtures.mdoc(extra = listOf("score" to com.upokecenter.cbor.CBORObject.FromObject(score))),
+            metadata = CredentialMetadata(name = "Nym", claims = listOf(org.siros.sdk.credentials.ClaimMeta(listOf("score"), "Credit score"))), batchId = 1L, instanceId = 0,
+        )),
+        predicates = if (declared) org.siros.sdk.credentials.PredicateFunctions(listOf(org.siros.sdk.credentials.PredicateFunctions.AGE_CHECK, numberRange)) else null,
+        extraFunctions = setOf("number_range"),
+        consent = { false },
+    )
+
+    @Test
+    fun circuitZkConsent_aPredicateOnAnotherClaim_isDescribedWithTheCredentialsOwnLabel_andNeverTheValue() = runTest(dispatcher) {
+        val s = czkScoreSetup(15)
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.USER_DECLINED)
+        val item = s.consents.single().entries.single().items.single() as org.siros.sdk.credentials.ConsentItem.Predicate
+        assertEquals("number_range", item.functionId)
+        assertEquals(org.siros.sdk.credentials.ClaimRef(listOf("score"), "Credit score"), item.claim)
+        assertNull(item.age)
+        assertFalse(s.consents.single().toString().contains("15,") || s.consents.single().toString().contains("value=15"))
+        assertEquals(listOf("consent"), s.events)
+    }
+
+    @Test
+    fun circuitZkConsent_theLocalPrecheck_isNotAboutBirthDate_andRefusesWithoutAsking() = runTest(dispatcher) {
+        val s = czkScoreSetup(5)
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+        assertTrue(s.consents.isEmpty())
+    }
+
+    @Test
+    fun circuitZkConsent_aFunctionTheWalletCannotDescribe_isRefusedBeforeConsent() = runTest(dispatcher) {
+        // The validator and circuit accept number_range, but the wallet has no declaration for it: it cannot say what is disclosed.
+        val s = czkScoreSetup(15, declared = false)
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+        assertTrue(s.consents.isEmpty())
+        assertTrue(s.events.isEmpty())
+    }
+
+    @Test
+    fun circuitZkConsent_aPredicateThatPinsTheClaim_isRefusedByTheDeclaredMinimumSelectivity() = runTest(dispatcher) {
+        val s = czkScoreSetup(15, params = """{"claim":"score","ge":15,"le":15}""")
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+        assertTrue(s.consents.isEmpty())
     }
 
     private class FixedSource(override val type: String, val id: String?, val calls: MutableList<String>) : VerifierIdSource {
