@@ -423,64 +423,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ssc = SHA256(random 16-byte seed)` and the sample has an ssc scenario plus a
   "wrong seed must refuse" button.
 
-- **Issuer-delivered `credential_metadata` is relayed, verified and stored; the
-  ssc pseudonym configs are provable from the stored `secret_seed`.**
-  Transport: both `CredentialResult` DTOs (legacy engine and WMP OpenID4x) carry
-  `credentialMetadata` (`credential_metadata`, entries `{type, value}` as
-  `CredentialResponseMetadataEntry`, the value a raw `JsonElement`, any further
-  members retained in `additionalMembers`) and
-  `credentialMetadataEncryptedResponse` (`credential_metadata_encrypted_response`,
-  default false; set by the engine only when the issuer's response was
-  JWE-decrypted). The `wmp.flow.complete` result, a raw `JsonObject`, decodes with
-  `FlowCompleteResult.decode`. The wallet's WMP `onComplete` does not store
-  credentials today, so receipt is wired for the legacy engine path only.
-  Receipt (`flow_complete`): before anything is stored or a renewed batch is
-  replaced, every credential is checked. A `WalletConfig.secretSeedMetadataType`
-  entry (default `org.siros.NS.secret_seed`, non-blank) must come from an
-  encrypted response (plain JSON refuses), occur once, be exactly 32 lowercase
-  hex characters (16 bytes) and open the credential's `ssc`
-  (`SHA256(seed) == ssc`, constant time; mdoc: the one 32-byte bstr of the
-  doctype namespace, SD-JWT VC: the one top-level `ssc` disclosure, bound to the
-  signed `_sd`, 64 lowercase hex chars; absent, duplicate or wrong form
-  refuses). Any refusal fails the whole issuance: nothing is stored, the old
-  batch of a renewal stays, `credential_failure` is sent once per
-  `notification_id` (no notification id: no channel, the issuance still fails
-  locally and the error says so) and the error names no value. On success every
-  copy of the batch keeps ALL entries exactly as received (other types
-  uninterpreted). Metadata without a seed-type entry is just stored.
-  Storage: `S.credentials[].metadata` (privatedata-spec PR #3, vectors copied
-  under `sdk/keystore/src/test/resources/privatedata-spec/` with provenance) is
-  a keystore side map, never part of the stored credential JSON (whose own
-  `metadata` is display metadata and would fail to decode). Additive
-  `JweKeystore`/`WscdKeystoreAdapter` `getCredentialMetadata` and
-  `setCredentialMetadata` (not on `KeystoreManager`); `[]`/`null` are never
-  written; a malformed `metadata` is carried verbatim; it is dropped with the
-  credential. Rebuilding the container now preserves every member of a
-  credential entry this SDK does not own, every unknown `S` and `settings`
-  member and unknown container members, and writes back entries it cannot read
-  verbatim (the closed eight-field list used to drop them).
-  Use: the internal `CredentialSecretSeedSource` seam is now suspend and
-  keystore-backed (`KeystoreSecretSeedSource`); `handleCircuitZkDcApi` fetches
-  the picked credential's seed for the ssc configs, the presenter re-verifies the
-  commitment, and the wallet zeroes its copy. Guard tests keep the metadata out
-  of logs, history, presentations and stored credentials.
-  Entries are stored exactly as received: a `credential_metadata` entry keeps
-  every member beyond `type`/`value` (`CredentialResponseMetadataEntry.additionalMembers`,
-  `raw`), values verbatim (number literals keep their spelling). Only
-  `type`/`value` are interpreted. Cross-repo note: go-wallet-backend engine
-  PR #463 still rejects entries with members other than `type`/`value`, so extra
-  members arrive today only on the WMP path or from a future engine.
-  A malformed `credential_metadata` (an entry without `type` or `value`, an
-  empty or non-string `type`, a non-object entry, a non-array value) no longer
-  throws while decoding the whole `flow_complete` (which the engine session only
-  logs, leaving the issuance pending forever): the entry decodes as a
-  `CredentialResponseMetadataEntry` with `malformed = true` (constructor
-  parameter added, new in this PR), each credential's `notification_id` stays
-  readable, and the existing refusal runs: nothing stored, `onFlowError`,
-  `credential_failure` per `notification_id`, state reset. A non-boolean
-  `credential_metadata_encrypted_response` reads as false. The WMP transport
-  decodes the same way, and its `wmp.flow.complete` is now refused through the
-  same path instead of being reported as complete.
+- **The issuer-delivered `secret_seed` arrives in the response-level
+  `credential_metadata` (OpenID4VCI 1.1, openid/OpenID4VCI#721; privatedata-spec
+  2.6 section 5A, vectors vendored verbatim from privatedata-spec `8c4c865`); the ssc
+  pseudonym configs are provable from the stored seed.**
+  Wire: ONE object per Credential (and Deferred) Response, applying to every
+  credential in it: `"credential_metadata": {"org.siros.secret_seed":
+  {"<namespace>": "<32 lowercase hex>"}}` (`SecretSeedDelivery.MEMBER`, one constant).
+  Transport: `FlowCompleteMessage` (engine) and the WMP `FlowCompleteResult` carry
+  `credentialMetadata` (`ResponseCredentialMetadata`: every member verbatim and in
+  order, unknown members preserved; a value that is not an object decodes as a
+  `malformed` placeholder so the frame and each `notification_id` stay readable) and
+  `credentialMetadataEncryptedResponse` (default false; set by the engine only for a
+  JWE-decrypted response; a non-boolean reads as false). The credential DTOs print
+  no credential and the response object prints no member.
+  Receipt (`flow_complete`), once for the whole response and before anything is
+  stored or a renewed batch replaced: the `org.siros.secret_seed` member must come
+  from an encrypted response, the response must carry a `notification_id`, the
+  member must be well formed (1-8 namespaces of at most 64 UTF-8 bytes, none the
+  reserved `namespaces`, each seed exactly 32 lowercase hex characters), and the seed
+  of `WalletConfig.secretSeedNamespace` (default `org.siros.nym_auth`) must open the
+  `ssc` of EVERY credential (`SHA256(seed) == ssc`, constant time; mdoc: the one 32-byte
+  bstr of the doctype namespace, SD-JWT VC: the one top-level `ssc` disclosure bound
+  to the signed `_sd`). Any refusal fails the whole issuance: nothing is stored, the old
+  batch of a renewal stays, `credential_failure` is sent once per `notification_id`, and
+  the error names no value. Storage is unchanged: every credential of the response
+  gets one `S.credentials[].metadata` entry per response member,
+  `{type: <member>, value: <member verbatim>}`, in order (a keystore side map, never
+  part of the stored credential JSON). `WalletConfig.secretSeedMetadataType` is replaced
+  by `secretSeedNamespace`.
+  Safeguards: the seed is STRIPPED from the response object before any merge into
+  display metadata (`SecretSeedDelivery.stripped` / `mergeDisplay`: the issuer's
+  public advertisement stays, the seed cannot enter), and a static test keeps every
+  other reader of the object out. Issuer metadata advertises a seed by namespace names
+  only (`credential_metadata["org.siros.secret_seed"] = {"namespaces": [...]}`,
+  `CredentialDisplayMetadata.secretSeed`, `SecretSeedDelivery.classifyAdvertisement`):
+  a configuration whose public metadata carries anything else there (a seed value, say)
+  is malformed and not offered, and a completion for an advertising configuration that
+  was not encrypted is refused. The wallet cannot itself ask for response encryption:
+  the engine decides `credential_response_encryption` from the issuer's
+  `credential_response_encryption` metadata; for an advertising configuration the engine
+  must treat encryption as required (see the engine note in the PR).
+  Replays and the WMP client: a REPLAYED `wmp.flow.complete` lists what it withheld in
+  `redacted_members` (from `credential_metadata`, `credential_metadata_encrypted_response`,
+  `refresh_token`, `dpop_jwk`, `dpop_key_id`; the credentials are kept, a live completion has no
+  marker; both flow-complete DTOs decode it, an unreadable marker reads as everything withheld).
+  A listed member is not recoverable: nothing is invented, reused from an earlier flow or
+  substituted. A credential that needs a seed (it carries an `ssc`, or its configuration advertised
+  one) in a completion whose metadata was withheld, or an advertised seed that did not arrive, fails the
+  issuance with nothing stored; credentials of a replay that needs no seed are stored normally;
+  renewal material is captured only when none of it is withheld, so a replayed batch is not
+  renewable (re-issue). A seed over a deferred response is refused
+  (`DeliveredResponseMetadata.deferredResponse`, false until the engine relays one). The SSE
+  transport (`WmpHttpSseTransport`) now returns from `connect()` only once the stream is open (so it is
+  connected before `wmp.flow.start` is sent), drops a replayed event id, sends `Last-Event-ID` on a
+  reconnect, and no event data or decode error is ever logged (`WmpSession`, `WmpPeer` log the
+  exception class only).
+  Use: the internal `CredentialSecretSeedSource` seam is suspend and keystore-backed
+  (`KeystoreSecretSeedSource`, reads the `org.siros.secret_seed` entry's
+  designated-namespace seed); `handleCircuitZkDcApi` fetches the picked credential's
+  seed for the ssc configs, the presenter re-verifies the commitment, and the wallet
+  zeroes its copy. Guard tests keep the metadata out of logs, history, presentations
+  and stored credentials. The keystores preserve every member of a credential entry
+  they do not own, every unknown `S` and `settings` member and unknown container
+  members.
 - **Validator cleanup: a legacy `verifier_id_type` is accepted and ignored.**
   Rulebook v0.3 removed it from the request and implementations must not reject
   it. `verifier-id-type-forbidden` and `verifier-id-type-unregistered`, the

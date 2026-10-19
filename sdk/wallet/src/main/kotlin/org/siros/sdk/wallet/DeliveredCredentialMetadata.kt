@@ -2,20 +2,31 @@
 package org.siros.sdk.wallet
 
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.siros.sdk.credentials.SecretSeedCommitment
-import org.siros.sdk.transport.CredentialResultMetadata
+import org.siros.sdk.credentials.SecretSeedDelivery
+import org.siros.sdk.transport.DeliveredResponseMetadata
 
 /** Why delivered credential metadata was refused. The text names no value. */
 internal enum class DeliveredMetadataRefusal(val text: String) {
-    /** A secret arrived in a response the engine did not report as JWE-decrypted. */
+    /** A secret arrived in a response the engine did not report as JWE-decrypted (or an advertised one was not encrypted). */
     NOT_ENCRYPTED("the secret was not delivered in an encrypted response"),
 
-    /** An entry or the secret is not in the required form. */
+    /** The response's `credential_metadata` or its secret member is not in the required form. */
     MALFORMED("the delivered metadata is malformed"),
 
-    /** The same secret type was delivered more than once. */
-    DUPLICATE("the secret was delivered more than once"),
+    /** A seed was delivered but the response carries no `notification_id`. */
+    NO_NOTIFICATION_ID("the response carries a secret but no notification_id"),
+
+    /** A Deferred Credential Response carried a seed: not supported in this version, even when encrypted. */
+    DEFERRED_SEED("a deferred credential response cannot deliver a secret"),
+
+    /** The seed was withheld (a replayed or resumed completion) or an advertised seed did not arrive: it is unavailable, never invented. */
+    SEED_UNAVAILABLE("the delivered secret is unavailable for this issuance"),
+
+    /** The credential type's designated namespace is absent from the delivered seeds. */
+    NAMESPACE_ABSENT("the delivered secret has no seed for the credential's namespace"),
 
     /** The credential carries no readable commitment to check the secret against. */
     NO_COMMITMENT("the credential carries no usable commitment for the delivered secret"),
@@ -27,60 +38,107 @@ internal enum class DeliveredMetadataRefusal(val text: String) {
     NO_STORAGE("this wallet cannot store the delivered secret"),
 }
 
-/** The outcome of checking one received credential's delivered metadata. */
+/** One received credential, as far as the receipt check needs it. */
+internal class DeliveredCredential(val format: String, val credential: String, val notificationId: String?) {
+    override fun toString() = "DeliveredCredential(redacted)"
+}
+
+/** The outcome of checking one credential response's delivered metadata. */
 internal sealed class DeliveredMetadataVerdict {
     /** The issuer delivered no metadata: nothing to store, behaviour unchanged. */
     data object None : DeliveredMetadataVerdict()
 
-    /** Store [entries] (every entry exactly as received) with the credential. */
-    class Accept(val entries: JsonArray) : DeliveredMetadataVerdict()
+    /**
+     * Store [entries] with EVERY credential of the response: one `{type, value}` entry per response-level member,
+     * values exactly as received (privatedata-spec 5A.2, section 6). They can hold the seed.
+     */
+    class Accept(val entries: JsonArray) : DeliveredMetadataVerdict() {
+        override fun toString() = "Accept(redacted)"
+    }
 
-    /** The credential must not be stored. */
+    /** The response must not be stored: not one of its credentials. */
     class Refuse(val reason: DeliveredMetadataRefusal) : DeliveredMetadataVerdict()
 }
 
+/** Whether [c] commits to a seed (carries an `ssc`): a credential that cannot be used for its pseudonym without it. */
+private fun needsSeed(c: DeliveredCredential): Boolean {
+    val ssc = when {
+        c.format.equals("mso_mdoc", ignoreCase = true) -> SecretSeedCommitment.sscOfMdoc(c.credential)
+        c.format.contains("sd-jwt", ignoreCase = true) -> SecretSeedCommitment.sscOfSdJwt(c.credential)
+        else -> null
+    }
+    ssc?.fill(0)
+    return ssc != null
+}
+
 /**
- * Receipt of the per-credential `credential_metadata` the issuer delivers beside a credential
- * (privatedata-spec §5A). A pure check, run BEFORE anything is stored: a refusal means the credential
- * (and, for a batch, the whole issuance) is not stored.
+ * Receipt of the response-level `credential_metadata` the issuer delivers (privatedata-spec 5A; OpenID4VCI 1.1). A pure
+ * check of the WHOLE response, run BEFORE anything is stored: a refusal means no credential of the response is stored.
  *
- * Only the entry type [secretSeedType] is interpreted: it must arrive in a JWE-encrypted response, be 16
- * bytes as 32 lowercase hex characters, and open the `ssc` of the credential just received
- * (`SHA256(secret_seed) == ssc`). Every other entry is stored uninterpreted.
+ * Only the member [SecretSeedDelivery.MEMBER] is interpreted: the response must have been JWE-encrypted and carry a
+ * `notification_id`, the member must be well formed ([SecretSeedDelivery.parseDelivery]), and the seed of
+ * [secretNamespace] must open the `ssc` of EVERY credential of the response (`SHA256(secret_seed) == ssc`). The seeds of
+ * other namespaces are stored as received. Every other member is stored uninterpreted, in the order received.
+ *
+ * The check never produces display metadata: the one function that does ([SecretSeedDelivery.mergeDisplay]) takes the
+ * object with the member stripped.
  */
 internal object DeliveredCredentialMetadata {
     fun check(
-        format: String,
-        credential: String,
-        delivered: CredentialResultMetadata,
-        secretSeedType: String,
+        response: DeliveredResponseMetadata,
+        credentials: List<DeliveredCredential>,
+        secretNamespace: String,
         canStoreSecret: Boolean,
+        /** The issuer metadata of the configuration advertised a seed (`namespaces`): the response must have been encrypted. */
+        advertised: Boolean = false,
     ): DeliveredMetadataVerdict {
-        val entries = delivered.credentialMetadata
-        if (entries.isNullOrEmpty()) return DeliveredMetadataVerdict.None
-        // A malformed wire entry, or one the container could not store (blank type), refuses rather than being dropped.
-        if (entries.any { it.malformed || it.type.isEmpty() }) return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.MALFORMED)
-        // The entries as received: all members, member values verbatim.
-        val all = JsonArray(entries.map { it.raw })
-        val seeds = entries.filter { it.type == secretSeedType }
-        if (seeds.isEmpty()) return DeliveredMetadataVerdict.Accept(all)
-        if (seeds.size > 1) return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.DUPLICATE)
+        if (response.credentialMetadataRedacted) {
+            // Withheld, not absent: a replayed or resumed completion. A redacted completion that also carries the object
+            // contradicts itself; one for a credential that needs a seed cannot be completed.
+            if (response.credentialMetadata != null) return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.MALFORMED)
+            return if (advertised || credentials.any { needsSeed(it) }) {
+                DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.SEED_UNAVAILABLE)
+            } else {
+                DeliveredMetadataVerdict.None
+            }
+        }
+        if (advertised && !response.credentialMetadataEncryptedResponse) {
+            return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.NOT_ENCRYPTED)
+        }
+        val metadata = response.credentialMetadata ?: return if (advertised) {
+            // The configuration advertised a seed and the response has none (a resumed completion that lost it, say).
+            DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.SEED_UNAVAILABLE)
+        } else {
+            DeliveredMetadataVerdict.None
+        }
+        if (metadata.malformed) return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.MALFORMED)
+        // The entries as received: one per member, member values verbatim.
+        val all = JsonArray(metadata.members.map { (member, value) -> JsonObject(mapOf("type" to JsonPrimitive(member), "value" to value)) })
+        val seedMember = metadata.members[SecretSeedDelivery.MEMBER] ?: return when {
+            advertised -> DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.SEED_UNAVAILABLE)
+            metadata.members.isEmpty() -> DeliveredMetadataVerdict.None
+            else -> DeliveredMetadataVerdict.Accept(all)
+        }
+        if (response.deferredResponse) return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.DEFERRED_SEED)
         // Plain JSON never carries a secret: the engine sets the flag only for a JWE-decrypted response.
-        if (!delivered.credentialMetadataEncryptedResponse) return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.NOT_ENCRYPTED)
+        if (!response.credentialMetadataEncryptedResponse) return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.NOT_ENCRYPTED)
+        val seeds = SecretSeedDelivery.parseDelivery(seedMember) ?: return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.MALFORMED)
+        if (credentials.none { !it.notificationId.isNullOrEmpty() }) return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.NO_NOTIFICATION_ID)
         if (!canStoreSecret) return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.NO_STORAGE)
-        val hex = (seeds[0].value as? JsonPrimitive)?.takeIf { it.isString }?.content
-            ?: return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.MALFORMED)
-        val seed = SecretSeedCommitment.seedFromHex(hex)
-            ?: return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.MALFORMED)
+        val hex = seeds[secretNamespace] ?: return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.NAMESPACE_ABSENT)
+        val seed = SecretSeedCommitment.seedFromHex(hex) ?: return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.MALFORMED)
         try {
-            val ssc = when {
-                format.equals("mso_mdoc", ignoreCase = true) -> SecretSeedCommitment.sscOfMdoc(credential)
-                format.contains("sd-jwt", ignoreCase = true) -> SecretSeedCommitment.sscOfSdJwt(credential)
-                else -> null
-            } ?: return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.NO_COMMITMENT)
-            val ok = SecretSeedCommitment.opens(seed, ssc)
-            ssc.fill(0)
-            return if (ok) DeliveredMetadataVerdict.Accept(all) else DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.MISMATCH)
+            for (c in credentials) {
+                val ssc = when {
+                    c.format.equals("mso_mdoc", ignoreCase = true) -> SecretSeedCommitment.sscOfMdoc(c.credential)
+                    c.format.contains("sd-jwt", ignoreCase = true) -> SecretSeedCommitment.sscOfSdJwt(c.credential)
+                    else -> null
+                } ?: return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.NO_COMMITMENT)
+                val ok = SecretSeedCommitment.opens(seed, ssc)
+                ssc.fill(0)
+                if (!ok) return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.MISMATCH)
+            }
+            return DeliveredMetadataVerdict.Accept(all)
         } finally {
             seed.fill(0)
         }

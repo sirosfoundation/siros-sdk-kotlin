@@ -10,8 +10,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import org.siros.sdk.credentials.TransactionDataError
-import org.siros.sdk.transport.CredentialResponseMetadataEntry
-import org.siros.sdk.transport.CredentialResultMetadata
 import org.siros.sdk.transport.StringOrStringListSerializer
 import org.siros.sdk.transport.engine.CredentialRef
 import org.siros.sdk.transport.wmp.*
@@ -148,15 +146,10 @@ data class CredentialResult(
     val vct: String? = null,
     @SerialName("c_nonce") val cNonce: String? = null,
     @SerialName("notification_id") val notificationId: String? = null,
-    /** See [org.siros.sdk.transport.engine.CredentialResult.credentialMetadata]. */
-    @SerialName("credential_metadata")
-    @Serializable(with = org.siros.sdk.transport.CredentialMetadataListSerializer::class)
-    override val credentialMetadata: List<CredentialResponseMetadataEntry>? = null,
-    /** See [org.siros.sdk.transport.engine.CredentialResult.credentialMetadataEncryptedResponse]. */
-    @SerialName("credential_metadata_encrypted_response")
-    @Serializable(with = org.siros.sdk.transport.EncryptedResponseFlagSerializer::class)
-    override val credentialMetadataEncryptedResponse: Boolean = false,
-) : CredentialResultMetadata
+) {
+    // The credential itself is never printed.
+    override fun toString() = "CredentialResult(format=$format, credential=<redacted>, notificationId=$notificationId)"
+}
 
 /**
  * The typed view of a `wmp.flow.complete` `result`, which is the whole
@@ -169,7 +162,17 @@ data class FlowCompleteResult(
     val credentials: List<CredentialResult>? = null,
     @SerialName("credential_issuer") val credentialIssuer: String? = null,
     @SerialName("redirect_uri") val redirectUri: String? = null,
-) {
+    /** The response-level `credential_metadata`; see [org.siros.sdk.transport.engine.FlowCompleteMessage.credentialMetadata]. */
+    @SerialName("credential_metadata") override val credentialMetadata: org.siros.sdk.transport.ResponseCredentialMetadata? = null,
+    /** See [org.siros.sdk.transport.engine.FlowCompleteMessage.credentialMetadataEncryptedResponse]. */
+    @SerialName("credential_metadata_encrypted_response")
+    @Serializable(with = org.siros.sdk.transport.EncryptedResponseFlagSerializer::class)
+    override val credentialMetadataEncryptedResponse: Boolean = false,
+    /** `redacted_members`: what a replayed completion withheld; see [org.siros.sdk.transport.DeliveredResponseMetadata.redactedMembers]. */
+    @SerialName("redacted_members")
+    @Serializable(with = org.siros.sdk.transport.RedactedMembersSerializer::class)
+    override val redactedMembers: Set<String> = emptySet(),
+) : org.siros.sdk.transport.DeliveredResponseMetadata {
     companion object {
         private val lenient = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 

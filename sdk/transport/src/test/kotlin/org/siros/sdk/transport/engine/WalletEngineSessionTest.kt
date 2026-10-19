@@ -206,84 +206,76 @@ class WalletEngineSessionTest {
     }
 
     @Test
-    fun flow_complete_parses_delivered_credential_metadata() = runTest {
-        val session = WalletEngineSession(
-            baseUrl = "https://wallet.example.com",
-            tenantId = "tenant-42",
-            client = client,
-        )
+    fun flow_complete_parses_the_response_level_credential_metadata() = runTest {
+        val session = WalletEngineSession(baseUrl = "https://wallet.example.com", tenantId = "tenant-42", client = client)
         session.connect("app-token")
 
         session.flowComplete().test {
             listener.onMessage(
                 webSocket,
                 """{"type":"flow_complete","flow_id":"flow-1","credentials":""" +
-                    """[{"format":"dc+sd-jwt","credential":"jwt-token",""" +
-                    """"credential_metadata":[{"type":"org.siros.NS.secret_seed","value":"00112233445566778899aabbccddeeff"},""" +
-                    """{"type":"other","value":{"k":1}}],""" +
-                    """"credential_metadata_encrypted_response":true},""" +
-                    """{"format":"dc+sd-jwt","credential":"plain"}]}""",
+                    """[{"format":"dc+sd-jwt","credential":"jwt-token","notification_id":"n1"},""" +
+                    """{"format":"dc+sd-jwt","credential":"plain","notification_id":"n1"}],""" +
+                    """"credential_metadata":{"org.siros.secret_seed":{"org.siros.nym_auth":"00112233445566778899aabbccddeeff"},""" +
+                    """"other":{"k":1}},"credential_metadata_encrypted_response":true}""",
             )
 
             val message = awaitItem()
-            val first = message.credentials!![0]
-            assertEquals(2, first.credentialMetadata!!.size)
-            assertEquals("org.siros.NS.secret_seed", first.credentialMetadata!![0].type)
-            assertEquals(
-                "00112233445566778899aabbccddeeff",
-                (first.credentialMetadata!![0].value as kotlinx.serialization.json.JsonPrimitive).content,
-            )
-            assertEquals(true, first.credentialMetadataEncryptedResponse)
-            val second = message.credentials!![1]
-            assertEquals(null, second.credentialMetadata)
-            assertEquals(false, second.credentialMetadataEncryptedResponse)
+            val metadata = message.credentialMetadata!!
+            assertEquals(false, metadata.malformed)
+            assertEquals(listOf("org.siros.secret_seed", "other"), metadata.members.keys.toList())
+            val seed = (metadata.members["org.siros.secret_seed"] as kotlinx.serialization.json.JsonObject)["org.siros.nym_auth"]
+            assertEquals("00112233445566778899aabbccddeeff", (seed as kotlinx.serialization.json.JsonPrimitive).content)
+            assertEquals(true, message.credentialMetadataEncryptedResponse)
+            assertEquals(2, message.credentials!!.size)
             cancelAndIgnoreRemainingEvents()
         }
     }
 
     @Test
-    fun flow_complete_keeps_unknown_members_of_a_delivered_metadata_entry() = runTest {
+    fun flow_complete_without_credential_metadata_has_none_and_is_not_encrypted() = runTest {
+        val session = WalletEngineSession(baseUrl = "https://wallet.example.com", tenantId = "tenant-42", client = client)
+        session.connect("app-token")
+        session.flowComplete().test {
+            listener.onMessage(webSocket, """{"type":"flow_complete","flow_id":"flow-1","credentials":[{"format":"dc+sd-jwt","credential":"j"}]}""")
+            val message = awaitItem()
+            assertEquals(null, message.credentialMetadata)
+            assertEquals(false, message.credentialMetadataEncryptedResponse)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun flow_complete_keeps_unknown_members_of_the_response_metadata_verbatim_and_in_order() = runTest {
         val session = WalletEngineSession(baseUrl = "https://wallet.example.com", tenantId = "tenant-42", client = client)
         session.connect("app-token")
         session.flowComplete().test {
             listener.onMessage(
                 webSocket,
-                """{"type":"flow_complete","flow_id":"flow-1","credentials":[{"format":"dc+sd-jwt","credential":"j",""" +
-                    """"credential_metadata":[{"type":"other","value":1,"scope":"issuer","n":1.50}]}]}""",
+                """{"type":"flow_complete","flow_id":"flow-1","credentials":[{"format":"dc+sd-jwt","credential":"j"}],""" +
+                    """"credential_metadata":{"z.last":{"n":1.50},"a.first":[1,2],"x":null}}""",
             )
-            val e = awaitItem().credentials!![0].credentialMetadata!!.single()
-            assertEquals("other", e.type)
-            assertEquals(kotlinx.serialization.json.JsonPrimitive("issuer"), e.raw["scope"])
-            assertEquals("1.50", (e.raw["n"] as kotlinx.serialization.json.JsonPrimitive).content)
-            assertEquals("1", (e.raw["value"] as kotlinx.serialization.json.JsonPrimitive).content)
+            val members = awaitItem().credentialMetadata!!.members
+            assertEquals(listOf("z.last", "a.first", "x"), members.keys.toList())
+            assertEquals("1.50", ((members["z.last"] as kotlinx.serialization.json.JsonObject)["n"] as kotlinx.serialization.json.JsonPrimitive).content)
             cancelAndIgnoreRemainingEvents()
         }
     }
 
     @Test
-    fun flow_complete_with_malformed_credential_metadata_still_emits_with_a_malformed_entry() = runTest {
+    fun flow_complete_with_credential_metadata_that_is_not_an_object_still_emits_with_a_malformed_placeholder() = runTest {
         val session = WalletEngineSession(baseUrl = "https://wallet.example.com", tenantId = "tenant-42", client = client)
         session.connect("app-token")
-        val bad = listOf(
-            """[{"type":"other"}]""",
-            """[{"value":1}]""",
-            """[{"type":"","value":1}]""",
-            """[{"type":5,"value":1}]""",
-            """["text"]""",
-            """[null]""",
-            """{"type":"other","value":1}""",
-            """"text"""",
-        )
         session.flowComplete().test {
-            bad.forEach { md ->
+            listOf("""[{"type":"other","value":1}]""", """"text"""", "5", "true").forEach { md ->
                 listener.onMessage(
                     webSocket,
                     """{"type":"flow_complete","flow_id":"flow-1","credentials":[{"format":"dc+sd-jwt","credential":"j",""" +
-                        """"notification_id":"notif-1","credential_metadata":$md}]}""",
+                        """"notification_id":"notif-1"}],"credential_metadata":$md}""",
                 )
-                val c = awaitItem().credentials!!.single()
-                assertEquals(md, "notif-1", c.notificationId)
-                assertTrue(md, c.credentialMetadata!!.any { it.malformed })
+                val m = awaitItem()
+                assertEquals(md, "notif-1", m.credentials!!.single().notificationId)
+                assertTrue(md, m.credentialMetadata!!.malformed)
             }
             cancelAndIgnoreRemainingEvents()
         }
@@ -298,12 +290,31 @@ class WalletEngineSessionTest {
                 listener.onMessage(
                     webSocket,
                     """{"type":"flow_complete","flow_id":"flow-1","credentials":[{"format":"dc+sd-jwt","credential":"j",""" +
-                        """"notification_id":"n1","credential_metadata":[{"type":"t","value":1}],""" +
-                        """"credential_metadata_encrypted_response":$flag}]}""",
+                        """"notification_id":"n1"}],"credential_metadata":{"t":1},"credential_metadata_encrypted_response":$flag}""",
                 )
-                val c = awaitItem().credentials!!.single()
-                assertEquals(flag, false, c.credentialMetadataEncryptedResponse)
-                assertEquals("n1", c.notificationId)
+                val m = awaitItem()
+                assertEquals(flag, false, m.credentialMetadataEncryptedResponse)
+                assertEquals("n1", m.credentials!!.single().notificationId)
+            }
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun the_delivered_seed_is_in_no_string_form_of_the_decoded_frame() = runTest {
+        val session = WalletEngineSession(baseUrl = "https://wallet.example.com", tenantId = "tenant-42", client = client)
+        session.connect("app-token")
+        session.flowComplete().test {
+            listener.onMessage(
+                webSocket,
+                """{"type":"flow_complete","flow_id":"flow-1","credentials":[{"format":"dc+sd-jwt","credential":"secret-credential"}],""" +
+                    """"credential_metadata":{"org.siros.secret_seed":{"org.siros.nym_auth":"00112233445566778899aabbccddeeff"}},""" +
+                    """"credential_metadata_encrypted_response":true}""",
+            )
+            val message = awaitItem()
+            for (text in listOf(message.toString(), message.credentialMetadata.toString(), message.credentials.toString())) {
+                assertTrue(text, !text.contains("00112233445566778899aabbccddeeff"))
+                assertTrue(text, !text.contains("secret-credential"))
             }
             cancelAndIgnoreRemainingEvents()
         }

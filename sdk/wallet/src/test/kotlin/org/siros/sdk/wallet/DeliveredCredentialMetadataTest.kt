@@ -1,171 +1,306 @@
 package org.siros.sdk.wallet
 
-import com.upokecenter.cbor.CBORObject
+import java.io.File
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import org.siros.sdk.transport.CredentialResponseMetadataEntry
-import org.siros.sdk.transport.engine.CredentialResult
+import org.siros.sdk.credentials.SecretSeedDelivery
+import org.siros.sdk.transport.DeliveredResponseMetadata
+import org.siros.sdk.transport.ResponseCredentialMetadata
 import org.siros.sdk.wallet.NymTestCredentials as N
 
+/** The receipt of the response-level `credential_metadata`, by hand-made cases and by the privatedata-spec 2.4 vectors. */
 class DeliveredCredentialMetadataTest {
 
-    private val type = WalletConfig.DEFAULT_SECRET_SEED_METADATA_TYPE
+    private val ns = SecretSeedDelivery.DEFAULT_NAMESPACE
+    private val member = SecretSeedDelivery.MEMBER
 
-    private fun seedEntry(value: JsonElement = JsonPrimitive(N.seedHex), t: String = type) =
-        CredentialResponseMetadataEntry(t, value)
+    private class Response(
+        override val credentialMetadata: ResponseCredentialMetadata?,
+        override val credentialMetadataEncryptedResponse: Boolean,
+        override val deferredResponse: Boolean = false,
+    ) : DeliveredResponseMetadata
 
-    private fun result(
-        entries: List<CredentialResponseMetadataEntry>?,
+    private fun seedObject(hex: String = N.seedHex, namespace: String = ns) = buildJsonObject { put(namespace, JsonPrimitive(hex)) }
+
+    private fun response(
+        members: Map<String, JsonElement>? = mapOf(member to seedObject()),
         encrypted: Boolean = true,
-    ) = CredentialResult(
-        format = "dc+sd-jwt",
-        credential = "x",
-        credentialMetadata = entries,
-        credentialMetadataEncryptedResponse = encrypted,
+        malformed: Boolean = false,
+    ) = Response(
+        when {
+            malformed -> ResponseCredentialMetadata(malformed = true)
+            members == null -> null
+            else -> ResponseCredentialMetadata(JsonObject(members))
+        },
+        encrypted,
     )
 
+    private fun cred(credential: String = N.sdJwt(), format: String = "dc+sd-jwt", notificationId: String? = "n1") =
+        DeliveredCredential(format, credential, notificationId)
+
     private fun check(
-        entries: List<CredentialResponseMetadataEntry>?,
-        credential: String = N.sdJwt(),
-        format: String = "dc+sd-jwt",
-        encrypted: Boolean = true,
-        seedType: String = type,
+        response: Response = response(),
+        credentials: List<DeliveredCredential> = listOf(cred()),
         canStore: Boolean = true,
-    ) = DeliveredCredentialMetadata.check(format, credential, result(entries, encrypted), seedType, canStore)
+        advertised: Boolean = false,
+        namespace: String = ns,
+    ) = DeliveredCredentialMetadata.check(response, credentials, namespace, canStore, advertised)
 
     private fun assertRefused(reason: DeliveredMetadataRefusal, v: DeliveredMetadataVerdict) {
         assertTrue("expected $reason but was $v", v is DeliveredMetadataVerdict.Refuse)
         assertEquals(reason, (v as DeliveredMetadataVerdict.Refuse).reason)
     }
 
+    private fun entries(v: DeliveredMetadataVerdict): JsonArray {
+        assertTrue("expected an accept but was $v", v is DeliveredMetadataVerdict.Accept)
+        return (v as DeliveredMetadataVerdict.Accept).entries
+    }
+
     @Test
     fun noMetadataIsNone() {
-        assertSame(DeliveredMetadataVerdict.None, check(null))
-        assertSame(DeliveredMetadataVerdict.None, check(emptyList()))
+        assertSame(DeliveredMetadataVerdict.None, check(response(members = null)))
+        assertSame(DeliveredMetadataVerdict.None, check(response(members = emptyMap())))
     }
 
     @Test
-    fun matchingSeedIsAcceptedForSdJwtAndMdoc() {
-        val other = CredentialResponseMetadataEntry("other", buildJsonObject { put("k", JsonNull) })
-        for ((format, cred) in listOf("dc+sd-jwt" to N.sdJwt(), "mso_mdoc" to N.mdoc())) {
-            val v = check(listOf(seedEntry(), other), cred, format)
-            assertTrue(format, v is DeliveredMetadataVerdict.Accept)
-            val entries = (v as DeliveredMetadataVerdict.Accept).entries
-            // Every entry, in order, exactly as received.
-            assertEquals(2, entries.size)
-            assertEquals(JsonPrimitive(type), (entries[0] as kotlinx.serialization.json.JsonObject)["type"])
-            assertEquals(JsonPrimitive(N.seedHex), (entries[0] as kotlinx.serialization.json.JsonObject)["value"])
-            assertEquals(buildJsonObject { put("k", JsonNull) }, (entries[1] as kotlinx.serialization.json.JsonObject)["value"])
+    fun aMatchingSeedIsAcceptedForSdJwtAndMdoc_andStoredAsOneEntryPerMember() {
+        val other = buildJsonObject { put("k", JsonNull) }
+        for ((format, c) in listOf("dc+sd-jwt" to N.sdJwt(), "mso_mdoc" to N.mdoc())) {
+            val e = entries(check(response(mapOf("example.other" to other, member to seedObject())), listOf(cred(c, format))))
+            assertEquals(2, e.size)
+            assertEquals(JsonPrimitive("example.other"), e[0].jsonObject["type"])
+            assertEquals(other, e[0].jsonObject["value"])
+            assertEquals(JsonPrimitive(member), e[1].jsonObject["type"])
+            assertEquals(seedObject(), e[1].jsonObject["value"])
         }
     }
 
     @Test
-    fun metadataWithoutTheSeedTypeIsStoredEvenOverPlainJson() {
-        val v = check(listOf(CredentialResponseMetadataEntry("other", JsonPrimitive("x"))), encrypted = false)
-        assertTrue(v is DeliveredMetadataVerdict.Accept)
+    fun theSeedMustOpenTheSscOfEveryCredentialOfTheResponse() {
+        val wrong = N.sdJwt(sscValues = listOf(N.hex(N.wrongSsc)))
+        assertRefused(DeliveredMetadataRefusal.MISMATCH, check(credentials = listOf(cred(), cred(wrong))))
+        assertRefused(DeliveredMetadataRefusal.MISMATCH, check(credentials = listOf(cred(wrong), cred())))
+        assertTrue(check(credentials = listOf(cred(), cred(), cred())) is DeliveredMetadataVerdict.Accept)
     }
 
     @Test
-    fun aSeedOutsideAnEncryptedResponseIsRefused() {
-        assertRefused(DeliveredMetadataRefusal.NOT_ENCRYPTED, check(listOf(seedEntry()), encrypted = false))
+    fun aSeedOfAnotherNamespaceDoesNotOpenIt_andOthersAreStoredUnverified() {
+        assertRefused(DeliveredMetadataRefusal.NAMESPACE_ABSENT, check(response(mapOf(member to seedObject(namespace = "org.siros.other")))))
+        val both = buildJsonObject {
+            put("org.siros.other", JsonPrimitive("ffeeddccbbaa99887766554433221100"))
+            put(ns, JsonPrimitive(N.seedHex))
+        }
+        assertEquals(both, entries(check(response(mapOf(member to both))))[0].jsonObject["value"])
+        assertRefused(DeliveredMetadataRefusal.NAMESPACE_ABSENT, check(namespace = "org.example.designated"))
     }
 
     @Test
-    fun malformedSeedValuesAreRefused() {
-        val bad = listOf<JsonElement>(
-            JsonPrimitive(N.seedHex.dropLast(2)),
-            JsonPrimitive(N.seedHex + "00"),
-            JsonPrimitive(N.seedHex.uppercase()),
-            JsonPrimitive("0x" + N.seedHex.drop(2)),
-            JsonPrimitive(" " + N.seedHex.drop(1)),
-            JsonPrimitive("zz" + N.seedHex.drop(2)),
-            JsonPrimitive(5),
-            JsonNull,
+    fun aSeedNeedsAnEncryptedResponseAndANotificationId() {
+        assertRefused(DeliveredMetadataRefusal.NOT_ENCRYPTED, check(response(encrypted = false)))
+        assertRefused(DeliveredMetadataRefusal.NO_NOTIFICATION_ID, check(credentials = listOf(cred(notificationId = null))))
+        assertRefused(DeliveredMetadataRefusal.NO_NOTIFICATION_ID, check(credentials = listOf(cred(notificationId = ""))))
+        // The response-level id may sit on any one credential.
+        assertTrue(check(credentials = listOf(cred(notificationId = null), cred(notificationId = "n"))) is DeliveredMetadataVerdict.Accept)
+    }
+
+    @Test
+    fun otherMembersAreStoredUninterpreted_overPlainJsonToo() {
+        val v = check(response(mapOf("example.other" to JsonPrimitive("v")), encrypted = false), credentials = listOf(cred(notificationId = null)))
+        assertEquals(1, entries(v).size)
+    }
+
+    @Test
+    fun anAdvertisedConfigurationRefusesAnUnencryptedResponse_evenWithoutAnyMetadata() {
+        assertRefused(DeliveredMetadataRefusal.NOT_ENCRYPTED, check(response(members = null, encrypted = false), advertised = true))
+        assertRefused(DeliveredMetadataRefusal.NOT_ENCRYPTED, check(response(mapOf("example.other" to JsonPrimitive(1)), encrypted = false), advertised = true))
+        // Encrypted but without the seed an advertised configuration delivers: unavailable, never invented.
+        assertRefused(DeliveredMetadataRefusal.SEED_UNAVAILABLE, check(response(members = null, encrypted = true), advertised = true))
+        assertRefused(DeliveredMetadataRefusal.SEED_UNAVAILABLE, check(response(mapOf("example.other" to JsonPrimitive(1)), encrypted = true), advertised = true))
+        assertTrue(check(response(), advertised = true) is DeliveredMetadataVerdict.Accept)
+        assertSame(DeliveredMetadataVerdict.None, check(response(members = null, encrypted = false), advertised = false))
+    }
+
+    private fun redacted(members: Map<String, JsonElement>? = null, encrypted: Boolean = false) = object : DeliveredResponseMetadata {
+        override val credentialMetadata = members?.let { ResponseCredentialMetadata(JsonObject(it)) }
+        override val credentialMetadataEncryptedResponse = encrypted
+        override val redactedMembers = setOf("credential_metadata", "credential_metadata_encrypted_response")
+    }
+
+    @Test
+    fun aRedactedCompletionMeansTheSeedIsUnavailable_forACredentialThatNeedsOne() {
+        // The credential carries an ssc (so it needs a seed): fail, never accept without it.
+        assertRefused(DeliveredMetadataRefusal.SEED_UNAVAILABLE, DeliveredCredentialMetadata.check(redacted(), listOf(cred()), ns, true))
+        assertRefused(DeliveredMetadataRefusal.SEED_UNAVAILABLE, DeliveredCredentialMetadata.check(redacted(), listOf(cred(N.mdoc(), "mso_mdoc")), ns, true))
+        assertRefused(DeliveredMetadataRefusal.SEED_UNAVAILABLE, DeliveredCredentialMetadata.check(redacted(), listOf(cred("x", "dc+sd-jwt")), ns, true, advertised = true))
+        // Even a response whose flag says encrypted: withheld is withheld.
+        assertRefused(DeliveredMetadataRefusal.SEED_UNAVAILABLE, DeliveredCredentialMetadata.check(redacted(encrypted = true), listOf(cred()), ns, true))
+        // A credential with no commitment does not need one.
+        assertSame(DeliveredMetadataVerdict.None, DeliveredCredentialMetadata.check(redacted(), listOf(cred("x", "dc+sd-jwt")), ns, true))
+    }
+
+    @Test
+    fun aRedactedCompletionThatAlsoCarriesTheObjectIsMalformed_andNothingIsSubstituted() {
+        assertRefused(
+            DeliveredMetadataRefusal.MALFORMED,
+            DeliveredCredentialMetadata.check(redacted(mapOf(member to seedObject()), encrypted = true), listOf(cred()), ns, true),
+        )
+    }
+
+    @Test
+    fun malformedMetadataAndMalformedSeedMembersAreRefused() {
+        assertRefused(DeliveredMetadataRefusal.MALFORMED, check(response(malformed = true)))
+        for (bad in listOf<JsonElement>(
+            JsonPrimitive(N.seedHex),
             JsonArray(listOf(JsonPrimitive(N.seedHex))),
-        )
-        for (value in bad) assertRefused(DeliveredMetadataRefusal.MALFORMED, check(listOf(seedEntry(value))))
-        assertRefused(DeliveredMetadataRefusal.MALFORMED, check(listOf(CredentialResponseMetadataEntry("", JsonPrimitive("x")))))
-    }
-
-    @Test
-    fun aDuplicateSeedEntryIsRefused() {
-        assertRefused(DeliveredMetadataRefusal.DUPLICATE, check(listOf(seedEntry(), seedEntry())))
-    }
-
-    @Test
-    fun anSdJwtWithoutAUsableSscIsRefused() {
-        val bad = listOf(
-            N.sdJwt(sscValues = emptyList()),
-            N.sdJwt(sscValues = listOf(N.hex(N.goodSsc), N.hex(N.goodSsc))),
-            N.sdJwt(sscInClear = N.hex(N.goodSsc), sscValues = emptyList()),
-            N.sdJwt(sscInClear = N.hex(N.goodSsc)),
-            N.sdJwt(referenceInSd = false),
-            N.sdJwt(sscValues = listOf(N.hex(N.goodSsc).dropLast(2))),
-            N.sdJwt(sscValues = listOf(N.hex(N.goodSsc) + "00")),
-            N.sdJwt(sscValues = listOf(N.hex(N.goodSsc).uppercase())),
-            "not-a-jwt",
-        )
-        for (cred in bad) assertRefused(DeliveredMetadataRefusal.NO_COMMITMENT, check(listOf(seedEntry()), cred))
-    }
-
-    @Test
-    fun anMdocWithoutAUsableSscIsRefused() {
-        val bad = listOf(
-            N.mdoc(sscValues = emptyList()),
-            N.mdoc(sscValues = listOf(N.bstr(N.goodSsc), N.bstr(N.goodSsc))),
-            N.mdoc(sscValues = listOf(N.bstr(N.goodSsc.copyOf(31)))),
-            N.mdoc(sscValues = listOf(N.text(N.hex(N.goodSsc)))),
-            N.mdoc(namespace = "org.example.other"),
-            "!!not-base64!!",
-        )
-        for (cred in bad) assertRefused(DeliveredMetadataRefusal.NO_COMMITMENT, check(listOf(seedEntry()), cred, "mso_mdoc"))
-    }
-
-    @Test
-    fun aSeedThatDoesNotOpenTheSscIsRefused() {
-        assertRefused(DeliveredMetadataRefusal.MISMATCH, check(listOf(seedEntry()), N.sdJwt(sscValues = listOf(N.hex(N.wrongSsc)))))
-        assertRefused(
-            DeliveredMetadataRefusal.MISMATCH,
-            check(listOf(seedEntry()), N.mdoc(sscValues = listOf(N.bstr(N.wrongSsc))), "mso_mdoc"),
-        )
-    }
-
-    @Test
-    fun aFormatWithoutACommitmentIsRefused() {
-        assertRefused(DeliveredMetadataRefusal.NO_COMMITMENT, check(listOf(seedEntry()), "the.jwp.here", "jwp"))
-    }
-
-    @Test
-    fun aKeystoreThatCannotHoldTheSecretRefuses() {
-        assertRefused(DeliveredMetadataRefusal.NO_STORAGE, check(listOf(seedEntry()), canStore = false))
-    }
-
-    @Test
-    fun onlyTheConfiguredTypeIsInterpreted() {
-        // The default type is just another entry once a different type is configured.
-        val v = check(listOf(seedEntry(JsonPrimitive("not hex"))), encrypted = false, seedType = "example.other_seed")
-        assertTrue(v is DeliveredMetadataVerdict.Accept)
-        // And the configured one is checked.
-        assertRefused(
-            DeliveredMetadataRefusal.NOT_ENCRYPTED,
-            check(listOf(seedEntry(t = "example.other_seed")), encrypted = false, seedType = "example.other_seed"),
-        )
-        assertTrue(check(listOf(seedEntry(t = "example.other_seed")), seedType = "example.other_seed") is DeliveredMetadataVerdict.Accept)
-    }
-
-    @Test
-    fun theSeedTypeMustNotBeBlank() {
-        try {
-            WalletConfig(backendUrl = "https://wallet.example.com", secretSeedMetadataType = " ")
-            org.junit.Assert.fail("accepted a blank type")
-        } catch (_: IllegalArgumentException) {
+            JsonObject(emptyMap()),
+            seedObject(N.seedHex.uppercase()),
+            seedObject(N.seedHex.dropLast(1)),
+            seedObject(N.seedHex + "0"),
+            buildJsonObject { put(ns, JsonArray(List(16) { JsonPrimitive(0) })) },
+            buildJsonObject { put("", JsonPrimitive(N.seedHex)); put(ns, JsonPrimitive(N.seedHex)) },
+            buildJsonObject { put("namespaces", JsonArray(listOf(JsonPrimitive(ns)))) },
+        )) {
+            assertRefused(DeliveredMetadataRefusal.MALFORMED, check(response(mapOf(member to bad))))
         }
+    }
+
+    @Test
+    fun aDeferredResponseCarryingASeedIsRefused_evenWhenEncrypted_butOtherMetadataIsNot() {
+        assertRefused(DeliveredMetadataRefusal.DEFERRED_SEED, check(Response(ResponseCredentialMetadata(JsonObject(mapOf(member to seedObject()))), true, true)))
+        assertTrue(check(Response(ResponseCredentialMetadata(JsonObject(mapOf("example.other" to JsonPrimitive(1)))), true, true)) is DeliveredMetadataVerdict.Accept)
+    }
+
+    @Test
+    fun aKeystoreThatCannotHoldItAndACredentialWithoutACommitmentFailClosed() {
+        assertRefused(DeliveredMetadataRefusal.NO_STORAGE, check(canStore = false))
+        assertRefused(DeliveredMetadataRefusal.NO_COMMITMENT, check(credentials = listOf(cred("x", "dc+sd-jwt"))))
+        assertRefused(DeliveredMetadataRefusal.NO_COMMITMENT, check(credentials = listOf(cred(N.sdJwt(), "jwt_vc_json"))))
+    }
+
+    @Test
+    fun theVerdictAndTheCredentialShowNoSeed() {
+        val v = check()
+        assertFalse(v.toString().contains(N.seedHex))
+        assertFalse(cred().toString().contains(N.sdJwt()))
+        assertFalse(response().credentialMetadata.toString().contains(N.seedHex))
+    }
+
+    // ---- privatedata-spec 2.4 vectors (vendored with provenance under the keystore module's test resources) ----
+
+    private val vectors: Map<String, JsonObject> by lazy {
+        val f = File("../keystore/src/test/resources/privatedata-spec/vectors.jsonl")
+        require(f.isFile) { "vector file not found at ${f.absolutePath}" }
+        f.readLines().filter { it.isNotBlank() }.map { Json.parseToJsonElement(it).jsonObject }.associateBy { it["id"]!!.jsonPrimitive.content }
+    }
+
+    private fun cases(id: String): List<JsonObject> = vectors.getValue(id)["inputs"]!!.jsonObject["cases"]!!.jsonArray.map { it.jsonObject }
+
+    private fun runWireCase(c: JsonObject): DeliveredMetadataVerdict {
+        val wire = c["response"]!!.jsonObject
+        val md = wire["credential_metadata"]
+        val deferred = c["responseType"]?.jsonPrimitive?.content == "deferred"
+        val response = Response(
+            when (md) {
+                null -> null
+                is JsonObject -> ResponseCredentialMetadata(md)
+                else -> ResponseCredentialMetadata(malformed = true)
+            },
+            c["jweEncrypted"]!!.jsonPrimitive.content.toBoolean(),
+            deferred,
+        )
+        val ssc = c["sscHex"]!!.jsonPrimitive.content
+        val notification = wire["notification_id"]?.jsonPrimitive?.content
+        val credentials = wire["credentials"]!!.jsonArray.map { DeliveredCredential("dc+sd-jwt", N.sdJwt(sscValues = listOf(ssc)), notification) }
+        return DeliveredCredentialMetadata.check(response, credentials, c["commitmentNamespace"]!!.jsonPrimitive.content, canStoreSecret = true)
+    }
+
+    @Test
+    fun vector_acceptCases_storeOneEntryPerMemberInEveryCredential() {
+        val all = cases("delivered-secret-wire-001")
+        assertTrue(all.size >= 4)
+        for (c in all) {
+            val name = c["name"]!!.jsonPrimitive.content
+            val v = runWireCase(c)
+            assertTrue("$name: $v", v is DeliveredMetadataVerdict.Accept)
+            assertEquals(name, c["expected"]!!.jsonObject["storedMetadataPerCredential"], (v as DeliveredMetadataVerdict.Accept).entries)
+        }
+    }
+
+    @Test
+    fun vector_malformedAndRefusalCases_areRefusedAndNothingIsAccepted() {
+        val all = cases("delivered-secret-malformed-001") + cases("delivered-secret-refusal-001")
+        assertTrue(all.size >= 20)
+        for (c in all) {
+            val name = c["name"]!!.jsonPrimitive.content
+            assertEquals(name, "refuse", c["expected"]!!.jsonObject["outcome"]!!.jsonPrimitive.content)
+            val v = runWireCase(c)
+            assertTrue("$name: $v", v is DeliveredMetadataVerdict.Refuse)
+        }
+    }
+
+    @Test
+    fun vector_theSeedIsStrippedBeforeTheMerge_andNeverInTheMergedDisplayMetadata() {
+        for (c in cases("delivered-secret-strip-001")) {
+            val name = c["name"]!!.jsonPrimitive.content
+            val issuer = c["issuerCredentialMetadata"]!!.jsonObject
+            val response = c["responseCredentialMetadata"]!!.jsonObject
+            val expected = c["expected"]!!.jsonObject
+            assertEquals(name, expected["strippedResponse"], SecretSeedDelivery.stripped(response))
+            val merged = SecretSeedDelivery.mergeDisplay(issuer, response)
+            assertEquals(name, expected["mergedDisplayMetadata"], merged)
+            assertFalse(name, merged.toString().contains("00112233445566778899aabbccddeeff"))
+            // The secret store gets the seed entry, exactly as received.
+            val stored = expected["storedMetadata"]!!.jsonArray
+            val v = runWireCase(
+                buildJsonObject {
+                    put("jweEncrypted", JsonPrimitive(true))
+                    put("commitmentNamespace", JsonPrimitive("org.siros.nym_auth"))
+                    put("sscHex", JsonPrimitive("a8faed6abbf35c12a4b26e40f6feb19d736d90045c83b9f9a31f638d323e6811"))
+                    put(
+                        "response",
+                        buildJsonObject {
+                            put("credentials", JsonArray(listOf(buildJsonObject { put("credential", JsonPrimitive("x")) })))
+                            put("notification_id", JsonPrimitive("n"))
+                            put("credential_metadata", response)
+                        },
+                    )
+                },
+            )
+            for (entry in stored) assertTrue(name, entry in (v as DeliveredMetadataVerdict.Accept).entries)
+        }
+    }
+
+    @Test
+    fun vector_advertisementsAreClassified() {
+        for (c in cases("delivered-secret-advertise-001")) {
+            val name = c["name"]!!.jsonPrimitive.content
+            val member = c["issuerCredentialMetadata"]!!.jsonObject[SecretSeedDelivery.MEMBER]
+            val outcome = c["expected"]!!.jsonObject["outcome"]!!.jsonPrimitive.content
+            val got = SecretSeedDelivery.classifyAdvertisement(member)
+            when (outcome) {
+                "valid-advertisement" -> assertTrue(name, got is SecretSeedDelivery.Advertisement.Valid)
+                "no-advertisement" -> assertSame(name, SecretSeedDelivery.Advertisement.None, got)
+                "malformed" -> assertSame(name, SecretSeedDelivery.Advertisement.Malformed, got)
+                else -> error("unknown outcome $outcome")
+            }
+            if (outcome == "valid-advertisement") {
+                assertEquals(name, true, c["expected"]!!.jsonObject["walletMustRequestCredentialResponseEncryption"]!!.jsonPrimitive.content.toBoolean())
+            }
+        }
+        assertNotNull(cases("delivered-secret-advertise-001"))
     }
 }

@@ -13,78 +13,47 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
 /**
- * One entry of a per-credential `credential_metadata` array that an issuer
- * delivers beside `credential` in an OID4VCI credential response, as the
- * wallet engine relays it on a `CredentialResult`.
+ * The response-level `credential_metadata` object of an OpenID4VCI 1.1 Credential Response (and Deferred
+ * Credential Response), as the wallet engine relays it on the flow-complete message
+ * (openid/OpenID4VCI#721; privatedata-spec section 5A). ONE object per response: it applies to every credential
+ * in the response.
  *
- * This is NOT the display-oriented `CredentialMetadata` of the credential
- * store (issuer-published claim and logo metadata): it is a delivered,
- * possibly secret, per-credential value. [value] is kept as the raw JSON
- * element so it can be stored exactly as received; a consumer interprets
- * only the entry types it knows and leaves every other entry untouched.
+ * This is NOT the display metadata of the credential store: it is the object the issuer's response delivers,
+ * which is shared with display data and may carry the issuer-delivered `org.siros.secret_seed`. [members] is kept
+ * as received, every member verbatim (unknown ones included, in order), so the receipt can store each exactly.
+ * A consumer interprets only the members it knows.
  *
- * The array is only trustworthy when [CredentialResultMetadata.credentialMetadataEncryptedResponse]
- * is set on the same result: the engine sets that only when the issuer's
- * response was JWE-decrypted, and a secret must not be accepted from a plain
- * JSON response.
+ * A value that is not a JSON object decodes as the [malformed] placeholder, which carries no data and which a
+ * consumer MUST refuse the issuance on (decoding it as a flag rather than an exception keeps the rest of the
+ * frame, notably each `notification_id`, readable so the refusal can be reported to the issuer).
+ *
+ * It can hold a secret: [toString] shows no member, and nothing here is logged.
  */
-@Serializable(with = CredentialResponseMetadataEntrySerializer::class)
-data class CredentialResponseMetadataEntry(
-    val type: String,
-    val value: JsonElement,
-    /**
-     * Every member of the received entry other than `type` and `value`,
-     * verbatim. Kept so the entry can be stored exactly as received
-     * (privatedata-spec section 6), including members this SDK does not know.
-     */
-    val additionalMembers: JsonObject = JsonObject(emptyMap()),
-    /**
-     * True when the wire entry was not a well-formed `{type: non-empty string, value: ...}` object (or
-     * the whole `credential_metadata` was not an array). Such a placeholder carries no data: a consumer
-     * MUST refuse the issuance rather than store or interpret it. Decoding it as a flag, not an
-     * exception, keeps the rest of the frame (notably each credential's `notification_id`) readable so
-     * the refusal can be reported to the issuer.
-     */
+@Serializable(with = ResponseCredentialMetadataSerializer::class)
+class ResponseCredentialMetadata(
+    val members: JsonObject = JsonObject(emptyMap()),
     val malformed: Boolean = false,
 ) {
-    /** The entry as received: `type`, `value` and every additional member, values verbatim. */
-    val raw: JsonObject
-        get() = JsonObject(additionalMembers + mapOf("type" to JsonPrimitive(type), "value" to value))
+    override fun toString() = "ResponseCredentialMetadata(${if (malformed) "malformed" else "redacted"})"
+
+    override fun equals(other: Any?) = other is ResponseCredentialMetadata && malformed == other.malformed && members == other.members
+
+    override fun hashCode() = members.hashCode() * 31 + malformed.hashCode()
 }
 
-internal fun malformedCredentialMetadataEntry() =
-    CredentialResponseMetadataEntry(type = "", value = kotlinx.serialization.json.JsonNull, malformed = true)
+/** Decodes the response-level object without ever throwing for its content: anything but an object is the malformed placeholder. */
+internal object ResponseCredentialMetadataSerializer : KSerializer<ResponseCredentialMetadata> {
+    override val descriptor: SerialDescriptor = JsonObject.serializer().descriptor
 
-/** Reads one wire entry; anything other than an object with a non-empty string `type` and a `value` is the [malformed] placeholder. */
-internal fun decodeCredentialMetadataEntry(element: JsonElement): CredentialResponseMetadataEntry {
-    val obj = element as? JsonObject ?: return malformedCredentialMetadataEntry()
-    val type = (obj["type"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotEmpty() }
-        ?: return malformedCredentialMetadataEntry()
-    val value = obj["value"] ?: return malformedCredentialMetadataEntry()
-    return CredentialResponseMetadataEntry(type, value, JsonObject(obj - "type" - "value"))
-}
-
-/**
- * Decodes the `credential_metadata` array without ever throwing for its content: a value that is not
- * an array becomes one malformed placeholder, and each bad entry becomes a malformed placeholder, so
- * the frame still decodes and the wallet's refusal path (not a swallowed serializer exception) ends
- * the issuance.
- */
-internal object CredentialMetadataListSerializer : KSerializer<List<CredentialResponseMetadataEntry>> {
-    override val descriptor: SerialDescriptor = kotlinx.serialization.json.JsonArray.serializer().descriptor
-
-    override fun deserialize(decoder: Decoder): List<CredentialResponseMetadataEntry> {
+    override fun deserialize(decoder: Decoder): ResponseCredentialMetadata {
         val element = (decoder as? JsonDecoder ?: throw SerializationException("credential metadata decodes from JSON only"))
             .decodeJsonElement()
-        return when (element) {
-            is kotlinx.serialization.json.JsonArray -> element.map(::decodeCredentialMetadataEntry)
-            else -> listOf(malformedCredentialMetadataEntry())
-        }
+        return (element as? JsonObject)?.let { ResponseCredentialMetadata(it) } ?: ResponseCredentialMetadata(malformed = true)
     }
 
-    override fun serialize(encoder: Encoder, value: List<CredentialResponseMetadataEntry>) {
+    override fun serialize(encoder: Encoder, value: ResponseCredentialMetadata) {
         (encoder as? JsonEncoder ?: throw SerializationException("credential metadata encodes to JSON only"))
-            .encodeJsonElement(kotlinx.serialization.json.JsonArray(value.map { it.raw }))
+            .encodeJsonElement(value.members)
     }
 }
 
@@ -109,39 +78,63 @@ internal object EncryptedResponseFlagSerializer : KSerializer<Boolean> {
 }
 
 /**
- * Decodes an entry from the raw JSON object so unknown members survive
- * (`ignoreUnknownKeys` would otherwise drop them). A bad entry is not an
- * exception here either (see [decodeCredentialMetadataEntry]). Member values stay [JsonElement]s whose literals are untouched, so
- * integers stay integers and floats keep their spelling.
+ * The delivered-metadata members shared by both transports' flow-complete results, so wallet code reads them the
+ * same way whichever transport carried the result.
  */
-internal object CredentialResponseMetadataEntrySerializer : KSerializer<CredentialResponseMetadataEntry> {
-    override val descriptor: SerialDescriptor = JsonObject.serializer().descriptor
+interface DeliveredResponseMetadata {
+    /** The response-level `credential_metadata`; null when the issuer delivered none. */
+    val credentialMetadata: ResponseCredentialMetadata?
 
-    override fun deserialize(decoder: Decoder): CredentialResponseMetadataEntry =
-        decodeCredentialMetadataEntry(
-            (decoder as? JsonDecoder ?: throw SerializationException("credential metadata entries decode from JSON only"))
-                .decodeJsonElement(),
-        )
+    /**
+     * `credential_metadata_encrypted_response`: true only when the issuer's response was JWE-decrypted by the engine.
+     * Absent means false; a secret in a response with this false came over plain JSON.
+     */
+    val credentialMetadataEncryptedResponse: Boolean
 
-    override fun serialize(encoder: Encoder, value: CredentialResponseMetadataEntry) {
-        (encoder as? JsonEncoder ?: throw SerializationException("credential metadata entries encode to JSON only"))
-            .encodeJsonElement(value.raw)
-    }
+    /**
+     * `redacted_members`: on a REPLAYED or resumed completion, exactly the members that were present and withheld, from
+     * `credential_metadata`, `credential_metadata_encrypted_response`, `refresh_token`, `dpop_jwk` and `dpop_key_id`
+     * (the credentials and every other member are kept). A listed member is NOT RECOVERABLE: it is never invented,
+     * reused from an earlier flow or substituted. A live completion has no marker. Empty means nothing was withheld.
+     */
+    val redactedMembers: Set<String> get() = emptySet()
+
+    /**
+     * Whether this completion answers a Deferred Credential Response. Seed delivery over a deferred response is not
+     * supported (privatedata-spec 5A.2) and is refused. Today's engine frames carry no such member, so this is false until
+     * the engine relays one; the engine, as the OpenID4VCI client, refuses it first.
+     */
+    val deferredResponse: Boolean get() = false
+
+    /** Whether the delivered metadata (and with it any secret) was withheld: its object or its encryption flag is listed. */
+    val credentialMetadataRedacted: Boolean
+        get() = "credential_metadata" in redactedMembers || "credential_metadata_encrypted_response" in redactedMembers
+
+    /** Whether the renewal material (`refresh_token`, `dpop_jwk`, `dpop_key_id`) was withheld, wholly or in part: renewal of the issuance is then unavailable. */
+    val renewalMaterialRedacted: Boolean
+        get() = redactedMembers.any { it == "refresh_token" || it == "dpop_jwk" || it == "dpop_key_id" }
 }
 
 /**
- * The delivered-metadata members shared by both transports' `CredentialResult`
- * DTOs, so wallet code reads them the same way whichever transport carried
- * the result.
+ * Decodes `redacted_members` without ever throwing: an array of strings is the set of withheld member names; absent is
+ * empty; any other shape (not an array, a non-string element) cannot be trusted to say what was withheld, so it reads as
+ * everything the marker can list being withheld: the safe direction (nothing is then recovered or substituted).
  */
-interface CredentialResultMetadata {
-    /** `credential_metadata`; null when the issuer delivered none. */
-    val credentialMetadata: List<CredentialResponseMetadataEntry>?
+internal object RedactedMembersSerializer : KSerializer<Set<String>> {
+    val ALL: Set<String> = setOf("credential_metadata", "credential_metadata_encrypted_response", "refresh_token", "dpop_jwk", "dpop_key_id")
 
-    /**
-     * `credential_metadata_encrypted_response`: true only when metadata is
-     * present AND the issuer's response was JWE-decrypted by the engine.
-     * Absent means false; metadata with this false came over plain JSON.
-     */
-    val credentialMetadataEncryptedResponse: Boolean
+    override val descriptor: SerialDescriptor = kotlinx.serialization.json.JsonElement.serializer().descriptor
+
+    override fun deserialize(decoder: Decoder): Set<String> {
+        val element = (decoder as? JsonDecoder ?: throw SerializationException("redacted_members decodes from JSON only"))
+            .decodeJsonElement()
+        if (element !is kotlinx.serialization.json.JsonArray) return ALL
+        val names = element.map { e -> (e as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return ALL }
+        return names.toSet()
+    }
+
+    override fun serialize(encoder: Encoder, value: Set<String>) {
+        (encoder as? JsonEncoder ?: throw SerializationException("redacted_members encodes to JSON only"))
+            .encodeJsonElement(kotlinx.serialization.json.JsonArray(value.sorted().map { JsonPrimitive(it) }))
+    }
 }

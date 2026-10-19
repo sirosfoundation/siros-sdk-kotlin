@@ -316,59 +316,85 @@ class OpenID4xProfileTest {
     }
 
     @Test
-    fun deliveredMetadataEntryKeepsUnknownMembers() {
-        val wire = """{"format":"dc+sd-jwt","credential":"x","credential_metadata":[{"type":"other","value":1,"scope":"issuer","n":1.50}]}"""
-        val r = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-            .decodeFromString<org.siros.sdk.transport.wmp.openid4x.CredentialResult>(wire)
-        val e = r.credentialMetadata!!.single()
-        assertEquals("other", e.type)
-        assertEquals(JsonPrimitive("issuer"), e.raw["scope"])
-        assertEquals("1.50", (e.raw["n"] as JsonPrimitive).content)
-        assertEquals("1", (e.raw["value"] as JsonPrimitive).content)
-    }
-
-    @Test
-    fun flowCompleteResultWithMalformedCredentialMetadataDecodesWithAMalformedEntry() {
-        val bad = listOf(
-            """[{"type":"other"}]""",
-            """[{"value":1}]""",
-            """[{"type":"","value":1}]""",
-            """["text"]""",
-            """{"type":"other","value":1}""",
-            """"text"""",
-        )
-        bad.forEach { md ->
-            val result = kotlinx.serialization.json.Json.parseToJsonElement(
-                """{"credentials":[{"format":"dc+sd-jwt","credential":"x","notification_id":"n1","credential_metadata":$md}]}""",
-            ) as JsonObject
-            val c = FlowCompleteResult.decode(result)!!.credentials!!.single()
-            assertEquals(md, "n1", c.notificationId)
-            assertTrue(md, c.credentialMetadata!!.any { it.malformed })
-        }
-        val ok = kotlinx.serialization.json.Json.parseToJsonElement(
-            """{"credentials":[{"format":"dc+sd-jwt","credential":"x","credential_metadata":[{"type":"t","value":1}]}]}""",
-        ) as JsonObject
-        assertTrue(FlowCompleteResult.decode(ok)!!.credentials!!.single().credentialMetadata!!.none { it.malformed })
-    }
-
-    @Test
-    fun flowCompleteResultDecodesDeliveredCredentialMetadata() {
+    fun flowCompleteResultKeepsTheResponseMetadataMembersVerbatimAndInOrder() {
         val result = kotlinx.serialization.json.Json.parseToJsonElement(
-            """{"type":"flow_complete","flow_id":"f","credentials":[{"format":"mso_mdoc","credential":"AA",""" +
-                """"credential_metadata":[{"type":"org.siros.NS.secret_seed","value":"00112233445566778899aabbccddeeff"}],""" +
-                """"credential_metadata_encrypted_response":true},{"format":"dc+sd-jwt","credential":"x"}]}""",
+            """{"credentials":[{"format":"dc+sd-jwt","credential":"x"}],"credential_metadata":{"z.last":{"n":1.50},"a.first":1}}""",
+        ) as JsonObject
+        val members = FlowCompleteResult.decode(result)!!.credentialMetadata!!.members
+        assertEquals(listOf("z.last", "a.first"), members.keys.toList())
+        assertEquals("1.50", ((members["z.last"] as JsonObject)["n"] as JsonPrimitive).content)
+    }
+
+    @Test
+    fun flowCompleteResultWithCredentialMetadataThatIsNotAnObjectDecodesWithAMalformedPlaceholder() {
+        listOf("""[{"type":"other","value":1}]""", """"text"""", "5").forEach { md ->
+            val result = kotlinx.serialization.json.Json.parseToJsonElement(
+                """{"credentials":[{"format":"dc+sd-jwt","credential":"x","notification_id":"n1"}],"credential_metadata":$md}""",
+            ) as JsonObject
+            val decoded = FlowCompleteResult.decode(result)!!
+            assertEquals(md, "n1", decoded.credentials!!.single().notificationId)
+            assertTrue(md, decoded.credentialMetadata!!.malformed)
+        }
+    }
+
+    @Test
+    fun flowCompleteResultDecodesTheDeliveredCredentialMetadata() {
+        val result = kotlinx.serialization.json.Json.parseToJsonElement(
+            """{"type":"flow_complete","flow_id":"f","credentials":[{"format":"mso_mdoc","credential":"AA","notification_id":"n"},""" +
+                """{"format":"dc+sd-jwt","credential":"x"}],""" +
+                """"credential_metadata":{"org.siros.secret_seed":{"org.siros.nym_auth":"00112233445566778899aabbccddeeff"}},""" +
+                """"credential_metadata_encrypted_response":true}""",
         ) as JsonObject
         val decoded = FlowCompleteResult.decode(result)!!
-        val first = decoded.credentials!![0]
-        assertEquals("org.siros.NS.secret_seed", first.credentialMetadata!!.single().type)
-        assertEquals(
-            "00112233445566778899aabbccddeeff",
-            (first.credentialMetadata!!.single().value as JsonPrimitive).content,
-        )
-        assertTrue(first.credentialMetadataEncryptedResponse)
-        assertNull(decoded.credentials!![1].credentialMetadata)
-        assertEquals(false, decoded.credentials!![1].credentialMetadataEncryptedResponse)
+        val seeds = decoded.credentialMetadata!!.members["org.siros.secret_seed"] as JsonObject
+        assertEquals("00112233445566778899aabbccddeeff", (seeds["org.siros.nym_auth"] as JsonPrimitive).content)
+        assertTrue(decoded.credentialMetadataEncryptedResponse)
+        assertNull(FlowCompleteResult.decode(JsonObject(emptyMap()))!!.credentialMetadata)
         assertNull(FlowCompleteResult.decode(null))
+    }
+
+    @Test
+    fun flowCompleteResultDecodesRedactedMembers() {
+        fun decode(members: String?) = FlowCompleteResult.decode(
+            kotlinx.serialization.json.Json.parseToJsonElement(
+                """{"credentials":[{"format":"mso_mdoc","credential":"AA","notification_id":"n"}]""" +
+                    (members?.let { ""","redacted_members":$it""" } ?: "") + "}",
+            ) as JsonObject,
+        )!!
+        assertEquals(emptySet<String>(), decode(null).redactedMembers)
+        assertEquals(false, decode(null).credentialMetadataRedacted)
+        assertEquals(false, decode("[]").renewalMaterialRedacted)
+        val replay = decode("""["credential_metadata","credential_metadata_encrypted_response","dpop_jwk","refresh_token"]""")
+        assertEquals(setOf("credential_metadata", "credential_metadata_encrypted_response", "dpop_jwk", "refresh_token"), replay.redactedMembers)
+        assertTrue(replay.credentialMetadataRedacted)
+        assertTrue(replay.renewalMaterialRedacted)
+        assertNull(replay.credentialMetadata)
+        // Only the metadata withheld: renewal material is not.
+        val onlyMetadata = decode("""["credential_metadata"]""")
+        assertTrue(onlyMetadata.credentialMetadataRedacted)
+        assertEquals(false, onlyMetadata.renewalMaterialRedacted)
+        // Only part of the renewal material: still unavailable, the metadata is not.
+        val partial = decode("""["dpop_key_id"]""")
+        assertTrue(partial.renewalMaterialRedacted)
+        assertEquals(false, partial.credentialMetadataRedacted)
+        // A marker that cannot be read says nothing reliable: everything it can list is withheld.
+        for (bad in listOf(""""credential_metadata"""", "5", "[1]", """[null]""", "{}")) {
+            val d = decode(bad)
+            assertTrue(bad, d.credentialMetadataRedacted && d.renewalMaterialRedacted)
+        }
+    }
+
+    @Test
+    fun theSeedAppearsInNoStringFormOfTheDecodedResult() {
+        val result = kotlinx.serialization.json.Json.parseToJsonElement(
+            """{"credentials":[{"format":"mso_mdoc","credential":"secret-credential"}],""" +
+                """"credential_metadata":{"org.siros.secret_seed":{"org.siros.nym_auth":"00112233445566778899aabbccddeeff"}}}""",
+        ) as JsonObject
+        val decoded = FlowCompleteResult.decode(result)!!
+        for (text in listOf(decoded.toString(), decoded.credentialMetadata.toString(), decoded.credentials.toString())) {
+            assertTrue(text, !text.contains("00112233445566778899aabbccddeeff"))
+            assertTrue(text, !text.contains("secret-credential"))
+        }
     }
 
     @Test

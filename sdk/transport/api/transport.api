@@ -6,33 +6,36 @@ public final class org/siros/sdk/transport/CredentialNotifier$DefaultImpls {
 	public static synthetic fun sendCredentialNotification$default (Lorg/siros/sdk/transport/CredentialNotifier;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)V
 }
 
-public final class org/siros/sdk/transport/CredentialResponseMetadataEntry {
-	public static final field Companion Lorg/siros/sdk/transport/CredentialResponseMetadataEntry$Companion;
-	public fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Lkotlinx/serialization/json/JsonObject;Z)V
-	public synthetic fun <init> (Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Lkotlinx/serialization/json/JsonObject;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun component2 ()Lkotlinx/serialization/json/JsonElement;
-	public final fun component3 ()Lkotlinx/serialization/json/JsonObject;
-	public final fun component4 ()Z
-	public final fun copy (Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Lkotlinx/serialization/json/JsonObject;Z)Lorg/siros/sdk/transport/CredentialResponseMetadataEntry;
-	public static synthetic fun copy$default (Lorg/siros/sdk/transport/CredentialResponseMetadataEntry;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Lkotlinx/serialization/json/JsonObject;ZILjava/lang/Object;)Lorg/siros/sdk/transport/CredentialResponseMetadataEntry;
+public abstract interface class org/siros/sdk/transport/DeliveredResponseMetadata {
+	public abstract fun getCredentialMetadata ()Lorg/siros/sdk/transport/ResponseCredentialMetadata;
+	public abstract fun getCredentialMetadataEncryptedResponse ()Z
+	public abstract fun getCredentialMetadataRedacted ()Z
+	public abstract fun getDeferredResponse ()Z
+	public abstract fun getRedactedMembers ()Ljava/util/Set;
+	public abstract fun getRenewalMaterialRedacted ()Z
+}
+
+public final class org/siros/sdk/transport/DeliveredResponseMetadata$DefaultImpls {
+	public static fun getCredentialMetadataRedacted (Lorg/siros/sdk/transport/DeliveredResponseMetadata;)Z
+	public static fun getDeferredResponse (Lorg/siros/sdk/transport/DeliveredResponseMetadata;)Z
+	public static fun getRedactedMembers (Lorg/siros/sdk/transport/DeliveredResponseMetadata;)Ljava/util/Set;
+	public static fun getRenewalMaterialRedacted (Lorg/siros/sdk/transport/DeliveredResponseMetadata;)Z
+}
+
+public final class org/siros/sdk/transport/ResponseCredentialMetadata {
+	public static final field Companion Lorg/siros/sdk/transport/ResponseCredentialMetadata$Companion;
+	public fun <init> ()V
+	public fun <init> (Lkotlinx/serialization/json/JsonObject;Z)V
+	public synthetic fun <init> (Lkotlinx/serialization/json/JsonObject;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun equals (Ljava/lang/Object;)Z
-	public final fun getAdditionalMembers ()Lkotlinx/serialization/json/JsonObject;
 	public final fun getMalformed ()Z
-	public final fun getRaw ()Lkotlinx/serialization/json/JsonObject;
-	public final fun getType ()Ljava/lang/String;
-	public final fun getValue ()Lkotlinx/serialization/json/JsonElement;
+	public final fun getMembers ()Lkotlinx/serialization/json/JsonObject;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
 
-public final class org/siros/sdk/transport/CredentialResponseMetadataEntry$Companion {
+public final class org/siros/sdk/transport/ResponseCredentialMetadata$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
-}
-
-public abstract interface class org/siros/sdk/transport/CredentialResultMetadata {
-	public abstract fun getCredentialMetadata ()Ljava/util/List;
-	public abstract fun getCredentialMetadataEncryptedResponse ()Z
 }
 
 public abstract interface class org/siros/sdk/transport/Transport {
@@ -624,23 +627,19 @@ public final class org/siros/sdk/transport/engine/CredentialRef$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
-public final class org/siros/sdk/transport/engine/CredentialResult : org/siros/sdk/transport/CredentialResultMetadata {
+public final class org/siros/sdk/transport/engine/CredentialResult {
 	public static final field Companion Lorg/siros/sdk/transport/engine/CredentialResult$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/util/List;Z)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/util/List;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/lang/String;
 	public final fun component4 ()Lkotlinx/serialization/json/JsonElement;
 	public final fun component5 ()Ljava/lang/String;
-	public final fun component6 ()Ljava/util/List;
-	public final fun component7 ()Z
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/util/List;Z)Lorg/siros/sdk/transport/engine/CredentialResult;
-	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/CredentialResult;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/util/List;ZILjava/lang/Object;)Lorg/siros/sdk/transport/engine/CredentialResult;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/CredentialResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/CredentialResult;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/CredentialResult;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getCredential ()Ljava/lang/String;
-	public fun getCredentialMetadata ()Ljava/util/List;
-	public fun getCredentialMetadataEncryptedResponse ()Z
 	public final fun getFormat ()Ljava/lang/String;
 	public final fun getNotificationId ()Ljava/lang/String;
 	public final fun getTypeMetadata ()Lkotlinx/serialization/json/JsonElement;
@@ -768,31 +767,40 @@ public final class org/siros/sdk/transport/engine/FlowActionMessage$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
-public final class org/siros/sdk/transport/engine/FlowCompleteMessage {
+public final class org/siros/sdk/transport/engine/FlowCompleteMessage : org/siros/sdk/transport/DeliveredResponseMetadata {
 	public static final field Companion Lorg/siros/sdk/transport/engine/FlowCompleteMessage$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/ResponseCredentialMetadata;ZLjava/util/Set;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/ResponseCredentialMetadata;ZLjava/util/Set;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
-	public final fun component10 ()Ljava/lang/String;
+	public final fun component10 ()Ljava/util/Set;
 	public final fun component11 ()Ljava/lang/String;
+	public final fun component12 ()Ljava/lang/String;
+	public final fun component13 ()Ljava/lang/String;
+	public final fun component14 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/util/List;
 	public final fun component4 ()Ljava/lang/String;
 	public final fun component5 ()Lkotlinx/serialization/json/JsonElement;
 	public final fun component6 ()Ljava/lang/String;
 	public final fun component7 ()Ljava/lang/String;
-	public final fun component8 ()Ljava/lang/String;
-	public final fun component9 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/FlowCompleteMessage;
-	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/FlowCompleteMessage;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/FlowCompleteMessage;
+	public final fun component8 ()Lorg/siros/sdk/transport/ResponseCredentialMetadata;
+	public final fun component9 ()Z
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/ResponseCredentialMetadata;ZLjava/util/Set;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/FlowCompleteMessage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/FlowCompleteMessage;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/ResponseCredentialMetadata;ZLjava/util/Set;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/FlowCompleteMessage;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getCredentialIssuer ()Ljava/lang/String;
+	public fun getCredentialMetadata ()Lorg/siros/sdk/transport/ResponseCredentialMetadata;
+	public fun getCredentialMetadataEncryptedResponse ()Z
+	public fun getCredentialMetadataRedacted ()Z
 	public final fun getCredentials ()Ljava/util/List;
+	public fun getDeferredResponse ()Z
 	public final fun getDpopJwk ()Ljava/lang/String;
 	public final fun getDpopKeyId ()Ljava/lang/String;
 	public final fun getFlowId ()Ljava/lang/String;
+	public fun getRedactedMembers ()Ljava/util/Set;
 	public final fun getRedirectUri ()Ljava/lang/String;
 	public final fun getRefreshToken ()Ljava/lang/String;
+	public fun getRenewalMaterialRedacted ()Z
 	public final fun getSelectedCredentialConfigurationId ()Ljava/lang/String;
 	public final fun getTimestamp ()Ljava/lang/String;
 	public final fun getType ()Ljava/lang/String;
@@ -2633,24 +2641,20 @@ public final class org/siros/sdk/transport/wmp/openid4x/CredentialMatch$Companio
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
-public final class org/siros/sdk/transport/wmp/openid4x/CredentialResult : org/siros/sdk/transport/CredentialResultMetadata {
+public final class org/siros/sdk/transport/wmp/openid4x/CredentialResult {
 	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/CredentialResult$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Z)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/lang/String;
 	public final fun component4 ()Ljava/lang/String;
 	public final fun component5 ()Ljava/lang/String;
-	public final fun component6 ()Ljava/util/List;
-	public final fun component7 ()Z
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Z)Lorg/siros/sdk/transport/wmp/openid4x/CredentialResult;
-	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/CredentialResult;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;ZILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/CredentialResult;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/CredentialResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/CredentialResult;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/CredentialResult;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getCNonce ()Ljava/lang/String;
 	public final fun getCredential ()Ljava/lang/String;
-	public fun getCredentialMetadata ()Ljava/util/List;
-	public fun getCredentialMetadataEncryptedResponse ()Z
 	public final fun getFormat ()Ljava/lang/String;
 	public final fun getNotificationId ()Ljava/lang/String;
 	public final fun getVct ()Ljava/lang/String;
@@ -2673,20 +2677,29 @@ public final class org/siros/sdk/transport/wmp/openid4x/CredentialResult$Compani
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
-public final class org/siros/sdk/transport/wmp/openid4x/FlowCompleteResult {
+public final class org/siros/sdk/transport/wmp/openid4x/FlowCompleteResult : org/siros/sdk/transport/DeliveredResponseMetadata {
 	public static final field Companion Lorg/siros/sdk/transport/wmp/openid4x/FlowCompleteResult$Companion;
 	public fun <init> ()V
-	public fun <init> (Ljava/util/List;Ljava/lang/String;Ljava/lang/String;)V
-	public synthetic fun <init> (Ljava/util/List;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/ResponseCredentialMetadata;ZLjava/util/Set;)V
+	public synthetic fun <init> (Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/ResponseCredentialMetadata;ZLjava/util/Set;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/util/List;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/lang/String;
-	public final fun copy (Ljava/util/List;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/wmp/openid4x/FlowCompleteResult;
-	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/FlowCompleteResult;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/FlowCompleteResult;
+	public final fun component4 ()Lorg/siros/sdk/transport/ResponseCredentialMetadata;
+	public final fun component5 ()Z
+	public final fun component6 ()Ljava/util/Set;
+	public final fun copy (Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/ResponseCredentialMetadata;ZLjava/util/Set;)Lorg/siros/sdk/transport/wmp/openid4x/FlowCompleteResult;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/wmp/openid4x/FlowCompleteResult;Ljava/util/List;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/ResponseCredentialMetadata;ZLjava/util/Set;ILjava/lang/Object;)Lorg/siros/sdk/transport/wmp/openid4x/FlowCompleteResult;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getCredentialIssuer ()Ljava/lang/String;
+	public fun getCredentialMetadata ()Lorg/siros/sdk/transport/ResponseCredentialMetadata;
+	public fun getCredentialMetadataEncryptedResponse ()Z
+	public fun getCredentialMetadataRedacted ()Z
 	public final fun getCredentials ()Ljava/util/List;
+	public fun getDeferredResponse ()Z
+	public fun getRedactedMembers ()Ljava/util/Set;
 	public final fun getRedirectUri ()Ljava/lang/String;
+	public fun getRenewalMaterialRedacted ()Z
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }

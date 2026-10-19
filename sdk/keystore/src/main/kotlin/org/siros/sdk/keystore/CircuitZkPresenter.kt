@@ -322,7 +322,9 @@ class CircuitZkPresenter(
          * log, a history record or a response.
          */
         val secretSeed: ByteArray? = null,
-    )
+    ) {
+        override fun toString() = "CircuitZkPresenter.Request(redacted)"
+    }
 
     /** A presentation: the `vp_token` entry, its results, and the circuit used. */
     class Result(
