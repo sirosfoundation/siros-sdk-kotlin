@@ -75,11 +75,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   independent `tools/gen_nym_pseudonym_vectors.py`; for reuse by the Swift
   port) and `spec/circuit-zk-validator-vectors.json` were regenerated to
   match; the matcher's `circuit_zk` planner vectors were re-copied from
-  siros-dc-matcher tag `v0.9.1` (`5630bd6`; byte-identical to the earlier
-  `9237638` copy, v0.9.1 only bumped versions; no
+  siros-dc-matcher tag `v0.10.0` (`ba1323c`; byte-identical to the earlier
+  `9237638` and `v0.9.1` copies; no
   `verifier_id_type` in the requests, a new vector shows a legacy one is still
-  accepted and passed through opaquely). The planner behaviour is unchanged, so
-  the SDK's pinned matcher AAR (0.9.0) needs no bump and stays pinned (0.9.1 is not yet on Maven Central; behaviour is unchanged). The sample app's nym demo drops the request parameter and uses the
+  accepted and passed through opaquely). The planner behaviour is unchanged. The sample app's nym demo drops the request parameter and uses the
   bare DNS form.
   Type strings are opaque: the names in the wallet's list must match what the
   PDP returns; go-trust is aligning to the trust framework (the `x509_san_dns`
@@ -165,6 +164,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot return. (#266)
 
 ### Added
+- **siros-dc-matcher 0.10.0: capabilities use `credential.issuance_profile`.**
+  The pinned matcher AAR moves from 0.9.0 to 0.10.0 (no FFI or plan-JSON
+  change: the vendored `uniffi.siros_dc_matcher_ffi` bindings are
+  byte-identical to the matcher tag's, nothing regenerated). The matcher's
+  capabilities parser follows the circuit catalog's rename of
+  `credential.profile` to `credential.issuance_profile` (an optional, non-empty
+  opaque string constraining the input credential; validated, never a filter).
+  The old `profile` key is now an unknown member, so such capabilities are
+  rejected and the circuit is not offered (fail closed); nothing here set it,
+  the SDK passes `capabilities` through verbatim. `spec/circuit-capabilities-vectors`
+  is re-copied from the `v0.10.0` tag (`match.json` changed: `profile-*` cases
+  use `issuance_profile`, three cases added, two carry `expectRejected`);
+  `spec/circuit-zk-planner-vectors` is unchanged (byte-identical). The host and
+  device capability-vector harnesses treat `expectRejected` cases as "nothing
+  served" and check registering them does not throw.
 - **`SharedCircuitZkPlanner`: the default `circuit_zk` planner, backed by
   siros-dc-matcher 0.8.0.** Used when `WalletConfig.circuitZk` is on and no
   `circuitZkPlanner` is given. The wallet's circuits are registered with the

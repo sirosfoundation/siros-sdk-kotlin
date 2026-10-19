@@ -405,7 +405,7 @@ class CircuitZkMatchingTest {
     }
 
     /**
-     * The matcher's v0.9.0 capability vectors, replayed as the matcher's answers: for every case,
+     * The matcher's v0.10.0 capability vectors, replayed as the matcher's answers: for every case,
      * the circuits the vector says are served (`expect`) are exactly the circuits selection takes,
      * through both selection paths. The rule itself is the matcher's and is exercised by the
      * device test `SirosCredentialRegistryCapabilityVectorsTest`; this proves selection consumes
@@ -419,6 +419,7 @@ class CircuitZkMatchingTest {
         assertTrue(cases.size >= 40)
         var withServed = 0
         var withNone = 0
+        var rejectedCases = 0
         for (case in cases) {
             val name = (case["name"] as kotlinx.serialization.json.JsonPrimitive).content
             val expect = (case["expect"] as? kotlinx.serialization.json.JsonArray)?.map { (it as kotlinx.serialization.json.JsonPrimitive).content }?.toSet().orEmpty()
@@ -430,15 +431,22 @@ class CircuitZkMatchingTest {
                     capabilities = c["capabilities"]?.toString() ?: "{}",
                 )
             }
-            val serving = CircuitZkServing { circuit, _, _ -> circuit.circuitId in expect }
+            // `expectRejected`: the matcher must not parse these capabilities, so it serves nothing.
+            val rejected = (case["expectRejected"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "true"
+            if (rejected) {
+                assertTrue("$name: a rejected case expects nothing", expect.isEmpty())
+                rejectedCases++
+            }
+            val serving = CircuitZkServing { circuit, _, _ -> !rejected && circuit.circuitId in expect }
             val p = CircuitZkPlan(plan.functions, raw = query().let { (it["credentials"] as kotlinx.serialization.json.JsonArray)[0].jsonObject })
             val selected = circuits.filter { it.supports(p, doctype, serving) }.map { it.circuitId }.toSet()
-            assertEquals(name, circuits.map { it.circuitId }.toSet().intersect(expect), selected)
+            assertEquals(name, if (rejected) emptySet() else circuits.map { it.circuitId }.toSet().intersect(expect), selected)
             val matched = matchWith(circuits, serving).candidates
             assertEquals(name, selected.isNotEmpty(), matched.isNotEmpty())
             if (selected.isEmpty()) withNone++ else withServed++
         }
         assertTrue("some cases serve, some do not ($withServed/$withNone)", withServed > 5 && withNone > 5)
+        assertTrue("expectRejected cases went missing: $rejectedCases", rejectedCases >= 2)
     }
 
     // ---- no claims registered ----

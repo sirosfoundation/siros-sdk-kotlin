@@ -9,6 +9,9 @@ code or vectors. The SDKs copy this file from a release tag of this repository,
 the way they copy the planner vectors, and record the tag and hash beside their
 copy. The matcher is held to it by `tests/circuit_capabilities.rs`.
 
+Current `match.json` sha256 (v0.10.0, `credential.issuance_profile`):
+`ab2e4f07ca6399e56cef486831ce1447fb772e13f3420af3a8d36d732153e8e9`.
+
 Change a vector here only together with the rule, in the same PR, and say so in
 the changelog: a changed vector changes what every wallet must do.
 
@@ -21,11 +24,14 @@ aliases, `revoked`) and then compares the set of
 served circuit ids with `expect`.
 
 - **Ranking is not checked.** `expect` is ordered (active before deprecated,
-  profile preference, id tie-break); the matcher does not rank circuits, a
-  wallet does, so the test compares sets. The `profile-*`,
+  issuance_profile preference, id tie-break); the matcher does not rank
+  circuits, a wallet does, so the test compares sets. The `profile-*`,
   `deprecated-ranks-below-active` and `id-tiebreak` cases therefore pin
-  membership only. `conformsToProfiles` and `credential.profile` are not read
-  by the matcher.
+  membership only. `conformsToProfiles` and `credential.issuance_profile` are
+  not read by the matcher beyond validating the latter: it must be a non-empty
+  string when present (`issuance-profile-empty-fails-closed`). It was called
+  `credential.profile` before the catalog renamed it; the old key is an unknown
+  member and fails closed (`legacy-profile-key-fails-closed`).
 - **`expectError` cases** (a request without presentation, credential format or
   credential type) cannot arise in the matcher, whose presentation is fixed
   at `circuit_zk` and whose format and type come from the profile and `meta`.

@@ -60,7 +60,11 @@ class SirosCredentialRegistryCapabilityVectorsTest {
             // The vectors' `expectError` cases, and `empty-req`, are not requests
             // the matcher is ever asked: its planner refuses an empty `req`
             // (the vectors' README says so), so nothing is offered for them.
+            // `expectRejected` cases carry capabilities the matcher must NOT parse (an unknown
+            // member such as the old `credential.profile`, an empty `issuance_profile`): no
+            // circuit may be served for them. Registration still must not throw.
             val unaskable = case["expectError"]?.jsonPrimitive?.content == "true" ||
+                isRejected(case) ||
                 case["request"]!!.jsonObject["req"]!!.jsonArray.isEmpty()
             val want = if (unaskable) {
                 emptySet()
@@ -71,6 +75,26 @@ class SirosCredentialRegistryCapabilityVectorsTest {
             if (got == want) null else "${case["name"]!!.jsonPrimitive.content}: want $want, got $got"
         }
         assertTrue("\n" + failures.joinToString("\n"), failures.isEmpty())
+    }
+
+    private fun isRejected(case: JsonObject) = case["expectRejected"]?.jsonPrimitive?.content == "true"
+
+    /**
+     * The `expectRejected` cases: their capabilities are registered (the SDK passes them through
+     * verbatim and must not throw) and the matcher then serves nothing for them, while the same
+     * request with the accepted spelling (`issuance-profile-served`) is served.
+     */
+    @Test
+    fun rejected_capabilities_register_without_error_and_serve_nothing() {
+        val cases = vectors()["cases"]!!.jsonArray.map { it.jsonObject }
+        val rejected = cases.filter(::isRejected)
+        assertTrue("expectRejected cases went missing: ${rejected.size}", rejected.size >= 2)
+        for (case in rejected) {
+            assertTrue("a rejected case expects nothing", case["expect"]!!.jsonArray.isEmpty())
+            assertEquals(case["name"]!!.jsonPrimitive.content, emptySet<String>(), offered(case))
+        }
+        val served = cases.first { it["name"]!!.jsonPrimitive.content == "issuance-profile-served" }
+        assertEquals(setOf("c1"), offered(served))
     }
 
     /** Guards against a harness that offers nothing, or everything, whatever the case. */

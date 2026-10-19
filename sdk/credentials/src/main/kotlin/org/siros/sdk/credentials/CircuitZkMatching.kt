@@ -91,7 +91,7 @@ fun interface CircuitZkRequestValidator {
  * function filtering applies to it.
  *
  * [credentialType] and [capabilities] are opaque strings passed to the matcher
- * when the circuit is registered (siros-dc-matcher 0.9.0) and never read by
+ * when the circuit is registered (siros-dc-matcher 0.10.0) and never read by
  * the SDK. [credentialType] restricts the circuit to a request naming that
  * doctype or vct. [capabilities] is the catalog's `capabilities` object as a
  * JSON string; when present the matcher applies its capability rule and reads

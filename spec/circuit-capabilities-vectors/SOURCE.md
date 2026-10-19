@@ -4,13 +4,18 @@
 match vectors of the shared matcher,
 `crates/siros-dc-matcher-core/tests/vectors/circuit_capabilities/` in
 [sirosfoundation/siros-dc-matcher](https://github.com/sirosfoundation/siros-dc-matcher),
-at tag `v0.9.1` (commit `5630bd6023904c4c84d2496b61befe4ea76d5087`). The files are byte-identical to those at
-`v0.9.0` and at the earlier recorded commit `9237638`; only the recorded provenance changes.
+at tag `v0.10.0` (commit `ba1323c0ddd1a1e0587303b8eaefcaaee2813ec9`). `match.json` CHANGED
+relative to `v0.9.1` / `v0.9.0` (earlier sha256 `9bee1868fd957fd4ad56a91dbca93b922ede04bfa57bb0f8b3a3c9bd5f383866`):
+the `profile-preferred`, `profile-conformant` and `profile-before-status` cases now use `credential.issuance_profile`
+(membership expectations unchanged), and three cases were added: `issuance-profile-served`,
+`legacy-profile-key-fails-closed` and `issuance-profile-empty-fails-closed`. The last two carry `expectRejected: true`:
+their capabilities must not parse (the old `credential.profile` key is now an unknown member; an empty
+`issuance_profile` is invalid), so no circuit may be served for them. `README.md` changed accordingly.
 
 | file | sha256 |
 | --- | --- |
-| `match.json` | `9bee1868fd957fd4ad56a91dbca93b922ede04bfa57bb0f8b3a3c9bd5f383866` |
-| `README.md` | `aeb7972b16ab4183a473aa9ebcf42d7046994d26129451c5d4aa3e8bbd754d72` |
+| `match.json` | `ab2e4f07ca6399e56cef486831ce1447fb772e13f3420af3a8d36d732153e8e9` |
+| `README.md` | `6407690ed30d0463735d53498c30b06b4394512b72c605d017748e681579056c` |
 
 Not authored here, and not to be edited here: the matcher owns these vectors.
 Change them there and copy them again when the SDK takes a new matcher release
@@ -29,5 +34,6 @@ through any SDK code of its own. `SirosCredentialRegistryCapabilityVectorsTest`
 (a device test, because the matcher is native) registers each case's circuits
 through `SirosCredentialRegistry` and checks that the matcher offers exactly
 the circuits the case expects, which proves the registration reaches the rule
-unaltered. Ranking, the profile cases and `expectError` cases are the
-catalog's, not the matcher's; see the README for what is and is not checked.
+unaltered. Ranking and the `expectError` cases are the catalog's, not the
+matcher's; `expectRejected` cases are checked to serve nothing (and registering them must not throw); see the README
+for what is and is not checked.

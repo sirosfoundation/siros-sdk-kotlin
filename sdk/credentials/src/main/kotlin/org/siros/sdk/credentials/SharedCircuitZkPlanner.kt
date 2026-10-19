@@ -15,7 +15,7 @@ import uniffi.siros_dc_matcher_ffi.circuitZkPlan
  * credential picker runs, so the wallet and the picker cannot read a
  * `circuit_zk` request differently.
  *
- * The matcher (0.9.0) exports its planner over the FFI as `circuit_zk_plan`,
+ * The matcher (0.10.0) exports its planner over the FFI as `circuit_zk_plan`,
  * which returns the plan as JSON or fails with the planner's own stable code
  * for a structurally broken request. The plan is read from that JSON and this
  * class never parses a function or a parameter itself. A request the planner

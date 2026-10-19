@@ -2221,7 +2221,7 @@
     },
     {
       "name": "profile-preferred",
-      "description": "Ranking: a circuit whose profile the credential conforms to (or that has none) ranks above one whose profile it does not conform to.",
+      "description": "Ranking: a circuit whose issuance_profile the credential conforms to (or that has none) ranks above one whose issuance_profile it does not conform to.",
       "circuits": [
         {
           "id": "a-strict",
@@ -2233,7 +2233,7 @@
             "credential": {
               "format": "fmt1",
               "type": "type1",
-              "profile": "prof"
+              "issuance_profile": "prof"
             },
             "functions": [
               {
@@ -2310,7 +2310,7 @@
             "credential": {
               "format": "fmt1",
               "type": "type1",
-              "profile": "prof"
+              "issuance_profile": "prof"
             },
             "functions": [
               {
@@ -2378,7 +2378,7 @@
     },
     {
       "name": "profile-before-status",
-      "description": "Ranking: profile preference outranks active over deprecated.",
+      "description": "Ranking: issuance_profile preference outranks active over deprecated.",
       "circuits": [
         {
           "id": "a-active-strict",
@@ -2390,7 +2390,7 @@
             "credential": {
               "format": "fmt1",
               "type": "type1",
-              "profile": "prof"
+              "issuance_profile": "prof"
             },
             "functions": [
               {
@@ -2638,6 +2638,151 @@
         "req": []
       },
       "expectError": true
+    },
+    {
+      "name": "issuance-profile-served",
+      "description": "credential.issuance_profile is a constraint on the input credential, not a filter: a circuit carrying it is served normally.",
+      "circuits": [
+        {
+          "id": "c1",
+          "system": "sysA",
+          "status": "active",
+          "capabilities": {
+            "schema": 1,
+            "presentation": "pres",
+            "credential": {
+              "format": "fmt1",
+              "type": "type1",
+              "issuance_profile": "prof"
+            },
+            "functions": [
+              {
+                "id": "fn-age",
+                "max": 1,
+                "params": {
+                  "ge": {
+                    "type": "full-date"
+                  },
+                  "le": {
+                    "type": "full-date"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "request": {
+        "presentation": "pres",
+        "credential": {
+          "format": "fmt1",
+          "type": "type1"
+        },
+        "req": [
+          {
+            "id": "fn-age"
+          }
+        ]
+      },
+      "expect": [
+        "c1"
+      ]
+    },
+    {
+      "name": "legacy-profile-key-fails-closed",
+      "description": "The key `profile` was renamed `issuance_profile`; the old key is an unknown member, so the capabilities are rejected and the circuit is not served. expectRejected: the capabilities themselves fail to parse (fail closed), which is why nothing is served.",
+      "circuits": [
+        {
+          "id": "c1",
+          "system": "sysA",
+          "status": "active",
+          "capabilities": {
+            "schema": 1,
+            "presentation": "pres",
+            "credential": {
+              "format": "fmt1",
+              "type": "type1",
+              "profile": "prof"
+            },
+            "functions": [
+              {
+                "id": "fn-age",
+                "max": 1,
+                "params": {
+                  "ge": {
+                    "type": "full-date"
+                  },
+                  "le": {
+                    "type": "full-date"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "request": {
+        "presentation": "pres",
+        "credential": {
+          "format": "fmt1",
+          "type": "type1"
+        },
+        "req": [
+          {
+            "id": "fn-age"
+          }
+        ]
+      },
+      "expectRejected": true,
+      "expect": []
+    },
+    {
+      "name": "issuance-profile-empty-fails-closed",
+      "description": "credential.issuance_profile must be a non-empty string: an empty one is rejected and the circuit is not served. expectRejected: the capabilities themselves fail to parse (fail closed), which is why nothing is served.",
+      "circuits": [
+        {
+          "id": "c1",
+          "system": "sysA",
+          "status": "active",
+          "capabilities": {
+            "schema": 1,
+            "presentation": "pres",
+            "credential": {
+              "format": "fmt1",
+              "type": "type1",
+              "issuance_profile": ""
+            },
+            "functions": [
+              {
+                "id": "fn-age",
+                "max": 1,
+                "params": {
+                  "ge": {
+                    "type": "full-date"
+                  },
+                  "le": {
+                    "type": "full-date"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "request": {
+        "presentation": "pres",
+        "credential": {
+          "format": "fmt1",
+          "type": "type1"
+        },
+        "req": [
+          {
+            "id": "fn-age"
+          }
+        ]
+      },
+      "expectRejected": true,
+      "expect": []
     }
   ]
 }
