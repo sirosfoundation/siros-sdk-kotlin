@@ -23,8 +23,29 @@ builder against it. The SDK-owned wording is generated from these items and is n
 `intermediary_risk`), `entries[]` (`credential`, `items[]`) and `request_signed`.
 
 Item kinds: `pseudonym` (`config`, `scope`, `remappable_by_issuer`, `cross_site`, `verifier_id`,
-`verifier_context`), `age_range` (`ge`, `le`, `form`: `between` with `from`/`to`/`min_years`/`max_years`,
-`at_least`/`at_most` with `years`), `claim` (`name`), `legacy_pseudonym` (`verifier_context`).
+`verifier_context`), `claim` (`name`), `legacy_pseudonym` (`verifier_context`) and `predicate`: what the verifier
+LEARNS about a claim (that it satisfies every condition), never its value.
+
+`predicate`: `function`, `claim` (`path`; `label` is the credential's OWN display label for that path from
+`credential.claims`, else null: a renderer falls back to the path, never an invented name), `value_type`
+(`date`, `number`, `string`, `bool`), `conditions[]` (`op` one of `eq ne lt le gt ge in`, `values` as text of the
+claim type) and `age_form` (null, or `between`/`at_least`/`at_most` computed from `today` for a function declared
+as an age). The set of `circuit_zk` functions is open-ended, so predicate functions are DATA: `function_registry[]`
+declares each one (`claim`: `{"path": [...]}` fixed or `{"param": "claim"}`; `value_type`; `comparisons`: param name
+to op, in display order; optional `min_span`; optional `age_specialisation`). A function's params are a conjunction of
+comparisons on one claim; any other param, a mistyped operand, a duplicated `in` member or no comparison refuses the
+request. A function that is not in the registry (and is not a pseudonym or the legacy disclosure) refuses the
+request: the wallet cannot say what it would disclose.
+
+`precheck[]`: the local satisfiability check against a claim lookup (`found` with `type`/`text`, `absent`, or
+`unsupported`). `expected` false = the credential definitely does not satisfy; true = it holds OR cannot be judged
+(`unsupported` is skipped, never guessed; an absent claim is false).
+
+`combined_predicate_bounds[]`: the cross-query privacy rule. The proofs of one request together reveal the
+intersection of their predicates on a claim, so for plans answered with the SAME credential, per claim path and over
+functions that DECLARE a `min_span`: lower = max `ge`, upper = min `le`; with both, the span (date: days inclusive;
+number: `le - ge`) must reach the strictest declared `min_span` (`age_check`: 365 days). Functions that declare none
+have no merge rule. An unreadable bound is not ok.
 
 `verifier_id_shortening[]` pins the display shortening of a `verifier_id` (more than 40 code points keeps
 the first and last 18 joined by U+2026). The value used for hashing is never altered.
