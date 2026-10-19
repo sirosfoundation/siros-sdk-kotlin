@@ -2688,7 +2688,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             },
         )
         // The user's request-policy settings (non-disclosure, circuit_zk, DC API origin rules, verifier ids).
-        return _walletPolicy.value.applyTo(base, circuits = SampleCircuitZk.circuits)
+        val policy = _walletPolicy.value
+        // The fake prover is an opt-in that goes with the demo circuit table; otherwise the SDK's real prover serves the catalog's circuits.
+        return policy.applyTo(base, circuits = if (policy.fakeProver) SampleCircuitZk.circuits else SampleCircuitZk.catalogCircuits)
     }
 
     companion object {

@@ -106,6 +106,9 @@ class NymAuthDemoRunner(
             )
             val circuits = CircuitZkCircuitSource { listOf(circuit) }
             val presenter = source.circuitZkPresenter(
+                // This stand-alone demo issues its own credential locally (a throwaway issuer, not the nym_auth issuance
+                // profile the circuits require), so it can only run on the fake. The real path is the wallet's
+                // circuit_zk flow over the DC API with the SDK's default prover (request policy: fake prover off).
                 prover = FakeCircuitZkProver.optIn(),
                 circuits = circuits,
                 validator = RulebookCircuitZkValidator(circuits = circuits),

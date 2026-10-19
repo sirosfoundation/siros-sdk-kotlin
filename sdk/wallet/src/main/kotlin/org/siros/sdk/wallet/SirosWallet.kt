@@ -234,7 +234,7 @@ class SirosWallet private constructor(
     // The real catalog prover unless the host set one; built on first use because it needs the circuit
     // client, which is declared further down. Never the fake: that is an explicit opt-in through the config.
     private val defaultCircuitZkProverHolder = lazy {
-        org.siros.sdk.keystore.CatalogCircuitZkProver.standard(zkCircuitClient, zkPresentation, config.circuitZkNativeProver)
+        org.siros.sdk.keystore.CatalogCircuitZkProver.standard(zkCircuitClient, zkPresentation, config.circuitZkNativeProver ?: org.siros.sdk.keystore.UniffiNymAuthNativeProver())
     }
     private val circuitZkProver: org.siros.sdk.keystore.CircuitZkProver? = config.circuitZkProver
 
@@ -4819,7 +4819,24 @@ class SirosWallet private constructor(
             zkPresentation.onCircuitRetired(d)
             if (defaultCircuitZkProverHolder.isInitialized()) defaultCircuitZkProverHolder.value.onCircuitRetired(d)
         },
+        // A catalog-backed circuit table follows the catalog.
+        onManifest = { manifest ->
+            (config.circuitZkCircuits as? org.siros.sdk.credentials.CatalogCircuitZkCircuitSource)
+                ?.update(manifest, defaultCircuitZkProverHolder.value::declaredFunctions)
+        },
     )
+    init {
+        // Offline start: the circuits of the descriptors cached from earlier runs, until a manifest is fetched.
+        if (config.circuitZk) {
+            (config.circuitZkCircuits as? org.siros.sdk.credentials.CatalogCircuitZkCircuitSource)?.let { source ->
+                try {
+                    source.update(zkCircuitClient.knownDescriptors().values.filter { it.isActive() }, defaultCircuitZkProverHolder.value::declaredFunctions)
+                } catch (e: Exception) {
+                    Timber.w("Seeding the circuit table from the cache failed (${e.javaClass.simpleName})")
+                }
+            }
+        }
+    }
     private val circuitCatalogRefreshJob: kotlinx.coroutines.Job? =
         if (config.circuitZk) circuitCatalogRefresher.launchIn(scope) else null
     private val circuitCatalogNetworkCallback: android.net.ConnectivityManager.NetworkCallback? =
