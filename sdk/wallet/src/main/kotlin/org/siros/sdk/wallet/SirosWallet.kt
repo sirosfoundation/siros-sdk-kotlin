@@ -231,7 +231,18 @@ class SirosWallet private constructor(
         // registers its own policy; another wallet's looser one cannot weaken it (the guard applies the union).
         org.siros.sdk.credentials.CredentialDisclosureGuard.register(this, config.nonDisclosurePolicy)
     }
+    // The real catalog prover unless the host set one; built on first use because it needs the circuit
+    // client, which is declared further down. Never the fake: that is an explicit opt-in through the config.
+    private val defaultCircuitZkProverHolder = lazy {
+        org.siros.sdk.keystore.CatalogCircuitZkProver(zkCircuitClient, config.circuitZkNativeProver)
+    }
     private val circuitZkProver: org.siros.sdk.keystore.CircuitZkProver? = config.circuitZkProver
+
+    /** Drops every resident ZK prover: the mdoc proof systems' and the default circuit_zk prover's circuit. */
+    private fun releaseAllZkProvers() {
+        zkPresentation.releaseProvers()
+        if (defaultCircuitZkProverHolder.isInitialized()) defaultCircuitZkProverHolder.value.releaseProvers()
+    }
     private val circuitZkSupport: org.siros.sdk.credentials.CircuitZkSupport? =
         if (config.circuitZk && config.circuitZkCircuits != null) {
             org.siros.sdk.credentials.CircuitZkSupport(
@@ -2082,7 +2093,7 @@ class SirosWallet private constructor(
         org.siros.sdk.credentials.CredentialDisclosureGuard.unregister(this)
         bumpSessionGeneration()
         activity.applicationContext.unregisterComponentCallbacks(memoryPressureCallbacks)
-        zkPresentation.releaseProvers()
+        releaseAllZkProvers()
         engineSession?.disconnect()
         engineSession = null
         scope.launch { wmpPeer?.close() }
@@ -4183,7 +4194,7 @@ class SirosWallet private constructor(
         // Refused before trust evaluation or any credential access; the verifier gets the bare access_denied.
         if (request.hasTransactionData) refuse("transaction-data", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
         val support = circuitZkSupport ?: refuse("disabled", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
-        val prover = circuitZkProver ?: refuse("no-prover", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+        val prover = circuitZkProver ?: defaultCircuitZkProverHolder.value
         val registry = verifierIdRegistry ?: refuse("no-sources", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
         val query = request.dcqlQuery ?: refuse("no-query", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
 
@@ -4757,7 +4768,7 @@ class SirosWallet private constructor(
     private val memoryPressureCallbacks = object : android.content.ComponentCallbacks2 {
         override fun onTrimMemory(level: Int) {
             if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
-                zkPresentation.releaseProvers()
+                releaseAllZkProvers()
             }
         }
 
@@ -4765,7 +4776,7 @@ class SirosWallet private constructor(
 
         @Deprecated("Deprecated in Java")
         override fun onLowMemory() {
-            zkPresentation.releaseProvers()
+            releaseAllZkProvers()
         }
     }.also { activity.applicationContext.registerComponentCallbacks(it) }
 

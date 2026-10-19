@@ -5114,6 +5114,11 @@ class SirosWalletTest {
         return wrapDCAPIRequest("openid4vp-v1-signed", buildJsonObject { put("request", jwt.serialize()) })
     }
 
+    /** What the wallet builds when the host configures no prover: the catalog prover with no native half, over an empty catalog. */
+    private fun defaultCatalogProverHolder(): Lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> = lazy {
+        org.siros.sdk.keystore.CatalogCircuitZkProver(org.siros.sdk.credentials.ZkCircuitClient(sources = emptyList()), null)
+    }
+
     private fun circuitZkWallet(support: org.siros.sdk.credentials.CircuitZkSupport?, keystore: KeystoreManager): SirosWallet {
         val apiClient = mockk<BackendApiClient>()
         coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
@@ -5132,6 +5137,7 @@ class SirosWalletTest {
             "trustCache" to TrustCache(),
             "_presentationHistory" to mutableListOf<PresentationRecord>(),
             "circuitZkSupport" to support,
+            "defaultCircuitZkProverHolder" to defaultCatalogProverHolder(),
         )
     }
 
@@ -5354,6 +5360,8 @@ class SirosWalletTest {
         serving: org.siros.sdk.credentials.CircuitZkServing? = null,
         /** Replaces the wallet's seed source (the allocated test wallet has none). */
         secretSeedSource: CredentialSecretSeedSource? = null,
+        /** No prover is configured, so the wallet uses its default (the catalog prover without a native half). */
+        defaultProver: Boolean = false,
     ): CzkSetup {
         val apiClient = mockk<BackendApiClient>()
         val trustRequests = mutableListOf<JsonObject>()
@@ -5397,7 +5405,7 @@ class SirosWalletTest {
                 readerTrustEvaluationMode = if (localOnlyTrust) MdocTrustEvaluationMode.LOCAL_ONLY else null,
             ),
             "circuitZkSupport" to (if (flagOn) support else null),
-            "circuitZkProver" to prover,
+            *(if (defaultProver) arrayOf("defaultCircuitZkProverHolder" to defaultCatalogProverHolder()) else arrayOf("circuitZkProver" to prover)),
             "verifierIdRegistry" to registry,
             *(if (secretSeedSource != null) arrayOf("credentialSecretSeedSource" to secretSeedSource) else emptyArray()),
         )
@@ -5457,6 +5465,21 @@ class SirosWalletTest {
                 assertFalse(line, line.contains("rp.example"))
                 assertFalse(line, line.contains("czk-nonce-1"))
             }
+        } finally {
+            timber.log.Timber.uproot(czkTree)
+        }
+    }
+
+    @Test
+    fun circuitZkDcApi_withNoConfiguredProver_usesTheRealCatalogProverAndRefusesWithoutANativeOne() = runTest(dispatcher) {
+        timber.log.Timber.plant(czkTree)
+        try {
+            val s = czkSetup(defaultProver = true)
+            czkRefused(s, czkRequest())
+            // The refusal came from the catalog prover itself (every earlier step passed, as in the success case),
+            // and the fake is never substituted: the test prover that would have answered saw nothing.
+            assertTrue(czkLogs.any { it.contains("no nymauth native prover is wired in") })
+            assertEquals(0, s.prover.calls)
         } finally {
             timber.log.Timber.uproot(czkTree)
         }

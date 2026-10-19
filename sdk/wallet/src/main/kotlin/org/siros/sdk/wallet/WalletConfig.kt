@@ -351,8 +351,8 @@ data class WalletConfig(
      * matches nothing, exactly as before. With `true` it is matched through
      * [circuitZkPlanner], [circuitZkValidator] and [circuitZkCircuits]; without
      * a circuit source it still matches nothing (fail closed).
-     * `handleDCAPIRequest` presents a matched `circuit_zk` request only with a
-     * [circuitZkProver] configured; without one it is answered with access-denied.
+     * `handleDCAPIRequest` presents a matched `circuit_zk` request with [circuitZkProver],
+     * by default the catalog prover, which answers access-denied until a native prover is supplied.
      * A circuit that declares `capabilities` or a `credential_type` is selected
      * only when the shared matcher serves it (never assumed unrestricted).
      */
@@ -370,8 +370,19 @@ data class WalletConfig(
      * type itself, see [circuitZkVerifierIdTypes]).
      */
     val circuitZkValidator: CircuitZkRequestValidator? = null,
-    /** The prover behind `circuit_zk` presentations. Without one, a matched request is refused. */
+    /**
+     * The prover behind `circuit_zk` presentations. `null` (default) means the real one,
+     * [org.siros.sdk.keystore.CatalogCircuitZkProver] over the wallet's circuit catalog client and
+     * [circuitZkNativeProver]; it refuses every request while that is absent. Only a host that opts in
+     * explicitly (see [WalletPolicyOptions.fakeProver]) gets a prover that makes no real proof.
+     */
     val circuitZkProver: org.siros.sdk.keystore.CircuitZkProver? = null,
+    /**
+     * The native half of the default `circuit_zk` prover: builds the `nymauth-*` circuit witnesses and
+     * runs the proof system (see [org.siros.sdk.keystore.NymAuthNativeProver]). Ignored when
+     * [circuitZkProver] is set. `null` (default): none is available, so the default prover refuses.
+     */
+    val circuitZkNativeProver: org.siros.sdk.keystore.NymAuthNativeProver? = null,
     /**
      * The wallet's ORDERED supported `verifier_id_type`s (default
      * `["semantic", "x509_san_dns"]`, see [VerifierIdTypeOrder]). The type is agreed in the

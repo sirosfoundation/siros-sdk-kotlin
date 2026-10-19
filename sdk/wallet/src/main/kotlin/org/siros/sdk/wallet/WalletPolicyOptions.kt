@@ -60,9 +60,9 @@ data class WalletPolicyOptions(
      * [base] with this policy applied. [planner] and [circuits] are what
      * `circuit_zk` needs besides a prover; they are only used when [circuitZk]
      * is on. The prover of [base] is kept unless [fakeProver] selects the fake
-     * one, so a host can combine these options with a production prover. With
-     * neither (the SDK ships no other) `circuit_zk` is on for matching but
-     * every request is refused.
+     * one, so a host can combine these options with its own prover. With
+     * neither the wallet's default applies, the catalog prover, which refuses every
+     * request until a native prover is supplied ([WalletConfig.circuitZkNativeProver]).
      */
     fun applyTo(
         base: WalletConfig,
