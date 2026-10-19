@@ -73,7 +73,18 @@ class NymAuthCircuitZkAdapter(
     private val clock: Clock = Clock.systemUTC(),
     /** Decompresses a downloaded artifact; replaceable only because the zstd binding is native. */
     private val decompress: (ByteArray, ZkCircuitDescriptor) -> ByteBuffer = ::decompressZkCircuitArtifact,
+    /**
+     * Called with the circuit id when the native side says this app build does not support the circuit (its shapes are
+     * not on the approved list): a wallet can use it to say "update the app". The request is refused as always.
+     */
+    private val onUnsupportedCircuit: (String) -> Unit = {},
 ) : CircuitZkSystemAdapter {
+
+    private val unsupported = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** The circuits the native side has refused as not supported by this build (this process). */
+    val unsupportedCircuits: Set<String> get() = unsupported.toSet()
+
 
     override val systems: Set<CircuitZkSystemKey> = setOf(
         CircuitZkSystemKey(LONGFELLOW_SYSTEM, "61a8a73"),
@@ -170,6 +181,8 @@ class NymAuthCircuitZkAdapter(
                             transcriptSeed = input.sessionTranscript,
                         ),
                     )
+                } catch (e: NymAuthNativeException) {
+                    throw mapNativeError(descriptor, e)
                 } finally {
                     seedCopy.fill(0)
                 }
@@ -189,6 +202,44 @@ class NymAuthCircuitZkAdapter(
     }
 
     private fun refuse() = CircuitZkError.AccessDenied(CircuitZkStep.PROVE)
+
+    /**
+     * Each native failure is a refusal, none a crash and none a leak: the verifier sees the bare `access_denied`,
+     * the log sees the kind and the circuit id and nothing the binding said (a circuit digest, a rule, a value).
+     * An unsupported circuit is the one with a meaning of its own: this build of the app cannot prove it.
+     */
+    private fun mapNativeError(descriptor: ZkCircuitDescriptor, e: NymAuthNativeException): CircuitZkError.AccessDenied {
+        val reason = when (e.kind) {
+            NymAuthNativeErrorKind.UNSUPPORTED_CIRCUIT -> CircuitZkRefusalReason.CIRCUIT_UNSUPPORTED_BY_APP
+            NymAuthNativeErrorKind.INVALID_INPUT -> CircuitZkRefusalReason.INVALID_INPUT
+            NymAuthNativeErrorKind.INVALID_CIRCUIT -> CircuitZkRefusalReason.INVALID_CIRCUIT
+            NymAuthNativeErrorKind.PROVER_FAILED -> CircuitZkRefusalReason.PROVER_FAILED
+            NymAuthNativeErrorKind.PROOF_INVALID -> CircuitZkRefusalReason.PROOF_INVALID
+            NymAuthNativeErrorKind.MISMATCH -> CircuitZkRefusalReason.MISMATCH
+            NymAuthNativeErrorKind.INTERNAL -> CircuitZkRefusalReason.INTERNAL
+            NymAuthNativeErrorKind.REFUSED -> when (e.refusal) {
+                NymAuthRefusal.SEED_MISMATCH -> CircuitZkRefusalReason.SEED_MISMATCH
+                NymAuthRefusal.ISSUER_SIGNATURE -> CircuitZkRefusalReason.ISSUER_SIGNATURE
+                NymAuthRefusal.DEVICE_SIGNATURE -> CircuitZkRefusalReason.DEVICE_SIGNATURE
+                NymAuthRefusal.CREDENTIAL -> CircuitZkRefusalReason.CREDENTIAL
+                else -> CircuitZkRefusalReason.UNSATISFIED
+            }
+        }
+        if (reason == CircuitZkRefusalReason.CIRCUIT_UNSUPPORTED_BY_APP) {
+            Timber.w("circuit_zk: circuit '${descriptor.id}' is not supported by this app version; refusing")
+            residency.releaseCircuit(descriptor.id)
+            if (unsupported.add(descriptor.id)) {
+                try {
+                    onUnsupportedCircuit(descriptor.id)
+                } catch (t: Exception) {
+                    Timber.w("circuit_zk: the unsupported-circuit listener threw (${t.javaClass.simpleName})")
+                }
+            }
+        } else {
+            Timber.w("circuit_zk: the native prover refused (${reason.name}) for circuit '${descriptor.id}'")
+        }
+        return CircuitZkError.AccessDenied(CircuitZkStep.PROVE, reason)
+    }
 
     /** The descriptor is a circuit of a format and configuration this adapter can drive. */
     private fun isSupported(descriptor: ZkCircuitDescriptor): Boolean {

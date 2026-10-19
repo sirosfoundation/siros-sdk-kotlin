@@ -48,6 +48,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tolerance on `proof_time`); a sanity window or trusted time is deferred. An empty
   `verifier_id` is refused, and the derived `private_seed` is zeroed after a
   presentation.
+- **The nymauth native seam's errors are typed.** `NymAuthNativeException`
+  (`NymAuthNativeErrorKind`, a coarse `NymAuthRefusal`, no message of the binding) is a
+  superset of the Vega (`InvalidInput`, `InvalidShapes`, `UnknownCircuit`, `Refused{code}`,
+  `ProverFailed`, `ProofInvalid`, `Mismatch`, `Internal`) and Longfellow (`InvalidInput`,
+  `Circuit`, `UnsupportedCircuit`, `Credential`, `Unsatisfied`, `Prover`, `Verification`)
+  error types (`NymAuthNativeException.vega(..)` / `.longfellow(..)`). The adapter refuses on
+  each, with an internal reason and a log line that names only the kind and the circuit id; the
+  verifier still gets the bare `access_denied`. `UnknownCircuit` / `UnsupportedCircuit` mean "this
+  app version does not support this circuit build": a distinct reason
+  (`CIRCUIT_UNSUPPORTED_BY_APP`), the resident circuit is dropped, and
+  `NymAuthCircuitZkAdapter.onUnsupportedCircuit` / `unsupportedCircuits` let a wallet say "update the app".
 - **PROPOSAL: `zk-claim-disclosure-v1`, a `circuit_zk` function for the legacy
   proof systems** (`CircuitZkLegacyDisclosure`; the id is one constant, the
   rulebook owners decide the name). Params `claims`, `systems` (the verifier's

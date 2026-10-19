@@ -38,7 +38,22 @@ sealed class CircuitZkError(message: String, errorCode: String) : SirosException
     class AccessDenied internal constructor(
         /** The step that refused. Internal: for local diagnostics and tests, never part of the message. */
         internal val step: CircuitZkStep,
+        /** Why, when a prover knows. Internal like [step]: the verifier only ever sees the bare refusal. */
+        internal val reason: CircuitZkRefusalReason = CircuitZkRefusalReason.GENERIC,
     ) : CircuitZkError("circuit_zk request refused", "circuit_zk_access_denied")
+}
+
+/**
+ * Why a prover refused, for local diagnostics and for a wallet that wants to tell the user something (never sent
+ * to the verifier, which gets the bare `access_denied`). No value is ever attached.
+ */
+internal enum class CircuitZkRefusalReason {
+    GENERIC,
+
+    /** The circuit is well-formed but this build of the app cannot prove it (its shapes/circuit are not on the approved list): "update the app". */
+    CIRCUIT_UNSUPPORTED_BY_APP,
+    INVALID_INPUT, INVALID_CIRCUIT, SEED_MISMATCH, ISSUER_SIGNATURE, DEVICE_SIGNATURE, CREDENTIAL, UNSATISFIED,
+    PROVER_FAILED, PROOF_INVALID, MISMATCH, INTERNAL,
 }
 
 private const val SECRET_SEED_BYTES = 16

@@ -30,6 +30,83 @@ fun interface NymAuthNativeProver {
     suspend fun prove(request: NymAuthProveRequest): NymAuthProveResponse
 }
 
+/** The coarse reason a native prover refused to make a proof (never the broken rule, never a value). */
+enum class NymAuthRefusal { SEED_MISMATCH, ISSUER_SIGNATURE, DEVICE_SIGNATURE, CREDENTIAL, UNSATISFIED }
+
+/** The kinds of failure a native nymauth binding reports: a superset of the Vega and the Longfellow error types. */
+enum class NymAuthNativeErrorKind {
+    /** An argument has the wrong size, format or range (Vega `InvalidInput`, Longfellow `InvalidInput`). */
+    INVALID_INPUT,
+
+    /** The circuit artifact is malformed or past its budget (Vega `InvalidShapes`, Longfellow `Circuit`). */
+    INVALID_CIRCUIT,
+
+    /**
+     * The circuit is well formed but not one this build knows (Vega `UnknownCircuit`, whose message is the shapes'
+     * digest; Longfellow `UnsupportedCircuit`): this app version does not support this circuit build.
+     */
+    UNSUPPORTED_CIRCUIT,
+
+    /** The inputs break a rule; see [NymAuthRefusal] (Vega `Refused{code}`, Longfellow `Credential` and `Unsatisfied`). */
+    REFUSED,
+
+    /** The prover failed (Vega `ProverFailed`, Longfellow `Prover`). */
+    PROVER_FAILED,
+
+    /** The proof does not verify (Vega `ProofInvalid`, Longfellow `Verification`). */
+    PROOF_INVALID,
+
+    /** The proof verifies, but not for the named values (Vega `Mismatch`). */
+    MISMATCH,
+
+    /** A bug in the binding (Vega `Internal`, a caught panic). */
+    INTERNAL,
+}
+
+/**
+ * What a [NymAuthNativeProver] throws for a failure of the binding. It carries a [kind] and, for [NymAuthNativeErrorKind.REFUSED],
+ * a coarse [refusal], and NO message: the bindings' own messages can hold a circuit digest or a rule, and
+ * nothing of them is kept. A binding's glue maps its own error type here (see [vega] and [longfellow]).
+ */
+class NymAuthNativeException(val kind: NymAuthNativeErrorKind, val refusal: NymAuthRefusal? = null) :
+    Exception("nymauth native prover: $kind" + (refusal?.let { " ($it)" } ?: "")) {
+
+    companion object {
+        /** The Vega binding's error by variant name and, for `Refused`, its coarse `code` (`SeedMismatch`, ...). */
+        fun vega(variant: String, refusedCode: String? = null): NymAuthNativeException = when (variant) {
+            "InvalidInput" -> NymAuthNativeException(NymAuthNativeErrorKind.INVALID_INPUT)
+            "InvalidShapes" -> NymAuthNativeException(NymAuthNativeErrorKind.INVALID_CIRCUIT)
+            "UnknownCircuit" -> NymAuthNativeException(NymAuthNativeErrorKind.UNSUPPORTED_CIRCUIT)
+            "Refused" -> NymAuthNativeException(NymAuthNativeErrorKind.REFUSED, refusalOf(refusedCode))
+            "ProverFailed" -> NymAuthNativeException(NymAuthNativeErrorKind.PROVER_FAILED)
+            "ProofInvalid" -> NymAuthNativeException(NymAuthNativeErrorKind.PROOF_INVALID)
+            "Mismatch" -> NymAuthNativeException(NymAuthNativeErrorKind.MISMATCH)
+            else -> NymAuthNativeException(NymAuthNativeErrorKind.INTERNAL)
+        }
+
+        /** The Longfellow binding's `NymAuthError` by variant name. */
+        fun longfellow(variant: String): NymAuthNativeException = when (variant) {
+            "InvalidInput" -> NymAuthNativeException(NymAuthNativeErrorKind.INVALID_INPUT)
+            "Circuit" -> NymAuthNativeException(NymAuthNativeErrorKind.INVALID_CIRCUIT)
+            "UnsupportedCircuit" -> NymAuthNativeException(NymAuthNativeErrorKind.UNSUPPORTED_CIRCUIT)
+            "Credential" -> NymAuthNativeException(NymAuthNativeErrorKind.REFUSED, NymAuthRefusal.CREDENTIAL)
+            "Unsatisfied" -> NymAuthNativeException(NymAuthNativeErrorKind.REFUSED, NymAuthRefusal.UNSATISFIED)
+            "Prover" -> NymAuthNativeException(NymAuthNativeErrorKind.PROVER_FAILED)
+            "Verification" -> NymAuthNativeException(NymAuthNativeErrorKind.PROOF_INVALID)
+            else -> NymAuthNativeException(NymAuthNativeErrorKind.INTERNAL)
+        }
+
+        private fun refusalOf(code: String?) = when (code) {
+            "SeedMismatch" -> NymAuthRefusal.SEED_MISMATCH
+            "IssuerSignature" -> NymAuthRefusal.ISSUER_SIGNATURE
+            "DeviceSignature" -> NymAuthRefusal.DEVICE_SIGNATURE
+            "Credential" -> NymAuthRefusal.CREDENTIAL
+            // A code this build does not know is still a refusal; it is not guessed at.
+            else -> NymAuthRefusal.UNSATISFIED
+        }
+    }
+}
+
 /**
  * What [NymAuthNativeProver.prove] receives. Everything here is derived by the SDK from the stored
  * credential, the verifier's request and the device signer; the native side does not parse the request.

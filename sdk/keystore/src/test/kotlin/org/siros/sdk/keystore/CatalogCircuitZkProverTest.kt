@@ -621,4 +621,82 @@ class CatalogCircuitZkProverTest {
         runBlocking { p.onCircuitRetired(descriptor()) }
         assertNull(residency.residentKey)
     }
+
+    // -------- the native binding's typed errors --------
+
+    private fun reasonOf(t: NymAuthNativeException, residency: ZkProverResidency = ZkProverResidency()): CircuitZkRefusalReason {
+        try {
+            prove(prover(Recording { throw t }, residency = residency), input())
+            fail("expected a refusal")
+        } catch (e: CircuitZkError.AccessDenied) {
+            assertEquals(CircuitZkStep.PROVE, e.step)
+            // The verifier-facing refusal is bare whatever the cause was.
+            assertEquals("circuit_zk request refused", e.message)
+            return e.reason
+        }
+        error("unreachable")
+    }
+
+    @Test
+    fun `every native error maps deliberately to a refusal reason, Vega's and Longfellow's alike`() {
+        val expected = mapOf(
+            NymAuthNativeException.vega("InvalidInput") to CircuitZkRefusalReason.INVALID_INPUT,
+            NymAuthNativeException.vega("InvalidShapes") to CircuitZkRefusalReason.INVALID_CIRCUIT,
+            NymAuthNativeException.vega("UnknownCircuit") to CircuitZkRefusalReason.CIRCUIT_UNSUPPORTED_BY_APP,
+            NymAuthNativeException.vega("Refused", "SeedMismatch") to CircuitZkRefusalReason.SEED_MISMATCH,
+            NymAuthNativeException.vega("Refused", "IssuerSignature") to CircuitZkRefusalReason.ISSUER_SIGNATURE,
+            NymAuthNativeException.vega("Refused", "DeviceSignature") to CircuitZkRefusalReason.DEVICE_SIGNATURE,
+            NymAuthNativeException.vega("Refused", "Credential") to CircuitZkRefusalReason.CREDENTIAL,
+            NymAuthNativeException.vega("Refused", "SomethingNew") to CircuitZkRefusalReason.UNSATISFIED,
+            NymAuthNativeException.vega("ProverFailed") to CircuitZkRefusalReason.PROVER_FAILED,
+            NymAuthNativeException.vega("ProofInvalid") to CircuitZkRefusalReason.PROOF_INVALID,
+            NymAuthNativeException.vega("Mismatch") to CircuitZkRefusalReason.MISMATCH,
+            NymAuthNativeException.vega("Internal") to CircuitZkRefusalReason.INTERNAL,
+            NymAuthNativeException.vega("AVariantFromTheFuture") to CircuitZkRefusalReason.INTERNAL,
+            NymAuthNativeException.longfellow("InvalidInput") to CircuitZkRefusalReason.INVALID_INPUT,
+            NymAuthNativeException.longfellow("Circuit") to CircuitZkRefusalReason.INVALID_CIRCUIT,
+            NymAuthNativeException.longfellow("UnsupportedCircuit") to CircuitZkRefusalReason.CIRCUIT_UNSUPPORTED_BY_APP,
+            NymAuthNativeException.longfellow("Credential") to CircuitZkRefusalReason.CREDENTIAL,
+            NymAuthNativeException.longfellow("Unsatisfied") to CircuitZkRefusalReason.UNSATISFIED,
+            NymAuthNativeException.longfellow("Prover") to CircuitZkRefusalReason.PROVER_FAILED,
+            NymAuthNativeException.longfellow("Verification") to CircuitZkRefusalReason.PROOF_INVALID,
+            NymAuthNativeException.longfellow("AVariantFromTheFuture") to CircuitZkRefusalReason.INTERNAL,
+        )
+        for ((e, reason) in expected) assertEquals(e.message, reason, reasonOf(e))
+    }
+
+    @Test
+    fun `an unsupported circuit is its own reason, is announced once, drops the resident circuit and leaks nothing`() {
+        val announced = mutableListOf<String>()
+        val residency = ZkProverResidency()
+        val adapter = NymAuthCircuitZkAdapter(client(), Recording { throw NymAuthNativeException.vega("UnknownCircuit") }, residency, clock, decompress, announced::add)
+        val p = CatalogCircuitZkProver(client(), CircuitZkSystemRegistry(listOf(adapter)))
+        repeat(2) {
+            try {
+                prove(p, input())
+                fail("expected a refusal")
+            } catch (e: CircuitZkError.AccessDenied) {
+                assertEquals(CircuitZkRefusalReason.CIRCUIT_UNSUPPORTED_BY_APP, e.reason)
+                assertEquals("circuit_zk request refused", e.message)
+            }
+        }
+        assertEquals(listOf(circuitId), announced)
+        assertEquals(setOf(circuitId), adapter.unsupportedCircuits)
+        assertNull("the circuit that cannot be proved is not kept resident", residency.residentKey)
+        // Nothing but the kind and the circuit id reaches the log: no seed, no digest, no hex of either.
+        assertTrue(logs.any { it.contains("not supported by this app version") })
+        logs.forEach {
+            assertFalse(it, it.contains(hex(seed)))
+            assertFalse(it, it.contains(hex(sha256(circuitBytes))))
+        }
+    }
+
+    @Test
+    fun `a native error carries no message of the binding, and a refusal only its coarse code`() {
+        val e = NymAuthNativeException.vega("Refused", "SeedMismatch")
+        assertEquals(NymAuthNativeErrorKind.REFUSED, e.kind)
+        assertEquals(NymAuthRefusal.SEED_MISMATCH, e.refusal)
+        assertEquals("nymauth native prover: REFUSED (SEED_MISMATCH)", e.message)
+        assertNull(NymAuthNativeException.vega("UnknownCircuit").refusal)
+    }
 }
