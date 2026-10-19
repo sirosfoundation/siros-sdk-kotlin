@@ -386,7 +386,7 @@ class SirosWallet private constructor(
      */
     @Volatile
     internal var credentialSecretSeedSource: CredentialSecretSeedSource =
-        KeystoreSecretSeedSource(config.secretSeedMetadataType) { id -> storedCredentialMetadata(id) }
+        KeystoreSecretSeedSource(config.secretSeedNamespace) { id -> storedCredentialMetadata(id) }
 
     /** The delivered `metadata` of a stored credential. Never display it, log it or put it in a presentation. */
     internal suspend fun storedCredentialMetadata(id: Long): kotlinx.serialization.json.JsonArray? =
@@ -3400,6 +3400,13 @@ class SirosWallet private constructor(
     ): CredentialOffer? {
         metadata.credentialConfigurationsSupported[configId] ?: return null
         val config = metadata.credentialConfigurationsSupported.getValue(configId)
+        // A configuration that advertises a seed (names only) must have its response encrypted; one whose public
+        // metadata carries anything else under that member (a seed value, say) is malformed: not offered.
+        when (org.siros.sdk.credentials.SecretSeedDelivery.classifyAdvertisement(config.credentialMetadata?.secretSeed)) {
+            is org.siros.sdk.credentials.SecretSeedDelivery.Advertisement.Malformed -> return null
+            is org.siros.sdk.credentials.SecretSeedDelivery.Advertisement.Valid -> secretSeedAdvertised?.add(issuerUrl to configId)
+            org.siros.sdk.credentials.SecretSeedDelivery.Advertisement.None -> secretSeedAdvertised?.remove(issuerUrl to configId)
+        }
         val issuerDisplay = metadata.display?.firstOrNull()
         val issuerName = issuerDisplay?.name
             ?: java.net.URI(issuerUrl).host
@@ -5374,6 +5381,12 @@ class SirosWallet private constructor(
     private fun keystoreCanHoldCredentialMetadata(): Boolean =
         keystore is JweKeystore || keystore is WscdKeystoreAdapter
 
+    /** (issuer, configuration) pairs whose issuer metadata advertised a seed: their response must be encrypted. */
+    private val secretSeedAdvertised: MutableSet<Pair<String, String>>? = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    private fun isSecretSeedAdvertised(issuer: String?, configurationId: String?): Boolean =
+        issuer != null && configurationId != null && secretSeedAdvertised?.contains(issuer to configurationId) == true
+
     /**
      * Stores [entries] (verbatim) as credential [id]'s delivered metadata. True when there was nothing to
      * store or it was stored. On failure the just-stored credential is deleted and false is returned: a
@@ -5452,26 +5465,22 @@ class SirosWallet private constructor(
     internal fun wmpDeliveredMetadataRefusal(
         result: kotlinx.serialization.json.JsonObject?,
     ): Pair<DeliveredMetadataRefusal, List<String>>? {
-        val creds = try {
-            org.siros.sdk.transport.wmp.openid4x.FlowCompleteResult.decode(result)?.credentials
+        val decoded = try {
+            org.siros.sdk.transport.wmp.openid4x.FlowCompleteResult.decode(result)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
             return DeliveredMetadataRefusal.MALFORMED to emptyList()
         } ?: return null
-        val canStore = keystoreCanHoldCredentialMetadata()
-        var refusal: DeliveredMetadataRefusal? = null
-        for (cred in creds) {
-            val verdict = DeliveredCredentialMetadata.check(
-                format = cred.format,
-                credential = cred.credential,
-                delivered = cred,
-                secretSeedType = config.secretSeedMetadataType,
-                canStoreSecret = canStore,
-            )
-            if (verdict is DeliveredMetadataVerdict.Refuse && refusal == null) refusal = verdict.reason
-        }
-        return refusal?.let { it to creds.mapNotNull { c -> c.notificationId } }
+        val creds = decoded.credentials.orEmpty()
+        val verdict = DeliveredCredentialMetadata.check(
+            response = decoded,
+            credentials = creds.map { DeliveredCredential(it.format, it.credential, it.notificationId) },
+            secretNamespace = config.secretSeedNamespace,
+            canStoreSecret = keystoreCanHoldCredentialMetadata(),
+            advertised = isSecretSeedAdvertised(decoded.credentialIssuer, null),
+        )
+        return (verdict as? DeliveredMetadataVerdict.Refuse)?.let { it.reason to creds.mapNotNull { c -> c.notificationId } }
     }
 
     private suspend fun removeCredentialRefreshToken(batchId: Long) {
@@ -7326,29 +7335,26 @@ class SirosWallet private constructor(
                 terminatedFlowIds.add(msg.flowId)
                 pendingMatchResultsByFlow.remove(msg.flowId)
 
-                // Issuer-delivered credential_metadata (a secret_seed, say) is checked for EVERY
-                // credential before anything is stored or replaced: one refusal fails the whole
-                // issuance, so a batch is never stored in part and a renewal never supersedes
-                // the old batch with nothing. The entries to store are kept per credential.
+                // The issuer's response-level credential_metadata (a secret_seed, say) is checked once for the
+                // whole response, and against EVERY credential's ssc, before anything is stored or replaced: one
+                // refusal fails the whole issuance, so a batch is never stored in part and a renewal never
+                // supersedes the old batch with nothing. The same entries are stored with every credential.
                 val canStoreDelivered = keystoreCanHoldCredentialMetadata()
-                val deliveredByIndex = HashMap<Int, kotlinx.serialization.json.JsonArray>()
-                var deliveredRefusal: DeliveredMetadataRefusal? = null
-                msg.credentials?.forEachIndexed { index, cred ->
-                    when (val verdict = DeliveredCredentialMetadata.check(
-                        format = cred.format,
-                        credential = cred.credential,
-                        delivered = cred,
-                        secretSeedType = config.secretSeedMetadataType,
-                        canStoreSecret = canStoreDelivered,
-                    )) {
-                        DeliveredMetadataVerdict.None -> Unit
-                        is DeliveredMetadataVerdict.Accept -> if (canStoreDelivered) deliveredByIndex[index] = verdict.entries
-                        is DeliveredMetadataVerdict.Refuse -> if (deliveredRefusal == null) deliveredRefusal = verdict.reason
+                var deliveredEntries: kotlinx.serialization.json.JsonArray? = null
+                val deliveredVerdict = DeliveredCredentialMetadata.check(
+                    response = msg,
+                    credentials = msg.credentials.orEmpty().map { DeliveredCredential(it.format, it.credential, it.notificationId) },
+                    secretNamespace = config.secretSeedNamespace,
+                    canStoreSecret = canStoreDelivered,
+                    advertised = isSecretSeedAdvertised(msg.credentialIssuer, msg.selectedCredentialConfigurationId),
+                )
+                when (deliveredVerdict) {
+                    DeliveredMetadataVerdict.None -> Unit
+                    is DeliveredMetadataVerdict.Accept -> if (canStoreDelivered) deliveredEntries = deliveredVerdict.entries
+                    is DeliveredMetadataVerdict.Refuse -> {
+                        rejectDeliveredMetadata(msg.flowId, msg.credentials.orEmpty().mapNotNull { it.notificationId }, deliveredVerdict.reason)
+                        return@collect
                     }
-                }
-                deliveredRefusal?.let { refusal ->
-                    rejectDeliveredMetadata(msg.flowId, msg.credentials.orEmpty().mapNotNull { it.notificationId }, refusal)
-                    return@collect
                 }
 
                 // Tracks whether any credential in this batch actually made it
@@ -7474,7 +7480,7 @@ class SirosWallet private constructor(
                             kid = activeAttestedKeyIds?.getOrNull(index),
                         )
                         credentialStore.save(stored)
-                        if (!attachDeliveredMetadata(stored.id, deliveredByIndex[index])) {
+                        if (!attachDeliveredMetadata(stored.id, deliveredEntries)) {
                             deliveredStoreFailed = true
                             return@forEachIndexed
                         }
@@ -7560,7 +7566,7 @@ class SirosWallet private constructor(
                             storeFailureReason = "Credential could not be stored"
                             return@forEachIndexed
                         }
-                        if (!attachDeliveredMetadata(stored.id, deliveredByIndex[index])) {
+                        if (!attachDeliveredMetadata(stored.id, deliveredEntries)) {
                             bbsHolderStateVault?.remove(credentialId.toString())
                             deliveredStoreFailed = true
                             return@forEachIndexed
@@ -7627,7 +7633,7 @@ class SirosWallet private constructor(
                         kid = activeAttestedKeyIds?.getOrNull(index),
                     )
                     credentialStore.save(stored)
-                    if (!attachDeliveredMetadata(stored.id, deliveredByIndex[index])) {
+                    if (!attachDeliveredMetadata(stored.id, deliveredEntries)) {
                         deliveredStoreFailed = true
                         return@forEachIndexed
                     }
@@ -7663,7 +7669,10 @@ class SirosWallet private constructor(
                 // setCredentialRefreshToken's doc comment) so renewCredential()
                 // can use it later, including after an app restart or on a
                 // different device sharing this account.
-                msg.refreshToken?.let { token ->
+                // A replayed (redacted) completion withholds the renewal material: nothing is captured, nothing is
+                // invented or taken from an earlier flow, and the batch is simply not renewable (re-issue instead).
+                if (msg.renewalMaterialRedacted) Timber.i("Replayed completion: renewal material is not recoverable for batch=$batchId")
+                msg.refreshToken?.takeUnless { msg.renewalMaterialRedacted }?.let { token ->
                     flowOffer?.let { offer ->
                         setCredentialRefreshToken(
                             batchId,

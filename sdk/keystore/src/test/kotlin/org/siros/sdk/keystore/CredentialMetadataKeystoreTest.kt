@@ -34,8 +34,8 @@ import java.security.MessageDigest
 
 /**
  * Per-credential `metadata` (privatedata-spec §6, §5A) and the preservation of
- * every member this SDK does not own: consumes the six vectors of
- * privatedata-spec PR #3 (see `vectors-credential-metadata.PROVENANCE.txt`).
+ * every member this SDK does not own: consumes the vectors of
+ * privatedata-spec 2.6 (8c4c865) (see `vectors.PROVENANCE.txt`).
  *
  * The vectors' credential entries use string `id`s and no `credentialId`, so
  * this SDK cannot read them as credentials. They are tested twice: verbatim
@@ -49,23 +49,23 @@ class CredentialMetadataKeystoreTest {
     private val prf = ByteArray(32) { it.toByte() }
     private val salt = ByteArray(32) { (it + 0x10).toByte() }
     private val info = "eDiplomas PRF".toByteArray(Charsets.UTF_8)
-    private val seedType = "org.siros.NS.secret_seed"
+    private val seedType = "org.siros.secret_seed"
     private val seedHex = "00112233445566778899aabbccddeeff"
 
     private fun seedEntry(hex: String = seedHex) = buildJsonObject {
         put("type", JsonPrimitive(seedType))
-        put("value", JsonPrimitive(hex))
+        put("value", buildJsonObject { put("org.siros.nym_auth", JsonPrimitive(hex)) })
     }
 
     private fun resourceBytes(name: String): ByteArray =
         javaClass.classLoader!!.getResourceAsStream("privatedata-spec/$name")!!.readBytes()
 
     private fun loadVectors(): Map<String, JsonObject> {
-        val bytes = resourceBytes("vectors-credential-metadata.jsonl")
+        val bytes = resourceBytes("vectors.jsonl")
         val sha = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
         assertEquals(
             "vectors file no longer matches the hash in its PROVENANCE file",
-            "18e4eebf7a9b5a5c8f6fc3550a2712e82af3be57ed14dd250077728f04183787",
+            "2893c0c68da7735ef17da110405161c2f81d09d9faebc1340f00218c4e3f9ec4",
             sha,
         )
         return bytes.toString(Charsets.UTF_8).lineSequence().filter { it.isNotBlank() }

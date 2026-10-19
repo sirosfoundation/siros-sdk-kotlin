@@ -45,6 +45,22 @@ class DeliveredMetadataNonDisclosureTest {
     }
 
     @Test
+    fun theResponseLevelCredentialMetadataIsReadOnlyByTheReceiptCheck() {
+        // Strip before merge: the object that can hold the seed is interpreted in exactly one place, which never
+        // hands any display, history or logging code the member; everything else only passes the DTO along.
+        val reader = Regex("""ResponseCredentialMetadata|credentialMetadata\??\.members|\.members\[|DeliveredResponseMetadata""")
+        val allowed = setOf(
+            "DeliveredCredentialMetadata.kt", "CredentialResponseMetadata.kt", "EngineTypes.kt", "OpenID4xProfile.kt",
+            "SirosWallet.kt", "SecretSeedDelivery.kt",
+        )
+        val offending = sources().filter { it.name !in allowed && reader.containsMatchIn(it.readText()) }.map { it.path }
+        assertTrue("response credential_metadata referenced outside the receipt path: $offending", offending.isEmpty())
+        val walletUses = File("src/main/kotlin/org/siros/sdk/wallet/SirosWallet.kt").readLines()
+            .filter { Regex("""\.members\b""").containsMatchIn(it) && !it.trimStart().startsWith("*") && !it.trimStart().startsWith("//") }
+        assertTrue("SirosWallet reads the members of the response object: $walletUses", walletUses.isEmpty())
+    }
+
+    @Test
     fun noLogCallMentionsDeliveredMetadataOrASeed() {
         val sensitive = Regex("""(credentialMetadata|deliveredByIndex|secretSeed|seedHex|storedCredentialMetadata|getCredentialMetadata)""")
         val offending = sources().filter { it.path.contains("/wallet/") || it.path.contains("/keystore/") || it.path.contains("sample-app") }
@@ -68,7 +84,7 @@ class DeliveredMetadataNonDisclosureTest {
         keystore.setCredentialMetadata(
             5L,
             buildJsonArray {
-                add(buildJsonObject { put("type", JsonPrimitive("org.siros.NS.secret_seed")); put("value", JsonPrimitive(NymTestCredentials.seedHex)) })
+                add(buildJsonObject { put("type", JsonPrimitive("org.siros.secret_seed")); put("value", buildJsonObject { put("org.siros.nym_auth", JsonPrimitive(NymTestCredentials.seedHex)) }) })
             },
         )
         // Not in the credential the store hands out, nor in any raw view of it.

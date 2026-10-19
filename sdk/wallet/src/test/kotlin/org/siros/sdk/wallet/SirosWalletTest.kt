@@ -8991,29 +8991,29 @@ class SirosWalletTest {
         val engine: WalletEngineSession,
     )
 
-    private val deliveredType = "org.siros.NS.secret_seed"
+    private val deliveredMember = org.siros.sdk.credentials.SecretSeedDelivery.MEMBER
+    private val deliveredNamespace = org.siros.sdk.credentials.SecretSeedDelivery.DEFAULT_NAMESPACE
 
-    private fun deliveredEntries(hex: String = NymTestCredentials.seedHex) = listOf(
-        org.siros.sdk.transport.CredentialResponseMetadataEntry(deliveredType, JsonPrimitive(hex)),
-        org.siros.sdk.transport.CredentialResponseMetadataEntry("example.other", JsonPrimitive("kept as is")),
+    private fun deliveredMetadata(hex: String = NymTestCredentials.seedHex) = org.siros.sdk.transport.ResponseCredentialMetadata(
+        buildJsonObject {
+            put(deliveredMember, buildJsonObject { put(deliveredNamespace, JsonPrimitive(hex)) })
+            put("example.other", JsonPrimitive("kept as is"))
+        },
     )
 
     private fun deliveredResult(
         credential: String = NymTestCredentials.sdJwt(),
-        entries: List<org.siros.sdk.transport.CredentialResponseMetadataEntry>? = deliveredEntries(),
-        encrypted: Boolean = true,
         notificationId: String? = "notif-1",
         format: String = "dc+sd-jwt",
-    ) = CredentialResult(
-        format = format,
-        credential = credential,
-        notificationId = notificationId,
-        credentialMetadata = entries,
-        credentialMetadataEncryptedResponse = encrypted,
-    )
+    ) = CredentialResult(format = format, credential = credential, notificationId = notificationId)
 
     private suspend fun kotlinx.coroutines.test.TestScope.deliveredScenario(
         results: List<CredentialResult>,
+        metadata: org.siros.sdk.transport.ResponseCredentialMetadata? = deliveredMetadata(),
+        encrypted: Boolean = true,
+        advertised: Boolean = false,
+        redactedMembers: Set<String> = emptySet(),
+        refreshToken: String? = null,
         preexisting: List<StoredCredential> = emptyList(),
         renewalSourceBatchId: Long? = null,
         configure: (WalletConfig) -> WalletConfig = { it },
@@ -9046,12 +9046,25 @@ class SirosWalletTest {
             "sessionStore" to sessionStore,
             "apiClient" to apiClient,
             "eventListener" to listener,
+            "secretSeedAdvertised" to java.util.concurrent.ConcurrentHashMap.newKeySet<Pair<String, String>>().also {
+                if (advertised) it.add("https://issuer.example" to "nym")
+            },
         )
         if (renewalSourceBatchId != null) fields += "pendingRenewalSourceBatchId" to renewalSourceBatchId
+        fields += "activeOffer" to org.siros.sdk.credentials.CredentialOffer(
+            credentialConfigurationId = "nym", credentialIssuerIdentifier = "https://issuer.example", credentialName = "Nym", issuerName = "Issuer",
+        )
         val wallet = newWallet(*fields.toTypedArray())
         invokeConnectEngine(wallet, "app-token")
         advanceUntilIdle()
-        completeFlow.emit(FlowCompleteMessage(flowId = flowId, credentials = results))
+        completeFlow.emit(
+            FlowCompleteMessage(
+                flowId = flowId, credentials = results,
+                credentialIssuer = "https://issuer.example", selectedCredentialConfigurationId = "nym",
+                credentialMetadata = metadata, credentialMetadataEncryptedResponse = encrypted,
+                redactedMembers = redactedMembers, refreshToken = refreshToken, dpopKeyId = refreshToken?.let { "key-1" },
+            ),
+        )
         advanceUntilIdle()
         return DeliveredScenario(wallet, store, keystore, listener, engine)
     }
@@ -9074,13 +9087,19 @@ class SirosWalletTest {
         assertFalse(t.contains(NymTestCredentials.hex(NymTestCredentials.wrongSsc)))
     }
 
+    private fun wrongSscCredential() = NymTestCredentials.sdJwt(sscValues = listOf(NymTestCredentials.hex(NymTestCredentials.wrongSsc)))
+
     @Test
     fun deliveredSeed_matchingSsc_storesCredentialAndMetadata_andAccepts() = runTest(dispatcher) {
         val s = deliveredScenario(listOf(deliveredResult()))
         val stored = s.store.getAll().single()
         val md = s.keystore.getCredentialMetadata(stored.id)!!
         assertEquals(2, md.size)
-        assertEquals(JsonPrimitive(NymTestCredentials.seedHex), md[0].jsonObject["value"])
+        assertEquals(JsonPrimitive(deliveredMember), md[0].jsonObject["type"])
+        assertEquals(
+            JsonPrimitive(NymTestCredentials.seedHex),
+            md[0].jsonObject["value"]!!.jsonObject[deliveredNamespace],
+        )
         assertEquals(JsonPrimitive("kept as is"), md[1].jsonObject["value"])
         // The secret never reaches the stored credential JSON, display metadata or the wallet state.
         assertNoSecretIn(s.keystore.getCredential(stored.id))
@@ -9093,60 +9112,44 @@ class SirosWalletTest {
     }
 
     @Test
-    fun deliveredSeed_everyCopyOfABatchCarriesTheMetadata() = runTest(dispatcher) {
-        val s = deliveredScenario(listOf(deliveredResult(), deliveredResult()))
+    fun deliveredSeed_everyCopyOfABatchCarriesTheSameMetadata() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult(), deliveredResult(), deliveredResult()))
         val all = s.store.getAll()
-        assertEquals(2, all.size)
-        for (c in all) assertEquals(2, s.keystore.getCredentialMetadata(c.id)!!.size)
+        assertEquals(3, all.size)
+        val first = s.keystore.getCredentialMetadata(all[0].id)!!
+        for (c in all) assertEquals(first, s.keystore.getCredentialMetadata(c.id))
+        assertEquals(2, first.size)
     }
 
     @Test
-    fun deliveredMetadata_withoutTheSeedType_isStoredUninterpreted_overPlainJson() = runTest(dispatcher) {
-        val entries = listOf(org.siros.sdk.transport.CredentialResponseMetadataEntry("example.other", JsonPrimitive("v")))
-        val s = deliveredScenario(listOf(deliveredResult(entries = entries, encrypted = false)))
-        val stored = s.store.getAll().single()
-        assertEquals(1, s.keystore.getCredentialMetadata(stored.id)!!.size)
+    fun deliveredMetadata_withoutTheSeedMember_isStoredUninterpreted_overPlainJson() = runTest(dispatcher) {
+        val md = org.siros.sdk.transport.ResponseCredentialMetadata(buildJsonObject { put("example.other", JsonPrimitive("v")) })
+        val s = deliveredScenario(listOf(deliveredResult()), metadata = md, encrypted = false)
+        assertEquals(1, s.keystore.getCredentialMetadata(s.store.getAll().single().id)!!.size)
     }
 
-    private fun decodedEntries(json: String): List<org.siros.sdk.transport.CredentialResponseMetadataEntry> =
-        kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-            .decodeFromString<List<org.siros.sdk.transport.CredentialResponseMetadataEntry>>(json)
+    private fun message(metadataJson: String, encrypted: Boolean = true, notificationId: String = "notif-1"): FlowCompleteMessage =
+        Json { ignoreUnknownKeys = true }.decodeFromString(
+            FlowCompleteMessage.serializer(),
+            """{"type":"flow_complete","flow_id":"flow-delivered","credentials":[{"format":"dc+sd-jwt","credential":${JsonPrimitive(NymTestCredentials.sdJwt())},"notification_id":"$notificationId"}],"credential_metadata":$metadataJson,"credential_metadata_encrypted_response":$encrypted}""",
+        )
+
+    private suspend fun kotlinx.coroutines.test.TestScope.deliveredScenarioOf(m: FlowCompleteMessage) =
+        deliveredScenario(m.credentials!!, metadata = m.credentialMetadata, encrypted = m.credentialMetadataEncryptedResponse)
 
     @Test
-    fun deliveredMetadata_entryMembersBeyondTypeAndValue_areStoredExactlyAsReceived() = runTest(dispatcher) {
-        val wire = """[{"type":"example.other","value":1,"scope":"issuer","n":1.50,"nested":{"a":[1,2.0,null]}}]"""
-        val s = deliveredScenario(listOf(deliveredResult(entries = decodedEntries(wire), encrypted = false), deliveredResult(entries = decodedEntries(wire), encrypted = false)))
-        val expected = kotlinx.serialization.json.Json.parseToJsonElement(wire)
-        val all = s.store.getAll()
-        assertEquals(2, all.size)
-        for (c in all) {
-            val stored = s.keystore.getCredentialMetadata(c.id)!!
-            assertEquals(expected, stored)
-            // Literals are verbatim: 1.50 and 2.0 keep their spelling, 1 stays an integer.
-            val text = stored[0].toString()
-            assertTrue(text, "\"n\":1.50" in text && "[1,2.0,null]" in text && "\"value\":1}" in text)
-        }
-    }
-
-    @Test
-    fun deliveredSeed_entryWithAnExtraMember_isStillValidatedAndStoredWhole() = runTest(dispatcher) {
-        val wire = """[{"type":"$deliveredType","value":"${NymTestCredentials.seedHex}","scope":"issuer"}]"""
-        val s = deliveredScenario(listOf(deliveredResult(entries = decodedEntries(wire))))
+    fun deliveredMetadata_membersAreStoredExactlyAsReceived_inOrder_withLiteralsVerbatim() = runTest(dispatcher) {
+        val wire = """{"z.last":{"n":1.50,"nested":{"a":[1,2.0,null]}},"a.first":1}"""
+        val s = deliveredScenarioOf(message(wire, encrypted = false))
         val stored = s.keystore.getCredentialMetadata(s.store.getAll().single().id)!!
-        assertEquals(kotlinx.serialization.json.Json.parseToJsonElement(wire), stored)
+        assertEquals(listOf("z.last", "a.first"), stored.map { it.jsonObject["type"]!!.jsonPrimitive.content })
+        val text = stored[0].toString()
+        assertTrue(text, "\"n\":1.50" in text && "[1,2.0,null]" in text)
     }
 
     @Test
-    fun deliveredSeed_wrongSeedWithAnExtraMember_isStillRefused() = runTest(dispatcher) {
-        val bad = """[{"type":"$deliveredType","value":"${NymTestCredentials.seedHex.map { if (it == 'a') 'b' else 'a' }.joinToString("")}","scope":"issuer"}]"""
-        val s = deliveredScenario(listOf(deliveredResult(entries = decodedEntries(bad))))
-        assertNothingStored(s)
-    }
-
-    @Test
-    fun deliveredSeed_mismatchingSsc_failsTheIssuance_storesNothing_andNotifiesFailure() = runTest(dispatcher) {
-        val wrong = NymTestCredentials.sdJwt(sscValues = listOf(NymTestCredentials.hex(NymTestCredentials.wrongSsc)))
-        val s = deliveredScenario(listOf(deliveredResult(credential = wrong)))
+    fun deliveredSeed_wrongSeed_failsTheIssuance_storesNothing_andNotifiesFailure() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult(credential = wrongSscCredential())))
         assertNothingStored(s)
         verify(exactly = 1) {
             s.engine.sendCredentialNotification(
@@ -9165,7 +9168,7 @@ class SirosWalletTest {
 
     @Test
     fun deliveredSeed_inAPlainJsonResponse_failsTheIssuance() = runTest(dispatcher) {
-        val s = deliveredScenario(listOf(deliveredResult(encrypted = false)))
+        val s = deliveredScenario(listOf(deliveredResult()), encrypted = false)
         assertNothingStored(s)
         verify(exactly = 1) {
             s.engine.sendCredentialNotification(any(), "notif-1", CredentialNotificationEvent.FAILURE, any())
@@ -9174,14 +9177,12 @@ class SirosWalletTest {
 
     @Test
     fun deliveredSeed_malformedValue_failsTheIssuance() = runTest(dispatcher) {
-        val s = deliveredScenario(listOf(deliveredResult(entries = deliveredEntries(hex = NymTestCredentials.seedHex.uppercase()))))
-        assertNothingStored(s)
+        assertNothingStored(deliveredScenario(listOf(deliveredResult()), metadata = deliveredMetadata(NymTestCredentials.seedHex.uppercase())))
     }
 
     @Test
-    fun deliveredSeed_failureWithoutNotificationId_stillFailsLocally_andSaysSo() = runTest(dispatcher) {
-        val wrong = NymTestCredentials.sdJwt(sscValues = listOf(NymTestCredentials.hex(NymTestCredentials.wrongSsc)))
-        val s = deliveredScenario(listOf(deliveredResult(credential = wrong, notificationId = null)))
+    fun deliveredSeed_withoutANotificationId_failsLocally_andSaysSo() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult(notificationId = null)))
         assertNothingStored(s)
         verify(exactly = 0) { s.engine.sendCredentialNotification(any(), any(), any(), any()) }
         val message = slot<String>()
@@ -9192,17 +9193,15 @@ class SirosWalletTest {
 
     @Test
     fun deliveredSeed_oneBadCopyFailsTheWholeBatch() = runTest(dispatcher) {
-        val wrong = NymTestCredentials.sdJwt(sscValues = listOf(NymTestCredentials.hex(NymTestCredentials.wrongSsc)))
-        val s = deliveredScenario(listOf(deliveredResult(), deliveredResult(credential = wrong)))
+        val s = deliveredScenario(listOf(deliveredResult(), deliveredResult(credential = wrongSscCredential())))
         assertNothingStored(s)
         verify(exactly = 1) { s.engine.sendCredentialNotification(any(), "notif-1", CredentialNotificationEvent.FAILURE, any()) }
     }
 
     @Test
     fun deliveredSeed_failedRenewalKeepsTheOldBatch() = runTest(dispatcher) {
-        val wrong = NymTestCredentials.sdJwt(sscValues = listOf(NymTestCredentials.hex(NymTestCredentials.wrongSsc)))
         val s = deliveredScenario(
-            listOf(deliveredResult(credential = wrong)),
+            listOf(deliveredResult(credential = wrongSscCredential())),
             preexisting = listOf(storedCopy(id = 41L, batchId = 77L)),
             renewalSourceBatchId = 77L,
         )
@@ -9210,22 +9209,56 @@ class SirosWalletTest {
         verify(exactly = 0) { s.listener.onFlowComplete(any(), any()) }
     }
 
-    private fun frameResults(metadataJson: String, notificationId: String = "notif-1"): List<CredentialResult> =
-        Json { ignoreUnknownKeys = true }.decodeFromString(
-            FlowCompleteMessage.serializer(),
-            """{"type":"flow_complete","flow_id":"flow-delivered","credentials":[{"format":"dc+sd-jwt","credential":${JsonPrimitive(NymTestCredentials.sdJwt())},"notification_id":"$notificationId","credential_metadata":$metadataJson,"credential_metadata_encrypted_response":true}]}""",
-        ).credentials!!
+    @Test
+    fun aLiveCompletionCapturesTheRenewalMaterial() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult()), refreshToken = "rt-1")
+        val batch = s.store.getAll().single().batchId!!
+        val entry = s.keystore.exportCredentialRefreshTokens()[batch]!!
+        assertEquals("rt-1", entry.refreshToken)
+        assertEquals("key-1", entry.dpopKeyId)
+    }
+
+    @Test
+    fun aReplayedCompletion_storesItsCredentials_butCapturesNoRenewalMaterial_andIsNotRenewable() = runTest(dispatcher) {
+        // No seed is needed (a credential without a commitment): the credentials are stored normally.
+        val plain = NymTestCredentials.sdJwt(sscValues = emptyList())
+        val s = deliveredScenario(listOf(deliveredResult(credential = plain)), metadata = null, redactedMembers = setOf("credential_metadata", "credential_metadata_encrypted_response", "dpop_key_id", "refresh_token"), refreshToken = "rt-must-not-be-kept")
+        val stored = s.store.getAll()
+        assertEquals(1, stored.size)
+        assertTrue(s.keystore.exportCredentialRefreshTokens().isEmpty())
+        verify(exactly = 1) { s.listener.onFlowComplete("flow-delivered", any()) }
+        // Renewal of that batch is unavailable: nothing stale is reused.
+        val e = try {
+            kotlinx.coroutines.runBlocking { s.wallet.renewCredential(stored.single().batchId!!) }
+            null
+        } catch (t: Exception) {
+            t
+        }
+        assertTrue(e?.message.orEmpty(), e?.message.orEmpty().contains("No refresh_token stored"))
+    }
+
+    @Test
+    fun aReplayedCompletionForACredentialThatNeedsASeedFails_andStoresNothing() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult()), metadata = null, redactedMembers = setOf("credential_metadata", "credential_metadata_encrypted_response"))
+        assertNothingStored(s)
+        verify(exactly = 1) { s.engine.sendCredentialNotification(any(), "notif-1", CredentialNotificationEvent.FAILURE, any()) }
+        assertTrue(s.keystore.exportCredentialRefreshTokens().isEmpty())
+    }
+
+    @Test
+    fun anAdvertisedConfiguration_refusesAnUnencryptedCompletion_evenWithoutMetadata() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult()), metadata = null, encrypted = false, advertised = true)
+        assertNothingStored(s)
+        verify(exactly = 1) { s.engine.sendCredentialNotification(any(), "notif-1", CredentialNotificationEvent.FAILURE, any()) }
+        // An encrypted one that carries the seed is fine.
+        val ok = deliveredScenario(listOf(deliveredResult()), encrypted = true, advertised = true)
+        assertEquals(1, ok.store.getAll().size)
+    }
 
     @Test
     fun malformedDeliveredMetadataOnTheWire_endsTheIssuanceAsARefusal() = runTest(dispatcher) {
-        listOf(
-            """[{"type":"other"}]""",
-            """[{"value":1}]""",
-            """[{"type":"","value":1}]""",
-            """["text"]""",
-            """{"type":"other","value":1}""",
-        ).forEach { md ->
-            val s = deliveredScenario(frameResults(md))
+        listOf("""[{"type":"other","value":1}]""", """"text"""", "5").forEach { md ->
+            val s = deliveredScenarioOf(message(md))
             assertNothingStored(s)
             verify(exactly = 1) {
                 s.engine.sendCredentialNotification(flowId = "flow-delivered", notificationId = "notif-1", event = CredentialNotificationEvent.FAILURE, eventDescription = any())
@@ -9237,25 +9270,33 @@ class SirosWalletTest {
 
     @Test
     fun wellFormedDeliveredMetadataOnTheWire_isUnaffected() = runTest(dispatcher) {
-        val s = deliveredScenario(frameResults("""[{"type":"example.other","value":"v","scope":"issuer"}]"""))
+        val s = deliveredScenarioOf(message("""{"example.other":{"scope":"issuer"}}"""))
         assertEquals(1, s.store.getAll().size)
         verify(exactly = 0) { s.listener.onFlowError(any(), any(), any()) }
     }
 
     @Test
-    fun wmpFlowComplete_malformedDeliveredMetadata_isRefusedWithItsNotificationId() = runTest(dispatcher) {
+    fun wmpFlowComplete_refusesMalformedAndUnencryptedSeedMetadata_withItsNotificationIds() = runTest(dispatcher) {
         val wallet = newWallet(
             "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
             "keystore" to org.siros.sdk.keystore.JweKeystore(),
         )
-        fun result(md: String) = Json.parseToJsonElement(
-            """{"credentials":[{"format":"dc+sd-jwt","credential":"x","notification_id":"n9","credential_metadata":$md}]}""",
+        fun result(md: String, encrypted: Boolean = true) = Json.parseToJsonElement(
+            """{"credentials":[{"format":"dc+sd-jwt","credential":"x","notification_id":"n9"}],"credential_metadata":$md,"credential_metadata_encrypted_response":$encrypted}""",
         ).jsonObject
         val refused = wallet.wmpDeliveredMetadataRefusal(result("""[{"type":"other"}]"""))
         assertEquals(DeliveredMetadataRefusal.MALFORMED, refused!!.first)
         assertEquals(listOf("n9"), refused.second)
         assertEquals(DeliveredMetadataRefusal.MALFORMED, wallet.wmpDeliveredMetadataRefusal(result("\"text\""))!!.first)
-        assertEquals(null, wallet.wmpDeliveredMetadataRefusal(result("""[{"type":"other","value":1}]""")))
+        val seed = """{"$deliveredMember":{"$deliveredNamespace":"${NymTestCredentials.seedHex}"}}"""
+        assertEquals(DeliveredMetadataRefusal.NOT_ENCRYPTED, wallet.wmpDeliveredMetadataRefusal(result(seed, encrypted = false))!!.first)
+        assertEquals(null, wallet.wmpDeliveredMetadataRefusal(result("""{"example.other":1}""")))
+        // A replayed completion carries the marker and no object: for a credential that needs a seed it is refused.
+        val replayed = Json.parseToJsonElement(
+            """{"credentials":[{"format":"dc+sd-jwt","credential":${JsonPrimitive(NymTestCredentials.sdJwt())},"notification_id":"n9"}],"redacted_members":["credential_metadata","credential_metadata_encrypted_response"]}""",
+        ).jsonObject
+        assertEquals(DeliveredMetadataRefusal.SEED_UNAVAILABLE, wallet.wmpDeliveredMetadataRefusal(replayed)!!.first)
+        assertEquals(listOf("n9"), wallet.wmpDeliveredMetadataRefusal(replayed)!!.second)
         assertEquals(null, wallet.wmpDeliveredMetadataRefusal(null))
     }
 
@@ -9271,13 +9312,31 @@ class SirosWalletTest {
     }
 
     @Test
-    fun deliveredSeed_aConfiguredTypeIsTheOneInterpreted() = runTest(dispatcher) {
-        val entries = listOf(org.siros.sdk.transport.CredentialResponseMetadataEntry("example.my_seed", JsonPrimitive(NymTestCredentials.seedHex)))
-        val s = deliveredScenario(
-            listOf(deliveredResult(entries = entries, encrypted = false)),
-            configure = { it.copy(secretSeedMetadataType = "example.my_seed") },
-        )
+    fun deliveredSeed_aConfiguredNamespaceIsTheOneVerified() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult()), configure = { it.copy(secretSeedNamespace = "example.designated") })
         assertNothingStored(s)
+    }
+
+    @Test
+    fun anAdvertisementWithAValueInPublicIssuerMetadata_makesTheConfigurationNotOffered() = runTest(dispatcher) {
+        val wallet = newWallet(
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "secretSeedAdvertised" to java.util.concurrent.ConcurrentHashMap.newKeySet<Pair<String, String>>(),
+        )
+        fun offer(secretSeed: String?): Any? {
+            val member = if (secretSeed != null) ""","org.siros.secret_seed":$secretSeed""" else ""
+            val metadata = Json { ignoreUnknownKeys = true }.decodeFromString(
+                org.siros.sdk.credentials.IssuerMetadata.serializer(),
+                """{"credential_issuer":"https://issuer.example","credential_endpoint":"https://issuer.example/c","credential_configurations_supported":{"nym":{"format":"dc+sd-jwt","vct":"urn:nym","credential_metadata":{"display":[{"name":"Nym"}]$member}}}}""",
+            )
+            val m = wallet.javaClass.getDeclaredMethod("buildCredentialOfferFromMetadata", String::class.java, String::class.java, org.siros.sdk.credentials.IssuerMetadata::class.java)
+            m.isAccessible = true
+            return m.invoke(wallet, "https://issuer.example", "nym", metadata)
+        }
+        assertNotNull(offer(null))
+        assertNotNull(offer("""{"namespaces":["org.siros.nym_auth"]}"""))
+        assertEquals(null, offer("""{"org.siros.nym_auth":"00112233445566778899aabbccddeeff"}"""))
+        assertEquals(null, offer("""{"namespaces":["org.siros.nym_auth"],"org.siros.nym_auth":"00112233445566778899aabbccddeeff"}"""))
     }
 
     @Test
@@ -9305,10 +9364,11 @@ class SirosWalletTest {
             "sessionStore" to sessionStore,
             "apiClient" to apiClient,
             "eventListener" to listener,
+            "secretSeedAdvertised" to java.util.concurrent.ConcurrentHashMap.newKeySet<Pair<String, String>>(),
         )
         invokeConnectEngine(wallet, "app-token")
         advanceUntilIdle()
-        completeFlow.emit(FlowCompleteMessage(flowId = "f", credentials = listOf(deliveredResult())))
+        completeFlow.emit(FlowCompleteMessage(flowId = "f", credentials = listOf(deliveredResult()), credentialMetadata = deliveredMetadata(), credentialMetadataEncryptedResponse = true))
         advanceUntilIdle()
         assertEquals(0, store.getAll().size)
         verify(exactly = 1) { engine.sendCredentialNotification("f", "notif-1", CredentialNotificationEvent.FAILURE, any()) }

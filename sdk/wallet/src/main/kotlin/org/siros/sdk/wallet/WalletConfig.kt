@@ -412,15 +412,16 @@ data class WalletConfig(
     /** The circuits the wallet can prove with, from the circuit catalog. */
     val circuitZkCircuits: CircuitZkCircuitSource? = null,
     /**
-     * The `credential_metadata` entry `type` under which an issuer delivers a credential's `secret_seed`
-     * (default `org.siros.NS.secret_seed`). An entry of this type is accepted only from an encrypted
-     * response, as 16 bytes of lowercase hex that open the credential's `ssc`; otherwise the issuance
-     * fails. Must not be blank.
+     * The namespace whose delivered seed the credential type designates: in the response-level
+     * `credential_metadata` member `org.siros.secret_seed` ([org.siros.sdk.credentials.SecretSeedDelivery.MEMBER]) the
+     * issuer maps namespaces to seeds, and the seed of this one must be 16 bytes of lowercase hex that open the
+     * credential's `ssc`, in an encrypted response; otherwise the issuance fails. Seeds of other namespaces are stored
+     * as received. Must not be blank.
      */
-    val secretSeedMetadataType: String = DEFAULT_SECRET_SEED_METADATA_TYPE,
+    val secretSeedNamespace: String = org.siros.sdk.credentials.SecretSeedDelivery.DEFAULT_NAMESPACE,
 ) {
     init {
-        require(secretSeedMetadataType.isNotBlank()) { "secretSeedMetadataType must not be blank" }
+        require(secretSeedNamespace.isNotBlank()) { "secretSeedNamespace must not be blank" }
         VerifierIdTypeOrder.require(circuitZkVerifierIdTypes)
     }
 
@@ -450,9 +451,6 @@ data class WalletConfig(
         }
 
     companion object {
-        /** The default [secretSeedMetadataType]. */
-        const val DEFAULT_SECRET_SEED_METADATA_TYPE = "org.siros.NS.secret_seed"
-
         private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
         /**
