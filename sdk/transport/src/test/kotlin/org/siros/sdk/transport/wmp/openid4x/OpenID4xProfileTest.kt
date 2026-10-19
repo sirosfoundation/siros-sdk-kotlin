@@ -328,6 +328,30 @@ class OpenID4xProfileTest {
     }
 
     @Test
+    fun flowCompleteResultWithMalformedCredentialMetadataDecodesWithAMalformedEntry() {
+        val bad = listOf(
+            """[{"type":"other"}]""",
+            """[{"value":1}]""",
+            """[{"type":"","value":1}]""",
+            """["text"]""",
+            """{"type":"other","value":1}""",
+            """"text"""",
+        )
+        bad.forEach { md ->
+            val result = kotlinx.serialization.json.Json.parseToJsonElement(
+                """{"credentials":[{"format":"dc+sd-jwt","credential":"x","notification_id":"n1","credential_metadata":$md}]}""",
+            ) as JsonObject
+            val c = FlowCompleteResult.decode(result)!!.credentials!!.single()
+            assertEquals(md, "n1", c.notificationId)
+            assertTrue(md, c.credentialMetadata!!.any { it.malformed })
+        }
+        val ok = kotlinx.serialization.json.Json.parseToJsonElement(
+            """{"credentials":[{"format":"dc+sd-jwt","credential":"x","credential_metadata":[{"type":"t","value":1}]}]}""",
+        ) as JsonObject
+        assertTrue(FlowCompleteResult.decode(ok)!!.credentials!!.single().credentialMetadata!!.none { it.malformed })
+    }
+
+    @Test
     fun flowCompleteResultDecodesDeliveredCredentialMetadata() {
         val result = kotlinx.serialization.json.Json.parseToJsonElement(
             """{"type":"flow_complete","flow_id":"f","credentials":[{"format":"mso_mdoc","credential":"AA",""" +

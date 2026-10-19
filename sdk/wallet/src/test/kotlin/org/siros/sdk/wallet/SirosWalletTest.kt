@@ -9187,6 +9187,55 @@ class SirosWalletTest {
         verify(exactly = 0) { s.listener.onFlowComplete(any(), any()) }
     }
 
+    private fun frameResults(metadataJson: String, notificationId: String = "notif-1"): List<CredentialResult> =
+        Json { ignoreUnknownKeys = true }.decodeFromString(
+            FlowCompleteMessage.serializer(),
+            """{"type":"flow_complete","flow_id":"flow-delivered","credentials":[{"format":"dc+sd-jwt","credential":${JsonPrimitive(NymTestCredentials.sdJwt())},"notification_id":"$notificationId","credential_metadata":$metadataJson,"credential_metadata_encrypted_response":true}]}""",
+        ).credentials!!
+
+    @Test
+    fun malformedDeliveredMetadataOnTheWire_endsTheIssuanceAsARefusal() = runTest(dispatcher) {
+        listOf(
+            """[{"type":"other"}]""",
+            """[{"value":1}]""",
+            """[{"type":"","value":1}]""",
+            """["text"]""",
+            """{"type":"other","value":1}""",
+        ).forEach { md ->
+            val s = deliveredScenario(frameResults(md))
+            assertNothingStored(s)
+            verify(exactly = 1) {
+                s.engine.sendCredentialNotification(flowId = "flow-delivered", notificationId = "notif-1", event = CredentialNotificationEvent.FAILURE, eventDescription = any())
+            }
+            verify(exactly = 1) { s.listener.onFlowError("flow-delivered", any(), any()) }
+            assertTrue(md, s.wallet.state.value is WalletState.Ready)
+        }
+    }
+
+    @Test
+    fun wellFormedDeliveredMetadataOnTheWire_isUnaffected() = runTest(dispatcher) {
+        val s = deliveredScenario(frameResults("""[{"type":"example.other","value":"v","scope":"issuer"}]"""))
+        assertEquals(1, s.store.getAll().size)
+        verify(exactly = 0) { s.listener.onFlowError(any(), any(), any()) }
+    }
+
+    @Test
+    fun wmpFlowComplete_malformedDeliveredMetadata_isRefusedWithItsNotificationId() = runTest(dispatcher) {
+        val wallet = newWallet(
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to org.siros.sdk.keystore.JweKeystore(),
+        )
+        fun result(md: String) = Json.parseToJsonElement(
+            """{"credentials":[{"format":"dc+sd-jwt","credential":"x","notification_id":"n9","credential_metadata":$md}]}""",
+        ).jsonObject
+        val refused = wallet.wmpDeliveredMetadataRefusal(result("""[{"type":"other"}]"""))
+        assertEquals(DeliveredMetadataRefusal.MALFORMED, refused!!.first)
+        assertEquals(listOf("n9"), refused.second)
+        assertEquals(DeliveredMetadataRefusal.MALFORMED, wallet.wmpDeliveredMetadataRefusal(result("\"text\""))!!.first)
+        assertEquals(null, wallet.wmpDeliveredMetadataRefusal(result("""[{"type":"other","value":1}]""")))
+        assertEquals(null, wallet.wmpDeliveredMetadataRefusal(null))
+    }
+
     @Test
     fun deliveredSeed_aKeystoreThatRefusesTheMetadata_rollsBackTheWholeBatch() = runTest(dispatcher) {
         // The store never put the credentials into the keystore, so attaching their metadata fails.

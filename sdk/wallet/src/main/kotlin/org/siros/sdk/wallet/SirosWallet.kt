@@ -5342,11 +5342,20 @@ class SirosWallet private constructor(
      * it), resets the issuance state and surfaces the error. Without a `notification_id` there is no channel
      * to the issuer: the issuance still fails locally and the error says so.
      */
-    private suspend fun rejectDeliveredMetadata(flowId: String, notificationIds: List<String>, refusal: DeliveredMetadataRefusal) {
+    private suspend fun rejectDeliveredMetadata(
+        flowId: String,
+        notificationIds: List<String>,
+        refusal: DeliveredMetadataRefusal,
+        /** The WMP transport reports through its peer; null uses the engine [credentialNotifier]. */
+        sendFailure: (suspend (flowId: String, notificationId: String) -> Unit)? = null,
+    ) {
         val ids = notificationIds.distinct()
         Timber.e("Flow $flowId refused: delivered credential metadata rejected (${refusal.name})")
         val notifier = credentialNotifier
-        if (notifier != null) {
+        val canReport = sendFailure != null || notifier != null
+        if (sendFailure != null) {
+            ids.forEach { id -> sendFailure(flowId, id) }
+        } else if (notifier != null) {
             ids.forEach { id ->
                 notifier.sendCredentialNotification(
                     flowId = flowId,
@@ -5356,7 +5365,7 @@ class SirosWallet private constructor(
                 )
             }
         }
-        val reported = notifier != null && ids.isNotEmpty()
+        val reported = canReport && ids.isNotEmpty()
         val reason = "The issuer's delivered credential data was rejected: ${refusal.text}" +
             if (reported) "" else " (the issuer could not be notified: no notification channel)"
         // The superseded batch of a renewal stays: nothing replaced it.
@@ -5368,6 +5377,36 @@ class SirosWallet private constructor(
         val userId = (current as? WalletState.FlowActive)?.userId ?: (current as? WalletState.Ready)?.userId ?: ""
         val displayName = (current as? WalletState.FlowActive)?.displayName ?: (current as? WalletState.Ready)?.displayName
         _state.value = WalletState.Ready(userId = userId, displayName = displayName, credentials = credentialStore.getAll())
+    }
+
+    /**
+     * The refusal (and the recoverable `notification_id`s) for a `wmp.flow.complete` result whose
+     * delivered `credential_metadata` is refused by [DeliveredCredentialMetadata.check]; null when it is
+     * acceptable or absent. An undecodable `credentials` array is refused as malformed (fail closed).
+     */
+    internal fun wmpDeliveredMetadataRefusal(
+        result: kotlinx.serialization.json.JsonObject?,
+    ): Pair<DeliveredMetadataRefusal, List<String>>? {
+        val creds = try {
+            org.siros.sdk.transport.wmp.openid4x.FlowCompleteResult.decode(result)?.credentials
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return DeliveredMetadataRefusal.MALFORMED to emptyList()
+        } ?: return null
+        val canStore = keystoreCanHoldCredentialMetadata()
+        var refusal: DeliveredMetadataRefusal? = null
+        for (cred in creds) {
+            val verdict = DeliveredCredentialMetadata.check(
+                format = cred.format,
+                credential = cred.credential,
+                delivered = cred,
+                secretSeedType = config.secretSeedMetadataType,
+                canStoreSecret = canStore,
+            )
+            if (verdict is DeliveredMetadataVerdict.Refuse && refusal == null) refusal = verdict.reason
+        }
+        return refusal?.let { it to creds.mapNotNull { c -> c.notificationId } }
     }
 
     private suspend fun removeCredentialRefreshToken(batchId: Long) {
@@ -5850,9 +5889,28 @@ class SirosWallet private constructor(
                 onSignRequest = { flowId, params -> handleWmpSignRequest(flowId, params) },
                 onMatchRequest = { flowId, payload -> handleWmpMatchRequest(flowId, payload) },
                 onTrustEvaluation = { flowId, payload -> handleWmpTrustEvaluation(flowId, payload) },
-                onComplete = { flowId, _ ->
-                    Timber.i("WMP flow $flowId complete")
-                    eventListener?.onFlowComplete(flowId)
+                onComplete = { flowId, result ->
+                    // This transport stores nothing from the result, but a malformed or refused
+                    // delivered credential_metadata still ends the flow as a refusal, not a success.
+                    val refusal = wmpDeliveredMetadataRefusal(result)
+                    if (refusal != null) {
+                        rejectDeliveredMetadata(
+                            flowId,
+                            refusal.second,
+                            refusal.first,
+                            sendFailure = { fid, nid ->
+                                peer.sendCredentialNotification(
+                                    flowId = fid,
+                                    notificationId = nid,
+                                    event = CredentialNotificationEvent.FAILURE,
+                                    eventDescription = "credential_metadata_rejected",
+                                )
+                            },
+                        )
+                    } else {
+                        Timber.i("WMP flow $flowId complete")
+                        eventListener?.onFlowComplete(flowId)
+                    }
                 },
                 onError = { flowId, code, message ->
                     Timber.e("WMP flow $flowId error: $code — $message")

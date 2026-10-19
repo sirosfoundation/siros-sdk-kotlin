@@ -58,8 +58,8 @@ internal object DeliveredCredentialMetadata {
     ): DeliveredMetadataVerdict {
         val entries = delivered.credentialMetadata
         if (entries.isNullOrEmpty()) return DeliveredMetadataVerdict.None
-        // An entry the container could not store (blank type) refuses rather than being dropped.
-        if (entries.any { it.type.isEmpty() }) return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.MALFORMED)
+        // A malformed wire entry, or one the container could not store (blank type), refuses rather than being dropped.
+        if (entries.any { it.malformed || it.type.isEmpty() }) return DeliveredMetadataVerdict.Refuse(DeliveredMetadataRefusal.MALFORMED)
         // The entries as received: all members, member values verbatim.
         val all = JsonArray(entries.map { it.raw })
         val seeds = entries.filter { it.type == secretSeedType }

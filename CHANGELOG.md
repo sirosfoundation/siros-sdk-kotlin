@@ -358,6 +358,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `type`/`value` are interpreted. Cross-repo note: go-wallet-backend engine
   PR #463 still rejects entries with members other than `type`/`value`, so extra
   members arrive today only on the WMP path or from a future engine.
+  A malformed `credential_metadata` (an entry without `type` or `value`, an
+  empty or non-string `type`, a non-object entry, a non-array value) no longer
+  throws while decoding the whole `flow_complete` (which the engine session only
+  logs, leaving the issuance pending forever): the entry decodes as a
+  `CredentialResponseMetadataEntry` with `malformed = true` (constructor
+  parameter added, new in this PR), each credential's `notification_id` stays
+  readable, and the existing refusal runs: nothing stored, `onFlowError`,
+  `credential_failure` per `notification_id`, state reset. A non-boolean
+  `credential_metadata_encrypted_response` reads as false. The WMP transport
+  decodes the same way, and its `wmp.flow.complete` is now refused through the
+  same path instead of being reported as complete.
 - **Validator cleanup: a legacy `verifier_id_type` is accepted and ignored.**
   Rulebook v0.3 removed it from the request and implementations must not reject
   it. `verifier-id-type-forbidden` and `verifier-id-type-unregistered`, the

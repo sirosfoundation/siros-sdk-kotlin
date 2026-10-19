@@ -38,31 +38,90 @@ data class CredentialResponseMetadataEntry(
      * (privatedata-spec section 6), including members this SDK does not know.
      */
     val additionalMembers: JsonObject = JsonObject(emptyMap()),
+    /**
+     * True when the wire entry was not a well-formed `{type: non-empty string, value: ...}` object (or
+     * the whole `credential_metadata` was not an array). Such a placeholder carries no data: a consumer
+     * MUST refuse the issuance rather than store or interpret it. Decoding it as a flag, not an
+     * exception, keeps the rest of the frame (notably each credential's `notification_id`) readable so
+     * the refusal can be reported to the issuer.
+     */
+    val malformed: Boolean = false,
 ) {
     /** The entry as received: `type`, `value` and every additional member, values verbatim. */
     val raw: JsonObject
         get() = JsonObject(additionalMembers + mapOf("type" to JsonPrimitive(type), "value" to value))
 }
 
+internal fun malformedCredentialMetadataEntry() =
+    CredentialResponseMetadataEntry(type = "", value = kotlinx.serialization.json.JsonNull, malformed = true)
+
+/** Reads one wire entry; anything other than an object with a non-empty string `type` and a `value` is the [malformed] placeholder. */
+internal fun decodeCredentialMetadataEntry(element: JsonElement): CredentialResponseMetadataEntry {
+    val obj = element as? JsonObject ?: return malformedCredentialMetadataEntry()
+    val type = (obj["type"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotEmpty() }
+        ?: return malformedCredentialMetadataEntry()
+    val value = obj["value"] ?: return malformedCredentialMetadataEntry()
+    return CredentialResponseMetadataEntry(type, value, JsonObject(obj - "type" - "value"))
+}
+
+/**
+ * Decodes the `credential_metadata` array without ever throwing for its content: a value that is not
+ * an array becomes one malformed placeholder, and each bad entry becomes a malformed placeholder, so
+ * the frame still decodes and the wallet's refusal path (not a swallowed serializer exception) ends
+ * the issuance.
+ */
+internal object CredentialMetadataListSerializer : KSerializer<List<CredentialResponseMetadataEntry>> {
+    override val descriptor: SerialDescriptor = kotlinx.serialization.json.JsonArray.serializer().descriptor
+
+    override fun deserialize(decoder: Decoder): List<CredentialResponseMetadataEntry> {
+        val element = (decoder as? JsonDecoder ?: throw SerializationException("credential metadata decodes from JSON only"))
+            .decodeJsonElement()
+        return when (element) {
+            is kotlinx.serialization.json.JsonArray -> element.map(::decodeCredentialMetadataEntry)
+            else -> listOf(malformedCredentialMetadataEntry())
+        }
+    }
+
+    override fun serialize(encoder: Encoder, value: List<CredentialResponseMetadataEntry>) {
+        (encoder as? JsonEncoder ?: throw SerializationException("credential metadata encodes to JSON only"))
+            .encodeJsonElement(kotlinx.serialization.json.JsonArray(value.map { it.raw }))
+    }
+}
+
+/**
+ * Decodes `credential_metadata_encrypted_response` without ever throwing: only a JSON boolean `true`
+ * is true; absent, `false` or any other shape (a string, number, object) is false, which is the safe
+ * direction (a secret then is refused as not encrypted) and keeps the frame decodable.
+ */
+internal object EncryptedResponseFlagSerializer : KSerializer<Boolean> {
+    override val descriptor: SerialDescriptor = kotlinx.serialization.descriptors.PrimitiveSerialDescriptor(
+        "org.siros.sdk.transport.EncryptedResponseFlag",
+        kotlinx.serialization.descriptors.PrimitiveKind.BOOLEAN,
+    )
+
+    override fun deserialize(decoder: Decoder): Boolean {
+        val element = (decoder as? JsonDecoder ?: throw SerializationException("flag decodes from JSON only"))
+            .decodeJsonElement()
+        return element is JsonPrimitive && !element.isString && element.content == "true"
+    }
+
+    override fun serialize(encoder: Encoder, value: Boolean) = encoder.encodeBoolean(value)
+}
+
 /**
  * Decodes an entry from the raw JSON object so unknown members survive
- * (`ignoreUnknownKeys` would otherwise drop them). Requires a string `type`
- * and a present `value`; anything else is a [SerializationException], as
- * before. Member values stay [JsonElement]s whose literals are untouched, so
+ * (`ignoreUnknownKeys` would otherwise drop them). A bad entry is not an
+ * exception here either (see [decodeCredentialMetadataEntry]). Member values stay [JsonElement]s whose literals are untouched, so
  * integers stay integers and floats keep their spelling.
  */
 internal object CredentialResponseMetadataEntrySerializer : KSerializer<CredentialResponseMetadataEntry> {
     override val descriptor: SerialDescriptor = JsonObject.serializer().descriptor
 
-    override fun deserialize(decoder: Decoder): CredentialResponseMetadataEntry {
-        val obj = (decoder as? JsonDecoder ?: throw SerializationException("credential metadata entries decode from JSON only"))
-            .decodeJsonElement() as? JsonObject
-            ?: throw SerializationException("credential metadata entry is not a JSON object")
-        val type = (obj["type"] as? JsonPrimitive)?.takeIf { it.isString }?.content
-            ?: throw SerializationException("credential metadata entry has no string type")
-        val value = obj["value"] ?: throw SerializationException("credential metadata entry has no value")
-        return CredentialResponseMetadataEntry(type, value, JsonObject(obj - "type" - "value"))
-    }
+    override fun deserialize(decoder: Decoder): CredentialResponseMetadataEntry =
+        decodeCredentialMetadataEntry(
+            (decoder as? JsonDecoder ?: throw SerializationException("credential metadata entries decode from JSON only"))
+                .decodeJsonElement(),
+        )
 
     override fun serialize(encoder: Encoder, value: CredentialResponseMetadataEntry) {
         (encoder as? JsonEncoder ?: throw SerializationException("credential metadata entries encode to JSON only"))

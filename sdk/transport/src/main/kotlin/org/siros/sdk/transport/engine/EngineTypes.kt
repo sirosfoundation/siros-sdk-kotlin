@@ -356,6 +356,7 @@ data class CredentialResult(
      * [CredentialResponseMetadataEntry].
      */
     @SerialName("credential_metadata")
+    @Serializable(with = org.siros.sdk.transport.CredentialMetadataListSerializer::class)
     override val credentialMetadata: List<CredentialResponseMetadataEntry>? = null,
     /**
      * Set by the engine only when [credentialMetadata] is present and the
@@ -363,6 +364,7 @@ data class CredentialResult(
      * plain JSON.
      */
     @SerialName("credential_metadata_encrypted_response")
+    @Serializable(with = org.siros.sdk.transport.EncryptedResponseFlagSerializer::class)
     override val credentialMetadataEncryptedResponse: Boolean = false,
 ) : CredentialResultMetadata
 

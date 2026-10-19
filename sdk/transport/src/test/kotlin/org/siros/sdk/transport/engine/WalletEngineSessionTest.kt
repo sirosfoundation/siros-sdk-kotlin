@@ -261,6 +261,55 @@ class WalletEngineSessionTest {
     }
 
     @Test
+    fun flow_complete_with_malformed_credential_metadata_still_emits_with_a_malformed_entry() = runTest {
+        val session = WalletEngineSession(baseUrl = "https://wallet.example.com", tenantId = "tenant-42", client = client)
+        session.connect("app-token")
+        val bad = listOf(
+            """[{"type":"other"}]""",
+            """[{"value":1}]""",
+            """[{"type":"","value":1}]""",
+            """[{"type":5,"value":1}]""",
+            """["text"]""",
+            """[null]""",
+            """{"type":"other","value":1}""",
+            """"text"""",
+        )
+        session.flowComplete().test {
+            bad.forEach { md ->
+                listener.onMessage(
+                    webSocket,
+                    """{"type":"flow_complete","flow_id":"flow-1","credentials":[{"format":"dc+sd-jwt","credential":"j",""" +
+                        """"notification_id":"notif-1","credential_metadata":$md}]}""",
+                )
+                val c = awaitItem().credentials!!.single()
+                assertEquals(md, "notif-1", c.notificationId)
+                assertTrue(md, c.credentialMetadata!!.any { it.malformed })
+            }
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun flow_complete_with_a_non_boolean_encrypted_flag_still_emits_with_the_flag_false() = runTest {
+        val session = WalletEngineSession(baseUrl = "https://wallet.example.com", tenantId = "tenant-42", client = client)
+        session.connect("app-token")
+        session.flowComplete().test {
+            listOf(""""true"""", "1", "null", "{}").forEach { flag ->
+                listener.onMessage(
+                    webSocket,
+                    """{"type":"flow_complete","flow_id":"flow-1","credentials":[{"format":"dc+sd-jwt","credential":"j",""" +
+                        """"notification_id":"n1","credential_metadata":[{"type":"t","value":1}],""" +
+                        """"credential_metadata_encrypted_response":$flag}]}""",
+                )
+                val c = awaitItem().credentials!!.single()
+                assertEquals(flag, false, c.credentialMetadataEncryptedResponse)
+                assertEquals("n1", c.notificationId)
+            }
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
     fun flow_error_message_emits_to_error_flow() = runTest {
         val session = WalletEngineSession(
             baseUrl = "https://wallet.example.com",

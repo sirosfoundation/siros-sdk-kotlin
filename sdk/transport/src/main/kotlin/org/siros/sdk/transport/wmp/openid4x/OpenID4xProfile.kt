@@ -150,9 +150,11 @@ data class CredentialResult(
     @SerialName("notification_id") val notificationId: String? = null,
     /** See [org.siros.sdk.transport.engine.CredentialResult.credentialMetadata]. */
     @SerialName("credential_metadata")
+    @Serializable(with = org.siros.sdk.transport.CredentialMetadataListSerializer::class)
     override val credentialMetadata: List<CredentialResponseMetadataEntry>? = null,
     /** See [org.siros.sdk.transport.engine.CredentialResult.credentialMetadataEncryptedResponse]. */
     @SerialName("credential_metadata_encrypted_response")
+    @Serializable(with = org.siros.sdk.transport.EncryptedResponseFlagSerializer::class)
     override val credentialMetadataEncryptedResponse: Boolean = false,
 ) : CredentialResultMetadata
 
