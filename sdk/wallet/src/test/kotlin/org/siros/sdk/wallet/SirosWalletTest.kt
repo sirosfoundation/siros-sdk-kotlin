@@ -7170,6 +7170,64 @@ class SirosWalletTest {
         assertTrue("the cancelled flow must not reopen: ${stateFlow.value}", stateFlow.value is WalletState.Ready)
     }
 
+    private fun abandonedStartWallet(
+        progressFlow: MutableSharedFlow<FlowProgressMessage>,
+        flowErrors: MutableSharedFlow<FlowErrorMessage> = MutableSharedFlow(),
+        listener: WalletEventListener,
+        stateFlow: MutableStateFlow<WalletState>,
+    ): Pair<SirosWallet, WalletEngineSession> {
+        val engine = mockEngineConstructor(progressFlow = progressFlow, flowErrors = flowErrors)
+        every { engine.startIssuance(any(), any(), any(), any(), any(), any()) } just runs
+        every { engine.cancelFlow(any()) } just runs
+        val wallet = newWallet(
+            "_state" to stateFlow,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", tenantId = "tenant-1"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to listener,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        return wallet to engine
+    }
+
+    @Test
+    fun cancelledStart_whoseFirstReplyIsAnError_doesNotResetState_orReachTheHost() = runTest(dispatcher) {
+        val flowErrors = MutableSharedFlow<FlowErrorMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val (wallet, engine) = abandonedStartWallet(MutableSharedFlow(), flowErrors, listener, stateFlow)
+        advanceUntilIdle()
+        wallet.startIssuanceByOffer(startOffer)
+        wallet.cancelCurrentFlow()
+
+        flowErrors.emit(
+            FlowErrorMessage(flowId = "flow-late", error = org.siros.sdk.transport.engine.FlowError(code = "x", message = "boom"))
+        )
+        advanceUntilIdle()
+
+        verify(exactly = 1) { engine.cancelFlow("flow-late") }
+        verify(exactly = 0) { listener.onFlowError(any(), any(), any()) }
+    }
+
+    @Test
+    fun retryAfterACancelledStart_isNotMistakenForTheCancelledFlow() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val (wallet, engine) = abandonedStartWallet(progressFlow, listener = listener, stateFlow = stateFlow)
+        advanceUntilIdle()
+        wallet.startIssuanceByOffer(startOffer)
+        wallet.cancelCurrentFlow()
+        // The retry replaces the socket; the cancelled flow's reply can no longer arrive.
+        wallet.startIssuanceByOffer(startOffer)
+
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-retry", step = "parsing_offer"))
+        advanceUntilIdle()
+
+        verify(exactly = 0) { engine.cancelFlow(any()) }
+        assertEquals("flow-retry", (stateFlow.value as WalletState.FlowActive).flowId)
+    }
+
     private fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {
         val wallet = allocateInstance(SirosWallet::class.java) as SirosWallet
         val values = fields.toMap(mutableMapOf())

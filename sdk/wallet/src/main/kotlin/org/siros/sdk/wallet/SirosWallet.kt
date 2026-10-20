@@ -3465,6 +3465,10 @@ class SirosWallet private constructor(
     private suspend fun connectEngineForIssuance(engine: WalletEngineSession, epoch: Int) {
         advanceIssuanceStart(epoch, WalletState.FlowActive.STEP_CONNECTING_ENGINE)
         engine.forceReconnect()
+        // The old socket is gone, and with it any reply to a start cancelled
+        // earlier: forget those, or the retry's own first event would be taken
+        // for the cancelled flow's.
+        abandonedStartTimes.clear()
         advanceIssuanceStart(epoch, WalletState.FlowActive.STEP_ESTABLISHING_SESSION)
         engine.awaitConnected()
     }
@@ -6468,7 +6472,7 @@ class SirosWallet private constructor(
         // Observe sign requests → auto-sign with keystore
         scope.launch {
             engine.signRequests().collect { msg ->
-                if (msg.flowId in abandonedFlowIds) return@collect
+                if (isAbandonedFlowEvent(msg.flowId)) return@collect
                 // An SCA request waits on the user (up to the consent limit); doing that inside this
                 // sequential collector would stall every other sign request (issuance proofs, client
                 // auth, attestation), so it is handled in its own coroutine.
@@ -6956,7 +6960,7 @@ class SirosWallet private constructor(
         // Observe flow completion → sync new credentials
         scope.launch {
             engine.flowComplete().collect { msg ->
-                if (msg.flowId in abandonedFlowIds) return@collect
+                if (isAbandonedFlowEvent(msg.flowId)) return@collect
                 Timber.i("Flow ${msg.flowId} complete")
                 terminatedFlowIds.add(msg.flowId)
                 pendingMatchResultsByFlow.remove(msg.flowId)
@@ -7328,7 +7332,7 @@ class SirosWallet private constructor(
         // Observe flow errors
         scope.launch {
             engine.flowErrors().collect { msg ->
-                if (msg.flowId != null && msg.flowId in abandonedFlowIds) return@collect
+                if (isAbandonedFlowEvent(msg.flowId)) return@collect
                 Timber.e("Flow ${msg.flowId} error: ${msg.error.code} — ${msg.error.message}")
                 val fid = msg.flowId ?: "unknown"
                 terminatedFlowIds.add(fid)
