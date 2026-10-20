@@ -7983,6 +7983,11 @@ class SirosWallet private constructor(
                 if (flowPscIssuer != null && flowOffer != null && !sameAdvertisedIssuer(flowOffer.credentialIssuerIdentifier, flowPscIssuer)) {
                     Timber.w("The commitment issuer of flow ${msg.flowId} differs from the offer's issuer identifier")
                 }
+                // The issuer the credentials are bound to (their `private_seed` derives from it): the one the commitment was
+                // derived for, else the offer's, else the one the engine states in the completion itself. A replayed or resumed
+                // completion can reach a wallet with no active offer and no preceding sign request, and the credential must
+                // still keep the exact issuer.
+                val flowIssuerId = flowPscIssuer ?: flowOffer?.credentialIssuerIdentifier ?: msg.credentialIssuer
                 val flowVctmDocument = activeVctmDocument
                 msg.credentials?.forEachIndexed { index, cred ->
                     if (cred.format == "mso_mdoc") {
@@ -8026,7 +8031,7 @@ class SirosWallet private constructor(
                             raw = cred.credential,
                             metadata = metadata,
                             notificationId = cred.notificationId,
-                            credentialIssuerIdentifier = flowPscIssuer ?: flowOffer?.credentialIssuerIdentifier,
+                            credentialIssuerIdentifier = flowIssuerId,
                             credentialConfigurationId = flowOffer?.credentialConfigurationId,
                             batchId = batchId,
                             instanceId = index,
@@ -8089,7 +8094,7 @@ class SirosWallet private constructor(
                                 )
                             },
                             notificationId = cred.notificationId,
-                            credentialIssuerIdentifier = flowPscIssuer ?: flowOffer?.credentialIssuerIdentifier,
+                            credentialIssuerIdentifier = flowIssuerId,
                             credentialConfigurationId = flowOffer?.credentialConfigurationId,
                             batchId = batchId,
                             instanceId = index,
@@ -8179,7 +8184,7 @@ class SirosWallet private constructor(
                         issuedAt = payload["iat"]?.jsonPrimitive?.longOrNull,
                         expiresAt = exp,
                         notificationId = cred.notificationId,
-                        credentialIssuerIdentifier = flowPscIssuer ?: flowOffer?.credentialIssuerIdentifier,
+                        credentialIssuerIdentifier = flowIssuerId,
                         credentialConfigurationId = flowOffer?.credentialConfigurationId,
                         batchId = batchId,
                         instanceId = index,

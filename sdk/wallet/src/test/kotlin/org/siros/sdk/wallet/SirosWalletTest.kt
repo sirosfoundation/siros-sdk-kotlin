@@ -11254,6 +11254,8 @@ class SirosWalletTest {
         configure: (WalletConfig) -> WalletConfig = { it },
         mirrorToKeystore: Boolean = true,
         issuerTrust: org.siros.sdk.transport.engine.IssuerTrustReport? = null,
+        /** False: the wallet has no active offer (a replayed or resumed completion in a fresh wallet). */
+        withOffer: Boolean = true,
     ): DeliveredScenario {
         val flowId = "flow-delivered"
         val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
@@ -11287,9 +11289,11 @@ class SirosWalletTest {
             },
         )
         if (renewalSourceBatchId != null) fields += "pendingRenewalSourceBatchId" to renewalSourceBatchId
-        fields += "activeOffer" to org.siros.sdk.credentials.CredentialOffer(
-            credentialConfigurationId = "nym", credentialIssuerIdentifier = "https://issuer.example", credentialName = "Nym", issuerName = "Issuer",
-        )
+        if (withOffer) {
+            fields += "activeOffer" to org.siros.sdk.credentials.CredentialOffer(
+                credentialConfigurationId = "nym", credentialIssuerIdentifier = "https://issuer.example", credentialName = "Nym", issuerName = "Issuer",
+            )
+        }
         val wallet = newWallet(*fields.toTypedArray())
         invokeConnectEngine(wallet, "app-token")
         advanceUntilIdle()
@@ -11346,6 +11350,16 @@ class SirosWalletTest {
             s.engine.sendCredentialNotification(flowId = "flow-delivered", notificationId = "notif-1", event = CredentialNotificationEvent.ACCEPTED)
         }
         verify(exactly = 1) { s.listener.onFlowComplete("flow-delivered", any()) }
+    }
+
+    @Test
+    fun aCompletionWithNoActiveOffer_keepsTheIssuerTheEngineStates() = runTest(dispatcher) {
+        // A replayed or resumed flow_complete in a fresh wallet: no offer, no preceding sign request. The stored credential must
+        // still be bound to the exact issuer (its private_seed derives from that string), not to null.
+        val withOffer = deliveredScenario(listOf(deliveredResult()))
+        assertEquals("https://issuer.example", withOffer.store.getAll().single().credentialIssuerIdentifier)
+        val fresh = deliveredScenario(listOf(deliveredResult()), withOffer = false)
+        assertEquals("https://issuer.example", fresh.store.getAll().single().credentialIssuerIdentifier)
     }
 
     @Test
