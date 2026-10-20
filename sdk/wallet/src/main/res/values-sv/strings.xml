@@ -12,7 +12,7 @@
     <string name="siros_dcapi_refused_request_not_verified">Begäran kunde inte verifieras som kommande från webbplatsen du befinner dig på, så ingenting delades.</string>
     <string name="siros_dcapi_refused_verifier_id_unavailable">Din plånbok kunde inte avgöra vem som frågar, så ingenting delades.</string>
     <string name="siros_dcapi_refused_proof_failed">Din plånbok kunde inte skapa beviset, så ingenting delades. Försök igen.</string>
-    <!-- circuit_zk consent. Wording approved by leifj except: title, buttons, "share" header, legacy claim/pseudonym lines and the two refusal messages (SDK-authored, translations unreviewed in non-English locales). -->
+    <!-- circuit_zk consent. Wording approved by leifj 2026-10-20. -->
     <string name="siros_consent_title">Bekräfta delning</string>
     <string name="siros_consent_share">Dela</string>
     <string name="siros_consent_cancel">Avbryt</string>
@@ -28,7 +28,7 @@
     <string name="siros_consent_legacy_pseudonym">En pseudonym delas med %1$s.</string>
     <string name="siros_dcapi_refused_consent_unavailable">Din plånbok kan inte be om ditt godkännande just nu, så ingenting delades.</string>
     <string name="siros_dcapi_refused_user_declined">Du godkände inte begäran, så ingenting delades.</string>
-    <!-- circuit_zk generic predicate wording (any claim). Proposed; translations unreviewed. -->
+    <!-- circuit_zk generic predicate wording (any claim). Approved by leifj 2026-10-20. -->
     <string name="siros_consent_predicate_eq">%1$s är %2$s.</string>
     <string name="siros_consent_predicate_ne">%1$s är inte %2$s.</string>
     <string name="siros_consent_predicate_lt">%1$s är mindre än %2$s.</string>
@@ -36,7 +36,7 @@
     <string name="siros_consent_predicate_gt">%1$s är större än %2$s.</string>
     <string name="siros_consent_predicate_ge">%1$s är minst %2$s.</string>
     <string name="siros_consent_predicate_in">%1$s är något av: %2$s.</string>
-    <!-- circuit_zk predicate wording for DATE-typed claims (generic comparison wording stays for numbers and strings). Proposed; translations unreviewed. -->
+    <!-- circuit_zk predicate wording for DATE-typed claims (generic comparison wording stays for numbers and strings). Approved by leifj 2026-10-20. -->
     <string name="siros_consent_predicate_date_eq">%1$s är den %2$s.</string>
     <string name="siros_consent_predicate_date_ne">%1$s är inte den %2$s.</string>
     <string name="siros_consent_predicate_date_lt">%1$s är före %2$s.</string>

@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A DATE-typed claim has its own operator sentences ("is on or after {date}", "is after", "is on or before",
   "is before", "is on", "is not on", "is one of the dates: ..."; `siros_consent_predicate_date_*`), numbers and strings
   keep the generic wording, and the age wording of `age_check` still wins. Vectors: `date_compare` cases.
+  The consent wording (all five locales) was approved by leifj on 2026-10-20.
   Known follow-up (not filed): the approved year strings use `%d` with words, so fi/el (and sv/pt as needed)
   need proper plural resources.
 - **`CatalogCircuitZkProver`: the real `circuit_zk` prover, and the wallet's
