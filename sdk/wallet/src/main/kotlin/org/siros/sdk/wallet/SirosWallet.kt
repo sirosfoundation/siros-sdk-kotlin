@@ -4623,10 +4623,13 @@ class SirosWallet private constructor(
             throw WalletException("Authorization state mismatch for flow $flowId (possible CSRF)")
         }
         pendingAuthorizations.remove(flowId)
+        Timber.i("Resuming authorization of flow $flowId after the browser: reconnecting the engine WebSocket (was ${engine.state.value}) and sending a new, stateless flow_start; the engine will answer under a new flow id")
+        resumingFlowIds?.add(flowId)
         scope.launch {
             try {
                 engine.forceReconnect()
                 engine.awaitConnected()
+                Timber.i("Engine WebSocket reconnected (${engine.state.value}); sending the resume flow_start for flow $flowId")
                 // Client attestation for the resumed flow arrives the same way
                 // as for a fresh one: go-wallet-backend's Execute() runs its
                 // attestation setup before branching on msg.AuthCode, so it
@@ -4641,7 +4644,8 @@ class SirosWallet private constructor(
                     codeVerifier = pending.codeVerifier,
                 )
             } catch (e: Exception) {
-                Timber.e(e, "Failed to resume authorization for flow $flowId")
+                resumingFlowIds?.remove(flowId)
+                Timber.e(e, "Failed to resume authorization for flow $flowId (engine WebSocket ${engine.state.value})")
                 eventListener?.onFlowError(flowId, e.message ?: "Failed to resume authorization")
             }
         }
@@ -5156,6 +5160,26 @@ class SirosWallet private constructor(
                 }
             }
         }
+    }
+
+    /**
+     * The flow ids whose authorization was just resumed. The resume is a brand-new, stateless `flow_start`, so the engine
+     * answers under a NEW flow id; [noteFlowId] pairs the first unknown id it sees with the oldest of these, for the log
+     * (and [flowContinuations]). Nothing here is state the flow depends on.
+     */
+    private val resumingFlowIds: java.util.concurrent.ConcurrentLinkedQueue<String>? = java.util.concurrent.ConcurrentLinkedQueue()
+
+    /** New flow id -> the flow id it resumed; logging only. */
+    private val flowContinuations: MutableMap<String, String>? = java.util.concurrent.ConcurrentHashMap()
+
+    private fun noteFlowId(flowId: String) {
+        val resuming = resumingFlowIds ?: return
+        val continuations = flowContinuations ?: return
+        val old = resuming.peek() ?: return
+        if (flowId == old || continuations.containsKey(flowId)) return
+        resuming.poll()
+        continuations[flowId] = old
+        Timber.i("Flow $old (authorization resumed after the browser) continues as NEW flow $flowId")
     }
 
     /** Resume context for in-progress OAuth authorizations, keyed by flow ID - see [PendingAuthorization]. */
@@ -6880,6 +6904,7 @@ class SirosWallet private constructor(
         // Observe sign requests → auto-sign with keystore
         scope.launch {
             engine.signRequests().collect { msg ->
+                noteFlowId(msg.flowId)
                 // An SCA request waits on the user (up to the consent limit); doing that inside this
                 // sequential collector would stall every other sign request (issuance proofs, client
                 // auth, attestation), so it is handled in its own coroutine.
@@ -7107,6 +7132,7 @@ class SirosWallet private constructor(
         // Observe match requests → DCQL-filtered credential matching
         scope.launch {
             engine.matchRequests().collect { msg ->
+                noteFlowId(msg.flowId)
                 try {
                     Timber.d("Match request for flow ${msg.flowId}")
                     val allCreds = credentialStore.getAll()
@@ -7255,6 +7281,7 @@ class SirosWallet private constructor(
         // Observe flow progress
         scope.launch {
             engine.flowProgress().collect { msg ->
+                noteFlowId(msg.flowId)
                 Timber.d("Flow ${msg.flowId} progress: ${msg.step}")
 
                 // Handle trust evaluation — matching wallet-frontend reference implementation
@@ -7292,7 +7319,8 @@ class SirosWallet private constructor(
                 // Handle authorization required — user must approve in browser
                 if (msg.step == "authorization_required") {
                     val payload = msg.payload?.jsonObject
-                    Timber.d("Authorization required payload: $payload")
+                    // Names only: the payload carries the PKCE code_verifier, which must never reach a log.
+                    Timber.d("Authorization required for flow ${msg.flowId}: payload members ${payload?.keys}")
 
                     // Handle tx_code (PIN input) for pre-authorized code flow
                     val payloadType = payload?.get("type")?.jsonPrimitive?.contentOrNull
@@ -7366,7 +7394,8 @@ class SirosWallet private constructor(
         // Observe flow completion → sync new credentials
         scope.launch {
             engine.flowComplete().collect { msg ->
-                Timber.i("Flow ${msg.flowId} complete")
+                noteFlowId(msg.flowId)
+                Timber.i("Flow ${msg.flowId} complete" + (flowContinuations?.get(msg.flowId)?.let { " (the resumption of flow $it)" } ?: ""))
                 terminatedFlowIds.add(msg.flowId)
                 pendingMatchResultsByFlow.remove(msg.flowId)
 

@@ -1556,6 +1556,134 @@ class SirosWalletTest {
     }
 
     /**
+     * The whole resumption after the browser: the authorization step hands off, the app comes back with a code, the engine
+     * WebSocket is reconnected, ONE stateless flow_start is sent, and the engine completes the issuance under a NEW flow id.
+     * The credential is stored and the completion is reported for the new id; the log names the reconnect and pairs the new
+     * flow id with the one it resumed (and shows nothing secret).
+     */
+    @Test
+    fun resumptionAfterTheBrowser_completesUnderANewFlowId_storesTheCredential_andLogsTheContinuation() = runTest(dispatcher) {
+        val logs = mutableListOf<String>()
+        val tree = object : timber.log.Timber.Tree() {
+            override fun log(priority: Int, tag: String?, message: String, t: Throwable?) { logs += message }
+        }
+        timber.log.Timber.plant(tree)
+        try {
+            val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+            val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
+            val listener = mockk<WalletEventListener>(relaxed = true)
+            val keystore = org.siros.sdk.keystore.JweKeystore()
+            keystore.unlock(ByteArray(32) { it.toByte() }, ByteArray(0), ByteArray(32) { 5 }, "info".toByteArray())
+            val store = KeystoreMirroringStore(keystore, mirror = true)
+            val sessionStore = mockk<SessionStore>(relaxed = true)
+            val apiClient = mockk<BackendApiClient>(relaxed = true)
+            every { sessionStore.privateDataJwe } returns null
+            coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+            val engine = mockEngineConstructor(progressFlow = progressFlow, flowComplete = completeFlow)
+            every { engine.resumeIssuance(any(), any(), any(), any(), any()) } just runs
+            every { engine.sendCredentialNotification(any(), any(), any(), any()) } just runs
+            val resuming = java.util.concurrent.ConcurrentLinkedQueue<String>()
+            val continuations = java.util.concurrent.ConcurrentHashMap<String, String>()
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+                "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com", tenantId = "tenant-1", redirectUri = "siros://callback"),
+                "credentialStore" to store,
+                "keystore" to keystore,
+                "sessionStore" to sessionStore,
+                "apiClient" to apiClient,
+                "eventListener" to listener,
+                "pendingAuthorizations" to mutableMapOf<String, Any?>(),
+                "resumingFlowIds" to resuming,
+                "flowContinuations" to continuations,
+                "json" to Json { ignoreUnknownKeys = true },
+            )
+            invokeConnectEngine(wallet, "app-token")
+            advanceUntilIdle()
+            progressFlow.emit(
+                FlowProgressMessage(
+                    flowId = "flow-old",
+                    step = "authorization_required",
+                    payload = buildJsonObject {
+                        put("authorization_url", "https://issuer.example.com/auth?state=st-1")
+                        put("expected_redirect_uri", "siros://callback")
+                        put("state", "st-1")
+                        put("code_verifier", "verifier-SECRET")
+                        putJsonObject("credential_offer") { put("credential_issuer", "https://issuer.example.com") }
+                    },
+                ),
+            )
+            advanceUntilIdle()
+
+            wallet.completeAuthorization(flowId = "flow-old", code = "auth-code-SECRET", state = "st-1")
+            advanceUntilIdle()
+            coVerify(exactly = 1) { engine.forceReconnect() }
+            verify(exactly = 1) { engine.resumeIssuance(any(), any(), "siros://callback", "auth-code-SECRET", "verifier-SECRET") }
+            assertEquals(listOf("flow-old"), resuming.toList())
+
+            // The engine answers the stateless flow_start under a NEW flow id.
+            completeFlow.emit(
+                FlowCompleteMessage(
+                    flowId = "flow-new",
+                    credentials = listOf(CredentialResult(format = "dc+sd-jwt", credential = NymTestCredentials.sdJwt(sscValues = emptyList()), notificationId = "n-1")),
+                ),
+            )
+            advanceUntilIdle()
+
+            assertEquals(1, store.getAll().size)
+            verify(exactly = 1) { listener.onFlowComplete("flow-new", any()) }
+            verify(exactly = 0) { listener.onFlowError(any(), any(), any()) }
+            assertEquals(mapOf("flow-new" to "flow-old"), continuations.toMap())
+            assertTrue(resuming.isEmpty())
+            assertTrue(logs.toString(), logs.any { it.contains("reconnecting the engine WebSocket") })
+            assertTrue(logs.toString(), logs.any { it.contains("Engine WebSocket reconnected") })
+            assertTrue(logs.toString(), logs.any { it.contains("Flow flow-old") && it.contains("NEW flow flow-new") })
+            assertTrue(logs.toString(), logs.any { it.contains("Flow flow-new complete") && it.contains("resumption of flow flow-old") })
+            // Neither the authorization code nor the code verifier is logged.
+            logs.forEach { assertFalse(it, it.contains("SECRET")) }
+        } finally {
+            timber.log.Timber.uproot(tree)
+        }
+    }
+
+    /** A failed reconnect leaves no continuation behind. */
+    @Test
+    fun resumptionAfterTheBrowser_aFailedReconnect_isReportedAndLeavesNoPendingContinuation() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val engine = mockEngineConstructor(progressFlow = progressFlow)
+        coEvery { engine.forceReconnect() } throws IllegalStateException("socket gone")
+        val resuming = java.util.concurrent.ConcurrentLinkedQueue<String>()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", tenantId = "tenant-1", redirectUri = "siros://callback"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to listener,
+            "pendingAuthorizations" to mutableMapOf<String, Any?>(),
+            "resumingFlowIds" to resuming,
+            "flowContinuations" to java.util.concurrent.ConcurrentHashMap<String, String>(),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "flow-old", step = "authorization_required",
+                payload = buildJsonObject {
+                    put("authorization_url", "https://issuer.example.com/auth?state=st-1")
+                    put("expected_redirect_uri", "siros://callback")
+                    put("state", "st-1")
+                },
+            ),
+        )
+        advanceUntilIdle()
+        wallet.completeAuthorization(flowId = "flow-old", code = "c", state = "st-1")
+        advanceUntilIdle()
+        verify(exactly = 1) { listener.onFlowError("flow-old", "socket gone", any()) }
+        assertTrue(resuming.isEmpty())
+    }
+
+    /**
      * The resumed flow_start carries no client attestation any more: the
      * engine asks for it via a `request_attestation` sign request on the
      * resume too (go-wallet-backend's Execute() runs its attestation setup
