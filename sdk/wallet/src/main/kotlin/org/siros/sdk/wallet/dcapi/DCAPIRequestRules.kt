@@ -129,7 +129,7 @@ class DCAPIPresentationDeclined(
  *   exactly `openid4vp-v1-signed` (so `openid4vp-v1-multisigned` is
  *   refused), and [origin] must equal, as an exact string, an entry of a
  *   non-empty `expected_origins`. A missing or malformed `expected_origins`
- *   fails. Every credential query with `format: "circuit_zk"` needs it
+ *   fails. Every credential query with `format: "zkp_req"` needs it
  *   ([DEFAULT_REQUIRES_SIGNED_REQUEST]) and nothing can lift that:
  *   [requiresSignedRequest] is a hook that may only ADD requests to the
  *   set (its `false` never exempts a `circuit_zk` request).
@@ -168,10 +168,10 @@ class DCAPIRequestRules(
         /** The only protocol a `circuit_zk` request may use. */
         const val SIGNED_PROTOCOL = "openid4vp-v1-signed"
 
-        /** The mandatory rule, and the hook's default: any credential query with `format: "circuit_zk"`. */
+        /** The mandatory rule, and the hook's default: any credential query with `format: "zkp_req"`. */
         val DEFAULT_REQUIRES_SIGNED_REQUEST: (JsonObject?) -> Boolean = { query ->
             ((query?.get("credentials") as? JsonArray) ?: JsonArray(emptyList())).any {
-                (it as? JsonObject)?.get("format")?.jsonPrimitive?.contentOrNull == "circuit_zk"
+                (it as? JsonObject)?.get("format")?.jsonPrimitive?.contentOrNull == "zkp_req"
             }
         }
     }

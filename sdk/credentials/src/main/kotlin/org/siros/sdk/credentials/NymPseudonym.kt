@@ -91,7 +91,7 @@ data class NymConfigInfo(
 )
 
 /**
- * The rulebook's pseudonym function `pseudonym-v1-sha256`:
+ * The rulebook's pseudonym function `pseudonym` (v0.4; `pseudonym-v1-sha256` before):
  * `SHA256(DST || seed || prover_input || verifier_input)`, with
  * `DST = "nym_auth/v1/<config>"` (UTF-8) and no separators.
  *
@@ -109,7 +109,7 @@ object NymPseudonym {
     private const val INPUT_BYTES = 32
 
     /**
-     * The config table (rulebook v0.3). A new configuration is a new entry;
+     * The config table (rulebook v0.4). A new configuration is a new entry;
      * nothing else changes.
      */
     internal val configs: Map<String, NymConfig> = listOf(
@@ -137,7 +137,7 @@ object NymPseudonym {
      * @param proverInput The user-supplied value, for configs that hash one; otherwise must be null.
      * @param verifierId The opaque `verifier_id` string, for configs that use one; otherwise must be null.
      *   Its value form is defined by the rulebook / trust framework and produced by the PDP (for example
-     *   `x509_san_dns`: the lower-case DNS name, no prefix; `semantic`: `semantic_id:` plus the ETSI id).
+     *   `x509_san_dns`: the Client Identifier INCLUDING its prefix, `x509_san_dns:<dns name>`; `semantic`: `semantic_id:` plus the ETSI id).
      *   It is hashed byte-for-byte as UTF-8: no lower-casing, trimming or prefix handling happens here.
      * @param verifierContext The `verifier_context` string, for configs that use one; otherwise must be null.
      *   Any length is accepted; the rulebook's 1-64 byte limit is the wallet's satisfiability check.

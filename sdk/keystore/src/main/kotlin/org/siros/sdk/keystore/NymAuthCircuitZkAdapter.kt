@@ -23,6 +23,7 @@ import org.siros.sdk.credentials.RulebookCircuitZkValidator
 import org.siros.sdk.credentials.CircuitZkVerdict
 import org.siros.sdk.credentials.CircuitZkRuleSet
 import org.siros.sdk.credentials.NymPseudonym
+import org.siros.sdk.credentials.ProofTime
 import org.siros.sdk.credentials.NymSeedKind
 import org.siros.sdk.credentials.ResultValue
 import org.siros.sdk.credentials.ZkArtifactException
@@ -45,11 +46,11 @@ private class LoadedNymAuthCircuit(val descriptor: ZkCircuitDescriptor, @Volatil
 
 /**
  * The adapter for the `nymauth-*` circuits (systems [LONGFELLOW_SYSTEM] and [VEGA_SYSTEM]): proves the
- * rulebook's `pseudonym-v1-sha256` (configuration `known-offender-matching-ssc`) and `age_check`.
+ * rulebook's `pseudonym` (configuration `known-offender-matching-ssc`) and `age_check`.
  *
  * What it does itself, in this order, refusing (an [CircuitZkError.AccessDenied], never a fallback to the
  * fake prover) at the first thing it cannot do:
- * 1. Only what the `nymauth-*` circuits prove is accepted: one `pseudonym-v1-sha256` with the config the
+ * 1. Only what the `nymauth-*` circuits prove is accepted: one `pseudonym` with the config the
  *    circuit was built for and at most one `age_check` with only `ge`/`le`; the credential an mdoc.
  * 2. The circuit's catalog descriptor (already checked by the dispatcher to be the chosen, active circuit)
  *    must be of format `mdoc` and of the configuration the circuit was built for.
@@ -144,7 +145,7 @@ class NymAuthCircuitZkAdapter(
         // The proof's time input. UNDECIDED upstream (verification time T): until it is decided this is the device clock, and
         // this is the one place T plugs in (a value carried by CircuitZkProveInput would replace it here).
         val time = Instant.now(clock).truncatedTo(ChronoUnit.SECONDS)
-        val timeText = time.toString().also { if (it.length != TIME_CHARS) throw refuse() }
+        val timeText = try { ProofTime.render(time) } catch (e: org.siros.sdk.credentials.ProofTimeException) { throw refuse() }
 
         val verifierInput = sha256(verifierId.toByteArray(Charsets.UTF_8))
         val deviceAuthBytes = MdocDeviceResponseBuilder.buildDeviceAuthentication(document.docType, input.sessionTranscript)
@@ -214,7 +215,7 @@ class NymAuthCircuitZkAdapter(
      * shape checks below.
      */
     private val validator = RulebookCircuitZkValidator(
-        CircuitZkRuleSet.rulebookV03(
+        CircuitZkRuleSet.rulebookV04(
             listOf(CircuitZkRuleSet.Companion.PseudonymConfig(SUPPORTED_CONFIG, usesVerifierInput = true, requiresVerifierContext = false)),
         ),
     )
@@ -368,7 +369,6 @@ class NymAuthCircuitZkAdapter(
 
         private const val SECRET_SEED_BYTES = 16
         private const val SIGNATURE_BYTES = 64
-        private const val TIME_CHARS = 20
         private const val NO_LOWER_BOUND = "0000-00-00"
         private const val NO_UPPER_BOUND = "9999-12-31"
     }

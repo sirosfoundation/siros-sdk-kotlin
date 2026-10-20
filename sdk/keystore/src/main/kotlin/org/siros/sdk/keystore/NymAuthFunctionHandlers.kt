@@ -8,7 +8,7 @@ import org.siros.sdk.credentials.NymPseudonym
 import org.siros.sdk.credentials.mdoc.DocumentMdoc
 
 // The handlers of the nym_auth rulebook's functions. Everything that names `birth_date`, `ssc`, `psc`, the
-// credential's doctype namespace, `age_check` or `pseudonym-v1-sha256` lives here (and in the nymauth adapter); the
+// credential's doctype namespace, `age_check` or `pseudonym` lives here (and in the nymauth adapter); the
 // presenter and the wallet reach it only through the [CircuitZkFunctionHandler] hooks.
 
 private const val COMMITMENT_BYTES = 32
@@ -22,11 +22,11 @@ private fun elementBytes(document: DocumentMdoc, name: String): ByteArray? {
 }
 
 /**
- * `pseudonym-v1-sha256`: needs the seed its config derives from (the device `private_seed` or the
+ * `pseudonym`: needs the seed its config derives from (the device `private_seed` or the
  * issuer-delivered `secret_seed`) and a user value where the config takes one.
  */
 object PseudonymFunctionHandler : CircuitZkFunctionHandler {
-    override val functionId = "pseudonym-v1-sha256"
+    override val functionId = "pseudonym"
 
     override fun witnessNeeds(function: CircuitZkFunction): Set<CircuitZkWitnessKind> {
         val info = (function.params["config"] as? kotlinx.serialization.json.JsonPrimitive)

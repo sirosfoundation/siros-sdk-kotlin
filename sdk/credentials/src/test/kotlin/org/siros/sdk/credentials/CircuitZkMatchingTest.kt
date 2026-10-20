@@ -54,8 +54,8 @@ class CircuitZkMatchingTest {
         return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(issuerSigned.EncodeToBytes())
     }
 
-    private fun query(extraMeta: String = "", format: String = "circuit_zk"): JsonObject = json.parseToJsonElement(
-        """{"credentials":[{"id":"q","format":"$format","meta":{"doctype_value":"$doctype"$extraMeta}}]}"""
+    private fun query(extraMeta: String = "", format: String = "zkp_req"): JsonObject = json.parseToJsonElement(
+        """{"credentials":[{"id":"q","format":"$format","meta":{"source_format":"mso_mdoc","doctype_value":"$doctype"$extraMeta}}]}"""
     ).jsonObject
 
     private val plan = CircuitZkPlan(functions = listOf(CircuitZkFunction("fn-a", "h1")))
@@ -88,7 +88,7 @@ class CircuitZkMatchingTest {
     }
 
     private fun mixed(circuitId: String? = "q"): JsonObject = json.parseToJsonElement(
-        """{"credentials":[{${circuitId?.let { "\"id\":\"$it\"," } ?: ""}"format":"circuit_zk","meta":{"doctype_value":"$doctype"}},""" +
+        """{"credentials":[{${circuitId?.let { "\"id\":\"$it\"," } ?: ""}"format":"zkp_req","meta":{"source_format":"mso_mdoc","doctype_value":"$doctype"}},""" +
             """{"id":"p","format":"mso_mdoc","meta":{"doctype_value":"$doctype"},"claims":[{"path":["$doctype","given_name"]}]}]}"""
     ).jsonObject
 
@@ -138,7 +138,20 @@ class CircuitZkMatchingTest {
         val r = match(query(), listOf(mdoc(1, doctype), mdoc(2, "other"), sdJwt(3)), support())
         assertEquals(listOf(1L), r.candidates.map { it.id })
         assertEquals(plan, r.circuitZkPlan)
-        assertEquals("circuit_zk", r.format)
+        assertEquals("zkp_req", r.format)
+    }
+
+    @Test
+    fun `an attestation must be of the requests source_format - a bbs_cd request is not answered with an mdoc`() {
+        val bbs = CircuitZkPlan(
+            functions = plan.functions,
+            raw = json.parseToJsonElement("""{"meta":{"source_format":"bbs_cd","schema_id_value":"s"}}""").jsonObject,
+        )
+        val r = match(query(), listOf(mdoc(1, doctype)), support(planner = FakePlanner { CircuitZkPlanResult.Plan(bbs) }))
+        assertEquals(emptyList<Long>(), r.candidates.map { it.id })
+        // The same plan over mso_mdoc matches.
+        val mso = CircuitZkPlan(functions = plan.functions, raw = json.parseToJsonElement("""{"meta":{"source_format":"mso_mdoc","doctype_value":"$doctype"}}""").jsonObject)
+        assertEquals(listOf(1L), match(query(), listOf(mdoc(1, doctype)), support(planner = FakePlanner { CircuitZkPlanResult.Plan(mso) })).candidates.map { it.id })
     }
 
     @Test
@@ -150,7 +163,7 @@ class CircuitZkMatchingTest {
 
     @Test
     fun `flag off - even a credential stored as format circuit_zk is not matched`() {
-        val odd = StoredCredential(id = 9, format = "circuit_zk", raw = "x", metadata = CredentialMetadata(doctype = doctype), batchId = 9, instanceId = 0)
+        val odd = StoredCredential(id = 9, format = "zkp_req", raw = "x", metadata = CredentialMetadata(doctype = doctype), batchId = 9, instanceId = 0)
         assertTrue(match(query(), listOf(odd), null).candidates.isEmpty())
     }
 
@@ -241,7 +254,7 @@ class CircuitZkMatchingTest {
     @Test
     fun `the query's own doctype_value must equal the credential's`() {
         val q = json.parseToJsonElement(
-            """{"credentials":[{"id":"q","format":"circuit_zk","meta":{"doctype_value":"other"}}]}"""
+            """{"credentials":[{"id":"q","format":"zkp_req","meta":{"source_format":"mso_mdoc","doctype_value":"other"}}]}"""
         ).jsonObject
         val s = support(circuits = listOf(circuit(docTypes = setOf(doctype, "other"))))
         assertEquals(listOf(2L), match(q, listOf(mdoc(1, doctype), mdoc(2, "other")), s).candidates.map { it.id })
@@ -263,7 +276,7 @@ class CircuitZkMatchingTest {
     @Test
     fun `other formats are unaffected by circuit_zk support and by its failures`() {
         val q = json.parseToJsonElement(
-            """{"credentials":[{"id":"q","format":"mso_mdoc","meta":{"doctype_value":"$doctype"}}]}"""
+            """{"credentials":[{"id":"q","format":"mso_mdoc","meta":{"source_format":"mso_mdoc","doctype_value":"$doctype"}}]}"""
         ).jsonObject
         val broken = support(planner = FakePlanner { error("boom") })
         assertEquals(listOf(1L), match(q, listOf(mdoc(1, doctype)), broken).candidates.map { it.id })
@@ -273,7 +286,7 @@ class CircuitZkMatchingTest {
     fun `a request mixing circuit_zk with another format keeps the engine's answer for the other format when circuit_zk fails`() {
         CredentialMatcher.engine = { _, _, _, _ -> SharedDcqlMatcher.Outcome(true, mapOf("a" to listOf(1L))) }
         val q = json.parseToJsonElement(
-            """{"credentials":[{"id":"a","format":"mso_mdoc","meta":{"doctype_value":"$doctype"}},{"id":"b","format":"circuit_zk","meta":{"doctype_value":"$doctype"}}]}"""
+            """{"credentials":[{"id":"a","format":"mso_mdoc","meta":{"source_format":"mso_mdoc","doctype_value":"$doctype"}},{"id":"b","format":"zkp_req","meta":{"source_format":"mso_mdoc","doctype_value":"$doctype"}}]}"""
         ).jsonObject
         val out = CredentialMatcher.matchDcql(q, listOf(mdoc(1, doctype)), circuitZk = support(planner = FakePlanner { error("x") }))
         assertEquals(listOf(1L), out.queryResults.first { it.queryId == "a" }.candidates.map { it.id })
@@ -284,8 +297,9 @@ class CircuitZkMatchingTest {
 
     @Test
     fun `isCircuitZkFormat is the one predicate and is not the legacy zk format`() {
-        assertTrue(CredentialUtils.isCircuitZkFormat("circuit_zk"))
-        assertTrue(CredentialUtils.isCircuitZkFormat("CIRCUIT_ZK"))
+        assertTrue(CredentialUtils.isCircuitZkFormat("zkp_req"))
+        assertTrue(CredentialUtils.isCircuitZkFormat("ZKP_REQ"))
+        assertFalse(CredentialUtils.isCircuitZkFormat("circuit_zk"))
         assertFalse(CredentialUtils.isCircuitZkFormat("mso_mdoc_zk"))
         assertFalse(CredentialUtils.isCircuitZkFormat("mso_mdoc"))
         assertFalse(CredentialUtils.isCircuitZkFormat(null))
@@ -376,7 +390,7 @@ class CircuitZkMatchingTest {
 
     // ---- circuits the matcher constrains (capabilities / credential_type) ----
 
-    private val capabilities = """{"schema":1,"presentation":"circuit_zk","credential":{"format":"mso_mdoc","type":"$doctype"},"functions":[{"id":"fn-a"}]}"""
+    private val capabilities = """{"schema":1,"presentation":"zkp_req","credential":{"format":"mso_mdoc","type":"$doctype"},"functions":[{"id":"fn-a"}]}"""
 
     private fun constrained(id: String = "c1") = CircuitZkCircuit("sys", id, setOf(doctype), capabilities = capabilities)
 

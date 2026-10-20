@@ -15,7 +15,7 @@ data class CircuitZkFunction(
 
 /**
  * A request's circuit list: the verifier's two independent lists
- * (`circuit_proof_system_values`, `circuit_id_values`), kept as two lists. A circuit is admitted when
+ * (`proof_system_values`, `system_id_values`), kept as two lists. A circuit is admitted when
  * its system is in [proofSystems] AND its id (or an alias of it) is in [circuitIds]; a list the
  * verifier did not send is null and constrains nothing, and a list sent empty admits nothing.
  *
@@ -39,8 +39,8 @@ data class CircuitZkCircuitFilter(val proofSystems: List<String>?, val circuitId
         return circuit.circuitId.takeIf { it in ids } ?: circuit.aliases.firstOrNull { it in ids }
     }
 
-    /** Whether the request offered [circuit]'s proof system: false when it stated no list (nothing offered). */
-    fun offersProofSystem(circuit: CircuitZkCircuit): Boolean = proofSystems?.contains(circuit.system) == true
+    /** Whether the request accepts [circuit]'s proof system: `proof_system_values` is OPTIONAL, so no list accepts any. */
+    fun offersProofSystem(circuit: CircuitZkCircuit): Boolean = proofSystems?.contains(circuit.system) ?: true
 }
 
 /**
@@ -54,7 +54,14 @@ data class CircuitZkPlan(
     val functions: List<CircuitZkFunction>,
     val circuitFilter: CircuitZkCircuitFilter? = null,
     val raw: JsonObject = JsonObject(emptyMap()),
-)
+) {
+    /**
+     * `meta.source_format`: the format of the attestation the proof is made over (`mso_mdoc`; `bbs_cd` is held). The planner
+     * requires it; a hand-made plan without it is read as `mso_mdoc`, the only format this SDK stores.
+     */
+    val sourceFormat: String?
+        get() = ((raw["meta"] as? JsonObject)?.get("source_format") as? JsonPrimitive)?.takeIf { it.isString }?.content ?: "mso_mdoc"
+}
 
 /** Result of [CircuitZkPlanner.plan]. */
 sealed interface CircuitZkPlanResult {
@@ -167,7 +174,7 @@ object SharedCircuitZkServing : CircuitZkServing {
     fun capabilities(circuit: CircuitZkCircuit): List<uniffi.siros_dc_matcher_ffi.FfiCapability> =
         (listOf(circuit.circuitId) + circuit.aliases.sorted()).distinct().map { id ->
             val params = buildMap {
-                put("circuit_id", id)
+                put("system_id", id)
                 circuit.functions?.let { put("functions", it.sorted().joinToString(",")) }
                 circuit.credentialType?.let { put("credential_type", it) }
                 circuit.capabilities?.let { put("capabilities", it) }
@@ -177,7 +184,7 @@ object SharedCircuitZkServing : CircuitZkServing {
 
     override fun serves(circuit: CircuitZkCircuit, docType: String, query: JsonObject): Boolean? = try {
         val blob = uniffi.siros_dc_matcher_ffi.SirosBlobBuilder().use { builder ->
-            capabilities(circuit).forEach(builder::addCircuitZkSystem)
+            capabilities(circuit).forEach(builder::addZkpReqSystem)
             builder.addCredential(
                 uniffi.siros_dc_matcher_ffi.FfiCredential(
                     id = "1", format = "mso_mdoc", doctype = docType, vct = null,
@@ -276,6 +283,10 @@ internal object CircuitZkMatching {
             emptySet<String>()
         }
         val wantedDoctype = ((query["meta"] as? JsonObject)?.get("doctype_value") as? JsonPrimitive)?.contentOrNull
+        // The attestation a proof is made over must be of the request's `source_format`. Only `mso_mdoc` attestations are
+        // stored here (`bbs_cd` is held), so a request for any other source format is not offered, never answered with a
+        // credential of another format.
+        if (plan.sourceFormat != "mso_mdoc") return plan to emptyList()
         val matched = credentials.filter { cred ->
             cred.format.equals("mso_mdoc", ignoreCase = true) && run {
                 val docType = CredentialUtils.parseMdocDocument(cred)?.docType ?: cred.metadata?.doctype

@@ -12,9 +12,9 @@ class SirosCredentialRegistryCircuitZkTest {
         val c = CircuitZkCircuit("sys", "c1", setOf("d"), aliases = setOf("old", "older"))
         assertEquals(
             listOf(
-                FfiCapability("sys", mapOf("circuit_id" to "c1")),
-                FfiCapability("sys", mapOf("circuit_id" to "old")),
-                FfiCapability("sys", mapOf("circuit_id" to "older")),
+                FfiCapability("sys", mapOf("system_id" to "c1")),
+                FfiCapability("sys", mapOf("system_id" to "old")),
+                FfiCapability("sys", mapOf("system_id" to "older")),
             ),
             SirosCredentialRegistry.circuitCapabilities(c),
         )
@@ -22,13 +22,13 @@ class SirosCredentialRegistryCircuitZkTest {
 
     @Test
     fun functionsAreDeclaredOnlyWhenTheCatalogSaysWhichThereAre() {
-        val declared = CircuitZkCircuit("sys", "c1", setOf("d"), functions = setOf("pseudonym-v1-sha256", "age_check"))
+        val declared = CircuitZkCircuit("sys", "c1", setOf("d"), functions = setOf("pseudonym", "age_check"))
         assertEquals(
-            mapOf("circuit_id" to "c1", "functions" to "age_check,pseudonym-v1-sha256"),
+            mapOf("system_id" to "c1", "functions" to "age_check,pseudonym"),
             SirosCredentialRegistry.circuitCapabilities(declared).single().params,
         )
         val undeclared = CircuitZkCircuit("sys", "c1", setOf("d"))
-        assertEquals(mapOf("circuit_id" to "c1"), SirosCredentialRegistry.circuitCapabilities(undeclared).single().params)
+        assertEquals(mapOf("system_id" to "c1"), SirosCredentialRegistry.circuitCapabilities(undeclared).single().params)
     }
 
     @Test
@@ -36,18 +36,18 @@ class SirosCredentialRegistryCircuitZkTest {
         val caps = """{"schema":1,"unknown":"not read here"}"""
         val c = CircuitZkCircuit("sys", "c1", setOf("d"), functions = setOf("f"), credentialType = "d", capabilities = caps)
         assertEquals(
-            mapOf("circuit_id" to "c1", "functions" to "f", "credential_type" to "d", "capabilities" to caps),
+            mapOf("system_id" to "c1", "functions" to "f", "credential_type" to "d", "capabilities" to caps),
             SirosCredentialRegistry.circuitCapabilities(c).single().params,
         )
         // Each alias is registered with the same values.
         val aliased = SirosCredentialRegistry.circuitCapabilities(c.copy(aliases = setOf("old")))
-        assertEquals(listOf("c1", "old"), aliased.map { it.params["circuit_id"] })
+        assertEquals(listOf("c1", "old"), aliased.map { it.params["system_id"] })
         assertEquals(listOf(caps, caps), aliased.map { it.params["capabilities"] })
     }
 
     @Test
     fun neitherIsRegisteredWhenTheCircuitHasNone() {
         val params = SirosCredentialRegistry.circuitCapabilities(CircuitZkCircuit("sys", "c1", setOf("d"))).single().params
-        assertEquals(setOf("circuit_id"), params.keys)
+        assertEquals(setOf("system_id"), params.keys)
     }
 }

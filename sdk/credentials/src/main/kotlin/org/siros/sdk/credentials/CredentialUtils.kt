@@ -798,7 +798,7 @@ object CredentialUtils {
      * `mso_mdoc_zk` presentation path, which would produce the wrong
      * presentation.
      */
-    fun isCircuitZkFormat(format: String?): Boolean = format.equals("circuit_zk", ignoreCase = true)
+    fun isCircuitZkFormat(format: String?): Boolean = format.equals("zkp_req", ignoreCase = true)
 
     /**
      * Whether [cred] is an mdoc of one of [docTypes] - the types served

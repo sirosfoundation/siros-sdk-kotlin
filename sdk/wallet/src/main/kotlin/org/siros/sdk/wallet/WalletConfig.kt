@@ -342,7 +342,7 @@ data class WalletConfig(
     /**
      * Which DC API requests must be signed and name the calling origin, given
      * the request's DCQL query. The default is any query with a credential of
-     * `format: "circuit_zk"`.
+     * `format: "zkp_req"`.
      */
     val dcApiRequiresSignedRequest: (kotlinx.serialization.json.JsonObject?) -> Boolean =
         DCAPIRequestRules.DEFAULT_REQUIRES_SIGNED_REQUEST,

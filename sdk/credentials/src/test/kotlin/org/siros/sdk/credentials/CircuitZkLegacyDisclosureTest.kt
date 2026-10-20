@@ -47,16 +47,18 @@ class CircuitZkLegacyDisclosureTest {
         assertNull(CircuitZkLegacyDisclosure.parse(fn("""{"claims":["a"],"systems":$systems}""", id = "age_check")))
     }
 
+    private val rawMeta = Json.parseToJsonElement("""{"meta":{"source_format":"mso_mdoc","doctype_value":"d"}}""").jsonObject
+
     private fun ruleOf(v: CircuitZkVerdict) = (v as CircuitZkVerdict.AccessDenied).ruleId
 
     @Test
     fun `the rulebook validator refuses the function until the rule set adds it`() {
-        val plan = CircuitZkPlan(listOf(fn("""{"claims":["a"],"systems":$systems}""")))
-        assertEquals("unknown-function", ruleOf(RulebookCircuitZkValidator().validate(plan)))
-        val withIt = RulebookCircuitZkValidator(CircuitZkRuleSet.rulebookV03().withFunction(CircuitZkLegacyDisclosure.FUNCTION_ID, CircuitZkLegacyDisclosure.RULES))
+        val plan = CircuitZkPlan(listOf(fn("""{"claims":["a"],"systems":$systems}""")), raw = rawMeta)
+        assertEquals("function_unknown", ruleOf(RulebookCircuitZkValidator().validate(plan)))
+        val withIt = RulebookCircuitZkValidator(CircuitZkRuleSet.rulebookV04().withFunction(CircuitZkLegacyDisclosure.FUNCTION_ID, CircuitZkLegacyDisclosure.RULES))
         assertEquals(CircuitZkVerdict.Ok, withIt.validate(plan))
-        assertEquals("claim-disclosure-malformed", ruleOf(withIt.validate(CircuitZkPlan(listOf(fn("""{"claims":[],"systems":$systems}"""))))))
-        assertEquals("claim-disclosure-count", ruleOf(withIt.validate(CircuitZkPlan(listOf(plan.functions[0], plan.functions[0].copy(handle = "h2"))))))
+        assertEquals("claim-disclosure-malformed", ruleOf(withIt.validate(CircuitZkPlan(listOf(fn("""{"claims":[],"systems":$systems}""")), raw = rawMeta))))
+        assertEquals("claim-disclosure-count", ruleOf(withIt.validate(CircuitZkPlan(listOf(plan.functions[0], plan.functions[0].copy(handle = "h2")), raw = rawMeta))))
         assertNotNull(CircuitZkLegacyDisclosure.FUNCTION_ID)
     }
 }

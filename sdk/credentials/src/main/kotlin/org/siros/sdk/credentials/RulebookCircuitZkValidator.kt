@@ -6,11 +6,11 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 
 /**
- * What the rules may consult besides the plan itself. There is deliberately no `verifier_id_type`
- * registry: a request no longer carries the member (the wallet picks the type itself) and one that
- * still does is accepted and ignored.
+ * What the rules may consult besides the plan itself: the circuits (for the wallet-only `function-not-declared` rule) and
+ * the plan's `meta.source_format`, which the pseudonym's `prf` rule depends on. There is deliberately no
+ * `verifier_id_type` registry: the member is gone from the request (an undeclared parameter if sent).
  */
-class CircuitZkRuleEnv(val circuits: CircuitZkCircuitSource?)
+class CircuitZkRuleEnv(val circuits: CircuitZkCircuitSource?, val sourceFormat: String? = null)
 
 /** A rule over the whole plan: [holds] false makes the request unsatisfiable, reported as [id]. */
 class CircuitZkPlanRule(val id: String, val holds: (CircuitZkPlan, CircuitZkRuleEnv) -> Boolean)
@@ -31,7 +31,8 @@ class CircuitZkFunctionRules(
 /**
  * A named, data-driven rule set. A function id that is a key of [functions]
  * is a known function; any other function id is unsatisfiable. New functions
- * and credential types add entries; the validator does not change.
+ * and credential types add entries; the validator does not change. The rule ids of the rulebook rules are the stable
+ * codes of the matcher's `zkp_req_unsat` vectors.
  */
 class CircuitZkRuleSet(
     val planRules: List<CircuitZkPlanRule>,
@@ -41,13 +42,19 @@ class CircuitZkRuleSet(
     fun withFunction(id: String, rules: CircuitZkFunctionRules): CircuitZkRuleSet = CircuitZkRuleSet(planRules, functions + (id to rules))
 
     companion object {
-        const val PSEUDONYM = "pseudonym-v1-sha256"
+        const val PSEUDONYM = "pseudonym"
         const val AGE_CHECK = "age_check"
 
-        /** How a pseudonym config uses `verifier_input` and `verifier_context` (rulebook v0.3). */
+        /** The `meta.source_format`s of the rulebook: `mso_mdoc` (stored here) and `bbs_cd` (held). */
+        private val SOURCE_FORMATS = setOf("mso_mdoc", "bbs_cd")
+        private const val PRF_SHA256 = "sha-256"
+        private const val PRF_HASHDH = "hashdh-bls12381g1"
+        private const val SSC_CONFIG = "known-offender-matching-ssc"
+
+        /** How a pseudonym config uses `verifier_input` and `verifier_context` (rulebook v0.4). */
         class PseudonymConfig(val id: String, val usesVerifierInput: Boolean, val requiresVerifierContext: Boolean)
 
-        /** The four rulebook v0.3 configurations. */
+        /** The four rulebook configurations. */
         val RULEBOOK_PSEUDONYM_CONFIGS: List<PseudonymConfig> = listOf(
             PseudonymConfig("known-offender-matching-ssc", usesVerifierInput = true, requiresVerifierContext = false),
             PseudonymConfig("known-offender-matching-psc", usesVerifierInput = true, requiresVerifierContext = false),
@@ -57,8 +64,8 @@ class CircuitZkRuleSet(
 
         private const val MAX_CONTEXT_BYTES = 64
 
-        /** The rules of rulebook v0.3. [pseudonymConfigs] is the set of configurations this wallet supports. */
-        fun rulebookV03(
+        /** The rules of rulebook v0.4. [pseudonymConfigs] is the set of configurations this wallet supports. */
+        fun rulebookV04(
             pseudonymConfigs: List<PseudonymConfig> = RULEBOOK_PSEUDONYM_CONFIGS,
             /** The predicate functions this wallet declares: each one's per-function rules come from its declaration. */
             predicates: PredicateFunctions = PredicateFunctions.DEFAULT,
@@ -66,10 +73,18 @@ class CircuitZkRuleSet(
             val byId = pseudonymConfigs.associateBy { it.id }
             return CircuitZkRuleSet(
                 planRules = listOf(
-                    CircuitZkPlanRule("meta-vct-values-reserved") { plan, _ ->
-                        ((plan.raw["meta"] as? JsonObject)?.containsKey("vct_values")) != true
+                    CircuitZkPlanRule("source_format_unsupported") { plan, _ -> meta(plan)?.get("source_format")?.let { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content } in SOURCE_FORMATS },
+                    CircuitZkPlanRule("meta_type_value_invalid") { plan, _ ->
+                        val meta = meta(plan)
+                        val format = (meta?.get("source_format") as? JsonPrimitive)?.takeIf { it.isString }?.content
+                        // Exactly the type value of the source format, and never `vct_values`.
+                        meta != null && !meta.containsKey("vct_values") && when (format) {
+                            "mso_mdoc" -> meta.containsKey("doctype_value") && !meta.containsKey("schema_id_value")
+                            "bbs_cd" -> meta.containsKey("schema_id_value") && !meta.containsKey("doctype_value")
+                            else -> true
+                        }
                     },
-                    CircuitZkPlanRule("holder-binding-false") { plan, _ ->
+                    CircuitZkPlanRule("holder_binding_waived") { plan, _ ->
                         val v = plan.raw["require_cryptographic_holder_binding"]
                         v == null || (v is JsonPrimitive && !v.isString && v.booleanOrNull == true)
                     },
@@ -78,20 +93,27 @@ class CircuitZkRuleSet(
                 functions = mapOf(
                     PSEUDONYM to CircuitZkFunctionRules(
                         maxItems = 1,
-                        countRuleId = "pseudonym-count",
+                        countRuleId = "pseudonym_repeated",
                         rules = listOf(
-                            CircuitZkFunctionRule("pseudonym-config-unsupported") { f, _ ->
-                                str(f.params, "config")?.let { it in byId } == true
+                            CircuitZkFunctionRule("pseudonym_config_missing") { f, _ -> f.params.containsKey("config") },
+                            CircuitZkFunctionRule("pseudonym_config_unknown") { f, _ -> str(f.params, "config")?.let { it in byId } == true },
+                            CircuitZkFunctionRule("pseudonym_ver_missing") { f, _ -> f.params.containsKey("ver") },
+                            CircuitZkFunctionRule("pseudonym_ver_unsupported") { f, _ ->
+                                val ver = f.params["ver"] as? JsonPrimitive
+                                ver != null && !ver.isString && ver.content == "1"
                             },
-                            CircuitZkFunctionRule("verifier-context-required") { f, _ ->
+                            CircuitZkFunctionRule("pseudonym_prf_missing") { f, _ -> f.params.containsKey("prf") },
+                            CircuitZkFunctionRule("pseudonym_prf_unsupported") { f, env ->
+                                val prf = str(f.params, "prf")
+                                when (env.sourceFormat ?: "mso_mdoc") {
+                                    "mso_mdoc" -> prf == PRF_SHA256
+                                    "bbs_cd" -> prf == PRF_HASHDH && str(f.params, "config") == SSC_CONFIG
+                                    else -> false
+                                }
+                            },
+                            CircuitZkFunctionRule("verifier_context_invalid") { f, _ ->
                                 val cfg = byId[str(f.params, "config")] ?: return@CircuitZkFunctionRule true
-                                !cfg.requiresVerifierContext || f.params.containsKey("verifier_context")
-                            },
-                            CircuitZkFunctionRule("verifier-context-forbidden") { f, _ ->
-                                val cfg = byId[str(f.params, "config")] ?: return@CircuitZkFunctionRule true
-                                cfg.requiresVerifierContext || !f.params.containsKey("verifier_context")
-                            },
-                            CircuitZkFunctionRule("verifier-context-length") { f, _ ->
+                                if (cfg.requiresVerifierContext != f.params.containsKey("verifier_context")) return@CircuitZkFunctionRule false
                                 if (!f.params.containsKey("verifier_context")) return@CircuitZkFunctionRule true
                                 val bytes = str(f.params, "verifier_context")?.toByteArray(Charsets.UTF_8)?.size
                                 bytes != null && bytes in 1..MAX_CONTEXT_BYTES
@@ -101,6 +123,8 @@ class CircuitZkRuleSet(
                 ) + predicates.ids.associateWith { predicates[it]!!.validatorRules() },
             )
         }
+
+        private fun meta(plan: CircuitZkPlan): JsonObject? = plan.raw["meta"] as? JsonObject
 
         private fun str(params: JsonObject, key: String): String? =
             (params[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
@@ -133,23 +157,24 @@ class CircuitZkRuleSet(
  * Whether a predicate holds for the holder's `birth_date` is data-dependent
  * and is checked when proving, not here.
  *
- * A `verifier_id_type` member in a pseudonym item is neither checked nor refused.
+ * A `verifier_id_type` member is an undeclared parameter and ignored here.
  *
  * Every failure is [CircuitZkVerdict.AccessDenied]. Its `ruleId` is for local
  * logs and tests; it must never reach the verifier.
  */
 class RulebookCircuitZkValidator(
-    private val rules: CircuitZkRuleSet = CircuitZkRuleSet.rulebookV03(),
+    private val rules: CircuitZkRuleSet = CircuitZkRuleSet.rulebookV04(),
     circuits: CircuitZkCircuitSource? = null,
 ) : CircuitZkRequestValidator {
     private val env = CircuitZkRuleEnv(circuits)
 
     override fun validate(plan: CircuitZkPlan): CircuitZkVerdict {
+        val planEnv = CircuitZkRuleEnv(env.circuits, plan.sourceFormat)
         for (rule in rules.planRules) {
-            if (!rule.holds(plan, env)) return CircuitZkVerdict.AccessDenied(rule.id)
+            if (!rule.holds(plan, planEnv)) return CircuitZkVerdict.AccessDenied(rule.id)
         }
         for (function in plan.functions) {
-            if (function.id !in rules.functions) return CircuitZkVerdict.AccessDenied("unknown-function")
+            if (function.id !in rules.functions) return CircuitZkVerdict.AccessDenied("function_unknown")
         }
         for ((id, entry) in rules.functions) {
             val items = plan.functions.filter { it.id == id }
@@ -157,7 +182,7 @@ class RulebookCircuitZkValidator(
             if (max != null && items.size > max) return CircuitZkVerdict.AccessDenied(entry.countRuleId)
             for (item in items) {
                 for (rule in entry.rules) {
-                    if (!rule.holds(item, env)) return CircuitZkVerdict.AccessDenied(rule.id)
+                    if (!rule.holds(item, planEnv)) return CircuitZkVerdict.AccessDenied(rule.id)
                 }
             }
         }
@@ -168,38 +193,38 @@ class RulebookCircuitZkValidator(
 
 /**
  * The validator rules of one declared predicate function, derived from its declaration so the same data drives
- * consent, the local pre-check, the cross-query rule and the validator. Rule ids are `<slug>-<rule>`, with the slug
- * the function id with `_` as `-` (`age_check`: `age-check-count`, `age-check-no-bounds`, `age-check-bad-date`,
- * `age-check-le-before-ge`, `age-check-span-short`). Like the rulebook's, they do not reject a param they do not
+ * consent, the local pre-check, the cross-query rule and the validator. Rule ids are `<function id>_<rule>`
+ * (`age_check`: `age_check_repeated`, `age_check_no_bound`, `age_check_bad_date`, `age_check_inverted`,
+ * `age_check_span_too_short`: for the rulebook's function, the matcher's own codes). Like the rulebook's, they do not reject a param they do not
  * know (the prover does); each is data-independent.
  */
 fun PredicateFunction.validatorRules(): CircuitZkFunctionRules {
-    val slug = id.replace('_', '-')
+    val slug = id
     val rules = mutableListOf<CircuitZkFunctionRule>()
-    rules += CircuitZkFunctionRule("$slug-no-bounds") { f, _ -> comparisons.keys.any { f.params.containsKey(it) } }
-    rules += CircuitZkFunctionRule(if (valueType == ValueType.DATE) "$slug-bad-date" else "$slug-bad-operand") { f, _ ->
+    rules += CircuitZkFunctionRule("${slug}_no_bound") { f, _ -> comparisons.keys.any { f.params.containsKey(it) } }
+    rules += CircuitZkFunctionRule(if (valueType == ValueType.DATE) "${slug}_bad_date" else "${slug}_bad_operand") { f, _ ->
         comparisons.all { (param, op) -> operandWellFormed(f.params[param], op) }
     }
     if (claim == ClaimSource.FromParam) {
-        rules += CircuitZkFunctionRule("$slug-bad-claim") { f, _ -> f.params["claim"]?.let { claimParam(it) } != null }
+        rules += CircuitZkFunctionRule("${slug}_bad_claim") { f, _ -> f.params["claim"]?.let { claimParam(it) } != null }
     }
     val ge = comparisons.entries.firstOrNull { it.value == ComparisonOp.GE }?.key
     val le = comparisons.entries.firstOrNull { it.value == ComparisonOp.LE }?.key
     if (ge != null && le != null) {
-        rules += CircuitZkFunctionRule("$slug-le-before-ge") { f, _ ->
+        rules += CircuitZkFunctionRule("${slug}_inverted") { f, _ ->
             val lo = operandOf(f.params[ge], ComparisonOp.GE)
             val hi = operandOf(f.params[le], ComparisonOp.LE)
             lo == null || hi == null || PredicateFunctions.compareOperands(valueType, hi, lo) >= 0
         }
         if (minSpan != null) {
-            rules += CircuitZkFunctionRule("$slug-span-short") { f, _ ->
+            rules += CircuitZkFunctionRule("${slug}_span_too_short") { f, _ ->
                 val lo = operandOf(f.params[ge], ComparisonOp.GE)
                 val hi = operandOf(f.params[le], ComparisonOp.LE)
                 lo == null || hi == null || PredicateFunctions.spanAtLeast(valueType, lo, hi, minSpan)
             }
         }
     }
-    return CircuitZkFunctionRules(maxItems = 1, countRuleId = "$slug-count", rules = rules)
+    return CircuitZkFunctionRules(maxItems = 1, countRuleId = "${slug}_repeated", rules = rules)
 }
 
 private fun PredicateFunction.operandOf(e: kotlinx.serialization.json.JsonElement?, op: ComparisonOp): String? =

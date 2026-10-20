@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate spec/circuit-zk-consent-vectors.json with INDEPENDENT code.
 
-Maps what phase 1 of a circuit_zk request established (plan functions per query, the credential that
+Maps what phase 1 of a zkp_req request established (plan functions per query, the credential that
 will be proved, the trust outcome, the resolved verifier_id and its type, the request's verified
 client-id display name, the attested origin) to the LOCALE-FREE consent request: item kinds, config,
 scope, remappable flags, age bounds as dates and integers. Both SDKs generate their text from the
@@ -34,7 +34,7 @@ Item semantics (the generator is the reference):
     per-verifier config, or no verifier_id: the request is REFUSED (expected "refused": true).
   - an unknown function id, a plan with no function, or an unknown/ill-formed age_check: REFUSED.
   - input.verifier_id / verifier_id_type are what the wallet resolved; a query is given the verifier_id only
-    when its plan has a pseudonym-v1-sha256 or a legacy pseudonym (the wallet resolves one only then), and the
+    when its plan has a pseudonym or a legacy pseudonym (the wallet resolves one only then), and the
     request's verifier.verifier_id is the first such query's.
   - verifier label: trust entity name, else the verified client-id display name (null for an
     unsigned request), else the attested origin.
@@ -188,7 +188,7 @@ def items_of(plan, verifier_id, today, claims=(), namespace=None):
     out = []
     for f in plan:
         p = f.get("params", {})
-        if f["id"] == "pseudonym-v1-sha256":
+        if f["id"] == "pseudonym":
             cfg = p.get("config")
             if cfg not in CONFIGS:
                 return None
@@ -224,8 +224,8 @@ def fn(id_, handle, **params):
     return {"id": id_, "handle": handle, "params": params}
 
 
-SSC = fn("pseudonym-v1-sha256", "n", config="known-offender-matching-ssc")
-PSC = fn("pseudonym-v1-sha256", "n", config="known-offender-matching-psc")
+SSC = fn("pseudonym", "n", config="known-offender-matching-ssc", ver=1, prf="sha-256")
+PSC = fn("pseudonym", "n", config="known-offender-matching-psc", ver=1, prf="sha-256")
 LEGACY = fn("zk-claim-disclosure-v1", "d", claims=["family_name", "given_name"], systems=[{"id": "c", "system": "longfellow-libzk-v1"}])
 LEGACY_PSEUDO = fn("zk-claim-disclosure-v1", "d", claims=["age_over_18"], systems=[{"id": "c", "system": "longfellow-libzk-v1"}],
                    pseudonym=True, verifier_context="ctx-1")
@@ -287,10 +287,10 @@ CASES = [
     case("age: malformed date is refused", [([age(ge="2000-1-1")], CRED)]),
     case("age: impossible date is refused", [([age(ge="2000-02-30")], CRED)]),
     case("pseudonym without a verifier_id is refused", [([SSC], CRED)], verifier_id=None, verifier_id_type=None),
-    case("account-recovery-ssc is not modelled: refused", [([fn("pseudonym-v1-sha256", "n", config="account-recovery-ssc", verifier_context="acct")], CRED)]),
-    case("user-managed-pseudonym-xsite-ssc is not modelled: refused", [([fn("pseudonym-v1-sha256", "n", config="user-managed-pseudonym-xsite-ssc")], CRED)]),
-    case("a verifier_context on a per-verifier config is refused", [([fn("pseudonym-v1-sha256", "n", config="known-offender-matching-ssc", verifier_context="x")], CRED)]),
-    case("unknown config is refused", [([fn("pseudonym-v1-sha256", "n", config="nope")], CRED)]),
+    case("account-recovery-ssc is not modelled: refused", [([fn("pseudonym", "n", config="account-recovery-ssc", verifier_context="acct")], CRED)]),
+    case("user-managed-pseudonym-xsite-ssc is not modelled: refused", [([fn("pseudonym", "n", config="user-managed-pseudonym-xsite-ssc")], CRED)]),
+    case("a verifier_context on a per-verifier config is refused", [([fn("pseudonym", "n", config="known-offender-matching-ssc", verifier_context="x")], CRED)]),
+    case("unknown config is refused", [([fn("pseudonym", "n", config="nope")], CRED)]),
     case("unknown function is refused", [([fn("mystery", "m")], CRED)]),
     case("empty plan is refused", [([], CRED)]),
     case("an empty query list is refused", []),

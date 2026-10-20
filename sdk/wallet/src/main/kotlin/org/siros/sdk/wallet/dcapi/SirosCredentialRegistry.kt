@@ -380,7 +380,7 @@ object SirosCredentialRegistry {
     /**
      * The matcher capabilities that register [circuit]: one per id the circuit
      * answers to (its id, then each alias), because the matcher compares a
-     * verifier's `circuit_id_values` with one registered `circuit_id` and knows
+     * verifier's `system_id_values` with one registered `system_id` and knows
      * nothing of aliases. `functions` is declared only when the catalog says
      * which functions the circuit supports; a circuit that declares none is
      * not filtered by function. `credential_type` and `capabilities` are
@@ -428,7 +428,7 @@ object SirosCredentialRegistry {
         // exist.
         builder.setDebug(debug)
         zkSystems.forEach { builder.addZkSystem(FfiCapability(it.system, it.params)) }
-        circuitZkCircuits.forEach { circuit -> circuitCapabilities(circuit).forEach(builder::addCircuitZkSystem) }
+        circuitZkCircuits.forEach { circuit -> circuitCapabilities(circuit).forEach(builder::addZkpReqSystem) }
 
         credentials.forEach { cred ->
             val iconId = cred.id.toString()

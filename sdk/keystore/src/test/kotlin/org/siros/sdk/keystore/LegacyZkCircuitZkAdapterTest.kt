@@ -143,7 +143,7 @@ class LegacyZkCircuitZkAdapterTest {
     private fun plan(vararg fns: CircuitZkFunction) = CircuitZkPlan(
         fns.toList(),
         circuitFilter = org.siros.sdk.credentials.CircuitZkCircuitFilter(listOf("longfellow"), listOf(circuitId)),
-        raw = params("""{"id":"q","format":"circuit_zk","meta":{"doctype_value":"$docType"}}"""),
+        raw = params("""{"id":"q","format":"zkp_req","meta":{"source_format":"mso_mdoc","doctype_value":"$docType"}}"""),
     )
 
     private fun descriptor(
@@ -223,7 +223,7 @@ class LegacyZkCircuitZkAdapterTest {
             )
         }
         val decoded = result.presentation
-        assertEquals(circuitId, decoded.circuitId)
+        assertEquals(circuitId, decoded.systemId)
         assertEquals(ResultValue.Predicate, decoded.results["d"])
         assertEquals(setOf("d"), decoded.results.keys)
         // The proof is the zk DeviceResponse, carrying the system's proof bytes and only the disclosed claims.
@@ -369,7 +369,7 @@ class LegacyZkCircuitZkAdapterTest {
                 signer,
             )
         }
-        assertEquals(circuitId, result.circuitId)
+        assertEquals(circuitId, result.systemId)
     }
 
     @Test

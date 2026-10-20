@@ -11,6 +11,7 @@ import org.siros.sdk.credentials.CircuitZkCircuitSource
 import org.siros.sdk.credentials.CircuitZkFunction
 import org.siros.sdk.credentials.CircuitZkPlan
 import org.siros.sdk.credentials.CircuitZkResponsePresentation
+import org.siros.sdk.credentials.ProofTime
 import org.siros.sdk.credentials.CircuitZkRequestValidator
 import org.siros.sdk.credentials.CircuitZkVerdict
 import org.siros.sdk.credentials.NymPseudonym
@@ -354,15 +355,17 @@ class CircuitZkPresenter(
         override fun toString() = "CircuitZkPresenter.Request(redacted)"
     }
 
-    /** A presentation: the `vp_token` array element, its results, and the circuit used. */
+    /** A presentation: the `vp_token` array element and what it carries. */
     class Result(
-        /** The presentation in the `circuit_zk` response shape: `{circuit_id, proof_system, proof, x5chain, results}`. */
+        /** The `ZkpPresentation` (rulebook v0.4): `{system_id, proof, issuer_key_set, proof_time, results}`. */
         val presentation: CircuitZkResponsePresentation,
     ) {
-        /** The JSON object to put in the `vp_token` array of the query. */
-        val json: kotlinx.serialization.json.JsonObject get() = presentation.toJson()
+        /** The JSON string to put in the `vp_token` array of the query: base64url (no padding) of the CBOR presentation. */
+        val json: kotlinx.serialization.json.JsonPrimitive get() = presentation.toJson()
         val results: Map<String, ResultValue> get() = presentation.results
-        val circuitId: String get() = presentation.circuitId
+
+        /** The `system_id` stated. */
+        val systemId: String get() = presentation.systemId
     }
 
     /**
@@ -458,8 +461,8 @@ class CircuitZkPresenter(
             if (!handler.holds(function, document)) refuse(CircuitZkStep.PREDICATE)
         }
 
-        // 6. A circuit that fits the plan, and that the request OFFERED: a response states a `circuit_id` and a `proof_system`
-        // from the request's lists, so a request that offered none (or none of ours) cannot be answered.
+        // 6. A circuit that fits the plan, and that the request OFFERED: a response states a `system_id` from the request's
+        // `system_id_values` (and a proof system the request accepts), so a request that offered none (or none of ours) cannot be answered.
         val filter = plan.circuitFilter ?: refuse(CircuitZkStep.CIRCUIT)
         val circuit = circuits.circuits().firstOrNull {
             it.supports(plan, document.docType, serving) && prover.admits(it, plan) && filter.offeredCircuitId(it) != null && filter.offersProofSystem(it)
@@ -467,7 +470,7 @@ class CircuitZkPresenter(
 
         // 6b. The issuer chain the response must carry (leaf first, within the wire limits): checked before any proof is made.
         val chain = issuerChain(document)?.takeIf {
-            it.size <= CircuitZkResponsePresentation.MAX_CERTS && it.all { c -> c.size in 1..CircuitZkResponsePresentation.MAX_CERT_BYTES }
+            it.size <= CircuitZkResponsePresentation.MAX_KEYS && it.all { c -> c.size in 1..CircuitZkResponsePresentation.MAX_KEY_BYTES }
         } ?: refuse(CircuitZkStep.BUILD)
 
         // 7. Prove.
@@ -498,10 +501,13 @@ class CircuitZkPresenter(
         if (output.results.keys != handles) refuse(CircuitZkStep.BUILD)
         val presentation = try {
             CircuitZkResponsePresentation(
-                circuitId = filter.offeredCircuitId(circuit) ?: refuse(CircuitZkStep.BUILD),
-                proofSystem = circuit.system,
+                systemId = filter.offeredCircuitId(circuit) ?: refuse(CircuitZkStep.BUILD),
                 proof = output.proof,
-                x5chain = chain,
+                issuerKeySet = chain,
+                // The prover's own time input when it has one (it proved with it); else the one function that renders the
+                // device clock. Required for mso_mdoc, optional for other source formats.
+                proofTime = output.proofTime?.let(ProofTime::render)
+                    ?: if (plan.sourceFormat == "mso_mdoc") ProofTime.render(Instant.now()) else null,
                 results = output.results,
             )
         } catch (e: IllegalArgumentException) {

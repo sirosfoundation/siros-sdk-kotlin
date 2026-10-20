@@ -105,7 +105,7 @@ class NymAuthDemoRunner(
                 circuitId = "demo-fake-circuit-v1",
                 docTypes = setOf(NymAuthDemoIssuer.DOC_TYPE),
                 // A circuit that declares no functions fits no plan.
-                functions = setOf("pseudonym-v1-sha256", "age_check"),
+                functions = setOf("pseudonym", "age_check"),
             )
             val circuits = CircuitZkCircuitSource { listOf(circuit) }
             val presenter = source.circuitZkPresenter(
@@ -121,10 +121,12 @@ class NymAuthDemoRunner(
             val plan = CircuitZkPlan(
                 functions = listOf(
                     CircuitZkFunction(
-                        id = "pseudonym-v1-sha256",
+                        id = "pseudonym",
                         handle = "nym",
                         params = buildJsonObject {
                             put("config", config)
+                            put("ver", 1)
+                            put("prf", "sha-256")
                         },
                     ),
                     CircuitZkFunction(
@@ -139,7 +141,7 @@ class NymAuthDemoRunner(
                 // The demo "verifier" offers exactly the demo circuit: a response states an offered circuit_id and proof_system.
                 circuitFilter = CircuitZkCircuitFilter(proofSystems = listOf(circuit.system), circuitIds = listOf(circuit.circuitId)),
                 raw = JsonObject(
-                    mapOf("meta" to buildJsonObject { put("doctype_value", NymAuthDemoIssuer.DOC_TYPE) }),
+                    mapOf("meta" to buildJsonObject { put("source_format", "mso_mdoc"); put("doctype_value", NymAuthDemoIssuer.DOC_TYPE) }),
                 ),
             )
 
@@ -187,7 +189,7 @@ class NymAuthDemoRunner(
             val recomputed = NymPseudonym.derive(config = config, seed = seed, verifierId = p.verifierId)
             issuerSeed.fill(0)
             Outcome.Presented(
-                circuitId = decoded.circuitId,
+                circuitId = decoded.systemId,
                 token = result.json.toString(),
                 pseudonymHex = pseudonym.bytes.toHex(),
                 recomputedHex = recomputed.toHex(),

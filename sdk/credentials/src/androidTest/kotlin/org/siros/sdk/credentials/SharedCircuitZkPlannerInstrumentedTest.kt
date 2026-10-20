@@ -13,19 +13,19 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
-import uniffi.siros_dc_matcher_ffi.CircuitZkPlanException
-import uniffi.siros_dc_matcher_ffi.circuitZkPlan
+import uniffi.siros_dc_matcher_ffi.ZkpReqPlanException
+import uniffi.siros_dc_matcher_ffi.zkpReqPlan
 
 /**
  * [SharedCircuitZkPlanner] against the matcher's own conformance vectors
- * (`spec/circuit-zk-planner-vectors/`, copied verbatim; see its `SOURCE.md`),
+ * (`spec/zkp-req-vectors/zkp_req/`, copied verbatim; see `spec/zkp-req-vectors/SOURCE.md`),
  * on a device because the planner is reached through the native library.
  *
  * NOT run by `./gradlew test`: needs a device or emulator.
  */
 @RunWith(AndroidJUnit4::class)
 class SharedCircuitZkPlannerInstrumentedTest {
-    private val dir = "circuit-zk-planner-vectors"
+    private val dir = "zkp-req-vectors/zkp_req"
 
     private fun vectors(): List<Pair<String, JsonObject>> {
         val assets = InstrumentationRegistry.getInstrumentation().context.assets
@@ -75,9 +75,9 @@ class SharedCircuitZkPlannerInstrumentedTest {
         for ((name, v) in errors) {
             val code = ((v["expect"] as JsonObject)["error"] as JsonPrimitive).content
             val e = try {
-                circuitZkPlan(v.queryText(), v.clientMetadataText())
+                zkpReqPlan(v.queryText(), v.clientMetadataText())
                 null
-            } catch (e: CircuitZkPlanException.InvalidRequest) {
+            } catch (e: ZkpReqPlanException.InvalidRequest) {
                 e
             }
             assertNotNull("$name was planned", e)
@@ -95,8 +95,8 @@ class SharedCircuitZkPlannerInstrumentedTest {
         assertTrue("only $typed error vectors reached the typed boundary", typed >= 30)
     }
 
-    private fun query(extra: String = "", meta: String = """{"doctype_value":"d"}""", id: String? = "q") = Json.parseToJsonElement(
-        """{${id?.let { "\"id\":\"$it\"," } ?: ""}"format":"circuit_zk","meta":$meta,"req":[{"id":"age_check","return":"h","params":{"ge":"2008-10-10"}}]$extra}""",
+    private fun query(extra: String = "", meta: String = """{"source_format":"mso_mdoc","doctype_value":"d"}""", id: String? = "q") = Json.parseToJsonElement(
+        """{${id?.let { "\"id\":\"$it\"," } ?: ""}"format":"zkp_req","meta":$meta,"_req":[{"fn_id":"age_check","return":"h","params":{"ge":"2008-10-10"}}]$extra}""",
     ).jsonObject
 
     private fun planned(q: JsonObject, clientMetadata: JsonObject? = null) =
@@ -109,17 +109,14 @@ class SharedCircuitZkPlannerInstrumentedTest {
      */
     @Test
     fun plans_the_requests_the_old_probe_could_not() {
-        fun cm(lists: String) = Json.parseToJsonElement("""{"vp_formats_supported":{"circuit_zk":$lists}}""").jsonObject
-        assertEquals(CircuitZkCircuitFilter(null, emptyList()), planned(query(), cm("""{"circuit_id_values":[]}""")).circuitFilter)
-        assertEquals(CircuitZkCircuitFilter(emptyList(), listOf("c")), planned(query(), cm("""{"circuit_proof_system_values":[],"circuit_id_values":["c"]}""")).circuitFilter)
+        fun cm(lists: String) = Json.parseToJsonElement("""{"vp_formats_supported":{"zkp_req":$lists}}""").jsonObject
+        assertEquals(CircuitZkCircuitFilter(null, emptyList()), planned(query(), cm("""{"system_id_values":[]}""")).circuitFilter)
+        assertEquals(CircuitZkCircuitFilter(emptyList(), listOf("c")), planned(query(), cm("""{"proof_system_values":[],"system_id_values":["c"]}""")).circuitFilter)
         assertEquals(1, planned(query(meta = """{"vct_values":[]}""")).functions.size)
         assertEquals(1, planned(query(id = null)).functions.size)
-        // Plain and envelope shapes of the verifier's lists both reach the plan.
-        val plain = cm("""{"circuit_proof_system_values":["s1"],"circuit_id_values":["c1"]}""")
+        // The verifier's lists reach the plan (the base64 `input` envelope of the pre-v0.4 draft is gone).
+        val plain = cm("""{"proof_system_values":["s1"],"system_id_values":["c1"]}""")
         assertEquals(CircuitZkCircuitFilter(listOf("s1"), listOf("c1")), planned(query(), plain).circuitFilter)
-        val envelope = java.util.Base64.getUrlEncoder().withoutPadding()
-            .encodeToString("""{"circuit_proof_system_values":["s1"],"circuit_id_values":["c>?"]}""".toByteArray())
-        assertEquals(CircuitZkCircuitFilter(listOf("s1"), listOf("c>?")), planned(query(), cm("""{"fn_id":"x","input":"$envelope"}""")).circuitFilter)
     }
 
     /** What a request's two circuit lists become in the SDK's plan, end to end. */
@@ -133,7 +130,7 @@ class SharedCircuitZkPlannerInstrumentedTest {
             CircuitZkCircuitFilter(listOf("longfellow-libzk-v1"), listOf("urn:circuits:longfellow:nym_auth:v1")),
             planned("ok_normative_plain.json").circuitFilter,
         )
-        assertNull(planned("ok_client_metadata_without_circuit_zk.json").circuitFilter)
+        assertNull(planned("ok_client_metadata_without_zkp_req.json").circuitFilter)
     }
 
     /** The planner is what [CredentialMatcher] uses when the wallet turns circuit_zk on. */
@@ -153,13 +150,13 @@ class SharedCircuitZkPlannerInstrumentedTest {
         val dcql = JsonObject(mapOf("credentials" to kotlinx.serialization.json.JsonArray(listOf(v.query()!!))))
         val result = CredentialMatcher.matchDcql(dcql, creds, circuitZk = support, clientMetadata = v.clientMetadata()).queryResults.single()
         assertEquals(listOf(1L), result.candidates.map { it.id })
-        assertEquals(listOf("pseudonym-v1-sha256", "age_check"), result.circuitZkPlan!!.functions.map { it.id })
+        assertEquals(listOf("pseudonym", "age_check"), result.circuitZkPlan!!.functions.map { it.id })
 
         // A verifier naming another circuit is not served, and a structurally invalid request is not planned.
         val other = JsonObject(
             mapOf(
                 "vp_formats_supported" to JsonObject(
-                    mapOf("circuit_zk" to JsonObject(mapOf("circuit_id_values" to kotlinx.serialization.json.JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive("urn:other")))))),
+                    mapOf("zkp_req" to JsonObject(mapOf("system_id_values" to kotlinx.serialization.json.JsonArray(listOf(kotlinx.serialization.json.JsonPrimitive("urn:other")))))),
                 ),
             ),
         )
