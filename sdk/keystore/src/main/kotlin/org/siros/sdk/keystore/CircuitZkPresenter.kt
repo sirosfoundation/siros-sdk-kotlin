@@ -173,6 +173,29 @@ object LegacyDisclosureFunctionHandler : CircuitZkFunctionHandler {
     }
 }
 
+/**
+ * A function the wallet declared as a predicate ([org.siros.sdk.credentials.PredicateFunctions]) beyond the
+ * rulebook's: it needs no wallet-held private input, and holds when the declared comparison holds for the
+ * credential's own claim value (or cannot be judged, like the consent pre-check: the prover decides).
+ * One handler per declared id, so a function the user was asked about can also be presented.
+ */
+class DeclaredPredicateHandler(
+    override val functionId: String,
+    private val functions: org.siros.sdk.credentials.PredicateFunctions,
+) : CircuitZkFunctionHandler {
+    override fun witnessNeeds(function: CircuitZkFunction): Set<CircuitZkWitnessKind> = emptySet()
+
+    override fun holds(function: CircuitZkFunction, credential: DocumentMdoc): Boolean =
+        functions.precheck(CircuitZkPlan(listOf(function)), org.siros.sdk.credentials.PredicateFunctions.mdocReader(credential))
+
+    companion object {
+        /** [DEFAULT_CIRCUIT_ZK_HANDLERS] plus one handler for each function [functions] declares that they do not cover. */
+        fun handlersFor(functions: org.siros.sdk.credentials.PredicateFunctions): List<CircuitZkFunctionHandler> =
+            DEFAULT_CIRCUIT_ZK_HANDLERS + functions.ids.filter { id -> DEFAULT_CIRCUIT_ZK_HANDLERS.none { it.functionId == id } }
+                .map { DeclaredPredicateHandler(it, functions) }
+    }
+}
+
 /** The handlers a presenter has unless it is given others: the rulebook's two functions and the proposed legacy one. */
 val DEFAULT_CIRCUIT_ZK_HANDLERS: List<CircuitZkFunctionHandler> =
     listOf(PseudonymFunctionHandler, AgeCheckFunctionHandler, LegacyDisclosureFunctionHandler)

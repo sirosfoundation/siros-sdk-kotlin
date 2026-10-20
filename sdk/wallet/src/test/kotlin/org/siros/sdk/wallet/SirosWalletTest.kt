@@ -5518,6 +5518,8 @@ class SirosWalletTest {
         noConsentHandler: Boolean = false,
         /** The prover asks the signer for a signature, like a real one. */
         proverSigns: Boolean = false,
+        /** Replaces the fake prover (which knows only the rulebook functions). */
+        innerProver: org.siros.sdk.keystore.CircuitZkProver? = null,
         /** Plans each query differently: the functions of the query at this index (overrides [functions]). */
         functionsPerQuery: ((Int) -> List<org.siros.sdk.credentials.CircuitZkFunction>)? = null,
         /** The predicate functions the wallet can describe; null is the wallet's default (age_check only). */
@@ -5565,7 +5567,7 @@ class SirosWalletTest {
         val history = mutableListOf<PresentationRecord>()
         val cache = TrustCache()
         if (cachedTrust) cache.put("x509_san_dns:rp.example", TrustResult(trusted = true))
-        val prover = CountingCzkProver(org.siros.sdk.keystore.FakeCircuitZkProver.optIn()).also { it.events = events; it.signs = proverSigns }
+        val prover = CountingCzkProver(innerProver ?: org.siros.sdk.keystore.FakeCircuitZkProver.optIn()).also { it.events = events; it.signs = proverSigns }
         val trackedSeeds = secretSeedSource?.let { inner -> CredentialSecretSeedSource { id -> events += "seed"; inner.secretSeed(id) } }
         val consentHandler = PresentationConsentHandler { r -> events += "consent"; consents += r; consent(r) }
         val wallet = newWallet(
@@ -6285,7 +6287,13 @@ class SirosWalletTest {
         comparisons = linkedMapOf("ge" to org.siros.sdk.credentials.ComparisonOp.GE, "le" to org.siros.sdk.credentials.ComparisonOp.LE), minSpan = 10,
     )
 
-    private fun czkScoreSetup(score: Long, params: String = """{"claim":"score","ge":10,"le":20}""", declared: Boolean = true) = czkSetup(
+    private fun czkScoreSetup(
+        score: Long,
+        params: String = """{"claim":"score","ge":10,"le":20}""",
+        declared: Boolean = true,
+        consent: suspend (org.siros.sdk.credentials.PresentationConsentRequest) -> Boolean = { false },
+        innerProver: org.siros.sdk.keystore.CircuitZkProver? = null,
+    ) = czkSetup(
         functions = listOf(org.siros.sdk.credentials.CircuitZkFunction("number_range", "p", Json.parseToJsonElement(params).jsonObject)),
         credentials = listOf(StoredCredential(
             id = 1L, format = "mso_mdoc",
@@ -6294,7 +6302,8 @@ class SirosWalletTest {
         )),
         predicates = if (declared) org.siros.sdk.credentials.PredicateFunctions(listOf(org.siros.sdk.credentials.PredicateFunctions.AGE_CHECK, numberRange)) else null,
         extraFunctions = setOf("number_range"),
-        consent = { false },
+        consent = consent,
+        innerProver = innerProver,
     )
 
     @Test
@@ -6307,6 +6316,23 @@ class SirosWalletTest {
         assertNull(item.age)
         assertFalse(s.consents.single().toString().contains("15,") || s.consents.single().toString().contains("value=15"))
         assertEquals(listOf("consent"), s.events)
+    }
+
+    /** A prover for a custom predicate: every planned function proves as a predicate. */
+    private val predicateOnlyProver = object : org.siros.sdk.keystore.CircuitZkProver {
+        override suspend fun prove(input: org.siros.sdk.keystore.CircuitZkProveInput) = org.siros.sdk.keystore.CircuitZkProveOutput(
+            proof = byteArrayOf(1), results = input.plan.functions.associate { it.handle to org.siros.sdk.credentials.ResultValue.Predicate },
+        )
+    }
+
+    @Test
+    fun circuitZkConsent_aDeclaredCustomPredicate_isPresentedAfterConsent_withTheStockKeystore() = runTest(dispatcher) {
+        // The presenter must know every function the wallet described to the user, not only the rulebook's.
+        val s = czkScoreSetup(15, consent = { true }, innerProver = predicateOnlyProver)
+        val result = czkRun(s, czkRequest())
+        assertEquals(listOf(1L), result.credentialIds)
+        assertEquals(1, s.prover.calls)
+        assertEquals(1, s.consents.size)
     }
 
     @Test

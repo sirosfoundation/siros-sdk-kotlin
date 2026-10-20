@@ -264,7 +264,6 @@ public final class org/siros/sdk/wallet/ConsentString : java/lang/Enum {
 	public static final field PREDICATE_LE Lorg/siros/sdk/wallet/ConsentString;
 	public static final field PREDICATE_LT Lorg/siros/sdk/wallet/ConsentString;
 	public static final field PREDICATE_NE Lorg/siros/sdk/wallet/ConsentString;
-	public static final field PREDICATE_VALUE_NOT_SHARED Lorg/siros/sdk/wallet/ConsentString;
 	public static final field PSEUDONYM Lorg/siros/sdk/wallet/ConsentString;
 	public static final field PSEUDONYM_ISSUER_CAN_LINK Lorg/siros/sdk/wallet/ConsentString;
 	public static final field SHARE Lorg/siros/sdk/wallet/ConsentString;

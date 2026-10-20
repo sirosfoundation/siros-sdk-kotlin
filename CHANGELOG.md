@@ -135,6 +135,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   locally against the credential's `birth_date` before the user is asked; an unsatisfiable one is
   refused without consent. Only per-verifier pseudonym configs (`known-offender-matching-ssc`,
   `-psc`) have consent wording; any other config is refused (`UNSUPPORTED_REQUEST`) for now.
+- **Consent review follow-ups.** The numeric merge rule compares the span as a `BigDecimal` (it
+  was narrowed to `Long`; vector added); generic predicate text no longer says "the value is not
+  shared" (a proof of `== SE` reveals it); the presenter is given a `DeclaredPredicateHandler` for every
+  function the wallet declared in `circuitZkPredicateFunctions`, so a function the user was asked about
+  can also be presented. `context.intermediary_risk` is optional and provisional until go-trust defines it.
 - **`VerifierIdRegistry.resolve` returns `ResolvedVerifierId(type, id)`** instead of the bare id
   string. Removed the unused precursor `CircuitZkConsentSummary` / `circuitZkConsentSummary()`.
 - **A `circuit_zk` circuit that declares no `functions` and no `capabilities`

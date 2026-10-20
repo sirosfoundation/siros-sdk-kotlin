@@ -4513,6 +4513,32 @@
       "expected_ok": false
     },
     {
+      "name": "a numeric claim: width 2^64 is wider than any minimum (never narrowed to a 64-bit integer)",
+      "plans": [
+        [
+          {
+            "id": "number_range",
+            "handle": "p",
+            "params": {
+              "claim": "score",
+              "ge": 0
+            }
+          }
+        ],
+        [
+          {
+            "id": "number_range",
+            "handle": "p",
+            "params": {
+              "claim": "score",
+              "le": 18446744073709551616
+            }
+          }
+        ]
+      ],
+      "expected_ok": true
+    },
+    {
       "name": "different claims do not merge",
       "plans": [
         [

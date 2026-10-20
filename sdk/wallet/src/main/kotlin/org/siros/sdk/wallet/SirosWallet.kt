@@ -4331,9 +4331,11 @@ class SirosWallet private constructor(
             nonce = request.nonce,
             encryptionPublicJwkThumbprint = encryptionThumbprint,
         )
+        // Every function the wallet declared (and so described to the user) can also be presented.
+        val presenterHandlers = org.siros.sdk.keystore.DeclaredPredicateHandler.handlersFor(config.circuitZkPredicateFunctions)
         val presenter = (keystore as? org.siros.sdk.keystore.HolderWitnessSource)
-            ?.circuitZkPresenter(prover, support.circuits, support.validator, serving = support.serving)
-            ?: org.siros.sdk.keystore.CircuitZkPresenter(prover, support.circuits, support.validator, NoWitnessProvider, serving = support.serving)
+            ?.circuitZkPresenter(prover, support.circuits, support.validator, handlers = presenterHandlers, serving = support.serving)
+            ?: org.siros.sdk.keystore.CircuitZkPresenter(prover, support.circuits, support.validator, NoWitnessProvider, handlers = presenterHandlers, serving = support.serving)
         val verifierContext = VerifierIdContext(request, trust, origin)
         val today = java.time.LocalDate.now(java.time.ZoneOffset.UTC)
 

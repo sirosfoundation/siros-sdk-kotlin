@@ -368,7 +368,7 @@ def combined_ok(plans):
     for g in groups.values():
         if g["lo"] is None or g["hi"] is None:
             continue
-        span = (g["hi"] - g["lo"]).days + 1 if g["vt"] == "date" else int(g["hi"] - g["lo"])
+        span = (g["hi"] - g["lo"]).days + 1 if g["vt"] == "date" else (g["hi"] - g["lo"])
         if span < g["min"]:
             return False
     return True
@@ -385,6 +385,8 @@ COMBINED = [
     {"name": "a numeric claim: width exactly the declared minimum", "plans": [[pred("number_range", claim="score", ge=10)], [pred("number_range", claim="score", le=20)]]},
     {"name": "a numeric claim: one less than the declared minimum", "plans": [[pred("number_range", claim="score", ge=10)], [pred("number_range", claim="score", le=19)]]},
     {"name": "a numeric claim: pinned to one value", "plans": [[pred("number_range", claim="score", ge=15)], [pred("number_range", claim="score", le=15)]]},
+    {"name": "a numeric claim: width 2^64 is wider than any minimum (never narrowed to a 64-bit integer)",
+     "plans": [[pred("number_range", claim="score", ge=0)], [pred("number_range", claim="score", le=18446744073709551616)]]},
     {"name": "different claims do not merge", "plans": [[pred("number_range", claim="score", ge=15)], [pred("number_range", claim="other", le=15)]]},
     {"name": "a date claim other than birth_date, declared minimum 30 days", "plans": [[pred("date_range", claim="issue_date", ge="2024-01-01")], [pred("date_range", claim="issue_date", le="2024-01-30")]]},
     {"name": "the same, 29 days", "plans": [[pred("date_range", claim="issue_date", ge="2024-01-01")], [pred("date_range", claim="issue_date", le="2024-01-29")]]},

@@ -40,7 +40,6 @@
     <string name="siros_consent_predicate_gt">%1$s is greater than %2$s.</string>
     <string name="siros_consent_predicate_ge">%1$s is at least %2$s.</string>
     <string name="siros_consent_predicate_in">%1$s is one of: %2$s.</string>
-    <string name="siros_consent_predicate_value_not_shared">The actual value of %1$s is not shared.</string>
     <!-- circuit_zk predicate wording for DATE-typed claims (generic comparison wording stays for numbers and strings). Proposed; translations unreviewed. -->
     <string name="siros_consent_predicate_date_eq">%1$s is on %2$s.</string>
     <string name="siros_consent_predicate_date_ne">%1$s is not on %2$s.</string>

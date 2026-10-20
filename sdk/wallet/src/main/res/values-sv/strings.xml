@@ -36,7 +36,6 @@
     <string name="siros_consent_predicate_gt">%1$s är större än %2$s.</string>
     <string name="siros_consent_predicate_ge">%1$s är minst %2$s.</string>
     <string name="siros_consent_predicate_in">%1$s är något av: %2$s.</string>
-    <string name="siros_consent_predicate_value_not_shared">Det faktiska värdet av %1$s delas inte.</string>
     <!-- circuit_zk predicate wording for DATE-typed claims (generic comparison wording stays for numbers and strings). Proposed; translations unreviewed. -->
     <string name="siros_consent_predicate_date_eq">%1$s är den %2$s.</string>
     <string name="siros_consent_predicate_date_ne">%1$s är inte den %2$s.</string>

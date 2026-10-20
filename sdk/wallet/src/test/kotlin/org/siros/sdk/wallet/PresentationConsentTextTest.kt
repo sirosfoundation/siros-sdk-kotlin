@@ -52,7 +52,6 @@ class PresentationConsentTextTest {
         ConsentString.PREDICATE_DATE_LT to "siros_consent_predicate_date_lt", ConsentString.PREDICATE_DATE_LE to "siros_consent_predicate_date_le",
         ConsentString.PREDICATE_DATE_GT to "siros_consent_predicate_date_gt", ConsentString.PREDICATE_DATE_GE to "siros_consent_predicate_date_ge",
         ConsentString.PREDICATE_DATE_IN to "siros_consent_predicate_date_in",
-        ConsentString.PREDICATE_VALUE_NOT_SHARED to "siros_consent_predicate_value_not_shared",
     )
 
     private fun textFor(dir: String) = PresentationConsentText({ key, args ->
@@ -187,20 +186,22 @@ class PresentationConsentTextTest {
     }
 
     @Test
-    fun aGenericPredicate_saysWhatTheVerifierLearns_neverTheValue_inEveryLocale() {
+    fun aGenericPredicate_saysWhatIsProved_neverReassuresAboutTheValue_inEveryLocale() {
         val score = ClaimRef(listOf("score"), "Credit score")
         val en = textFor("values")
         fun lines(item: ConsentItem) = en.render(request(item)).entries.single().lines
         assertEquals(
-            listOf("Credit score is at least 10.", "Credit score is at most 20.", "The actual value of Credit score is not shared."),
+            listOf("Credit score is at least 10.", "Credit score is at most 20."),
             lines(predicate(score, ValueType.NUMBER, Condition(ComparisonOp.GE, listOf("10")), Condition(ComparisonOp.LE, listOf("20")))),
         )
         assertEquals(
-            listOf("Country is one of: SE, FI.", "The actual value of Country is not shared."),
+            listOf("Country is one of: SE, FI."),
             lines(predicate(ClaimRef(listOf("country"), "Country"), ValueType.STRING, Condition(ComparisonOp.IN, listOf("SE", "FI")))),
         )
         // No label: the path is the fallback, never an invented name.
-        assertEquals("address.country is SE.", lines(predicate(ClaimRef(listOf("address", "country"), null), ValueType.STRING, Condition(ComparisonOp.EQ, listOf("SE")))).first())
+        // A proof of `== SE` (or a singleton membership, or a boolean equality) reveals the value: the text must not claim it is not shared.
+        assertEquals(listOf("address.country is SE."), lines(predicate(ClaimRef(listOf("address", "country"), null), ValueType.STRING, Condition(ComparisonOp.EQ, listOf("SE")))))
+        assertEquals(listOf("Country is one of: SE."), lines(predicate(ClaimRef(listOf("country"), "Country"), ValueType.STRING, Condition(ComparisonOp.IN, listOf("SE")))))
         // A date operand is written the way the locale writes dates; a date claim that is not a birth date is not an age.
         assertEquals(
             "Issue date is on or after January 1, 2020.",
@@ -214,7 +215,7 @@ class PresentationConsentTextTest {
                 val screen = t.render(request(predicate(ClaimRef(listOf("c"), "CLAIMLABEL"), ValueType.STRING, Condition(op, operand))))
                 val sentence = screen.entries.single().lines.first()
                 assertTrue("$dir $op: $sentence", sentence.contains("CLAIMLABEL") && sentence.contains("A") && !sentence.contains("%"))
-                assertTrue("$dir $op: the value-not-shared sentence", screen.entries.single().lines.last().contains("CLAIMLABEL"))
+                assertEquals("$dir $op: one sentence per condition, no reassurance", 1, screen.entries.single().lines.size)
             }
         }
     }
@@ -224,7 +225,7 @@ class PresentationConsentTextTest {
         val t = PresentationConsentText({ _, _ -> "generic" }, Locale.ENGLISH, mapOf("x_check" to { _: ConsentItem.Predicate -> listOf("custom") }))
         val item = predicate(ClaimRef(listOf("c"), null), ValueType.STRING, Condition(ComparisonOp.EQ, listOf("A")))
         assertEquals(listOf("custom"), t.render(request(item)).entries.single().lines)
-        assertEquals(listOf("generic", "generic"), t.render(request(item.copy(functionId = "other"))).entries.single().lines)
+        assertEquals(listOf("generic"), t.render(request(item.copy(functionId = "other"))).entries.single().lines)
     }
 
     @Test

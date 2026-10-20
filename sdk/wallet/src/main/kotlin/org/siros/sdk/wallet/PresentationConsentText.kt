@@ -42,7 +42,6 @@ enum class ConsentString(internal val res: Int) {
     PREDICATE_DATE_GT(R.string.siros_consent_predicate_date_gt),
     PREDICATE_DATE_GE(R.string.siros_consent_predicate_date_ge),
     PREDICATE_DATE_IN(R.string.siros_consent_predicate_date_in),
-    PREDICATE_VALUE_NOT_SHARED(R.string.siros_consent_predicate_value_not_shared),
 }
 
 /** Resolves a [ConsentString] with its arguments. The wallet's implementation reads the SDK's string resources. */
@@ -121,7 +120,7 @@ class PresentationConsentText(
         is ConsentItem.Claim -> listOf(strings.get(ConsentString.CLAIM, item.name))
     }
 
-    /** An age (approved wording) when the item carries one, else one sentence per condition plus "the value is not shared". */
+    /** An age (approved wording) when the item carries one, else one sentence per condition. */
     private fun predicateLines(item: ConsentItem.Predicate): List<String> {
         item.age?.let { return listOf(ageLine(it)) }
         val claim = item.claim.display
@@ -138,7 +137,8 @@ class PresentationConsentText(
             }
             strings.get(key, claim, c.values.joinToString(", ") { value(item.valueType, it) })
         }
-        return sentences + strings.get(ConsentString.PREDICATE_VALUE_NOT_SHARED, claim)
+        // No "the value is not shared" reassurance: a proof of `country == SE` does reveal the value. The sentences say what is proved.
+        return sentences
     }
 
     private fun ageLine(form: AgeForm): String = when (form) {

@@ -185,6 +185,9 @@ class PredicateFunctions(functions: List<PredicateFunction>) {
 
     operator fun get(id: String): PredicateFunction? = byId[id]
 
+    /** The ids of the declared functions. */
+    val ids: Set<String> get() = byId.keys
+
     /** The consent item for [fn], or null (undeclared function, or params the declaration does not allow). */
     fun item(fn: CircuitZkFunction, claims: List<ClaimMeta>, today: LocalDate): ConsentItem.Predicate? {
         val f = byId[fn.id] ?: return null
@@ -236,11 +239,12 @@ class PredicateFunctions(functions: List<PredicateFunction>) {
         for (acc in groups.values) {
             val lo = acc.lower ?: continue
             val hi = acc.upper ?: continue
-            val span = when (acc.type) {
-                ValueType.DATE -> ChronoUnit.DAYS.between(date(lo), date(hi)) + 1
-                else -> number(hi)!!.subtract(number(lo)!!).toLong()
+            // Compared exactly: a numeric span is a BigDecimal and may exceed any primitive (never narrowed to Long).
+            val tooNarrow = when (acc.type) {
+                ValueType.DATE -> ChronoUnit.DAYS.between(date(lo), date(hi)) + 1 < acc.min
+                else -> number(hi)!!.subtract(number(lo)!!).compareTo(BigDecimal.valueOf(acc.min)) < 0
             }
-            if (span < acc.min) return false
+            if (tooNarrow) return false
         }
         return true
     }
