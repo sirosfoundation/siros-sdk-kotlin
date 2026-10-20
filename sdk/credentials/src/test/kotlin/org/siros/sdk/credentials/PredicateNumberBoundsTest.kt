@@ -49,4 +49,17 @@ class PredicateNumberBoundsTest {
         assertEquals(ValueType.NUMBER, PredicateFunctions.read(bigfloat(-2, 1), ValueType.NUMBER).type)
         assertEquals(ClaimValue(ValueType.NUMBER, "0.25"), PredicateFunctions.read(bigfloat(-2, 1), ValueType.NUMBER))
     }
+
+    @Test
+    fun `a nested decimal in the exponent or the mantissa is refused without being converted`() {
+        val inner = decimalFraction(100_000_000L, 1)
+        val started = System.nanoTime()
+        // 4([4([100000000, 1]), 1]) and 4([1, 4([100000000, 1])]) and the same under a bigfloat.
+        for (tag in listOf(4, 5)) {
+            val nestedExponent = CBORObject.FromObjectAndTag(CBORObject.NewArray().Add(inner).Add(1L), tag)
+            val nestedMantissa = CBORObject.FromObjectAndTag(CBORObject.NewArray().Add(1L).Add(inner), tag)
+            for (v in listOf(nestedExponent, nestedMantissa)) assertEquals("tag $tag", ValueType.STRING, PredicateFunctions.read(v, ValueType.NUMBER).type)
+        }
+        org.junit.Assert.assertTrue("took ${(System.nanoTime() - started) / 1_000_000} ms", System.nanoTime() - started < 2_000_000_000L)
+    }
 }

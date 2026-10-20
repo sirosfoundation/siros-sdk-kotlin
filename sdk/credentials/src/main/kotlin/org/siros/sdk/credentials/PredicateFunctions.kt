@@ -372,19 +372,26 @@ class PredicateFunctions(functions: List<PredicateFunction>) {
          * decimal fraction or bigfloat by its exponent and mantissa, all checked on the encoded items before anything is expanded.
          */
         private fun rawNumberWithinBounds(v0: CBORObject, v: CBORObject): Boolean {
-            fun mantissaBits(m: CBORObject): Boolean = try {
-                m.AsNumber().ToEInteger().GetUnsignedBitLengthAsEInteger().compareTo(com.upokecenter.numbers.EInteger.FromInt32(MAX_NUMBER_MANTISSA_BITS)) <= 0
-            } catch (e: Exception) {
-                false
+            // The exponent and mantissa are read as PLAIN integers or bignums by their encoding: a nested decimal fraction or
+            // bigfloat there (4([4([100000000, 1]), 1])) is refused, never converted to look at its size.
+            fun mantissaOk(m: CBORObject): Boolean = when {
+                !m.isTagged && m.type == CBORType.Integer -> m.AsNumber().ToEInteger().GetUnsignedBitLengthAsEInteger()
+                    .compareTo(com.upokecenter.numbers.EInteger.FromInt32(MAX_NUMBER_MANTISSA_BITS)) <= 0
+                m.isTagged && m.tagCount == 1 && (m.HasMostOuterTag(2) || m.HasMostOuterTag(3)) -> {
+                    val bytes = m.UntagOne()
+                    !bytes.isTagged && bytes.type == CBORType.ByteString && bytes.GetByteString().size <= MAX_BIGNUM_BYTES
+                }
+                else -> false
             }
+            fun exponentWithin(e: CBORObject, limit: Int): Boolean =
+                !e.isTagged && e.type == CBORType.Integer && e.AsNumber().ToEInteger().Abs().compareTo(com.upokecenter.numbers.EInteger.FromInt32(limit)) <= 0
             return when {
-                v.type == CBORType.ByteString -> v.GetByteString().size <= MAX_BIGNUM_BYTES
+                v.type == CBORType.ByteString -> !v.isTagged && v.GetByteString().size <= MAX_BIGNUM_BYTES
                 v.type == CBORType.Array && v.size() == 2 -> {
                     val limit = if (v0.HasMostOuterTag(5)) MAX_BIGFLOAT_EXPONENT else MAX_NUMBER_EXPONENT
-                    val exp = try { v[0].AsNumber().ToEInteger() } catch (e: Exception) { return false }
-                    exp.Abs().compareTo(com.upokecenter.numbers.EInteger.FromInt32(limit)) <= 0 && mantissaBits(v[1])
+                    exponentWithin(v[0], limit) && mantissaOk(v[1])
                 }
-                else -> true
+                else -> false
             }
         }
 
