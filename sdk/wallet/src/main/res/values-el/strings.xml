@@ -12,4 +12,6 @@
     <string name="siros_dcapi_refused_request_not_verified">Δεν ήταν δυνατό να επαληθευτεί ότι το αίτημα προέρχεται από τον ιστότοπο στον οποίο βρίσκεστε, γι\' αυτό δεν κοινοποιήθηκε τίποτα.</string>
     <string name="siros_dcapi_refused_verifier_id_unavailable">Το πορτοφόλι σας δεν μπόρεσε να καθορίσει ποιος ζητά τα στοιχεία, γι\' αυτό δεν κοινοποιήθηκε τίποτα.</string>
     <string name="siros_dcapi_refused_proof_failed">Το πορτοφόλι σας δεν μπόρεσε να δημιουργήσει την απόδειξη, γι\' αυτό δεν κοινοποιήθηκε τίποτα. Δοκιμάστε ξανά.</string>
+    <!-- Shown when an issuance is refused because the issuer's trust could not be established. -->
+    <string name="siros_issuer_not_trusted">Ο εκδότης δεν ήταν δυνατό να επαληθευτεί ως αξιόπιστος, επομένως το διαπιστευτήριο δεν προστέθηκε.</string>
 </resources>

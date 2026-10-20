@@ -12,4 +12,6 @@
     <string name="siros_dcapi_refused_request_not_verified">Não foi possível verificar que este pedido vem do site em que está, por isso nada foi partilhado.</string>
     <string name="siros_dcapi_refused_verifier_id_unavailable">A sua carteira não conseguiu determinar quem está a pedir, por isso nada foi partilhado.</string>
     <string name="siros_dcapi_refused_proof_failed">A sua carteira não conseguiu criar a prova, por isso nada foi partilhado. Tente novamente.</string>
+    <!-- Shown when an issuance is refused because the issuer's trust could not be established. -->
+    <string name="siros_issuer_not_trusted">Não foi possível verificar este emissor como fidedigno, por isso a credencial não foi adicionada.</string>
 </resources>
