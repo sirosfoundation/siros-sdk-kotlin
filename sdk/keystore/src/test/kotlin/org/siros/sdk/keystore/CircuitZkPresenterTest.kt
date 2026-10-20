@@ -45,7 +45,15 @@ class CircuitZkPresenterTest {
         return t1.copyOf(length)
     }
 
-    private val seed16 get() = hkdf(root, "org.siros.private_seed/v1$docType".toByteArray(), 16)
+    /** The credential's Credential Issuer Identifier exactly as stored; the device seed is per issuer (privatedata-spec 2.7). */
+    private val issuerId = "https://issuer-a.example.com"
+
+    /** An independent `lp(x)`: 2-byte big-endian length, then the UTF-8 bytes. */
+    private fun lp(x: String) = x.toByteArray().let { byteArrayOf((it.size shr 8).toByte(), it.size.toByte()) + it }
+
+    private fun seedFor(issuer: String) = hkdf(root, "org.siros.private_seed/v2".toByteArray() + lp(docType) + lp(issuer), 16)
+
+    private val seed16 get() = seedFor(issuerId)
     private val goodPsc get() = MessageDigest.getInstance("SHA-256").digest(seed16)
     private val cert = ByteArray(40) { (it + 7).toByte() }
 
@@ -135,7 +143,8 @@ class CircuitZkPresenterTest {
         verifierId: String? = "rp.example",
         secretSeed: ByteArray? = null,
         verifierContext: String? = null,
-    ) = CircuitZkPresenter.Request(cred, p, verifierId, verifierContext, byteArrayOf(1, 2, 3), secretSeed)
+        issuer: String? = issuerId,
+    ) = CircuitZkPresenter.Request(cred, p, verifierId, verifierContext, byteArrayOf(1, 2, 3), secretSeed, issuer)
 
     /** A delivered secret_seed (16 bytes) and the ssc it opens; independent of the presenter. */
     private val secretSeedA get() = ByteArray(16) { it.toByte() }
@@ -618,8 +627,8 @@ class CircuitZkPresenterTest {
         assertEquals(setOf(CircuitZkWitnessKind.SECRET_SEED, CircuitZkWitnessKind.USER_VALUE), needs("user-managed-pseudonym-xsite-ssc"))
         assertEquals(setOf(CircuitZkWitnessKind.NOT_HELD_BY_WALLET), needs("made-up"))
         val provider = HolderWitnessProvider(seeds, byteArrayOf(1))
-        assertNull(provider.witness(pseudonymFn("known-offender-matching-ssc"), setOf(CircuitZkWitnessKind.SECRET_SEED), docType))
-        assertNull(provider.witness(pseudonymFn("known-offender-matching-ssc"), setOf(CircuitZkWitnessKind.NOT_HELD_BY_WALLET), docType))
+        assertNull(provider.witness(pseudonymFn("known-offender-matching-ssc"), setOf(CircuitZkWitnessKind.SECRET_SEED), docType, null))
+        assertNull(provider.witness(pseudonymFn("known-offender-matching-ssc"), setOf(CircuitZkWitnessKind.NOT_HELD_BY_WALLET), docType, null))
     }
 
     @Test
@@ -742,10 +751,10 @@ class CircuitZkPresenterTest {
     fun `the derived private_seed is zeroed once the proof is over`() {
         var held: ByteArray? = null
         val provider = object : CircuitZkWitnessProvider {
-            override fun witness(function: CircuitZkFunction, needs: Set<CircuitZkWitnessKind>, credentialType: String) =
+            override fun witness(function: CircuitZkFunction, needs: Set<CircuitZkWitnessKind>, credentialType: String, issuer: String?) =
                 CircuitZkFunctionWitness(privateSeed = seed16.also { held = it })
 
-            override fun privateSeedMatches(credentialType: String, psc: ByteArray) = true
+            override fun privateSeedMatches(credentialType: String, issuer: String?, psc: ByteArray) = true
         }
         val pr = CircuitZkPresenter(FakeCircuitZkProver.optIn(), { listOf(circuit) }, CircuitZkRequestValidator.PERMISSIVE, provider)
         present(pr, request())
@@ -775,6 +784,7 @@ class CircuitZkPresenterTest {
             credential: org.siros.sdk.credentials.mdoc.DocumentMdoc,
             witness: CircuitZkFunctionWitness,
             provider: CircuitZkWitnessProvider,
+            issuer: String?,
         ): CircuitZkCommitmentCheck {
             checked++
             return commitment
@@ -835,5 +845,30 @@ class CircuitZkPresenterTest {
             val nonFake = if (f.name == "CircuitZkPresenter.kt") hits.filterNot { it.contains("AgeCheckFunctionHandler.functionId") || it.contains("PseudonymFunctionHandler.functionId") } else hits
             assertTrue("${f.name} names a nym_auth detail: $nonFake", nonFake.isEmpty())
         }
+    }
+
+    // -------- the device seed is per issuer: the issuer string exactly as stored --------
+
+    @Test
+    fun `the device commitment is checked for the issuer exactly as stored - a trailing slash is another psc`() {
+        // The credential commits to the seed of "https://issuer-a.example.com" (the stored identifier).
+        assertEquals(setOf("n", "a"), present(presenter(), request()).results.keys)
+        // The same issuer with a trailing slash derives another seed, so another psc: refused, never silently accepted.
+        assertDenied(CircuitZkStep.COMMITMENT) { present(presenter(), request(issuer = "$issuerId/")) }
+        assertDenied(CircuitZkStep.COMMITMENT) { present(presenter(), request(issuer = "https://ISSUER-A.example.com")) }
+        // A credential that committed with the slash form is proved only for that exact string.
+        val slash = "$issuerId/"
+        val cred = credential(psc = MessageDigest.getInstance("SHA-256").digest(seedFor(slash)))
+        assertEquals(setOf("n", "a"), present(presenter(), request(cred = cred, issuer = slash)).results.keys)
+        assertDenied(CircuitZkStep.COMMITMENT) { present(presenter(), request(cred = cred, issuer = issuerId)) }
+    }
+
+    @Test
+    fun `a function that needs the device seed is refused without an issuer, or with one the derivation refuses`() {
+        assertDenied(CircuitZkStep.WITNESS) { present(presenter(), request(issuer = null)) }
+        assertDenied(CircuitZkStep.WITNESS) { present(presenter(), request(issuer = "")) }
+        assertDenied(CircuitZkStep.WITNESS) { present(presenter(), request(issuer = "a".repeat(65536))) }
+        // A function that needs no device seed does not care.
+        assertEquals(setOf("a"), present(presenter(), request(p = plan(ageFn()), issuer = null)).results.keys)
     }
 }

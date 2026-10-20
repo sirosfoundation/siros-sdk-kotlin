@@ -4350,6 +4350,8 @@ class SirosWallet private constructor(
                         verifierContext = context,
                         sessionTranscript = transcript,
                         secretSeed = secretSeed,
+                        // The issuer exactly as stored at issuance: the device seed (and so psc) depends on it.
+                        issuer = cred.credentialIssuerIdentifier,
                     ),
                     signer = { algorithm, data ->
                         require(algorithm == COSE_ALG_ES256) { "This keystore signs ES256 only" }
@@ -4389,10 +4391,11 @@ class SirosWallet private constructor(
             function: org.siros.sdk.credentials.CircuitZkFunction,
             needs: Set<org.siros.sdk.keystore.CircuitZkWitnessKind>,
             credentialType: String,
+            issuer: String?,
         ): org.siros.sdk.keystore.CircuitZkFunctionWitness? =
             if (needs.isEmpty()) org.siros.sdk.keystore.CircuitZkFunctionWitness() else null
 
-        override fun privateSeedMatches(credentialType: String, psc: ByteArray) = false
+        override fun privateSeedMatches(credentialType: String, issuer: String?, psc: ByteArray) = false
     }
 
     /** Carries the per-request consent handler of [handleDCAPIRequest]'s overload. */

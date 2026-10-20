@@ -362,10 +362,10 @@ class CatalogCircuitZkProverTest {
             { listOf(circuit) },
             CircuitZkRequestValidator.PERMISSIVE,
             object : CircuitZkWitnessProvider {
-                override fun witness(function: CircuitZkFunction, needs: Set<CircuitZkWitnessKind>, credentialType: String) =
+                override fun witness(function: CircuitZkFunction, needs: Set<CircuitZkWitnessKind>, credentialType: String, issuer: String?) =
                     CircuitZkFunctionWitness()
 
-                override fun privateSeedMatches(credentialType: String, psc: ByteArray) = false
+                override fun privateSeedMatches(credentialType: String, issuer: String?, psc: ByteArray) = false
             },
             serving = { _, _, _ -> true },
         )

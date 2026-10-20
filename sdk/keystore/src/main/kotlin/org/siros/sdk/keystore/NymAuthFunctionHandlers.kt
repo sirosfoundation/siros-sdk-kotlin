@@ -66,12 +66,13 @@ object PseudonymFunctionHandler : CircuitZkFunctionHandler {
         credential: DocumentMdoc,
         witness: CircuitZkFunctionWitness,
         provider: CircuitZkWitnessProvider,
+        issuer: String?,
     ): CircuitZkCommitmentCheck {
         when (config(function)?.seedKind) {
             // psc: the commitment in the credential must be the one this wallet derives.
             org.siros.sdk.credentials.NymSeedKind.PRIVATE -> {
                 val psc = elementBytes(credential, "psc") ?: return CircuitZkCommitmentCheck.DEVICE_COMMITMENT_FAILS
-                if (!provider.privateSeedMatches(credential.docType, psc)) return CircuitZkCommitmentCheck.DEVICE_COMMITMENT_FAILS
+                if (!provider.privateSeedMatches(credential.docType, issuer, psc)) return CircuitZkCommitmentCheck.DEVICE_COMMITMENT_FAILS
             }
             // ssc: SHA256(secret_seed) == ssc. The seed is caller-supplied, so it is never used on trust; ssc is read from
             // the doctype namespace only, as one 32-byte bstr, so the value checked is the value the circuit binds.

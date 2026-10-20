@@ -42,8 +42,11 @@ class NymAuthDemoRunner(
 ) {
     private companion object {
         /** The label privatedata-spec fixes for the holder private seed; the demo recomputes with it independently. */
-        const val PRIVATE_SEED_LABEL = "org.siros.private_seed/v1"
+        const val PRIVATE_SEED_LABEL = "org.siros.private_seed/v2"
     }
+
+    /** `lp(x)`: the 2-byte big-endian length of the UTF-8 bytes, then the bytes (privatedata-spec 5.4.1). */
+    private fun lp(x: String): ByteArray = x.toByteArray(Charsets.UTF_8).let { byteArrayOf((it.size shr 8).toByte(), it.size.toByte()) + it }
 
     /** The demo's seed source: HKDF-SHA256 over a random per-install key. */
     private val source = FixedRootHolderWitnessSource(rootKey)
@@ -94,7 +97,7 @@ class NymAuthDemoRunner(
             // The issuer generates a random 16-byte secret_seed and commits to it: ssc = SHA256(seed).
             val issuerSeed = newSecretSeed()
             val ssc = NymAuthDemoIssuer.commitmentTo(issuerSeed)
-            val psc = if (p.foreignPsc) ByteArray(32).also(java.security.SecureRandom()::nextBytes) else source.privateSeedCommitment(NymAuthDemoIssuer.DOC_TYPE)
+            val psc = if (p.foreignPsc) ByteArray(32).also(java.security.SecureRandom()::nextBytes) else source.privateSeedCommitment(NymAuthDemoIssuer.DOC_TYPE, NymAuthDemoIssuer.ISSUER)
             val credential = NymAuthDemoIssuer.issue(p.birthDate, ssc, psc, deviceKey.public as ECPublicKey)
 
             val circuit = CircuitZkCircuit(
@@ -163,6 +166,7 @@ class NymAuthDemoRunner(
                         verifierId = p.verifierId,
                         sessionTranscript = transcript,
                         secretSeed = delivered,
+                        issuer = NymAuthDemoIssuer.ISSUER,
                     ),
                     signer,
                 )
@@ -175,7 +179,7 @@ class NymAuthDemoRunner(
             decoded.requireResultHandles(setOf("nym", "age"))
             val pseudonym = (decoded.results["nym"] as ResultValue.Pseudonym)
             val seed = when (p.scenario) {
-                Scenario.KNOWN_OFFENDER_PSC -> hkdf(rootKey, (PRIVATE_SEED_LABEL + NymAuthDemoIssuer.DOC_TYPE).toByteArray(Charsets.UTF_8), 16)
+                Scenario.KNOWN_OFFENDER_PSC -> hkdf(rootKey, PRIVATE_SEED_LABEL.toByteArray(Charsets.UTF_8) + lp(NymAuthDemoIssuer.DOC_TYPE) + lp(NymAuthDemoIssuer.ISSUER), 16)
                 Scenario.KNOWN_OFFENDER_SSC -> issuerSeed
             }
             val recomputed = NymPseudonym.derive(config = config, seed = seed, verifierId = p.verifierId)

@@ -32,6 +32,9 @@ import java.util.Base64
  */
 object NymAuthDemoIssuer {
     const val DOC_TYPE = "eu.europa.ec.eudi.nym_auth.1"
+
+    /** The demo issuer's Credential Issuer Identifier: the holder's private seed (and psc) is per issuer. */
+    const val ISSUER = "https://nym-demo-issuer.example"
     private const val SECRET_SEED_BYTES = 16
 
     // PKCS#8 P-256 private key and self-signed certificate of the demo
