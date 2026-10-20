@@ -9110,6 +9110,52 @@ class SirosWalletTest {
         assertEquals(setOf("aud", "iat", "nonce", "sd_hash"), plainClaims.keys)
     }
 
+    @Test
+    fun wmpGenerateProof_withHolderCommitments_everyProofCarriesTheClaimForTheExactIssuer() = runTest(dispatcher) {
+        val asked = mutableListOf<Pair<String, String>>()
+        val keystore = pscKeystore(asked)
+        val captured = mutableListOf<Map<String, String>>()
+        coEvery { keystore.generateProof(any(), any(), any(), any(), capture(captured)) } returns "proof-jwt"
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "A")),
+            "keystore" to keystore,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+        val result = invokeWmpSign(
+            wallet,
+            org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams(
+                action = "generate_proof", nonce = "n", audience = "https://issuer.example/", count = 2,
+                holderCommitments = listOf("psc"), credentialType = "t", credentialIssuer = "https://issuer.example/",
+            ),
+        )
+        assertEquals(2, result.proofs?.size)
+        assertEquals(2, captured.size)
+        assertTrue(captured.all { it == mapOf("org.siros.psc" to pscClaimFor("t", "https://issuer.example/")) })
+        assertEquals(listOf("t" to "https://issuer.example/"), asked)
+    }
+
+    @Test
+    fun wmpGenerateProof_withHolderCommitments_refusesAnAttestationOnlyRequestWithoutSigning() = runTest(dispatcher) {
+        val keystore = pscKeystore(mutableListOf())
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "A")),
+            "keystore" to keystore,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+        val e = runCatching {
+            invokeWmpSign(
+                wallet,
+                org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams(
+                    action = "generate_proof", nonce = "n", audience = "aud", proofType = "attestation",
+                    holderCommitments = listOf("psc"), credentialType = "t", credentialIssuer = "https://issuer.example",
+                ),
+            )
+        }.exceptionOrNull()
+        assertTrue(e is org.siros.sdk.credentials.WalletException)
+        coVerify(exactly = 0) { keystore.generateProof(any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { keystore.generateKeyAttestation(any(), any()) }
+    }
+
     // WMP
 
     private fun invokeWmpSign(wallet: SirosWallet, params: org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams): org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult {
