@@ -757,4 +757,83 @@ class CircuitZkPresenterTest {
         assertDenied(CircuitZkStep.PROVE) { present(pr2, request()) }
         assertTrue(held!!.all { it == 0.toByte() })
     }
+
+    // -------- the handler hooks: nothing outside the handlers names a claim, a commitment or a namespace --------
+
+    /** A function the presenter has never heard of, driven only by its hooks. */
+    private class HookHandler(
+        val admits: Boolean = true,
+        val commitment: CircuitZkCommitmentCheck = CircuitZkCommitmentCheck.HOLDS,
+    ) : CircuitZkFunctionHandler {
+        override val functionId = "custom_fn"
+        var checked = 0
+        override fun witnessNeeds(function: CircuitZkFunction) = emptySet<CircuitZkWitnessKind>()
+        override fun holds(function: CircuitZkFunction, credential: org.siros.sdk.credentials.mdoc.DocumentMdoc) = true
+        override fun admitsCredential(function: CircuitZkFunction, credential: org.siros.sdk.credentials.mdoc.DocumentMdoc) = admits
+        override fun commitmentCheck(
+            function: CircuitZkFunction,
+            credential: org.siros.sdk.credentials.mdoc.DocumentMdoc,
+            witness: CircuitZkFunctionWitness,
+            provider: CircuitZkWitnessProvider,
+        ): CircuitZkCommitmentCheck {
+            checked++
+            return commitment
+        }
+    }
+
+    private fun hookPresenter(h: HookHandler) = CircuitZkPresenter(
+        CountingProver(FakeCircuitZkProver.optIn(), override = { CircuitZkProveOutput(ByteArray(2), mapOf("c" to ResultValue.Predicate)) }),
+        { listOf(CircuitZkCircuit("sys", "circuit-1", setOf(docType), functions = setOf("custom_fn"))) },
+        CircuitZkRequestValidator.PERMISSIVE, HolderWitnessProvider(seeds), handlers = listOf(h),
+    )
+
+    private fun hookRequest() = request(p = plan(CircuitZkFunction("custom_fn", "c", JsonObject(emptyMap()))))
+
+    @Test
+    fun `a function's own hooks decide the credential structure and the commitment, whatever its name`() {
+        val ok = HookHandler()
+        assertEquals(setOf("c"), present(hookPresenter(ok), hookRequest()).results.keys)
+        assertEquals(1, ok.checked)
+        assertDenied(CircuitZkStep.NAMESPACE) { present(hookPresenter(HookHandler(admits = false)), hookRequest()) }
+        val device = HookHandler(commitment = CircuitZkCommitmentCheck.DEVICE_COMMITMENT_FAILS)
+        assertDenied(CircuitZkStep.COMMITMENT) { present(hookPresenter(device), hookRequest()) }
+        val delivered = HookHandler(commitment = CircuitZkCommitmentCheck.DELIVERED_COMMITMENT_FAILS)
+        assertDenied(CircuitZkStep.SECRET_COMMITMENT) { present(hookPresenter(delivered), hookRequest()) }
+    }
+
+    @Test
+    fun `the nym_auth handlers declare what the wallet needs, and the commitment checks are theirs`() {
+        fun fn(config: String) = CircuitZkFunction("pseudonym-v1-sha256", "n", params("""{"config":"$config","verifier_context":"ctx"}"""))
+        val ssc = fn("known-offender-matching-ssc")
+        val psc = fn("known-offender-matching-psc")
+        assertTrue(PseudonymFunctionHandler.needsVerifierId(ssc))
+        assertTrue(PseudonymFunctionHandler.needsSecretSeed(ssc))
+        assertFalse(PseudonymFunctionHandler.needsSecretSeed(psc))
+        assertFalse(PseudonymFunctionHandler.needsVerifierId(fn("user-managed-pseudonym-xsite-ssc")))
+        assertEquals("ctx", PseudonymFunctionHandler.verifierContext(ssc))
+        assertNull(AgeCheckFunctionHandler.verifierContext(ageFn()))
+        assertFalse(AgeCheckFunctionHandler.needsVerifierId(ageFn()))
+        assertFalse(AgeCheckFunctionHandler.needsSecretSeed(ageFn()))
+        // The legacy disclosure needs a verifier id only for its pseudonym.
+        val spec = """[{"id":"c","system":"s"}]"""
+        fun legacy(extra: String) = CircuitZkFunction(org.siros.sdk.credentials.CircuitZkLegacyDisclosure.FUNCTION_ID, "d", params("""{"claims":["a"],"systems":$spec$extra}"""))
+        assertFalse(LegacyDisclosureFunctionHandler.needsVerifierId(legacy("")))
+        assertTrue(LegacyDisclosureFunctionHandler.needsVerifierId(legacy(""","pseudonym":true""")))
+    }
+
+    @Test
+    fun `neither the presenter nor the wallet names a nym_auth claim, commitment or function`() {
+        val names = Regex(""""(birth_date|ssc|psc)"|age_check|pseudonym-v1-sha256|CircuitZkRuleSet\.(PSEUDONYM|AGE_CHECK)""")
+        val files = listOf(
+            java.io.File("src/main/kotlin/org/siros/sdk/keystore/CircuitZkPresenter.kt"),
+            java.io.File("../wallet/src/main/kotlin/org/siros/sdk/wallet/SirosWallet.kt"),
+        )
+        for (f in files) {
+            val code = f.readLines().filter { l -> val t = l.trimStart(); !t.startsWith("*") && !t.startsWith("//") && !t.startsWith("/*") }
+            val hits = code.filter { names.containsMatchIn(it) }
+            // The fake prover is test-only and names the rulebook functions it fakes.
+            val nonFake = if (f.name == "CircuitZkPresenter.kt") hits.filterNot { it.contains("AgeCheckFunctionHandler.functionId") || it.contains("PseudonymFunctionHandler.functionId") } else hits
+            assertTrue("${f.name} names a nym_auth detail: $nonFake", nonFake.isEmpty())
+        }
+    }
 }

@@ -57,7 +57,6 @@ internal enum class CircuitZkRefusalReason {
 }
 
 private const val SECRET_SEED_BYTES = 16
-private const val COMMITMENT_BYTES = 32
 
 /** The steps of [CircuitZkPresenter.present], in order. Internal. */
 internal enum class CircuitZkStep { VALIDATE, DOCTYPE, NAMESPACE, WITNESS, COMMITMENT, SECRET_COMMITMENT, PREDICATE, CIRCUIT, PROVE, BUILD }
@@ -152,6 +151,43 @@ interface CircuitZkFunctionHandler {
 
     /** The data-dependent check of [function] against the credential; false means no presentation. */
     fun holds(function: CircuitZkFunction, credential: DocumentMdoc): Boolean
+
+    /**
+     * Whether the credential's STRUCTURE is one [function] can be proved over; false refuses the request (before any
+     * private input is looked at). A function whose circuit binds a particular namespace layout checks it here.
+     */
+    fun admitsCredential(function: CircuitZkFunction, credential: DocumentMdoc): Boolean = true
+
+    /**
+     * Checks the credential's commitments against what the wallet holds for [function] ([witness], and [provider] for
+     * values only it can check); anything but [CircuitZkCommitmentCheck.HOLDS] refuses before a prover runs.
+     */
+    fun commitmentCheck(
+        function: CircuitZkFunction,
+        credential: DocumentMdoc,
+        witness: CircuitZkFunctionWitness,
+        provider: CircuitZkWitnessProvider,
+    ): CircuitZkCommitmentCheck = CircuitZkCommitmentCheck.HOLDS
+
+    /** Whether answering [function] needs the verifier's identifier (resolved by the wallet's verifier-id registry). */
+    fun needsVerifierId(function: CircuitZkFunction): Boolean = false
+
+    /** Whether answering [function] needs the issuer-delivered `secret_seed` of the credential (fetched by the wallet). */
+    fun needsSecretSeed(function: CircuitZkFunction): Boolean = false
+
+    /** The verifier context [function] names itself, or null. */
+    fun verifierContext(function: CircuitZkFunction): String? = null
+}
+
+/** The outcome of [CircuitZkFunctionHandler.commitmentCheck]. */
+enum class CircuitZkCommitmentCheck {
+    HOLDS,
+
+    /** The commitment to a value derived on this device does not match. */
+    DEVICE_COMMITMENT_FAILS,
+
+    /** The commitment to a value the issuer delivered does not match. */
+    DELIVERED_COMMITMENT_FAILS,
 }
 
 /**
@@ -171,6 +207,10 @@ object LegacyDisclosureFunctionHandler : CircuitZkFunctionHandler {
         val present = namespaces.single().map { it.item.elementIdentifier }.toSet()
         return request.claims.all { it in present }
     }
+
+    /** The proof system's own pseudonym is bound to the verifier's identity. */
+    override fun needsVerifierId(function: CircuitZkFunction) =
+        org.siros.sdk.credentials.CircuitZkLegacyDisclosure.parse(function)?.pseudonym == true
 }
 
 /**
@@ -199,67 +239,6 @@ class DeclaredPredicateHandler(
 /** The handlers a presenter has unless it is given others: the rulebook's two functions and the proposed legacy one. */
 val DEFAULT_CIRCUIT_ZK_HANDLERS: List<CircuitZkFunctionHandler> =
     listOf(PseudonymFunctionHandler, AgeCheckFunctionHandler, LegacyDisclosureFunctionHandler)
-
-/**
- * `pseudonym-v1-sha256`: needs the seed its config derives from (the device `private_seed` or the
- * issuer-delivered `secret_seed`) and a user value where the config takes one.
- */
-object PseudonymFunctionHandler : CircuitZkFunctionHandler {
-    override val functionId = "pseudonym-v1-sha256"
-
-    override fun witnessNeeds(function: CircuitZkFunction): Set<CircuitZkWitnessKind> {
-        val info = (function.params["config"] as? kotlinx.serialization.json.JsonPrimitive)
-            ?.takeIf { it.isString }?.content?.let(NymPseudonym::describe)
-            ?: return setOf(CircuitZkWitnessKind.NOT_HELD_BY_WALLET)
-        return buildSet {
-            add(
-                when (info.seedKind) {
-                    org.siros.sdk.credentials.NymSeedKind.PRIVATE -> CircuitZkWitnessKind.PRIVATE_SEED
-                    org.siros.sdk.credentials.NymSeedKind.SECRET -> CircuitZkWitnessKind.SECRET_SEED
-                },
-            )
-            if (info.userValue) add(CircuitZkWitnessKind.USER_VALUE)
-        }
-    }
-
-    override fun holds(function: CircuitZkFunction, credential: DocumentMdoc) = true
-}
-
-/**
- * The value of the element [name] in the credential's own doctype namespace (the namespace a nym_auth
- * credential carries its claims in, and the one the circuit binds), or null when that namespace or element
- * is absent or the element occurs more than once there. The same element name in another namespace is
- * never consulted, so a pre-check cannot read a different value than the circuit proves.
- */
-internal fun doctypeElement(document: DocumentMdoc, name: String): CBORObject? =
-    org.siros.sdk.credentials.SecretSeedCommitment.doctypeElement(document, name)
-
-/** `age_check`: `birth_date` must lie within `ge`..`le`. Needs no private input from the wallet. */
-object AgeCheckFunctionHandler : CircuitZkFunctionHandler {
-    override val functionId = "age_check"
-
-    override fun witnessNeeds(function: CircuitZkFunction): Set<CircuitZkWitnessKind> = emptySet()
-
-    override fun holds(function: CircuitZkFunction, credential: DocumentMdoc): Boolean {
-        val birth = birthDate(credential) ?: return false
-        val ge = bound(function, "ge")
-        val le = bound(function, "le")
-        if (ge == null && le == null) return false
-        return (ge == null || !birth.isBefore(ge)) && (le == null || !birth.isAfter(le))
-    }
-
-    private fun bound(function: CircuitZkFunction, key: String): LocalDate? {
-        val s = (function.params[key] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content ?: return null
-        return try { LocalDate.parse(s) } catch (e: DateTimeParseException) { null }
-    }
-
-    private fun birthDate(credential: DocumentMdoc): LocalDate? {
-        val value = doctypeElement(credential, "birth_date") ?: return null
-        val text = if (value.isTagged) value.UntagOne() else value
-        if (text.type != CBORType.TextString) return null
-        return try { LocalDate.parse(text.AsString()) } catch (e: DateTimeParseException) { null }
-    }
-}
 
 /** Input of [CircuitZkProver.prove]. The witness values are private: the prover must not log them. */
 class CircuitZkProveInput(
@@ -411,15 +390,10 @@ class CircuitZkPresenter(
             as? kotlinx.serialization.json.JsonPrimitive)?.content
         if (wanted == null || wanted != document.docType) refuse(CircuitZkStep.DOCTYPE)
 
-        // 2b. Fail closed on the namespace the circuit binds. A nym_auth credential carries its claims in the
-        // namespace named by its doctype, and the circuit reads birth_date and ssc from that one; it does not
-        // check that no other namespace holds an attribute of the same name. So the doctype namespace must be
-        // present and the only one: a credential with a decoy or extra namespace is never proved.
-        // (The legacy claim-disclosure function is not nym_auth: it works on the credential's one namespace.)
-        if (plan.functions.any { it.id != org.siros.sdk.credentials.CircuitZkLegacyDisclosure.FUNCTION_ID } &&
-            document.issuerSigned.nameSpaces.keys != setOf(document.docType)
-        ) {
-            refuse(CircuitZkStep.NAMESPACE)
+        // 2b. Each function checks that the credential's structure is one it can be proved over (a circuit that
+        // binds a namespace layout refuses a decoy or extra namespace here, before anything private is touched).
+        for ((function, handler) in plan.functions.zip(functionHandlers)) {
+            if (!handler.admitsCredential(function, document)) refuse(CircuitZkStep.NAMESPACE)
         }
 
         // 3. Wallet-held private inputs; a function whose witness cannot be supplied is refused.
@@ -439,22 +413,15 @@ class CircuitZkPresenter(
             }
         }
 
-        // 4. The commitment in the credential must be the one this wallet derives.
-        if (needs.values.any { CircuitZkWitnessKind.PRIVATE_SEED in it }) {
-            val psc = elementBytes(document, "psc") ?: refuse(CircuitZkStep.COMMITMENT)
-            if (!witnessProvider.privateSeedMatches(document.docType, psc)) refuse(CircuitZkStep.COMMITMENT)
-        }
-
-        // 4b. The delivered secret_seed must open the credential's ssc: SHA256(seed) == ssc. The seed is
-        // caller-supplied, so it is never used on trust; a mismatch (a seed of another credential, a stale or
-        // corrupted one) refuses before any prover runs. ssc is read from the doctype namespace only, as one
-        // 32-byte bstr, so the value checked is the value the circuit binds.
-        if (needs.values.any { CircuitZkWitnessKind.SECRET_SEED in it }) {
-            val ssc = elementBytes(document, "ssc")?.takeIf { it.size == COMMITMENT_BYTES } ?: refuse(CircuitZkStep.SECRET_COMMITMENT)
-            val digest = java.security.MessageDigest.getInstance("SHA-256").digest(seed ?: refuse(CircuitZkStep.SECRET_COMMITMENT))
-            val ok = java.security.MessageDigest.isEqual(digest, ssc)
-            digest.fill(0)
-            if (!ok) refuse(CircuitZkStep.SECRET_COMMITMENT)
+        // 4. The credential's commitments must be the ones this wallet holds: each function checks its own (a
+        // value derived on this device, or one the issuer delivered: never used on trust, a mismatch refuses
+        // before any prover runs).
+        for ((function, handler) in plan.functions.zip(functionHandlers)) {
+            when (handler.commitmentCheck(function, document, witnesses.getValue(function.handle), witnessProvider)) {
+                CircuitZkCommitmentCheck.HOLDS -> Unit
+                CircuitZkCommitmentCheck.DEVICE_COMMITMENT_FAILS -> refuse(CircuitZkStep.COMMITMENT)
+                CircuitZkCommitmentCheck.DELIVERED_COMMITMENT_FAILS -> refuse(CircuitZkStep.SECRET_COMMITMENT)
+            }
         }
 
         // 5. Data-dependent predicates: a false one means no presentation.
@@ -503,11 +470,6 @@ class CircuitZkPresenter(
     private fun refuse(step: CircuitZkStep): Nothing {
         Timber.w("circuit_zk presentation refused (step=$step)")
         throw CircuitZkError.AccessDenied(step)
-    }
-
-    private fun elementBytes(document: DocumentMdoc, name: String): ByteArray? {
-        val v = doctypeElement(document, name) ?: return null
-        return if (v.type == CBORType.ByteString) v.GetByteString() else null
     }
 
     /** The Document Signer certificate chain: `issuerAuth`'s unprotected header `x5chain` (label 33). */

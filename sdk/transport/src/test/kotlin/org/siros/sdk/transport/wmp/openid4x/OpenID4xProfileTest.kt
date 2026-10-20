@@ -373,6 +373,8 @@ class OpenID4xProfileTest {
         val onlyMetadata = decode("""["credential_metadata"]""")
         assertTrue(onlyMetadata.credentialMetadataRedacted)
         assertEquals(false, onlyMetadata.renewalMaterialRedacted)
+        // Only the encryption flag withheld: the metadata cannot be trusted as encrypted, so it counts as withheld.
+        assertTrue(decode("""["credential_metadata_encrypted_response"]""").credentialMetadataRedacted)
         // Only part of the renewal material: still unavailable, the metadata is not.
         val partial = decode("""["dpop_key_id"]""")
         assertTrue(partial.renewalMaterialRedacted)

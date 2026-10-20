@@ -185,6 +185,17 @@ class DeliveredCredentialMetadataTest {
     }
 
     @Test
+    fun aMalformedSeedOfAnyNamespaceIsMalformed_notOnlyTheDesignatedOne() {
+        for (bad in listOf(N.seedHex.uppercase(), N.seedHex.dropLast(2), "zz".repeat(16))) {
+            val both = buildJsonObject {
+                put("org.siros.other", JsonPrimitive(bad))
+                put(ns, JsonPrimitive(N.seedHex))
+            }
+            assertRefused(DeliveredMetadataRefusal.MALFORMED, check(response(mapOf(member to both))))
+        }
+    }
+
+    @Test
     fun aKeystoreThatCannotHoldItAndACredentialWithoutACommitmentFailClosed() {
         assertRefused(DeliveredMetadataRefusal.NO_STORAGE, check(canStore = false))
         assertRefused(DeliveredMetadataRefusal.NO_COMMITMENT, check(credentials = listOf(cred("x", "dc+sd-jwt"))))
