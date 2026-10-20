@@ -2,6 +2,7 @@ package org.siros.sdk.wallet
 
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.coVerifyOrder
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
@@ -4456,6 +4457,76 @@ class SirosWalletTest {
     }
 
     @Test
+    fun freshRegistration_unlocksTheOtherKeystoresFromTheContainerItExported() = runTest(dispatcher) {
+        val container = "exported-container".toByteArray()
+        val default = mockk<KeystoreManager>(relaxed = true)
+        coEvery { default.exportEncryptedContainer() } returns container
+        val other = mockk<KeystoreManager>(relaxed = true)
+        val wallet = newWallet(
+            "keystore" to default,
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                availableKeystores = mapOf("default" to default, "other" to other),
+            ),
+        )
+        val method = SirosWallet::class.declaredMemberFunctions.first { it.name == "initialiseKeystoresForNewAccount" }
+        method.isAccessible = true
+        val returned = method.callSuspend(wallet, ByteArray(32), ByteArray(8), ByteArray(32), ByteArray(32), ByteArray(32)) as ByteArray?
+        assertTrue(returned.contentEquals(container))
+        // Not the empty container: that is a different, never-saved root.
+        coVerify(exactly = 1) { other.unlock(any(), container, any(), any(), any()) }
+        coVerify(exactly = 0) { other.unlock(any(), match { it.isEmpty() }, any(), any(), any()) }
+        // The default keystore was exported after setCredentialId, before the others unlocked.
+        coVerifyOrder {
+            default.unlock(any(), match { it.isEmpty() }, any(), any(), any())
+            default.exportEncryptedContainer()
+            other.unlock(any(), container, any(), any(), any())
+        }
+    }
+
+    @Test
+    fun issuedCredential_isStoredUnderTheIssuerStringTheCommitmentWasDerivedFor_evenWithoutAnOffer() = runTest(dispatcher) {
+        val testCredential = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9."
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
+        val store = FakeCredentialStore(mutableListOf())
+        val keystore = pscKeystore(mutableListOf())
+        every { keystore.isUnlocked } returns true
+        coEvery { keystore.generateProof(any(), any(), any(), any(), any()) } returns "proof-jwt"
+        coEvery { keystore.exportEncryptedContainer() } returns """{"prfKeys":[],"jwe":"x"}""".toByteArray()
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+        mockEngineConstructor(signRequests = signFlow, flowComplete = completeFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "A")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to mockk<SessionStore>(relaxed = true),
+            "apiClient" to apiClient,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        // activeOffer is null (the issuer metadata could not be fetched): the only record of the issuer is the sign request.
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-i", action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "https://issuer.example/", nonce = "n", holderCommitments = listOf("psc"),
+                    credentialType = "urn:t", credentialIssuer = "https://issuer.example/",
+                ),
+            )
+        )
+        advanceUntilIdle()
+        completeFlow.emit(
+            FlowCompleteMessage(flowId = "flow-i", credentials = listOf(CredentialResult(format = "dc+sd-jwt", credential = testCredential)))
+        )
+        advanceUntilIdle()
+        assertEquals("https://issuer.example/", store.getAll().single().credentialIssuerIdentifier)
+    }
+
+    @Test
     fun generateProof_withoutHolderCommitments_usesTheFourArgumentForm() = runTest(dispatcher) {
         val keystore = mockk<KeystoreManager>()
         coEvery { keystore.generateProof(audience = "aud-1", nonce = "n-1", freshKey = any(), holderBinding = any()) } returns "proof-jwt"
@@ -8442,6 +8513,9 @@ class SirosWalletTest {
         val stateFlow = values["_state"] as? MutableStateFlow<WalletState>
         if (stateFlow != null && "state" !in values) {
             values["state"] = stateFlow.asStateFlow()
+        }
+        if ("pscIssuerByFlow" !in values) {
+            values["pscIssuerByFlow"] = java.util.concurrent.ConcurrentHashMap<String, String>()
         }
         if ("terminatedFlowIds" !in values) {
             values["terminatedFlowIds"] = mutableSetOf<String>()

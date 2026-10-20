@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `KeystoreManager.generateProof(..., extraClaims)`
   (non-empty claims refused by a conformer that cannot place them),
   `SignRequestParams`/`SignSubFlowParams` members.
+- Holder commitment consistency: the issuer string a commitment was derived for
+  is stored with the issued credentials (also when issuer display metadata could
+  not be fetched), and a fresh registration unlocks the other keystores from the
+  exported container instead of independent empty ones, so every keystore derives
+  the same `psc` before and after login.
 - **`PSC_CONFLICT` as a typed error.** The issuer's refusal of a different
   pseudonym commitment (before anything is issued, so nothing to roll back) is
   delivered as `WalletEventListener.onPseudonymCommitmentConflict`

@@ -1210,6 +1210,29 @@ class SirosWallet private constructor(
         )
     }
 
+    /**
+     * Unlocks the default keystore with an empty container, exports it, and unlocks every other
+     * available keystore from THAT container, as login does. Unlocking them with an empty one gave
+     * each its own, never-saved root, so a holder commitment derived through one of them differed
+     * from the default keystore's and from what the same wallet derives after its next login.
+     * Returns the exported container (null when the keystore cannot export).
+     */
+    internal suspend fun initialiseKeystoresForNewAccount(
+        prfOutput: ByteArray,
+        credId: ByteArray,
+        hkdfSalt: ByteArray,
+        hkdfInfo: ByteArray,
+        prfSalt: ByteArray,
+    ): ByteArray? {
+        keystore.unlock(prfOutput, ByteArray(0), hkdfSalt, hkdfInfo, prfSalt)
+        keystore.setCredentialId(credId)
+        val encryptedContainer = try {
+            keystore.exportEncryptedContainer()
+        } catch (_: UnsupportedOperationException) { null }
+        unlockAvailableKeystores(prfOutput, encryptedContainer ?: ByteArray(0), hkdfSalt, hkdfInfo, prfSalt)
+        return encryptedContainer
+    }
+
     private suspend fun finishRegistration(
         userId: String,
         displayName: String?,
@@ -1222,12 +1245,7 @@ class SirosWallet private constructor(
         appToken: String?,
     ) {
         // Derive key and initialise empty keystore
-        keystore.unlock(prfOutput.first, ByteArray(0), hkdfSalt, hkdfInfo, prfSalt)
-        unlockAvailableKeystores(prfOutput.first, ByteArray(0), hkdfSalt, hkdfInfo, prfSalt)
-        keystore.setCredentialId(credId)
-        val encryptedContainer = try {
-            keystore.exportEncryptedContainer()
-        } catch (_: UnsupportedOperationException) { null }
+        val encryptedContainer = initialiseKeystoresForNewAccount(prfOutput.first, credId, hkdfSalt, hkdfInfo, prfSalt)
 
         // Register account in the persistent registry (survives logout)
         val accountId = "${config.tenantId}:${userId}"
@@ -5202,6 +5220,16 @@ class SirosWallet private constructor(
     private val terminatedFlowIds = mutableSetOf<String>()
 
     /**
+     * The exact issuer string a flow's holder commitment (`org.siros.psc`) was
+     * derived for, from the engine's sign request. It is what the credential must
+     * be stored under: presentation derives the same commitment from the stored
+     * issuer identifier, so a credential stored without it, or under another
+     * spelling, could never be presented. Kept independently of display-metadata
+     * resolution (which may leave [activeOffer] null). Removed when the flow ends.
+     */
+    private val pscIssuerByFlow = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /**
      * Report a flow-terminating failure immediately (e.g. a keystore/WSCD
      * exception raised while handling a sign request) instead of leaving
      * the flow to die silently until the engine's own reply timeout fires.
@@ -6977,6 +7005,9 @@ class SirosWallet private constructor(
                 // the first entry's list (as this used to) silently dropped every
                 // index past 0 for a "jwt" batch of more than one credential.
                 activeAttestedKeyIds = generated.flatMap { it.attestedKeyIds.orEmpty() }.ifEmpty { null }
+                            if (!params?.holderCommitments.isNullOrEmpty()) {
+                                params?.credentialIssuer?.let { pscIssuerByFlow[msg.flowId] = it }
+                            }
                             val proofs = generated.map {
                                 ProofObject(proofType = it.proofType, jwt = it.jwt, attestation = it.attestation)
                             }
@@ -7523,6 +7554,12 @@ class SirosWallet private constructor(
                 // flow's offer.
                 val flowOffer = activeOffer
                 val flowVctm = activeVctm
+                // The issuer string the commitment was derived for wins over the offer's: it is
+                // the one presentation will derive from. (Absent when no commitment was asked for.)
+                val flowPscIssuer = pscIssuerByFlow.remove(msg.flowId)
+                if (flowPscIssuer != null && flowOffer != null && !sameAdvertisedIssuer(flowOffer.credentialIssuerIdentifier, flowPscIssuer)) {
+                    Timber.w("The commitment issuer of flow ${msg.flowId} differs from the offer's issuer identifier")
+                }
                 val flowVctmDocument = activeVctmDocument
                 msg.credentials?.forEachIndexed { index, cred ->
                     if (cred.format == "mso_mdoc") {
@@ -7581,7 +7618,7 @@ class SirosWallet private constructor(
                             raw = cred.credential,
                             metadata = metadata,
                             notificationId = cred.notificationId,
-                            credentialIssuerIdentifier = flowOffer?.credentialIssuerIdentifier,
+                            credentialIssuerIdentifier = flowPscIssuer ?: flowOffer?.credentialIssuerIdentifier,
                             credentialConfigurationId = flowOffer?.credentialConfigurationId,
                             batchId = batchId,
                             instanceId = index,
@@ -7644,7 +7681,7 @@ class SirosWallet private constructor(
                                 )
                             },
                             notificationId = cred.notificationId,
-                            credentialIssuerIdentifier = flowOffer?.credentialIssuerIdentifier,
+                            credentialIssuerIdentifier = flowPscIssuer ?: flowOffer?.credentialIssuerIdentifier,
                             credentialConfigurationId = flowOffer?.credentialConfigurationId,
                             batchId = batchId,
                             instanceId = index,
@@ -7734,7 +7771,7 @@ class SirosWallet private constructor(
                         issuedAt = payload["iat"]?.jsonPrimitive?.longOrNull,
                         expiresAt = exp,
                         notificationId = cred.notificationId,
-                        credentialIssuerIdentifier = flowOffer?.credentialIssuerIdentifier,
+                        credentialIssuerIdentifier = flowPscIssuer ?: flowOffer?.credentialIssuerIdentifier,
                         credentialConfigurationId = flowOffer?.credentialConfigurationId,
                         batchId = batchId,
                         instanceId = index,
@@ -7865,6 +7902,7 @@ class SirosWallet private constructor(
                 val fid = msg.flowId ?: "unknown"
                 terminatedFlowIds.add(fid)
                 pendingMatchResultsByFlow.remove(fid)
+                pscIssuerByFlow.remove(fid)
                 val redirectUri = msg.error.details?.get("redirect_uri")?.jsonPrimitive?.contentOrNull
                 if (!reportPseudonymCommitmentConflict(fid, msg.error.code, msg.error.message)) {
                     eventListener?.onFlowError(fid, msg.error.message, redirectUri)
