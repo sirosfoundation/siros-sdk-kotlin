@@ -2,7 +2,6 @@
 package org.siros.sdk.keystore
 
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import timber.log.Timber
 
 /**
@@ -34,11 +33,22 @@ class ZkProverResidency {
     private class Resident(val key: String, val prover: AutoCloseable)
 
     private val mutex = Mutex()
-    private var resident: Resident? = null
+
+    /**
+     * Guards the retirement protocol: the decision of [release]/[releaseCircuit] (idle now, or deferred) and the end-of-use cleanup of
+     * [use] (including the unlock of [mutex]) happen under it, so a request registered while a use is in flight is always seen by that
+     * use's cleanup, and a request that finds the residency idle destroys the prover itself. Never held across a suspension.
+     */
+    private val stateLock = Any()
+
+    @Volatile private var resident: Resident? = null
     @Volatile private var releaseWhenIdle = false
 
-    /** The key being loaded by a [use] that has the lock but has not yet stored its [Resident]; null when none. */
+    /** The key being loaded by a [use] that has the mutex but has not yet stored its [Resident]; null when none. */
     @Volatile private var loadingKey: String? = null
+
+    /** Test hook: runs inside the retirement decision, after a deferral was decided and before it is recorded. */
+    @Volatile internal var onRetirementDeferred: (() -> Unit)? = null
 
     /** The key of the prover currently loaded, or null. For diagnostics and tests. */
     val residentKey: String? get() = resident?.key
@@ -50,11 +60,12 @@ class ZkProverResidency {
      * caller's.
      */
     suspend fun <T : AutoCloseable, R> use(key: String, load: suspend () -> T, block: suspend (T) -> R): R {
-        mutex.withLock {
+        mutex.lock()
+        try {
             // A release requested between a previous proof's end and this
             // call is moot: the host is proving again, so the resident
             // prover is wanted, not memory to be reclaimed.
-            releaseWhenIdle = false
+            synchronized(stateLock) { releaseWhenIdle = false }
             val current = resident
             val prover: T = if (current != null && current.key == key) {
                 @Suppress("UNCHECKED_CAST")
@@ -63,30 +74,33 @@ class ZkProverResidency {
                 if (current != null) {
                     Timber.i("Releasing resident ZK prover '${current.key}' to load '$key'")
                     destroyQuietly(current)
-                    resident = null
+                    synchronized(stateLock) { resident = null }
                 }
                 // A retirement arriving while this loads must not be lost: it sees [loadingKey] and defers to the end of the use.
-                loadingKey = key
+                synchronized(stateLock) { loadingKey = key }
                 val loaded = try {
                     load()
                 } catch (t: Throwable) {
-                    loadingKey = null
+                    synchronized(stateLock) { loadingKey = null }
                     throw t
                 }
-                // Publish the resident BEFORE clearing the loading key (both volatile): a concurrent releaseCircuit that reads the
-                // loading key first and then the resident always sees one of them, so there is no window in which neither is set.
-                resident = Resident(key, loaded)
-                loadingKey = null
+                synchronized(stateLock) {
+                    resident = Resident(key, loaded)
+                    loadingKey = null
+                }
                 loaded
             }
-            try {
-                return block(prover)
-            } finally {
+            return block(prover)
+        } finally {
+            // The cleanup and the unlock are one step under [stateLock]: a retirement that found the mutex held registered its
+            // request under the same lock, so it is either seen here or happens after the unlock and finds the residency idle.
+            synchronized(stateLock) {
                 if (releaseWhenIdle) {
                     releaseWhenIdle = false
                     resident?.let { destroyQuietly(it) }
                     resident = null
                 }
+                mutex.unlock()
             }
         }
     }
@@ -97,24 +111,23 @@ class ZkProverResidency {
      * with nothing resident.
      */
     fun release() {
-        // Never blocks: this is called from lifecycle callbacks on the main
-        // thread while a proof may be holding the lock for seconds. The lock
-        // is held exactly while a use() is in flight, so acquiring it means
-        // nothing is using the prover and it can go now; failing to means a
-        // proof is running, and its finally block applies the deferred
-        // release under the same lock.
-        if (mutex.tryLock()) {
-            try {
-                resident?.let {
-                    Timber.i("Releasing resident ZK prover '${it.key}'")
-                    destroyQuietly(it)
+        // Never blocks on a proof: this is called from lifecycle callbacks on the main thread while a proof may be holding the
+        // mutex for seconds. Under [stateLock] (held only briefly): acquiring the mutex means nothing is using the prover and it
+        // can go now; failing to means a proof is running, and its cleanup applies the deferred release under the same lock.
+        synchronized(stateLock) {
+            if (mutex.tryLock()) {
+                try {
+                    resident?.let {
+                        Timber.i("Releasing resident ZK prover '${it.key}'")
+                        destroyQuietly(it)
+                    }
+                    resident = null
+                } finally {
+                    mutex.unlock()
                 }
-                resident = null
-            } finally {
-                mutex.unlock()
+            } else {
+                releaseWhenIdle = true
             }
-        } else {
-            releaseWhenIdle = true
         }
     }
 
@@ -126,19 +139,21 @@ class ZkProverResidency {
      * which includes a prover that is still loading.
      */
     fun releaseCircuit(circuitId: String) {
-        if (mutex.tryLock()) {
-            try {
-                resident?.takeIf { keyHasCircuit(it.key, circuitId) }?.let {
-                    Timber.i("Releasing resident ZK prover '${it.key}': its circuit was retired")
-                    destroyQuietly(it)
-                    resident = null
+        synchronized(stateLock) {
+            if (mutex.tryLock()) {
+                try {
+                    resident?.takeIf { keyHasCircuit(it.key, circuitId) }?.let {
+                        Timber.i("Releasing resident ZK prover '${it.key}': its circuit was retired")
+                        destroyQuietly(it)
+                        resident = null
+                    }
+                } finally {
+                    mutex.unlock()
                 }
-            } finally {
-                mutex.unlock()
+            } else if (loadingKey?.let { keyHasCircuit(it, circuitId) } == true || resident?.key?.let { keyHasCircuit(it, circuitId) } == true) {
+                onRetirementDeferred?.invoke()
+                releaseWhenIdle = true
             }
-        } else if (loadingKey?.let { keyHasCircuit(it, circuitId) } == true || resident?.key?.let { keyHasCircuit(it, circuitId) } == true) {
-            // The loading key is read FIRST, then the resident: see the publication order in use().
-            releaseWhenIdle = true
         }
     }
 

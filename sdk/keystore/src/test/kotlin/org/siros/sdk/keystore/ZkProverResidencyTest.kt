@@ -206,4 +206,30 @@ class ZkProverResidencyTest {
         finish2.complete(Unit)
         assertFalse(withTimeout(5000) { job2.await() }.closed)
     }
+
+    @Test
+    fun `a retirement decided while a use is in flight cannot be lost to that use's cleanup`() = runBlocking {
+        val residency = ZkProverResidency()
+        val started = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        val decided = java.util.concurrent.CountDownLatch(1)
+        val proceed = java.util.concurrent.CountDownLatch(1)
+        // The releasing thread decides to defer, then pauses before recording the request.
+        residency.onRetirementDeferred = { decided.countDown(); proceed.await(10, java.util.concurrent.TimeUnit.SECONDS) }
+        val job = async(Dispatchers.Default) {
+            residency.use("sys:circ-1", { FakeProver("a") }) { p -> started.complete(Unit); finish.await(); p }
+        }
+        withTimeout(5000) { started.await() }
+        val releaser = Thread { residency.releaseCircuit("circ-1") }.also { it.start() }
+        assertTrue(decided.await(5, java.util.concurrent.TimeUnit.SECONDS))
+        // The use finishes its proof while the releaser is paused: its cleanup must wait for (and then see) the request.
+        finish.complete(Unit)
+        Thread.sleep(300)
+        assertFalse("the use's cleanup may not run ahead of a decided retirement", job.isCompleted)
+        proceed.countDown()
+        releaser.join(5000)
+        val p = withTimeout(5000) { job.await() }
+        assertTrue("the retired prover is released, not left resident", p.closed)
+        assertNull(residency.residentKey)
+    }
 }
