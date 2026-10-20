@@ -6798,18 +6798,19 @@ class SirosWallet private constructor(
                     )
                 }
                 val epochAtStart = issuanceEpoch
+                val sessionAtStart = sessionGeneration
                 val issuanceCredentials = msg.credentials.orEmpty()
                 val trustRefusal = if (issuanceCredentials.isEmpty()) {
                     null
                 } else {
                     issuanceTrustRefusal(issuanceCredentials, engineIssuerTrust) { (mdocIssuanceTrustHook ?: ::mdocIssuanceTrust)(it) }
                 }
-                if (issuanceEpoch != epochAtStart) {
+                if (issuanceEpoch != epochAtStart || sessionGeneration != sessionAtStart) {
                     // The trust check suspended on the network and the flow was
                     // cancelled meanwhile (cancelCurrentFlow/logout reset the
                     // issuance state, and a new issuance may already own it).
                     // This completion no longer owns that state: touch nothing.
-                    Timber.w("Flow ${msg.flowId} was cancelled while its issuer trust was being evaluated - dropping its completion")
+                    Timber.w("Flow ${msg.flowId} was cancelled or its session ended while its issuer trust was being evaluated - dropping its completion")
                     return@collect
                 }
                 if (trustRefusal != null) {
@@ -6879,10 +6880,7 @@ class SirosWallet private constructor(
                         // parseJwtPayload always returns null for it),
                         // silently dropping every issued mdoc credential.
                         val parsed = try {
-                            val bytes = android.util.Base64.decode(
-                                cred.credential,
-                                android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP,
-                            )
+                            val bytes = java.util.Base64.getUrlDecoder().decode(cred.credential)
                             org.siros.sdk.credentials.mdoc.MdocCbor.parseStoredCredential(bytes)
                         } catch (e: Exception) {
                             Timber.w(e, "Skipping unparseable mdoc credential in flow ${msg.flowId}")
@@ -8057,10 +8055,7 @@ class SirosWallet private constructor(
     /** Decodes an issued `mso_mdoc` credential and evaluates its issuer; null if it cannot be verified. */
     private suspend fun mdocIssuanceTrust(credential: CredentialResult): TrustResult? {
         val parsed = try {
-            val bytes = android.util.Base64.decode(
-                credential.credential,
-                android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP,
-            )
+            val bytes = java.util.Base64.getUrlDecoder().decode(credential.credential)
             org.siros.sdk.credentials.mdoc.MdocCbor.parseStoredCredential(bytes)
         } catch (e: Exception) {
             Timber.w(e, "Issued mdoc credential could not be parsed for the issuer trust check")

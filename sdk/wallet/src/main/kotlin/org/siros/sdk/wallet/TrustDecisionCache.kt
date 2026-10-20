@@ -34,7 +34,9 @@ import java.time.Duration
 internal class TrustDecisionCache(
     private val ttl: Duration,
     private val maxSize: Int = DEFAULT_MAX_SIZE,
-    private val nowMillis: () -> Long = { System.nanoTime() / 1_000_000L },
+    // elapsedRealtime keeps counting through deep sleep; nanoTime does not, which
+    // would let an entry outlive its TTL on a phone that slept.
+    private val nowMillis: () -> Long = { android.os.SystemClock.elapsedRealtime() },
 ) {
     private class Entry(val response: JsonObject, val storedAt: Long)
 
