@@ -12,7 +12,7 @@ set -euo pipefail
 
 VEGA_SHA=d6f0955bf60379e4e81c242e13b5ecbd8e28a271          # sirosfoundation/zk-cred-vega PR #13 (feat/nymauth-prove)
 LONGFELLOW_SHA=cf2eba996ba1fac247539d515d8bab502da48f94    # sirosfoundation/zk-cred-longfellow PR #13 (feat/nymauth-prove)
-VEGA_VERSION=0.0.6
+VEGA_VERSION=0.0.7                                         # the crate says 0.0.6, which is already released (v0.0.6, no nymauth): built under the next version so it cannot be mistaken for it
 LONGFELLOW_VERSION=0.1.2                                    # the crate says 0.1.1: built under the next version so it cannot be mistaken for the released one
 
 here="$(cd "$(dirname "$0")/.." && pwd)"

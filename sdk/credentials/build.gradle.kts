@@ -1,3 +1,5 @@
+import java.util.zip.ZipFile
+
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
@@ -28,6 +30,60 @@ android {
     sourceSets.getByName("androidTest").assets.srcDir("../../spec")
 }
 
+// The native libraries that carry the nymauth entry points (docs/NATIVE_DEV.md). Until a release of each is published
+// to GitHub Packages these coordinates resolve only from a local build (-PsirosNativeRepo=<dir>).
+val zkCredVegaVersion: String = providers.gradleProperty("zkCredVegaVersion").getOrElse("0.0.7")
+val zkCredLongfellowVersion: String = providers.gradleProperty("zkCredLongfellowVersion").getOrElse("0.1.2")
+
+/**
+ * Fails the build up front, with the coordinates and the way out, instead of a bare resolution error deep in a compile
+ * task (or, worse, quietly using an AAR that has no nymauth entry points: ~/.m2 can hold an older build of the same
+ * version, and mavenLocal comes before GitHub Packages). Each AAR must resolve and its arm64 library must export the
+ * nymauth functions the vendored bindings call.
+ */
+val checkNativeLibraries = tasks.register("checkNativeLibraries") {
+    group = "verification"
+    description = "Checks that zk-cred-vega and zk-cred-longfellow resolve and carry the nymauth entry points."
+    val nativeLibs = listOf(
+        Triple("zk-cred-vega", zkCredVegaVersion, "libzk_cred_vega.so" to "nymauth_vega_load_keys"),
+        Triple("zk-cred-longfellow", zkCredLongfellowVersion, "libzk_cred_longfellow.so" to "nymauth_initialize_prover"),
+    )
+    doLast {
+        for ((artifact, version, lib) in nativeLibs) {
+            val coordinates = "org.siros:$artifact:$version"
+            val files = try {
+                configurations.detachedConfiguration(dependencies.create("$coordinates@aar")).apply { isTransitive = false }.resolve()
+            } catch (e: Exception) {
+                throw GradleException(
+                    "The native library $coordinates cannot be resolved.\n" +
+                        "It carries the nymauth circuit_zk prover and is not published yet (GitHub Packages: " +
+                        "https://maven.pkg.github.com/sirosfoundation/$artifact). Build it from its pull request and point Gradle at it:\n" +
+                        "  tools/build-native-aars.sh --vega <zk-cred-vega checkout> --longfellow <zk-cred-longfellow checkout>\n" +
+                        "  ./gradlew -PsirosNativeRepo=<repo>/build/native-repo ...\n" +
+                        "See docs/NATIVE_DEV.md. (-PzkCredVegaVersion / -PzkCredLongfellowVersion select other versions.)\n" +
+                        "Gradle said: ${e.message?.lineSequence()?.firstOrNull().orEmpty()}",
+                    // No cause: Gradle would print the resolution error instead of this message.
+                )
+            }
+            val aar = files.single()
+            val has = ZipFile(aar).use { zip ->
+                val entry = zip.getEntry("jni/arm64-v8a/${lib.first}")
+                entry != null && zip.getInputStream(entry).use { it.readBytes() }.let { bytes ->
+                    String(bytes, Charsets.ISO_8859_1).contains(lib.second)
+                }
+            }
+            if (!has) {
+                throw GradleException(
+                    "$coordinates resolved to $aar but its ${lib.first} has no `${lib.second}`: it is an older build of the same version " +
+                        "(an old copy in ~/.m2, say). Use the build from the pinned pull request: put -PsirosNativeRepo=<dir> first " +
+                        "(docs/NATIVE_DEV.md), or remove the stale artifact from ~/.m2/repository/org/siros/$artifact/$version.",
+                )
+            }
+        }
+    }
+}
+tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(checkNativeLibraries) }
+
 dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.core)
@@ -56,7 +112,7 @@ dependencies {
     // The nymauth entry points (the circuit_zk prover) need the libraries that carry them; the vendored UniFFI
     // bindings are generated from exactly these builds and check their API checksums at load, so the two move
     // together. Override for a local build with -PzkCredLongfellowVersion / -PzkCredVegaVersion (docs/NATIVE_DEV.md).
-    implementation("org.siros:zk-cred-longfellow:${providers.gradleProperty("zkCredLongfellowVersion").getOrElse("0.1.2")}")
+    implementation("org.siros:zk-cred-longfellow:$zkCredLongfellowVersion")
 
     // zk-cred-vega UniFFI bindings - real GitHub Packages Maven artifact
     // (resolved via GitHubPackagesZkCredVega in settings.gradle.kts), built
@@ -68,7 +124,7 @@ dependencies {
     // v0.0.4 bumps vega-prover to sirosfoundation/vega-prover@2a7dcb3, a
     // real measured ~35-40% prove() speedup on x86_64 (chunk-overhead fix
     // in bind_and_prepare_poly_ABC_inner) - not yet confirmed on-device.
-    implementation("org.siros:zk-cred-vega:${providers.gradleProperty("zkCredVegaVersion").getOrElse("0.0.6")}")
+    implementation("org.siros:zk-cred-vega:$zkCredVegaVersion")
 
     // zk-cred-bbs UniFFI bindings - blind BBS with Schnorr key binding.
     // Same shape as above: AAR from GitHub Packages (or mavenLocal via
