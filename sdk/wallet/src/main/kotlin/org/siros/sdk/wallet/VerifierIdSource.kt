@@ -95,7 +95,7 @@ class VerifierIdRegistry(
  * defined by the rulebook / trust framework, produced by the PDP, and opaque here (the
  * wallet hashes the value byte-for-byte and never lower-cases, trims or strips it): the names in the wallet's list must match what the
  * PDP returns, and go-trust is aligning to the trust framework (for `x509_san_dns` the
- * value is the bare DNS name, without a prefix, derived by the PDP). The wallet derives
+ * value is the PREFIXED Client Identifier, `x509_san_dns:<dns name>`, as in rulebook v0.4, derived by the PDP). The wallet derives
  * nothing itself from the request's client id or `x5c` chain; the PDP is the single
  * default source of verifier ids.
  */
@@ -118,7 +118,7 @@ class AuthZENSource(override val type: String) : VerifierIdSource {
 internal fun defaultCircuitZkValidator(circuits: org.siros.sdk.credentials.CircuitZkCircuitSource?): org.siros.sdk.credentials.CircuitZkRequestValidator =
     org.siros.sdk.credentials.RulebookCircuitZkValidator(
         // The rulebook rules plus the proposed legacy claim-disclosure function (see CircuitZkLegacyDisclosure).
-        rules = org.siros.sdk.credentials.CircuitZkRuleSet.rulebookV03()
+        rules = org.siros.sdk.credentials.CircuitZkRuleSet.rulebookV04()
             .withFunction(org.siros.sdk.credentials.CircuitZkLegacyDisclosure.FUNCTION_ID, org.siros.sdk.credentials.CircuitZkLegacyDisclosure.RULES),
         circuits = circuits,
     )

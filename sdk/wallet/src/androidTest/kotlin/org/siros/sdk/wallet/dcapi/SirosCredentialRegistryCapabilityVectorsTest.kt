@@ -106,7 +106,7 @@ class SirosCredentialRegistryCapabilityVectorsTest {
         assertEquals(emptySet<String>(), offered(byName.getValue("id-filter-no-hit")))
     }
 
-    private val circuitZkFormat = "circuit_zk"
+    private val circuitZkFormat = "zkp_req"
     private val storedFormat = "mso_mdoc"
 
     /** The ids of the case's circuits the matcher offers for its request. */
@@ -126,7 +126,7 @@ class SirosCredentialRegistryCapabilityVectorsTest {
                 val o = item.jsonObject
                 JsonObject(
                     buildMap {
-                        put("id", o["id"]!!)
+                        put("fn_id", o["id"]!!)
                         put("return", JsonPrimitive("r$i"))
                         o["params"]?.let { put("params", it) }
                     },
@@ -141,8 +141,8 @@ class SirosCredentialRegistryCapabilityVectorsTest {
                             mapOf(
                                 "id" to JsonPrimitive("q"),
                                 "format" to JsonPrimitive(circuitZkFormat),
-                                "meta" to JsonObject(mapOf("doctype_value" to JsonPrimitive(type))),
-                                "req" to req,
+                                "meta" to JsonObject(mapOf("source_format" to JsonPrimitive("mso_mdoc"), "doctype_value" to JsonPrimitive(type))),
+                                "_req" to req,
                             ),
                         ),
                     ),
@@ -151,12 +151,12 @@ class SirosCredentialRegistryCapabilityVectorsTest {
         ).toString()
         val lists = buildMap {
             request["proofSystems"]?.takeIf { it is JsonArray && it.jsonArray.isNotEmpty() }
-                ?.let { put("circuit_proof_system_values", it) }
+                ?.let { put("proof_system_values", it) }
             request["circuitIds"]?.takeIf { it is JsonArray && it.jsonArray.isNotEmpty() }
-                ?.let { put("circuit_id_values", it) }
+                ?.let { put("system_id_values", it) }
         }
         val clientMetadata = lists.takeIf { it.isNotEmpty() }?.let {
-            JsonObject(mapOf("vp_formats_supported" to JsonObject(mapOf("circuit_zk" to JsonObject(it))))).toString()
+            JsonObject(mapOf("vp_formats_supported" to JsonObject(mapOf("zkp_req" to JsonObject(it))))).toString()
         }
 
         val credential1 = StoredCredential(

@@ -28,7 +28,7 @@ private fun elementBytes(document: DocumentMdoc, name: String): ByteArray? {
  * issuer-delivered `secret_seed`) and a user value where the config takes one.
  */
 object PseudonymFunctionHandler : CircuitZkFunctionHandler {
-    override val functionId = "pseudonym-v1-sha256"
+    override val functionId = "pseudonym"
 
     override fun witnessNeeds(function: CircuitZkFunction): Set<CircuitZkWitnessKind> {
         val info = (function.params["config"] as? kotlinx.serialization.json.JsonPrimitive)

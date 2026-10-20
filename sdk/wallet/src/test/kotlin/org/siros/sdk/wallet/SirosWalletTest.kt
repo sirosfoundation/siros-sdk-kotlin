@@ -5781,7 +5781,7 @@ class SirosWalletTest {
         val requestJson = wrapDCAPIRequest("openid4vp-v1-unsigned", buildJsonObject {
             put("nonce", "n")
             putJsonObject("dcql_query") {
-                putJsonArray("credentials") { add(buildJsonObject { put("id", "q"); put("format", "circuit_zk") }) }
+                putJsonArray("credentials") { add(buildJsonObject { put("id", "q"); put("format", "zkp_req") }) }
             }
         })
 
@@ -5820,7 +5820,7 @@ class SirosWalletTest {
         val ecKey = com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256).generate()
         val claims = com.nimbusds.jwt.JWTClaimsSet.parse(
             """{"client_id":"x509_san_dns:rp.example","nonce":"n","expected_origins":["$origin"],""" +
-                """"dcql_query":{"credentials":[{${circuitQueryId?.let { "\"id\":\"$it\"," } ?: ""}"format":"circuit_zk","meta":{"doctype_value":"test.doctype.1"}}$extraQueries]}}"""
+                """"dcql_query":{"credentials":[{${circuitQueryId?.let { "\"id\":\"$it\"," } ?: ""}"format":"zkp_req","meta":{"source_format":"mso_mdoc","doctype_value":"test.doctype.1"}}$extraQueries]}}"""
         )
         val jwt = com.nimbusds.jwt.SignedJWT(
             com.nimbusds.jose.JWSHeader.Builder(com.nimbusds.jose.JWSAlgorithm.ES256).jwk(ecKey.toPublicJWK()).build(), claims,
@@ -5900,7 +5900,7 @@ class SirosWalletTest {
 
         val mixed = signedCircuitZkRequest(
             "https://rp.example",
-            extraQueries = """,{"id":"p","format":"mso_mdoc","meta":{"doctype_value":"test.doctype.1"}}""",
+            extraQueries = """,{"id":"p","format":"mso_mdoc","meta":{"source_format":"mso_mdoc","doctype_value":"test.doctype.1"}}""",
         )
         val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
             kotlinx.coroutines.runBlocking { wallet.handleDCAPIRequest(mixed, origin = "https://rp.example") }
@@ -5919,7 +5919,7 @@ class SirosWalletTest {
 
         val request = signedCircuitZkRequest(
             "https://rp.example",
-            extraQueries = """,{"id":"p","format":"mso_mdoc","meta":{"doctype_value":"test.doctype.1"}}""",
+            extraQueries = """,{"id":"p","format":"mso_mdoc","meta":{"source_format":"mso_mdoc","doctype_value":"test.doctype.1"}}""",
             circuitQueryId = null,
         )
         val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
@@ -6022,7 +6022,7 @@ class SirosWalletTest {
         extraQueries: String = "",
     ): String {
         val query = """{"credentials":[""" + queryIds.withIndex().joinToString(",") { (i, id) ->
-            """{"id":"$id","format":"circuit_zk","meta":{"doctype_value":"${queryDoctypes?.get(i) ?: CzkFixtures.DOCTYPE}"}}"""
+            """{"id":"$id","format":"zkp_req","meta":{"source_format":"mso_mdoc","doctype_value":"${queryDoctypes?.get(i) ?: CzkFixtures.DOCTYPE}"}}"""
         } + "$extraQueries]}"
         val claims = com.nimbusds.jwt.JWTClaimsSet.parse(
             """{"client_id":"$clientId","nonce":"$nonce","response_mode":"dc_api","dcql_query":$query""" +
@@ -6059,12 +6059,12 @@ class SirosWalletTest {
     private fun czkSetup(
         functions: List<org.siros.sdk.credentials.CircuitZkFunction> = listOf(
             org.siros.sdk.credentials.CircuitZkFunction(
-                "pseudonym-v1-sha256", "n",
-                Json.parseToJsonElement("""{"config":"known-offender-matching-psc","verifier_id_type":"x509_san_dns"}""").jsonObject,
+                "pseudonym", "n",
+                Json.parseToJsonElement("""{"config":"known-offender-matching-psc","ver":1,"prf":"sha-256"}""").jsonObject,
             ),
         ),
         /** Default: the PDP supplies the x509_san_dns identifier (the bare DNS name, as go-trust derives it). */
-        trust: suspend () -> JsonObject = czkIds("x509_san_dns" to "rp.example"),
+        trust: suspend () -> JsonObject = czkIds("x509_san_dns" to "x509_san_dns:rp.example"),
         /** The wallet's ORDERED supported verifier-id types. */
         types: List<String> = VerifierIdTypeOrder.DEFAULT,
         /** Optional host-registered sources; the PDP's AuthZEN source is always tried first per type. */
@@ -6084,7 +6084,7 @@ class SirosWalletTest {
         secretSeedSource: CredentialSecretSeedSource? = null,
         /** No prover is configured, so the wallet uses its default (the catalog prover without a native half). */
         defaultProver: Boolean = false,
-        /** The request offers the test circuit (`circuit_id_values` / `circuit_proof_system_values`); false: it states no list. */
+        /** The request offers the test circuit (`system_id_values` / `proof_system_values`); false: it states no list. */
         offersCircuit: Boolean = true,
         /** Replaces the fake prover (which knows only the rulebook functions). */
         innerProver: org.siros.sdk.keystore.CircuitZkProver? = null,
@@ -6107,7 +6107,7 @@ class SirosWalletTest {
         )).toMutableList())
         val registry = VerifierIdRegistry(types, sources)
         val circuits = org.siros.sdk.credentials.CircuitZkCircuitSource {
-            listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf(CzkFixtures.DOCTYPE) + extraDocTypes, functions = setOf("pseudonym-v1-sha256", "age_check") + extraCircuitFunctions, capabilities = capabilities))
+            listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf(CzkFixtures.DOCTYPE) + extraDocTypes, functions = setOf("pseudonym", "age_check") + extraCircuitFunctions, capabilities = capabilities))
         }
         val support = org.siros.sdk.credentials.CircuitZkSupport(
             // The plan's raw query is the query itself (its doctype_value is what the presenter checks the credential against).
@@ -6203,15 +6203,16 @@ class SirosWalletTest {
             assertEquals("openid4vp-v1-signed", envelope["protocol"]?.jsonPrimitive?.content)
             val decoded = czkDecoded(result.responseJson)
             assertEquals(
-                org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("rp.example")),
+                org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("x509_san_dns:rp.example")),
                 decoded.results["n"],
             )
             assertEquals(setOf("n"), decoded.results.keys)
-            // The response shape: exactly these members, the offered circuit and proof system, the issuer chain.
-            assertEquals(setOf("circuit_id", "proof_system", "proof", "x5chain", "results"), decoded.json.keys)
-            assertEquals("c1", decoded.json["circuit_id"]!!.jsonPrimitive.content)
-            assertEquals("sys", decoded.json["proof_system"]!!.jsonPrimitive.content)
-            assertTrue(decoded.json["x5chain"]!!.jsonArray.isNotEmpty())
+            // The response shape (rulebook v0.4 ZkpPresentation): exactly these members, the offered system id, the issuer key set, proof_time.
+            assertEquals(setOf("system_id", "proof", "issuer_key_set", "proof_time", "results"), decoded.members)
+            assertEquals("c1", decoded.cbor["system_id"].AsString())
+            assertTrue(decoded.cbor["issuer_key_set"].size() > 0)
+            assertTrue(decoded.cbor["proof_time"].HasMostOuterTag(0))
+            assertEquals(20, decoded.cbor["proof_time"].AsString().length)
             assertEquals(1, s.prover.calls)
             // History: a ZK proof, no claim names, no pseudonym.
             val record = s.history.single()
@@ -6293,7 +6294,7 @@ class SirosWalletTest {
         val s = czkSetup()
         czkRefused(
             s,
-            czkRequest(extraQueries = """,{"format":"mso_mdoc","meta":{"doctype_value":"x"}}"""),
+            czkRequest(extraQueries = """,{"format":"mso_mdoc","meta":{"source_format":"mso_mdoc","doctype_value":"x"}}"""),
             reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST,
         )
         assertEquals(0, s.prover.calls)
@@ -6325,7 +6326,7 @@ class SirosWalletTest {
 
     @Test
     fun circuitZkDcApi_circuitWithCapabilities_isSelectedOnlyWhenTheMatcherServesIt() = runTest(dispatcher) {
-        val caps = """{"schema":1,"presentation":"circuit_zk","credential":{"format":"mso_mdoc","type":"${CzkFixtures.DOCTYPE}"},"functions":[]}"""
+        val caps = """{"schema":1,"presentation":"zkp_req","credential":{"format":"mso_mdoc","type":"${CzkFixtures.DOCTYPE}"},"functions":[]}"""
         // No matcher answer: a circuit that declares capabilities is not unrestricted, so nothing is selected.
         val noMatcher = czkSetup(capabilities = caps, serving = null)
         czkRefused(noMatcher, czkRequest())
@@ -6350,7 +6351,7 @@ class SirosWalletTest {
 
     private fun czkSscFunction(config: String = "known-offender-matching-ssc", extra: String = "") =
         listOf(org.siros.sdk.credentials.CircuitZkFunction(
-            "pseudonym-v1-sha256", "n", Json.parseToJsonElement("""{"config":"$config"$extra}""").jsonObject,
+            "pseudonym", "n", Json.parseToJsonElement("""{"config":"$config","ver":1,"prf":"sha-256"$extra}""").jsonObject,
         ))
 
     private fun czkSscSetup(source: CredentialSecretSeedSource?, config: String = "known-offender-matching-ssc", extra: String = "", ssc: ByteArray = NymTestCredentials.goodSsc) =
@@ -6373,7 +6374,7 @@ class SirosWalletTest {
         val result = czkRun(s, czkRequest())
         assertEquals(
             org.siros.sdk.credentials.ResultValue.Pseudonym(
-                org.siros.sdk.credentials.NymPseudonym.derive("known-offender-matching-ssc", NymTestCredentials.seed, verifierId = "rp.example"),
+                org.siros.sdk.credentials.NymPseudonym.derive("known-offender-matching-ssc", NymTestCredentials.seed, verifierId = "x509_san_dns:rp.example"),
             ),
             czkPseudonymOf(result),
         )
@@ -6389,7 +6390,7 @@ class SirosWalletTest {
         assertEquals(
             org.siros.sdk.credentials.ResultValue.Pseudonym(
                 org.siros.sdk.credentials.NymPseudonym.derive(
-                    "account-recovery-ssc", NymTestCredentials.seed, verifierId = "rp.example", verifierContext = "ctx-1",
+                    "account-recovery-ssc", NymTestCredentials.seed, verifierId = "x509_san_dns:rp.example", verifierContext = "ctx-1",
                 ),
             ),
             czkPseudonymOf(czkRun(s, czkRequest())),
@@ -6429,7 +6430,7 @@ class SirosWalletTest {
     fun circuitZkDcApi_aPseudonymFunctionWithoutVerifierIdType_stillNeedsAndGetsAVerifierId() = runTest(dispatcher) {
         // The request no longer carries verifier_id_type: the config alone says a verifier id is needed.
         val bare = listOf(org.siros.sdk.credentials.CircuitZkFunction(
-            "pseudonym-v1-sha256", "n", Json.parseToJsonElement("""{"config":"known-offender-matching-psc"}""").jsonObject,
+            "pseudonym", "n", Json.parseToJsonElement("""{"config":"known-offender-matching-psc","ver":1,"prf":"sha-256"}""").jsonObject,
         ))
         val s = czkSetup(functions = bare, trust = czkIds("x509_san_dns" to "pdp.example"))
         assertEquals(
@@ -6455,14 +6456,16 @@ class SirosWalletTest {
     }
 
     /** What the wallet answered for query `q`: the one presentation OBJECT of the `circuit_zk` response shape. */
-    private class CzkDecoded(val json: JsonObject) {
-        val results: Map<String, org.siros.sdk.credentials.ResultValue> = json["results"]!!.jsonObject.entries.associate { (handle, v) ->
-            val o = v.jsonObject
-            handle to if ("pseudonym" in o) {
-                org.siros.sdk.credentials.ResultValue.Pseudonym(java.util.Base64.getUrlDecoder().decode(o["pseudonym"]!!.jsonPrimitive.content))
+    /** One presentation of the answer: the base64url CBOR `ZkpPresentation` string of the query `q`, decoded. */
+    private class CzkDecoded(val encoded: String) {
+        val cbor: com.upokecenter.cbor.CBORObject = com.upokecenter.cbor.CBORObject.DecodeFromBytes(java.util.Base64.getUrlDecoder().decode(encoded))
+        val members: Set<String> = cbor.keys.map { it.AsString() }.toSet()
+        val results: Map<String, org.siros.sdk.credentials.ResultValue> = cbor["results"].keys.associate { k ->
+            val v = cbor["results"][k]
+            k.AsString() to if (v.type == com.upokecenter.cbor.CBORType.ByteString) {
+                org.siros.sdk.credentials.ResultValue.Pseudonym(v.GetByteString())
             } else {
-                assertEquals(setOf("satisfied"), o.keys)
-                assertEquals("true", o["satisfied"]!!.jsonPrimitive.content)
+                assertTrue(v.isTrue)
                 org.siros.sdk.credentials.ResultValue.Predicate
             }
         }
@@ -6470,7 +6473,7 @@ class SirosWalletTest {
 
     private fun czkDecoded(responseJson: String): CzkDecoded {
         val entry = Json.parseToJsonElement(responseJson).jsonObject["data"]!!.jsonObject["vp_token"]!!.jsonObject["q"]!!.jsonArray
-        return CzkDecoded(entry.single().jsonObject)
+        return CzkDecoded(entry.single().jsonPrimitive.content)
     }
 
     private fun czkPseudonymOf(result: SirosWallet.DCAPIPresentationResult): org.siros.sdk.credentials.ResultValue? {
@@ -6478,8 +6481,8 @@ class SirosWalletTest {
     }
 
     private fun czkFnOfType(type: String) = org.siros.sdk.credentials.CircuitZkFunction(
-        "pseudonym-v1-sha256", "n",
-        Json.parseToJsonElement("""{"config":"known-offender-matching-psc","verifier_id_type":"$type"}""").jsonObject,
+        "pseudonym", "n",
+        Json.parseToJsonElement("""{"config":"known-offender-matching-psc","ver":1,"prf":"sha-256"}""").jsonObject,
     )
 
     private fun czkIds(vararg entries: Pair<String, String>): suspend () -> JsonObject = {
@@ -6516,7 +6519,7 @@ class SirosWalletTest {
             listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf(CzkFixtures.DOCTYPE)))
         }
         for (type in listOf("x509_hash", "semantic", "x509_san_dns", "anything-else")) {
-            val plan = org.siros.sdk.credentials.CircuitZkPlan(listOf(czkFnOfType(type)), raw = JsonObject(emptyMap()))
+            val plan = org.siros.sdk.credentials.CircuitZkPlan(listOf(czkFnOfType(type)), raw = Json.parseToJsonElement("""{"meta":{"source_format":"mso_mdoc","doctype_value":"d"}}""").jsonObject)
             assertEquals(type, org.siros.sdk.credentials.CircuitZkVerdict.Ok, defaultCircuitZkValidator(circuits).validate(plan))
         }
     }
@@ -6764,8 +6767,8 @@ class SirosWalletTest {
     @Test
     fun circuitZkDcApi_authZenSourceReadsTheVerifierIdFromTheTrustContext() = runTest(dispatcher) {
         val semantic = org.siros.sdk.credentials.CircuitZkFunction(
-            "pseudonym-v1-sha256", "n",
-            Json.parseToJsonElement("""{"config":"known-offender-matching-psc","verifier_id_type":"semantic"}""").jsonObject,
+            "pseudonym", "n",
+            Json.parseToJsonElement("""{"config":"known-offender-matching-psc","ver":1,"prf":"sha-256"}""").jsonObject,
         )
         val withContext = czkSetup(functions = listOf(semantic), trust = {
             buildJsonObject {

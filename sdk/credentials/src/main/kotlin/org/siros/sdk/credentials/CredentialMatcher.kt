@@ -508,8 +508,9 @@ object CredentialMatcher {
             matchesFormat(cred, format) &&
                 matchesVct(cred, vctValues) &&
                 matchesDoctype(cred, doctypeValue) &&
-                // A query for a protected claim matches nothing (see CredentialDisclosureGuard).
-                !CredentialDisclosureGuard.requestsProtected(cred, claims)
+                // A query for a protected claim matches nothing (see CredentialDisclosureGuard). A query with no `claims` at
+                // all asks for the WHOLE attestation, which includes them: the empty path is an ancestor of every claim.
+                !CredentialDisclosureGuard.requestsProtected(cred, claims.ifEmpty { listOf(emptyList()) })
         }
 
         Timber.d("DCQL query '$queryId': format=$format vct=$vctValues doctype=$doctypeValue → ${matched.size} matches")

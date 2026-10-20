@@ -50,14 +50,14 @@ class DCAPIRequestRulesTest {
     private fun assertRefused(raw: String, mode: ExpectedOriginsMode = ExpectedOriginsMode.OFF, callingOrigin: String = origin, message: String? = null) {
         val e = assertThrows(message, DCAPIRequestRefused::class.java) { parse(raw, mode, callingOrigin) }
         assertFalse(e.message!!.contains(callingOrigin))
-        assertFalse(e.message!!.contains("circuit_zk"))
+        assertFalse(e.message!!.contains("zkp_req"))
     }
 
     // ---- circuit_zk: always signed + origin ----
 
     @Test
     fun `circuit_zk signed with a listed origin is accepted`() {
-        val r = parse(envelope(signed("circuit_zk", """["$origin","https://other.example"]""")))
+        val r = parse(envelope(signed("zkp_req", """["$origin","https://other.example"]""")))
         assertEquals("openid4vp-v1-signed", r.protocol)
         assertEquals(listOf(origin, "https://other.example"), r.expectedOrigins)
         assertTrue(r.hasExpectedOrigins)
@@ -66,36 +66,36 @@ class DCAPIRequestRulesTest {
     @Test
     fun `circuit_zk with an origin that is not listed is refused, comparing exactly`() {
         for (listed in listOf("https://other.example", "https://rp.example/", "https://RP.example", "http://rp.example", "https://rp.example:443")) {
-            assertRefused(envelope(signed("circuit_zk", """["$listed"]""")), message = listed)
+            assertRefused(envelope(signed("zkp_req", """["$listed"]""")), message = listed)
         }
     }
 
     @Test
     fun `circuit_zk with a missing or malformed expected_origins is refused`() {
         for (value in listOf(null, "[]", "\"$origin\"", "[1]", "[null]", "[\"$origin\",1]", "{}", "null")) {
-            assertRefused(envelope(signed("circuit_zk", value)), message = value.toString())
+            assertRefused(envelope(signed("zkp_req", value)), message = value.toString())
         }
     }
 
     @Test
     fun `circuit_zk unsigned is refused`() {
-        assertRefused(envelope(unsigned("circuit_zk")))
+        assertRefused(envelope(unsigned("zkp_req")))
     }
 
     @Test
     fun `circuit_zk entry that claims the signed protocol but carries an unsigned body is refused`() {
-        assertRefused(envelope("""{"protocol":"openid4vp-v1-signed","data":{"nonce":"n","dcql_query":${query("circuit_zk")},"expected_origins":["$origin"]}}"""))
+        assertRefused(envelope("""{"protocol":"openid4vp-v1-signed","data":{"nonce":"n","dcql_query":${query("zkp_req")},"expected_origins":["$origin"]}}"""))
     }
 
     @Test
     fun `circuit_zk with the multisigned protocol is refused`() {
-        assertRefused(envelope(signed("circuit_zk", """["$origin"]""", protocol = "openid4vp-v1-multisigned")))
+        assertRefused(envelope(signed("zkp_req", """["$origin"]""", protocol = "openid4vp-v1-multisigned")))
     }
 
     @Test
     fun `a circuit_zk query among other credential queries still needs the signed request`() {
         val claims = JWTClaimsSet.parse(
-            """{"nonce":"n","dcql_query":{"credentials":[{"id":"a","format":"dc+sd-jwt"},{"id":"b","format":"circuit_zk"}]}}"""
+            """{"nonce":"n","dcql_query":{"credentials":[{"id":"a","format":"dc+sd-jwt"},{"id":"b","format":"zkp_req"}]}}"""
         )
         val jwt = SignedJWT(JWSHeader.Builder(JWSAlgorithm.ES256).jwk(ecKey.toPublicJWK()).build(), claims).also { it.sign(ECDSASigner(ecKey)) }
         // signed, but no expected_origins
@@ -105,8 +105,8 @@ class DCAPIRequestRulesTest {
     @Test
     fun `circuit_zk ignores the config mode`() {
         for (mode in ExpectedOriginsMode.values()) {
-            assertRefused(envelope(signed("circuit_zk", null)), mode)
-            parse(envelope(signed("circuit_zk", """["$origin"]""")), mode)
+            assertRefused(envelope(signed("zkp_req", null)), mode)
+            parse(envelope(signed("zkp_req", """["$origin"]""")), mode)
         }
     }
 
@@ -114,21 +114,21 @@ class DCAPIRequestRulesTest {
 
     @Test
     fun `an unsigned first entry is skipped in favour of a signed second one`() {
-        val r = parse(envelope(unsigned("circuit_zk", nonce = "first"), signed("circuit_zk", """["$origin"]""", nonce = "second")))
+        val r = parse(envelope(unsigned("zkp_req", nonce = "first"), signed("zkp_req", """["$origin"]""", nonce = "second")))
         assertEquals("second", r.nonce)
         assertEquals("openid4vp-v1-signed", r.protocol)
     }
 
     @Test
     fun `the first acceptable entry wins when several are`() {
-        val r = parse(envelope(signed("circuit_zk", """["$origin"]""", nonce = "one"), signed("circuit_zk", """["$origin"]""", nonce = "two")))
+        val r = parse(envelope(signed("zkp_req", """["$origin"]""", nonce = "one"), signed("zkp_req", """["$origin"]""", nonce = "two")))
         assertEquals("one", r.nonce)
     }
 
     @Test
     fun `the refusal names the protocol of the first refused entry only`() {
         val e = assertThrows(DCAPIRequestRefused::class.java) {
-            parse(envelope(unsigned("circuit_zk"), signed("circuit_zk", null, protocol = "openid4vp-v1-multisigned")))
+            parse(envelope(unsigned("zkp_req"), signed("zkp_req", null, protocol = "openid4vp-v1-multisigned")))
         }
         assertEquals("openid4vp-v1-unsigned", e.protocol)
         assertEquals("DC API request refused (protocol=openid4vp-v1-unsigned)", e.message)
@@ -136,7 +136,7 @@ class DCAPIRequestRulesTest {
 
     @Test
     fun `the default parse takes the first entry, unchanged`() {
-        val raw = envelope(unsigned("circuit_zk", nonce = "first"), signed("circuit_zk", """["$origin"]""", nonce = "second"))
+        val raw = envelope(unsigned("zkp_req", nonce = "first"), signed("zkp_req", """["$origin"]""", nonce = "second"))
         assertEquals("first", DCAPIRequestParser.parse(raw).nonce)
         assertEquals("first", DCAPIRequestParser.parse(raw, DCAPIEntryPolicy.FIRST_ENTRY).nonce)
     }
@@ -144,7 +144,7 @@ class DCAPIRequestRulesTest {
     @Test
     fun `a malformed entry still fails the request instead of being skipped`() {
         assertThrows(DCAPIRequestException::class.java) {
-            parse(envelope("""{"protocol":"openid4vp-v1-unsigned"}""", signed("circuit_zk", """["$origin"]""")))
+            parse(envelope("""{"protocol":"openid4vp-v1-unsigned"}""", signed("zkp_req", """["$origin"]""")))
         }
     }
 
@@ -200,8 +200,8 @@ class DCAPIRequestRulesTest {
     @Test
     fun `the hook can only add requirements, a circuit_zk query is always signed and origin-bound`() {
         // A hook returning false does not let an unsigned (or unlisted-origin) circuit_zk request through.
-        assertThrows(DCAPIRequestRefused::class.java) { parse(envelope(unsigned("circuit_zk")), hook = { false }) }
-        assertThrows(DCAPIRequestRefused::class.java) { parse(envelope(unsigned("circuit_zk")), hook = { it == null }) }
+        assertThrows(DCAPIRequestRefused::class.java) { parse(envelope(unsigned("zkp_req")), hook = { false }) }
+        assertThrows(DCAPIRequestRefused::class.java) { parse(envelope(unsigned("zkp_req")), hook = { it == null }) }
     }
 
     @Test

@@ -90,7 +90,7 @@ class LegacyZkCircuitZkAdapter(private val presentation: ZkMdocPresentation) : C
 
         val value: ResultValue = if (request.pseudonym) {
             val pseudonym = result.proof.pseudonym
-            if (result.proof.pseudonymOutcome != PseudonymOutcome.PROVIDED || pseudonym == null || pseudonym.size != ResultValue.Pseudonym.SIZE) {
+            if (result.proof.pseudonymOutcome != PseudonymOutcome.PROVIDED || pseudonym == null || pseudonym.size != ResultValue.Pseudonym.SHA256_SIZE) {
                 Timber.w("circuit_zk: the proof system returned no pseudonym; refusing")
                 throw refuse()
             }

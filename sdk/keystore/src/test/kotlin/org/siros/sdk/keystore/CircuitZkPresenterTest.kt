@@ -24,7 +24,6 @@ import org.siros.sdk.credentials.CircuitZkFunction
 import org.siros.sdk.credentials.CircuitZkPlan
 import org.siros.sdk.credentials.CircuitZkRequestValidator
 import org.siros.sdk.credentials.CircuitZkVerdict
-import org.siros.sdk.credentials.IssuerKeySet
 import org.siros.sdk.credentials.NymPseudonym
 import org.siros.sdk.credentials.ResultValue
 import org.siros.sdk.credentials.ZkWitnessSigner
@@ -117,16 +116,16 @@ class CircuitZkPresenterTest {
 
     private fun params(json: String): JsonObject = Json.parseToJsonElement(json).jsonObject
     private fun pseudonymFn(config: String = "known-offender-matching-psc", handle: String = "n") =
-        CircuitZkFunction("pseudonym-v1-sha256", handle, params("""{"config":"$config","verifier_id_type":"x509_san_dns"}"""))
+        CircuitZkFunction("pseudonym", handle, params("""{"config":"$config","ver":1,"prf":"sha-256"}"""))
     private fun ageFn(json: String = """{"ge":"1990-01-01"}""", handle: String = "a") = CircuitZkFunction("age_check", handle, params(json))
     private fun plan(vararg fns: CircuitZkFunction, doctype: String = docType) = CircuitZkPlan(
         functions = fns.toList(),
         // The request offers the test circuit: a response states a circuit_id and proof_system from the request's lists.
         circuitFilter = org.siros.sdk.credentials.CircuitZkCircuitFilter(listOf("sys"), listOf("circuit-1")),
-        raw = params("""{"id":"q","format":"circuit_zk","meta":{"doctype_value":"$doctype"}}"""),
+        raw = params("""{"id":"q","format":"zkp_req","meta":{"source_format":"mso_mdoc","doctype_value":"$doctype"}}"""),
     )
 
-    private val circuit = CircuitZkCircuit("sys", "circuit-1", setOf(docType), functions = setOf("pseudonym-v1-sha256", "age_check"))
+    private val circuit = CircuitZkCircuit("sys", "circuit-1", setOf(docType), functions = setOf("pseudonym", "age_check"))
     private val signer = ZkWitnessSigner { _, _ -> error("the fake prover never asks for a signature") }
 
     private class CountingProver(val inner: CircuitZkProver, val override: (() -> CircuitZkProveOutput)? = null) : CircuitZkProver {
@@ -198,12 +197,14 @@ class CircuitZkPresenterTest {
         val expected = NymPseudonym.derive("known-offender-matching-psc", seed16, verifierId = "rp.example")
         assertEquals(ResultValue.Pseudonym(expected), decoded.results["n"])
         assertEquals(ResultValue.Predicate, decoded.results["a"])
-        assertEquals("circuit-1", decoded.circuitId)
-        assertEquals("circuit-1", result.circuitId)
+        assertEquals("circuit-1", decoded.systemId)
+        assertEquals("circuit-1", result.systemId)
         assertArrayEquals(FakeCircuitZkProver.DUMMY_PROOF, decoded.proof)
-        assertEquals(1, decoded.x5chain.size)
-        assertArrayEquals(cert, decoded.x5chain.single())
-        assertEquals("sys", decoded.proofSystem)
+        assertEquals(1, decoded.issuerKeySet.size)
+        assertArrayEquals(cert, decoded.issuerKeySet.single())
+        // proof_time is required for mso_mdoc: the exact 20-byte form.
+        assertEquals(20, decoded.proofTime!!.toByteArray(Charsets.US_ASCII).size)
+        assertTrue(org.siros.sdk.credentials.ProofTime.isValid(decoded.proofTime!!))
     }
 
     @Test
@@ -231,22 +232,30 @@ class CircuitZkPresenterTest {
     fun `the circuit is the first that supports the plan`() {
         val circuits = listOf(
             CircuitZkCircuit("sys", "wrong-doctype", setOf("other")),
-            CircuitZkCircuit("sys", "no-age", setOf(docType), functions = setOf("pseudonym-v1-sha256")),
-            CircuitZkCircuit("sys", "right", setOf(docType), functions = setOf("pseudonym-v1-sha256", "age_check")),
+            CircuitZkCircuit("sys", "no-age", setOf(docType), functions = setOf("pseudonym")),
+            CircuitZkCircuit("sys", "right", setOf(docType), functions = setOf("pseudonym", "age_check")),
         )
         val offered = plan(pseudonymFn(), ageFn()).copy(circuitFilter = org.siros.sdk.credentials.CircuitZkCircuitFilter(listOf("sys"), listOf("wrong-doctype", "no-age", "right")))
-        assertEquals("right", present(presenter(circuits = circuits), request(p = offered)).circuitId)
+        assertEquals("right", present(presenter(circuits = circuits), request(p = offered)).systemId)
     }
 
     // -------- the response shape: offered circuit and proof system, issuer chain --------
 
     @Test
-    fun `a request that offered no circuit or proof system cannot be answered and nothing is proved`() {
+    fun `a request that offered no system_id cannot be answered and nothing is proved`() {
         val prover = CountingProver(FakeCircuitZkProver.optIn())
-        for (filter in listOf(null, org.siros.sdk.credentials.CircuitZkCircuitFilter(null, null), org.siros.sdk.credentials.CircuitZkCircuitFilter(listOf("sys"), null), org.siros.sdk.credentials.CircuitZkCircuitFilter(null, listOf("circuit-1")))) {
+        for (filter in listOf(null, org.siros.sdk.credentials.CircuitZkCircuitFilter(null, null), org.siros.sdk.credentials.CircuitZkCircuitFilter(listOf("sys"), null))) {
             assertDenied(CircuitZkStep.CIRCUIT) { present(presenter(prover), request(p = plan(pseudonymFn(), ageFn()).copy(circuitFilter = filter))) }
         }
         assertEquals(0, prover.calls)
+    }
+
+    @Test
+    fun `proof_system_values is optional, system_id_values is not`() {
+        val prover = CountingProver(FakeCircuitZkProver.optIn())
+        val noSystems = plan(pseudonymFn(), ageFn()).copy(circuitFilter = org.siros.sdk.credentials.CircuitZkCircuitFilter(null, listOf("circuit-1")))
+        assertEquals("circuit-1", present(presenter(prover), request(p = noSystems)).systemId)
+        assertEquals(1, prover.calls)
     }
 
     @Test
@@ -258,21 +267,20 @@ class CircuitZkPresenterTest {
     }
 
     @Test
-    fun `an alias the request offered is the circuit_id stated`() {
-        val aliased = CircuitZkCircuit("sys", "circuit-1", setOf(docType), functions = setOf("pseudonym-v1-sha256", "age_check"), aliases = setOf("urn:alias"))
+    fun `an alias the request offered is the system_id stated`() {
+        val aliased = CircuitZkCircuit("sys", "circuit-1", setOf(docType), functions = setOf("pseudonym", "age_check"), aliases = setOf("urn:alias"))
         val p = plan(pseudonymFn(), ageFn()).copy(circuitFilter = org.siros.sdk.credentials.CircuitZkCircuitFilter(listOf("sys"), listOf("urn:alias")))
         val result = present(presenter(circuits = listOf(aliased)), request(p = p))
-        assertEquals("urn:alias", result.circuitId)
-        assertEquals("urn:alias", result.json["circuit_id"]!!.jsonPrimitive.content)
+        assertEquals("urn:alias", result.systemId)
     }
 
     @Test
-    fun `the issuer chain is the credentials own x5chain, leaf first, and the whole presentation validates`() {
+    fun `the issuer key set is the credentials own x5chain, leaf first, and the whole presentation validates`() {
         val ca = ByteArray(30) { (it + 100).toByte() }
         val result = present(presenter(), request(cred = credential(chain = listOf(cert, ca))))
-        assertEquals(2, result.presentation.x5chain.size)
-        assertArrayEquals(cert, result.presentation.x5chain[0])
-        assertArrayEquals(ca, result.presentation.x5chain[1])
+        assertEquals(2, result.presentation.issuerKeySet.size)
+        assertArrayEquals(cert, result.presentation.issuerKeySet[0])
+        assertArrayEquals(ca, result.presentation.issuerKeySet[1])
         val p = plan(pseudonymFn(), ageFn())
         val token = JsonObject(mapOf("q" to kotlinx.serialization.json.JsonArray(listOf(result.json)))).toString()
         assertNull(org.siros.sdk.credentials.CircuitZkResponseValidator.validate(p, token))
@@ -867,7 +875,7 @@ class CircuitZkPresenterTest {
 
     @Test
     fun `the nym_auth handlers declare what the wallet needs, and the commitment checks are theirs`() {
-        fun fn(config: String) = CircuitZkFunction("pseudonym-v1-sha256", "n", params("""{"config":"$config","verifier_context":"ctx"}"""))
+        fun fn(config: String) = CircuitZkFunction("pseudonym", "n", params("""{"config":"$config","verifier_context":"ctx"}"""))
         val ssc = fn("known-offender-matching-ssc")
         val psc = fn("known-offender-matching-psc")
         assertTrue(PseudonymFunctionHandler.needsVerifierId(ssc))
@@ -887,7 +895,7 @@ class CircuitZkPresenterTest {
 
     @Test
     fun `neither the presenter nor the wallet names a nym_auth claim, commitment or function`() {
-        val names = Regex(""""(birth_date|ssc|psc)"|age_check|pseudonym-v1-sha256|CircuitZkRuleSet\.(PSEUDONYM|AGE_CHECK)""")
+        val names = Regex(""""(birth_date|ssc|psc)"|age_check|"pseudonym"|CircuitZkRuleSet\.(PSEUDONYM|AGE_CHECK)""")
         val files = listOf(
             java.io.File("src/main/kotlin/org/siros/sdk/keystore/CircuitZkPresenter.kt"),
             java.io.File("../wallet/src/main/kotlin/org/siros/sdk/wallet/SirosWallet.kt"),

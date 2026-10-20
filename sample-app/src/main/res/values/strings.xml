@@ -311,7 +311,7 @@
     <string name="settings_policy_non_disclosure">Protected claims</string>
     <string name="settings_policy_non_disclosure_default">Default: never match, show or share the nym_auth seed commitments (ssc, psc)</string>
     <string name="settings_policy_non_disclosure_none">None: no protected claims (testing only)</string>
-    <string name="settings_policy_circuit_zk">circuit_zk requests</string>
+    <string name="settings_policy_circuit_zk">zkp_req requests</string>
     <string name="settings_policy_circuit_zk_description">Answer circuit_zk (zero-knowledge) requests. The sample app supplies only the nym_auth demo circuit, so it can answer only that query.</string>
     <string name="settings_policy_fake_prover">FAKE prover (no real proof)</string>
     <string name="settings_policy_fake_prover_description">Use the fake prover, which produces NO real proof. A verifier cannot accept it. Development only. Needs circuit_zk on.</string>
