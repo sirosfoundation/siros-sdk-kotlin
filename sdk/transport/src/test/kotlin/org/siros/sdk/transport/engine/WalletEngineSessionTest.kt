@@ -761,6 +761,7 @@ class WalletEngineSessionTest {
         // handshake frame after it is awaited so the consumer has certainly
         // routed the progress frame into its (buffered) channel.
         listener.onMessage(webSocket, """{"type":"flow_progress","flow_id":"old-flow","step":"parsing_offer"}""")
+        listener.onMessage(webSocket, """{"type":"match_request","flow_id":"old-flow","dcql_query":{}}""")
         session.messages().test {
             listener.onMessage(webSocket, """{"type":"handshake_complete","session_id":"s1"}""")
             awaitItem()
@@ -769,6 +770,10 @@ class WalletEngineSessionTest {
 
         session.forceReconnect()
 
+        session.matchRequests().test {
+            expectNoEvents()
+            cancelAndIgnoreRemainingEvents()
+        }
         session.flowProgress().test {
             expectNoEvents()
             listener.onMessage(webSocket, """{"type":"flow_progress","flow_id":"new-flow","step":"parsing_offer"}""")

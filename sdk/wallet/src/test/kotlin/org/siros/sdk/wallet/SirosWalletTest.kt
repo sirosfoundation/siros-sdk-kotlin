@@ -7255,6 +7255,28 @@ class SirosWalletTest {
         assertTrue(stateFlow.value is WalletState.Ready)
     }
 
+    @Test
+    fun cancelledIssuanceMarker_isRetiredByAnyConnectionReplacement_notJustAnIssuanceRetry() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val (wallet, engine) = abandonedStartWallet(progressFlow, listener = listener, stateFlow = stateFlow)
+        advanceUntilIdle()
+        wallet.startIssuanceByOffer(startOffer)
+        wallet.cancelCurrentFlow()
+
+        // A presentation/renewal path reconnects through ensureEngineConnected.
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "ensureEngineConnected" }
+        method.isAccessible = true
+        method.callSuspend(wallet, engine)
+
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-presentation", step = "parsing_request"))
+        advanceUntilIdle()
+
+        verify(exactly = 0) { engine.cancelFlow(any()) }
+        assertEquals("flow-presentation", (stateFlow.value as WalletState.FlowActive).flowId)
+    }
+
     private fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {
         val wallet = allocateInstance(SirosWallet::class.java) as SirosWallet
         val values = fields.toMap(mutableMapOf())

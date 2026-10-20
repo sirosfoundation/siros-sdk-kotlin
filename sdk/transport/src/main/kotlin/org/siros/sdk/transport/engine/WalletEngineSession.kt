@@ -738,6 +738,7 @@ class WalletEngineSession(
         while (flowCompleteChannel.tryReceive().isSuccess) { /* drop */ }
         while (flowErrorChannel.tryReceive().isSuccess) { /* drop */ }
         while (signRequestChannel.tryReceive().isSuccess) { /* drop */ }
+        while (matchRequestChannel.tryReceive().isSuccess) { /* drop */ }
     }
 
     /** Disconnect the WebSocket session. */

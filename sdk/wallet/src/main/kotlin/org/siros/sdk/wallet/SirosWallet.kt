@@ -4139,6 +4139,8 @@ class SirosWallet private constructor(
      */
     private suspend fun ensureEngineConnected(engine: WalletEngineSession) {
         engine.forceReconnect()
+        // The old socket is gone: so is any reply to a cancelled start.
+        abandonedStartTimes.clear()
         engine.awaitConnected()
     }
 
@@ -4268,6 +4270,7 @@ class SirosWallet private constructor(
         scope.launch {
             try {
                 engine.forceReconnect()
+                abandonedStartTimes.clear()
                 engine.awaitConnected()
                 // Client attestation for the resumed flow arrives the same way
                 // as for a fresh one: go-wallet-backend's Execute() runs its
