@@ -5668,9 +5668,19 @@ class SirosWalletTest {
             fun mac(k: ByteArray, d: ByteArray) = javax.crypto.Mac.getInstance("HmacSHA256").apply { init(javax.crypto.spec.SecretKeySpec(k, "HmacSHA256")) }.doFinal(d)
             return mac(mac(ByteArray(32), root), info + byteArrayOf(1)).copyOf(length)
         }
-        val seed get() = hkdf("org.siros.private_seed/v1$DOCTYPE".toByteArray(), 16)
+        /**
+         * The Credential Issuer Identifier the fixtures store with their credentials, WITH a trailing slash on purpose:
+         * the device seed (and so psc) is derived from the string exactly as stored, so a normalised form would not match.
+         */
+        const val ISSUER = "https://issuer.example/"
+
+        /** An independent `lp(x)` of privatedata-spec 5.4.1: 2-byte big-endian length, then the UTF-8 bytes. */
+        private fun lp(x: String) = x.toByteArray().let { byteArrayOf((it.size shr 8).toByte(), it.size.toByte()) + it }
+
+        fun seedFor(docType: String, issuer: String) = hkdf("org.siros.private_seed/v2".toByteArray() + lp(docType) + lp(issuer), 16)
+        val seed get() = seedFor(DOCTYPE, ISSUER)
         val psc get() = pscFor(DOCTYPE)
-        fun pscFor(docType: String) = java.security.MessageDigest.getInstance("SHA-256").digest(hkdf("org.siros.private_seed/v1$docType".toByteArray(), 16))
+        fun pscFor(docType: String, issuer: String = ISSUER) = java.security.MessageDigest.getInstance("SHA-256").digest(seedFor(docType, issuer))
 
         fun mdoc(psc: ByteArray = this.psc, birth: String = "2000-06-15", docType: String = DOCTYPE, ssc: ByteArray = ByteArray(32) { 9 }): String {
             fun c(o: Any) = com.upokecenter.cbor.CBORObject.FromObject(o)
@@ -5785,7 +5795,7 @@ class SirosWalletTest {
             seedSource.circuitZkPresenter(arg(0), arg(1), arg(2), arg(3), arg(4), arg(5), arg(6))
         }
         val store = FakeCredentialStore((credentials ?: listOf(
-            StoredCredential(id = 1L, format = "mso_mdoc", raw = CzkFixtures.mdoc(psc, birth),
+            StoredCredential(id = 1L, format = "mso_mdoc", raw = CzkFixtures.mdoc(psc, birth), credentialIssuerIdentifier = CzkFixtures.ISSUER,
                 metadata = CredentialMetadata(name = "Nym"), batchId = 1L, instanceId = 0),
         )).toMutableList())
         val registry = VerifierIdRegistry(types, sources)
@@ -5847,6 +5857,28 @@ class SirosWalletTest {
     private fun czkExpectedPseudonym(verifierId: String) = org.siros.sdk.credentials.NymPseudonym.derive(
         "known-offender-matching-psc", CzkFixtures.seed, verifierId = verifierId,
     )
+
+    private fun czkSetupWithIssuer(issuer: String?) = czkSetup(
+        credentials = listOf(
+            StoredCredential(
+                id = 1L, format = "mso_mdoc", raw = CzkFixtures.mdoc(CzkFixtures.psc, "2000-06-15"),
+                credentialIssuerIdentifier = issuer, metadata = CredentialMetadata(name = "Nym"), batchId = 1L, instanceId = 0,
+            ),
+        ),
+    )
+
+    @Test
+    fun circuitZkDcApi_theDevicePscFollowsTheIssuerExactlyAsStored_atPresentationToo() = runTest(dispatcher) {
+        // The fixture credential committed to the seed of "https://issuer.example/" (trailing slash), the stored string.
+        val ok = czkRun(czkSetupWithIssuer(CzkFixtures.ISSUER), czkRequest())
+        assertEquals(setOf("n"), org.siros.sdk.credentials.CircuitZkPresentationCodec.decodeBase64Url(
+            Json.parseToJsonElement(ok.responseJson).jsonObject["data"]!!.jsonObject["vp_token"]!!.jsonObject["q"]!!.jsonArray.single().jsonPrimitive.content,
+        ).results.keys)
+        // The same issuer without the slash is another string, another seed, another psc: refused, never normalised.
+        czkRefused(czkSetupWithIssuer("https://issuer.example"), czkRequest())
+        // A credential stored without its issuer cannot derive the device seed at all.
+        czkRefused(czkSetupWithIssuer(null), czkRequest())
+    }
 
     @Test
     fun circuitZkDcApi_success_presentationDecodesAndPseudonymMatchesIndependentRecompute() = runTest(dispatcher) {
@@ -5978,7 +6010,7 @@ class SirosWalletTest {
         czkSetup(
             functions = czkSscFunction(config, extra),
             credentials = listOf(StoredCredential(
-                id = 1L, format = "mso_mdoc", raw = CzkFixtures.mdoc(ssc = ssc),
+                id = 1L, format = "mso_mdoc", raw = CzkFixtures.mdoc(ssc = ssc), credentialIssuerIdentifier = CzkFixtures.ISSUER,
                 metadata = CredentialMetadata(name = "Nym"), batchId = 1L, instanceId = 0,
             )),
             secretSeedSource = source,
@@ -6233,7 +6265,7 @@ class SirosWalletTest {
     }
 
     private fun czkCred(id: Long, batch: Long, instance: Int = 0) = StoredCredential(
-        id = id, format = "mso_mdoc", raw = CzkFixtures.mdoc(CzkFixtures.psc, "2000-06-15"),
+        id = id, format = "mso_mdoc", raw = CzkFixtures.mdoc(CzkFixtures.psc, "2000-06-15"), credentialIssuerIdentifier = CzkFixtures.ISSUER,
         metadata = CredentialMetadata(name = "Nym $id"), batchId = batch, instanceId = instance,
     )
 
@@ -6325,7 +6357,7 @@ class SirosWalletTest {
     fun circuitZkDcApi_multiQuery_aQueryTheUsersPickIsNotACandidateOf_isRefused_notAnsweredWithAnotherCredential() = runTest(dispatcher) {
         // Query "qo" wants the other doctype (only credential 5 is its candidate); the user picked credential 1.
         val other = StoredCredential(
-            id = 5L, format = "mso_mdoc", raw = CzkFixtures.mdoc(psc = CzkFixtures.pscFor(CzkFixtures.OTHER_DOCTYPE), docType = CzkFixtures.OTHER_DOCTYPE),
+            id = 5L, format = "mso_mdoc", raw = CzkFixtures.mdoc(psc = CzkFixtures.pscFor(CzkFixtures.OTHER_DOCTYPE), docType = CzkFixtures.OTHER_DOCTYPE), credentialIssuerIdentifier = CzkFixtures.ISSUER,
             metadata = CredentialMetadata(name = "Other"), batchId = 5L, instanceId = 0,
         )
         val raw = czkRequest(queryIds = listOf("qo", "q"), queryDoctypes = listOf(CzkFixtures.OTHER_DOCTYPE, CzkFixtures.DOCTYPE))
