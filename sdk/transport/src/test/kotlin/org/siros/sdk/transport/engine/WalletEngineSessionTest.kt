@@ -778,6 +778,18 @@ class WalletEngineSessionTest {
     }
 
     @Test
+    fun reconnect_discard_keeps_push_and_ack_frames_but_drops_flow_traffic() {
+        val session = WalletEngineSession(baseUrl = "https://wallet.example.com", tenantId = "t", client = client)
+        for (flow in listOf("flow_progress", "flow_complete", "flow_error", "sign_request", "match_request")) {
+            assertTrue(flow, session.isFlowTraffic("""{"type":"$flow","flow_id":"f"}"""))
+        }
+        // Not tied to the replaced socket's flows; an issuance_complete push can carry credentials.
+        assertEquals(false, session.isFlowTraffic("""{"type":"push","push_type":"issuance_complete"}"""))
+        assertEquals(false, session.isFlowTraffic("""{"type":"notification_ack"}"""))
+        assertEquals(false, session.isFlowTraffic("not json"))
+    }
+
+    @Test
     fun forceReconnect_signals_reauth_required_when_token_provider_rejects_with_401() = runTest {
         val session = WalletEngineSession(
             baseUrl = "https://wallet.example.com",

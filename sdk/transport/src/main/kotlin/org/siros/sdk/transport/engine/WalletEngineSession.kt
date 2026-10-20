@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.siros.sdk.credentials.interop.AuthorizationDetail
@@ -713,8 +714,26 @@ class WalletEngineSession(
      * or an error from it failing the retry). Best effort: a frame a consumer
      * has already taken cannot be recalled.
      */
+    internal fun isFlowTraffic(frame: String): Boolean = try {
+        when (json.parseToJsonElement(frame).jsonObject["type"]?.jsonPrimitive?.contentOrNull) {
+            MessageTypes.FLOW_PROGRESS, MessageTypes.FLOW_COMPLETE, MessageTypes.FLOW_ERROR,
+            MessageTypes.SIGN_REQUEST, MessageTypes.MATCH_REQUEST -> true
+            else -> false
+        }
+    } catch (e: Exception) {
+        false
+    }
+
     private fun discardBufferedFlowTraffic() {
-        while (rawMessageChannel.tryReceive().isSuccess) { /* drop */ }
+        // Raw frames: drop stale flow/session traffic but keep everything else
+        // (push, notification_ack, ...), which is not tied to the old socket's
+        // flows and can carry data nothing else will redeliver.
+        val kept = mutableListOf<String>()
+        while (true) {
+            val frame = rawMessageChannel.tryReceive().getOrNull() ?: break
+            if (!isFlowTraffic(frame)) kept += frame
+        }
+        kept.forEach { rawMessageChannel.trySend(it) }
         while (flowProgressChannel.tryReceive().isSuccess) { /* drop */ }
         while (flowCompleteChannel.tryReceive().isSuccess) { /* drop */ }
         while (flowErrorChannel.tryReceive().isSuccess) { /* drop */ }

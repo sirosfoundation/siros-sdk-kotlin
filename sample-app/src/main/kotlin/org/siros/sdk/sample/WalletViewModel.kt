@@ -1468,6 +1468,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 _errorMessage.value = ERROR_CODE_RESOURCES[e.errorCode]?.let(activity::getString)
                     ?: e.message ?: "Identity verification failed"
             } catch (e: Exception) {
+                // Cancelling the pending issuance (startIssuance inside
+                // verifyIdentityAndIssue) is not a failure to report.
+                if (isSilentCancellation(e)) throw e
                 android.util.Log.e("SIROS_VM", "IDV failed", e)
                 _errorMessage.value = e.message ?: "Identity verification failed"
             } finally {
