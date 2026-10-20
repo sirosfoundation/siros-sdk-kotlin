@@ -16,7 +16,7 @@ import org.siros.sdk.wallet.dcapi.DCAPIRequestKeyMaterial
 class NonDisclosureWalletTest {
     private val plan = CircuitZkPlan(
         listOf(
-            CircuitZkFunction("pseudonym-v1-sha256", "n", Json.parseToJsonElement("""{"config":"known-offender-matching-psc"}""").jsonObject),
+            CircuitZkFunction("pseudonym", "n", Json.parseToJsonElement("""{"config":"known-offender-matching-psc"}""").jsonObject),
             CircuitZkFunction("age_check", "a", Json.parseToJsonElement("""{"ge":"2000-01-01"}""").jsonObject),
         ),
     )

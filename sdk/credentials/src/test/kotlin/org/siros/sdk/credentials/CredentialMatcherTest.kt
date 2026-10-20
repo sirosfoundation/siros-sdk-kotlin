@@ -764,7 +764,7 @@ class CredentialMatcherTest {
         val query = json.parseToJsonElement(
             """{"credentials":[
                  {"id":"pid","format":"dc+sd-jwt","meta":{"vct_values":["urn:eu.europa.ec.eudi:pid:1"]}},
-                 {"id":"mdl","format":"mso_mdoc","meta":{"doctype_value":"org.iso.18013.5.1.mDL"}}
+                 {"id":"mdl","format":"mso_mdoc","meta":{"source_format":"mso_mdoc","doctype_value":"org.iso.18013.5.1.mDL"}}
                ]}"""
         ).jsonObject
 

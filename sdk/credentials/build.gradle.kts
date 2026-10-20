@@ -25,7 +25,7 @@ android {
         jvmTarget = "17"
     }
 
-    // The matcher's circuit_zk planner vectors (spec/circuit-zk-planner-vectors)
+    // The matcher's zkp_req planner vectors (spec/zkp-req-vectors/zkp_req)
     // are read by the instrumented planner test as assets of the test APK.
     sourceSets.getByName("androidTest").assets.srcDir("../../spec")
 }
@@ -34,6 +34,10 @@ android {
 // to GitHub Packages these coordinates resolve only from a local build (-PsirosNativeRepo=<dir>).
 val zkCredVegaVersion: String = providers.gradleProperty("zkCredVegaVersion").getOrElse("0.0.7")
 val zkCredLongfellowVersion: String = providers.gradleProperty("zkCredLongfellowVersion").getOrElse("0.1.2")
+
+// The matcher at rulebook v0.4 (`zkp_req`): siros-dc-matcher pull request 50 (merged as 93047bc7, no release yet). Not released yet, so this
+// coordinate resolves only from a local build (-PsirosNativeRepo=<dir>, docs/NATIVE_DEV.md); re-pin to the release when it is cut.
+val sirosDcMatcherVersion: String = providers.gradleProperty("sirosDcMatcherVersion").getOrElse("0.11.0-pr50.69e6be1")
 
 /**
  * Fails the build up front, with the coordinates and the way out, instead of a bare resolution error deep in a compile
@@ -107,7 +111,7 @@ dependencies {
     //
     // `api`, because :sdk:wallet registers the blob and ships the asset, and
     // consumers of the SDK see the matcher's types through CredentialMatcher.
-    api("org.siros:siros-dc-matcher:0.10.0")
+    api("org.siros:siros-dc-matcher:$sirosDcMatcherVersion")
 
     // The nymauth entry points (the circuit_zk prover) need the libraries that carry them; the vendored UniFFI
     // bindings are generated from exactly these builds and check their API checksums at load, so the two move

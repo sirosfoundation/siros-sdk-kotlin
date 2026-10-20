@@ -293,7 +293,7 @@
     <string name="settings_policy_non_disclosure">Suojatut väitteet</string>
     <string name="settings_policy_non_disclosure_default">Oletus: älä koskaan täsmäytä, näytä tai jaa nym_auth-siemensitoumuksia (ssc, psc)</string>
     <string name="settings_policy_non_disclosure_none">Ei mitään: ei suojattuja väitteitä (vain testaus)</string>
-    <string name="settings_policy_circuit_zk">circuit_zk-pyynnöt</string>
+    <string name="settings_policy_circuit_zk">zkp_req-pyynnöt</string>
     <string name="settings_policy_circuit_zk_description">Vastaa circuit_zk-pyyntöihin (nollatieto). Esimerkkisovellus tarjoaa vain nym_auth-demopiirin, joten se vastaa vain siihen kyselyyn.</string>
     <string name="settings_policy_fake_prover">VÄÄRÄ todistaja (ei oikeaa todistetta)</string>
     <string name="settings_policy_fake_prover_description">Käytä väärää todistajaa, joka EI tuota oikeaa todistetta. Tarkastaja ei voi hyväksyä sitä. Vain kehitykseen. Vaatii circuit_zk:n päälle.</string>

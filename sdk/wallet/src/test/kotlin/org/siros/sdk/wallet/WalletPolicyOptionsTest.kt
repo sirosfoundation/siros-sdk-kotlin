@@ -51,7 +51,7 @@ class WalletPolicyOptionsTest {
         assertEquals(base.circuitZkVerifierIdTypes, applied.circuitZkVerifierIdTypes)
         assertEquals(VerifierIdTypeOrder.DEFAULT, WalletPolicyOptions().verifierIdTypes)
         val query = kotlinx.serialization.json.Json.parseToJsonElement(
-            """{"credentials":[{"id":"q","format":"circuit_zk"}]}""",
+            """{"credentials":[{"id":"q","format":"zkp_req"}]}""",
         ) as kotlinx.serialization.json.JsonObject
         val plain = kotlinx.serialization.json.Json.parseToJsonElement(
             """{"credentials":[{"id":"q","format":"mso_mdoc"}]}""",
@@ -173,7 +173,7 @@ class WalletPolicyOptionsTest {
         assertSame(NonDisclosurePolicy.DEFAULT, CredentialDisclosureGuard.policy)
         assertTrue(CredentialDisclosureGuard.isProtected(NonDisclosurePolicy.NYM_AUTH_DOCTYPE, nymPsc))
         assertTrue(CredentialDisclosureGuard.isProtected(NonDisclosurePolicy.NYM_AUTH_DOCTYPE, nymSsc))
-        assertFalse(CredentialDisclosureGuard.isProtected(NonDisclosurePolicy.NYM_AUTH_DOCTYPE, nymBirth))
+        assertTrue(CredentialDisclosureGuard.isProtected(NonDisclosurePolicy.NYM_AUTH_DOCTYPE, nymBirth))
         assertFalse(CredentialDisclosureGuard.isProtected("some.other.doctype", nymPsc))
     }
 }

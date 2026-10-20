@@ -15,7 +15,7 @@ package org.siros.sdk.wallet
  * `verifier_id_type` the policy decision point returns, never aliased or
  * mapped. The names in the wallet's list must therefore match what the PDP
  * returns; go-trust is aligning its type names and value forms to the trust
- * framework (the `x509_san_dns` value is the bare DNS name, derived by the PDP,
+ * framework (the `x509_san_dns` value is the prefixed Client Identifier `x509_san_dns:<dns name>`, derived by the PDP,
  * so the default below, `semantic` then `x509_san_dns`, is supplied by it). The
  * PDP is the single default source of verifier ids: the wallet derives nothing
  * from the request itself.

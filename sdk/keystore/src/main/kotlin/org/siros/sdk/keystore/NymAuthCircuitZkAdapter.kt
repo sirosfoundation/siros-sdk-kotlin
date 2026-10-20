@@ -23,6 +23,7 @@ import org.siros.sdk.credentials.RulebookCircuitZkValidator
 import org.siros.sdk.credentials.CircuitZkVerdict
 import org.siros.sdk.credentials.CircuitZkRuleSet
 import org.siros.sdk.credentials.NymPseudonym
+import org.siros.sdk.credentials.ProofTime
 import org.siros.sdk.credentials.NymSeedKind
 import org.siros.sdk.credentials.ResultValue
 import org.siros.sdk.credentials.ZkArtifactException
@@ -144,7 +145,7 @@ class NymAuthCircuitZkAdapter(
         // The proof's time input. UNDECIDED upstream (verification time T): until it is decided this is the device clock, and
         // this is the one place T plugs in (a value carried by CircuitZkProveInput would replace it here).
         val time = Instant.now(clock).truncatedTo(ChronoUnit.SECONDS)
-        val timeText = time.toString().also { if (it.length != TIME_CHARS) throw refuse() }
+        val timeText = try { ProofTime.render(time) } catch (e: org.siros.sdk.credentials.ProofTimeException) { throw refuse() }
 
         val verifierInput = sha256(verifierId.toByteArray(Charsets.UTF_8))
         val deviceAuthBytes = MdocDeviceResponseBuilder.buildDeviceAuthentication(document.docType, input.sessionTranscript)
@@ -214,7 +215,7 @@ class NymAuthCircuitZkAdapter(
      * shape checks below.
      */
     private val validator = RulebookCircuitZkValidator(
-        CircuitZkRuleSet.rulebookV03(
+        CircuitZkRuleSet.rulebookV04(
             listOf(CircuitZkRuleSet.Companion.PseudonymConfig(SUPPORTED_CONFIG, usesVerifierInput = true, requiresVerifierContext = false)),
         ),
     )
@@ -368,7 +369,6 @@ class NymAuthCircuitZkAdapter(
 
         private const val SECRET_SEED_BYTES = 16
         private const val SIGNATURE_BYTES = 64
-        private const val TIME_CHARS = 20
         private const val NO_LOWER_BOUND = "0000-00-00"
         private const val NO_UPPER_BOUND = "9999-12-31"
     }

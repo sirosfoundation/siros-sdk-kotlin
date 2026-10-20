@@ -7,15 +7,15 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import timber.log.Timber
-import uniffi.siros_dc_matcher_ffi.CircuitZkPlanException
-import uniffi.siros_dc_matcher_ffi.circuitZkPlan
+import uniffi.siros_dc_matcher_ffi.ZkpReqPlanException
+import uniffi.siros_dc_matcher_ffi.zkpReqPlan
 
 /**
  * The [CircuitZkPlanner] backed by the shared matcher: the same planner the OS
  * credential picker runs, so the wallet and the picker cannot read a
- * `circuit_zk` request differently.
+ * `zkp_req` request differently.
  *
- * The matcher (0.10.0) exports its planner over the FFI as `circuit_zk_plan`,
+ * The matcher (rulebook v0.4) exports its planner over the FFI as `zkp_req_plan`,
  * which returns the plan as JSON or fails with the planner's own stable code
  * for a structurally broken request. The plan is read from that JSON and this
  * class never parses a function or a parameter itself. A request the planner
@@ -45,14 +45,14 @@ class SharedCircuitZkPlanner : CircuitZkPlanner {
 
         /**
          * The matcher's plan for [query], as the JSON it serialises
-         * (`functions`, `circuit_filter`, `meta_doctype`, `raw`), or null when
+         * (`functions`, `system_filter`, `source_format`, `meta_doctype`, `meta_schema_id`, `raw`), or null when
          * the planner rejects the request. Throws when the native library is
          * unavailable.
          */
         fun planJson(query: JsonObject, clientMetadata: JsonObject?): JsonObject? {
             val text = try {
-                circuitZkPlan(query.toString(), clientMetadata?.toString())
-            } catch (e: CircuitZkPlanException) {
+                zkpReqPlan(query.toString(), clientMetadata?.toString())
+            } catch (e: ZkpReqPlanException) {
                 Timber.d("The matcher does not plan this request (${e.javaClass.simpleName})")
                 return null
             }
@@ -75,9 +75,9 @@ class SharedCircuitZkPlanner : CircuitZkPlanner {
                     params = o["params"] as? JsonObject ?: JsonObject(emptyMap()),
                 )
             }
-            val filter = plan["circuit_filter"] as? JsonObject
+            val filter = plan["system_filter"] as? JsonObject
             val systems = filter?.get("proof_systems")?.strings("proof_systems")
-            val ids = filter?.get("circuit_ids")?.strings("circuit_ids")
+            val ids = filter?.get("system_ids")?.strings("system_ids")
             // Not expanded into pairs: see [CircuitZkCircuitFilter].
             val refs = if (systems == null && ids == null) null else CircuitZkCircuitFilter(systems, ids)
             return CircuitZkPlan(

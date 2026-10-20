@@ -189,7 +189,7 @@ class CatalogCircuitZkProverTest {
     private fun params(json: String): JsonObject = Json.parseToJsonElement(json).jsonObject
 
     private fun pseudonymFn(config: String = "known-offender-matching-ssc") =
-        CircuitZkFunction("pseudonym-v1-sha256", "n", params("""{"config":"$config"}"""))
+        CircuitZkFunction("pseudonym", "n", params("""{"config":"$config","ver":1,"prf":"sha-256"}"""))
 
     private fun ageFn(json: String = """{"ge":"1990-01-01","le":"2008-10-19"}""") = CircuitZkFunction("age_check", "a", params(json))
 
@@ -202,7 +202,7 @@ class CatalogCircuitZkProverTest {
         transcript: ByteArray = CBORObject.NewArray().also { it.Add(CBORObject.Null); it.Add(CBORObject.Null); it.Add(cbor("handover")) }.EncodeToBytes(),
     ) = CircuitZkProveInput(
         circuit = circuit,
-        plan = CircuitZkPlan(functions),
+        plan = CircuitZkPlan(functions, raw = params("""{"meta":{"source_format":"mso_mdoc","doctype_value":"$docType"}}""")),
         credentialBytes = cred,
         sessionTranscript = transcript,
         verifierId = verifierId,
@@ -355,7 +355,7 @@ class CatalogCircuitZkProverTest {
 
     @Test
     fun `a presenter over the catalog prover produces a presentation with the circuit's proof, not the fake's`() {
-        val circuit = CircuitZkCircuit(system, circuitId, setOf(docType), functions = setOf("pseudonym-v1-sha256", "age_check"), systemVersion = "61a8a73")
+        val circuit = CircuitZkCircuit(system, circuitId, setOf(docType), functions = setOf("pseudonym", "age_check"), systemVersion = "61a8a73")
         val presenter = CircuitZkPresenter(
             prover(honestNative()),
             { listOf(circuit) },
@@ -371,7 +371,7 @@ class CatalogCircuitZkProverTest {
         val plan = CircuitZkPlan(
             listOf(pseudonymFn(), ageFn()),
             circuitFilter = org.siros.sdk.credentials.CircuitZkCircuitFilter(listOf(system), listOf(circuitId)),
-            raw = params("""{"id":"q","format":"circuit_zk","meta":{"doctype_value":"$docType"}}"""),
+            raw = params("""{"id":"q","format":"zkp_req","meta":{"source_format":"mso_mdoc","doctype_value":"$docType"}}"""),
         )
         val result = runBlocking {
             presenter.present(
@@ -701,17 +701,16 @@ class CatalogCircuitZkProverTest {
 
     // -------- the prover runs the validator's rules --------
 
-    private fun spec(): JsonObject {
-        val f = java.io.File("../../spec/circuit-zk-validator-vectors.json")
-        require(f.isFile) { "vector file not found at ${f.absolutePath}" }
-        return Json.parseToJsonElement(f.readText()).jsonObject
+    private fun unsatVectors(): List<Pair<String, JsonObject>> {
+        val dir = java.io.File("../../spec/zkp-req-vectors/zkp_req_unsat")
+        require(dir.isDirectory) { "vector dir not found at ${dir.absolutePath}" }
+        return dir.listFiles { f -> f.extension == "json" }!!.sortedBy { it.name }.map { it.name to Json.parseToJsonElement(it.readText()).jsonObject }
     }
 
     /**
-     * For every shared vector whose plan this adapter could prove at all (a known-offender-matching-ssc pseudonym
-     * and, at most, an age_check), the wallet's validator says Ok exactly when the adapter accepts the plan: the adapter
-     * runs the validator's rules, so neither passes a plan the other refuses. The vectors cover an age span under 365
-     * days, `le` before `ge`, a `verifier_context` where none is allowed, the reserved meta members and the rest.
+     * For every unsatisfiable-request vector whose plan this adapter could prove at all (a known-offender-matching-ssc pseudonym
+     * and, at most, an age_check, over mso_mdoc), the wallet's validator says Ok exactly when the adapter accepts the plan: the
+     * adapter runs the validator's rules, so neither passes a plan the other refuses.
      */
     @Test
     fun `the validator and the nymauth adapter agree on every shared vector's plan`() {
@@ -719,29 +718,26 @@ class CatalogCircuitZkProverTest {
         val validator = org.siros.sdk.credentials.RulebookCircuitZkValidator()
         var compared = 0
         var refusedByBoth = 0
-        val refusedNames = mutableListOf<String>()
-        for (e in spec()["cases"]!!.jsonArray) {
-            val c = e.jsonObject
-            val plan = c["plan"]!!.jsonObject
-            val fns = plan["functions"]!!.jsonArray.map {
+        for ((name, v) in unsatVectors()) {
+            val query = v["query"]!!.jsonObject
+            val fns = query["_req"]!!.jsonArray.map {
                 val o = it.jsonObject
-                CircuitZkFunction(o["id"]!!.jsonPrimitive.content, o["handle"]!!.jsonPrimitive.content, o["params"]!!.jsonObject)
+                CircuitZkFunction(o["fn_id"]!!.jsonPrimitive.content, o["return"]!!.jsonPrimitive.content, (o["params"] as? JsonObject) ?: JsonObject(emptyMap()))
             }
-            val pseudonyms = fns.filter { it.id == "pseudonym-v1-sha256" }
-            val comparable = c["options"] == null && plan["circuit_filter"] == null && pseudonyms.isNotEmpty() &&
+            val pseudonyms = fns.filter { it.id == "pseudonym" }
+            val comparable = pseudonyms.isNotEmpty() &&
                 pseudonyms.all { (it.params["config"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull == "known-offender-matching-ssc" } &&
-                fns.all { it.id == "pseudonym-v1-sha256" || it.id == "age_check" }
+                fns.all { it.id == "pseudonym" || it.id == "age_check" } &&
+                (query["meta"]!!.jsonObject["source_format"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull == "mso_mdoc"
             if (!comparable) continue
-            val p = CircuitZkPlan(fns, raw = plan["query"]!!.jsonObject)
+            val p = CircuitZkPlan(fns, raw = query)
             val validatorOk = validator.validate(p) is org.siros.sdk.credentials.CircuitZkVerdict.Ok
-            assertEquals(c["name"]!!.jsonPrimitive.content, validatorOk, adapter.acceptsPlan(p))
+            assertEquals(name, validatorOk, adapter.acceptsPlan(p))
             compared++
-            if (!validatorOk) { refusedByBoth++; refusedNames += c["name"]!!.jsonPrimitive.content }
+            if (!validatorOk) refusedByBoth++
         }
-        assertTrue("compared $compared", compared >= 10)
+        assertTrue("compared $compared", compared >= 8)
         assertTrue("refused by both $refusedByBoth", refusedByBoth >= 3)
-        // The named rules of the shared vectors are among them.
-        assertTrue(refusedNames.toString(), refusedNames.any { it.contains("verifier_context") })
     }
 
     @Test
@@ -751,7 +747,7 @@ class CatalogCircuitZkProverTest {
         // Span under 365 days, le before ge, a verifier_context the configuration forbids.
         assertRefused { prove(p, input(functions = listOf(pseudonymFn(), ageFn("""{"ge":"2000-01-01","le":"2000-06-01"}""")))) }
         assertRefused { prove(p, input(functions = listOf(pseudonymFn(), ageFn("""{"ge":"2010-01-01","le":"2000-01-01"}""")))) }
-        assertRefused { prove(p, input(functions = listOf(CircuitZkFunction("pseudonym-v1-sha256", "n", params("""{"config":"known-offender-matching-ssc","verifier_context":"c"}""")), ageFn()))) }
+        assertRefused { prove(p, input(functions = listOf(CircuitZkFunction("pseudonym", "n", params("""{"config":"known-offender-matching-ssc","ver":1,"prf":"sha-256","verifier_context":"c"}""")), ageFn()))) }
         assertEquals(0, native.calls)
         // A span of exactly 365 days is allowed.
         prove(p, input(functions = listOf(pseudonymFn(), ageFn("""{"ge":"2000-01-01","le":"2000-12-30"}"""))))

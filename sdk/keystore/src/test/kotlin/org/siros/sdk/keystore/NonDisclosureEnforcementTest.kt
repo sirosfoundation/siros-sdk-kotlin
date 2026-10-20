@@ -52,6 +52,7 @@ class NonDisclosureEnforcementTest {
         items.Add(item(0, "birth_date", CBORObject.FromObjectAndTag("2000-06-15", 1004)))
         items.Add(item(1, "ssc", CBORObject.FromObject(ByteArray(32) { 1 })))
         items.Add(item(2, "psc", CBORObject.FromObject(ByteArray(32) { 2 })))
+        items.Add(item(3, "given_name", CBORObject.FromObject("Jane")))
         val ns = CBORObject.NewMap()
         ns[CBORObject.FromObject(docType)] = items
         val mso = CBORObject.NewMap()
@@ -121,7 +122,7 @@ class NonDisclosureEnforcementTest {
                 kotlinx.coroutines.runBlocking { a.signMdocPresentationForProximity(bytes, claims, ByteArray(8), null) }
             }
         }
-        assertTrue(a.signMdocPresentationForDCAPI(bytes, listOf("birth_date"), "n", "https://rp.example", null, null).isNotEmpty())
+        assertTrue(a.signMdocPresentationForDCAPI(bytes, listOf("given_name"), "n", "https://rp.example", null, null).isNotEmpty())
     }
 
     @Test
@@ -211,7 +212,7 @@ class NonDisclosureEnforcementTest {
         assertThrows(DisclosureRefusedException::class.java) {
             kotlinx.coroutines.runBlocking {
                 presentation.present(
-                    ZkMdocPresentation.Request(mdocBytes(nym), emptyList(), ByteArray(1), listOf("birth_date", "ssc")),
+                    ZkMdocPresentation.Request(mdocBytes(nym), emptyList(), ByteArray(1), listOf("given_name", "ssc")),
                     { _, _ -> ByteArray(64) },
                 )
             }
@@ -219,7 +220,7 @@ class NonDisclosureEnforcementTest {
         // A request for an unprotected element gets as far as proof-system resolution.
         assertThrows(ZkMdocPresentation.NoMatchingProofSystem::class.java) {
             kotlinx.coroutines.runBlocking {
-                presentation.present(ZkMdocPresentation.Request(mdocBytes(nym), emptyList(), ByteArray(1), listOf("birth_date")), { _, _ -> ByteArray(64) })
+                presentation.present(ZkMdocPresentation.Request(mdocBytes(nym), emptyList(), ByteArray(1), listOf("given_name")), { _, _ -> ByteArray(64) })
             }
         }
     }
@@ -230,7 +231,7 @@ class NonDisclosureEnforcementTest {
         val result = org.siros.sdk.credentials.ZkProofResult(proofBytes = ByteArray(4), timestamp = "2026-01-01T00:00:00Z")
         val p = ZkMdocPresentation(ZkProofSystemRegistry(emptyList()))
         assertThrows(DisclosureRefusedException::class.java) {
-            p.buildDeviceResponse(mdocBytes(nym), nym, spec, listOf("birth_date", "ssc"), result)
+            p.buildDeviceResponse(mdocBytes(nym), nym, spec, listOf("given_name", "ssc"), result)
         }
         assertThrows(DisclosureRefusedException::class.java) {
             MdocDeviceResponseBuilder.buildZkDeviceResponse(
@@ -239,7 +240,7 @@ class NonDisclosureEnforcementTest {
             )
         }
         // An unprotected element, and a type with no policy entry, still build.
-        assertTrue(p.buildDeviceResponse(mdocBytes(nym), nym, spec, listOf("birth_date"), result).isNotEmpty())
+        assertTrue(p.buildDeviceResponse(mdocBytes(nym), nym, spec, listOf("given_name"), result).isNotEmpty())
         assertTrue(
             MdocDeviceResponseBuilder.buildZkDeviceResponse(
                 proofBytes = ByteArray(4), zkSystemId = "s", docType = "other.doctype", timestamp = "2026-01-01T00:00:00Z", namespace = "other.doctype",

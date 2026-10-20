@@ -2,7 +2,7 @@
 """Generate spec/nym-pseudonym-vectors.json with INDEPENDENT code (hashlib only).
 
 Does not call or import the Kotlin implementation. Formula, from the nym_auth
-rulebook v0.3 ("Pseudonym generation function", "Configurations"):
+rulebook v0.4 ("Pseudonym generation function", "Configurations", "Verifier identity"):
 
   pseudonym = SHA256(DST || seed || prover_input || verifier_input)
   DST       = "nym_auth/v1/<config>" (UTF-8), no separators
@@ -28,6 +28,7 @@ def h(*parts: bytes) -> bytes:
 Z = bytes(32)
 SEED_A = bytes(range(0x00, 0x10))
 SEED_B = bytes(range(0xF0, 0x100))
+SEED_ARCHIVE = bytes.fromhex("4a8f9c1d2e3f4a5b6c7d8e9f0a1b2c3d")
 
 
 def pseudonym(config, seed, user_value=None, vid=None, vctx=None):
@@ -45,12 +46,12 @@ def pseudonym(config, seed, user_value=None, vid=None, vctx=None):
 # Verifier id VALUE FORMS are defined by the nym_auth rulebook ("Verifier identity") and
 # produced by the PDP; the derivation hashes the string verbatim. Types (informational,
 # not an input): semantic or an OpenID4VP client_id_type name.
-#   x509_san_dns            dNSName SAN, ASCII lower case, no trailing dot, NO prefix
+#   x509_san_dns            the Client Identifier INCLUDING its prefix: "x509_san_dns:<dns name>" (the bare DNS name is not a verifier_id)
 #   x509_san_uri            URI SAN as bound
 #   decentralized_identifier DID without fragment
 #   openid_federation       entity id as in the chain
 #   semantic                "semantic_id:" + ETSI id
-DNS = "verifier.example.com"
+DNS = "x509_san_dns:verifier.example.com"
 SEM = "semantic_id:VATSE-556000000101"
 SEM_LEI = "semantic_id:LEIXG-529900T8BM49AURSDO55"
 URI = "https://verifier.example.com/rp"
@@ -59,14 +60,14 @@ FED = "https://verifier.example.com/federation/entity"
 
 # (name, config, seed, inputs); "type" is informational and kept out of the derivation.
 CASES = [
-    ("known-offender ssc, x509_san_dns (bare lower-case DNS name)", "known-offender-matching-ssc", SEED_A, {"verifier_id_type": "x509_san_dns", "verifier_id": DNS}),
+    ("known-offender ssc, x509_san_dns (prefixed Client Identifier)", "known-offender-matching-ssc", SEED_A, {"verifier_id_type": "x509_san_dns", "verifier_id": DNS}),
     ("known-offender ssc, semantic (VAT)", "known-offender-matching-ssc", SEED_A, {"verifier_id_type": "semantic", "verifier_id": SEM}),
     ("known-offender ssc, semantic (LEI)", "known-offender-matching-ssc", SEED_A, {"verifier_id_type": "semantic", "verifier_id": SEM_LEI}),
     ("known-offender ssc, x509_san_uri", "known-offender-matching-ssc", SEED_A, {"verifier_id_type": "x509_san_uri", "verifier_id": URI}),
     ("known-offender ssc, decentralized_identifier", "known-offender-matching-ssc", SEED_A, {"verifier_id_type": "decentralized_identifier", "verifier_id": DID}),
     ("known-offender ssc, openid_federation", "known-offender-matching-ssc", SEED_A, {"verifier_id_type": "openid_federation", "verifier_id": FED}),
     ("known-offender ssc, other seed", "known-offender-matching-ssc", SEED_B, {"verifier_id_type": "x509_san_dns", "verifier_id": DNS}),
-    ("known-offender ssc, verbatim hashing: a mixed-case value is NOT lower-cased by the derivation", "known-offender-matching-ssc", SEED_A, {"verifier_id_type": "x509_san_dns", "verifier_id": "Verifier.Example.COM"}),
+    ("known-offender ssc, verbatim hashing: a mixed-case value is NOT lower-cased by the derivation", "known-offender-matching-ssc", SEED_A, {"verifier_id_type": "x509_san_dns", "verifier_id": "x509_san_dns:Verifier.Example.COM"}),
     ("known-offender psc, x509_san_dns", "known-offender-matching-psc", SEED_A, {"verifier_id_type": "x509_san_dns", "verifier_id": DNS}),
     ("known-offender psc, semantic, other seed", "known-offender-matching-psc", SEED_B, {"verifier_id_type": "semantic", "verifier_id": SEM}),
     ("known-offender psc vs ssc, same seed and id differ by DST", "known-offender-matching-psc", SEED_A, {"verifier_id_type": "semantic", "verifier_id": SEM_LEI}),
@@ -77,6 +78,9 @@ CASES = [
     ("account-recovery, 65-byte context (derivation accepts any length)", "account-recovery-ssc", SEED_A, {"verifier_id_type": "x509_san_dns", "verifier_id": DNS, "verifier_context": "c" * 65}),
     ("account-recovery, 64-byte multi-byte context (16 x 4-byte chars)", "account-recovery-ssc", SEED_A, {"verifier_id_type": "x509_san_dns", "verifier_id": DNS, "verifier_context": "\U0001F512" * 16}),
     ("account-recovery, empty context (derivation accepts any length)", "account-recovery-ssc", SEED_A, {"verifier_id_type": "x509_san_dns", "verifier_id": DNS, "verifier_context": ""}),
+    # The nym_auth circuit developers' reference pseudonyms (zk-cred-vega test-vectors/nymauth/pseudonym.json): the check values.
+    ("archive reference: ssc, x509_san_dns:verifier.example", "known-offender-matching-ssc", SEED_ARCHIVE, {"verifier_id_type": "x509_san_dns", "verifier_id": "x509_san_dns:verifier.example"}),
+    ("archive reference: ssc, x509_san_dns:other-verifier.example", "known-offender-matching-ssc", SEED_ARCHIVE, {"verifier_id_type": "x509_san_dns", "verifier_id": "x509_san_dns:other-verifier.example"}),
     ("xsite, 16-byte user value", "user-managed-pseudonym-xsite-ssc", SEED_A, {"prover_input_hex": "000102030405060708090a0b0c0d0e0f"}),
     ("xsite, UTF-8 user value", "user-managed-pseudonym-xsite-ssc", SEED_B, {"prover_input_hex": "my shared värde".encode().hex()}),
     ("xsite, 100-byte user value", "user-managed-pseudonym-xsite-ssc", SEED_A, {"prover_input_hex": ("ab" * 100)}),
@@ -102,7 +106,16 @@ REJECT = [
 ]
 
 
+ARCHIVE = {
+    "x509_san_dns:verifier.example": "155f433796d1f282268a87100cd08510893f97f6e5607bc5e4c66afadb71aad1",
+    "x509_san_dns:other-verifier.example": "eefc129a09b735ea4ea6a5bc8278dc664c9849499f354d80aa37614fe8caec6b",
+}
+
+
 def build():
+    for vid, want in ARCHIVE.items():
+        got = pseudonym("known-offender-matching-ssc", SEED_ARCHIVE, None, vid, None).hex()
+        assert got == want, (vid, got)
     vectors = []
     for name, config, seed, inp in CASES:
         uv = bytes.fromhex(inp["prover_input_hex"]) if "prover_input_hex" in inp else None
@@ -113,7 +126,7 @@ def build():
     ]
     return {
         "status": "self-generated, not yet cross-checked with the circuit developers",
-        "rulebook": "nym_auth v0.3, pseudonym-v1-sha256",
+        "rulebook": "nym_auth v0.4, pseudonym",
         "generator": "tools/gen_nym_pseudonym_vectors.py",
         "vectors": vectors,
         "rejections": rejects,

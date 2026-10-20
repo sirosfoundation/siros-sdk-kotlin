@@ -80,12 +80,15 @@ class NonDisclosureTest {
     // ---- the policy table ----
 
     @Test
-    fun `the default data protects ssc and psc of the nym_auth doctype and nothing else`() {
+    fun `the default data protects ssc, psc, secret_seed and birth_date of a nym_auth attestation and nothing else`() {
         val p = NonDisclosurePolicy.DEFAULT
-        assertEquals(setOf(nym), p.types)
-        assertTrue(p.isProtected(nym, listOf(nym, "ssc")))
-        assertTrue(p.isProtected(nym, listOf(nym, "psc")))
-        assertFalse(p.isProtected(nym, listOf(nym, "birth_date")))
+        val bbs = NonDisclosurePolicy.NYM_AUTH_BBS_TYPE
+        assertEquals(setOf(nym, bbs), p.types)
+        for (type in listOf(nym, bbs)) {
+            for (element in listOf("ssc", "psc", "secret_seed", "birth_date")) assertTrue("$type $element", p.isProtected(type, listOf(type, element)))
+        }
+        // birth_date of any OTHER credential is an ordinary claim.
+        assertFalse(p.isProtected("eu.europa.ec.eudi.pid.1", listOf("eu.europa.ec.eudi.pid.1", "birth_date")))
         assertFalse(p.isProtected(nym, listOf(nym, "given_name")))
         assertFalse(p.isProtected("other.doctype", listOf("other.doctype", "ssc")))
         assertFalse(p.isProtected(null, listOf(nym, "ssc")))
@@ -148,19 +151,21 @@ class NonDisclosureTest {
     // ---- enforcement point 1: matching ----
 
     @Test
-    fun `a query for ssc or psc matches nothing, a query for birth_date matches`() {
+    fun `a query for ssc, psc or birth_date matches nothing, a query for another claim matches`() {
         val cred = mdoc(nym)
         assertTrue(CredentialMatcher.match(query("mso_mdoc", nym, "ssc"), listOf(cred)).single().candidates.isEmpty())
         assertTrue(CredentialMatcher.match(query("mso_mdoc", nym, "psc"), listOf(cred)).single().candidates.isEmpty())
         assertTrue(CredentialMatcher.match(query("mso_mdoc", nym, "birth_date", "ssc"), listOf(cred)).single().candidates.isEmpty())
-        assertEquals(1, CredentialMatcher.match(query("mso_mdoc", nym, "birth_date"), listOf(cred)).single().candidates.size)
-        assertEquals(1, CredentialMatcher.match(query("mso_mdoc", nym), listOf(cred)).single().candidates.size)
+        assertTrue(CredentialMatcher.match(query("mso_mdoc", nym, "birth_date"), listOf(cred)).single().candidates.isEmpty())
+        assertEquals(1, CredentialMatcher.match(query("mso_mdoc", nym, "given_name"), listOf(cred)).single().candidates.size)
+        // A claimless query asks for the whole attestation, which includes protected claims: no match.
+        assertTrue(CredentialMatcher.match(query("mso_mdoc", nym), listOf(cred)).single().candidates.isEmpty())
     }
 
     @Test
     fun `a legacy zk query for a protected claim matches nothing either`() {
         val q = json.parseToJsonElement(
-            """{"credentials":[{"id":"q","format":"mso_mdoc_zk","meta":{"doctype_value":"$nym"},"claims":[{"path":["$nym","ssc"]}]}]}"""
+            """{"credentials":[{"id":"q","format":"mso_mdoc_zk","meta":{"source_format":"mso_mdoc","doctype_value":"$nym"},"claims":[{"path":["$nym","ssc"]}]}]}"""
         ).jsonObject
         assertTrue(CredentialMatcher.match(q, listOf(mdoc(nym))).single().candidates.isEmpty())
     }
@@ -197,14 +202,14 @@ class NonDisclosureTest {
     fun `no protected claim is registered, listed or displayed`() {
         val cred = mdoc(nym)
         val displayed = CredentialUtils.extractClaims(cred)
-        assertEquals(setOf("$nym.birth_date", "$nym.given_name"), displayed.map { it.key }.toSet())
+        assertEquals(setOf("$nym.given_name"), displayed.map { it.key }.toSet())
         for (c in displayed) {
             assertFalse(c.value.contains("0101") && c.key.endsWith("ssc"))
         }
         assertEquals(displayed.map { it.key }, CredentialUtils.extractMdocClaims(cred).map { it.key })
         val ffi = SharedDcqlMatcher.buildFfiClaims(cred)
-        assertEquals(setOf(listOf(nym, "birth_date"), listOf(nym, "given_name")), ffi.map { it.path }.toSet())
-        assertTrue(ffi.none { f -> f.path.last() == "ssc" || f.path.last() == "psc" })
+        assertEquals(setOf(listOf(nym, "given_name")), ffi.map { it.path }.toSet())
+        assertTrue(ffi.none { f -> f.path.last() == "ssc" || f.path.last() == "psc" || f.path.last() == "birth_date" })
     }
 
     // ---- the guard's own failure ----
@@ -212,10 +217,13 @@ class NonDisclosureTest {
     @Test
     fun `a presentation of a protected element is refused, and the refusal names no claim`() {
         val e = assertThrows(DisclosureRefusedException::class.java) {
-            CredentialDisclosureGuard.requireNoneProtected(nym, mapOf(nym to listOf("birth_date", "ssc")))
+            CredentialDisclosureGuard.requireNoneProtected(nym, mapOf(nym to listOf("given_name", "ssc")))
         }
         assertFalse(e.message!!.contains("ssc"))
-        CredentialDisclosureGuard.requireNoneProtected(nym, mapOf(nym to listOf("birth_date")))
+        assertThrows(DisclosureRefusedException::class.java) {
+            CredentialDisclosureGuard.requireNoneProtected(nym, mapOf(nym to listOf("birth_date")))
+        }
+        CredentialDisclosureGuard.requireNoneProtected(nym, mapOf(nym to listOf("given_name")))
         CredentialDisclosureGuard.requireNoneProtected("other.doctype", mapOf("other.doctype" to listOf("ssc")))
     }
 
@@ -402,7 +410,7 @@ class NonDisclosureTest {
     fun `the consent summary is built from the plan and holds no credential value`() {
         val plan = CircuitZkPlan(
             listOf(
-                CircuitZkFunction("pseudonym-v1-sha256", "n", json.parseToJsonElement("""{"config":"known-offender-matching-psc","verifier_id_type":"semantic"}""").jsonObject),
+                CircuitZkFunction("pseudonym", "n", json.parseToJsonElement("""{"config":"known-offender-matching-psc","ver":1,"prf":"sha-256"}""").jsonObject),
                 CircuitZkFunction("age_check", "a", json.parseToJsonElement("""{"ge":"2000-01-01"}""").jsonObject),
             ),
         )

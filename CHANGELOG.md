@@ -170,22 +170,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   downgrading.
 
 ### Changed
-- **BREAKING (unreleased `circuit_zk`): the response is the JSON shape of siros-dc-matcher `docs/circuit_zk_response.md`.**
-  `vp_token[queryId]` is an ARRAY of presentation objects `{circuit_id, proof_system, proof, x5chain, results}`
-  (`CircuitZkResponsePresentation`; `CircuitZkPresenter.Result.presentation` / `.json`; `base64Url` is gone). `proof` is
-  base64url without padding. `x5chain` is REQUIRED: the credential's own `issuerAuth` `x5chain`, leaf (Document Signer)
-  first, at most 8 certificates of at most 4096 bytes each, standard base64 with padding (the verifier validates it
-  through go-trust and takes the issuer key from the leaf; the wallet never sends a bare key). `results` is
-  `{handle: {pseudonym}}` or `{handle: {satisfied: true}}`, one per `return` handle, none skipped. `circuit_id` and
-  `proof_system` are values the request OFFERED (`circuit_id_values`, `circuit_proof_system_values`): a request that
-  offered none cannot be answered and is refused before anything is proved (an offered alias is stated as the id). The old
-  CBOR presentation and its `proof_time` are no longer produced. `CircuitZkResponseValidator` (a mirror of the matcher's
-  `validate_response`, strict: `null` is a type error, repeated members refused, an item type with no result shape refuses
-  the response) checks every response before it is sent; the 79 shared vectors are vendored in
-  `spec/circuit-zk-response-vectors` (siros-dc-matcher 932b07af, set digest 5c7fd1d3...). Only `multiple: true` queries may
-  carry more than one presentation. A legacy `zk-claim-disclosure-v1` plan has no result shape yet and so cannot be
-  answered over this shape. The verification time T is NOT decided and not implemented.
-- **Redirect (OpenID4VP QR) handover for `circuit_zk`:** `MdocDeviceResponseBuilder.buildCircuitZkRedirectSessionTranscript`
+- **BREAKING (unreleased): rulebook v0.4, `circuit_zk` is `zkp_req`.** Names (the matcher's, siros-dc-matcher pull request 50,
+  head `69e6be1`, `spec/zkp-req-vectors`): format `zkp_req`, `req` is `_req`, item `id` is `fn_id`, `pseudonym-v1-sha256` is
+  `pseudonym` with `config`, `ver` (1) and `prf` (`sha-256`; `hashdh-bls12381g1` for the held `bbs_cd`), `circuit_id` is
+  `system_id`, `circuit_id_values` / `circuit_proof_system_values` are `system_id_values` / `proof_system_values`
+  (`proof_system_values` is optional, `system_id_values` is not: a request that offered no `system_id` cannot be answered and
+  is refused before anything is proved), the plan's `circuit_filter` is `system_filter`, `meta.source_format` is required
+  (`mso_mdoc`; a request for another source format is not answered with an mdoc), `verifier_id_type` is gone. The planner is
+  `zkp_req_plan`, the registration `addZkpReqSystem` with the circuit's `system_id`; a blob built by an older matcher declines
+  `zkp_req`, so the bundled matcher and the registered blob move together (docs/NATIVE_DEV.md, coordinate
+  `org.siros:siros-dc-matcher:0.11.0-pr50.69e6be1`, local build until the matcher is released). The wallet's satisfiability
+  rules (`CircuitZkRuleSet.rulebookV04`) use the matcher's codes as rule ids and pass all 43 `zkp_req_unsat` vectors.
+- **BREAKING (unreleased): the response is the rulebook's base64url CBOR `ZkpPresentation`.** `vp_token[queryId]` is an array of
+  strings, each the unpadded base64url of `{system_id, proof, issuer_key_set, ? proof_time, results}`
+  (`CircuitZkResponsePresentation`; `CircuitZkPresenter.Result.presentation` / `.json`; `base64Url` is gone, and the earlier
+  CBOR/JSON presentation classes with `circuit_id`/`x5chain` are removed). `issuer_key_set` is the credential's own
+  `issuerAuth` `x5chain` (DER, leaf first, at most 8 certificates of at most 4096 bytes each, checked before any proof is
+  made; the verifier validates them through go-trust and takes the issuer key from the leaf). `proof_time` (tag 0) is the
+  EXACT 20-byte form `YYYY-MM-DDThh:mm:ssZ` and required for `mso_mdoc`: the prover's own time input when it has one, else the
+  device clock, rendered by the one function `ProofTime.render`. A pseudonym is 32 bytes for `sha-256`, a predicate result is
+  `true`; no item type is skipped. `CircuitZkResponseValidator` (strict CBOR: definite lengths, no duplicate keys, no trailing
+  bytes, depth 16) mirrors the matcher's `validate_response` and checks every response before it is sent; the 143 response
+  vectors, the `proof_time` vectors and the 54 planner vectors (device test) are vendored verbatim with their set digest checked.
+  A legacy `zk-claim-disclosure-v1` plan has no result shape and cannot be answered over this shape.
+- **Prefixed `verifier_id`:** `verifier_input = SHA-256(verifier_id)` with the PREFIXED string (`x509_san_dns:<dns name>`,
+  `semantic_id:...`). The bare DNS name is not a `verifier_id`. The pseudonym vectors now carry the prefixed forms and the
+  circuit developers' reference pseudonyms (`155f4337...aad1` for `x509_san_dns:verifier.example`).
+- **`birth_date` of a nym_auth attestation is never disclosed:** the default non-disclosure policy protects `ssc`, `psc`,
+  `secret_seed` and `birth_date` of `eu.europa.ec.eudi.nym_auth.1` and `.bbs.1`; a query with no `claims` (the whole
+  attestation) does not match them. `birth_date` of any other credential is an ordinary claim. `age_check` still reads it locally.
+- **Redirect (OpenID4VP QR) handover for `zkp_req`:** `MdocDeviceResponseBuilder.buildCircuitZkRedirectSessionTranscript`
   (OpenID4VPHandover over `[prefixed client_id, nonce, JWK thumbprint (32 bytes, required), response_uri]`; the response
   is always encrypted, so a null thumbprint is not representable). Pinned by the spec's own example from the shared
   nymauth challenge vectors. The DC API path keeps `OpenID4VPDCAPIHandover`.

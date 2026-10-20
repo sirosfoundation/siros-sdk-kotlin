@@ -69,14 +69,20 @@ class NonDisclosurePolicy(protectedPaths: Map<String, Set<List<String>>>) {
         /** The nym_auth document type, whose `ssc` and `psc` are seed commitments. */
         const val NYM_AUTH_DOCTYPE = "eu.europa.ec.eudi.nym_auth.1"
 
-        /** The default data: the nym_auth doctype with `ssc` and `psc` (`birth_date` is not protected). */
+        /** The nym_auth attestation of the `bbs_cd` source format (held). */
+        const val NYM_AUTH_BBS_TYPE = "eu.europa.ec.eudi.nym_auth.bbs.1"
+
+        /** The elements of a nym_auth attestation that are never disclosed (rulebook v0.4): the seeds and `birth_date`. */
+        private val NYM_AUTH_PROTECTED = listOf("ssc", "psc", "secret_seed", "birth_date")
+
+        /**
+         * The default data: `ssc`, `psc`, `secret_seed` and `birth_date` of a nym_auth attestation (both types). A request
+         * through any format other than `zkp_req` that names one of them, uses a wildcard path or asks for the whole
+         * attestation does not match it. `birth_date` of any OTHER credential is an ordinary claim: the entry is per type.
+         * `age_check` reads `birth_date` locally to prove a bound; the value itself is never disclosed.
+         */
         val DEFAULT = NonDisclosurePolicy(
-            mapOf(
-                NYM_AUTH_DOCTYPE to setOf(
-                    listOf(NYM_AUTH_DOCTYPE, "ssc"),
-                    listOf(NYM_AUTH_DOCTYPE, "psc"),
-                ),
-            ),
+            listOf(NYM_AUTH_DOCTYPE, NYM_AUTH_BBS_TYPE).associateWith { type -> NYM_AUTH_PROTECTED.map { listOf(type, it) }.toSet() },
         )
 
         /** No protected claims anywhere. */

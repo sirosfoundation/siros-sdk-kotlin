@@ -62,7 +62,7 @@ private fun Screen(runner: NymAuthDemoRunner) {
     var birth by remember { mutableStateOf("1990-05-17") }
     var ge by remember { mutableStateOf("1900-01-01") }
     var le by remember { mutableStateOf("2008-10-14") }
-    var verifier by remember { mutableStateOf("verifier.example.org") }
+    var verifier by remember { mutableStateOf("x509_san_dns:verifier.example.org") }
     var output by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -108,7 +108,7 @@ private fun Screen(runner: NymAuthDemoRunner) {
         OutlinedTextField(birth, { birth = it }, label = { Text("birth_date in the credential") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         OutlinedTextField(ge, { ge = it }, label = { Text("age_check ge (not before)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         OutlinedTextField(le, { le = it }, label = { Text("age_check le (not after)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-        OutlinedTextField(verifier, { verifier = it }, label = { Text("verifier_id (x509_san_dns form: lower-case DNS name, no prefix)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+        OutlinedTextField(verifier, { verifier = it }, label = { Text("verifier_id (prefixed: x509_san_dns:<dns name> or semantic_id:...)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         Button({ go(false) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Present") }
         OutlinedButton({ go(true) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Present with a foreign psc (must refuse)") }
         val ssc = NymAuthDemoRunner.Scenario.KNOWN_OFFENDER_SSC
