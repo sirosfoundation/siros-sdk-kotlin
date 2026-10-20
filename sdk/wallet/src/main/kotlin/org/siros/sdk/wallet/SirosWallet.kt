@@ -5179,7 +5179,12 @@ class SirosWallet private constructor(
 
     /** Every `/v1/evaluate` call goes through here; see [TrustDecisionCache]. */
     private suspend fun evaluateTrustCached(client: BackendApiClient, request: JsonObject): JsonObject =
-        trustDecisionCache.getOrEvaluate(TrustDecisionCache.keyFor(request)) { client.evaluateTrust(request) }
+        // The client's identity is part of the key: a call that captured an old
+        // client before logout/re-login can then neither answer nor populate
+        // entries for the new client, whatever the interleaving.
+        trustDecisionCache.getOrEvaluate("${System.identityHashCode(client)}:${TrustDecisionCache.keyFor(request)}") {
+            client.evaluateTrust(request)
+        }
     private var engineSession: WalletEngineSession? = null
     /** Collects [engineSession]'s state to catch [WalletEngineSession.State.REAUTH_REQUIRED]
      *  transitions from the automatic background reconnect loop, which never

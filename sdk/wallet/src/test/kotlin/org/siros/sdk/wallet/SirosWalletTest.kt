@@ -6110,6 +6110,29 @@ class SirosWalletTest {
     }
 
     @Test
+    fun trustDecisionCache_decisionOfAnOldClientNeverAnswersTheNewClient() = runTest(dispatcher) {
+        val oldClient = mockk<BackendApiClient>()
+        val newClient = mockk<BackendApiClient>()
+        coEvery { oldClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", JsonPrimitive(true)) }
+        coEvery { newClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", JsonPrimitive(false)) }
+        val wallet = newWallet(
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "trustDecisionCache" to TrustDecisionCache(java.time.Duration.ofMinutes(5), nowMillis = { System.nanoTime() / 1_000_000L }),
+        )
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "evaluateTrustCached" }
+        method.isAccessible = true
+        val body = buildJsonObject { put("subject", buildJsonObject { put("id", JsonPrimitive("s")) }) }
+
+        // Old client's call completes after a re-login (the cache was cleared in between).
+        (getField(wallet, "trustDecisionCache") as TrustDecisionCache).clear()
+        method.callSuspend(wallet, oldClient, body)
+        val answer = method.callSuspend(wallet, newClient, body) as JsonObject
+
+        assertEquals(JsonPrimitive(false), answer["decision"])
+        coVerify(exactly = 1) { newClient.evaluateTrust(any()) }
+    }
+
+    @Test
     fun trustDecisionCache_errorsAreNotCachedByTheWallet() = runTest(dispatcher) {
         val apiClient = mockk<BackendApiClient>()
         coEvery { apiClient.evaluateTrust(any()) } throws NetworkException("offline")
