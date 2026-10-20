@@ -209,7 +209,7 @@ class JweKeystore(
 
     private val witnessSource by lazy { SeedBackedWitnessSource(PrivateSeed(rootSecret)) }
 
-    override fun privateSeedCommitment(credentialType: String): ByteArray = witnessSource.privateSeedCommitment(credentialType)
+    override fun privateSeedCommitment(credentialType: String, issuer: String): ByteArray = witnessSource.privateSeedCommitment(credentialType, issuer)
 
     override fun circuitZkPresenter(
         prover: CircuitZkProver,

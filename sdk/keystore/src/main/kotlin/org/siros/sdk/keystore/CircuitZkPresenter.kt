@@ -111,10 +111,10 @@ interface CircuitZkWitnessProvider {
      * [needs] never contains [CircuitZkWitnessKind.SECRET_SEED]: the issuer-delivered seed is not derivable
      * from key material and comes with the request, so the presenter handles it itself.
      */
-    fun witness(function: CircuitZkFunction, needs: Set<CircuitZkWitnessKind>, credentialType: String): CircuitZkFunctionWitness?
+    fun witness(function: CircuitZkFunction, needs: Set<CircuitZkWitnessKind>, credentialType: String, issuer: String?): CircuitZkFunctionWitness?
 
     /** Whether [psc] is the commitment this provider's `private_seed` has for [credentialType]. */
-    fun privateSeedMatches(credentialType: String, psc: ByteArray): Boolean
+    fun privateSeedMatches(credentialType: String, issuer: String?, psc: ByteArray): Boolean
 }
 
 /**
@@ -126,16 +126,28 @@ class HolderWitnessProvider internal constructor(
     private val seeds: PrivateSeed,
     private val userValue: ByteArray? = null,
 ) : CircuitZkWitnessProvider {
-    override fun witness(function: CircuitZkFunction, needs: Set<CircuitZkWitnessKind>, credentialType: String): CircuitZkFunctionWitness? {
+    override fun witness(function: CircuitZkFunction, needs: Set<CircuitZkWitnessKind>, credentialType: String, issuer: String?): CircuitZkFunctionWitness? {
         if (CircuitZkWitnessKind.NOT_HELD_BY_WALLET in needs || CircuitZkWitnessKind.SECRET_SEED in needs) return null
         if (CircuitZkWitnessKind.USER_VALUE in needs && userValue == null) return null
         return CircuitZkFunctionWitness(
-            privateSeed = if (CircuitZkWitnessKind.PRIVATE_SEED in needs) seeds.derive(credentialType) else null,
+            privateSeed = if (CircuitZkWitnessKind.PRIVATE_SEED in needs) derive(credentialType, issuer ?: return null) ?: return null else null,
             userValue = if (CircuitZkWitnessKind.USER_VALUE in needs) userValue else null,
         )
     }
 
-    override fun privateSeedMatches(credentialType: String, psc: ByteArray) = seeds.matchesCommitment(credentialType, psc)
+    /** The seed for the type at the issuer, or null when either is refused (empty or over 65535 bytes): no seed is derived. */
+    private fun derive(credentialType: String, issuer: String): ByteArray? = try {
+        seeds.derive(credentialType, issuer)
+    } catch (e: IllegalArgumentException) {
+        null
+    }
+
+    override fun privateSeedMatches(credentialType: String, issuer: String?, psc: ByteArray): Boolean =
+        issuer != null && try {
+            seeds.matchesCommitment(credentialType, issuer, psc)
+        } catch (e: IllegalArgumentException) {
+            false
+        }
 }
 
 /**
@@ -167,6 +179,7 @@ interface CircuitZkFunctionHandler {
         credential: DocumentMdoc,
         witness: CircuitZkFunctionWitness,
         provider: CircuitZkWitnessProvider,
+        issuer: String?,
     ): CircuitZkCommitmentCheck = CircuitZkCommitmentCheck.HOLDS
 
     /** Whether answering [function] needs the verifier's identifier (resolved by the wallet's verifier-id registry). */
@@ -324,6 +337,12 @@ class CircuitZkPresenter(
          * log, a history record or a response.
          */
         val secretSeed: ByteArray? = null,
+        /**
+         * The Credential Issuer Identifier of the credential EXACTLY as the wallet stored it at issuance
+         * (`credentialIssuerIdentifier`, no normalisation): the holder's `private_seed` depends on it, so a different
+         * string (a trailing slash) is a different `psc`. Null refuses a function that needs the device seed.
+         */
+        val issuer: String? = null,
     ) {
         override fun toString() = "CircuitZkPresenter.Request(redacted)"
     }
@@ -405,7 +424,7 @@ class CircuitZkPresenter(
             // The secret seed comes with the request, not from the provider: it must be present and exactly
             // 16 bytes (its commitment is checked in step 4b).
             if (CircuitZkWitnessKind.SECRET_SEED in n && (seed == null || seed.size != SECRET_SEED_BYTES)) refuse(CircuitZkStep.WITNESS)
-            val fromProvider = witnessProvider.witness(function, n - CircuitZkWitnessKind.SECRET_SEED, document.docType) ?: refuse(CircuitZkStep.WITNESS)
+            val fromProvider = witnessProvider.witness(function, n - CircuitZkWitnessKind.SECRET_SEED, document.docType, request.issuer) ?: refuse(CircuitZkStep.WITNESS)
             witnesses[function.handle] = if (CircuitZkWitnessKind.SECRET_SEED in n) {
                 CircuitZkFunctionWitness(fromProvider.privateSeed, fromProvider.userValue, seed)
             } else {
@@ -417,7 +436,7 @@ class CircuitZkPresenter(
         // value derived on this device, or one the issuer delivered: never used on trust, a mismatch refuses
         // before any prover runs).
         for ((function, handler) in plan.functions.zip(functionHandlers)) {
-            when (handler.commitmentCheck(function, document, witnesses.getValue(function.handle), witnessProvider)) {
+            when (handler.commitmentCheck(function, document, witnesses.getValue(function.handle), witnessProvider, request.issuer)) {
                 CircuitZkCommitmentCheck.HOLDS -> Unit
                 CircuitZkCommitmentCheck.DEVICE_COMMITMENT_FAILS -> refuse(CircuitZkStep.COMMITMENT)
                 CircuitZkCommitmentCheck.DELIVERED_COMMITMENT_FAILS -> refuse(CircuitZkStep.SECRET_COMMITMENT)
