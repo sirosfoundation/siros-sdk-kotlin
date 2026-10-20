@@ -894,6 +894,26 @@ class WalletEngineSessionTest {
     }
 
     @Test
+    fun discardingAStaleProgressFrame_keepsItsIssuerTrustReportForTheKeptCompletion() = runTest {
+        val session = WalletEngineSession(baseUrl = "https://wallet.example.com", tenantId = "t", client = client)
+        session.connect("app-token")
+        // A trust_evaluated frame still queued when the connection is replaced...
+        val kept = session.keepAcrossReconnect(
+            """{"type":"flow_progress","flow_id":"f","step":"trust_evaluated","payload":{"issuer_trust_evaluated":true,"issuer":"https://i.example","trusted":false,"reason":"no"}}""",
+        )
+        assertEquals("stale progress is dropped", false, kept)
+
+        // ...must still reach the (kept) completion, or the wallet reads "no report" as "not checked".
+        session.flowComplete().test {
+            listener.onMessage(webSocket, """{"type":"flow_complete","flow_id":"f"}""")
+            val done = awaitItem()
+            assertEquals(false, done.issuerTrust?.trusted)
+            assertEquals("no", done.issuerTrust?.reason)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
     fun forceReconnect_signals_reauth_required_when_token_provider_rejects_with_401() = runTest {
         val session = WalletEngineSession(
             baseUrl = "https://wallet.example.com",

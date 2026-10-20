@@ -780,6 +780,26 @@ class WalletEngineSession(
         false
     }
 
+    /**
+     * Whether a raw frame queued on a replaced connection is kept. Stale flow
+     * traffic is dropped, but a dropped `trust_evaluated` progress frame first
+     * has its issuer-trust report recorded: a kept `flow_complete` for that
+     * flow would otherwise reach the wallet with the (possibly negative) trust
+     * evidence missing, and the wallet's refusal safeguard reads "no report"
+     * as "not checked".
+     */
+    internal fun keepAcrossReconnect(frame: String): Boolean {
+        if (!isFlowTraffic(frame)) return true
+        try {
+            if (json.parseToJsonElement(frame).jsonObject["type"]?.jsonPrimitive?.contentOrNull == MessageTypes.FLOW_PROGRESS) {
+                recordIssuerTrustReport(json.decodeFromString(FlowProgressMessage.serializer(), frame))
+            }
+        } catch (e: Exception) {
+            Timber.w(e, "Could not read a stale progress frame while discarding it")
+        }
+        return false
+    }
+
     private fun discardBufferedFlowTraffic() {
         // Raw frames: drop stale flow/session traffic but keep everything else
         // (push, notification_ack, ...), which is not tied to the old socket's
@@ -787,7 +807,7 @@ class WalletEngineSession(
         val kept = mutableListOf<RawFrame>()
         while (true) {
             val frame = rawMessageChannel.tryReceive().getOrNull() ?: break
-            if (!isFlowTraffic(frame.text)) kept += frame
+            if (keepAcrossReconnect(frame.text)) kept += frame
         }
         kept.forEach { rawMessageChannel.trySend(it) }
         while (flowProgressChannel.tryReceive().isSuccess) { /* drop */ }
