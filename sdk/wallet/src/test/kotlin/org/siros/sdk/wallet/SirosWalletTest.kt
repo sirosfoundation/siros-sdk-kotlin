@@ -92,6 +92,7 @@ import com.nimbusds.jwt.JWTClaimsSet
 import com.nimbusds.jwt.SignedJWT
 import org.siros.sdk.transport.engine.CredentialNotificationEvent
 import org.siros.sdk.transport.engine.CredentialResult
+import org.siros.sdk.transport.engine.IssuerTrustReport
 import org.siros.sdk.transport.engine.CredentialMatch
 import org.siros.sdk.transport.engine.FlowCompleteMessage
 import org.siros.sdk.transport.engine.FlowError
@@ -3975,12 +3976,14 @@ class SirosWalletTest {
         val apiClient: BackendApiClient,
         val engine: WalletEngineSession,
         val state: MutableStateFlow<WalletState>,
+        val wallet: SirosWallet,
     )
 
     private fun TestScope.refusalHarness(
         progress: MutableSharedFlow<FlowProgressMessage>,
         complete: MutableSharedFlow<FlowCompleteMessage>,
         existing: List<StoredCredential> = emptyList(),
+        configure: (SirosWallet) -> Unit = {},
     ): RefusalHarness {
         val listener = mockk<WalletEventListener>(relaxed = true)
         val store = FakeCredentialStore(existing.toMutableList())
@@ -4008,9 +4011,10 @@ class SirosWalletTest {
             "apiClient" to apiClient,
             "eventListener" to listener,
         )
+        configure(wallet)
         invokeConnectEngine(wallet, "app-token")
         advanceUntilIdle()
-        return RefusalHarness(store, listener, apiClient, engine, state)
+        return RefusalHarness(store, listener, apiClient, engine, state, wallet)
     }
 
     @Test
@@ -4055,22 +4059,11 @@ class SirosWalletTest {
         val complete = MutableSharedFlow<FlowCompleteMessage>()
         val h = refusalHarness(progress, complete)
 
-        progress.emit(
-            FlowProgressMessage(
-                flowId = "f1",
-                step = "trust_evaluated",
-                payload = buildJsonObject {
-                    put("issuer_trust_evaluated", JsonPrimitive("true"))
-                    put("issuer", JsonPrimitive("https://issuer.example"))
-                    put("trusted", JsonPrimitive("false"))
-                },
-            ),
-        )
-        advanceUntilIdle()
         complete.emit(
             FlowCompleteMessage(
                 flowId = "f1",
                 credentials = listOf(CredentialResult(format = "dc+sd-jwt", credential = testCredential, notificationId = "n")),
+                issuerTrust = IssuerTrustReport("https://issuer.example", trusted = false, framework = null, reason = "no"),
             ),
         )
         advanceUntilIdle()
@@ -4090,25 +4083,52 @@ class SirosWalletTest {
         val complete = MutableSharedFlow<FlowCompleteMessage>()
         val h = refusalHarness(progress, complete)
 
-        progress.emit(
-            FlowProgressMessage(
-                flowId = "f1",
-                step = "trust_evaluated",
-                payload = buildJsonObject {
-                    put("issuer_trust_evaluated", JsonPrimitive("true"))
-                    put("issuer", JsonPrimitive("https://issuer.example"))
-                    put("trusted", JsonPrimitive("true"))
-                },
-            ),
-        )
-        advanceUntilIdle()
         complete.emit(
-            FlowCompleteMessage(flowId = "f1", credentials = listOf(CredentialResult(format = "dc+sd-jwt", credential = testCredential))),
+            FlowCompleteMessage(
+                flowId = "f1",
+                credentials = listOf(CredentialResult(format = "dc+sd-jwt", credential = testCredential)),
+                issuerTrust = IssuerTrustReport("https://issuer.example", trusted = true, framework = "x", reason = null),
+            ),
         )
         advanceUntilIdle()
 
         assertEquals(1, runBlocking { h.store.getAll() }.size)
         verify(exactly = 0) { h.listener.onIssuerNotTrusted(any(), any(), any()) }
+    }
+
+    /**
+     * Review finding: the trust check suspends on the network. If the flow is
+     * cancelled meanwhile (issuance state reset, a new flow may own it), the
+     * stale completion must neither store nor reset anything.
+     */
+    @Test
+    fun flowComplete_cancelledWhileTrustCheckPending_touchesNothing() = runTest(dispatcher) {
+        val progress = MutableSharedFlow<FlowProgressMessage>()
+        val complete = MutableSharedFlow<FlowCompleteMessage>()
+        val gate = kotlinx.coroutines.CompletableDeferred<TrustResult?>()
+        val h = refusalHarness(progress, complete) { wallet ->
+            wallet.mdocIssuanceTrustHook = { gate.await() }
+        }
+
+        complete.emit(
+            FlowCompleteMessage(
+                flowId = "f1",
+                credentials = listOf(mdocResult(notificationId = "n")),
+                refreshToken = "rt",
+            ),
+        )
+        advanceUntilIdle()
+        // cancelCurrentFlow()-equivalent while the check is pending.
+        val reset = SirosWallet::class.java.getDeclaredMethod("resetIssuanceGuards")
+        reset.isAccessible = true
+        reset.invoke(h.wallet)
+        gate.complete(TrustResult(trusted = false, reason = "late"))
+        advanceUntilIdle()
+
+        assertTrue(runBlocking { h.store.getAll() }.isEmpty())
+        verify(exactly = 0) { h.listener.onIssuerNotTrusted(any(), any(), any()) }
+        verify(exactly = 0) { h.listener.onFlowError(any(), any(), any()) }
+        verify(exactly = 0) { h.engine.sendCredentialNotification(any(), any(), any(), any()) }
     }
 
     @Test
@@ -7310,9 +7330,6 @@ class SirosWalletTest {
         // Disabled by default so cache behaviour never leaks into other tests.
         if ("trustDecisionCache" !in values) {
             values["trustDecisionCache"] = TrustDecisionCache(java.time.Duration.ZERO)
-        }
-        if ("serverIssuerTrustByFlow" !in values) {
-            values["serverIssuerTrustByFlow"] = java.util.concurrent.ConcurrentHashMap<String, TrustResult>()
         }
         if ("zkPreparationsByFlow" !in values) {
             values["zkPreparationsByFlow"] =

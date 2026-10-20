@@ -22,7 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   notification (best effort, no detail) and ends the flow with the new
   `WalletEventListener.onIssuerNotTrusted` plus `onFlowError` carrying the
   default wording (string resource `siros_issuer_not_trusted`, localised
-  en/sv/fi/el/pt). There is no host switch to turn this off.
+  en/sv/fi/el/pt). There is no host switch to turn this off. The engine's
+  issuer-trust report now travels on `FlowCompleteMessage.issuerTrust`
+  (attached by `WalletEngineSession` in message order, so it cannot race the
+  completion), and a completion whose flow was cancelled while its trust check
+  was pending is dropped without touching state.
 - **One trust-decision cache replaces `TrustCache`** (removed). Every
   `/v1/evaluate` call (mdoc issuer/reader, DC API, engine-relayed and WMP trust
   evaluation) goes through `TrustDecisionCache`: successful decisions (allow

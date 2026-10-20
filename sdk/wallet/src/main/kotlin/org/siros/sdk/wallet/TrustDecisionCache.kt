@@ -28,8 +28,8 @@ import java.time.Duration
  *
  * In memory only, bounded ([maxSize], least recently used evicted), thread
  * safe, with concurrent identical evaluations sharing one in-flight request.
- * [clear] drops everything and also keeps any evaluation already in flight
- * from being stored.
+ * [clear] drops everything, detaches evaluations already in flight and keeps
+ * their results from being stored.
  */
 internal class TrustDecisionCache(
     private val ttl: Duration,
@@ -87,7 +87,7 @@ internal class TrustDecisionCache(
             try {
                 val response = evaluate()
                 synchronized(lock) {
-                    inFlight.remove(key)
+                    if (inFlight[key] === mine) inFlight.remove(key)
                     if (generation == startedGeneration && isDecision(response)) {
                         entries[key] = Entry(response, nowMillis())
                     }
@@ -95,7 +95,7 @@ internal class TrustDecisionCache(
                 mine.complete(response)
                 return response
             } catch (t: Throwable) {
-                synchronized(lock) { inFlight.remove(key) }
+                synchronized(lock) { if (inFlight[key] === mine) inFlight.remove(key) }
                 mine.completeExceptionally(if (t is CancellationException) LeaderCancelled() else t)
                 throw t
             }
@@ -106,6 +106,9 @@ internal class TrustDecisionCache(
         synchronized(lock) {
             generation++
             entries.clear()
+            // Detach pending evaluations: a request made after clear() (e.g.
+            // for a new connection) must not join the old connection's.
+            inFlight.clear()
         }
     }
 

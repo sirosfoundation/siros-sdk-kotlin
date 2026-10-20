@@ -164,4 +164,23 @@ class TrustDecisionCacheTest {
         assertEquals(1, calls)
         assertEquals(0, c.size)
     }
+
+    @Test
+    fun requestAfterClearDoesNotJoinTheOldInFlightEvaluation() = runTest {
+        val c = cache()
+        val gate = CompletableDeferred<Unit>()
+        val old = async { c.getOrEvaluate("k") { gate.await(); decision(true) } }
+        advanceUntilIdle()
+        c.clear()
+        var calls = 0
+        val fresh = c.getOrEvaluate("k") { calls++; decision(false) }
+        assertEquals("the new connection must ask its own backend", 1, calls)
+        assertEquals(decision(false), fresh)
+        gate.complete(Unit)
+        old.await()
+        // The old leader must not have evicted or overwritten the newer state.
+        var again = 0
+        assertEquals(decision(false), c.getOrEvaluate("k") { again++; decision(true) })
+        assertEquals(0, again)
+    }
 }

@@ -5262,6 +5262,7 @@ class SirosWallet private constructor(
      * still set and incorrectly delete that stale batch's credentials.
      */
     private fun resetIssuanceGuards() {
+        issuanceEpoch++
         activeOffer = null
         activeVctm = null
         activeVctmDocument = null
@@ -6688,26 +6689,10 @@ class SirosWallet private constructor(
                     handleTrustEvaluation(engine, msg.flowId, msg.payload!!.jsonObject)
                 }
 
-                // Handle server-side issuer trust result (informational, no response needed).
-                // This is distinct from the verifier trust flow — it does NOT overwrite
-                // lastTrustResults (which is used for credential selection consent UI).
-                if (msg.step == "trust_evaluated" &&
-                    msg.payload?.jsonObject?.get("issuer_trust_evaluated")?.jsonPrimitive?.contentOrNull == "true"
-                ) {
-                    val payload = msg.payload?.jsonObject
-                    val trustResult = TrustResult(
-                        trusted = payload?.get("trusted")?.jsonPrimitive?.contentOrNull == "true",
-                        framework = payload?.get("framework")?.jsonPrimitive?.contentOrNull,
-                        reason = payload?.get("reason")?.jsonPrimitive?.contentOrNull,
-                        entityName = null,
-                        identifier = payload?.get("issuer")?.jsonPrimitive?.contentOrNull,
-                    )
-                    // Only populate the trust cache — do NOT store in lastTrustResults
-                    // (that map is for verifier consent UI in credential_selection step)
-                    // Kept per flow for the issuance gate (issuanceTrustRefusal).
-                    serverIssuerTrustByFlow[msg.flowId] = trustResult
-                    Timber.i("Server-side issuer trust: trusted=${trustResult.trusted} for ${trustResult.identifier}")
-                }
+                // The server-side issuer trust report is NOT handled here: this
+                // collector and the completion collector are separate channels,
+                // so the engine session attaches the report to the flow's
+                // completion (FlowCompleteMessage.issuerTrust) in message order.
 
                 // Handle credential selection — verifier wants credentials, user must consent
                 if (msg.step == "credential_selection") {
@@ -6804,12 +6789,28 @@ class SirosWallet private constructor(
 
                 // Issuance trust gate (fail closed): decided before ANYTHING is
                 // stored, superseded, captured or synced. See issuanceTrustRefusal.
-                val engineIssuerTrust = serverIssuerTrustByFlow.remove(msg.flowId)
+                val engineIssuerTrust = msg.issuerTrust?.let {
+                    TrustResult(
+                        trusted = it.trusted,
+                        framework = it.framework,
+                        reason = it.reason,
+                        identifier = it.issuer,
+                    )
+                }
+                val epochAtStart = issuanceEpoch
                 val issuanceCredentials = msg.credentials.orEmpty()
                 val trustRefusal = if (issuanceCredentials.isEmpty()) {
                     null
                 } else {
-                    issuanceTrustRefusal(issuanceCredentials, engineIssuerTrust) { mdocIssuanceTrust(it) }
+                    issuanceTrustRefusal(issuanceCredentials, engineIssuerTrust) { (mdocIssuanceTrustHook ?: ::mdocIssuanceTrust)(it) }
+                }
+                if (issuanceEpoch != epochAtStart) {
+                    // The trust check suspended on the network and the flow was
+                    // cancelled meanwhile (cancelCurrentFlow/logout reset the
+                    // issuance state, and a new issuance may already own it).
+                    // This completion no longer owns that state: touch nothing.
+                    Timber.w("Flow ${msg.flowId} was cancelled while its issuer trust was being evaluated - dropping its completion")
+                    return@collect
                 }
                 if (trustRefusal != null) {
                     refuseUntrustedIssuance(msg.flowId, issuanceCredentials, engineIssuerTrust, trustRefusal)
@@ -7167,7 +7168,6 @@ class SirosWallet private constructor(
                 Timber.e("Flow ${msg.flowId} error: ${msg.error.code} — ${msg.error.message}")
                 val fid = msg.flowId ?: "unknown"
                 terminatedFlowIds.add(fid)
-                serverIssuerTrustByFlow.remove(fid)
                 pendingMatchResultsByFlow.remove(fid)
                 val redirectUri = msg.error.details?.get("redirect_uri")?.jsonPrimitive?.contentOrNull
                 eventListener?.onFlowError(fid, msg.error.message, redirectUri)
@@ -8047,8 +8047,12 @@ class SirosWallet private constructor(
         }
     }
 
-    /** Per-flow server-side issuer trust reported by the engine; see [issuanceTrustRefusal]. */
-    private val serverIssuerTrustByFlow = java.util.concurrent.ConcurrentHashMap<String, TrustResult>()
+    /** Bumped by [resetIssuanceGuards]; lets a completion detect that its flow was cancelled while it awaited. */
+    @Volatile
+    private var issuanceEpoch = 0L
+
+    /** Test seam: replaces [mdocIssuanceTrust] so a test can hold the trust check open. */
+    internal var mdocIssuanceTrustHook: (suspend (CredentialResult) -> TrustResult?)? = null
 
     /** Decodes an issued `mso_mdoc` credential and evaluates its issuer; null if it cannot be verified. */
     private suspend fun mdocIssuanceTrust(credential: CredentialResult): TrustResult? {
