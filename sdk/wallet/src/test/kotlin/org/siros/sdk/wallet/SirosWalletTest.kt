@@ -7365,6 +7365,27 @@ class SirosWalletTest {
         assertEquals("flow-legit", (stateFlow.value as WalletState.FlowActive).flowId)
     }
 
+    @Test
+    fun cancelFromASynchronousStateCollector_onStartingFlow_stopsTheStartBeforeItIsSent() = runTest(dispatcher) {
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val wallet = startingWallet(engine, stateFlow)
+        val collector = CoroutineScope(Dispatchers.Unconfined).launch {
+            stateFlow.collect { s ->
+                if (s is WalletState.FlowActive && s.status == WalletState.FlowActive.STEP_STARTING_FLOW) {
+                    wallet.cancelCurrentFlow()
+                }
+            }
+        }
+
+        val e = runCatching { wallet.startIssuanceByOffer(startOffer) }.exceptionOrNull()
+        collector.cancel()
+
+        assertTrue("start must unwind as a cancellation, was $e", e is kotlinx.coroutines.CancellationException)
+        verify(exactly = 0) { engine.startIssuance(any(), any(), any(), any(), any(), any()) }
+        assertTrue(stateFlow.value is WalletState.Ready)
+    }
+
     private fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {
         val wallet = allocateInstance(SirosWallet::class.java) as SirosWallet
         val values = fields.toMap(mutableMapOf())

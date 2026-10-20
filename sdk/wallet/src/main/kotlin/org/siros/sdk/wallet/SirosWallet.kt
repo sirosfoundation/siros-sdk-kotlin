@@ -5379,6 +5379,11 @@ class SirosWallet private constructor(
         val current = _state.value
         if (current is WalletState.FlowActive && current.isPending && current.status != step) {
             _state.value = current.copy(status = step)
+            // A synchronous collector of the state may have cancelled while it
+            // was published; stop before the caller goes on to send anything.
+            if (issuanceStartEpoch.get() != epoch) {
+                throw kotlinx.coroutines.CancellationException("Issuance start cancelled")
+            }
         }
     }
 
