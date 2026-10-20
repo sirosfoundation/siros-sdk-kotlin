@@ -83,8 +83,10 @@ def years(born, today):
 
 
 def num(s):
+    # Exact rational arithmetic: Decimal subtraction would round to 28 digits, Kotlin's BigDecimal does not.
     from decimal import Decimal
-    return Decimal(s) if isinstance(s, str) and NUMBER.match(s) else None
+    from fractions import Fraction
+    return Fraction(Decimal(s)) if isinstance(s, str) and NUMBER.match(s) else None
 
 
 def operand(vt, v):
@@ -387,6 +389,8 @@ COMBINED = [
     {"name": "a numeric claim: pinned to one value", "plans": [[pred("number_range", claim="score", ge=15)], [pred("number_range", claim="score", le=15)]]},
     {"name": "a numeric claim: width 2^64 is wider than any minimum (never narrowed to a 64-bit integer)",
      "plans": [[pred("number_range", claim="score", ge=0)], [pred("number_range", claim="score", le=18446744073709551616)]]},
+    {"name": "a numeric claim: exact arithmetic, a tiny lower bound does not round the span up to the minimum",
+     "plans": [[pred("number_range", claim="score", ge=1e-100)], [pred("number_range", claim="score", le=10)]]},
     {"name": "different claims do not merge", "plans": [[pred("number_range", claim="score", ge=15)], [pred("number_range", claim="other", le=15)]]},
     {"name": "a date claim other than birth_date, declared minimum 30 days", "plans": [[pred("date_range", claim="issue_date", ge="2024-01-01")], [pred("date_range", claim="issue_date", le="2024-01-30")]]},
     {"name": "the same, 29 days", "plans": [[pred("date_range", claim="issue_date", ge="2024-01-01")], [pred("date_range", claim="issue_date", le="2024-01-29")]]},

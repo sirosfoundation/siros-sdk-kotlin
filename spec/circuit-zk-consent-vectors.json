@@ -4539,6 +4539,32 @@
       "expected_ok": true
     },
     {
+      "name": "a numeric claim: exact arithmetic, a tiny lower bound does not round the span up to the minimum",
+      "plans": [
+        [
+          {
+            "id": "number_range",
+            "handle": "p",
+            "params": {
+              "claim": "score",
+              "ge": 1e-100
+            }
+          }
+        ],
+        [
+          {
+            "id": "number_range",
+            "handle": "p",
+            "params": {
+              "claim": "score",
+              "le": 10
+            }
+          }
+        ]
+      ],
+      "expected_ok": false
+    },
+    {
       "name": "different claims do not merge",
       "plans": [
         [

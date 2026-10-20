@@ -13,7 +13,10 @@ import org.siros.sdk.wallet.PresentationConsentHandler
  * A request on screen. A plain class (identity equality) on purpose: [PresentationConsentRequest] is a data class,
  * so two requests with equal content would be conflated by a `StateFlow` and the second one never shown.
  */
-class PendingPresentationConsent(val request: PresentationConsentRequest)
+class PendingPresentationConsent(val request: PresentationConsentRequest) {
+    /** This request's own answer: completing it can never affect another request, whatever the timing. */
+    internal val answer = CompletableDeferred<Boolean>()
+}
 
 /**
  * Hands a `circuit_zk` presentation consent from the SDK to the UI and the answer back: [handler] suspends
@@ -28,37 +31,28 @@ class PresentationConsentGate {
     /** The request waiting for the user, or `null`. */
     val pending: StateFlow<PendingPresentationConsent?> = _pending
 
-    @Volatile
-    private var waiting: CompletableDeferred<Boolean>? = null
-
     private val serial = Mutex()
-
-    @Volatile
-    private var current: PendingPresentationConsent? = null
 
     /** Register this with `SirosWallet.presentationConsentHandler`. */
     val handler = PresentationConsentHandler { request ->
         // One request on screen at a time; a second waits here (and is subject to the SDK's own time limit).
         serial.withLock {
-            val answer = CompletableDeferred<Boolean>()
-            waiting = answer
             val shown = PendingPresentationConsent(request)
-            current = shown
             _pending.value = shown
             try {
-                answer.await()
+                shown.answer.await()
             } finally {
-                if (waiting === answer) {
-                    waiting = null
-                    current = null
-                    _pending.value = null
-                }
+                // Clear only our own entry.
+                _pending.compareAndSet(shown, null)
             }
         }
     }
 
-    /** The user's answer to [shown]; ignored unless [shown] is the one on screen now. */
+    /**
+     * The user's answer to [shown]. It completes that request's own deferred, so a late callback of a replaced or
+     * expired dialog is a no-op and can never approve the request now on screen.
+     */
     fun answer(shown: PendingPresentationConsent, agreed: Boolean) {
-        if (current === shown) waiting?.complete(agreed)
+        shown.answer.complete(agreed)
     }
 }
