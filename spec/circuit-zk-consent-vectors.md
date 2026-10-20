@@ -28,7 +28,7 @@ LEARNS about a claim (that it satisfies every condition), never its value.
 
 `predicate`: `function`, `claim` (`path`; `label` is the credential's OWN display label for that path from
 `credential.claims`, else null: a renderer falls back to the path, never an invented name), `value_type`
-(`date`, `number`, `string`, `bool`), `conditions[]` (`op` one of `eq ne lt le gt ge in`, `values` as text of the
+(`date`, `number`, `string`, `bool`), `conditions[]` (renderers choose their wording by `value_type` as well as `op`: a `date` claim has its own operator sentences, e.g. "on or after"; `age_form` wins for a function declared as an age; `op` one of `eq ne lt le gt ge in`, `values` as text of the
 claim type) and `age_form` (null, or `between`/`at_least`/`at_most` computed from `today` for a function declared
 as an age). The set of `circuit_zk` functions is open-ended, so predicate functions are DATA: `function_registry[]`
 declares each one (`claim`: `{"path": [...]}` fixed or `{"param": "claim"}`; `value_type`; `comparisons`: param name
