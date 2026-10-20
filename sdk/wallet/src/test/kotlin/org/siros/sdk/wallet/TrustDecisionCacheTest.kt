@@ -183,4 +183,21 @@ class TrustDecisionCacheTest {
         assertEquals(decision(false), c.getOrEvaluate("k") { again++; decision(true) })
         assertEquals(0, again)
     }
+
+    @Test
+    fun followerRetryingAfterClearAndLeaderCancellationDoesNotRepopulateTheCache() = runTest {
+        val c = cache()
+        val gate = CompletableDeferred<Unit>()
+        val leader = async { c.getOrEvaluate("k") { gate.await(); decision(true) } }
+        advanceUntilIdle()
+        val followerGate = CompletableDeferred<Unit>()
+        val follower = async { c.getOrEvaluate("k") { followerGate.await(); decision(true) } }
+        advanceUntilIdle()
+        c.clear()
+        leader.cancel()
+        advanceUntilIdle()
+        followerGate.complete(Unit)
+        follower.await()
+        assertEquals("an invocation that began before clear() must not register", 0, c.size)
+    }
 }

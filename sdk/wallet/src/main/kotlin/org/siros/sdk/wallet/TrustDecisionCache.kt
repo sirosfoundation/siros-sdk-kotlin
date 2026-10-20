@@ -57,10 +57,12 @@ internal class TrustDecisionCache(
 
     suspend fun getOrEvaluate(key: String, evaluate: suspend () -> JsonObject): JsonObject {
         if (!enabled) return evaluate()
+        // Pinned for this whole call, including retries after a cancelled
+        // leader: a call that began before clear() never registers a result.
+        val startedGeneration = synchronized(lock) { generation }
         while (true) {
             var leader: CompletableDeferred<JsonObject>? = null
             var follow: CompletableDeferred<JsonObject>? = null
-            var startedGeneration = 0L
             val fresh: JsonObject? = synchronized(lock) {
                 val entry = entries[key]
                 if (entry != null) {
@@ -72,7 +74,6 @@ internal class TrustDecisionCache(
                     follow = existing
                 } else {
                     leader = CompletableDeferred<JsonObject>().also { inFlight[key] = it }
-                    startedGeneration = generation
                 }
                 null
             }

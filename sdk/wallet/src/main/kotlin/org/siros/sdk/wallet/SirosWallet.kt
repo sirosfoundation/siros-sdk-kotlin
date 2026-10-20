@@ -8093,6 +8093,16 @@ class SirosWallet private constructor(
                 }
             }
         }
+        // Read before releasing the guards, then re-check: the read can suspend,
+        // and a logout/cancel (or a new issuance) finishing meanwhile owns the
+        // state now.
+        val epoch = issuanceEpoch
+        val session = sessionGeneration
+        val credentialsNow = credentialStore.getAll()
+        if (issuanceEpoch != epoch || sessionGeneration != session) {
+            Timber.w("Flow $flowId refusal dropped: its session or issuance state changed meanwhile")
+            return
+        }
         resetIssuanceGuards()
         discardZkIssuancePreparation(flowId)
         val current = _state.value
@@ -8103,7 +8113,7 @@ class SirosWallet private constructor(
         _state.value = WalletState.Ready(
             userId = userId,
             displayName = displayName,
-            credentials = credentialStore.getAll(),
+            credentials = credentialsNow,
         )
         eventListener?.onIssuerNotTrusted(flowId, issuer, reason)
         eventListener?.onFlowError(flowId, ISSUER_NOT_TRUSTED_MESSAGE)
@@ -8122,6 +8132,12 @@ class SirosWallet private constructor(
      * @param issuerAuth the credential's `issuerAuth` COSE_Sign1 4-element array.
      * @param docType the credential's mdoc doctype, for VICAL docType enforcement.
      */
+    private fun signedMsoDocType(msoPayload: ByteArray): String? = runCatching {
+        var obj = CBORObject.DecodeFromBytes(msoPayload)
+        if (obj.HasMostOuterTag(24)) obj = CBORObject.DecodeFromBytes(obj.GetByteString())
+        obj["docType"]?.AsString()
+    }.getOrNull()
+
     private suspend fun verifyAndEvaluateIssuerTrust(issuerAuth: CBORObject, docType: String): TrustResult? {
         return try {
             val chain = MdocCose.extractX5Chain(issuerAuth)
@@ -8136,7 +8152,14 @@ class SirosWallet private constructor(
                 Timber.w("issuerAuth signature verification failed")
                 return null
             }
-            evaluateIssuerTrust(chain, docType)
+            // The envelope's docType is unsigned: trust is evaluated for the
+            // SIGNED type, and a wrapper that disagrees is refused.
+            val signedDocType = signedMsoDocType(msoBytes)
+            if (signedDocType == null || signedDocType != docType) {
+                Timber.w("mdoc envelope docType does not match the signed MSO docType")
+                return null
+            }
+            evaluateIssuerTrust(chain, signedDocType)
         } catch (e: Exception) {
             Timber.w(e, "issuerAuth verification threw")
             null

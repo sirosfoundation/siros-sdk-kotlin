@@ -4201,6 +4201,34 @@ class SirosWalletTest {
         verify(exactly = 1) { h.listener.onIssuerNotTrusted("f1", any(), any()) }
     }
 
+    @Test
+    fun flowComplete_envelopeDocTypeDifferentFromSignedMso_isRefusedWithoutAskingTheBackend() = runTest(dispatcher) {
+        val complete = MutableSharedFlow<FlowCompleteMessage>()
+        var asked = 0
+        val h = signedMdocHarness(complete) { asked++; buildJsonObject { put("decision", JsonPrimitive(true)) } }
+        // Wrap the validly signed (mDL) IssuerSigned in a DeviceResponse-style
+        // envelope that claims another docType.
+        val bare = com.upokecenter.cbor.CBORObject.DecodeFromBytes(java.util.Base64.getUrlDecoder().decode(signedMdoc()))
+        val document = com.upokecenter.cbor.CBORObject.NewMap().also {
+            it[com.upokecenter.cbor.CBORObject.FromObject("docType")] = com.upokecenter.cbor.CBORObject.FromObject("eu.europa.ec.eudi.pid.1")
+            it[com.upokecenter.cbor.CBORObject.FromObject("issuerSigned")] = bare
+        }
+        val envelope = com.upokecenter.cbor.CBORObject.NewMap().also {
+            it[com.upokecenter.cbor.CBORObject.FromObject("documents")] =
+                com.upokecenter.cbor.CBORObject.NewArray().also { a -> a.Add(document) }
+        }
+        val wrapped = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(envelope.EncodeToBytes())
+
+        complete.emit(FlowCompleteMessage(flowId = "f1", credentials = listOf(
+            CredentialResult(format = "mso_mdoc", credential = wrapped),
+        )))
+        advanceUntilIdle()
+
+        assertTrue(runBlocking { h.store.getAll() }.isEmpty())
+        assertEquals(0, asked)
+        verify(exactly = 1) { h.listener.onIssuerNotTrusted("f1", any(), any()) }
+    }
+
     /** Logout ends the session generation: a completion pending on trust must neither store nor refuse. */
     @Test
     fun flowComplete_sessionEndedWhileTrustCheckPending_touchesNothing() = runTest(dispatcher) {
