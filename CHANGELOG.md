@@ -171,6 +171,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   user-cancelled start is no longer reported as an error.
 
 ### Fixed
+- **SD-JWT `ssc` reader (`SecretSeedCommitment.sscOfSdJwt`) fails closed on a non-`sha-256` `_sd_alg`
+  and ignores a nested same-named claim.** Only an `ssc` disclosure whose digest is in the payload's
+  top-level `_sd` counts; a disclosure of a same-named claim of a nested object no longer makes the
+  top-level one ambiguous.
 - **mdoc issuer trust evaluation no longer 502s and silently downgrades to
   local VICAL validation.** The `mdoc-issuer-auth` AuthZEN request named the
   issuer URL as `subject.id` but the certificate hash as `resource.id`; go-trust
