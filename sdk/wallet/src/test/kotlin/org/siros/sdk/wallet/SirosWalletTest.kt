@@ -46,6 +46,7 @@ import kotlinx.serialization.json.putJsonObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -4363,6 +4364,152 @@ class SirosWalletTest {
                 messageId = null,
             )
         }
+    }
+
+    // ---- holder commitments (org.siros.psc) in the proof JWT; https://github.com/SUNET/vc/issues/823 ----
+
+    private class PscKeystore(private val delegate: KeystoreManager) :
+        KeystoreManager by delegate, org.siros.sdk.keystore.HolderCommitmentSource {
+        val asked = mutableListOf<Pair<String, String>>()
+        override fun psc(credentialType: String, issuer: String): ByteArray {
+            asked += credentialType to issuer
+            return java.security.MessageDigest.getInstance("SHA-256")
+                .digest("$credentialType|$issuer".toByteArray(Charsets.UTF_8))
+        }
+    }
+
+    private fun pscClaimFor(type: String, issuer: String): String = java.util.Base64.getUrlEncoder().withoutPadding()
+        .encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest("$type|$issuer".toByteArray(Charsets.UTF_8)))
+
+    private suspend fun kotlinx.coroutines.test.TestScope.generateProofWithCommitments(
+        keystore: KeystoreManager,
+        params: SignRequestParams,
+        listener: WalletEventListener? = null,
+    ) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        mockEngineConstructor(signRequests = signFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to keystore,
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to listener,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        signFlow.emit(SignRequestMessage(flowId = "flow-psc", action = "generate_proof", params = params))
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun generateProof_withHolderCommitments_signsTheClaimForTheExactIssuerString() = runTest(dispatcher) {
+        val logged = StringBuilder()
+        val tree = object : timber.log.Timber.Tree() {
+            override fun log(priority: Int, tag: String?, message: String, t: Throwable?) {
+                logged.append(message).append('\n')
+                t?.let { logged.append(it.toString()).append('\n') }
+            }
+        }
+        timber.log.Timber.plant(tree)
+        try {
+            val inner = mockk<KeystoreManager>()
+            val captured = slot<Map<String, String>>()
+            coEvery {
+                inner.generateProof(any(), any(), any(), any(), capture(captured))
+            } returns "proof-jwt"
+            val keystore = PscKeystore(inner)
+            generateProofWithCommitments(
+                keystore,
+                SignRequestParams(
+                    audience = "https://issuer.example/", nonce = "n-1",
+                    holderCommitments = listOf("psc"), credentialType = "urn:eudi:pid:1",
+                    credentialIssuer = "https://issuer.example/",
+                ),
+            )
+            assertEquals(mapOf("org.siros.psc" to pscClaimFor("urn:eudi:pid:1", "https://issuer.example/")), captured.captured)
+            // The trailing slash is part of the issuer string: the commitment for the
+            // slash-less spelling is a different value and was never asked for.
+            assertNotEquals(pscClaimFor("urn:eudi:pid:1", "https://issuer.example"), captured.captured.getValue("org.siros.psc"))
+            assertEquals(listOf("urn:eudi:pid:1" to "https://issuer.example/"), keystore.asked)
+            assertFalse("the commitment must never be logged", logged.contains(captured.captured.getValue("org.siros.psc")))
+        } finally {
+            timber.log.Timber.uproot(tree)
+        }
+    }
+
+    @Test
+    fun generateProof_withoutHolderCommitments_usesTheFourArgumentForm() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.generateProof(audience = "aud-1", nonce = "n-1", freshKey = any(), holderBinding = any()) } returns "proof-jwt"
+        generateProofWithCommitments(keystore, SignRequestParams(audience = "aud-1", nonce = "n-1"))
+        coVerify(exactly = 1) { keystore.generateProof(audience = "aud-1", nonce = "n-1", freshKey = false, holderBinding = any()) }
+        coVerify(exactly = 0) { keystore.generateProof(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun generateProof_withHolderCommitments_refusesWhenTheKeystoreCannotDeriveOne() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        generateProofWithCommitments(
+            keystore,
+            SignRequestParams(
+                audience = "aud-1", nonce = "n-1", holderCommitments = listOf("psc"),
+                credentialType = "t", credentialIssuer = "https://issuer.example",
+            ),
+            listener,
+        )
+        // The flow is failed, visibly, rather than answered with a proof lacking the claim.
+        verify(exactly = 1) { listener.onFlowError("flow-psc", any(), any()) }
+        // Not even the plain form: the proof is not made without the claim the issuer asked for.
+        coVerify(exactly = 0) { keystore.generateProof(any(), any(), any(), any()) }
+        coVerify(exactly = 0) { keystore.generateProof(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun pscConflict_isTypedAndNotAlsoAGenericError() = runTest(dispatcher) {
+        val errorFlow = MutableSharedFlow<FlowErrorMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val conflict = slot<PseudonymCommitmentConflictException>()
+        every { listener.onPseudonymCommitmentConflict("flow-c", capture(conflict)) } just runs
+        mockEngineConstructor(flowErrors = errorFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "A")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to listener,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        errorFlow.emit(
+            FlowErrorMessage(
+                flowId = "flow-c",
+                error = FlowError(code = "PSC_CONFLICT", message = "org.siros.psc_conflict: a different psc is on record"),
+            )
+        )
+        advanceUntilIdle()
+        assertEquals("org.siros.psc_conflict: a different psc is on record", conflict.captured.issuerMessage)
+        verify(exactly = 0) { listener.onFlowError(any(), any(), any()) }
+        assertTrue(wallet.state.value is WalletState.Ready)
+
+        // Any other code stays a generic flow error.
+        errorFlow.emit(FlowErrorMessage(flowId = "flow-d", error = FlowError(code = "OTHER", message = "boom")))
+        advanceUntilIdle()
+        verify(exactly = 1) { listener.onFlowError("flow-d", "boom", null) }
+    }
+
+    @Test
+    fun pscConflict_defaultListenerForwardsTheIssuerTextToOnFlowError() {
+        var seen: Pair<String, String>? = null
+        val listener = object : WalletEventListener {
+            override suspend fun onCredentialSelectionRequired(request: PresentationRequest): List<Long> = emptyList()
+            override fun onFlowError(flowId: String, errorMessage: String, redirectUri: String?) {
+                seen = flowId to errorMessage
+            }
+        }
+        listener.onPseudonymCommitmentConflict("f", PseudonymCommitmentConflictException("org.siros.psc_conflict: x"))
+        assertEquals("f" to "org.siros.psc_conflict: x", seen)
     }
 
     /** A `jwt`-proof-type proof-of-possession JWT with the given `kid` embedded in its `jwk` header, matching what [KeystoreManager.generateProof] actually produces. */

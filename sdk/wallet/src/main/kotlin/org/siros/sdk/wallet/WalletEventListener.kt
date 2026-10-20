@@ -107,6 +107,20 @@ interface WalletEventListener {
     fun onFlowError(flowId: String, errorMessage: String, redirectUri: String? = null) {}
 
     /**
+     * The issuer refused this wallet's pseudonym commitment: it holds a
+     * different one for the user (flow error `PSC_CONFLICT`). Terminal for the
+     * flow, with nothing issued or stored. Show
+     * [PseudonymCommitmentConflictException.userMessageRes] and tell the user to
+     * ask the issuer for a reset.
+     *
+     * The default forwards the issuer's text to [onFlowError], so a listener
+     * that does not know this callback still sees the failure.
+     */
+    fun onPseudonymCommitmentConflict(flowId: String, error: PseudonymCommitmentConflictException) {
+        onFlowError(flowId, error.issuerMessage)
+    }
+
+    /**
      * A presentation request carrying OpenID4VP `transaction_data` (EC TS12)
      * was refused or declined, with nothing signed. The SDK reports the
      * machine-readable [reason]; the app words it for the user in its own

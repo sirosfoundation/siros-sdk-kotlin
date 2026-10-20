@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Holder-generated pseudonym commitment (`org.siros.psc`) in the OpenID4VCI
+  proof JWT** (tracking issue https://github.com/SUNET/vc/issues/823). When the
+  engine's `generate_proof` sign request (legacy engine and WMP sign sub-flow)
+  carries `holder_commitments: ["psc"]` with `credential_type` and
+  `credential_issuer`, the wallet adds the claim `org.siros.psc` =
+  base64url-without-padding of the 32-byte `psc` to the `jwt` proof payload
+  before signing. The issuer string is used verbatim (a trailing slash is a
+  different commitment). Fail-closed: an unknown commitment name, a missing
+  type/issuer, a keystore that is not a `HolderCommitmentSource`, an
+  attestation-type proof, or a value that is not 32 bytes fails the flow instead
+  of sending a proof without the claim. The value is never logged. New:
+  `HolderCommitmentSource` (keystore), `KeystoreManager.generateProof(..., extraClaims)`
+  (non-empty claims refused by a conformer that cannot place them),
+  `SignRequestParams`/`SignSubFlowParams` members.
+- **`PSC_CONFLICT` as a typed error.** The issuer's refusal of a different
+  pseudonym commitment (before anything is issued, so nothing to roll back) is
+  delivered as `WalletEventListener.onPseudonymCommitmentConflict`
+  (`PseudonymCommitmentConflictException`, `errorCode = "psc_conflict"`,
+  `userMessageRes` = `siros_psc_conflict`, added in default/sv/fi/el/pt; the
+  translations are unreviewed). The default implementation forwards the issuer's
+  text to `onFlowError`.
 - **`CatalogCircuitZkProver`: the real `circuit_zk` prover, and the wallet's
   default.** `WalletConfig.circuitZkProver = null` now means the catalog prover
   (it was "refuse every request"); `FakeCircuitZkProver` stays an explicit
