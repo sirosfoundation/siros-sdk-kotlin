@@ -334,6 +334,35 @@ class ZkCircuitClientTest {
 
     // ── on-device cache ──────────────────────────────────────────────
 
+    @Test
+    fun `a stale alias copy that cannot be removed is logged, not ignored and not fatal`() {
+        val dir = tempCacheDir()
+        val descriptor = json.decodeFromString(ZkCircuitDescriptor.serializer(), circuitJson("longfellow-mdl-v1")).copy(aliases = listOf("old-alias"))
+        // A non-empty directory where the alias copy should be: File.delete() fails on it.
+        val stuck = java.io.File(java.io.File(dir, "descriptors"), "old-alias.json")
+        java.io.File(stuck, "child").apply { parentFile.mkdirs(); writeText("x") }
+        val lines = mutableListOf<String>()
+        val tree = object : timber.log.Timber.Tree() {
+            override fun log(priority: Int, tag: String?, message: String, t: Throwable?) { lines += message }
+        }
+        timber.log.Timber.plant(tree)
+        try {
+            ZkCircuitClient(cacheDir = dir).cacheDescriptor(descriptor)
+        } finally {
+            timber.log.Timber.uproot(tree)
+        }
+        assertTrue(lines.toString(), lines.any { it.contains("could not remove old-alias.json") })
+        // An alias copy that is simply absent logs nothing.
+        lines.clear()
+        timber.log.Timber.plant(tree)
+        try {
+            ZkCircuitClient(cacheDir = tempCacheDir()).cacheDescriptor(descriptor)
+        } finally {
+            timber.log.Timber.uproot(tree)
+        }
+        assertTrue(lines.toString(), lines.none { it.contains("could not remove") })
+    }
+
     private fun tempCacheDir(): java.io.File =
         java.nio.file.Files.createTempDirectory("zk-circuit-cache").toFile().also { it.deleteOnExit() }
 

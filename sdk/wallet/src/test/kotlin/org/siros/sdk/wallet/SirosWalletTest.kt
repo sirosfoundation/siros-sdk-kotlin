@@ -6269,6 +6269,31 @@ class SirosWalletTest {
     }
 
     @Test
+    fun circuitZkDcApi_aResponseThatFailsTheWalletsOwnCheck_isNeverSent() = runTest(dispatcher) {
+        // The legacy claim-disclosure function has no result shape in the circuit_zk response spec, so a verifier must
+        // refuse its response (result_function_unknown). The presenter builds it happily (this prover "proves" it): the
+        // wallet's own CircuitZkResponseValidator check is what stops it leaving the device.
+        val legacy = org.siros.sdk.credentials.CircuitZkFunction(
+            org.siros.sdk.credentials.CircuitZkLegacyDisclosure.FUNCTION_ID, "d",
+            Json.parseToJsonElement("""{"claims":["birth_date"],"systems":[{"id":"c","system":"sys"}]}""").jsonObject,
+        )
+        val everythingTrue = object : org.siros.sdk.keystore.CircuitZkProver {
+            override suspend fun prove(input: org.siros.sdk.keystore.CircuitZkProveInput) = org.siros.sdk.keystore.CircuitZkProveOutput(
+                proof = byteArrayOf(1, 2, 3),
+                results = input.plan.functions.associate { it.handle to org.siros.sdk.credentials.ResultValue.Predicate },
+            )
+        }
+        val s = czkSetup(
+            functions = listOf(legacy),
+            innerProver = everythingTrue,
+            extraFunctions = setOf(org.siros.sdk.credentials.CircuitZkLegacyDisclosure.FUNCTION_ID),
+        )
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.PROOF_FAILED)
+        // The proof was made (the request got as far as the prover) and the response was still not sent.
+        assertEquals(1, s.prover.calls)
+    }
+
+    @Test
     fun circuitZkDcApi_aRequestThatOfferedNoCircuit_isRefusedAndNothingIsProved() = runTest(dispatcher) {
         val s = czkSetup(offersCircuit = false)
         czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.PROOF_FAILED)
