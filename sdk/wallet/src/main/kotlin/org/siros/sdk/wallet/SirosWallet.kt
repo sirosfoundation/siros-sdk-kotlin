@@ -4327,22 +4327,19 @@ class SirosWallet private constructor(
             if (selectedCredentialIds.isNotEmpty() && pickedHere.isEmpty()) refuse("query-without-pick", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
             // Every copy answers as a circuit proof, so CONSUME_NON_ZKP never counts a copy used for one as consumed.
             val cred = eligibleInstances(if (selectedCredentialIds.isEmpty()) result.candidates else pickedHere) { true }.firstOrNull() ?: refuse("no-eligible-copy", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
-            val pseudonym = plan.functions.firstOrNull { it.id == org.siros.sdk.credentials.CircuitZkRuleSet.PSEUDONYM }
-            // Whether a verifier id is needed follows from the pseudonym config (the request no longer carries a
-            // verifier_id_type, and one it names is ignored). The trust framework fixes the type, and the wallet
-            // takes the first of its own ordered types that resolves. Nothing resolving (or no supported type)
-            // is a refusal. The resolved value is used verbatim: only the PDP canonicalises it.
-            // A legacy claim-disclosure function that asks for the proof system's pseudonym needs one as well.
-            val legacyPseudonym = plan.functions.any { f -> org.siros.sdk.credentials.CircuitZkLegacyDisclosure.parse(f)?.pseudonym == true }
-            val needsVerifierId = legacyPseudonym || (pseudonym?.params?.get("config") as? kotlinx.serialization.json.JsonPrimitive)
-                ?.contentOrNull?.let { org.siros.sdk.credentials.NymPseudonym.describe(it)?.verifierId } == true
+            // What answering the plan needs follows from its functions, asked of their handlers (nothing here names a
+            // function): whether a verifier id is needed (the request no longer carries a verifier_id_type, and one it
+            // names is ignored: the trust framework fixes the type, and the wallet takes the first of its own ordered
+            // types that resolves; nothing resolving is a refusal, the resolved value is used verbatim: only the PDP
+            // canonicalises it), the verifier context a function names, and whether the issuer-delivered secret seed is
+            // fetched (the presenter verifies it against the credential's commitment, and this copy is zeroed whatever
+            // happens).
+            val planHandlers = plan.functions.mapNotNull { f -> circuitZkHandlers[f.id]?.let { f to it } }
+            val needsVerifierId = planHandlers.any { (f, h) -> h.needsVerifierId(f) }
             val verifierId = if (needsVerifierId) registry.resolve(verifierContext) ?: refuse("verifier-id", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE) else null
-            val context = (pseudonym?.params?.get("verifier_context") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+            val context = planHandlers.firstNotNullOfOrNull { (f, h) -> h.verifierContext(f) }
             val kid = cred.kid ?: keystore.listKeys().firstOrNull()?.keyId
-            // Fetched only when the chosen config derives from the secret seed; the presenter verifies it
-            // against ssc, and this copy is zeroed whatever happens.
-            val needsSecretSeed = (pseudonym?.params?.get("config") as? kotlinx.serialization.json.JsonPrimitive)
-                ?.contentOrNull?.let { org.siros.sdk.credentials.NymPseudonym.describe(it)?.seedKind } == org.siros.sdk.credentials.NymSeedKind.SECRET
+            val needsSecretSeed = planHandlers.any { (f, h) -> h.needsSecretSeed(f) }
             val secretSeed = if (needsSecretSeed) credentialSecretSeedSource.secretSeed(cred.id) else null
             val presented = try {
                 presenter.present(
@@ -5439,6 +5436,10 @@ class SirosWallet private constructor(
     /** Whether the active keystore can hold `S.credentials[].metadata` (the two shipped container keystores). */
     private fun keystoreCanHoldCredentialMetadata(): Boolean =
         keystore is JweKeystore || keystore is WscdKeystoreAdapter
+
+    /** The function handlers answering a `circuit_zk` plan, by function id (the presenter's default registry). */
+    private val circuitZkHandlers: Map<String, org.siros.sdk.keystore.CircuitZkFunctionHandler>
+        get() = org.siros.sdk.keystore.DEFAULT_CIRCUIT_ZK_HANDLERS.associateBy { it.functionId }
 
     /** (issuer, configuration) pairs whose issuer metadata advertised a seed: their response must be encrypted. */
     private val secretSeedAdvertised: MutableSet<Pair<String, String>>? = java.util.concurrent.ConcurrentHashMap.newKeySet()
