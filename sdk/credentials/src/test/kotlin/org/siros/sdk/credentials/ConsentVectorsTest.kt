@@ -77,6 +77,7 @@ class ConsentVectorsTest {
             verifiedClientIdDisplayName = str(input["verified_client_id_display_name"]),
             attestedOrigin = str(input["attested_origin"])!!,
             verifierIdType = str(input["verifier_id_type"]),
+            requestSigned = true,
             today = LocalDate.parse(c["today"]!!.jsonPrimitive.content),
             locale = "en",
             predicates = registry,

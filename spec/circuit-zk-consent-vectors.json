@@ -19,6 +19,21 @@
       "age_specialisation": true
     },
     {
+      "id": "age_with_eq",
+      "claim": {
+        "path": [
+          "birth_date"
+        ]
+      },
+      "value_type": "date",
+      "comparisons": {
+        "ge": "ge",
+        "le": "le",
+        "eq": "eq"
+      },
+      "age_specialisation": true
+    },
+    {
       "id": "date_range",
       "claim": {
         "param": "claim"
@@ -1393,6 +1408,395 @@
         "queries": [
           {
             "plan": [],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            },
+            "claims": []
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "refused": true
+      }
+    },
+    {
+      "name": "an empty query list is refused",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "refused": true
+      }
+    },
+    {
+      "name": "age wording only for single ge/le bounds: ge and le render as an age",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "age_with_eq",
+                "handle": "p",
+                "params": {
+                  "ge": "1990-01-01",
+                  "le": "2008-10-19"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            },
+            "claims": []
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": null,
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "predicate",
+                  "function": "age_with_eq",
+                  "claim": {
+                    "path": [
+                      "birth_date"
+                    ],
+                    "label": null
+                  },
+                  "value_type": "date",
+                  "conditions": [
+                    {
+                      "op": "ge",
+                      "values": [
+                        "1990-01-01"
+                      ]
+                    },
+                    {
+                      "op": "le",
+                      "values": [
+                        "2008-10-19"
+                      ]
+                    }
+                  ],
+                  "age_form": {
+                    "kind": "between",
+                    "from": "1990-01-01",
+                    "to": "2008-10-19",
+                    "min_years": 18,
+                    "max_years": 36
+                  }
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "age wording only for single ge/le bounds: only le still renders as an age",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "age_with_eq",
+                "handle": "p",
+                "params": {
+                  "le": "2008-10-19"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            },
+            "claims": []
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": null,
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "predicate",
+                  "function": "age_with_eq",
+                  "claim": {
+                    "path": [
+                      "birth_date"
+                    ],
+                    "label": null
+                  },
+                  "value_type": "date",
+                  "conditions": [
+                    {
+                      "op": "le",
+                      "values": [
+                        "2008-10-19"
+                      ]
+                    }
+                  ],
+                  "age_form": {
+                    "kind": "at_least",
+                    "years": 18
+                  }
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "age wording only for single ge/le bounds: le plus eq renders generically (eq reveals the date)",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "age_with_eq",
+                "handle": "p",
+                "params": {
+                  "le": "2008-10-19",
+                  "eq": "2000-01-01"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            },
+            "claims": []
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": null,
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "predicate",
+                  "function": "age_with_eq",
+                  "claim": {
+                    "path": [
+                      "birth_date"
+                    ],
+                    "label": null
+                  },
+                  "value_type": "date",
+                  "conditions": [
+                    {
+                      "op": "le",
+                      "values": [
+                        "2008-10-19"
+                      ]
+                    },
+                    {
+                      "op": "eq",
+                      "values": [
+                        "2000-01-01"
+                      ]
+                    }
+                  ],
+                  "age_form": null
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "age wording only for single ge/le bounds: eq alone renders generically",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "age_with_eq",
+                "handle": "p",
+                "params": {
+                  "eq": "2000-01-01"
+                }
+              }
+            ],
+            "credential": {
+              "name": "Nym credential",
+              "issuer": "Example Issuer"
+            },
+            "claims": []
+          }
+        ],
+        "trust": {
+          "entity_name": "Example RP",
+          "framework": "etsi-tl",
+          "identifier": "rp.example",
+          "intermediary_risk": false
+        },
+        "verified_client_id_display_name": "rp.example",
+        "attested_origin": "https://rp.example",
+        "verifier_id": "rp.example",
+        "verifier_id_type": "x509_san_dns"
+      },
+      "expected": {
+        "request": {
+          "verifier": {
+            "label": "Example RP",
+            "trust_framework": "etsi-tl",
+            "trust_identifier": "rp.example",
+            "verifier_id": null,
+            "verifier_id_type": "x509_san_dns",
+            "intermediary_risk": false
+          },
+          "entries": [
+            {
+              "credential": {
+                "name": "Nym credential",
+                "issuer": "Example Issuer"
+              },
+              "items": [
+                {
+                  "kind": "predicate",
+                  "function": "age_with_eq",
+                  "claim": {
+                    "path": [
+                      "birth_date"
+                    ],
+                    "label": null
+                  },
+                  "value_type": "date",
+                  "conditions": [
+                    {
+                      "op": "eq",
+                      "values": [
+                        "2000-01-01"
+                      ]
+                    }
+                  ],
+                  "age_form": null
+                }
+              ]
+            }
+          ],
+          "request_signed": true
+        }
+      }
+    },
+    {
+      "name": "age_check does not declare eq: refused",
+      "today": "2026-10-19",
+      "input": {
+        "queries": [
+          {
+            "plan": [
+              {
+                "id": "age_check",
+                "handle": "a",
+                "params": {
+                  "le": "2008-10-19",
+                  "eq": "2000-01-01"
+                }
+              }
+            ],
             "credential": {
               "name": "Nym credential",
               "issuer": "Example Issuer"

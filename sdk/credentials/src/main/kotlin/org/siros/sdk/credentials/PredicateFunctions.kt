@@ -75,7 +75,10 @@ sealed interface ClaimSource {
  * @property minSpan The function's declared minimum selectivity, or null if it declares none (then no merge rule
  *   applies to it). For a date claim: calendar days, inclusive (`le - ge + 1`); for a number: `le - ge`. Needs
  *   `ge` and `le` only.
- * @property ageSpecialisation Renders as an age (born between / at least / at most). Needs a date claim and `ge`/`le` only.
+ * @property ageSpecialisation Renders as an age (born between / at least / at most). Needs a date claim. The age wording says
+ *   the exact birth date is not shared, so it is used ONLY when every condition of the request is a single `ge` or `le`
+ *   bound; a function that also declares `eq` (or `in`, `ne`, `lt`, `gt`) renders with the generic wording, which states
+ *   every comparison.
  * @property doctypeNamespaceOnly The circuit binds the credential's own doctype namespace, so a credential whose
  *   claims are not in exactly that one namespace is never proved (a decoy or extra namespace).
  */
@@ -95,9 +98,9 @@ class PredicateFunction(
         }
         val ge = comparisons.filterValues { it == ComparisonOp.GE }.keys
         val le = comparisons.filterValues { it == ComparisonOp.LE }.keys
-        if (minSpan != null || ageSpecialisation) {
-            require(comparisons.size == 2 && ge.size == 1 && le.size == 1) { "$id: a span or age rendering needs exactly ge and le" }
-            require(valueType == ValueType.DATE || (valueType == ValueType.NUMBER && minSpan != null && !ageSpecialisation)) { "$id: unsupported span/age type" }
+        if (minSpan != null) {
+            require(comparisons.size == 2 && ge.size == 1 && le.size == 1) { "$id: a span needs exactly ge and le" }
+            require(valueType == ValueType.DATE || (valueType == ValueType.NUMBER && !ageSpecialisation)) { "$id: unsupported span type" }
         }
         if (ageSpecialisation) require(valueType == ValueType.DATE) { "$id: age rendering needs a date claim" }
         require(minSpan == null || minSpan >= 0) { "$id: negative minSpan" }
@@ -160,6 +163,10 @@ class PredicateFunction(
     /** The age of a `ge`/`le` date predicate, for an [ageSpecialisation]. */
     internal fun ageForm(conditions: List<Condition>, today: LocalDate): AgeForm? {
         if (!ageSpecialisation) return null
+        // The age wording is only true when nothing else about the date is revealed: every condition is one ge or le bound.
+        if (conditions.isEmpty() || conditions.any { it.op != ComparisonOp.GE && it.op != ComparisonOp.LE } ||
+            conditions.count { it.op == ComparisonOp.GE } > 1 || conditions.count { it.op == ComparisonOp.LE } > 1
+        ) return null
         val ge = conditions.firstOrNull { it.op == ComparisonOp.GE }?.values?.single()
         val le = conditions.firstOrNull { it.op == ComparisonOp.LE }?.values?.single()
         val gd = PredicateFunctions.date(ge)
@@ -258,7 +265,7 @@ class PredicateFunctions(functions: List<PredicateFunction>) {
             // Compared exactly: a numeric span is a BigDecimal and may exceed any primitive (never narrowed to Long).
             val tooNarrow = when (acc.type) {
                 ValueType.DATE -> ChronoUnit.DAYS.between(date(lo), date(hi)) + 1 < acc.min
-                else -> number(hi)!!.subtract(number(lo)!!).compareTo(BigDecimal.valueOf(acc.min)) < 0
+                else -> !numberSpanAtLeast(lo, hi, acc.min)
             }
             if (tooNarrow) return false
         }
@@ -296,8 +303,22 @@ class PredicateFunctions(functions: List<PredicateFunction>) {
         /** Whether `lo..hi` is at least [min] wide: dates in inclusive calendar days, numbers as `hi - lo`, compared exactly. */
         internal fun spanAtLeast(type: ValueType, lo: String, hi: String, min: Long): Boolean = when (type) {
             ValueType.DATE -> ChronoUnit.DAYS.between(date(lo), date(hi)) + 1 >= min
-            else -> number(hi)!!.subtract(number(lo)!!).compareTo(BigDecimal.valueOf(min)) >= 0
+            else -> numberSpanAtLeast(lo, hi, min)
         }
+
+        /**
+         * Whether `hi - lo >= min`, computed exactly (arbitrary precision, never narrowed to a primitive). Refused (false) when the
+         * exact difference would need more than [MAX_SPAN_SCALE_GAP] digits of alignment (e.g. `1e999999999 - 1`): a bound that
+         * cannot be compared exactly is never "wide enough", and a request cannot make the wallet build a billion-digit number.
+         */
+        private fun numberSpanAtLeast(lo: String, hi: String, min: Long): Boolean {
+            val l = number(lo)!!
+            val h = number(hi)!!
+            if (Math.abs(h.scale().toLong() - l.scale().toLong()) > MAX_SPAN_SCALE_GAP) return false
+            return h.subtract(l).compareTo(BigDecimal.valueOf(min)) >= 0
+        }
+
+        private const val MAX_SPAN_SCALE_GAP = 4096L
 
         private fun compare(type: ValueType, a: String, b: String): Int = when (type) {
             ValueType.DATE -> date(a)!!.compareTo(date(b)!!)

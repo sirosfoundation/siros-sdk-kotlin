@@ -45,7 +45,7 @@ data class ConsentEntry(val credential: CredentialRef, val items: List<ConsentIt
 data class PresentationConsentRequest(
     val verifier: ConsentVerifier,
     val entries: List<ConsentEntry>,
-    /** Always true for `circuit_zk` (the rules require a signed request); kept so a host need not assume it. */
+    /** Whether the DC API request was signed (a `circuit_zk` request must be); stated by the caller, never assumed by the builder. */
     val requestSigned: Boolean,
     /** The locale tag the SDK text was resolved for. */
     val locale: String,
@@ -134,8 +134,9 @@ object ConsentRequests {
         entityName?.takeIf { it.isNotBlank() } ?: verifiedClientIdDisplayName?.takeIf { it.isNotBlank() } ?: attestedOrigin
 
     /**
-     * The request for [queries], or null when any query holds something that cannot be shown (see
-     * [ConsentItems.build]). [verifierIdType] is the type [Query.verifierId] was resolved under.
+     * The request for [queries], or null when [queries] is empty or any query holds something that cannot be shown
+     * (see [ConsentItems.build]). [verifierIdType] is the type [Query.verifierId] was resolved under. [requestSigned]
+     * is required: there is deliberately no default.
      */
     fun build(
         queries: List<Query>,
@@ -143,6 +144,7 @@ object ConsentRequests {
         verifiedClientIdDisplayName: String?,
         attestedOrigin: String,
         verifierIdType: String?,
+        requestSigned: Boolean,
         today: LocalDate,
         locale: String,
         predicates: PredicateFunctions = PredicateFunctions.DEFAULT,
@@ -159,7 +161,7 @@ object ConsentRequests {
                 intermediaryRisk = trust.intermediaryRisk,
             ),
             entries = entries,
-            requestSigned = true,
+            requestSigned = requestSigned,
             locale = locale,
         )
     }

@@ -4442,6 +4442,7 @@ class SirosWallet private constructor(
             verifiedClientIdDisplayName = request.clientId?.takeIf { request.keyMaterial != null }?.let { ClientIdScheme.parse(it).displayName },
             attestedOrigin = origin,
             verifierIdType = resolvedVerifier?.type,
+            requestSigned = request.keyMaterial != null,
             today = today,
             locale = java.util.Locale.getDefault().toLanguageTag(),
             predicates = config.circuitZkPredicateFunctions,

@@ -59,6 +59,10 @@ CONFIGS = {
 REGISTRY = [
     {"id": "age_check", "claim": {"path": ["birth_date"]}, "value_type": "date", "comparisons": {"ge": "ge", "le": "le"},
      "min_span": 365, "age_specialisation": True},
+    # An age-specialised function that also declares eq: the age wording ("exact birth date is not shared") would be false
+    # for an eq, so such a request is rendered with the generic wording (age_form null).
+    {"id": "age_with_eq", "claim": {"path": ["birth_date"]}, "value_type": "date", "comparisons": {"ge": "ge", "le": "le", "eq": "eq"},
+     "age_specialisation": True},
     {"id": "date_range", "claim": {"param": "claim"}, "value_type": "date", "comparisons": {"ge": "ge", "le": "le"}, "min_span": 30},
     {"id": "date_compare", "claim": {"param": "claim"}, "value_type": "date",
      "comparisons": {"eq": "eq", "ne": "ne", "lt": "lt", "le": "le", "gt": "gt", "ge": "ge", "in": "in"}},
@@ -149,6 +153,10 @@ def parse_fn(reg, fn):
 
 
 def age_form(conds, today):
+    # The age wording is used ONLY when every condition is a single ge or le bound.
+    if not conds or any(c["op"] not in ("ge", "le") for c in conds) or \
+            sum(c["op"] == "ge" for c in conds) > 1 or sum(c["op"] == "le" for c in conds) > 1:
+        return None
     ge = next((c["values"][0] for c in conds if c["op"] == "ge"), None)
     le = next((c["values"][0] for c in conds if c["op"] == "le"), None)
     gd, ld = parse_date(ge), parse_date(le)
@@ -232,7 +240,7 @@ def case(name, queries, verifier_id="rp.example", verifier_id_type="x509_san_dns
     claims: the credentials' own claim display metadata (the same for every query)."""
     qs = [dict({"plan": plan, "credential": cred, "claims": list(claims)}, **({"namespace": namespace} if namespace else {})) for plan, cred in queries]
     entries = []
-    refused = False
+    refused = not queries  # an empty query list is refused
     for plan, cred in queries:
         items = items_of(plan, verifier_id, today, claims, namespace)
         if items is None:
@@ -285,6 +293,13 @@ CASES = [
     case("unknown config is refused", [([fn("pseudonym-v1-sha256", "n", config="nope")], CRED)]),
     case("unknown function is refused", [([fn("mystery", "m")], CRED)]),
     case("empty plan is refused", [([], CRED)]),
+    case("an empty query list is refused", []),
+    case("age wording only for single ge/le bounds: ge and le render as an age", [([pred("age_with_eq", ge="1990-01-01", le="2008-10-19")], CRED)]),
+    case("age wording only for single ge/le bounds: only le still renders as an age", [([pred("age_with_eq", le="2008-10-19")], CRED)]),
+    case("age wording only for single ge/le bounds: le plus eq renders generically (eq reveals the date)",
+         [([pred("age_with_eq", le="2008-10-19", eq="2000-01-01")], CRED)]),
+    case("age wording only for single ge/le bounds: eq alone renders generically", [([pred("age_with_eq", eq="2000-01-01")], CRED)]),
+    case("age_check does not declare eq: refused", [([age(le="2008-10-19", eq="2000-01-01")], CRED)]),
     case("legacy claim disclosure lists the claim names", [([LEGACY], CRED)], verifier_id=None, verifier_id_type=None),
     case("legacy claim disclosure with a pseudonym", [([LEGACY_PSEUDO], CRED)]),
     case("two queries: one request, both queries' items", [([SSC], CRED), ([age(le="2008-10-19")], {"name": "Other", "issuer": None})]),

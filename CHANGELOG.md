@@ -171,6 +171,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   user-cancelled start is no longer reported as an error.
 
 ### Fixed
+- **Consent builder parity with the Swift review.** (1) The age wording ("your exact birth date is not shared") is used
+  only when every condition of an age-specialised function is a single `ge` or `le` bound; one that also declares `eq`
+  (or another comparison) renders with the generic wording stating every comparison (`age_with_eq` in the shared
+  vectors; an age-specialised function may now declare more than `ge`/`le`). (2) `ConsentRequests.build` takes a required
+  `requestSigned` (no default; the wallet passes whether the request carried key material); an empty query list is
+  refused (new vector); a numeric span whose bounds cannot be aligned exactly (`1e999999999`) is refused instead of
+  building a billion-digit number (the 2^64 span vector already pins exact arithmetic).
 - **SD-JWT `ssc` reader (`SecretSeedCommitment.sscOfSdJwt`) fails closed on a non-`sha-256` `_sd_alg`
   and ignores a nested same-named claim.** Only an `ssc` disclosure whose digest is in the payload's
   top-level `_sd` counts; a disclosure of a same-named claim of a nested object no longer makes the
