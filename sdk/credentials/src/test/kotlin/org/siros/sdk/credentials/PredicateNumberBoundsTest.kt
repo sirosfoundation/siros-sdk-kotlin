@@ -34,4 +34,19 @@ class PredicateNumberBoundsTest {
         val ok = CBORObject.FromObjectAndTag(ByteArray(100) { 0x7f }, 2)
         assertEquals(ValueType.NUMBER, PredicateFunctions.read(ok, ValueType.NUMBER).type)
     }
+
+    private fun bigfloat(exponent: Long, mantissa: Long): CBORObject =
+        CBORObject.FromObjectAndTag(CBORObject.NewArray().Add(exponent).Add(mantissa), 5)
+
+    @Test
+    fun `a bigfloat with an absurd binary exponent is refused before it is converted to a decimal`() {
+        val started = System.nanoTime()
+        // Exact conversion of [-100000000, 1] needs 5^100000000: it must never be attempted.
+        for (e in listOf(-100_000_000L, 100_000_000L, 4097L, -4097L)) {
+            assertEquals("exponent $e", ValueType.STRING, PredicateFunctions.read(bigfloat(e, 1), ValueType.NUMBER).type)
+        }
+        org.junit.Assert.assertTrue("took ${(System.nanoTime() - started) / 1_000_000} ms", System.nanoTime() - started < 2_000_000_000L)
+        assertEquals(ValueType.NUMBER, PredicateFunctions.read(bigfloat(-2, 1), ValueType.NUMBER).type)
+        assertEquals(ClaimValue(ValueType.NUMBER, "0.25"), PredicateFunctions.read(bigfloat(-2, 1), ValueType.NUMBER))
+    }
 }

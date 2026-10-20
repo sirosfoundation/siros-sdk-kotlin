@@ -69,10 +69,14 @@ class ZkProverResidency {
                 loadingKey = key
                 val loaded = try {
                     load()
-                } finally {
+                } catch (t: Throwable) {
                     loadingKey = null
+                    throw t
                 }
+                // Publish the resident BEFORE clearing the loading key (both volatile): a concurrent releaseCircuit that reads the
+                // loading key first and then the resident always sees one of them, so there is no window in which neither is set.
                 resident = Resident(key, loaded)
+                loadingKey = null
                 loaded
             }
             try {
@@ -132,7 +136,8 @@ class ZkProverResidency {
             } finally {
                 mutex.unlock()
             }
-        } else if (resident?.key?.let { keyHasCircuit(it, circuitId) } == true || loadingKey?.let { keyHasCircuit(it, circuitId) } == true) {
+        } else if (loadingKey?.let { keyHasCircuit(it, circuitId) } == true || resident?.key?.let { keyHasCircuit(it, circuitId) } == true) {
+            // The loading key is read FIRST, then the resident: see the publication order in use().
             releaseWhenIdle = true
         }
     }
