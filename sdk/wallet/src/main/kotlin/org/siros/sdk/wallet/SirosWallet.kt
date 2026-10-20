@@ -249,7 +249,7 @@ class SirosWallet private constructor(
             org.siros.sdk.credentials.CircuitZkSupport(
                 // The shared matcher's planner unless the app brings its own.
                 config.circuitZkPlanner ?: org.siros.sdk.credentials.SharedCircuitZkPlanner(),
-                config.circuitZkValidator ?: defaultCircuitZkValidator(config.circuitZkCircuits),
+                config.circuitZkValidator ?: defaultCircuitZkValidator(config.circuitZkCircuits, config.circuitZkPredicateFunctions),
                 config.circuitZkCircuits,
             )
         } else {
@@ -4333,7 +4333,7 @@ class SirosWallet private constructor(
             encryptionPublicJwkThumbprint = encryptionThumbprint,
         )
         // Every function the wallet declared (and so described to the user) can also be presented.
-        val presenterHandlers = org.siros.sdk.keystore.DeclaredPredicateHandler.handlersFor(config.circuitZkPredicateFunctions)
+        val presenterHandlers = org.siros.sdk.keystore.PredicateFunctionHandler.handlersFor(config.circuitZkPredicateFunctions)
         val presenter = (keystore as? org.siros.sdk.keystore.HolderWitnessSource)
             ?.circuitZkPresenter(prover, support.circuits, support.validator, handlers = presenterHandlers, serving = support.serving)
             ?: org.siros.sdk.keystore.CircuitZkPresenter(prover, support.circuits, support.validator, NoWitnessProvider, handlers = presenterHandlers, serving = support.serving)

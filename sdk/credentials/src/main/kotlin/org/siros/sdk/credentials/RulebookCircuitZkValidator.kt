@@ -1,9 +1,6 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.credentials
 
-import java.time.LocalDate
-import java.time.format.DateTimeParseException
-import java.time.temporal.ChronoUnit
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -58,11 +55,14 @@ class CircuitZkRuleSet(
             PseudonymConfig("user-managed-pseudonym-xsite-ssc", usesVerifierInput = false, requiresVerifierContext = false),
         )
 
-        private const val MIN_SPAN_DAYS = 365L
         private const val MAX_CONTEXT_BYTES = 64
 
         /** The rules of rulebook v0.3. [pseudonymConfigs] is the set of configurations this wallet supports. */
-        fun rulebookV03(pseudonymConfigs: List<PseudonymConfig> = RULEBOOK_PSEUDONYM_CONFIGS): CircuitZkRuleSet {
+        fun rulebookV03(
+            pseudonymConfigs: List<PseudonymConfig> = RULEBOOK_PSEUDONYM_CONFIGS,
+            /** The predicate functions this wallet declares: each one's per-function rules come from its declaration. */
+            predicates: PredicateFunctions = PredicateFunctions.DEFAULT,
+        ): CircuitZkRuleSet {
             val byId = pseudonymConfigs.associateBy { it.id }
             return CircuitZkRuleSet(
                 planRules = listOf(
@@ -98,46 +98,12 @@ class CircuitZkRuleSet(
                             },
                         ),
                     ),
-                    AGE_CHECK to CircuitZkFunctionRules(
-                        maxItems = 1,
-                        countRuleId = "age-check-count",
-                        rules = listOf(
-                            CircuitZkFunctionRule("age-check-no-bounds") { f, _ ->
-                                f.params.containsKey("ge") || f.params.containsKey("le")
-                            },
-                            CircuitZkFunctionRule("age-check-bad-date") { f, _ ->
-                                listOf("ge", "le").all { !f.params.containsKey(it) || date(f.params, it) != null }
-                            },
-                            CircuitZkFunctionRule("age-check-le-before-ge") { f, _ ->
-                                val ge = date(f.params, "ge")
-                                val le = date(f.params, "le")
-                                ge == null || le == null || !le.isBefore(ge)
-                            },
-                            CircuitZkFunctionRule("age-check-span-short") { f, _ ->
-                                val ge = date(f.params, "ge")
-                                val le = date(f.params, "le")
-                                // le - ge + 1, in calendar days.
-                                ge == null || le == null || ChronoUnit.DAYS.between(ge, le) + 1 >= MIN_SPAN_DAYS
-                            },
-                        ),
-                    ),
-                ),
+                ) + predicates.ids.associateWith { predicates[it]!!.validatorRules() },
             )
         }
 
         private fun str(params: JsonObject, key: String): String? =
             (params[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
-
-        /** An RFC 3339 `full-date` (`YYYY-MM-DD`), or null. */
-        private fun date(params: JsonObject, key: String): LocalDate? {
-            val s = str(params, key) ?: return null
-            if (s.length != 10) return null
-            return try {
-                LocalDate.parse(s)
-            } catch (e: DateTimeParseException) {
-                null
-            }
-        }
 
         /**
          * When some circuit fits the plan's doctype and circuit list, at least
@@ -197,4 +163,50 @@ class RulebookCircuitZkValidator(
         }
         return CircuitZkVerdict.Ok
     }
+}
+
+
+/**
+ * The validator rules of one declared predicate function, derived from its declaration so the same data drives
+ * consent, the local pre-check, the cross-query rule and the validator. Rule ids are `<slug>-<rule>`, with the slug
+ * the function id with `_` as `-` (`age_check`: `age-check-count`, `age-check-no-bounds`, `age-check-bad-date`,
+ * `age-check-le-before-ge`, `age-check-span-short`). Like the rulebook's, they do not reject a param they do not
+ * know (the prover does); each is data-independent.
+ */
+fun PredicateFunction.validatorRules(): CircuitZkFunctionRules {
+    val slug = id.replace('_', '-')
+    val rules = mutableListOf<CircuitZkFunctionRule>()
+    rules += CircuitZkFunctionRule("$slug-no-bounds") { f, _ -> comparisons.keys.any { f.params.containsKey(it) } }
+    rules += CircuitZkFunctionRule(if (valueType == ValueType.DATE) "$slug-bad-date" else "$slug-bad-operand") { f, _ ->
+        comparisons.all { (param, op) -> operandWellFormed(f.params[param], op) }
+    }
+    if (claim == ClaimSource.FromParam) {
+        rules += CircuitZkFunctionRule("$slug-bad-claim") { f, _ -> f.params["claim"]?.let { claimParam(it) } != null }
+    }
+    val ge = comparisons.entries.firstOrNull { it.value == ComparisonOp.GE }?.key
+    val le = comparisons.entries.firstOrNull { it.value == ComparisonOp.LE }?.key
+    if (ge != null && le != null) {
+        rules += CircuitZkFunctionRule("$slug-le-before-ge") { f, _ ->
+            val lo = operandOf(f.params[ge], ComparisonOp.GE)
+            val hi = operandOf(f.params[le], ComparisonOp.LE)
+            lo == null || hi == null || PredicateFunctions.compareOperands(valueType, hi, lo) >= 0
+        }
+        if (minSpan != null) {
+            rules += CircuitZkFunctionRule("$slug-span-short") { f, _ ->
+                val lo = operandOf(f.params[ge], ComparisonOp.GE)
+                val hi = operandOf(f.params[le], ComparisonOp.LE)
+                lo == null || hi == null || PredicateFunctions.spanAtLeast(valueType, lo, hi, minSpan)
+            }
+        }
+    }
+    return CircuitZkFunctionRules(maxItems = 1, countRuleId = "$slug-count", rules = rules)
+}
+
+private fun PredicateFunction.operandOf(e: kotlinx.serialization.json.JsonElement?, op: ComparisonOp): String? =
+    if (e == null || op == ComparisonOp.IN) null else operand(e)
+
+private fun PredicateFunction.operandWellFormed(e: kotlinx.serialization.json.JsonElement?, op: ComparisonOp): Boolean = when {
+    e == null -> true
+    op == ComparisonOp.IN -> (e as? kotlinx.serialization.json.JsonArray)?.let { a -> a.isNotEmpty() && a.all { operand(it) != null } } == true
+    else -> operand(e) != null
 }

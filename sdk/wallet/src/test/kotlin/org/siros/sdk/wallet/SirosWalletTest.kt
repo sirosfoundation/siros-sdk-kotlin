@@ -6480,6 +6480,21 @@ class SirosWalletTest {
     }
 
     @Test
+    fun circuitZkDefaultValidator_takesItsPredicateRulesFromTheSameDeclarations() {
+        val plan = org.siros.sdk.credentials.CircuitZkPlan(listOf(
+            org.siros.sdk.credentials.CircuitZkFunction("number_range", "p", Json.parseToJsonElement("""{"claim":"score","ge":10,"le":20}""").jsonObject),
+        ))
+        val declared = org.siros.sdk.credentials.PredicateFunctions(listOf(org.siros.sdk.credentials.PredicateFunctions.AGE_CHECK, numberRange))
+        assertEquals(org.siros.sdk.credentials.CircuitZkVerdict.Ok, defaultCircuitZkValidator(null, declared).validate(plan))
+        val narrow = org.siros.sdk.credentials.CircuitZkPlan(listOf(
+            org.siros.sdk.credentials.CircuitZkFunction("number_range", "p", Json.parseToJsonElement("""{"claim":"score","ge":10,"le":15}""").jsonObject),
+        ))
+        assertEquals("number-range-span-short", (defaultCircuitZkValidator(null, declared).validate(narrow) as org.siros.sdk.credentials.CircuitZkVerdict.AccessDenied).ruleId)
+        // Undeclared: the validator does not know it.
+        assertEquals("unknown-function", (defaultCircuitZkValidator(null).validate(plan) as org.siros.sdk.credentials.CircuitZkVerdict.AccessDenied).ruleId)
+    }
+
+    @Test
     fun circuitZkConsent_aTaggedCborNumberIsANumber_notAMismatchingType() = runTest(dispatcher) {
         // Tag 4 (decimal fraction) [-1, 150] is 15: within 10..20, so the user is asked.
         val fifteen = com.upokecenter.cbor.CBORObject.FromObject(com.upokecenter.numbers.EDecimal.FromString("15.0"))

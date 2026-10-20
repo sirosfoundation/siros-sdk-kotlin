@@ -3,8 +3,6 @@ package org.siros.sdk.keystore
 
 import com.upokecenter.cbor.CBORObject
 import com.upokecenter.cbor.CBORType
-import java.time.LocalDate
-import java.time.format.DateTimeParseException
 import org.siros.sdk.credentials.CircuitZkFunction
 import org.siros.sdk.credentials.NymPseudonym
 import org.siros.sdk.credentials.mdoc.DocumentMdoc
@@ -98,33 +96,3 @@ object PseudonymFunctionHandler : CircuitZkFunctionHandler {
  */
 internal fun doctypeElement(document: DocumentMdoc, name: String): CBORObject? =
     org.siros.sdk.credentials.SecretSeedCommitment.doctypeElement(document, name)
-
-/** `age_check`: `birth_date` must lie within `ge`..`le`. Needs no private input from the wallet. */
-object AgeCheckFunctionHandler : CircuitZkFunctionHandler {
-    override val functionId = "age_check"
-
-    override fun witnessNeeds(function: CircuitZkFunction): Set<CircuitZkWitnessKind> = emptySet()
-
-    override fun admitsCredential(function: CircuitZkFunction, credential: DocumentMdoc) = doctypeNamespaceOnly(credential)
-
-    override fun holds(function: CircuitZkFunction, credential: DocumentMdoc): Boolean {
-        val birth = birthDate(credential) ?: return false
-        val ge = bound(function, "ge")
-        val le = bound(function, "le")
-        if (ge == null && le == null) return false
-        return (ge == null || !birth.isBefore(ge)) && (le == null || !birth.isAfter(le))
-    }
-
-    private fun bound(function: CircuitZkFunction, key: String): LocalDate? {
-        val s = (function.params[key] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content ?: return null
-        return try { LocalDate.parse(s) } catch (e: DateTimeParseException) { null }
-    }
-
-    private fun birthDate(credential: DocumentMdoc): LocalDate? {
-        val value = doctypeElement(credential, "birth_date") ?: return null
-        val text = if (value.isTagged) value.UntagOne() else value
-        if (text.type != CBORType.TextString) return null
-        return try { LocalDate.parse(text.AsString()) } catch (e: DateTimeParseException) { null }
-    }
-}
-

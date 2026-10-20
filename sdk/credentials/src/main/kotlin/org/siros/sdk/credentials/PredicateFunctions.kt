@@ -76,6 +76,8 @@ sealed interface ClaimSource {
  *   applies to it). For a date claim: calendar days, inclusive (`le - ge + 1`); for a number: `le - ge`. Needs
  *   `ge` and `le` only.
  * @property ageSpecialisation Renders as an age (born between / at least / at most). Needs a date claim and `ge`/`le` only.
+ * @property doctypeNamespaceOnly The circuit binds the credential's own doctype namespace, so a credential whose
+ *   claims are not in exactly that one namespace is never proved (a decoy or extra namespace).
  */
 class PredicateFunction(
     val id: String,
@@ -84,6 +86,7 @@ class PredicateFunction(
     val comparisons: Map<String, ComparisonOp>,
     val minSpan: Long? = null,
     val ageSpecialisation: Boolean = false,
+    val doctypeNamespaceOnly: Boolean = false,
 ) {
     init {
         require(comparisons.isNotEmpty()) { "$id declares no comparison" }
@@ -130,7 +133,7 @@ class PredicateFunction(
         return Parsed(path, conditions)
     }
 
-    private fun claimParam(e: JsonElement): List<String>? = when (e) {
+    internal fun claimParam(e: JsonElement): List<String>? = when (e) {
         is JsonPrimitive -> if (e.isString && e.content.isNotEmpty()) listOf(e.content) else null
         is JsonArray -> e.map { (it as? JsonPrimitive)?.takeIf { p -> p.isString && p.content.isNotEmpty() }?.content ?: return null }
             .takeIf { it.isNotEmpty() }
@@ -138,7 +141,7 @@ class PredicateFunction(
     }
 
     /** One operand as text of [valueType], or null when it is not a well-formed one. */
-    private fun operand(e: JsonElement): String? {
+    internal fun operand(e: JsonElement): String? {
         val p = e as? JsonPrimitive ?: return null
         return when (valueType) {
             ValueType.DATE -> p.content.takeIf { p.isString && PredicateFunctions.date(it) != null }
@@ -215,6 +218,10 @@ class PredicateFunctions(functions: List<PredicateFunction>) {
         return true
     }
 
+    /** Whether [fn] holds for the credential [reader] reads: the pre-check of one function (same judgement as [precheck]). */
+    fun holdsFor(fn: CircuitZkFunction, reader: (path: List<String>, type: ValueType) -> ClaimLookup): Boolean =
+        precheck(CircuitZkPlan(listOf(fn)), reader)
+
     /**
      * The cross-query rule: the proofs of one request together reveal the INTERSECTION of the predicates on a
      * claim. For plans answered with the SAME credential, per claim path: the `ge` bounds are intersected (max),
@@ -258,6 +265,7 @@ class PredicateFunctions(functions: List<PredicateFunction>) {
             comparisons = linkedMapOf("ge" to ComparisonOp.GE, "le" to ComparisonOp.LE),
             minSpan = 365,
             ageSpecialisation = true,
+            doctypeNamespaceOnly = true,
         )
 
         /** The rulebook's functions: `age_check`. */
@@ -272,6 +280,15 @@ class PredicateFunctions(functions: List<PredicateFunction>) {
 
         /** A JSON number literal, or null. */
         fun number(s: String?): BigDecimal? = s?.takeIf { NUMBER.matches(it) }?.let { try { BigDecimal(it) } catch (e: NumberFormatException) { null } }
+
+        /** The ordering of two well-formed operands of [type] (strings by code point). */
+        internal fun compareOperands(type: ValueType, a: String, b: String): Int = compare(type, a, b)
+
+        /** Whether `lo..hi` is at least [min] wide: dates in inclusive calendar days, numbers as `hi - lo`, compared exactly. */
+        internal fun spanAtLeast(type: ValueType, lo: String, hi: String, min: Long): Boolean = when (type) {
+            ValueType.DATE -> ChronoUnit.DAYS.between(date(lo), date(hi)) + 1 >= min
+            else -> number(hi)!!.subtract(number(lo)!!).compareTo(BigDecimal.valueOf(min)) >= 0
+        }
 
         private fun compare(type: ValueType, a: String, b: String): Int = when (type) {
             ValueType.DATE -> date(a)!!.compareTo(date(b)!!)

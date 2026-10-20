@@ -118,10 +118,14 @@ class AuthZENSource(override val type: String) : VerifierIdSource {
  * request still carries. The wallet picks the type itself from [WalletConfig.circuitZkVerifierIdTypes], so the type
  * a request names is neither a selection input nor a reason to refuse.
  */
-internal fun defaultCircuitZkValidator(circuits: org.siros.sdk.credentials.CircuitZkCircuitSource?): org.siros.sdk.credentials.CircuitZkRequestValidator =
+internal fun defaultCircuitZkValidator(
+    circuits: org.siros.sdk.credentials.CircuitZkCircuitSource?,
+    /** The predicate functions the wallet declares: their per-function rules come from the same declarations as consent. */
+    predicates: org.siros.sdk.credentials.PredicateFunctions = org.siros.sdk.credentials.PredicateFunctions.DEFAULT,
+): org.siros.sdk.credentials.CircuitZkRequestValidator =
     org.siros.sdk.credentials.RulebookCircuitZkValidator(
         // The rulebook rules plus the proposed legacy claim-disclosure function (see CircuitZkLegacyDisclosure).
-        rules = org.siros.sdk.credentials.CircuitZkRuleSet.rulebookV03()
+        rules = org.siros.sdk.credentials.CircuitZkRuleSet.rulebookV03(predicates = predicates)
             .withFunction(org.siros.sdk.credentials.CircuitZkLegacyDisclosure.FUNCTION_ID, org.siros.sdk.credentials.CircuitZkLegacyDisclosure.RULES),
         circuits = circuits,
     )

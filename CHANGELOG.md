@@ -44,6 +44,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "is before", "is on", "is not on", "is one of the dates: ..."; `siros_consent_predicate_date_*`), numbers and strings
   keep the generic wording, and the age wording of `age_check` still wins. Vectors: `date_compare` cases.
   The consent wording (all five locales) was approved by leifj on 2026-10-20.
+  Predicate functions are ONE declaration (`PredicateFunction`): it drives consent, the local pre-check, the
+  cross-query merge rule AND the validator's per-function rules (`PredicateFunction.validatorRules()`, rule ids
+  `<function-id-with-dashes>-count|no-bounds|bad-date|bad-operand|bad-claim|le-before-ge|span-short`; `age_check`
+  keeps its rulebook ids). `RulebookCircuitZkValidator`/`CircuitZkRuleSet.rulebookV03(predicates=...)` and the
+  wallet's default validator take the declared functions. The presenter's handler for a predicate is the generic
+  `PredicateFunctionHandler(declaration)` (`holds` is `PredicateFunctions.holdsFor` over an mdoc claim reader);
+  `AgeCheckFunctionHandler` and `DeclaredPredicateHandler` are gone, and the handler registry keeps only hook-style
+  functions (`HOOK_CIRCUIT_ZK_HANDLERS`: the pseudonym, the legacy disclosure). `FakeCircuitZkProver.optIn(predicates)`.
   Known follow-up (not filed): the approved year strings use `%d` with words, so fi/el (and sv/pt as needed)
   need proper plural resources.
 - **`CatalogCircuitZkProver`: the real `circuit_zk` prover, and the wallet's

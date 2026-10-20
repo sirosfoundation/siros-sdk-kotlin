@@ -221,7 +221,7 @@ class NymAuthCircuitZkAdapter(
     private fun planParts(plan: CircuitZkPlan): Triple<CircuitZkFunction, CircuitZkFunction?, String> {
         if (validator.validate(plan) !is CircuitZkVerdict.Ok) throw refuse()
         val pseudonymFn = plan.functions.singleOrNull { it.id == PseudonymFunctionHandler.functionId } ?: throw refuse()
-        val ageFn = plan.functions.filter { it.id == AgeCheckFunctionHandler.functionId }.also { if (it.size > 1) throw refuse() }.firstOrNull()
+        val ageFn = plan.functions.filter { it.id == org.siros.sdk.credentials.PredicateFunctions.AGE_CHECK.id }.also { if (it.size > 1) throw refuse() }.firstOrNull()
         if (plan.functions.any { it !== pseudonymFn && it !== ageFn }) throw refuse()
         val config = (pseudonymFn.params["config"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: throw refuse()
         if (config != SUPPORTED_CONFIG) throw refuse()
