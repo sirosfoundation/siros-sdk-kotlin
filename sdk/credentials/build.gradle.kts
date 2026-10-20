@@ -35,9 +35,9 @@ android {
 val zkCredVegaVersion: String = providers.gradleProperty("zkCredVegaVersion").getOrElse("0.0.7")
 val zkCredLongfellowVersion: String = providers.gradleProperty("zkCredLongfellowVersion").getOrElse("0.1.2")
 
-// The matcher at rulebook v0.4 (`zkp_req`): siros-dc-matcher pull request 50 (merged as 93047bc7, no release yet). Not released yet, so this
-// coordinate resolves only from a local build (-PsirosNativeRepo=<dir>, docs/NATIVE_DEV.md); re-pin to the release when it is cut.
-val sirosDcMatcherVersion: String = providers.gradleProperty("sirosDcMatcherVersion").getOrElse("0.11.0-pr50.69e6be1")
+// The matcher at rulebook v0.4 (`zkp_req`): siros-dc-matcher v0.11.0 (merge 09ac62fb). Its Kotlin bindings (vendored below
+// uniffi/) and the vectors in spec/zkp-req-vectors are the ones of that tag.
+val sirosDcMatcherVersion: String = providers.gradleProperty("sirosDcMatcherVersion").getOrElse("0.11.0")
 
 /**
  * Fails the build up front, with the coordinates and the way out, instead of a bare resolution error deep in a compile

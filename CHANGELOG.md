@@ -233,8 +233,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is refused before anything is proved), the plan's `circuit_filter` is `system_filter`, `meta.source_format` is required
   (`mso_mdoc`; a request for another source format is not answered with an mdoc), `verifier_id_type` is gone. The planner is
   `zkp_req_plan`, the registration `addZkpReqSystem` with the circuit's `system_id`; a blob built by an older matcher declines
-  `zkp_req`, so the bundled matcher and the registered blob move together (docs/NATIVE_DEV.md, coordinate
-  `org.siros:siros-dc-matcher:0.11.0-pr50.69e6be1`, local build until the matcher is released). The wallet's satisfiability
+  `zkp_req`, so the bundled matcher and the registered blob move together (`org.siros:siros-dc-matcher:0.11.0`). The wallet's satisfiability
   rules (`CircuitZkRuleSet.rulebookV04`) use the matcher's codes as rule ids and pass all 43 `zkp_req_unsat` vectors.
 - **BREAKING (unreleased): the response is the rulebook's base64url CBOR `ZkpPresentation`.** `vp_token[queryId]` is an array of
   strings, each the unpadded base64url of `{system_id, proof, issuer_key_set, ? proof_time, results}`
