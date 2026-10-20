@@ -56,8 +56,10 @@ object SecretSeedCommitment {
     /**
      * The `ssc` of a compact SD-JWT VC: its one top-level `ssc` disclosure, as 64 lowercase hex
      * characters. Null when there is no such disclosure, more than one, the claim is also present in
-     * the clear, the disclosure is not referenced from the signed payload's top-level `_sd`, or the
-     * value is not 64 lowercase hex characters.
+     * the clear, the disclosure is not referenced from the signed payload's top-level `_sd`, the
+     * value is not 64 lowercase hex characters, or the payload's `_sd_alg` names a digest algorithm
+     * other than `sha-256` (the digests could not be matched, so nothing is read). A disclosure of a
+     * same-named claim of a NESTED object is not the top-level one and is ignored.
      */
     fun sscOfSdJwt(credential: String): ByteArray? {
         try {
@@ -66,6 +68,9 @@ object SecretSeedCommitment {
             val payloadObj = json.parseToJsonElement(String(Base64.getUrlDecoder().decode(payload), Charsets.UTF_8)) as? JsonObject
                 ?: return null
             if ("ssc" in payloadObj) return null
+            // Fail closed: the digests below are SHA-256; under another (or a malformed) algorithm they mean something else.
+            payloadObj["_sd_alg"]?.let { alg -> if ((alg as? JsonPrimitive)?.takeIf { it.isString }?.content != "sha-256") return null }
+            val digests = (payloadObj["_sd"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
             val found = ArrayList<Pair<String, String>>() // disclosure text to value
             for (segment in parts.drop(1).filter { it.isNotEmpty() }) {
                 val array = try {
@@ -76,13 +81,13 @@ object SecretSeedCommitment {
                 if (array.size != 3) continue
                 val name = (array[1] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: continue
                 if (name != "ssc") continue
+                // Bound to the issuer signature: only a disclosure whose digest sits in the payload's TOP-LEVEL `_sd` is
+                // the top-level claim. Any other `ssc` disclosure belongs to a nested object (or to nothing) and is ignored.
+                if (CredentialDisclosureGuard.digestOf(segment) !in digests) continue
                 val value = (array[2] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return null
                 found.add(segment to value)
             }
-            val (disclosure, value) = found.singleOrNull() ?: return null
-            // Bound to the issuer signature: the digest must sit in the payload's top-level _sd.
-            val digests = (payloadObj["_sd"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
-            if (CredentialDisclosureGuard.digestOf(disclosure) !in digests) return null
+            val (_, value) = found.singleOrNull() ?: return null
             if (!HEX_64.matches(value)) return null
             return hexToBytes(value)
         } catch (e: Exception) {
