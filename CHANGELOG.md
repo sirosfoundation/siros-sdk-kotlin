@@ -41,6 +41,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.20.5] - 2026-10-12
 
 ### Fixed
+- **mdoc issuer trust evaluation no longer 502s and silently downgrades to
+  local VICAL validation.** The `mdoc-issuer-auth` AuthZEN request named the
+  issuer URL as `subject.id` but the certificate hash as `resource.id`; go-trust
+  requires `resource.id == subject.id` on every full evaluation and answered
+  400, which go-wallet-backend's authzen proxy turns into a 502 on
+  `POST /v1/evaluate`, so every mdoc issuance fell back to local root validation
+  and was stored `trusted=false`. `resource.id` now always equals `subject.id`
+  (the key material stays in `resource.key`). The fallback to local validation
+  is also stricter: only a network failure, or a 502/503/504 carrying no
+  upstream JSON error body, counts as "backend unreachable"; a 4xx, a 500, or a
+  502/503/504 whose body is a PDP error now fails closed instead of silently
+  downgrading.
 - **A wallet installation's OAuth Client Attestation instance key could be
   lost forever, silently failing every `sign_client_auth` after.**
   `ensureInstanceKeyId` persisted only the key's id, never the key itself

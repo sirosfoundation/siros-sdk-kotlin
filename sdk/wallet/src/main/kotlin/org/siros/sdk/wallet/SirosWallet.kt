@@ -7829,19 +7829,35 @@ class SirosWallet private constructor(
      * Whether [e] represents the remote AuthZEN backend being unreachable
      * (network failure, backend outage) - the only condition that should
      * fall back to LOCAL, weaker X.509-root validation for
-     * [evaluateReaderTrust]/[evaluateIssuerTrust]. An explicit HTTP 4xx from
-     * [BackendApiException] means the backend was reachable and rejected
-     * the CALLER (an authorization failure), not the trust QUESTION -
-     * falling back to a weaker local check on that specific failure would
-     * let anything that makes the proxy/backend return e.g. 403 silently
-     * downgrade what should be a security-relevant deny (confirmed live at
-     * Geneva 2026: a 403 on `/v1/evaluate` was silently treated the same as
-     * an unreachable backend).
+     * [evaluateReaderTrust]/[evaluateIssuerTrust]. Fails closed:
+     *
+     * - [NetworkException] (timeout, DNS, connection failure): unreachable.
+     * - An HTTP 4xx from [BackendApiException] means the backend was reachable
+     *   and rejected the CALLER (an authorization failure) or the REQUEST:
+     *   never unreachable. Falling back to a weaker local check there would
+     *   let anything that makes the proxy/backend return e.g. 403 silently
+     *   downgrade what should be a security-relevant deny (confirmed live at
+     *   Geneva 2026).
+     * - 502/503/504 are what a gateway answers when it cannot reach its
+     *   upstream, but go-wallet-backend's authzen-proxy ALSO answers 502 when
+     *   the PDP was reached and refused the request as invalid (go-trust 400).
+     *   So these count as unreachable only when the response carries no
+     *   upstream error body: an empty body, `{}`, or a non-JSON gateway page.
+     *   A JSON object body is the PDP speaking, i.e. a refusal, not an outage.
+     * - Any other status (including 500) and any other exception: not
+     *   unreachable.
      */
     private fun isRemoteTrustEvaluationUnreachable(e: Exception): Boolean = when (e) {
         is NetworkException -> true
-        is BackendApiException -> e.code == 0 || e.code >= 500
+        is BackendApiException -> (e.code == 502 || e.code == 503 || e.code == 504) &&
+            !carriesUpstreamErrorBody(e.body)
         else -> false
+    }
+
+    private fun carriesUpstreamErrorBody(body: String?): Boolean {
+        if (body.isNullOrBlank()) return false
+        val parsed = runCatching { Json.parseToJsonElement(body) }.getOrNull()
+        return parsed is JsonObject && parsed.isNotEmpty()
     }
 
     /**
@@ -7897,8 +7913,11 @@ class SirosWallet private constructor(
      *   leaf certificate's SHA-256, which identifies the certificate itself
      *   (RICAL/VICAL validate the chain and ignore it); a caller whose
      *   registry resolves an entity by name passes that name instead.
-     *   `resource.id` always stays the certificate hash: it identifies the
-     *   key material carried in `resource.key`, not the entity.
+     *   `resource.id` is always the same value as `subject.id`: go-trust
+     *   rejects a full (non-resolution-only) evaluation whose `resource.id`
+     *   differs from `subject.id` with a 400 (which the backend's authzen
+     *   proxy turns into a 502). The key material travels in `resource.key`
+     *   (the x5c chain), so the certificate hash is not needed as an id.
      */
     private suspend fun evaluateMdocTrustRemote(
         x5chain: List<ByteArray>,
@@ -7909,8 +7928,7 @@ class SirosWallet private constructor(
         extraContext: (kotlinx.serialization.json.JsonObjectBuilder.() -> Unit)? = null,
     ): TrustResult {
         val client = apiClient ?: throw WalletException(NOT_CONNECTED)
-        val certificateId = sha256Hex(x5chain[0])
-        val subjectId = subjectId ?: certificateId
+        val subjectId = subjectId ?: sha256Hex(x5chain[0])
         val x5c = kotlinx.serialization.json.buildJsonArray {
             x5chain.forEach { add(kotlinx.serialization.json.JsonPrimitive(java.util.Base64.getEncoder().encodeToString(it))) }
         }
@@ -7922,7 +7940,7 @@ class SirosWallet private constructor(
             }
             putJsonObject("resource") {
                 put("type", kotlinx.serialization.json.JsonPrimitive("x5c"))
-                put("id", kotlinx.serialization.json.JsonPrimitive(certificateId))
+                put("id", kotlinx.serialization.json.JsonPrimitive(subjectId))
                 put("key", x5c)
             }
             putJsonObject("action") {

@@ -5557,6 +5557,157 @@ class SirosWalletTest {
         assertTrue(result.reason?.contains("no VICAL root certificate configured") == true)
     }
 
+    // -- go-trust requires resource.id == subject.id on every full evaluation;
+    // a mismatch is a 400 there and a 502 from the backend's authzen proxy.
+
+    private fun issuerNamingFixtureCert(): java.security.cert.X509Certificate {
+        val pem = checkNotNull(javaClass.getResourceAsStream("/mdoc-issuer-identity/uri_and_dns.pem"))
+        return java.security.cert.CertificateFactory.getInstance("X.509").generateCertificate(pem)
+            as java.security.cert.X509Certificate
+    }
+
+    private fun sha256HexOf(bytes: ByteArray): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
+    @Test
+    fun evaluateIssuerTrust_issuerNamedSubject_resourceIdEqualsSubjectId() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        val request = slot<JsonObject>()
+        coEvery { apiClient.evaluateTrust(capture(request)) } returns buildJsonObject {
+            put("decision", JsonPrimitive(true))
+        }
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+        val cert = issuerNamingFixtureCert()
+
+        wallet.evaluateIssuerTrust(listOf(cert.encoded), docType = "org.iso.18013.5.1.mDL")
+
+        val subject = request.captured["subject"]!!.jsonObject
+        val resource = request.captured["resource"]!!.jsonObject
+        assertEquals("https://issuer.example/tenant", subject["id"]?.jsonPrimitive?.content)
+        assertEquals(subject["id"]?.jsonPrimitive?.content, resource["id"]?.jsonPrimitive?.content)
+        // The key material still travels in resource.key.
+        assertEquals("x5c", resource["type"]?.jsonPrimitive?.content)
+        assertEquals(
+            java.util.Base64.getEncoder().encodeToString(cert.encoded),
+            resource["key"]?.jsonArray?.single()?.jsonPrimitive?.content,
+        )
+    }
+
+    @Test
+    fun evaluateIssuerTrust_certificateNamingNoUrl_usesCertificateHashForBoth() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        val request = slot<JsonObject>()
+        coEvery { apiClient.evaluateTrust(capture(request)) } returns buildJsonObject {
+            put("decision", JsonPrimitive(false))
+        }
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+        val der = ByteArray(4) { it.toByte() } // not a certificate: names no URL
+
+        wallet.evaluateIssuerTrust(listOf(der), docType = null)
+
+        val expected = sha256HexOf(der)
+        assertEquals(expected, request.captured["subject"]!!.jsonObject["id"]?.jsonPrimitive?.content)
+        assertEquals(expected, request.captured["resource"]!!.jsonObject["id"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun evaluateReaderTrust_defaultCertificateSubject_resourceIdEqualsSubjectId() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        val request = slot<JsonObject>()
+        coEvery { apiClient.evaluateTrust(capture(request)) } returns buildJsonObject {
+            put("decision", JsonPrimitive(true))
+        }
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+        val der = ByteArray(6) { (it + 1).toByte() }
+
+        wallet.evaluateReaderTrust(listOf(der))
+
+        val subjectId = request.captured["subject"]!!.jsonObject["id"]?.jsonPrimitive?.content
+        assertEquals(sha256HexOf(der), subjectId)
+        assertEquals(subjectId, request.captured["resource"]!!.jsonObject["id"]?.jsonPrimitive?.content)
+        assertEquals("mdoc-reader-auth", request.captured["action"]!!.jsonObject["name"]?.jsonPrimitive?.content)
+    }
+
+    // -- Fallback to local validation: genuine unreachability only.
+
+    /** A wallet whose local VICAL root accepts [cert], so a fallback would say trusted=true. */
+    private fun issuerWalletWithLocalRoot(apiClient: BackendApiClient, cert: java.security.cert.X509Certificate) =
+        newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                issuerTrustRootCertificatesPem = listOf("unused"),
+            ),
+            "issuerTrustRootCertificates\$delegate" to lazy { listOf(cert) },
+        )
+
+    @Test
+    fun evaluateIssuerTrust_fallbackOnlyForGenuineUnreachability() = runTest(dispatcher) {
+        val cert = issuerNamingFixtureCert()
+        // (exception, expect local fallback)
+        val cases = listOf(
+            NetworkException("timeout") to true,
+            BackendApiException(502, "API request failed: 502", "") to true,
+            BackendApiException(502, "API request failed: 502", "{}") to true,
+            BackendApiException(503, "API request failed: 503", "<html>Service Unavailable</html>") to true,
+            BackendApiException(504, "API request failed: 504", "upstream timed out") to true,
+            BackendApiException(400, "API request failed: 400", """{"error":"bad request"}""") to false,
+            BackendApiException(401, "API request failed: 401", "") to false,
+            BackendApiException(403, "API request failed: 403", "") to false,
+            BackendApiException(404, "API request failed: 404", "") to false,
+            BackendApiException(500, "API request failed: 500", "") to false,
+            BackendApiException(502, "API request failed: 502", """{"error":"resource.id must match subject.id"}""") to false,
+            BackendApiException(503, "API request failed: 503", """{"error":"pdp refused"}""") to false,
+            BackendApiException(0, "Missing field in response", "") to false,
+        )
+        for ((exception, expectFallback) in cases) {
+            val apiClient = mockk<BackendApiClient>()
+            coEvery { apiClient.evaluateTrust(any()) } throws exception
+            val wallet = issuerWalletWithLocalRoot(apiClient, cert)
+
+            val result = wallet.evaluateIssuerTrust(listOf(cert.encoded), docType = null)
+
+            val label = "$exception (${(exception as? BackendApiException)?.code}) body=${(exception as? BackendApiException)?.body}"
+            if (expectFallback) {
+                assertEquals(label, "local-vical-root", result.framework)
+                assertTrue(label, result.trusted)
+            } else {
+                assertEquals(label, "vical", result.framework)
+                assertTrue(label, !result.trusted)
+            }
+        }
+    }
+
+    @Test
+    fun evaluateIssuerTrust_remoteOnly_502WithoutBody_isNotTrusted() = runTest(dispatcher) {
+        val cert = issuerNamingFixtureCert()
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws BackendApiException(502, "API request failed: 502", "")
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                issuerTrustEvaluationMode = MdocTrustEvaluationMode.REMOTE_ONLY,
+                issuerTrustRootCertificatesPem = listOf("unused"),
+            ),
+            "issuerTrustRootCertificates\$delegate" to lazy { listOf(cert) },
+        )
+
+        val result = wallet.evaluateIssuerTrust(listOf(cert.encoded), docType = null)
+
+        assertTrue(!result.trusted)
+        assertEquals("vical", result.framework)
+    }
+
     @Test
     fun evaluateIssuerTrust_remoteCallThrowsAuthzDeny_failsClosedWithoutFallingBackToLocal() = runTest(dispatcher) {
         // GDC/SDK-6 (Geneva 2026): a 403 from /v1/evaluate is an authorization
