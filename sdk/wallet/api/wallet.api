@@ -536,11 +536,11 @@ public final class org/siros/sdk/wallet/SirosWallet {
 	public final fun getZkPresentation ()Lorg/siros/sdk/keystore/ZkMdocPresentation;
 	public final fun getZkSystemIds ()Ljava/util/List;
 	public final fun handleDCAPIRequest (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public final fun handleDCAPIRequest (Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/wallet/PresentationConsentHandler;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun handleDCAPIRequest (Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/wallet/TransactionConsentHandler;Ljava/util/List;Lorg/siros/sdk/wallet/PresentationConsentHandler;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun handleDCAPIRequest$default (Lorg/siros/sdk/wallet/SirosWallet;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-	public static synthetic fun handleDCAPIRequest$default (Lorg/siros/sdk/wallet/SirosWallet;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/wallet/PresentationConsentHandler;Ljava/util/List;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public static synthetic fun handleDCAPIRequest$default (Lorg/siros/sdk/wallet/SirosWallet;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/wallet/TransactionConsentHandler;Ljava/util/List;Lorg/siros/sdk/wallet/PresentationConsentHandler;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun handleDCAPIRequestWithPresentationConsent (Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/wallet/PresentationConsentHandler;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun handleDCAPIRequestWithPresentationConsent$default (Lorg/siros/sdk/wallet/SirosWallet;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/wallet/PresentationConsentHandler;Ljava/util/List;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun holderBindingFor (Ljava/lang/String;)Lorg/siros/sdk/credentials/interop/HolderBinding;
 	public final fun interopProfileFor (Ljava/lang/String;)Lorg/siros/sdk/credentials/interop/InteropProfile;
 	public final fun isTransactionDataEffectivelyEnabled ()Z

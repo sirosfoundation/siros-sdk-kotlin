@@ -6299,21 +6299,21 @@ class SirosWalletTest {
         val own = mutableListOf<org.siros.sdk.credentials.PresentationConsentRequest>()
         val s = czkSscSetup(czkSeedSource())
         kotlinx.coroutines.runBlocking {
-            s.wallet.handleDCAPIRequest(czkRequest(), CzkFixtures.ORIGIN, PresentationConsentHandler { own += it; true }, listOf(1L))
+            s.wallet.handleDCAPIRequestWithPresentationConsent(czkRequest(), CzkFixtures.ORIGIN, PresentationConsentHandler { own += it; true }, listOf(1L))
         }
         assertEquals(1, own.size)
         assertTrue("the wallet-level handler was not asked", s.consents.isEmpty())
         // With no wallet-level handler, the per-request one is all that is needed.
         val bare = czkSscSetup(czkSeedSource(), noConsentHandler = true)
         kotlinx.coroutines.runBlocking {
-            bare.wallet.handleDCAPIRequest(czkRequest(), CzkFixtures.ORIGIN, PresentationConsentHandler { true }, listOf(1L))
+            bare.wallet.handleDCAPIRequestWithPresentationConsent(czkRequest(), CzkFixtures.ORIGIN, PresentationConsentHandler { true }, listOf(1L))
         }
         assertEquals(1, bare.prover.calls)
         // A per-request handler that declines is a decline, whatever the wallet-level one would say.
         val declined = czkSscSetup(czkSeedSource())
         org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
             kotlinx.coroutines.runBlocking {
-                declined.wallet.handleDCAPIRequest(czkRequest(), CzkFixtures.ORIGIN, PresentationConsentHandler { false }, listOf(1L))
+                declined.wallet.handleDCAPIRequestWithPresentationConsent(czkRequest(), CzkFixtures.ORIGIN, PresentationConsentHandler { false }, listOf(1L))
             }
         }
         assertEquals(0, declined.prover.calls)
@@ -6418,6 +6418,7 @@ class SirosWalletTest {
     private fun czkScoreSetup(
         score: Long,
         params: String = """{"claim":"score","ge":10,"le":20}""",
+        scoreValue: com.upokecenter.cbor.CBORObject = com.upokecenter.cbor.CBORObject.FromObject(score),
         declared: Boolean = true,
         consent: suspend (org.siros.sdk.credentials.PresentationConsentRequest) -> Boolean = { false },
         innerProver: org.siros.sdk.keystore.CircuitZkProver? = null,
@@ -6425,7 +6426,7 @@ class SirosWalletTest {
         functions = listOf(org.siros.sdk.credentials.CircuitZkFunction("number_range", "p", Json.parseToJsonElement(params).jsonObject)),
         credentials = listOf(StoredCredential(
             id = 1L, format = "mso_mdoc",
-            raw = CzkFixtures.mdoc(extra = listOf("score" to com.upokecenter.cbor.CBORObject.FromObject(score))),
+            raw = CzkFixtures.mdoc(extra = listOf("score" to scoreValue)),
             metadata = CredentialMetadata(name = "Nym", claims = listOf(org.siros.sdk.credentials.ClaimMeta(listOf("score"), "Credit score"))), batchId = 1L, instanceId = 0,
         )),
         predicates = if (declared) org.siros.sdk.credentials.PredicateFunctions(listOf(org.siros.sdk.credentials.PredicateFunctions.AGE_CHECK, numberRange)) else null,
@@ -6444,6 +6445,20 @@ class SirosWalletTest {
         assertNull(item.age)
         assertFalse(s.consents.single().toString().contains("15,") || s.consents.single().toString().contains("value=15"))
         assertEquals(listOf("consent"), s.events)
+    }
+
+    @Test
+    fun circuitZkConsent_aTaggedCborNumberIsANumber_notAMismatchingType() = runTest(dispatcher) {
+        // Tag 4 (decimal fraction) [-1, 150] is 15: within 10..20, so the user is asked.
+        val fifteen = com.upokecenter.cbor.CBORObject.FromObject(com.upokecenter.numbers.EDecimal.FromString("15.0"))
+        assertTrue(fifteen.isTagged)
+        val s = czkScoreSetup(0, scoreValue = fifteen)
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.USER_DECLINED)
+        assertEquals(1, s.consents.size)
+        // 25 is outside the range, tagged or not: refused locally, never asked.
+        val out = czkScoreSetup(0, scoreValue = com.upokecenter.cbor.CBORObject.FromObject(com.upokecenter.numbers.EDecimal.FromString("25.0")))
+        czkRefused(out, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+        assertTrue(out.consents.isEmpty())
     }
 
     /** A prover for a custom predicate: every planned function proves as a predicate. */

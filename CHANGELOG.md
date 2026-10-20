@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **User consent for `circuit_zk` presentations.** One `PresentationConsentHandler`
   (a sibling of `TransactionConsentHandler`, not coupled to `transactionDataEnabled`;
   wallet-level `SirosWallet.presentationConsentHandler`, per request through a new
-  `presentationConsentHandler` parameter / overload of `handleDCAPIRequest`)
+  `presentationConsentHandler` parameter of `handleDCAPIRequest` and `handleDCAPIRequestWithPresentationConsent`)
   is asked once for ALL queries of a request, before anything is signed or proved and before
   the issuer-delivered secret seed is fetched. `handleCircuitZkDcApi` now runs in two phases:
   phase 1 (validation, trust, the user's pick, local age check, verifier id, consent items)

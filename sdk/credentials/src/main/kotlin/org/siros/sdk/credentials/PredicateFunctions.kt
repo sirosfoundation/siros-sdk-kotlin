@@ -319,7 +319,11 @@ class PredicateFunctions(functions: List<PredicateFunction>) {
                 ValueType.DATE -> if (v.type == CBORType.TextString && date(v.AsString()) != null) ClaimValue(type, v.AsString()) else mismatch
                 ValueType.STRING -> if (v.type == CBORType.TextString) ClaimValue(type, v.AsString()) else mismatch
                 ValueType.BOOL -> if (v.type == CBORType.Boolean) ClaimValue(type, v.isTrue.toString()) else mismatch
-                ValueType.NUMBER -> when (v.type) {
+                // A tagged number (bignum 2/3, decimal fraction 4, bigfloat 5) is a number, not a mismatching type.
+                ValueType.NUMBER -> if (listOf(2, 3, 4, 5).any { v0.HasMostOuterTag(it) }) {
+                    runCatching { v0.AsNumber() }.getOrNull()?.takeIf { it.IsFinite() }
+                        ?.let { ClaimValue(type, BigDecimal(it.ToEDecimal().toString()).toPlainString()) } ?: mismatch
+                } else when (v.type) {
                     CBORType.Integer -> ClaimValue(type, v.AsNumber().ToEInteger().toString())
                     CBORType.FloatingPoint -> v.AsDoubleValue().takeIf { it.isFinite() }?.let { ClaimValue(type, BigDecimal.valueOf(it).toPlainString()) } ?: mismatch
                     else -> mismatch

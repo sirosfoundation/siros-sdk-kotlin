@@ -3813,8 +3813,9 @@ class SirosWallet private constructor(
      *   by being another copy (same `batchId`) of the picked credential, so a one-time-use copy
      *   that is used up does not strand the user. Entries are not matched to queries by the
      *   picker's per-slot metadata (this SDK's matcher registers none), only by candidacy, so a
-     *   credential that satisfies two queries is picked for both. `null` or empty keeps the
-     *   previous behaviour: the first eligible credential of each query. The plain, mdoc and
+     *   credential that satisfies two queries is picked for both. For `circuit_zk`, `null` or empty
+     *   is refused ([org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE]):
+     *   nothing is chosen for the user, so pass the picker's ids. The plain, mdoc and
      *   legacy ZK paths ignore it and keep presenting via their own selection.
      * @throws WalletException if the user declines, or if not connected.
      * @throws TransactionDataError if a `transaction_data` request is refused or
@@ -4553,8 +4554,10 @@ class SirosWallet private constructor(
     /**
      * As [handleDCAPIRequest], with [presentationConsentHandler] asking for consent to a `circuit_zk`
      * presentation for this request in place of the wallet-level [SirosWallet.presentationConsentHandler].
+     * A distinct name, not an overload: two functional-interface parameters of one shape would make a
+     * positional lambda ambiguous with the transaction-consent overload.
      */
-    suspend fun handleDCAPIRequest(
+    suspend fun handleDCAPIRequestWithPresentationConsent(
         rawRequestJson: String,
         origin: String,
         presentationConsentHandler: PresentationConsentHandler,
