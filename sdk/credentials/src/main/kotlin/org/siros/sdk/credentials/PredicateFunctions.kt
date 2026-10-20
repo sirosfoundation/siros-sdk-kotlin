@@ -359,7 +359,23 @@ class PredicateFunctions(functions: List<PredicateFunction>) {
             }
         }
 
-        private fun read(v0: CBORObject, type: ValueType): ClaimValue {
+        /** Largest decimal exponent magnitude, and mantissa size in bits, a claim number may have before it is expanded to text. */
+        private const val MAX_NUMBER_EXPONENT = 1000
+        private const val MAX_NUMBER_MANTISSA_BITS = 4096
+
+        /**
+         * The plain decimal text of [d], or null when expanding it would be unreasonable: a CBOR decimal fraction or bigfloat
+         * such as `[100000000, 1]` (1E+100000000) would otherwise become ~100M characters before consent. Refused (the reader
+         * then reports a mismatching type, so no comparison holds): the bound is checked on the exponent and mantissa, before
+         * any expansion.
+         */
+        private fun boundedPlain(d: com.upokecenter.numbers.EDecimal): String? {
+            if (d.exponent.Abs().compareTo(com.upokecenter.numbers.EInteger.FromInt32(MAX_NUMBER_EXPONENT)) > 0) return null
+            if (d.unsignedMantissa.GetUnsignedBitLengthAsEInteger().compareTo(com.upokecenter.numbers.EInteger.FromInt32(MAX_NUMBER_MANTISSA_BITS)) > 0) return null
+            return BigDecimal(d.toString()).toPlainString()
+        }
+
+        internal fun read(v0: CBORObject, type: ValueType): ClaimValue {
             val v = if (v0.isTagged) v0.UntagOne() else v0
             val mismatch = ClaimValue(if (type == ValueType.STRING) ValueType.BOOL else ValueType.STRING, "")
             return when (type) {
@@ -369,7 +385,7 @@ class PredicateFunctions(functions: List<PredicateFunction>) {
                 // A tagged number (bignum 2/3, decimal fraction 4, bigfloat 5) is a number, not a mismatching type.
                 ValueType.NUMBER -> if (listOf(2, 3, 4, 5).any { v0.HasMostOuterTag(it) }) {
                     runCatching { v0.AsNumber() }.getOrNull()?.takeIf { it.IsFinite() }
-                        ?.let { ClaimValue(type, BigDecimal(it.ToEDecimal().toString()).toPlainString()) } ?: mismatch
+                        ?.let { n -> boundedPlain(n.ToEDecimal())?.let { ClaimValue(type, it) } } ?: mismatch
                 } else when (v.type) {
                     CBORType.Integer -> ClaimValue(type, v.AsNumber().ToEInteger().toString())
                     CBORType.FloatingPoint -> v.AsDoubleValue().takeIf { it.isFinite() }?.let { ClaimValue(type, BigDecimal(it).toPlainString()) } ?: mismatch
