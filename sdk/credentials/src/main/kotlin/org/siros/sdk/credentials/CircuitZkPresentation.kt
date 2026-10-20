@@ -159,6 +159,11 @@ fun interface IssuerKeySetDecoder {
 }
 
 /**
+ * SUPERSEDED on the wire: a `circuit_zk` response is now the JSON shape of [CircuitZkResponsePresentation]
+ * (`vp_token[queryId]` an array of `{circuit_id, proof_system, proof, x5chain, results}` objects; there is no
+ * `proof_time` member). This CBOR form is no longer produced by the wallet; it remains for hosts and vectors that
+ * still read it.
+ *
  * A `circuit_zk` presentation, per the rulebook's `CircuitZkPresentation`
  * CDDL. Generic: nothing here names a credential type, a circuit or a verifier.
  *

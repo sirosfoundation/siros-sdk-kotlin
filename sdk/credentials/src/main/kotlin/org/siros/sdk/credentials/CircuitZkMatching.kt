@@ -28,6 +28,19 @@ data class CircuitZkCircuitFilter(val proofSystems: List<String>?, val circuitId
     fun admits(circuit: CircuitZkCircuit): Boolean =
         (proofSystems == null || circuit.system in proofSystems) &&
             (circuitIds == null || circuit.circuitId in circuitIds || circuit.aliases.any { it in circuitIds })
+
+    /**
+     * The `circuit_id` a response must state for [circuit]: one the request OFFERED (its id, else one of its aliases). Null when
+     * the request stated no circuit-id list or names neither: a response states a value from the list, and a request that
+     * offered nothing cannot be answered.
+     */
+    fun offeredCircuitId(circuit: CircuitZkCircuit): String? {
+        val ids = circuitIds ?: return null
+        return circuit.circuitId.takeIf { it in ids } ?: circuit.aliases.firstOrNull { it in ids }
+    }
+
+    /** Whether the request offered [circuit]'s proof system: false when it stated no list (nothing offered). */
+    fun offersProofSystem(circuit: CircuitZkCircuit): Boolean = proofSystems?.contains(circuit.system) == true
 }
 
 /**
