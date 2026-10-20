@@ -764,7 +764,9 @@ class WalletEngineSessionTest {
         listener.onMessage(webSocket, """{"type":"match_request","flow_id":"old-flow","dcql_query":{}}""")
         session.messages().test {
             listener.onMessage(webSocket, """{"type":"handshake_complete","session_id":"s1"}""")
-            awaitItem()
+            // Handling is sequential: once the handshake envelope is seen, every
+            // frame sent before it has been routed to its channel.
+            while (awaitItem().type != MessageTypes.HANDSHAKE_COMPLETE) { /* keep consuming */ }
             cancelAndIgnoreRemainingEvents()
         }
 
@@ -785,13 +787,34 @@ class WalletEngineSessionTest {
     @Test
     fun reconnect_discard_keeps_push_and_ack_frames_but_drops_flow_traffic() {
         val session = WalletEngineSession(baseUrl = "https://wallet.example.com", tenantId = "t", client = client)
-        for (flow in listOf("flow_progress", "flow_complete", "flow_error", "sign_request", "match_request")) {
+        for (flow in listOf("flow_progress", "flow_error", "sign_request", "match_request")) {
             assertTrue(flow, session.isFlowTraffic("""{"type":"$flow","flow_id":"f"}"""))
         }
+        // A completion can carry issued credentials that nothing else redelivers.
+        assertEquals(false, session.isFlowTraffic("""{"type":"flow_complete","flow_id":"f"}"""))
         // Not tied to the replaced socket's flows; an issuance_complete push can carry credentials.
         assertEquals(false, session.isFlowTraffic("""{"type":"push","push_type":"issuance_complete"}"""))
         assertEquals(false, session.isFlowTraffic("""{"type":"notification_ack"}"""))
         assertEquals(false, session.isFlowTraffic("not json"))
+    }
+
+    @Test
+    fun forceReconnect_keepsABufferedCredentialBearingFlowComplete() = runTest {
+        val session = WalletEngineSession(baseUrl = "https://wallet.example.com", tenantId = "t", client = client)
+        session.connect("app-token")
+        listener.onMessage(webSocket, """{"type":"flow_complete","flow_id":"done-flow","credentials":[{"format":"dc+sd-jwt","credential":"jwt"}]}""")
+        session.messages().test {
+            listener.onMessage(webSocket, """{"type":"handshake_complete","session_id":"s1"}""")
+            while (awaitItem().type != MessageTypes.HANDSHAKE_COMPLETE) { /* keep consuming */ }
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        session.forceReconnect()
+
+        session.flowComplete().test {
+            assertEquals("done-flow", awaitItem().flowId)
+            cancelAndIgnoreRemainingEvents()
+        }
     }
 
     @Test

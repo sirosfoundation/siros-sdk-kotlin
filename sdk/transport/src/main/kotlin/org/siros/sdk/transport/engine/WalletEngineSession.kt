@@ -711,12 +711,15 @@ class WalletEngineSession(
      * no collector has consumed. Server-side flow state died with that socket,
      * so such a reply is stale; left queued it would be handed to whatever
      * flow the caller starts next (a cancelled flow's first reply reopening it,
-     * or an error from it failing the retry). Best effort: a frame a consumer
+     * or an error from it failing the retry). `flow_complete` is deliberately
+     * kept: it can carry issued credentials, and a replaced socket does not
+     * persist them - the wallet ignores a completion for a flow it cancelled.
+     * Best effort: a frame a consumer
      * has already taken cannot be recalled.
      */
     internal fun isFlowTraffic(frame: String): Boolean = try {
         when (json.parseToJsonElement(frame).jsonObject["type"]?.jsonPrimitive?.contentOrNull) {
-            MessageTypes.FLOW_PROGRESS, MessageTypes.FLOW_COMPLETE, MessageTypes.FLOW_ERROR,
+            MessageTypes.FLOW_PROGRESS, MessageTypes.FLOW_ERROR,
             MessageTypes.SIGN_REQUEST, MessageTypes.MATCH_REQUEST -> true
             else -> false
         }
@@ -735,7 +738,6 @@ class WalletEngineSession(
         }
         kept.forEach { rawMessageChannel.trySend(it) }
         while (flowProgressChannel.tryReceive().isSuccess) { /* drop */ }
-        while (flowCompleteChannel.tryReceive().isSuccess) { /* drop */ }
         while (flowErrorChannel.tryReceive().isSuccess) { /* drop */ }
         while (signRequestChannel.tryReceive().isSuccess) { /* drop */ }
         while (matchRequestChannel.tryReceive().isSuccess) { /* drop */ }
