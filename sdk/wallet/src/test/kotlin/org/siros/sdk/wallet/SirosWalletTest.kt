@@ -6811,6 +6811,98 @@ class SirosWalletTest {
         assertTrue(result.reason?.contains("403") == true)
     }
 
+    // ---- the /v1/evaluate request shape and when an error may fall back to the local check ----
+
+    /** A DS certificate whose subject alternative name is the URI https://issuer.example.test. */
+    private val issuerUriCertificate: ByteArray = java.util.Base64.getDecoder().decode(
+        "MIIBpTCCAUugAwIBAgIUfSsn99zIV6m0iFCSnb5dnr39QTkwCgYIKoZIzj0EAwIwFDESMBAGA1UEAwwJaXNzdWVyLWRzMB4XDTI2" +
+            "MTAxOTIzNTUxNVoXDTM2MTAxNjIzNTUxNVowFDESMBAGA1UEAwwJaXNzdWVyLWRzMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE" +
+            "YPh31J0j5qN6xC+cr2sjLaeM9RLCldhUf+sV+EdPUzLSaMW0iKQC7itsmbosx2SLdpKlrrUnZTe9zbI7vxlmqaN7MHkwHQYDVR0O" +
+            "BBYEFM2AsEujhU10nPxk7Er2nbN2nVreMB8GA1UdIwQYMBaAFM2AsEujhU10nPxk7Er2nbN2nVreMA8GA1UdEwEB/wQFMAMBAf8w" +
+            "JgYDVR0RBB8wHYYbaHR0cHM6Ly9pc3N1ZXIuZXhhbXBsZS50ZXN0MAoGCCqGSM49BAMCA0gAMEUCIQD2XlMmlP82TLF81krKHXm6" +
+            "OUzWAguMTIyKsKoqqUrm+wIgMDA1Rl3e4WvtMCWlBjgsB2cPT7lgGx86PvDgx9aEh0M=",
+    )
+
+    private fun evaluateRequestOf(call: suspend (SirosWallet) -> Unit): JsonObject = kotlinx.coroutines.runBlocking {
+        val apiClient = mockk<BackendApiClient>()
+        val captured = slot<JsonObject>()
+        coEvery { apiClient.evaluateTrust(capture(captured)) } returns buildJsonObject { put("decision", JsonPrimitive(true)) }
+        val wallet = newWallet("apiClient" to apiClient, "config" to WalletConfig(backendUrl = "https://wallet.example.com"))
+        call(wallet)
+        captured.captured
+    }
+
+    @Test
+    fun mdocTrustRequest_resourceIdEqualsSubjectId_forANamedSubject_andTheKeyMaterialStaysInResourceKey() = runTest(dispatcher) {
+        val request = evaluateRequestOf { it.evaluateIssuerTrust(listOf(issuerUriCertificate), docType = "org.iso.18013.5.1.mDL") }
+        val subject = request["subject"]!!.jsonObject["id"]!!.jsonPrimitive.content
+        assertEquals("https://issuer.example.test", subject)
+        assertEquals(subject, request["resource"]!!.jsonObject["id"]!!.jsonPrimitive.content)
+        assertEquals(1, request["resource"]!!.jsonObject["key"]!!.jsonArray.size)
+    }
+
+    @Test
+    fun mdocTrustRequest_resourceIdEqualsSubjectId_forTheDefaultSubject() = runTest(dispatcher) {
+        // A reader chain, and an issuer chain that names no URL: the subject is the certificate hash, and so is the resource.
+        for (call in listOf<suspend (SirosWallet) -> Unit>(
+            { it.evaluateReaderTrust(listOf(ByteArray(4) { 9 })) },
+            { it.evaluateIssuerTrust(listOf(ByteArray(4) { 9 }), docType = null) },
+        )) {
+            val request = evaluateRequestOf(call)
+            val subject = request["subject"]!!.jsonObject["id"]!!.jsonPrimitive.content
+            assertEquals(64, subject.length)
+            assertEquals(subject, request["resource"]!!.jsonObject["id"]!!.jsonPrimitive.content)
+        }
+    }
+
+    private suspend fun issuerTrustAfter(failure: Exception): TrustResult {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws failure
+        val wallet = newWallet("apiClient" to apiClient, "config" to WalletConfig(backendUrl = "https://wallet.example.com"))
+        return wallet.evaluateIssuerTrust(listOf(ByteArray(4)), docType = "org.iso.18013.5.1.mDL")
+    }
+
+    @Test
+    fun trustEvaluation_aGatewayErrorThatCarriesAnUpstreamError_failsClosed_neverDowngradesToTheLocalCheck() = runTest(dispatcher) {
+        for (body in listOf(
+            """{"error":"resource.id (abc) must match subject.id (https://issuer.example.test)"}""",
+            """{"message":"upstream said no"}""",
+            """{"detail":"bad request"}""",
+            """{"errors":[{"code":400}]}""",
+        )) {
+            val r = issuerTrustAfter(BackendApiException(502, "API request failed: 502", body))
+            assertTrue(body, !r.trusted)
+            assertEquals(body, "vical", r.framework) // the remote-failure path, not "local-vical-root"
+            assertTrue(body, r.reason?.contains("502") == true)
+        }
+    }
+
+    @Test
+    fun trustEvaluation_aBareGatewayErrorOrAConnectionFailure_mayFallBackToTheLocalCheck() = runTest(dispatcher) {
+        val failures = listOf<Exception>(
+            BackendApiException(502, "API request failed: 502", ""),
+            BackendApiException(502, "API request failed: 502", "<html><body>Bad Gateway</body></html>"),
+            BackendApiException(503, "API request failed: 503", null),
+            BackendApiException(504, "API request failed: 504", "upstream request timeout"),
+            NetworkException("connection refused"),
+        )
+        for (f in failures) {
+            val r = issuerTrustAfter(f)
+            assertEquals(f.message, "local-vical-root", r.framework)
+        }
+    }
+
+    @Test
+    fun trustEvaluation_aClientErrorAnUnexpectedServerErrorOrAMalformedAnswer_neverFallsBack() = runTest(dispatcher) {
+        for (code in listOf(400, 401, 403, 404, 422, 429, 500, 501, 0)) {
+            val r = issuerTrustAfter(BackendApiException(code, "API request failed: $code", """{"error":"x"}"""))
+            assertEquals("code $code", "vical", r.framework)
+            assertTrue("code $code", !r.trusted)
+        }
+        // Even without a body: a 400 is the backend answering.
+        assertEquals("vical", issuerTrustAfter(BackendApiException(400, "API request failed: 400", "")).framework)
+    }
+
     @Test
     fun evaluateIssuerTrust_preferLocalIssuerTrustEvaluation_skipsRemoteCallEntirely() = runTest(dispatcher) {
         val apiClient = mockk<BackendApiClient>()

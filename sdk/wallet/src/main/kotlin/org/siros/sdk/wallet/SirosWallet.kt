@@ -8482,9 +8482,25 @@ class SirosWallet private constructor(
      * an unreachable backend).
      */
     private fun isRemoteTrustEvaluationUnreachable(e: Exception): Boolean = when (e) {
+        // A connection failure or timeout: the backend was not reached at all.
         is NetworkException -> true
-        is BackendApiException -> e.code == 0 || e.code >= 500
+        // Only a gateway answering for a backend that is not there (502/503/504) with nothing of the upstream's own in the
+        // body. A 502 that carries an upstream error (the proxy relaying a 400 validation failure, say) is the backend
+        // ANSWERING: failing closed, never a downgrade to the weaker local check. Any other status, 4xx, an unexpected 5xx
+        // or a malformed answer (code 0) is not unreachability either.
+        is BackendApiException -> (e.code == 502 || e.code == 503 || e.code == 504) && !carriesUpstreamError(e.body)
         else -> false
+    }
+
+    /** Whether a gateway error body carries an error of the upstream (a JSON object naming one), as opposed to a bare gateway page. */
+    private fun carriesUpstreamError(body: String?): Boolean {
+        if (body.isNullOrBlank()) return false
+        val obj = try {
+            kotlinx.serialization.json.Json.parseToJsonElement(body) as? kotlinx.serialization.json.JsonObject
+        } catch (e: Exception) {
+            null
+        } ?: return false
+        return listOf("error", "errors", "error_description", "message", "detail").any { it in obj }
     }
 
     /**
@@ -8540,8 +8556,9 @@ class SirosWallet private constructor(
      *   leaf certificate's SHA-256, which identifies the certificate itself
      *   (RICAL/VICAL validate the chain and ignore it); a caller whose
      *   registry resolves an entity by name passes that name instead.
-     *   `resource.id` always stays the certificate hash: it identifies the
-     *   key material carried in `resource.key`, not the entity.
+     *   `resource.id` is the same value: go-trust rejects a request whose
+     *   `resource.id` differs from its `subject.id` (400, which the backend
+     *   proxies as a 502). The key material itself travels in `resource.key`.
      */
     private suspend fun evaluateMdocTrustRemote(
         x5chain: List<ByteArray>,
@@ -8565,7 +8582,9 @@ class SirosWallet private constructor(
             }
             putJsonObject("resource") {
                 put("type", kotlinx.serialization.json.JsonPrimitive("x5c"))
-                put("id", kotlinx.serialization.json.JsonPrimitive(certificateId))
+                // go-trust requires resource.id == subject.id for every request that is not resolution-only: the entity
+                // asked about, whether that is the certificate hash or the issuer URL. The key material is in `key`.
+                put("id", kotlinx.serialization.json.JsonPrimitive(subjectId))
                 put("key", x5c)
             }
             putJsonObject("action") {

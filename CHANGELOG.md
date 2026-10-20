@@ -78,6 +78,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sign_client_auth for flow <id>: a DPoP proof was asked for ... (reason=...); answering WITHOUT a key id`. The DPoP key
   is, and stays, the instance key of the default keystore (the WIA's `cnf` key), not the keystore resolved for
   credential key proofs.
+- **New permission: `android.permission.ACCESS_NETWORK_STATE`** (normal, install-time), declared in `sdk/wallet`'s manifest and merged
+  into the host: the circuit catalog refresh also runs when a network becomes available.
+- **Trust evaluation: `resource.id` equals `subject.id`, and a 502 no longer downgrades to the local check.** The mdoc
+  issuer/reader `/v1/evaluate` request sent the entity (the issuer URL) as `subject.id` and the certificate hash as `resource.id`;
+  go-trust rejects any request where they differ (400, proxied as 502), so every such call failed. Both now carry the entity;
+  the key material stays in `resource.key`. The fallback to local root validation is now only for a connection failure or a
+  502/503/504 with no upstream error in its body; a 4xx, any other 5xx, a malformed answer, or a gateway error that carries
+  an upstream error (a JSON body naming `error`/`message`/`detail`/...) fails closed.
 - **PROPOSAL: `zk-claim-disclosure-v1`, a `circuit_zk` function for the legacy
   proof systems** (`CircuitZkLegacyDisclosure`; the id is one constant, the
   rulebook owners decide the name). Params `claims`, `systems` (the verifier's
