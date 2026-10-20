@@ -8,6 +8,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -21,7 +22,6 @@ import org.siros.sdk.credentials.CircuitZkCircuit
 import org.siros.sdk.credentials.CircuitZkCircuitSource
 import org.siros.sdk.credentials.CircuitZkFunction
 import org.siros.sdk.credentials.CircuitZkPlan
-import org.siros.sdk.credentials.CircuitZkPresentationCodec
 import org.siros.sdk.credentials.CircuitZkRequestValidator
 import org.siros.sdk.credentials.CircuitZkVerdict
 import org.siros.sdk.credentials.IssuerKeySet
@@ -83,6 +83,8 @@ class CircuitZkPresenterTest {
         ssc: CBORObject? = cbor(ByteArray(32) { 9 }),
         /** Repeat ssc inside the claims namespace, with this value. */
         duplicateSsc: CBORObject? = null,
+        /** The issuer chain as an `x5chain` array (leaf first) instead of the single certificate. */
+        chain: List<ByteArray>? = null,
     ): ByteArray {
         val items = CBORObject.NewArray()
         var id = 0
@@ -97,7 +99,11 @@ class CircuitZkPresenterTest {
         val mso = CBORObject.NewMap()
         mso[cbor("docType")] = cbor(docType)
         val unprotected = CBORObject.NewMap()
-        if (withX5chain) unprotected[cbor(33)] = cbor(cert)
+        if (chain != null) {
+            unprotected[cbor(33)] = CBORObject.NewArray().also { a -> chain.forEach { a.Add(cbor(it)) } }
+        } else if (withX5chain) {
+            unprotected[cbor(33)] = cbor(cert)
+        }
         val auth = CBORObject.NewArray()
         auth.Add(cbor(ByteArray(0)))
         auth.Add(unprotected)
@@ -115,6 +121,8 @@ class CircuitZkPresenterTest {
     private fun ageFn(json: String = """{"ge":"1990-01-01"}""", handle: String = "a") = CircuitZkFunction("age_check", handle, params(json))
     private fun plan(vararg fns: CircuitZkFunction, doctype: String = docType) = CircuitZkPlan(
         functions = fns.toList(),
+        // The request offers the test circuit: a response states a circuit_id and proof_system from the request's lists.
+        circuitFilter = org.siros.sdk.credentials.CircuitZkCircuitFilter(listOf("sys"), listOf("circuit-1")),
         raw = params("""{"id":"q","format":"circuit_zk","meta":{"doctype_value":"$doctype"}}"""),
     )
 
@@ -185,7 +193,7 @@ class CircuitZkPresenterTest {
     @Test
     fun `a presentation decodes and its pseudonym equals an independent recompute`() {
         val result = present(presenter(), request())
-        val decoded = CircuitZkPresentationCodec.decodeBase64Url(result.base64Url)
+        val decoded = result.presentation
 
         val expected = NymPseudonym.derive("known-offender-matching-psc", seed16, verifierId = "rp.example")
         assertEquals(ResultValue.Pseudonym(expected), decoded.results["n"])
@@ -193,23 +201,21 @@ class CircuitZkPresenterTest {
         assertEquals("circuit-1", decoded.circuitId)
         assertEquals("circuit-1", result.circuitId)
         assertArrayEquals(FakeCircuitZkProver.DUMMY_PROOF, decoded.proof)
-        assertEquals(IssuerKeySet.DerCertificates(listOf(cert)), decoded.issuerKeySet)
-        assertNull(decoded.proofTime)
+        assertEquals(1, decoded.x5chain.size)
+        assertArrayEquals(cert, decoded.x5chain.single())
+        assertEquals("sys", decoded.proofSystem)
     }
 
     @Test
     fun `results keys are exactly the plan's handles`() {
         val p = plan(pseudonymFn(handle = "h-nym"), ageFn(handle = "h-age"))
-        val decoded = CircuitZkPresentationCodec.decodeBase64Url(present(presenter(), request(p = p)).base64Url)
+        val decoded = present(presenter(), request(p = p)).presentation
         assertEquals(setOf("h-nym", "h-age"), decoded.results.keys)
-        decoded.requireResultHandles(setOf("h-nym", "h-age"))
     }
 
     @Test
     fun `an age_check alone needs no seed and no psc`() {
-        val decoded = CircuitZkPresentationCodec.decodeBase64Url(
-            present(presenter(), request(cred = credential(psc = null), p = plan(ageFn()))).base64Url,
-        )
+        val decoded = present(presenter(), request(cred = credential(psc = null), p = plan(ageFn()))).presentation
         assertEquals(setOf("a"), decoded.results.keys)
     }
 
@@ -228,7 +234,59 @@ class CircuitZkPresenterTest {
             CircuitZkCircuit("sys", "no-age", setOf(docType), functions = setOf("pseudonym-v1-sha256")),
             CircuitZkCircuit("sys", "right", setOf(docType), functions = setOf("pseudonym-v1-sha256", "age_check")),
         )
-        assertEquals("right", present(presenter(circuits = circuits), request()).circuitId)
+        val offered = plan(pseudonymFn(), ageFn()).copy(circuitFilter = org.siros.sdk.credentials.CircuitZkCircuitFilter(listOf("sys"), listOf("wrong-doctype", "no-age", "right")))
+        assertEquals("right", present(presenter(circuits = circuits), request(p = offered)).circuitId)
+    }
+
+    // -------- the response shape: offered circuit and proof system, issuer chain --------
+
+    @Test
+    fun `a request that offered no circuit or proof system cannot be answered and nothing is proved`() {
+        val prover = CountingProver(FakeCircuitZkProver.optIn())
+        for (filter in listOf(null, org.siros.sdk.credentials.CircuitZkCircuitFilter(null, null), org.siros.sdk.credentials.CircuitZkCircuitFilter(listOf("sys"), null), org.siros.sdk.credentials.CircuitZkCircuitFilter(null, listOf("circuit-1")))) {
+            assertDenied(CircuitZkStep.CIRCUIT) { present(presenter(prover), request(p = plan(pseudonymFn(), ageFn()).copy(circuitFilter = filter))) }
+        }
+        assertEquals(0, prover.calls)
+    }
+
+    @Test
+    fun `a proof system the request did not offer is refused`() {
+        val prover = CountingProver(FakeCircuitZkProver.optIn())
+        val other = plan(pseudonymFn(), ageFn()).copy(circuitFilter = org.siros.sdk.credentials.CircuitZkCircuitFilter(listOf("another-system"), listOf("circuit-1")))
+        assertDenied(CircuitZkStep.CIRCUIT) { present(presenter(prover), request(p = other)) }
+        assertEquals(0, prover.calls)
+    }
+
+    @Test
+    fun `an alias the request offered is the circuit_id stated`() {
+        val aliased = CircuitZkCircuit("sys", "circuit-1", setOf(docType), functions = setOf("pseudonym-v1-sha256", "age_check"), aliases = setOf("urn:alias"))
+        val p = plan(pseudonymFn(), ageFn()).copy(circuitFilter = org.siros.sdk.credentials.CircuitZkCircuitFilter(listOf("sys"), listOf("urn:alias")))
+        val result = present(presenter(circuits = listOf(aliased)), request(p = p))
+        assertEquals("urn:alias", result.circuitId)
+        assertEquals("urn:alias", result.json["circuit_id"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `the issuer chain is the credentials own x5chain, leaf first, and the whole presentation validates`() {
+        val ca = ByteArray(30) { (it + 100).toByte() }
+        val result = present(presenter(), request(cred = credential(chain = listOf(cert, ca))))
+        assertEquals(2, result.presentation.x5chain.size)
+        assertArrayEquals(cert, result.presentation.x5chain[0])
+        assertArrayEquals(ca, result.presentation.x5chain[1])
+        val p = plan(pseudonymFn(), ageFn())
+        val token = JsonObject(mapOf("q" to kotlinx.serialization.json.JsonArray(listOf(result.json)))).toString()
+        assertNull(org.siros.sdk.credentials.CircuitZkResponseValidator.validate(p, token))
+    }
+
+    @Test
+    fun `an issuer chain outside the wire limits is refused before any proof is made`() {
+        val prover = CountingProver(FakeCircuitZkProver.optIn())
+        assertDenied(CircuitZkStep.BUILD) { present(presenter(prover), request(cred = credential(chain = List(9) { cert }))) }
+        assertDenied(CircuitZkStep.BUILD) { present(presenter(prover), request(cred = credential(chain = listOf(ByteArray(4097))))) }
+        assertEquals(0, prover.calls)
+        // The limits are inclusive.
+        present(presenter(prover), request(cred = credential(chain = List(8) { ByteArray(4096) })))
+        assertEquals(1, prover.calls)
     }
 
     // -------- refusals --------
@@ -401,28 +459,24 @@ class CircuitZkPresenterTest {
     @Test
     fun `each secret-seed config presents with a seed that opens ssc and equals an independent recompute`() {
         val seed = secretSeedA
-        val kom = CircuitZkPresentationCodec.decodeBase64Url(present(presenter(), sscRequest(seed)).base64Url)
+        val kom = present(presenter(), sscRequest(seed)).presentation
         assertEquals(
             ResultValue.Pseudonym(NymPseudonym.derive("known-offender-matching-ssc", seed, verifierId = "rp.example")),
             kom.results["n"],
         )
-        val recovery = CircuitZkPresentationCodec.decodeBase64Url(
-            present(
+        val recovery = present(
                 presenter(),
                 request(sscCred(), plan(pseudonymFn("account-recovery-ssc"), ageFn()), secretSeed = seed, verifierContext = "ctx-1"),
-            ).base64Url,
-        )
+            ).presentation
         assertEquals(
             ResultValue.Pseudonym(NymPseudonym.derive("account-recovery-ssc", seed, verifierId = "rp.example", verifierContext = "ctx-1")),
             recovery.results["n"],
         )
         val userValue = byteArrayOf(5, 6, 7)
-        val xsite = CircuitZkPresentationCodec.decodeBase64Url(
-            present(
+        val xsite = present(
                 presenter(userValue = userValue),
                 request(sscCred(), plan(pseudonymFn("user-managed-pseudonym-xsite-ssc"), ageFn()), verifierId = null, secretSeed = seed),
-            ).base64Url,
-        )
+            ).presentation
         assertEquals(
             ResultValue.Pseudonym(NymPseudonym.derive("user-managed-pseudonym-xsite-ssc", seed, proverInput = userValue)),
             xsite.results["n"],
@@ -500,7 +554,7 @@ class CircuitZkPresenterTest {
             val ssc = vec(v, "ssc_hex")
             assertArrayEquals(sha256(seed), ssc) // the vector itself is the relation
             val out = present(presenter(), sscRequest(seed, credential(ssc = cbor(ssc))))
-            val decoded = CircuitZkPresentationCodec.decodeBase64Url(out.base64Url)
+            val decoded = out.presentation
             assertEquals(
                 ResultValue.Pseudonym(NymPseudonym.derive("known-offender-matching-ssc", seed, verifierId = "rp.example")),
                 decoded.results["n"],
@@ -600,13 +654,13 @@ class CircuitZkPresenterTest {
         }
         try { present(presenter(boom), sscRequest(seed)) } catch (e: CircuitZkError) { results += e.toString() }
         val ok = present(presenter(), sscRequest(seed))
-        results += ok.base64Url
+        results += ok.json.toString()
         results += ok.results.toString()
         results += CircuitZkFunctionWitness(secretSeed = seed).toString()
         results += logs
         for (line in results) for (s in secrets) assertFalse(line, line.contains(s))
         // The seed is not even in the encoded presentation bytes.
-        val raw = java.util.Base64.getUrlDecoder().decode(ok.base64Url)
+        val raw = ok.json.toString().toByteArray()
         assertTrue(indexOf(raw, seed) < 0)
     }
 
