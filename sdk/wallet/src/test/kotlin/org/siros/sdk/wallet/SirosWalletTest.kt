@@ -7228,6 +7228,33 @@ class SirosWalletTest {
         assertEquals("flow-retry", (stateFlow.value as WalletState.FlowActive).flowId)
     }
 
+    @Test
+    fun supersededStartResumingAfterReconnect_doesNotEraseALaterCancelledStartsMarker() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val (wallet, engine) = abandonedStartWallet(progressFlow, listener = listener, stateFlow = stateFlow)
+        advanceUntilIdle()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var calls = 0
+        coEvery { engine.forceReconnect() } coAnswers { if (calls++ == 0) gate.await() }
+
+        val a = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            runCatching { wallet.startIssuanceByOffer(startOffer) }
+        }
+        wallet.cancelCurrentFlow()                      // A parked in forceReconnect, cancelled
+        wallet.startIssuanceByOffer(startOffer)         // B sends its start...
+        wallet.cancelCurrentFlow()                      // ...and is cancelled after send
+        gate.complete(Unit)                             // A resumes: must not touch B's marker
+        a.join()
+
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-b", step = "parsing_offer"))
+        advanceUntilIdle()
+
+        verify(exactly = 1) { engine.cancelFlow("flow-b") }
+        assertTrue(stateFlow.value is WalletState.Ready)
+    }
+
     private fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {
         val wallet = allocateInstance(SirosWallet::class.java) as SirosWallet
         val values = fields.toMap(mutableMapOf())

@@ -750,6 +750,34 @@ class WalletEngineSessionTest {
     }
 
     @Test
+    fun forceReconnect_discardsFlowRepliesBufferedFromTheReplacedConnection() = runTest {
+        val session = WalletEngineSession(
+            baseUrl = "https://wallet.example.com",
+            tenantId = "tenant-42",
+            client = client,
+        )
+        session.connect("app-token")
+        // A reply the old connection delivered that nobody has consumed yet. The
+        // handshake frame after it is awaited so the consumer has certainly
+        // routed the progress frame into its (buffered) channel.
+        listener.onMessage(webSocket, """{"type":"flow_progress","flow_id":"old-flow","step":"parsing_offer"}""")
+        session.messages().test {
+            listener.onMessage(webSocket, """{"type":"handshake_complete","session_id":"s1"}""")
+            awaitItem()
+            cancelAndIgnoreRemainingEvents()
+        }
+
+        session.forceReconnect()
+
+        session.flowProgress().test {
+            expectNoEvents()
+            listener.onMessage(webSocket, """{"type":"flow_progress","flow_id":"new-flow","step":"parsing_offer"}""")
+            assertEquals("new-flow", awaitItem().flowId)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
     fun forceReconnect_signals_reauth_required_when_token_provider_rejects_with_401() = runTest {
         val session = WalletEngineSession(
             baseUrl = "https://wallet.example.com",

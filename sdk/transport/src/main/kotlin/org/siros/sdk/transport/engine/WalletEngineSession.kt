@@ -698,10 +698,27 @@ class WalletEngineSession(
         webSocket?.cancel() // ungraceful - the connection may already be dead
         webSocket = null
         sessionId = null
+        discardBufferedFlowTraffic()
         if (token == null) return // refreshTokenOrSignalReauth already set State.REAUTH_REQUIRED
         _state.value = State.CONNECTING
         reconnectAttempts = 0
         doConnect(token)
+    }
+
+    /**
+     * Drop flow traffic that the replaced connection had already delivered but
+     * no collector has consumed. Server-side flow state died with that socket,
+     * so such a reply is stale; left queued it would be handed to whatever
+     * flow the caller starts next (a cancelled flow's first reply reopening it,
+     * or an error from it failing the retry). Best effort: a frame a consumer
+     * has already taken cannot be recalled.
+     */
+    private fun discardBufferedFlowTraffic() {
+        while (rawMessageChannel.tryReceive().isSuccess) { /* drop */ }
+        while (flowProgressChannel.tryReceive().isSuccess) { /* drop */ }
+        while (flowCompleteChannel.tryReceive().isSuccess) { /* drop */ }
+        while (flowErrorChannel.tryReceive().isSuccess) { /* drop */ }
+        while (signRequestChannel.tryReceive().isSuccess) { /* drop */ }
     }
 
     /** Disconnect the WebSocket session. */

@@ -3465,11 +3465,13 @@ class SirosWallet private constructor(
     private suspend fun connectEngineForIssuance(engine: WalletEngineSession, epoch: Int) {
         advanceIssuanceStart(epoch, WalletState.FlowActive.STEP_CONNECTING_ENGINE)
         engine.forceReconnect()
-        // The old socket is gone, and with it any reply to a start cancelled
-        // earlier: forget those, or the retry's own first event would be taken
-        // for the cancelled flow's.
-        abandonedStartTimes.clear()
+        // Stop a superseded attempt before it touches shared bookkeeping.
         advanceIssuanceStart(epoch, WalletState.FlowActive.STEP_ESTABLISHING_SESSION)
+        // The old socket is gone, and with it any reply to a start cancelled
+        // earlier (the transport also drops what it had buffered): forget
+        // those, or the retry's own first event would be taken for the
+        // cancelled flow's.
+        abandonedStartTimes.clear()
         engine.awaitConnected()
     }
 
