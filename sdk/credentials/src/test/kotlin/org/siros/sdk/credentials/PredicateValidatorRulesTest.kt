@@ -21,7 +21,7 @@ class PredicateValidatorRulesTest {
     private val validator = RulebookCircuitZkValidator(CircuitZkRuleSet.rulebookV04(predicates = declared))
 
     private fun verdict(id: String, params: String): String {
-        val plan = CircuitZkPlan(listOf(CircuitZkFunction(id, "p", Json.parseToJsonElement(params).jsonObject)))
+        val plan = CircuitZkPlan(listOf(CircuitZkFunction(id, "p", Json.parseToJsonElement(params).jsonObject)), raw = Json.parseToJsonElement("""{"meta":{"source_format":"mso_mdoc","doctype_value":"d"}}""").jsonObject)
         return when (val v = validator.validate(plan)) {
             CircuitZkVerdict.Ok -> "ok"
             is CircuitZkVerdict.AccessDenied -> v.ruleId ?: "denied"
@@ -36,7 +36,7 @@ class PredicateValidatorRulesTest {
         assertEquals("function_unknown", verdict("mystery", """{"claim":"x","ge":1}"""))
         // Without the declaration the validator does not know the function.
         val bare = RulebookCircuitZkValidator()
-        val plan = CircuitZkPlan(listOf(CircuitZkFunction("number_range", "p", Json.parseToJsonElement("""{"claim":"s","ge":1}""").jsonObject)))
+        val plan = CircuitZkPlan(listOf(CircuitZkFunction("number_range", "p", Json.parseToJsonElement("""{"claim":"s","ge":1}""").jsonObject)), raw = Json.parseToJsonElement("""{"meta":{"source_format":"mso_mdoc","doctype_value":"d"}}""").jsonObject)
         assertEquals("function_unknown", (bare.validate(plan) as CircuitZkVerdict.AccessDenied).ruleId)
     }
 

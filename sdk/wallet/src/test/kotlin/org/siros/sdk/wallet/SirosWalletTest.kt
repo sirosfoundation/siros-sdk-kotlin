@@ -6867,7 +6867,7 @@ class SirosWalletTest {
         czkRun(s, czkRequest())
         val request = s.consents.single()
         assertEquals("rp.example", request.verifier.label)
-        assertEquals("rp.example", request.verifier.verifierId)
+        assertEquals("x509_san_dns:rp.example", request.verifier.verifierId)
         assertEquals("x509_san_dns", request.verifier.verifierIdType)
         assertTrue(request.requestSigned)
         val entry = request.entries.single()
@@ -6879,7 +6879,7 @@ class SirosWalletTest {
                     scope = org.siros.sdk.credentials.PseudonymScope.PER_VERIFIER,
                     remappableByIssuer = true,
                     crossSite = false,
-                    verifierId = "rp.example",
+                    verifierId = "x509_san_dns:rp.example",
                     verifierContext = null,
                 ),
             ),
@@ -6992,15 +6992,15 @@ class SirosWalletTest {
     fun circuitZkDefaultValidator_takesItsPredicateRulesFromTheSameDeclarations() {
         val plan = org.siros.sdk.credentials.CircuitZkPlan(listOf(
             org.siros.sdk.credentials.CircuitZkFunction("number_range", "p", Json.parseToJsonElement("""{"claim":"score","ge":10,"le":20}""").jsonObject),
-        ))
+        ), raw = Json.parseToJsonElement("""{"meta":{"source_format":"mso_mdoc","doctype_value":"d"}}""").jsonObject)
         val declared = org.siros.sdk.credentials.PredicateFunctions(listOf(org.siros.sdk.credentials.PredicateFunctions.AGE_CHECK, numberRange))
         assertEquals(org.siros.sdk.credentials.CircuitZkVerdict.Ok, defaultCircuitZkValidator(null, declared).validate(plan))
         val narrow = org.siros.sdk.credentials.CircuitZkPlan(listOf(
             org.siros.sdk.credentials.CircuitZkFunction("number_range", "p", Json.parseToJsonElement("""{"claim":"score","ge":10,"le":15}""").jsonObject),
-        ))
-        assertEquals("number-range-span-short", (defaultCircuitZkValidator(null, declared).validate(narrow) as org.siros.sdk.credentials.CircuitZkVerdict.AccessDenied).ruleId)
+        ), raw = Json.parseToJsonElement("""{"meta":{"source_format":"mso_mdoc","doctype_value":"d"}}""").jsonObject)
+        assertEquals("number_range_span_too_short", (defaultCircuitZkValidator(null, declared).validate(narrow) as org.siros.sdk.credentials.CircuitZkVerdict.AccessDenied).ruleId)
         // Undeclared: the validator does not know it.
-        assertEquals("unknown-function", (defaultCircuitZkValidator(null).validate(plan) as org.siros.sdk.credentials.CircuitZkVerdict.AccessDenied).ruleId)
+        assertEquals("function_unknown", (defaultCircuitZkValidator(null).validate(plan) as org.siros.sdk.credentials.CircuitZkVerdict.AccessDenied).ruleId)
     }
 
     @Test
