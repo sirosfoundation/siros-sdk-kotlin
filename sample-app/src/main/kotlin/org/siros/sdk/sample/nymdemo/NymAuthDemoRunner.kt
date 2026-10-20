@@ -12,10 +12,10 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.siros.sdk.credentials.CircuitZkCircuit
+import org.siros.sdk.credentials.CircuitZkCircuitFilter
 import org.siros.sdk.credentials.CircuitZkCircuitSource
 import org.siros.sdk.credentials.CircuitZkFunction
 import org.siros.sdk.credentials.CircuitZkPlan
-import org.siros.sdk.credentials.CircuitZkPresentationCodec
 import org.siros.sdk.credentials.NymPseudonym
 import org.siros.sdk.credentials.ResultValue
 import org.siros.sdk.credentials.RulebookCircuitZkValidator
@@ -136,6 +136,8 @@ class NymAuthDemoRunner(
                         },
                     ),
                 ),
+                // The demo "verifier" offers exactly the demo circuit: a response states an offered circuit_id and proof_system.
+                circuitFilter = CircuitZkCircuitFilter(proofSystems = listOf(circuit.system), circuitIds = listOf(circuit.circuitId)),
                 raw = JsonObject(
                     mapOf("meta" to buildJsonObject { put("doctype_value", NymAuthDemoIssuer.DOC_TYPE) }),
                 ),
@@ -174,9 +176,9 @@ class NymAuthDemoRunner(
                 delivered?.fill(0)
             }
 
-            // Decode what was produced, and recompute the pseudonym independently of the presenter.
-            val decoded = CircuitZkPresentationCodec.decodeBase64Url(result.base64Url)
-            decoded.requireResultHandles(setOf("nym", "age"))
+            // Look at what was produced, and recompute the pseudonym independently of the presenter.
+            val decoded = result.presentation
+            check(decoded.results.keys == setOf("nym", "age"))
             val pseudonym = (decoded.results["nym"] as ResultValue.Pseudonym)
             val seed = when (p.scenario) {
                 Scenario.KNOWN_OFFENDER_PSC -> hkdf(rootKey, PRIVATE_SEED_LABEL.toByteArray(Charsets.UTF_8) + lp(NymAuthDemoIssuer.DOC_TYPE) + lp(NymAuthDemoIssuer.ISSUER), 16)
@@ -186,7 +188,7 @@ class NymAuthDemoRunner(
             issuerSeed.fill(0)
             Outcome.Presented(
                 circuitId = decoded.circuitId,
-                token = result.base64Url,
+                token = result.json.toString(),
                 pseudonymHex = pseudonym.bytes.toHex(),
                 recomputedHex = recomputed.toHex(),
                 ageResult = if (decoded.results["age"] === ResultValue.Predicate) "true" else "unexpected",

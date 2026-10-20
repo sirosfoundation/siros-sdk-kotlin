@@ -422,6 +422,32 @@ class MdocDeviceResponseBuilder(
             return sessionTranscript.EncodeToBytes()
         }
 
+        /**
+         * The `OpenID4VPHandover` session transcript a `circuit_zk` presentation over a REDIRECT (OpenID4VP QR) request is bound to:
+         * [buildOpenID4VPSessionTranscript] with the JWK thumbprint REQUIRED, because over redirects the response is always
+         * encrypted (`direct_post.jwt`): [verifierJwkThumbprint] is the base64url RFC 7638 thumbprint of the verifier's
+         * response-encryption key and must decode to exactly 32 bytes. `clientId` is the prefixed client id
+         * (`x509_san_dns:...`). A null thumbprint (valid only in the DC API handover, for an unencrypted response) is not
+         * representable here. The DC API path keeps [buildDCAPISessionTranscript].
+         *
+         * @throws IllegalArgumentException if the thumbprint is not unpadded base64url of 32 bytes.
+         */
+        fun buildCircuitZkRedirectSessionTranscript(
+            clientId: String,
+            nonce: String,
+            responseUri: String,
+            verifierJwkThumbprint: String,
+        ): ByteArray {
+            require(verifierJwkThumbprint.none { it == '=' || it == '+' || it == '/' }) { "the JWK thumbprint is unpadded base64url" }
+            val thumbprint = try {
+                java.util.Base64.getUrlDecoder().decode(verifierJwkThumbprint)
+            } catch (e: IllegalArgumentException) {
+                throw IllegalArgumentException("the JWK thumbprint is not base64url")
+            }
+            require(thumbprint.size == 32) { "the JWK thumbprint is 32 bytes" }
+            return buildOpenID4VPSessionTranscript(clientId, nonce, responseUri, verifierJwkThumbprint)
+        }
+
         fun sha256(data: ByteArray): ByteArray =
             MessageDigest.getInstance("SHA-256").digest(data)
 

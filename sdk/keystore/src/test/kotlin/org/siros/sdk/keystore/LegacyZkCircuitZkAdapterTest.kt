@@ -21,7 +21,6 @@ import org.siros.sdk.credentials.CircuitZkCircuit
 import org.siros.sdk.credentials.CircuitZkFunction
 import org.siros.sdk.credentials.CircuitZkLegacyDisclosure
 import org.siros.sdk.credentials.CircuitZkPlan
-import org.siros.sdk.credentials.CircuitZkPresentationCodec
 import org.siros.sdk.credentials.CircuitZkRequestValidator
 import org.siros.sdk.credentials.CredentialDocument
 import org.siros.sdk.credentials.CredentialFormat
@@ -143,6 +142,7 @@ class LegacyZkCircuitZkAdapterTest {
 
     private fun plan(vararg fns: CircuitZkFunction) = CircuitZkPlan(
         fns.toList(),
+        circuitFilter = org.siros.sdk.credentials.CircuitZkCircuitFilter(listOf("longfellow"), listOf(circuitId)),
         raw = params("""{"id":"q","format":"circuit_zk","meta":{"doctype_value":"$docType"}}"""),
     )
 
@@ -222,11 +222,10 @@ class LegacyZkCircuitZkAdapterTest {
                 signer,
             )
         }
-        val decoded = CircuitZkPresentationCodec.decodeBase64Url(result.base64Url)
+        val decoded = result.presentation
         assertEquals(circuitId, decoded.circuitId)
         assertEquals(ResultValue.Predicate, decoded.results["d"])
         assertEquals(setOf("d"), decoded.results.keys)
-        assertEquals(java.time.Instant.parse("2026-10-19T12:00:00Z"), decoded.proofTime)
         // The proof is the zk DeviceResponse, carrying the system's proof bytes and only the disclosed claims.
         val response = CBORObject.DecodeFromBytes(decoded.proof)
         val zkDocument = response["zkDocuments"][0]

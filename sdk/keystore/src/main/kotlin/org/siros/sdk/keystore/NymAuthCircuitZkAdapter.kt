@@ -141,6 +141,8 @@ class NymAuthCircuitZkAdapter(
 
         // 3. Load (or reuse) the verified circuit, 4. sign the challenge, 5. prove.
         val residencyKey = "${descriptor.system}:${descriptor.id}:${artifact.hash}"
+        // The proof's time input. UNDECIDED upstream (verification time T): until it is decided this is the device clock, and
+        // this is the one place T plugs in (a value carried by CircuitZkProveInput would replace it here).
         val time = Instant.now(clock).truncatedTo(ChronoUnit.SECONDS)
         val timeText = time.toString().also { if (it.length != TIME_CHARS) throw refuse() }
 

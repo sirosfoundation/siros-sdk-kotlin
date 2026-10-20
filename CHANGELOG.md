@@ -143,6 +143,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   downgrading.
 
 ### Changed
+- **BREAKING (unreleased `circuit_zk`): the response is the JSON shape of siros-dc-matcher `docs/circuit_zk_response.md`.**
+  `vp_token[queryId]` is an ARRAY of presentation objects `{circuit_id, proof_system, proof, x5chain, results}`
+  (`CircuitZkResponsePresentation`; `CircuitZkPresenter.Result.presentation` / `.json`; `base64Url` is gone). `proof` is
+  base64url without padding. `x5chain` is REQUIRED: the credential's own `issuerAuth` `x5chain`, leaf (Document Signer)
+  first, at most 8 certificates of at most 4096 bytes each, standard base64 with padding (the verifier validates it
+  through go-trust and takes the issuer key from the leaf; the wallet never sends a bare key). `results` is
+  `{handle: {pseudonym}}` or `{handle: {satisfied: true}}`, one per `return` handle, none skipped. `circuit_id` and
+  `proof_system` are values the request OFFERED (`circuit_id_values`, `circuit_proof_system_values`): a request that
+  offered none cannot be answered and is refused before anything is proved (an offered alias is stated as the id). The old
+  CBOR presentation and its `proof_time` are no longer produced. `CircuitZkResponseValidator` (a mirror of the matcher's
+  `validate_response`, strict: `null` is a type error, repeated members refused, an item type with no result shape refuses
+  the response) checks every response before it is sent; the 79 shared vectors are vendored in
+  `spec/circuit-zk-response-vectors` (siros-dc-matcher 932b07af, set digest 5c7fd1d3...). Only `multiple: true` queries may
+  carry more than one presentation. A legacy `zk-claim-disclosure-v1` plan has no result shape yet and so cannot be
+  answered over this shape. The verification time T is NOT decided and not implemented.
+- **Redirect (OpenID4VP QR) handover for `circuit_zk`:** `MdocDeviceResponseBuilder.buildCircuitZkRedirectSessionTranscript`
+  (OpenID4VPHandover over `[prefixed client_id, nonce, JWK thumbprint (32 bytes, required), response_uri]`; the response
+  is always encrypted, so a null thumbprint is not representable). Pinned by the spec's own example from the shared
+  nymauth challenge vectors. The DC API path keeps `OpenID4VPDCAPIHandover`.
 - **A `circuit_zk` circuit that declares no `functions` and no `capabilities`
   now fits no plan** (`CircuitZkCircuit.supports`; it used to fit every plan).
   `CircuitZkCircuitSource.fromManifest` takes an optional `declare` for entries a

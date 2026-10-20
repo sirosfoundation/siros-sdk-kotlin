@@ -29,7 +29,6 @@ import org.junit.Test
 import org.siros.sdk.credentials.CircuitZkCircuit
 import org.siros.sdk.credentials.CircuitZkFunction
 import org.siros.sdk.credentials.CircuitZkPlan
-import org.siros.sdk.credentials.CircuitZkPresentationCodec
 import org.siros.sdk.credentials.CircuitZkRequestValidator
 import org.siros.sdk.credentials.NymPseudonym
 import org.siros.sdk.credentials.ResultValue
@@ -371,6 +370,7 @@ class CatalogCircuitZkProverTest {
         )
         val plan = CircuitZkPlan(
             listOf(pseudonymFn(), ageFn()),
+            circuitFilter = org.siros.sdk.credentials.CircuitZkCircuitFilter(listOf(system), listOf(circuitId)),
             raw = params("""{"id":"q","format":"circuit_zk","meta":{"doctype_value":"$docType"}}"""),
         )
         val result = runBlocking {
@@ -380,9 +380,8 @@ class CatalogCircuitZkProverTest {
             )
         }
         assertFalse(presenter.usesFakeProver)
-        val decoded = CircuitZkPresentationCodec.decodeBase64Url(result.base64Url)
+        val decoded = result.presentation
         assertArrayEquals(proofBytes, decoded.proof)
-        assertEquals(Instant.parse("2026-10-19T12:34:56Z"), decoded.proofTime)
     }
 
     // -------- fail closed --------

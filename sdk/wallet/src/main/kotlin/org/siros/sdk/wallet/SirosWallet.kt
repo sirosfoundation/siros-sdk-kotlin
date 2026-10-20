@@ -4148,7 +4148,7 @@ class SirosWallet private constructor(
             tokensByQueryId.getOrPut(queryId) { mutableListOf() }.add(token)
         }
 
-        val finalResponseJson = buildDcApiResponseJson(request, tokensByQueryId, encryptionJwk)
+val finalResponseJson = buildDcApiResponseJson(request, tokensByQueryId.mapValues { (_, tokens) -> tokens.map { kotlinx.serialization.json.JsonPrimitive(it) } }, encryptionJwk)
 
         recordPresentation(PresentationRecord(
             id = randomUint32Id(),
@@ -4173,14 +4173,12 @@ class SirosWallet private constructor(
      */
     private fun buildDcApiResponseJson(
         request: org.siros.sdk.wallet.dcapi.DCAPIRequest,
-        tokensByQueryId: Map<String, List<String>>,
+        tokensByQueryId: Map<String, List<kotlinx.serialization.json.JsonElement>>,
         encryptionJwk: com.nimbusds.jose.jwk.JWK?,
     ): String {
         val vpTokenObj = kotlinx.serialization.json.buildJsonObject {
             for ((queryId, tokens) in tokensByQueryId) {
-                put(queryId, kotlinx.serialization.json.buildJsonArray {
-                    tokens.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) }
-                })
+                put(queryId, kotlinx.serialization.json.buildJsonArray { tokens.forEach { add(it) } })
             }
         }
 
@@ -4341,7 +4339,7 @@ class SirosWallet private constructor(
             ?: org.siros.sdk.keystore.CircuitZkPresenter(prover, support.circuits, support.validator, NoWitnessProvider, serving = support.serving)
         val verifierContext = VerifierIdContext(request, trust, origin)
 
-        val tokensByQueryId = linkedMapOf<String, List<String>>()
+        val tokensByQueryId = linkedMapOf<String, List<kotlinx.serialization.json.JsonElement>>()
         val usedIds = mutableListOf<Long>()
         for ((queryIndex, result) in results.withIndex()) {
             val plan = result.circuitZkPlan ?: refuse("no-plan", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
@@ -4393,11 +4391,24 @@ class SirosWallet private constructor(
             } finally {
                 secretSeed?.fill(0)
             }
-            tokensByQueryId[result.queryId] = listOf(presented.base64Url)
+            // The `circuit_zk` response shape: the query's entry is an ARRAY of presentation OBJECTS. The wallet checks what it
+            // built against the request (shape, offered circuit, handles, results, x5chain limits) and never sends a response
+            // a verifier must refuse; an invalid one is a refusal, nothing is sent.
+            val entry = listOf<kotlinx.serialization.json.JsonElement>(presented.json)
+            val checked = plan.copy(raw = JsonObject(plan.raw + ("id" to kotlinx.serialization.json.JsonPrimitive(result.queryId))))
+            val verdict = org.siros.sdk.credentials.CircuitZkResponseValidator.validate(
+                checked,
+                JsonObject(mapOf(result.queryId to kotlinx.serialization.json.JsonArray(entry))).toString(),
+            )
+            if (verdict != null) {
+                Timber.w("circuit_zk response failed its own check (${verdict.code})")
+                refuse("response-invalid", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.PROOF_FAILED)
+            }
+            tokensByQueryId[result.queryId] = entry
             usedIds += cred.id
         }
 
-        val finalResponseJson = buildDcApiResponseJson(request, tokensByQueryId, encryptionJwk)
+val finalResponseJson = buildDcApiResponseJson(request, tokensByQueryId, encryptionJwk)
         recordPresentation(PresentationRecord(
             id = randomUint32Id(),
             flowId = "dc-api-${java.util.UUID.randomUUID()}",

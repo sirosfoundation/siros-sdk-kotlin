@@ -10,11 +10,9 @@ import org.siros.sdk.credentials.CircuitZkCircuit
 import org.siros.sdk.credentials.CircuitZkCircuitSource
 import org.siros.sdk.credentials.CircuitZkFunction
 import org.siros.sdk.credentials.CircuitZkPlan
-import org.siros.sdk.credentials.CircuitZkPresentation
-import org.siros.sdk.credentials.CircuitZkPresentationCodec
+import org.siros.sdk.credentials.CircuitZkResponsePresentation
 import org.siros.sdk.credentials.CircuitZkRequestValidator
 import org.siros.sdk.credentials.CircuitZkVerdict
-import org.siros.sdk.credentials.IssuerKeySet
 import org.siros.sdk.credentials.NymPseudonym
 import org.siros.sdk.credentials.ResultValue
 import org.siros.sdk.credentials.SirosException
@@ -324,13 +322,16 @@ class CircuitZkPresenter(
         override fun toString() = "CircuitZkPresenter.Request(redacted)"
     }
 
-    /** A presentation: the `vp_token` entry, its results, and the circuit used. */
+    /** A presentation: the `vp_token` array element, its results, and the circuit used. */
     class Result(
-        /** base64url, no padding, of the CBOR `CircuitZkPresentation`. */
-        val base64Url: String,
-        val results: Map<String, ResultValue>,
-        val circuitId: String,
-    )
+        /** The presentation in the `circuit_zk` response shape: `{circuit_id, proof_system, proof, x5chain, results}`. */
+        val presentation: CircuitZkResponsePresentation,
+    ) {
+        /** The JSON object to put in the `vp_token` array of the query. */
+        val json: kotlinx.serialization.json.JsonObject get() = presentation.toJson()
+        val results: Map<String, ResultValue> get() = presentation.results
+        val circuitId: String get() = presentation.circuitId
+    }
 
     /**
      * Validates, proves and assembles.
@@ -425,8 +426,17 @@ class CircuitZkPresenter(
             if (!handler.holds(function, document)) refuse(CircuitZkStep.PREDICATE)
         }
 
-        // 6. A circuit that fits the plan.
-        val circuit = circuits.circuits().firstOrNull { it.supports(plan, document.docType, serving) && prover.admits(it, plan) } ?: refuse(CircuitZkStep.CIRCUIT)
+        // 6. A circuit that fits the plan, and that the request OFFERED: a response states a `circuit_id` and a `proof_system`
+        // from the request's lists, so a request that offered none (or none of ours) cannot be answered.
+        val filter = plan.circuitFilter ?: refuse(CircuitZkStep.CIRCUIT)
+        val circuit = circuits.circuits().firstOrNull {
+            it.supports(plan, document.docType, serving) && prover.admits(it, plan) && filter.offeredCircuitId(it) != null && filter.offersProofSystem(it)
+        } ?: refuse(CircuitZkStep.CIRCUIT)
+
+        // 6b. The issuer chain the response must carry (leaf first, within the wire limits): checked before any proof is made.
+        val chain = issuerChain(document)?.takeIf {
+            it.size <= CircuitZkResponsePresentation.MAX_CERTS && it.all { c -> c.size in 1..CircuitZkResponsePresentation.MAX_CERT_BYTES }
+        } ?: refuse(CircuitZkStep.BUILD)
 
         // 7. Prove.
         val output = try {
@@ -450,17 +460,22 @@ class CircuitZkPresenter(
             witnesses.values.forEach { it.privateSeed?.fill(0) }
         }
 
-        // 8. Assemble and encode.
-        val keySet = issuerKeySet(document) ?: refuse(CircuitZkStep.BUILD)
-        val presentation = CircuitZkPresentation(
-            circuitId = circuit.circuitId,
-            proof = output.proof,
-            issuerKeySet = keySet,
-            proofTime = output.proofTime,
-            results = output.results,
-        )
-        presentation.requireResultHandles(plan.functions.map { it.handle }.toSet())
-        return Result(CircuitZkPresentationCodec.encodeBase64Url(presentation), presentation.results, circuit.circuitId)
+        // 8. Assemble. Every planned function has a result (none skipped), and the issuer chain travels with the proof:
+        // the verifier validates it through its trust evaluation and takes the issuer key from its leaf.
+        val handles = plan.functions.map { it.handle }.toSet()
+        if (output.results.keys != handles) refuse(CircuitZkStep.BUILD)
+        val presentation = try {
+            CircuitZkResponsePresentation(
+                circuitId = filter.offeredCircuitId(circuit) ?: refuse(CircuitZkStep.BUILD),
+                proofSystem = circuit.system,
+                proof = output.proof,
+                x5chain = chain,
+                results = output.results,
+            )
+        } catch (e: IllegalArgumentException) {
+            refuse(CircuitZkStep.BUILD)
+        }
+        return Result(presentation)
     }
 
     private fun refuse(step: CircuitZkStep): Nothing {
@@ -469,7 +484,7 @@ class CircuitZkPresenter(
     }
 
     /** The Document Signer certificate chain: `issuerAuth`'s unprotected header `x5chain` (label 33). */
-    private fun issuerKeySet(document: DocumentMdoc): IssuerKeySet? {
+    private fun issuerChain(document: DocumentMdoc): List<ByteArray>? {
         val auth = document.issuerSigned.issuerAuth
         if (auth.type != CBORType.Array || auth.size() < 2) return null
         val unprotected = auth[1]
@@ -483,7 +498,7 @@ class CircuitZkPresenter(
             }
             else -> return null
         }
-        return certs.takeIf { it.isNotEmpty() }?.let { IssuerKeySet.DerCertificates(it) }
+        return certs.takeIf { it.isNotEmpty() }
     }
 }
 
