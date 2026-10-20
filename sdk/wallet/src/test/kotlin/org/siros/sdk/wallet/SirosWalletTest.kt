@@ -4082,11 +4082,15 @@ class SirosWalletTest {
     }
 
     /** A bare IssuerSigned mdoc, base64url, signed with the fixture key (optionally tampered / without x5chain). */
-    private fun signedMdoc(tamper: Boolean = false, withChain: Boolean = true): String {
+    private fun signedMdoc(tamper: Boolean = false, withChain: Boolean = true, untaggedMso: Boolean = false): String {
         val docType = "org.iso.18013.5.1.mDL"
         val mso = com.upokecenter.cbor.CBORObject.NewMap()
         mso[com.upokecenter.cbor.CBORObject.FromObject("docType")] = com.upokecenter.cbor.CBORObject.FromObject(docType)
-        val payload = com.upokecenter.cbor.CBORObject.FromObjectAndTag(mso.EncodeToBytes(), 24).EncodeToBytes()
+        val payload = if (untaggedMso) {
+            com.upokecenter.cbor.CBORObject.FromObject(mso.EncodeToBytes()).EncodeToBytes()
+        } else {
+            com.upokecenter.cbor.CBORObject.FromObjectAndTag(mso.EncodeToBytes(), 24).EncodeToBytes()
+        }
         val protectedBytes = com.upokecenter.cbor.CBORObject.NewMap()
             .also { it[com.upokecenter.cbor.CBORObject.FromObject(1)] = com.upokecenter.cbor.CBORObject.FromObject(-7) }
             .EncodeToBytes()
@@ -4155,6 +4159,19 @@ class SirosWalletTest {
         assertEquals(1, runBlocking { h.store.getAll() }.size)
         verify(exactly = 1) { h.engine.sendCredentialNotification("f1", "n", CredentialNotificationEvent.ACCEPTED, any()) }
         verify(exactly = 0) { h.listener.onIssuerNotTrusted(any(), any(), any()) }
+    }
+
+    @Test
+    fun flowComplete_signedMdocWithUntaggedByteStringMso_isStillAccepted() = runTest(dispatcher) {
+        val complete = MutableSharedFlow<FlowCompleteMessage>()
+        val h = signedMdocHarness(complete) { buildJsonObject { put("decision", JsonPrimitive(true)) } }
+
+        complete.emit(FlowCompleteMessage(flowId = "f1", credentials = listOf(
+            CredentialResult(format = "mso_mdoc", credential = signedMdoc(untaggedMso = true)),
+        )))
+        advanceUntilIdle()
+
+        assertEquals(1, runBlocking { h.store.getAll() }.size)
     }
 
     @Test

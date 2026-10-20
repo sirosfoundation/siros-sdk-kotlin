@@ -63,7 +63,14 @@ internal class TrustDecisionCache(
         while (true) {
             var leader: CompletableDeferred<JsonObject>? = null
             var follow: CompletableDeferred<JsonObject>? = null
+            var stale = false
             val fresh: JsonObject? = synchronized(lock) {
+                if (generation != startedGeneration) {
+                    // Invalidated since this call began (its connection is gone):
+                    // never share or consult the new generation's state.
+                    stale = true
+                    return@synchronized null
+                }
                 val entry = entries[key]
                 if (entry != null) {
                     if (nowMillis() - entry.storedAt < ttlMillis) return@synchronized entry.response
@@ -77,6 +84,7 @@ internal class TrustDecisionCache(
                 }
                 null
             }
+            if (stale) return evaluate()
             if (fresh != null) return fresh
             val shared = follow
             if (shared != null) {

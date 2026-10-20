@@ -196,8 +196,14 @@ class TrustDecisionCacheTest {
         c.clear()
         leader.cancel()
         advanceUntilIdle()
+        // A caller on the NEW connection asks while the old follower retries.
+        var newCalls = 0
+        val fresh = async { c.getOrEvaluate("k") { newCalls++; decision(false) } }
+        advanceUntilIdle()
         followerGate.complete(Unit)
         follower.await()
-        assertEquals("an invocation that began before clear() must not register", 0, c.size)
+        assertEquals(decision(false), fresh.await())
+        assertEquals("the new connection must ask its own backend", 1, newCalls)
+        assertEquals(1, c.size) // only the new connection's decision
     }
 }

@@ -8132,10 +8132,9 @@ class SirosWallet private constructor(
      * @param issuerAuth the credential's `issuerAuth` COSE_Sign1 4-element array.
      * @param docType the credential's mdoc doctype, for VICAL docType enforcement.
      */
-    private fun signedMsoDocType(msoPayload: ByteArray): String? = runCatching {
-        var obj = CBORObject.DecodeFromBytes(msoPayload)
-        if (obj.HasMostOuterTag(24)) obj = CBORObject.DecodeFromBytes(obj.GetByteString())
-        obj["docType"]?.AsString()
+    /** The docType inside the signed MSO, via the same decoder that parses stored mdocs. */
+    private fun signedMsoDocType(issuerAuth: CBORObject): String? = runCatching {
+        org.siros.sdk.credentials.mdoc.MdocCbor.decodeMso(issuerAuth)["docType"]?.AsString()
     }.getOrNull()
 
     private suspend fun verifyAndEvaluateIssuerTrust(issuerAuth: CBORObject, docType: String): TrustResult? {
@@ -8154,7 +8153,7 @@ class SirosWallet private constructor(
             }
             // The envelope's docType is unsigned: trust is evaluated for the
             // SIGNED type, and a wrapper that disagrees is refused.
-            val signedDocType = signedMsoDocType(msoBytes)
+            val signedDocType = signedMsoDocType(issuerAuth)
             if (signedDocType == null || signedDocType != docType) {
                 Timber.w("mdoc envelope docType does not match the signed MSO docType")
                 return null
