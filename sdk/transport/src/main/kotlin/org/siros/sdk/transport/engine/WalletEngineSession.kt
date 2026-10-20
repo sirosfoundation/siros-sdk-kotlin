@@ -158,6 +158,22 @@ class WalletEngineSession(
         }
     }
 
+    /** Issuer trust reports awaiting their flow's completion; see [FlowCompleteMessage.issuerTrust]. */
+    private val issuerTrustByFlow = java.util.concurrent.ConcurrentHashMap<String, IssuerTrustReport>()
+
+    private fun recordIssuerTrustReport(msg: FlowProgressMessage) {
+        if (msg.step != "trust_evaluated") return
+        val payload = msg.payload as? kotlinx.serialization.json.JsonObject ?: return
+        fun str(name: String) = (payload[name] as? kotlinx.serialization.json.JsonPrimitive)?.content
+        if (str("issuer_trust_evaluated") != "true") return
+        issuerTrustByFlow[msg.flowId] = IssuerTrustReport(
+            issuer = str("issuer"),
+            trusted = str("trusted") == "true",
+            framework = str("framework"),
+            reason = str("reason"),
+        )
+    }
+
     private val incomingMessages = Channel<EngineMessage>(Channel.BUFFERED)
     private val flowProgressChannel = Channel<FlowProgressMessage>(Channel.BUFFERED)
     private val flowCompleteChannel = Channel<FlowCompleteMessage>(Channel.BUFFERED)
@@ -368,16 +384,20 @@ class WalletEngineSession(
                 MessageTypes.FLOW_PROGRESS -> {
                     val msg = json.decodeFromString(FlowProgressMessage.serializer(), text)
                         .also { it.connectionGeneration = generation }
+                    recordIssuerTrustReport(msg)
                     flowProgressChannel.trySend(msg)
                 }
                 MessageTypes.FLOW_COMPLETE -> {
-                    val msg = json.decodeFromString(FlowCompleteMessage.serializer(), text)
+                    val decoded = json.decodeFromString(FlowCompleteMessage.serializer(), text)
+                    // copy() builds a new instance, so stamp the generation on the copy.
+                    val msg = decoded.copy(issuerTrust = issuerTrustByFlow.remove(decoded.flowId))
                         .also { it.connectionGeneration = generation }
                     flowCompleteChannel.trySend(msg)
                 }
                 MessageTypes.FLOW_ERROR -> {
                     val msg = json.decodeFromString(FlowErrorMessage.serializer(), text)
                         .also { it.connectionGeneration = generation }
+                    msg.flowId?.let { issuerTrustByFlow.remove(it) }
                     flowErrorChannel.trySend(msg)
                 }
                 MessageTypes.SIGN_REQUEST -> {

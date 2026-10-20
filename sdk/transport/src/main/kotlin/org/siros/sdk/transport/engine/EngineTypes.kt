@@ -347,6 +347,13 @@ data class FlowCompleteMessage(
      */
     @SerialName("dpop_key_id") val dpopKeyId: String? = null,
     val timestamp: String? = null,
+    /**
+     * The engine's server-side issuer trust report for this flow, if it sent
+     * one (a `trust_evaluated` progress message with `issuer_trust_evaluated`).
+     * Not on the wire: [WalletEngineSession] attaches it, in message order, so
+     * the consumer never races the separate progress and completion channels.
+     */
+    @kotlinx.serialization.Transient val issuerTrust: IssuerTrustReport? = null,
 ) {
     /**
      * Which connection delivered this frame (see [WalletEngineSession.connectionGeneration]);
@@ -357,6 +364,14 @@ data class FlowCompleteMessage(
     @kotlinx.serialization.Transient
     var connectionGeneration: Int = 0
 }
+
+/** Server-side issuer trust outcome reported by the engine for one flow. */
+data class IssuerTrustReport(
+    val issuer: String?,
+    val trusted: Boolean,
+    val framework: String?,
+    val reason: String?,
+)
 
 @Serializable
 data class CredentialResult(
