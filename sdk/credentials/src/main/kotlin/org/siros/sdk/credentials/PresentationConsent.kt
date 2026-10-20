@@ -119,6 +119,8 @@ object ConsentRequests {
         val verifierId: String?,
         /** The credential's own claim display metadata: labels for the claims a predicate is about. */
         val claims: List<ClaimMeta> = emptyList(),
+        /** The credential's doctype namespace (the one a predicate's claim path is relative to), when known. */
+        val namespace: String? = null,
     )
 
     /** What the trust decision said about the verifier; each field is null when the PDP did not supply it. */
@@ -146,7 +148,7 @@ object ConsentRequests {
         predicates: PredicateFunctions = PredicateFunctions.DEFAULT,
     ): PresentationConsentRequest? {
         if (queries.isEmpty()) return null
-        val entries = queries.map { q -> ConsentEntry(q.credential, ConsentItems.build(q.plan, q.verifierId, today, q.claims, predicates) ?: return null) }
+        val entries = queries.map { q -> ConsentEntry(q.credential, ConsentItems.build(q.plan, q.verifierId, today, q.claims, predicates, q.namespace) ?: return null) }
         return PresentationConsentRequest(
             verifier = ConsentVerifier(
                 label = label(trust.entityName, verifiedClientIdDisplayName, attestedOrigin),
@@ -188,6 +190,7 @@ object ConsentItems {
         today: LocalDate,
         claims: List<ClaimMeta> = emptyList(),
         predicates: PredicateFunctions = PredicateFunctions.DEFAULT,
+        namespace: String? = null,
     ): List<ConsentItem>? {
         val items = ArrayList<ConsentItem>()
         for (f in plan.functions) {
@@ -206,7 +209,7 @@ object ConsentItems {
                     if (legacy.pseudonym) items += ConsentItem.LegacyPseudonym(legacy.verifierContext)
                 }
                 // Any other function must be a declared predicate function: one we cannot describe is refused.
-                else -> items += predicates.item(f, claims, today) ?: return null
+                else -> items += predicates.item(f, claims, today, namespace) ?: return null
             }
         }
         return items.takeIf { it.isNotEmpty() }

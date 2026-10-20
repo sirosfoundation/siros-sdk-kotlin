@@ -303,7 +303,7 @@ class NymAuthCircuitZkAdapter(
     private fun ageBounds(age: CircuitZkFunction?): Pair<String, String> {
         if (age == null) return NO_LOWER_BOUND to NO_UPPER_BOUND
         // A parameter this circuit does not prove must not be silently dropped.
-        if (age.params.keys.any { it != "ge" && it != "le" }) throw refuse()
+        if (org.siros.sdk.credentials.PredicateFunctions.AGE_CHECK.parse(age) == null) throw refuse()
         fun bound(key: String): String? {
             val p = age.params[key] ?: return null
             val text = (p as? JsonPrimitive)?.takeIf { it.isString }?.content ?: throw refuse()

@@ -4400,6 +4400,7 @@ class SirosWallet private constructor(
                     org.siros.sdk.credentials.CredentialRef(p.cred.metadata?.name, p.cred.metadata?.issuer?.name),
                     p.verifierId,
                     p.cred.metadata?.claims.orEmpty(),
+                    ((p.plan.raw["meta"] as? JsonObject)?.get("doctype_value") as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull,
                 )
             },
             trust = org.siros.sdk.credentials.ConsentRequests.Trust(

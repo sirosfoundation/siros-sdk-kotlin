@@ -66,7 +66,7 @@ class ConsentVectorsTest {
             val needsId = plan.functions.any {
                 it.id == CircuitZkRuleSet.PSEUDONYM || CircuitZkLegacyDisclosure.parse(it)?.pseudonym == true
             }
-            ConsentRequests.Query(plan, CredentialRef(str(cred["name"]), str(cred["issuer"])), if (needsId) verifierId else null, claims)
+            ConsentRequests.Query(plan, CredentialRef(str(cred["name"]), str(cred["issuer"])), if (needsId) verifierId else null, claims, str(o["namespace"]))
         }
         return ConsentRequests.build(
             queries = queries,

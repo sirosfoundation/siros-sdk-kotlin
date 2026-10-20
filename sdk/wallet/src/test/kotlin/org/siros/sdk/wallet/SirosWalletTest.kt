@@ -6459,7 +6459,7 @@ class SirosWalletTest {
         credentials = listOf(StoredCredential(
             id = 1L, format = "mso_mdoc",
             raw = CzkFixtures.mdoc(extra = listOf("score" to scoreValue)),
-            metadata = CredentialMetadata(name = "Nym", claims = listOf(org.siros.sdk.credentials.ClaimMeta(listOf("score"), "Credit score"))), batchId = 1L, instanceId = 0,
+            metadata = CredentialMetadata(name = "Nym", claims = listOf(org.siros.sdk.credentials.ClaimMeta(listOf(CzkFixtures.DOCTYPE, "score"), "Credit score"))), batchId = 1L, instanceId = 0,
         )),
         predicates = if (declared) org.siros.sdk.credentials.PredicateFunctions(listOf(org.siros.sdk.credentials.PredicateFunctions.AGE_CHECK, numberRange)) else null,
         extraFunctions = setOf("number_range"),
@@ -6492,6 +6492,40 @@ class SirosWalletTest {
         assertEquals("number-range-span-short", (defaultCircuitZkValidator(null, declared).validate(narrow) as org.siros.sdk.credentials.CircuitZkVerdict.AccessDenied).ruleId)
         // Undeclared: the validator does not know it.
         assertEquals("unknown-function", (defaultCircuitZkValidator(null).validate(plan) as org.siros.sdk.credentials.CircuitZkVerdict.AccessDenied).ruleId)
+    }
+
+    @Test
+    fun circuitZkConsent_aDecoyNamespacesSameNamedClaimIsNeverTheLabel() = runTest(dispatcher) {
+        val s = czkSetup(
+            functions = listOf(org.siros.sdk.credentials.CircuitZkFunction("number_range", "p", Json.parseToJsonElement("""{"claim":"score","ge":10,"le":20}""").jsonObject)),
+            credentials = listOf(StoredCredential(
+                id = 1L, format = "mso_mdoc",
+                raw = CzkFixtures.mdoc(extra = listOf("score" to com.upokecenter.cbor.CBORObject.FromObject(15L))),
+                metadata = CredentialMetadata(name = "Nym", claims = listOf(org.siros.sdk.credentials.ClaimMeta(listOf("org.example.other", "score"), "Other score"))),
+                batchId = 1L, instanceId = 0,
+            )),
+            predicates = org.siros.sdk.credentials.PredicateFunctions(listOf(org.siros.sdk.credentials.PredicateFunctions.AGE_CHECK, numberRange)),
+            extraFunctions = setOf("number_range"),
+            consent = { false },
+        )
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.USER_DECLINED)
+        val item = s.consents.single().entries.single().items.single() as org.siros.sdk.credentials.ConsentItem.Predicate
+        assertNull(item.claim.label)
+        assertEquals("score", item.claim.display)
+    }
+
+    @Test
+    fun circuitZkConsent_theRulebookExamplesSourceParamIsAcceptedForAgeCheck_andAnotherSourceIsRefused() = runTest(dispatcher) {
+        fun age(source: String) = czkSetup(
+            functions = listOf(czkAgeFunction("""{"ge":"1999-01-01","le":"2005-01-01","source":$source}""")),
+            consent = { false },
+        )
+        val ok = age("""{"path":["birth_date"]}""")
+        czkRefused(ok, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.USER_DECLINED)
+        assertEquals(1, ok.consents.size)
+        val other = age("""{"path":["family_name"]}""")
+        czkRefused(other, czkRequest())
+        assertTrue(other.consents.isEmpty())
     }
 
     @Test

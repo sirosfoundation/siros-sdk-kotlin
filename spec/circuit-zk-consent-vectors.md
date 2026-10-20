@@ -57,3 +57,8 @@ default dialog text.
 request together reveal the intersection of their age bounds (lower = latest `ge`, upper = earliest `le`),
 which must still span at least 365 days (`upper - lower + 1`), else the request is refused. An unreadable
 bound is not ok.
+
+A query may carry `namespace` (the credential's doctype namespace, when known): the credential's claim metadata paths are
+`[namespace, element]`, so a predicate on `score` is labelled by the entry `[namespace, "score"]`, never by another
+namespace's `score`. An item param `source` (`{"path": [claim]}`, the rulebook example) is accepted when it names the
+function's own claim, otherwise the request is refused.

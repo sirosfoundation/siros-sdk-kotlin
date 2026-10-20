@@ -21,7 +21,7 @@ import org.siros.sdk.credentials.mdoc.MdocCbor
 class PredicateFunctionHandlerTest {
     private val docType = "org.example.nym.1"
 
-    private fun mdoc(extraNamespace: Boolean = false, birth: String = "2000-06-15", score: Long = 15): DocumentMdoc {
+    private fun mdoc(extraNamespace: Boolean = false, birth: String = "2000-06-15", score: CBORObject = CBORObject.FromObject(15L)): DocumentMdoc {
         fun c(o: Any) = CBORObject.FromObject(o)
         fun item(id: Long, name: String, v: CBORObject): CBORObject {
             val m = CBORObject.NewMap()
@@ -30,7 +30,7 @@ class PredicateFunctionHandlerTest {
         }
         val items = CBORObject.NewArray()
         items.Add(item(0, "birth_date", CBORObject.FromObjectAndTag(birth, 1004)))
-        items.Add(item(1, "score", c(score)))
+        items.Add(item(1, "score", score))
         val ns = CBORObject.NewMap(); ns[c(docType)] = items
         if (extraNamespace) ns[c("org.example.other")] = CBORObject.NewArray().also { it.Add(item(2, "birth_date", CBORObject.FromObjectAndTag("1980-01-01", 1004))) }
         val mso = CBORObject.NewMap(); mso[c("docType")] = c(docType)
@@ -66,8 +66,8 @@ class PredicateFunctionHandlerTest {
     @Test
     fun `a declared predicate on another claim holds for the claim's own value`() {
         val h = PredicateFunctionHandler(numberRange)
-        assertTrue(h.holds(fn("number_range", """{"claim":"score","ge":10,"le":20}"""), mdoc(score = 15)))
-        assertFalse(h.holds(fn("number_range", """{"claim":"score","ge":10,"le":20}"""), mdoc(score = 25)))
+        assertTrue(h.holds(fn("number_range", """{"claim":"score","ge":10,"le":20}"""), mdoc(score = CBORObject.FromObject(15L))))
+        assertFalse(h.holds(fn("number_range", """{"claim":"score","ge":10,"le":20}"""), mdoc(score = CBORObject.FromObject(25L))))
         // An absent claim cannot satisfy it.
         assertFalse(h.holds(fn("number_range", """{"claim":"nope","ge":10,"le":20}"""), mdoc()))
     }
@@ -80,5 +80,20 @@ class PredicateFunctionHandlerTest {
         assertFalse(age.admitsCredential(f, mdoc(extraNamespace = true)))
         // A declaration that does not bind the layout admits it.
         assertTrue(PredicateFunctionHandler(numberRange).admitsCredential(fn("number_range", """{"claim":"score","ge":1}"""), mdoc(extraNamespace = true)))
+    }
+
+    @Test
+    fun `a float is compared at its exact value, like the equivalent exact decimal encoding`() {
+        val h = PredicateFunctionHandler(numberRange.let { PredicateFunction(it.id, it.claim, it.valueType, it.comparisons) })
+        // float64 0.1 is exactly 0.1000000000000000055511151231257827...: above the decimal 0.1, below ...0003 + 1e-18.
+        val float = mdoc(score = CBORObject.FromObject(0.1))
+        val decimal = mdoc(score = CBORObject.FromObject(com.upokecenter.numbers.EDecimal.FromString("0.1")))
+        fun f(json: String) = fn("number_range", json)
+        // ge 0.100000000000000003 is satisfied by the float (its exact value is larger), as by no rounding to 0.1.
+        assertTrue(h.holds(f("""{"claim":"score","ge":0.100000000000000003}"""), float))
+        assertFalse(h.holds(f("""{"claim":"score","ge":0.100000000000000003}"""), decimal))
+        // le 0.1 is NOT satisfied by the float (exactly above 0.1), but is by the decimal 0.1.
+        assertFalse(h.holds(f("""{"claim":"score","le":0.1}"""), float))
+        assertTrue(h.holds(f("""{"claim":"score","le":0.1}"""), decimal))
     }
 }

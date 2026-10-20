@@ -16,7 +16,10 @@ Item semantics (the generator is the reference):
     registry's order; any other param, an operand of the wrong type, a duplicated `in` member or no
     comparison at all REFUSES the request. A function that is not in the registry (and is not a pseudonym
     or the legacy disclosure) REFUSES the request: we cannot describe what it discloses.
-  - the item's claim label is the credential's OWN display label for that path (credential.claims), else null
+  - the item's claim label is the credential's OWN display label for that path (credential.claims), else null. The
+    credential's metadata paths are [namespace, element]: a predicate's path (relative to the doctype namespace) also
+    matches [query.namespace] + path when the query names a namespace; another namespace's claim of the same name never does.
+  - an item param `source` ({"path": [claim]}, the rulebook example) is accepted when it names the function's own claim.
     (a renderer falls back to the path). Never invented.
   - age_specialisation (age_check): both bounds -> between (min_years = years(le, today), max_years =
     years(ge, today)); only `le` -> at_least(years(le, today)); only `ge` -> at_most(years(ge, today)).
@@ -117,9 +120,14 @@ def parse_fn(reg, fn):
             return None
     else:
         path = reg["claim"]["path"]
-    allowed = set(reg["comparisons"]) | ({"claim"} if "param" in reg["claim"] else set())
+    allowed = set(reg["comparisons"]) | {"source"} | ({"claim"} if "param" in reg["claim"] else set())
     if any(k not in allowed for k in p):
         return None
+    # The rulebook example's item `source` ({"path": [claim]}) is accepted only when it names the function's own claim.
+    if "source" in p:
+        src = p["source"]
+        if not isinstance(src, dict) or set(src) != {"path"} or src["path"] != path:
+            return None
     conds = []
     for param, op in reg["comparisons"].items():
         if param not in p:
@@ -153,7 +161,7 @@ def age_form(conds, today):
     return None
 
 
-def predicate_item(fn, claims, today):
+def predicate_item(fn, claims, today, namespace=None):
     reg = REG.get(fn["id"])
     if reg is None:
         return None
@@ -161,13 +169,13 @@ def predicate_item(fn, claims, today):
     if parsed is None:
         return None
     path, conds = parsed
-    label = next((c.get("label") for c in claims if c["path"] == path), None)
+    label = next((c.get("label") for c in claims if c["path"] == path or (namespace is not None and c["path"] == [namespace] + path)), None)
     label = label if label and label.strip() else None
     return {"kind": "predicate", "function": fn["id"], "claim": {"path": path, "label": label}, "value_type": reg["value_type"],
             "conditions": conds, "age_form": age_form(conds, today) if reg.get("age_specialisation") else None}
 
 
-def items_of(plan, verifier_id, today, claims=()):
+def items_of(plan, verifier_id, today, claims=(), namespace=None):
     today = date.fromisoformat(today)
     out = []
     for f in plan:
@@ -190,7 +198,7 @@ def items_of(plan, verifier_id, today, claims=()):
             if p.get("pseudonym"):
                 out.append({"kind": "legacy_pseudonym", "verifier_context": p.get("verifier_context")})
         else:
-            it = predicate_item(f, claims, today)
+            it = predicate_item(f, claims, today, namespace)
             if it is None:
                 return None
             out.append(it)
@@ -219,14 +227,14 @@ TRUST = {"entity_name": "Example RP", "framework": "etsi-tl", "identifier": "rp.
 
 
 def case(name, queries, verifier_id="rp.example", verifier_id_type="x509_san_dns", trust=TRUST, client_name="rp.example",
-         origin="https://rp.example", today=TODAY, claims=()):
+         origin="https://rp.example", today=TODAY, claims=(), namespace=None):
     """queries: list of (plan functions, credential). verifier_id applies to every query that has a pseudonym.
     claims: the credentials' own claim display metadata (the same for every query)."""
-    qs = [{"plan": plan, "credential": cred, "claims": list(claims)} for plan, cred in queries]
+    qs = [dict({"plan": plan, "credential": cred, "claims": list(claims)}, **({"namespace": namespace} if namespace else {})) for plan, cred in queries]
     entries = []
     refused = False
     for plan, cred in queries:
-        items = items_of(plan, verifier_id, today, claims)
+        items = items_of(plan, verifier_id, today, claims, namespace)
         if items is None:
             refused = True
             break
@@ -293,6 +301,14 @@ CASES = [
     # --- predicates over any claim (the function set is open-ended) ---
     case("numeric range on another claim, with the credential's own label", [([pred("number_range", claim="score", ge=10, le=20)], CRED)],
          claims=[{"path": ["score"], "label": "Credit score"}]),
+    case("a label from the credential's [namespace, element] metadata when the namespace is the doctype's",
+         [([pred("number_range", claim="score", ge=10, le=20)], CRED)], namespace="org.example.nym.1",
+         claims=[{"path": ["org.example.nym.1", "score"], "label": "Credit score"}]),
+    case("another namespace's claim of the same name is never the label",
+         [([pred("number_range", claim="score", ge=10, le=20)], CRED)], namespace="org.example.nym.1",
+         claims=[{"path": ["org.example.other", "score"], "label": "Other score"}]),
+    case("a source naming the claim is accepted (rulebook example item)", [([fn("age_check", "a", ge="2008-10-10", le="2013-10-09", source={"path": ["birth_date"]})], CRED)]),
+    case("a source naming another claim is refused", [([fn("age_check", "a", ge="2008-10-10", le="2013-10-09", source={"path": ["other"]})], CRED)]),
     case("numeric range: no display label, the path is the fallback", [([pred("number_range", claim="score", ge=10.5, le=99)], CRED)]),
     case("numeric range: a blank label is no label", [([pred("number_range", claim="score", ge=10, le=20)], CRED)], claims=[{"path": ["score"], "label": " "}]),
     case("numeric bounds: gt and lt", [([pred("number_bounds", claim="score", gt=0, lt=100)], CRED)]),

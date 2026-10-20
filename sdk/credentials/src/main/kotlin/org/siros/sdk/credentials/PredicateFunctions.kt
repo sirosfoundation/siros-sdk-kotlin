@@ -116,8 +116,14 @@ class PredicateFunction(
             is ClaimSource.Fixed -> claim.path
             ClaimSource.FromParam -> claimParam(fn.params["claim"] ?: return null) ?: return null
         }
-        val allowed = comparisons.keys + (if (claim == ClaimSource.FromParam) setOf("claim") else emptySet())
+        val allowed = comparisons.keys + setOf("source") + (if (claim == ClaimSource.FromParam) setOf("claim") else emptySet())
         if (fn.params.keys.any { it !in allowed }) return null
+        // The rulebook example's item `source` ({"path": [claim]}) is accepted only when it names the claim this function
+        // is about; any other source is a parameter the wallet does not support, so the request is refused.
+        fn.params["source"]?.let { src ->
+            val o = src as? kotlinx.serialization.json.JsonObject ?: return null
+            if (o.keys != setOf("path") || claimParam(o["path"]!!) != path) return null
+        }
         val conditions = comparisons.mapNotNull { (param, op) ->
             val raw = fn.params[param] ?: return@mapNotNull null
             val values = if (op == ComparisonOp.IN) {
@@ -191,11 +197,14 @@ class PredicateFunctions(functions: List<PredicateFunction>) {
     /** The ids of the declared functions. */
     val ids: Set<String> get() = byId.keys
 
-    /** The consent item for [fn], or null (undeclared function, or params the declaration does not allow). */
-    fun item(fn: CircuitZkFunction, claims: List<ClaimMeta>, today: LocalDate): ConsentItem.Predicate? {
+    /** The consent item for [fn], or null (undeclared function, or params the declaration does not allow). [namespace] is the credential's doctype namespace. */
+    fun item(fn: CircuitZkFunction, claims: List<ClaimMeta>, today: LocalDate, namespace: String? = null): ConsentItem.Predicate? {
         val f = byId[fn.id] ?: return null
         val parsed = f.parse(fn) ?: return null
-        val label = claims.firstOrNull { it.path == parsed.claimPath }?.label?.takeIf { it.isNotBlank() }
+        // The credential's claim metadata is `[namespace, elementId]`; a predicate's path is relative to the doctype
+        // namespace the circuit binds. Only that namespace's claim is labelled, never another one's of the same name.
+        val label = claims.firstOrNull { it.path == parsed.claimPath || (namespace != null && it.path == listOf(namespace) + parsed.claimPath) }
+            ?.label?.takeIf { it.isNotBlank() }
         return ConsentItem.Predicate(fn.id, ClaimRef(parsed.claimPath, label), f.valueType, parsed.conditions, f.ageForm(parsed.conditions, today))
     }
 
@@ -342,7 +351,7 @@ class PredicateFunctions(functions: List<PredicateFunction>) {
                         ?.let { ClaimValue(type, BigDecimal(it.ToEDecimal().toString()).toPlainString()) } ?: mismatch
                 } else when (v.type) {
                     CBORType.Integer -> ClaimValue(type, v.AsNumber().ToEInteger().toString())
-                    CBORType.FloatingPoint -> v.AsDoubleValue().takeIf { it.isFinite() }?.let { ClaimValue(type, BigDecimal.valueOf(it).toPlainString()) } ?: mismatch
+                    CBORType.FloatingPoint -> v.AsDoubleValue().takeIf { it.isFinite() }?.let { ClaimValue(type, BigDecimal(it).toPlainString()) } ?: mismatch
                     else -> mismatch
                 }
             }
