@@ -44,4 +44,6 @@
     <string name="siros_consent_predicate_date_gt">%1$s on %2$s jälkeen.</string>
     <string name="siros_consent_predicate_date_ge">%1$s on %2$s tai sen jälkeen.</string>
     <string name="siros_consent_predicate_date_in">%1$s on jokin seuraavista päivämääristä: %2$s.</string>
+    <!-- Shown when an issuance is refused because the issuer's trust could not be established. -->
+    <string name="siros_issuer_not_trusted">Myöntäjää ei voitu todentaa luotetuksi, joten tunnistetietoa ei lisätty.</string>
 </resources>

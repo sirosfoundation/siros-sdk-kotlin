@@ -48,4 +48,6 @@
     <string name="siros_consent_predicate_date_gt">%1$s is after %2$s.</string>
     <string name="siros_consent_predicate_date_ge">%1$s is on or after %2$s.</string>
     <string name="siros_consent_predicate_date_in">%1$s is one of the dates: %2$s.</string>
+    <!-- Shown when an issuance is refused because the issuer's trust could not be established. -->
+    <string name="siros_issuer_not_trusted">This issuer could not be verified as trusted, so the credential was not added.</string>
 </resources>

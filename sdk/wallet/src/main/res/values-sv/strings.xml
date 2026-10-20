@@ -44,4 +44,6 @@
     <string name="siros_consent_predicate_date_gt">%1$s är efter %2$s.</string>
     <string name="siros_consent_predicate_date_ge">%1$s är den %2$s eller senare.</string>
     <string name="siros_consent_predicate_date_in">%1$s är något av datumen: %2$s.</string>
+    <!-- Shown when an issuance is refused because the issuer's trust could not be established. -->
+    <string name="siros_issuer_not_trusted">Utfärdaren kunde inte verifieras som betrodd, så legitimationen lades inte till.</string>
 </resources>

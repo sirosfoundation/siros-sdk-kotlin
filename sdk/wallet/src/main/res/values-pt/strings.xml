@@ -44,4 +44,6 @@
     <string name="siros_consent_predicate_date_gt">%1$s é posterior a %2$s.</string>
     <string name="siros_consent_predicate_date_ge">%1$s é %2$s ou posterior.</string>
     <string name="siros_consent_predicate_date_in">%1$s é uma das datas: %2$s.</string>
+    <!-- Shown when an issuance is refused because the issuer's trust could not be established. -->
+    <string name="siros_issuer_not_trusted">Não foi possível verificar este emissor como fidedigno, por isso a credencial não foi adicionada.</string>
 </resources>

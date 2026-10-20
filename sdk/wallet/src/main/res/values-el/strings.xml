@@ -44,4 +44,6 @@
     <string name="siros_consent_predicate_date_gt">Το «%1$s» είναι μετά τις %2$s.</string>
     <string name="siros_consent_predicate_date_ge">Το «%1$s» είναι στις %2$s ή αργότερα.</string>
     <string name="siros_consent_predicate_date_in">Το «%1$s» είναι μία από τις ημερομηνίες: %2$s.</string>
+    <!-- Shown when an issuance is refused because the issuer's trust could not be established. -->
+    <string name="siros_issuer_not_trusted">Ο εκδότης δεν ήταν δυνατό να επαληθευτεί ως αξιόπιστος, επομένως το διαπιστευτήριο δεν προστέθηκε.</string>
 </resources>
