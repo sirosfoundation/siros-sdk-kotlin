@@ -6325,6 +6325,10 @@ class SirosWalletTest {
         defaultProver: Boolean = false,
         /** The request offers the test circuit (`circuit_id_values` / `circuit_proof_system_values`); false: it states no list. */
         offersCircuit: Boolean = true,
+        /** Replaces the fake prover (which knows only the rulebook functions). */
+        innerProver: org.siros.sdk.keystore.CircuitZkProver? = null,
+        /** Further function ids the test circuit supports. */
+        extraCircuitFunctions: Set<String> = emptySet(),
     ): CzkSetup {
         val apiClient = mockk<BackendApiClient>()
         val trustRequests = mutableListOf<JsonObject>()
@@ -6342,7 +6346,7 @@ class SirosWalletTest {
         )).toMutableList())
         val registry = VerifierIdRegistry(types, sources)
         val circuits = org.siros.sdk.credentials.CircuitZkCircuitSource {
-            listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf(CzkFixtures.DOCTYPE) + extraDocTypes, functions = setOf("pseudonym-v1-sha256", "age_check"), capabilities = capabilities))
+            listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf(CzkFixtures.DOCTYPE) + extraDocTypes, functions = setOf("pseudonym-v1-sha256", "age_check") + extraCircuitFunctions, capabilities = capabilities))
         }
         val support = org.siros.sdk.credentials.CircuitZkSupport(
             // The plan's raw query is the query itself (its doctype_value is what the presenter checks the credential against).
@@ -6361,7 +6365,7 @@ class SirosWalletTest {
             serving = serving,
         )
         val history = mutableListOf<PresentationRecord>()
-        val prover = CountingCzkProver(org.siros.sdk.keystore.FakeCircuitZkProver.optIn())
+        val prover = CountingCzkProver(innerProver ?: org.siros.sdk.keystore.FakeCircuitZkProver.optIn())
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
@@ -6461,6 +6465,31 @@ class SirosWalletTest {
         } finally {
             timber.log.Timber.uproot(czkTree)
         }
+    }
+
+    @Test
+    fun circuitZkDcApi_aResponseThatFailsTheWalletsOwnCheck_isNeverSent() = runTest(dispatcher) {
+        // The legacy claim-disclosure function has no result shape in the circuit_zk response spec, so a verifier must
+        // refuse its response (result_function_unknown). The presenter builds it happily (this prover "proves" it): the
+        // wallet's own CircuitZkResponseValidator check is what stops it leaving the device.
+        val legacy = org.siros.sdk.credentials.CircuitZkFunction(
+            org.siros.sdk.credentials.CircuitZkLegacyDisclosure.FUNCTION_ID, "d",
+            Json.parseToJsonElement("""{"claims":["birth_date"],"systems":[{"id":"c","system":"sys"}]}""").jsonObject,
+        )
+        val everythingTrue = object : org.siros.sdk.keystore.CircuitZkProver {
+            override suspend fun prove(input: org.siros.sdk.keystore.CircuitZkProveInput) = org.siros.sdk.keystore.CircuitZkProveOutput(
+                proof = byteArrayOf(1, 2, 3),
+                results = input.plan.functions.associate { it.handle to org.siros.sdk.credentials.ResultValue.Predicate },
+            )
+        }
+        val s = czkSetup(
+            functions = listOf(legacy),
+            innerProver = everythingTrue,
+            extraCircuitFunctions = setOf(org.siros.sdk.credentials.CircuitZkLegacyDisclosure.FUNCTION_ID),
+        )
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.PROOF_FAILED)
+        // The proof was made (the request got as far as the prover) and the response was still not sent.
+        assertEquals(1, s.prover.calls)
     }
 
     @Test

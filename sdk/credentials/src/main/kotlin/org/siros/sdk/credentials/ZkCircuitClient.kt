@@ -243,7 +243,7 @@ class ZkCircuitClient(
                     // Seen retired: it stops being usable now, not at the next refresh (the caller sees the
                     // descriptor and refuses it; nothing of it stays cached to serve an offline wallet).
                     expunge(descriptor)
-                    descriptorFile(id)?.delete()
+                    removeCached(descriptorFile(id))
                 }
                 return@withContext descriptor
             } catch (e: Exception) {
@@ -360,7 +360,7 @@ class ZkCircuitClient(
     fun cacheDescriptor(descriptor: ZkCircuitDescriptor) {
         writeCached(descriptorFile(descriptor.id), json.encodeToString(ZkCircuitDescriptor.serializer(), descriptor).toByteArray(Charsets.UTF_8))
         // A copy cached under an alias is stale now; the next lookup by alias fetches it afresh.
-        descriptor.aliases.forEach { descriptorFile(it)?.delete() }
+        descriptor.aliases.forEach { removeCached(descriptorFile(it)) }
         seen[descriptor.id] = descriptor
     }
 
@@ -412,6 +412,16 @@ class ZkCircuitClient(
         // Ids are catalog-controlled but still go through a filename-safe
         // encoding so a hostile or odd id cannot escape the directory.
         cacheDir?.let { File(File(it, "descriptors"), java.net.URLEncoder.encode(id, "UTF-8") + ".json") }
+
+    /**
+     * Removes a cached file. A file that is already absent is fine; one that exists and cannot be removed is logged (the file
+     * name only, never contents): the cache is best effort, so this never fails the caller, but a stale copy that stays
+     * must be visible.
+     */
+    private fun removeCached(file: File?) {
+        if (file == null || !file.exists()) return
+        if (!file.delete()) Timber.w("zk-circuit cache: could not remove ${file.name}")
+    }
 
     private fun readCached(file: File?): ByteArray? =
         try {
