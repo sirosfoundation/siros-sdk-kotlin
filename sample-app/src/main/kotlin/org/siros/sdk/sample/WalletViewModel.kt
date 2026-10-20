@@ -1178,6 +1178,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         viewModelScope.launch {
             try {
                 wallet.startIssuance(credentialOfferUri)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // The user cancelled the start (SirosWallet.cancelCurrentFlow): not a failure to report.
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "startIssuance failed", e)
                 _errorMessage.value = localizedErrorMessage(e)
@@ -1398,6 +1401,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         viewModelScope.launch {
             try {
                 wallet.startIssuanceByOffer(offer, replacesBatchId)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // The user cancelled the start (SirosWallet.cancelCurrentFlow): not a failure to report.
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start issuance for ${offer.credentialConfigurationId}", e)
                 _errorMessage.value = e.message ?: "Failed to start issuance"
@@ -2467,6 +2473,8 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                         wallet.startPresentation(uri)
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "QR/deep-link flow failed", e)
                 _errorMessage.value = e.message ?: "QR flow failed"

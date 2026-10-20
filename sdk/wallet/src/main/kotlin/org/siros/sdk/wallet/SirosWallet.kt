@@ -3350,14 +3350,16 @@ class SirosWallet private constructor(
         zkInput: ZkIssuanceInput? = null,
     ) {
         val engine = engineSession ?: throw WalletException(NOT_CONNECTED)
-        ensureEngineConnected(engine)
         if (issuanceInFlight) {
             throw WalletException("Another issuance is already in progress")
         }
         issuanceInFlight = true
         pendingRenewalSourceBatchId = replacesBatchId
         activeZkIssuanceInput = zkInput
+        val epoch = beginIssuanceStart()
         try {
+            connectEngineForIssuance(engine, epoch)
+            advanceIssuanceStart(epoch, WalletState.FlowActive.STEP_CHECKING_ENTITLEMENT)
             // ARF section 6.6.2.3: before requesting issuance, check that the
             // provider registered for this credential type. Done here rather
             // than on the display paths, which deliberately swallow failures so
@@ -3370,6 +3372,7 @@ class SirosWallet private constructor(
                     offer.credentialConfigurationId,
                 ),
             )
+            advanceIssuanceStart(epoch, WalletState.FlowActive.STEP_PREPARING_ISSUANCE)
 
             activeOffer = offer
             activeVctmDocument = try {
@@ -3428,6 +3431,7 @@ class SirosWallet private constructor(
                     }
                 })
             }
+            advanceIssuanceStart(epoch, WalletState.FlowActive.STEP_STARTING_FLOW)
             engine.startIssuance(
                 offer = credentialOffer.toString(),
                 redirectUri = config.redirectUri.ifBlank { null },
@@ -3439,13 +3443,25 @@ class SirosWallet private constructor(
             // issuanceInFlight via the normal flow_complete/flow_error path -
             // clear it here instead, or a failed start would permanently
             // lock out every future issuance attempt for the rest of the
-            // session.
-            issuanceInFlight = false
-            activeOffer = null
-            activeVctm = null
-            activeZkIssuanceInput = null
+            // session. Also drops the pending flow state (see
+            // failIssuanceStart); a cancelled start was already reset by
+            // cancelCurrentFlow.
+            failIssuanceStart(epoch)
             throw e
         }
+    }
+
+    /**
+     * The engine half of an issuance start, as two visible steps: reconnect
+     * (see [ensureEngineConnected] for why every start reconnects) and wait for
+     * the session. Token refresh, the socket handshake and the server's session
+     * message are all in here and are the first of the silent seconds.
+     */
+    private suspend fun connectEngineForIssuance(engine: WalletEngineSession, epoch: Int) {
+        advanceIssuanceStart(epoch, WalletState.FlowActive.STEP_CONNECTING_ENGINE)
+        engine.forceReconnect()
+        advanceIssuanceStart(epoch, WalletState.FlowActive.STEP_ESTABLISHING_SESSION)
+        engine.awaitConnected()
     }
 
     /**
@@ -3508,7 +3524,6 @@ class SirosWallet private constructor(
      */
     suspend fun startIssuance(offerUri: String, zkInput: ZkIssuanceInput? = null) {
         val engine = engineSession ?: throw WalletException(NOT_CONNECTED)
-        ensureEngineConnected(engine)
         if (issuanceInFlight) {
             throw WalletException("Another issuance is already in progress")
         }
@@ -3518,7 +3533,10 @@ class SirosWallet private constructor(
         // resolveOfferForDisplay() succeeds, so gating this on that result
         // would leave some real issuance flows unguarded.
         issuanceInFlight = true
+        val epoch = beginIssuanceStart()
         try {
+            connectEngineForIssuance(engine, epoch)
+            advanceIssuanceStart(epoch, WalletState.FlowActive.STEP_PREPARING_ISSUANCE)
             val redirectUri = config.redirectUri.ifBlank { null }
             resolveOfferForDisplay(offerUri)?.let { offer ->
                 activeOffer = offer
@@ -3539,6 +3557,7 @@ class SirosWallet private constructor(
             // handleRequestAttestation. That spares this side a second fetch
             // of a possibly single-use credential_offer_uri and a duplicate
             // authorization_servers/client_id discovery.
+            advanceIssuanceStart(epoch, WalletState.FlowActive.STEP_STARTING_FLOW)
             when (val start = resolveIssuanceStart(offerUri)) {
                 is IssuanceStart.Offer -> engine.startIssuance(
                     offer = start.offer,
@@ -3555,10 +3574,7 @@ class SirosWallet private constructor(
             // See startIssuanceByOffer's matching catch block: the flow was
             // never registered server-side, so nothing will ever clear
             // issuanceInFlight via the normal flow_complete/flow_error path.
-            issuanceInFlight = false
-            activeOffer = null
-            activeVctm = null
-            activeZkIssuanceInput = null
+            failIssuanceStart(epoch)
             throw e
         }
     }
@@ -4154,16 +4170,23 @@ class SirosWallet private constructor(
      * issuance was ever in flight, so it's always safe to call from here.
      */
     fun cancelCurrentFlow() {
+        // Invalidate any start still suspended in network work: it stops at its
+        // next step instead of sending the engine a flow that was cancelled.
+        issuanceStartEpoch.incrementAndGet()
         val current = _state.value
         if (current is WalletState.FlowActive) {
-            try {
-                engineSession?.cancelFlow(current.flowId)
-            } catch (e: Exception) {
-                Timber.w(e, "Failed to send cancel to backend")
+            // A pending state has no engine flow yet, so there is nothing to
+            // cancel server-side or to discard.
+            if (!current.isPending) {
+                try {
+                    engineSession?.cancelFlow(current.flowId)
+                } catch (e: Exception) {
+                    Timber.w(e, "Failed to send cancel to backend")
+                }
+                // A cancelled issuance produces no credential, so anything the
+                // holder committed for it is unusable from here on.
+                discardZkIssuancePreparation(current.flowId)
             }
-            // A cancelled issuance produces no credential, so anything the
-            // holder committed for it is unusable from here on.
-            discardZkIssuancePreparation(current.flowId)
             _state.value = readyState(current.userId, current.displayName, current.credentials)
         }
         resetIssuanceGuards()
@@ -5216,6 +5239,76 @@ class SirosWallet private constructor(
      * instead of silent cross-contamination.
      */
     private var issuanceInFlight = false
+
+    /**
+     * Identifies the current issuance start attempt, so a start that is still
+     * suspended in network work (engine connect, entitlement check, metadata
+     * fetch) notices that [cancelCurrentFlow] ran in the meantime and does not
+     * go on to send the engine a flow the user already cancelled.
+     */
+    private val issuanceStartEpoch = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /**
+     * Publish the synchronous pre-engine state of an issuance start: the first
+     * thing a start call does, before any network work, so a host can show the
+     * flow screen at once instead of leaving the user looking at whatever was
+     * behind it for however long the engine connect, entitlement check and
+     * metadata fetches take (several seconds on a mobile network, with no
+     * engine progress event possible until all of that is done).
+     *
+     * Only from [WalletState.Ready]: from any other state the start proceeds as
+     * before without a visible flow state. Returns this attempt's epoch.
+     */
+    private fun beginIssuanceStart(): Int {
+        val epoch = issuanceStartEpoch.incrementAndGet()
+        val current = _state.value
+        if (current is WalletState.Ready) {
+            _state.value = WalletState.FlowActive(
+                userId = current.userId,
+                displayName = current.displayName,
+                flowId = WalletState.FlowActive.PENDING_FLOW_ID,
+                flowType = WalletState.FlowActive.FLOW_TYPE_ISSUANCE,
+                status = WalletState.FlowActive.STEP_INITIALIZING,
+                credentials = current.credentials,
+            )
+        }
+        return epoch
+    }
+
+    /**
+     * Advance the pre-engine step, and stop a start that was cancelled while
+     * it was suspended. [cancelCurrentFlow] has already reset the wallet, so a
+     * cancelled start only has to unwind - it must not touch state again, which
+     * by now may belong to a newer attempt.
+     */
+    private fun advanceIssuanceStart(epoch: Int, step: String) {
+        if (issuanceStartEpoch.get() != epoch) {
+            throw kotlinx.coroutines.CancellationException("Issuance start cancelled")
+        }
+        val current = _state.value
+        if (current is WalletState.FlowActive && current.isPending && current.status != step) {
+            _state.value = current.copy(status = step)
+        }
+    }
+
+    /**
+     * A start that failed before the engine reported any flow: clear the
+     * pending state so the host is not left on a spinner that nothing will ever
+     * clear. The exception itself is the error; this only restores [WalletState.Ready].
+     */
+    private fun failIssuanceStart(epoch: Int) {
+        if (issuanceStartEpoch.get() != epoch) return
+        issuanceInFlight = false
+        pendingRenewalSourceBatchId = null
+        activeOffer = null
+        activeVctm = null
+        activeZkIssuanceInput = null
+        val current = _state.value
+        if (current is WalletState.FlowActive && current.isPending) {
+            _state.value = readyState(current.userId, current.displayName, current.credentials)
+        }
+    }
+
     /**
      * Key IDs generated for the current batch's Key Attestation proof, in the
      * SAME order they were submitted as `attested_keys` - an OID4VCI issuer
@@ -6764,11 +6857,20 @@ class SirosWallet private constructor(
                         ?: (current as? WalletState.FlowActive)?.userId ?: ""
                     val displayName = (current as? WalletState.Ready)?.displayName
                         ?: (current as? WalletState.FlowActive)?.displayName
+                    // An issuance that began with the wallet's own pre-engine
+                    // steps keeps its flow type, so the host does not see the
+                    // flow turn into something else when the engine speaks.
+                    val inheritedType = (current as? WalletState.FlowActive)
+                        ?.takeIf {
+                            it.flowType == WalletState.FlowActive.FLOW_TYPE_ISSUANCE &&
+                                (it.isPending || it.flowId == msg.flowId)
+                        }
+                        ?.flowType
                     _state.value = WalletState.FlowActive(
                         userId = userId,
                         displayName = displayName,
                         flowId = msg.flowId,
-                        flowType = msg.step ?: "unknown",
+                        flowType = inheritedType ?: msg.step ?: "unknown",
                         status = msg.step ?: "in_progress",
                         credentials = credentialStore.getAll(),
                     )
