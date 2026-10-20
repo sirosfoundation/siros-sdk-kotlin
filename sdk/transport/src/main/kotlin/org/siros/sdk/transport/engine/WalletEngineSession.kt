@@ -131,12 +131,29 @@ class WalletEngineSession(
      * preserves OkHttp's own delivery order while guaranteeing at most one
      * [handleMessage] call is ever in flight at a time.
      */
-    private val rawMessageChannel = Channel<String>(Channel.UNLIMITED)
+    private class RawFrame(val generation: Int, val text: String)
+
+    private val rawMessageChannel = Channel<RawFrame>(Channel.UNLIMITED)
+
+    /**
+     * Incremented for every socket this session opens (first connect,
+     * [forceReconnect], automatic reconnect). Every flow frame carries the
+     * generation of the socket that delivered it, so a consumer can tell a
+     * reply to something it sent on an earlier connection from one on the
+     * current connection, even after both were buffered together.
+     */
+    private val generationCounter = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /** Generation of the most recently opened socket. */
+    val connectionGeneration: Int get() = generationCounter.get()
+
+    /** Orders overlapping [forceReconnect] calls; only the latest may replace the socket. */
+    private val reconnectRequests = java.util.concurrent.atomic.AtomicInteger(0)
 
     init {
         scope.launch {
-            for (text in rawMessageChannel) {
-                handleMessage(text)
+            for (frame in rawMessageChannel) {
+                handleMessage(frame.text, frame.generation)
             }
         }
     }
@@ -231,6 +248,7 @@ class WalletEngineSession(
             .pingInterval(pingIntervalMs, TimeUnit.MILLISECONDS)
             .build()
 
+        val generation = generationCounter.incrementAndGet()
         webSocket = connectionClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
                 Timber.d("Engine WebSocket connected, sending handshake")
@@ -243,7 +261,7 @@ class WalletEngineSession(
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
-                rawMessageChannel.trySend(text)
+                rawMessageChannel.trySend(RawFrame(generation, text))
             }
 
             override fun onClosing(ws: WebSocket, code: Int, reason: String) {
@@ -321,7 +339,7 @@ class WalletEngineSession(
         }
     }
 
-    private suspend fun handleMessage(text: String) {
+    private suspend fun handleMessage(text: String, generation: Int) {
         try {
             val element = json.parseToJsonElement(text).jsonObject
             val type = element["type"]?.jsonPrimitive?.content ?: return
@@ -344,18 +362,22 @@ class WalletEngineSession(
                 }
                 MessageTypes.FLOW_PROGRESS -> {
                     val msg = json.decodeFromString(FlowProgressMessage.serializer(), text)
+                        .copy(connectionGeneration = generation)
                     flowProgressChannel.trySend(msg)
                 }
                 MessageTypes.FLOW_COMPLETE -> {
                     val msg = json.decodeFromString(FlowCompleteMessage.serializer(), text)
+                        .copy(connectionGeneration = generation)
                     flowCompleteChannel.trySend(msg)
                 }
                 MessageTypes.FLOW_ERROR -> {
                     val msg = json.decodeFromString(FlowErrorMessage.serializer(), text)
+                        .copy(connectionGeneration = generation)
                     flowErrorChannel.trySend(msg)
                 }
                 MessageTypes.SIGN_REQUEST -> {
                     val msg = json.decodeFromString(SignRequestMessage.serializer(), text)
+                        .copy(connectionGeneration = generation)
                     signRequestChannel.trySend(msg)
                 }
                 MessageTypes.MATCH_REQUEST -> {
@@ -692,7 +714,13 @@ class WalletEngineSession(
      */
     suspend fun forceReconnect() {
         if (lastAppToken == null) return
+        val request = reconnectRequests.incrementAndGet()
         val token = refreshTokenOrSignalReauth()
+        // A newer forceReconnect began while this one was refreshing its token
+        // (the caller moved on - e.g. a cancelled start that was retried). It
+        // owns the socket now; replacing it again would close the newer
+        // caller's connection and drop its replies.
+        if (reconnectRequests.get() != request) return
         // Clear the (possibly zombie) socket unconditionally, even if refresh was
         // rejected below - otherwise isConnected stays true and send() would keep
         // appearing usable on a session that's actually no longer valid.
@@ -731,10 +759,10 @@ class WalletEngineSession(
         // Raw frames: drop stale flow/session traffic but keep everything else
         // (push, notification_ack, ...), which is not tied to the old socket's
         // flows and can carry data nothing else will redeliver.
-        val kept = mutableListOf<String>()
+        val kept = mutableListOf<RawFrame>()
         while (true) {
             val frame = rawMessageChannel.tryReceive().getOrNull() ?: break
-            if (!isFlowTraffic(frame)) kept += frame
+            if (!isFlowTraffic(frame.text)) kept += frame
         }
         kept.forEach { rawMessageChannel.trySend(it) }
         while (flowProgressChannel.tryReceive().isSuccess) { /* drop */ }

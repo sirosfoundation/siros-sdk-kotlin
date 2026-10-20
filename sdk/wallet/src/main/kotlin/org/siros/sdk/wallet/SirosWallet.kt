@@ -3467,11 +3467,6 @@ class SirosWallet private constructor(
         engine.forceReconnect()
         // Stop a superseded attempt before it touches shared bookkeeping.
         advanceIssuanceStart(epoch, WalletState.FlowActive.STEP_ESTABLISHING_SESSION)
-        // The old socket is gone, and with it any reply to a start cancelled
-        // earlier (the transport also drops what it had buffered): forget
-        // those, or the retry's own first event would be taken for the
-        // cancelled flow's.
-        abandonedStartTimes.clear()
         engine.awaitConnected()
     }
 
@@ -4139,8 +4134,6 @@ class SirosWallet private constructor(
      */
     private suspend fun ensureEngineConnected(engine: WalletEngineSession) {
         engine.forceReconnect()
-        // The old socket is gone: so is any reply to a cancelled start.
-        abandonedStartTimes.clear()
         engine.awaitConnected()
     }
 
@@ -4199,7 +4192,11 @@ class SirosWallet private constructor(
             if (current.isPending) {
                 // The engine may already have the start without having named a
                 // flow yet; its first event will be cancelled when it arrives.
-                if (issuanceStartSent) abandonedStartTimes.add(System.currentTimeMillis())
+                if (issuanceStartSent) {
+                    abandonedStarts.add(
+                        AbandonedStart(System.currentTimeMillis(), engineSession?.connectionGeneration ?: 0),
+                    )
+                }
             } else {
                 try {
                     engineSession?.cancelFlow(current.flowId)
@@ -4270,7 +4267,6 @@ class SirosWallet private constructor(
         scope.launch {
             try {
                 engine.forceReconnect()
-                abandonedStartTimes.clear()
                 engine.awaitConnected()
                 // Client attestation for the resumed flow arrives the same way
                 // as for a fresh one: go-wallet-backend's Execute() runs its
@@ -5285,25 +5281,35 @@ class SirosWallet private constructor(
      * Entries expire so a start the engine never acted on cannot swallow a
      * later, legitimate flow.
      */
-    private val abandonedStartTimes = java.util.concurrent.CopyOnWriteArrayList<Long>()
+    private val abandonedStarts = java.util.concurrent.CopyOnWriteArrayList<AbandonedStart>()
+
+    /**
+     * A start cancelled after `flow_start` went out, scoped to the connection
+     * ([WalletEngineSession.connectionGeneration]) it was sent on: only that
+     * connection's first unknown flow can be its reply, so whatever arrives on
+     * a later connection (a retry's, a presentation's) is never mistaken for it,
+     * and a buffered stale reply is still recognised after the reconnect.
+     */
+    private data class AbandonedStart(val time: Long, val generation: Int)
     private val abandonedFlowIds: MutableSet<String> =
         java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
 
     /**
      * Whether an engine event belongs to a flow the user already cancelled
-     * (see [abandonedStartTimes]); when it is the first event of such a flow,
+     * (see [abandonedStarts]); when it is the first event of such a flow,
      * cancels it on the engine and remembers its id.
      */
-    private fun isAbandonedFlowEvent(flowId: String?): Boolean {
+    private fun isAbandonedFlowEvent(flowId: String?, generation: Int): Boolean {
         if (flowId == null) return false
         if (flowId in abandonedFlowIds) return true
         val now = System.currentTimeMillis()
-        abandonedStartTimes.removeAll { now - it > ABANDONED_START_TTL_MS }
+        abandonedStarts.removeAll { now - it.time > ABANDONED_START_TTL_MS }
         val current = _state.value
         val known = (current as? WalletState.FlowActive)?.takeIf { !it.isPending }?.flowId == flowId ||
             flowId in terminatedFlowIds
-        if (known || abandonedStartTimes.isEmpty()) return false
-        abandonedStartTimes.removeAt(0)
+        if (known) return false
+        val marker = abandonedStarts.firstOrNull { it.generation == generation } ?: return false
+        abandonedStarts.remove(marker)
         abandonedFlowIds.add(flowId)
         terminatedFlowIds.add(flowId)
         try {
@@ -6477,7 +6483,7 @@ class SirosWallet private constructor(
         // Observe sign requests → auto-sign with keystore
         scope.launch {
             engine.signRequests().collect { msg ->
-                if (isAbandonedFlowEvent(msg.flowId)) return@collect
+                if (isAbandonedFlowEvent(msg.flowId, msg.connectionGeneration)) return@collect
                 // An SCA request waits on the user (up to the consent limit); doing that inside this
                 // sequential collector would stall every other sign request (issuance proofs, client
                 // auth, attestation), so it is handled in its own coroutine.
@@ -6844,7 +6850,7 @@ class SirosWallet private constructor(
         // Observe flow progress
         scope.launch {
             engine.flowProgress().collect { msg ->
-                if (isAbandonedFlowEvent(msg.flowId)) return@collect
+                if (isAbandonedFlowEvent(msg.flowId, msg.connectionGeneration)) return@collect
                 Timber.d("Flow ${msg.flowId} progress: ${msg.step}")
 
                 // Handle trust evaluation — matching wallet-frontend reference implementation
@@ -6965,7 +6971,7 @@ class SirosWallet private constructor(
         // Observe flow completion → sync new credentials
         scope.launch {
             engine.flowComplete().collect { msg ->
-                if (isAbandonedFlowEvent(msg.flowId)) return@collect
+                if (isAbandonedFlowEvent(msg.flowId, msg.connectionGeneration)) return@collect
                 Timber.i("Flow ${msg.flowId} complete")
                 terminatedFlowIds.add(msg.flowId)
                 pendingMatchResultsByFlow.remove(msg.flowId)
@@ -7337,7 +7343,7 @@ class SirosWallet private constructor(
         // Observe flow errors
         scope.launch {
             engine.flowErrors().collect { msg ->
-                if (isAbandonedFlowEvent(msg.flowId)) return@collect
+                if (isAbandonedFlowEvent(msg.flowId, msg.connectionGeneration)) return@collect
                 Timber.e("Flow ${msg.flowId} error: ${msg.error.code} — ${msg.error.message}")
                 val fid = msg.flowId ?: "unknown"
                 terminatedFlowIds.add(fid)

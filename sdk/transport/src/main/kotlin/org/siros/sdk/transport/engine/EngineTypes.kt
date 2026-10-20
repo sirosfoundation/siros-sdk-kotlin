@@ -300,6 +300,11 @@ data class FlowProgressMessage(
     val step: String,
     val payload: JsonElement? = null,
     val timestamp: String? = null,
+    /**
+     * Which connection delivered this frame (see [WalletEngineSession.connectionGeneration]);
+     * set by the session on receipt, never on the wire.
+     */
+    @kotlinx.serialization.Transient val connectionGeneration: Int = 0,
 )
 
 @Serializable
@@ -338,6 +343,11 @@ data class FlowCompleteMessage(
      */
     @SerialName("dpop_key_id") val dpopKeyId: String? = null,
     val timestamp: String? = null,
+    /**
+     * Which connection delivered this frame (see [WalletEngineSession.connectionGeneration]);
+     * set by the session on receipt, never on the wire.
+     */
+    @kotlinx.serialization.Transient val connectionGeneration: Int = 0,
 )
 
 @Serializable
@@ -356,6 +366,11 @@ data class FlowErrorMessage(
     val step: String? = null,
     val error: FlowError,
     val timestamp: String? = null,
+    /**
+     * Which connection delivered this frame (see [WalletEngineSession.connectionGeneration]);
+     * set by the session on receipt, never on the wire.
+     */
+    @kotlinx.serialization.Transient val connectionGeneration: Int = 0,
 )
 
 @Serializable
@@ -373,6 +388,11 @@ data class SignRequestMessage(
     val action: String,
     val params: SignRequestParams,
     val timestamp: String? = null,
+    /**
+     * Which connection delivered this frame (see [WalletEngineSession.connectionGeneration]);
+     * set by the session on receipt, never on the wire.
+     */
+    @kotlinx.serialization.Transient val connectionGeneration: Int = 0,
 )
 
 @Serializable

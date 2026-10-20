@@ -6881,6 +6881,8 @@ class SirosWalletTest {
 
     // ---- Issuance start: visible state before any network work ----------
 
+    private val engineGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+
     private val startOffer = org.siros.sdk.credentials.CredentialOffer(
         credentialConfigurationId = "pid",
         credentialIssuerIdentifier = "https://issuer.invalid",
@@ -7163,7 +7165,7 @@ class SirosWalletTest {
         wallet.cancelCurrentFlow()
         assertTrue(stateFlow.value is WalletState.Ready)
 
-        progressFlow.emit(FlowProgressMessage(flowId = "flow-late", step = "parsing_offer"))
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-late", step = "parsing_offer", connectionGeneration = engineGeneration.get()))
         advanceUntilIdle()
 
         verify(exactly = 1) { engine.cancelFlow("flow-late") }
@@ -7201,7 +7203,7 @@ class SirosWalletTest {
         wallet.cancelCurrentFlow()
 
         flowErrors.emit(
-            FlowErrorMessage(flowId = "flow-late", error = org.siros.sdk.transport.engine.FlowError(code = "x", message = "boom"))
+            FlowErrorMessage(flowId = "flow-late", error = org.siros.sdk.transport.engine.FlowError(code = "x", message = "boom"), connectionGeneration = engineGeneration.get())
         )
         advanceUntilIdle()
 
@@ -7221,7 +7223,7 @@ class SirosWalletTest {
         // The retry replaces the socket; the cancelled flow's reply can no longer arrive.
         wallet.startIssuanceByOffer(startOffer)
 
-        progressFlow.emit(FlowProgressMessage(flowId = "flow-retry", step = "parsing_offer"))
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-retry", step = "parsing_offer", connectionGeneration = engineGeneration.get()))
         advanceUntilIdle()
 
         verify(exactly = 0) { engine.cancelFlow(any()) }
@@ -7270,11 +7272,48 @@ class SirosWalletTest {
         method.isAccessible = true
         method.callSuspend(wallet, engine)
 
-        progressFlow.emit(FlowProgressMessage(flowId = "flow-presentation", step = "parsing_request"))
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-presentation", step = "parsing_request", connectionGeneration = engineGeneration.get()))
         advanceUntilIdle()
 
         verify(exactly = 0) { engine.cancelFlow(any()) }
         assertEquals("flow-presentation", (stateFlow.value as WalletState.FlowActive).flowId)
+    }
+
+    @Test
+    fun staleBufferedCompletion_afterARetry_isRecognisedAsTheCancelledStarts_andNotTheRetrys() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val completes = MutableSharedFlow<FlowCompleteMessage>()
+        val engine = mockEngineConstructor(progressFlow = progressFlow, flowComplete = completes)
+        every { engine.startIssuance(any(), any(), any(), any(), any(), any()) } just runs
+        every { engine.cancelFlow(any()) } just runs
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val wallet = newWallet(
+            "_state" to stateFlow,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", tenantId = "tenant-1"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to listener,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        wallet.startIssuanceByOffer(startOffer)
+        val oldGeneration = engineGeneration.get() // the connection the start was sent on
+        wallet.cancelCurrentFlow()                 // cancelled after send, on that connection
+        wallet.startIssuanceByOffer(startOffer)    // retry: new connection
+
+        // The retry's own first event arrives first and must not be taken for the cancelled flow...
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-new", step = "parsing_offer", connectionGeneration = engineGeneration.get()))
+        advanceUntilIdle()
+        assertEquals("flow-new", (stateFlow.value as WalletState.FlowActive).flowId)
+        verify(exactly = 0) { engine.cancelFlow("flow-new") }
+
+        // ...and the buffered completion of the cancelled start, still tagged with
+        // the old connection, is dropped instead of acting on the retry's state.
+        completes.emit(FlowCompleteMessage(flowId = "flow-old", connectionGeneration = oldGeneration))
+        advanceUntilIdle()
+        verify(exactly = 1) { engine.cancelFlow("flow-old") }
+        assertEquals("flow-new", (stateFlow.value as WalletState.FlowActive).flowId)
     }
 
     private fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {
@@ -7315,8 +7354,8 @@ class SirosWalletTest {
             every { registry.listAccounts() } returns emptyList()
             values["accountRegistry"] = registry
         }
-        if ("abandonedStartTimes" !in values) {
-            values["abandonedStartTimes"] = java.util.concurrent.CopyOnWriteArrayList<Long>()
+        if ("abandonedStarts" !in values) {
+            values["abandonedStarts"] = java.util.concurrent.CopyOnWriteArrayList<Any>()
         }
         if ("abandonedFlowIds" !in values) {
             values["abandonedFlowIds"] = java.util.Collections.newSetFromMap(
@@ -8257,7 +8296,9 @@ class SirosWalletTest {
         val engine = mockk<WalletEngineSession>()
         every { engine.connect(any(), any(), any()) } just runs
         coEvery { engine.awaitConnected(any()) } just runs
-        coEvery { engine.forceReconnect() } just runs
+        // Each reconnect opens a new connection generation, as the real session does.
+        coEvery { engine.forceReconnect() } coAnswers { engineGeneration.incrementAndGet() }
+        every { engine.connectionGeneration } answers { engineGeneration.get() }
         every { engine.state } returns MutableStateFlow(WalletEngineSession.State.CONNECTED)
         every { engine.sendSignResponse(any(), any(), any(), any()) } just runs
         every { engine.sendMatchResponse(any(), any(), any()) } just runs

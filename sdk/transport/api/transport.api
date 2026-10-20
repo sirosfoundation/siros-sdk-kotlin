@@ -737,11 +737,12 @@ public final class org/siros/sdk/transport/engine/FlowActionMessage$Companion {
 
 public final class org/siros/sdk/transport/engine/FlowCompleteMessage {
 	public static final field Companion Lorg/siros/sdk/transport/engine/FlowCompleteMessage$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component10 ()Ljava/lang/String;
 	public final fun component11 ()Ljava/lang/String;
+	public final fun component12 ()I
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/util/List;
 	public final fun component4 ()Ljava/lang/String;
@@ -750,9 +751,10 @@ public final class org/siros/sdk/transport/engine/FlowCompleteMessage {
 	public final fun component7 ()Ljava/lang/String;
 	public final fun component8 ()Ljava/lang/String;
 	public final fun component9 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/FlowCompleteMessage;
-	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/FlowCompleteMessage;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/FlowCompleteMessage;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)Lorg/siros/sdk/transport/engine/FlowCompleteMessage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/FlowCompleteMessage;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;IILjava/lang/Object;)Lorg/siros/sdk/transport/engine/FlowCompleteMessage;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getConnectionGeneration ()I
 	public final fun getCredentialIssuer ()Ljava/lang/String;
 	public final fun getCredentials ()Ljava/util/List;
 	public final fun getDpopJwk ()Ljava/lang/String;
@@ -817,16 +819,18 @@ public final class org/siros/sdk/transport/engine/FlowError$Companion {
 
 public final class org/siros/sdk/transport/engine/FlowErrorMessage {
 	public static final field Companion Lorg/siros/sdk/transport/engine/FlowErrorMessage$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/FlowError;Ljava/lang/String;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/FlowError;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/FlowError;Ljava/lang/String;I)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/FlowError;Ljava/lang/String;IILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/lang/String;
 	public final fun component4 ()Lorg/siros/sdk/transport/engine/FlowError;
 	public final fun component5 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/FlowError;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/FlowErrorMessage;
-	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/FlowErrorMessage;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/FlowError;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/FlowErrorMessage;
+	public final fun component6 ()I
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/FlowError;Ljava/lang/String;I)Lorg/siros/sdk/transport/engine/FlowErrorMessage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/FlowErrorMessage;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/FlowError;Ljava/lang/String;IILjava/lang/Object;)Lorg/siros/sdk/transport/engine/FlowErrorMessage;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getConnectionGeneration ()I
 	public final fun getError ()Lorg/siros/sdk/transport/engine/FlowError;
 	public final fun getFlowId ()Ljava/lang/String;
 	public final fun getStep ()Ljava/lang/String;
@@ -853,16 +857,18 @@ public final class org/siros/sdk/transport/engine/FlowErrorMessage$Companion {
 
 public final class org/siros/sdk/transport/engine/FlowProgressMessage {
 	public static final field Companion Lorg/siros/sdk/transport/engine/FlowProgressMessage$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;I)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;IILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/lang/String;
 	public final fun component4 ()Lkotlinx/serialization/json/JsonElement;
 	public final fun component5 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/FlowProgressMessage;
-	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/FlowProgressMessage;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/FlowProgressMessage;
+	public final fun component6 ()I
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;I)Lorg/siros/sdk/transport/engine/FlowProgressMessage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/FlowProgressMessage;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonElement;Ljava/lang/String;IILjava/lang/Object;)Lorg/siros/sdk/transport/engine/FlowProgressMessage;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getConnectionGeneration ()I
 	public final fun getFlowId ()Ljava/lang/String;
 	public final fun getPayload ()Lkotlinx/serialization/json/JsonElement;
 	public final fun getStep ()Ljava/lang/String;
@@ -1248,18 +1254,20 @@ public final class org/siros/sdk/transport/engine/SessionConfig$Companion {
 
 public final class org/siros/sdk/transport/engine/SignRequestMessage {
 	public static final field Companion Lorg/siros/sdk/transport/engine/SignRequestMessage$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/SignRequestParams;Ljava/lang/String;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/SignRequestParams;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/SignRequestParams;Ljava/lang/String;I)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/SignRequestParams;Ljava/lang/String;IILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
 	public final fun component3 ()Ljava/lang/String;
 	public final fun component4 ()Ljava/lang/String;
 	public final fun component5 ()Lorg/siros/sdk/transport/engine/SignRequestParams;
 	public final fun component6 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/SignRequestParams;Ljava/lang/String;)Lorg/siros/sdk/transport/engine/SignRequestMessage;
-	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/SignRequestMessage;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/SignRequestParams;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/transport/engine/SignRequestMessage;
+	public final fun component7 ()I
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/SignRequestParams;Ljava/lang/String;I)Lorg/siros/sdk/transport/engine/SignRequestMessage;
+	public static synthetic fun copy$default (Lorg/siros/sdk/transport/engine/SignRequestMessage;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/transport/engine/SignRequestParams;Ljava/lang/String;IILjava/lang/Object;)Lorg/siros/sdk/transport/engine/SignRequestMessage;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAction ()Ljava/lang/String;
+	public final fun getConnectionGeneration ()I
 	public final fun getFlowId ()Ljava/lang/String;
 	public final fun getMessageId ()Ljava/lang/String;
 	public final fun getParams ()Lorg/siros/sdk/transport/engine/SignRequestParams;
@@ -1410,6 +1418,7 @@ public final class org/siros/sdk/transport/engine/WalletEngineSession : org/siro
 	public final fun flowErrors ()Lkotlinx/coroutines/flow/Flow;
 	public final fun flowProgress ()Lkotlinx/coroutines/flow/Flow;
 	public final fun forceReconnect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getConnectionGeneration ()I
 	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun isConnected ()Z
 	public final fun matchRequests ()Lkotlinx/coroutines/flow/Flow;

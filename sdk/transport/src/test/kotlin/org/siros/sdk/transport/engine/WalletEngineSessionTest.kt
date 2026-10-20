@@ -6,7 +6,9 @@ import io.mockk.mockk
 import io.mockk.slot
 import io.mockk.verify
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -812,9 +814,33 @@ class WalletEngineSessionTest {
         session.forceReconnect()
 
         session.flowComplete().test {
-            assertEquals("done-flow", awaitItem().flowId)
+            val done = awaitItem()
+            assertEquals("done-flow", done.flowId)
+            // Still tagged with the connection that delivered it, not the current one.
+            assertEquals(1, done.connectionGeneration)
+            assertEquals(2, session.connectionGeneration)
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    @Test
+    fun overlappingForceReconnect_supersededCallDoesNotReplaceTheNewerSocket() = runTest {
+        val session = WalletEngineSession(baseUrl = "https://wallet.example.com", tenantId = "t", client = client)
+        val gate = kotlinx.coroutines.CompletableDeferred<String>()
+        var calls = 0
+        session.connect("app-token", tokenProvider = { if (calls++ == 0) gate.await() else "fresh-token" })
+
+        val first = launch(start = CoroutineStart.UNDISPATCHED) {
+            session.forceReconnect() // parked in the token refresh
+        }
+        session.forceReconnect()      // the newer caller opens the new socket
+        verify(exactly = 2) { client.newWebSocket(any(), any()) }
+        gate.complete("stale-token")
+        first.join()
+
+        // The superseded call must not cancel/replace the newer caller's socket.
+        verify(exactly = 2) { client.newWebSocket(any(), any()) }
+        verify(exactly = 1) { webSocket.cancel() }
     }
 
     @Test
