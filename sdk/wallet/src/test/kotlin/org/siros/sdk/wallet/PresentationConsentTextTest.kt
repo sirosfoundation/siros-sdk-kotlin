@@ -48,6 +48,10 @@ class PresentationConsentTextTest {
         ConsentString.PREDICATE_LT to "siros_consent_predicate_lt", ConsentString.PREDICATE_LE to "siros_consent_predicate_le",
         ConsentString.PREDICATE_GT to "siros_consent_predicate_gt", ConsentString.PREDICATE_GE to "siros_consent_predicate_ge",
         ConsentString.PREDICATE_IN to "siros_consent_predicate_in",
+        ConsentString.PREDICATE_DATE_EQ to "siros_consent_predicate_date_eq", ConsentString.PREDICATE_DATE_NE to "siros_consent_predicate_date_ne",
+        ConsentString.PREDICATE_DATE_LT to "siros_consent_predicate_date_lt", ConsentString.PREDICATE_DATE_LE to "siros_consent_predicate_date_le",
+        ConsentString.PREDICATE_DATE_GT to "siros_consent_predicate_date_gt", ConsentString.PREDICATE_DATE_GE to "siros_consent_predicate_date_ge",
+        ConsentString.PREDICATE_DATE_IN to "siros_consent_predicate_date_in",
         ConsentString.PREDICATE_VALUE_NOT_SHARED to "siros_consent_predicate_value_not_shared",
     )
 
@@ -199,7 +203,7 @@ class PresentationConsentTextTest {
         assertEquals("address.country is SE.", lines(predicate(ClaimRef(listOf("address", "country"), null), ValueType.STRING, Condition(ComparisonOp.EQ, listOf("SE")))).first())
         // A date operand is written the way the locale writes dates; a date claim that is not a birth date is not an age.
         assertEquals(
-            "Issue date is at least January 1, 2020.",
+            "Issue date is on or after January 1, 2020.",
             lines(predicate(ClaimRef(listOf("issue_date"), "Issue date"), ValueType.DATE, Condition(ComparisonOp.GE, listOf("2020-01-01")))).first(),
         )
         // Every operator has its own sentence in every locale, with the claim and the operand filled in and nothing left over.
@@ -221,5 +225,37 @@ class PresentationConsentTextTest {
         val item = predicate(ClaimRef(listOf("c"), null), ValueType.STRING, Condition(ComparisonOp.EQ, listOf("A")))
         assertEquals(listOf("custom"), t.render(request(item)).entries.single().lines)
         assertEquals(listOf("generic", "generic"), t.render(request(item.copy(functionId = "other"))).entries.single().lines)
+    }
+
+    @Test
+    fun aDateClaim_usesTheDateOperatorSentences_aNumberKeepsTheGenericOnes() {
+        val en = textFor("values")
+        fun lines(type: ValueType, op: ComparisonOp, vararg v: String) =
+            en.render(request(predicate(ClaimRef(listOf("d"), "Issue date"), type, Condition(op, v.toList())))).entries.single().lines.first()
+        assertEquals("Issue date is on March 1, 2024.", lines(ValueType.DATE, ComparisonOp.EQ, "2024-03-01"))
+        assertEquals("Issue date is not on March 1, 2024.", lines(ValueType.DATE, ComparisonOp.NE, "2024-03-01"))
+        assertEquals("Issue date is before March 1, 2024.", lines(ValueType.DATE, ComparisonOp.LT, "2024-03-01"))
+        assertEquals("Issue date is on or before March 1, 2024.", lines(ValueType.DATE, ComparisonOp.LE, "2024-03-01"))
+        assertEquals("Issue date is after March 1, 2024.", lines(ValueType.DATE, ComparisonOp.GT, "2024-03-01"))
+        assertEquals("Issue date is on or after March 1, 2024.", lines(ValueType.DATE, ComparisonOp.GE, "2024-03-01"))
+        assertEquals("Issue date is one of the dates: March 1, 2024, April 1, 2024.", lines(ValueType.DATE, ComparisonOp.IN, "2024-03-01", "2024-04-01"))
+        // The same operators on a number keep the generic wording.
+        assertEquals("Issue date is at least 10.", lines(ValueType.NUMBER, ComparisonOp.GE, "10"))
+        assertEquals("Issue date is greater than 10.", lines(ValueType.NUMBER, ComparisonOp.GT, "10"))
+        // The age specialisation still wins for a function declared as an age.
+        val age = predicate(ClaimRef(listOf("birth_date"), null), ValueType.DATE, Condition(ComparisonOp.LE, listOf("2008-10-19")), function = "age_check")
+            .copy(age = AgeForm.AtLeast(18))
+        assertEquals("You are at least 18 years old. Your exact birth date is not shared.", en.render(request(age)).entries.single().lines.single())
+        // In every locale each date operator has its own sentence, different from the generic one for the same operator.
+        for (dir in locales.keys) {
+            val t = textFor(dir)
+            for (op in ComparisonOp.values()) {
+                val operand = if (op == ComparisonOp.IN) listOf("2024-03-01", "2024-04-01") else listOf("2024-03-01")
+                val date = t.render(request(predicate(ClaimRef(listOf("d"), "CLAIMLABEL"), ValueType.DATE, Condition(op, operand)))).entries.single().lines.first()
+                val generic = t.render(request(predicate(ClaimRef(listOf("d"), "CLAIMLABEL"), ValueType.STRING, Condition(op, listOf("X"))))).entries.single().lines.first()
+                assertTrue("$dir $op: $date", date.contains("CLAIMLABEL") && !date.contains("%") && !date.contains("2024-03-01"))
+                assertTrue("$dir $op: the date sentence is not the generic one: $date", date.replace(Regex("\\S*2024\\S*|\\d+"), "").trim() != generic.replace("X", "").trim())
+            }
+        }
     }
 }

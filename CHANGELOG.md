@@ -40,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   function's declared minimum selectivity is enforced (`age_check`: 365 days); functions that declare none have
   no merge rule. `intermediary_risk` is read from the PDP's `context.intermediary_risk` (boolean, optional) and is
   PROVISIONAL until go-trust defines it.
+  A DATE-typed claim has its own operator sentences ("is on or after {date}", "is after", "is on or before",
+  "is before", "is on", "is not on", "is one of the dates: ..."; `siros_consent_predicate_date_*`), numbers and strings
+  keep the generic wording, and the age wording of `age_check` still wins. Vectors: `date_compare` cases.
   Known follow-up (not filed): the approved year strings use `%d` with words, so fi/el (and sv/pt as needed)
   need proper plural resources.
 - **`CatalogCircuitZkProver`: the real `circuit_zk` prover, and the wallet's

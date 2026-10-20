@@ -35,6 +35,13 @@ enum class ConsentString(internal val res: Int) {
     PREDICATE_GT(R.string.siros_consent_predicate_gt),
     PREDICATE_GE(R.string.siros_consent_predicate_ge),
     PREDICATE_IN(R.string.siros_consent_predicate_in),
+    PREDICATE_DATE_EQ(R.string.siros_consent_predicate_date_eq),
+    PREDICATE_DATE_NE(R.string.siros_consent_predicate_date_ne),
+    PREDICATE_DATE_LT(R.string.siros_consent_predicate_date_lt),
+    PREDICATE_DATE_LE(R.string.siros_consent_predicate_date_le),
+    PREDICATE_DATE_GT(R.string.siros_consent_predicate_date_gt),
+    PREDICATE_DATE_GE(R.string.siros_consent_predicate_date_ge),
+    PREDICATE_DATE_IN(R.string.siros_consent_predicate_date_in),
     PREDICATE_VALUE_NOT_SHARED(R.string.siros_consent_predicate_value_not_shared),
 }
 
@@ -80,7 +87,7 @@ class PresentationConsentText(
     private val locale: Locale = Locale.getDefault(),
     /**
      * Specialised renderers of a predicate function, by function id. Without one the function is rendered as an
-     * age when its declaration says so ([ConsentItem.Predicate.age]), else by the generic comparison wording.
+     * age when its declaration says so ([ConsentItem.Predicate.age]), else by the comparison wording (date-specific sentences for a date claim, generic ones for numbers and strings).
      * A host adds one to word a function in its own domain terms.
      */
     private val predicateRenderers: Map<String, (ConsentItem.Predicate) -> List<String>> = emptyMap(),
@@ -119,14 +126,15 @@ class PresentationConsentText(
         item.age?.let { return listOf(ageLine(it)) }
         val claim = item.claim.display
         val sentences = item.conditions.map { c ->
+            val date = item.valueType == ValueType.DATE
             val key = when (c.op) {
-                ComparisonOp.EQ -> ConsentString.PREDICATE_EQ
-                ComparisonOp.NE -> ConsentString.PREDICATE_NE
-                ComparisonOp.LT -> ConsentString.PREDICATE_LT
-                ComparisonOp.LE -> ConsentString.PREDICATE_LE
-                ComparisonOp.GT -> ConsentString.PREDICATE_GT
-                ComparisonOp.GE -> ConsentString.PREDICATE_GE
-                ComparisonOp.IN -> ConsentString.PREDICATE_IN
+                ComparisonOp.EQ -> if (date) ConsentString.PREDICATE_DATE_EQ else ConsentString.PREDICATE_EQ
+                ComparisonOp.NE -> if (date) ConsentString.PREDICATE_DATE_NE else ConsentString.PREDICATE_NE
+                ComparisonOp.LT -> if (date) ConsentString.PREDICATE_DATE_LT else ConsentString.PREDICATE_LT
+                ComparisonOp.LE -> if (date) ConsentString.PREDICATE_DATE_LE else ConsentString.PREDICATE_LE
+                ComparisonOp.GT -> if (date) ConsentString.PREDICATE_DATE_GT else ConsentString.PREDICATE_GT
+                ComparisonOp.GE -> if (date) ConsentString.PREDICATE_DATE_GE else ConsentString.PREDICATE_GE
+                ComparisonOp.IN -> if (date) ConsentString.PREDICATE_DATE_IN else ConsentString.PREDICATE_IN
             }
             strings.get(key, claim, c.values.joinToString(", ") { value(item.valueType, it) })
         }
