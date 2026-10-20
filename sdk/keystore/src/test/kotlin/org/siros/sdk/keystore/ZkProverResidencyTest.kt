@@ -165,4 +165,45 @@ class ZkProverResidencyTest {
         assertFalse(q.closed)
         assertEquals("sys:circ-2", residency.residentKey)
     }
+
+    @Test
+    fun `a circuit id that itself contains colons is found in the key`() = runBlocking {
+        val residency = ZkProverResidency()
+        val id = "urn:circuits:longfellow:nym_auth:v1"
+        val p = residency.use("longfellow-libzk-v1:$id:2", { FakeProver("a") }) { it }
+        residency.releaseCircuit("urn:circuits:long")   // part of a segment is not the id
+        residency.releaseCircuit("auth:v1")
+        assertFalse(p.closed)
+        residency.releaseCircuit(id)
+        assertTrue(p.closed)
+        assertNull(residency.residentKey)
+    }
+
+    @Test
+    fun `a retirement that arrives while the prover is still loading is applied when the proof ends`() = runBlocking {
+        val residency = ZkProverResidency()
+        val loading = CompletableDeferred<Unit>()
+        val finishLoad = CompletableDeferred<Unit>()
+        val job = async(Dispatchers.Default) {
+            residency.use("sys:circ-1", { loading.complete(Unit); finishLoad.await(); FakeProver("a") }) { it }
+        }
+        withTimeout(5000) { loading.await() }
+        // resident is still null here: the retirement used to be lost.
+        residency.releaseCircuit("circ-1")
+        finishLoad.complete(Unit)
+        val p = withTimeout(5000) { job.await() }
+        assertTrue("retired while loading, so released when the use ended", p.closed)
+        assertNull(residency.residentKey)
+
+        // A retirement of another circuit while loading changes nothing.
+        val loading2 = CompletableDeferred<Unit>()
+        val finish2 = CompletableDeferred<Unit>()
+        val job2 = async(Dispatchers.Default) {
+            residency.use("sys:circ-2", { loading2.complete(Unit); finish2.await(); FakeProver("b") }) { it }
+        }
+        withTimeout(5000) { loading2.await() }
+        residency.releaseCircuit("circ-1")
+        finish2.complete(Unit)
+        assertFalse(withTimeout(5000) { job2.await() }.closed)
+    }
 }

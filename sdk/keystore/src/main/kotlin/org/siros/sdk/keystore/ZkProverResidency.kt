@@ -37,6 +37,9 @@ class ZkProverResidency {
     private var resident: Resident? = null
     @Volatile private var releaseWhenIdle = false
 
+    /** The key being loaded by a [use] that has the lock but has not yet stored its [Resident]; null when none. */
+    @Volatile private var loadingKey: String? = null
+
     /** The key of the prover currently loaded, or null. For diagnostics and tests. */
     val residentKey: String? get() = resident?.key
 
@@ -62,7 +65,13 @@ class ZkProverResidency {
                     destroyQuietly(current)
                     resident = null
                 }
-                val loaded = load()
+                // A retirement arriving while this loads must not be lost: it sees [loadingKey] and defers to the end of the use.
+                loadingKey = key
+                val loaded = try {
+                    load()
+                } finally {
+                    loadingKey = null
+                }
                 resident = Resident(key, loaded)
                 loaded
             }
@@ -107,13 +116,15 @@ class ZkProverResidency {
 
     /**
      * Drops the resident prover if it belongs to the circuit [circuitId] (a retired one): the key holds the circuit
-     * id as one of its `:`-separated segments (`longfellow-libzk-v1:<id>:<n>`, `vega-mc-p256-v1:<id>`,
-     * `<system>:<id>:<hash>`). Like [release]: at once when idle, else when the proof using it ends.
+     * id as a run of whole `:`-separated segments (`longfellow-libzk-v1:<id>:<n>`, `vega-mc-p256-v1:<id>`,
+     * `<system>:<id>:<hash>`), and the id itself may contain colons (`urn:circuits:longfellow:nym_auth:v1`), so the id is
+     * looked for as a whole run, not as one segment. Like [release]: at once when idle, else when the proof using it ends,
+     * which includes a prover that is still loading.
      */
     fun releaseCircuit(circuitId: String) {
         if (mutex.tryLock()) {
             try {
-                resident?.takeIf { circuitId in it.key.split(':') }?.let {
+                resident?.takeIf { keyHasCircuit(it.key, circuitId) }?.let {
                     Timber.i("Releasing resident ZK prover '${it.key}': its circuit was retired")
                     destroyQuietly(it)
                     resident = null
@@ -121,10 +132,13 @@ class ZkProverResidency {
             } finally {
                 mutex.unlock()
             }
-        } else if (resident?.key?.split(':')?.contains(circuitId) == true) {
+        } else if (resident?.key?.let { keyHasCircuit(it, circuitId) } == true || loadingKey?.let { keyHasCircuit(it, circuitId) } == true) {
             releaseWhenIdle = true
         }
     }
+
+    /** Whether [circuitId] occurs in [key] as a whole run of `:`-separated segments (never as a part of one). */
+    private fun keyHasCircuit(key: String, circuitId: String): Boolean = ":$key:".contains(":$circuitId:")
 
     private fun destroyQuietly(r: Resident) {
         try {
