@@ -1207,6 +1207,10 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             try {
                 wallet.startIssuance(credentialOfferUri)
             } catch (e: Exception) {
+                // A user/lifecycle cancel is not a failure to report - but a
+                // timeout (awaitConnected's withTimeout) is also a
+                // CancellationException and is one.
+                if (isSilentCancellation(e)) throw e
                 Log.e(TAG, "startIssuance failed", e)
                 _errorMessage.value = localizedErrorMessage(e)
             }
@@ -1427,6 +1431,10 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             try {
                 wallet.startIssuanceByOffer(offer, replacesBatchId)
             } catch (e: Exception) {
+                // A user/lifecycle cancel is not a failure to report - but a
+                // timeout (awaitConnected's withTimeout) is also a
+                // CancellationException and is one.
+                if (isSilentCancellation(e)) throw e
                 Log.e(TAG, "Failed to start issuance for ${offer.credentialConfigurationId}", e)
                 _errorMessage.value = e.message ?: "Failed to start issuance"
             }
@@ -1488,6 +1496,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 _errorMessage.value = ERROR_CODE_RESOURCES[e.errorCode]?.let(activity::getString)
                     ?: e.message ?: "Identity verification failed"
             } catch (e: Exception) {
+                // Cancelling the pending issuance (startIssuance inside
+                // verifyIdentityAndIssue) is not a failure to report.
+                if (isSilentCancellation(e)) throw e
                 android.util.Log.e("SIROS_VM", "IDV failed", e)
                 _errorMessage.value = e.message ?: "Identity verification failed"
             } finally {
@@ -2496,6 +2507,7 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                     }
                 }
             } catch (e: Exception) {
+                if (isSilentCancellation(e)) throw e
                 Log.e(TAG, "QR/deep-link flow failed", e)
                 _errorMessage.value = e.message ?: "QR flow failed"
                 _flowStarting.value = null
@@ -2780,3 +2792,12 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         }
     }
 }
+
+/**
+ * Whether [e] is a cancellation to unwind quietly (the user cancelled, or the
+ * scope ended) rather than a failure to show. [kotlinx.coroutines.TimeoutCancellationException]
+ * is a CancellationException too, but it is an internal timeout - e.g. the engine
+ * connect - and must reach the failure handling.
+ */
+internal fun isSilentCancellation(e: Throwable): Boolean =
+    e is kotlinx.coroutines.CancellationException && e !is kotlinx.coroutines.TimeoutCancellationException
