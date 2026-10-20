@@ -699,4 +699,63 @@ class CatalogCircuitZkProverTest {
         assertEquals("nymauth native prover: REFUSED (SEED_MISMATCH)", e.message)
         assertNull(NymAuthNativeException.vega("UnknownCircuit").refusal)
     }
+
+    // -------- the prover runs the validator's rules --------
+
+    private fun spec(): JsonObject {
+        val f = java.io.File("../../spec/circuit-zk-validator-vectors.json")
+        require(f.isFile) { "vector file not found at ${f.absolutePath}" }
+        return Json.parseToJsonElement(f.readText()).jsonObject
+    }
+
+    /**
+     * For every shared vector whose plan this adapter could prove at all (a known-offender-matching-ssc pseudonym
+     * and, at most, an age_check), the wallet's validator says Ok exactly when the adapter accepts the plan: the adapter
+     * runs the validator's rules, so neither passes a plan the other refuses. The vectors cover an age span under 365
+     * days, `le` before `ge`, a `verifier_context` where none is allowed, the reserved meta members and the rest.
+     */
+    @Test
+    fun `the validator and the nymauth adapter agree on every shared vector's plan`() {
+        val adapter = NymAuthCircuitZkAdapter(client(), honestNative())
+        val validator = org.siros.sdk.credentials.RulebookCircuitZkValidator()
+        var compared = 0
+        var refusedByBoth = 0
+        val refusedNames = mutableListOf<String>()
+        for (e in spec()["cases"]!!.jsonArray) {
+            val c = e.jsonObject
+            val plan = c["plan"]!!.jsonObject
+            val fns = plan["functions"]!!.jsonArray.map {
+                val o = it.jsonObject
+                CircuitZkFunction(o["id"]!!.jsonPrimitive.content, o["handle"]!!.jsonPrimitive.content, o["params"]!!.jsonObject)
+            }
+            val pseudonyms = fns.filter { it.id == "pseudonym-v1-sha256" }
+            val comparable = c["options"] == null && plan["circuit_filter"] == null && pseudonyms.isNotEmpty() &&
+                pseudonyms.all { (it.params["config"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull == "known-offender-matching-ssc" } &&
+                fns.all { it.id == "pseudonym-v1-sha256" || it.id == "age_check" }
+            if (!comparable) continue
+            val p = CircuitZkPlan(fns, raw = plan["query"]!!.jsonObject)
+            val validatorOk = validator.validate(p) is org.siros.sdk.credentials.CircuitZkVerdict.Ok
+            assertEquals(c["name"]!!.jsonPrimitive.content, validatorOk, adapter.acceptsPlan(p))
+            compared++
+            if (!validatorOk) { refusedByBoth++; refusedNames += c["name"]!!.jsonPrimitive.content }
+        }
+        assertTrue("compared $compared", compared >= 10)
+        assertTrue("refused by both $refusedByBoth", refusedByBoth >= 3)
+        // The named rules of the shared vectors are among them.
+        assertTrue(refusedNames.toString(), refusedNames.any { it.contains("verifier_context") })
+    }
+
+    @Test
+    fun `a short age span, an inverted range and a context are refused by the prover itself`() {
+        val native = honestNative()
+        val p = prover(native)
+        // Span under 365 days, le before ge, a verifier_context the configuration forbids.
+        assertRefused { prove(p, input(functions = listOf(pseudonymFn(), ageFn("""{"ge":"2000-01-01","le":"2000-06-01"}""")))) }
+        assertRefused { prove(p, input(functions = listOf(pseudonymFn(), ageFn("""{"ge":"2010-01-01","le":"2000-01-01"}""")))) }
+        assertRefused { prove(p, input(functions = listOf(CircuitZkFunction("pseudonym-v1-sha256", "n", params("""{"config":"known-offender-matching-ssc","verifier_context":"c"}""")), ageFn()))) }
+        assertEquals(0, native.calls)
+        // A span of exactly 365 days is allowed.
+        prove(p, input(functions = listOf(pseudonymFn(), ageFn("""{"ge":"2000-01-01","le":"2000-12-30"}"""))))
+        assertEquals(1, native.calls)
+    }
 }
