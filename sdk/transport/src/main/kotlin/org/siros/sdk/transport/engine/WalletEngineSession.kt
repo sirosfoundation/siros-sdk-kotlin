@@ -131,7 +131,8 @@ class WalletEngineSession(
      * preserves OkHttp's own delivery order while guaranteeing at most one
      * [handleMessage] call is ever in flight at a time.
      */
-    private class RawFrame(val generation: Int, val text: String)
+    /** A received frame, or - with a null [text] - the marker [forceReconnect] queues to purge stale flow traffic. */
+    private class RawFrame(val generation: Int, val text: String?)
 
     private val rawMessageChannel = Channel<RawFrame>(Channel.UNLIMITED)
 
@@ -153,7 +154,8 @@ class WalletEngineSession(
     init {
         scope.launch {
             for (frame in rawMessageChannel) {
-                handleMessage(frame.text, frame.generation)
+                val text = frame.text
+                if (text == null) purgeStaleFlowTraffic() else handleMessage(text, frame.generation)
             }
         }
     }
@@ -752,7 +754,7 @@ class WalletEngineSession(
         webSocket?.cancel() // ungraceful - the connection may already be dead
         webSocket = null
         sessionId = null
-        discardBufferedFlowTraffic()
+        rawMessageChannel.trySend(RawFrame(0, null))
         if (token == null) return // refreshTokenOrSignalReauth already set State.REAUTH_REQUIRED
         _state.value = State.CONNECTING
         reconnectAttempts = 0
@@ -760,56 +762,17 @@ class WalletEngineSession(
     }
 
     /**
-     * Drop flow traffic that the replaced connection had already delivered but
-     * no collector has consumed. Server-side flow state died with that socket,
-     * so such a reply is stale; left queued it would be handed to whatever
-     * flow the caller starts next (a cancelled flow's first reply reopening it,
-     * or an error from it failing the retry). `flow_complete` is deliberately
-     * kept: it can carry issued credentials, and a replaced socket does not
-     * persist them - the wallet ignores a completion for a flow it cancelled.
-     * Best effort: a frame a consumer
-     * has already taken cannot be recalled.
+     * Drop flow traffic the replaced connection delivered that no collector has
+     * consumed yet. Server-side flow state died with that socket, so such a
+     * reply is stale; left queued it would reach whatever flow the caller
+     * starts next. Runs in the single reader, at the point in the frame order
+     * where [forceReconnect] queued its marker: every earlier frame has been
+     * processed (so a `trust_evaluated` report still reaches its
+     * `flow_complete`, and a credential-bearing `flow_complete`, push and
+     * notification ack are all kept) and no later frame has. Best effort: a
+     * message a collector already took cannot be recalled.
      */
-    internal fun isFlowTraffic(frame: String): Boolean = try {
-        when (json.parseToJsonElement(frame).jsonObject["type"]?.jsonPrimitive?.contentOrNull) {
-            MessageTypes.FLOW_PROGRESS, MessageTypes.FLOW_ERROR,
-            MessageTypes.SIGN_REQUEST, MessageTypes.MATCH_REQUEST -> true
-            else -> false
-        }
-    } catch (e: Exception) {
-        false
-    }
-
-    /**
-     * Whether a raw frame queued on a replaced connection is kept. Stale flow
-     * traffic is dropped, but a dropped `trust_evaluated` progress frame first
-     * has its issuer-trust report recorded: a kept `flow_complete` for that
-     * flow would otherwise reach the wallet with the (possibly negative) trust
-     * evidence missing, and the wallet's refusal safeguard reads "no report"
-     * as "not checked".
-     */
-    internal fun keepAcrossReconnect(frame: String): Boolean {
-        if (!isFlowTraffic(frame)) return true
-        try {
-            if (json.parseToJsonElement(frame).jsonObject["type"]?.jsonPrimitive?.contentOrNull == MessageTypes.FLOW_PROGRESS) {
-                recordIssuerTrustReport(json.decodeFromString(FlowProgressMessage.serializer(), frame))
-            }
-        } catch (e: Exception) {
-            Timber.w(e, "Could not read a stale progress frame while discarding it")
-        }
-        return false
-    }
-
-    private fun discardBufferedFlowTraffic() {
-        // Raw frames: drop stale flow/session traffic but keep everything else
-        // (push, notification_ack, ...), which is not tied to the old socket's
-        // flows and can carry data nothing else will redeliver.
-        val kept = mutableListOf<RawFrame>()
-        while (true) {
-            val frame = rawMessageChannel.tryReceive().getOrNull() ?: break
-            if (keepAcrossReconnect(frame.text)) kept += frame
-        }
-        kept.forEach { rawMessageChannel.trySend(it) }
+    private fun purgeStaleFlowTraffic() {
         while (flowProgressChannel.tryReceive().isSuccess) { /* drop */ }
         while (flowErrorChannel.tryReceive().isSuccess) { /* drop */ }
         while (signRequestChannel.tryReceive().isSuccess) { /* drop */ }

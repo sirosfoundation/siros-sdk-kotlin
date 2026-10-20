@@ -8046,6 +8046,36 @@ class SirosWalletTest {
         assertTrue(stateFlow.value is WalletState.Ready)
     }
 
+    @Test
+    fun cancellationErrorOfAnActiveFlow_doesNotClearAnImmediateRetry() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val flowErrors = MutableSharedFlow<FlowErrorMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val (wallet, engine) = abandonedStartWallet(progressFlow, flowErrors, listener, stateFlow)
+        advanceUntilIdle()
+        wallet.startIssuanceByOffer(startOffer)
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-old", step = "parsing_offer").also { it.connectionGeneration = engineGeneration.get() })
+        advanceUntilIdle()
+        assertEquals("flow-old", (stateFlow.value as WalletState.FlowActive).flowId)
+
+        wallet.cancelCurrentFlow()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        coEvery { engine.forceReconnect() } coAnswers { gate.await() }
+        val retry = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            runCatching { wallet.startIssuanceByOffer(startOffer) }
+        }
+        // The old flow's cancellation error arrives while the retry refreshes its token.
+        flowErrors.emit(FlowErrorMessage(flowId = "flow-old", error = org.siros.sdk.transport.engine.FlowError(code = "cancelled", message = "cancelled")))
+        advanceUntilIdle()
+
+        verify(exactly = 0) { listener.onFlowError(any(), any(), any()) }
+        assertTrue("retry keeps its pending state", (stateFlow.value as WalletState.FlowActive).isPending)
+        assertTrue("and its in-flight guard", getField(wallet, "issuanceInFlight") as Boolean)
+        gate.complete(Unit)
+        retry.join()
+    }
+
     private fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {
         val wallet = allocateInstance(SirosWallet::class.java) as SirosWallet
         val values = fields.toMap(mutableMapOf())

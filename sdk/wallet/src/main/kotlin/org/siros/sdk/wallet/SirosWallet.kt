@@ -4199,6 +4199,9 @@ class SirosWallet private constructor(
                     }
                 }
             } else {
+                // Whatever this flow still sends (typically its cancellation error)
+                // must not act on a retry that starts before the socket is replaced.
+                abandonedFlowIds.add(current.flowId)
                 try {
                     engineSession?.cancelFlow(current.flowId)
                 } catch (e: Exception) {

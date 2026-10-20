@@ -802,12 +802,14 @@ class WalletEngineSessionTest {
 
         session.forceReconnect()
 
+        // The purge marker is queued before anything the new connection delivers,
+        // so the first item each channel yields must be the new connection's.
         session.matchRequests().test {
-            expectNoEvents()
+            listener.onMessage(webSocket, """{"type":"match_request","flow_id":"new-flow","dcql_query":{}}""")
+            assertEquals("new-flow", awaitItem().flowId)
             cancelAndIgnoreRemainingEvents()
         }
         session.flowProgress().test {
-            expectNoEvents()
             listener.onMessage(webSocket, """{"type":"flow_progress","flow_id":"new-flow","step":"parsing_offer"}""")
             assertEquals("new-flow", awaitItem().flowId)
             cancelAndIgnoreRemainingEvents()
@@ -815,17 +817,23 @@ class WalletEngineSessionTest {
     }
 
     @Test
-    fun reconnect_discard_keeps_push_and_ack_frames_but_drops_flow_traffic() {
+    fun forceReconnect_keepsTheIssuerTrustReportOfAFlowCompletedAcrossIt() = runTest {
         val session = WalletEngineSession(baseUrl = "https://wallet.example.com", tenantId = "t", client = client)
-        for (flow in listOf("flow_progress", "flow_error", "sign_request", "match_request")) {
-            assertTrue(flow, session.isFlowTraffic("""{"type":"$flow","flow_id":"f"}"""))
+        session.connect("app-token")
+        // Both frames are still queued (not awaited) when the connection is replaced.
+        listener.onMessage(
+            webSocket,
+            """{"type":"flow_progress","flow_id":"f","step":"trust_evaluated","payload":{"issuer_trust_evaluated":true,"issuer":"https://i.example","trusted":false,"reason":"no"}}""",
+        )
+        listener.onMessage(webSocket, """{"type":"flow_complete","flow_id":"f"}""")
+        session.forceReconnect()
+
+        session.flowComplete().test {
+            val done = awaitItem()
+            assertEquals(false, done.issuerTrust?.trusted)
+            assertEquals("no", done.issuerTrust?.reason)
+            cancelAndIgnoreRemainingEvents()
         }
-        // A completion can carry issued credentials that nothing else redelivers.
-        assertEquals(false, session.isFlowTraffic("""{"type":"flow_complete","flow_id":"f"}"""))
-        // Not tied to the replaced socket's flows; an issuance_complete push can carry credentials.
-        assertEquals(false, session.isFlowTraffic("""{"type":"push","push_type":"issuance_complete"}"""))
-        assertEquals(false, session.isFlowTraffic("""{"type":"notification_ack"}"""))
-        assertEquals(false, session.isFlowTraffic("not json"))
     }
 
     @Test
@@ -891,26 +899,6 @@ class WalletEngineSessionTest {
         assertEquals("the stale rejection must not reach the wallet", 0, rejected)
         assertEquals(stateBefore, session.state.value)
         assertTrue(session.state.value != WalletEngineSession.State.REAUTH_REQUIRED)
-    }
-
-    @Test
-    fun discardingAStaleProgressFrame_keepsItsIssuerTrustReportForTheKeptCompletion() = runTest {
-        val session = WalletEngineSession(baseUrl = "https://wallet.example.com", tenantId = "t", client = client)
-        session.connect("app-token")
-        // A trust_evaluated frame still queued when the connection is replaced...
-        val kept = session.keepAcrossReconnect(
-            """{"type":"flow_progress","flow_id":"f","step":"trust_evaluated","payload":{"issuer_trust_evaluated":true,"issuer":"https://i.example","trusted":false,"reason":"no"}}""",
-        )
-        assertEquals("stale progress is dropped", false, kept)
-
-        // ...must still reach the (kept) completion, or the wallet reads "no report" as "not checked".
-        session.flowComplete().test {
-            listener.onMessage(webSocket, """{"type":"flow_complete","flow_id":"f"}""")
-            val done = awaitItem()
-            assertEquals(false, done.issuerTrust?.trusted)
-            assertEquals("no", done.issuerTrust?.reason)
-            cancelAndIgnoreRemainingEvents()
-        }
     }
 
     @Test
