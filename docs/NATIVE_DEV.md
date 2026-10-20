@@ -10,7 +10,7 @@ The SDK is built against exactly these commits (full SHAs; check a PR's head bef
 
 | Library | Commit | Version built as |
 |---|---|---|
-| `zk-cred-vega` | `d6f0955bf60379e4e81c242e13b5ecbd8e28a271` | `0.0.6` |
+| `zk-cred-vega` | `d6f0955bf60379e4e81c242e13b5ecbd8e28a271` | `0.0.7` (the crate says `0.0.6`, which is already released without nymauth; a build under that version would collide with the released AAR in `~/.m2` and the Gradle cache) |
 | `zk-cred-longfellow` | `cf2eba996ba1fac247539d515d8bab502da48f94` | `0.1.2` (the crate says `0.1.1`; it is built under the next version so it cannot be mistaken for the released AAR) |
 
 The UniFFI Kotlin bindings vendored under `sdk/credentials/src/main/kotlin/uniffi/` are generated from these builds. They check
@@ -43,3 +43,16 @@ from the built libraries.
 ## Android NDK status
 
 See the table in the pull request description (updated with every build of these pins).
+
+## CI and release coordinates
+
+`checkNativeLibraries` (runs before every build of the SDK modules) fails with the coordinates and the way out, instead of a
+resolution error in a compile task, when an AAR cannot be resolved, and when it resolves to an older build of the same
+version that has no nymauth entry points. For CI to build without `-PsirosNativeRepo` these must be published to GitHub
+Packages (each library's own Maven repository), from the merged and tagged native PRs:
+
+- `org.siros:zk-cred-vega:0.0.7` (the PR branch's Cargo.toml still says 0.0.6, which is released and has no nymauth: bump it to 0.0.7 before tagging)
+- `org.siros:zk-cred-longfellow:0.1.2` (Cargo.toml says 0.1.1: bump to 0.1.2 before tagging)
+
+and the vendored bindings regenerated from those tagged builds, with `zkCredVegaVersion` / `zkCredLongfellowVersion` defaults
+in `sdk/credentials/build.gradle.kts` matching.
