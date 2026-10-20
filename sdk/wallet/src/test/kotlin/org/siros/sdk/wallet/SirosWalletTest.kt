@@ -25,6 +25,7 @@ import kotlin.reflect.full.declaredMemberFunctions
 import kotlin.reflect.jvm.isAccessible
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import okhttp3.OkHttpClient
@@ -368,7 +369,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -419,7 +419,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -485,7 +484,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -550,7 +548,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -611,7 +608,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -679,7 +675,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -739,7 +734,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         val result = invokeHandleWmpTrustEvaluation(
@@ -807,7 +801,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         val result = invokeHandleWmpTrustEvaluation(
@@ -841,7 +834,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         val result = invokeHandleWmpTrustEvaluation(
@@ -891,7 +883,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         val result = invokeHandleWmpTrustEvaluation(
@@ -951,7 +942,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -1017,7 +1007,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -1083,7 +1072,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -1153,7 +1141,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -1203,7 +1190,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -1272,7 +1258,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -1310,7 +1295,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -1356,7 +1340,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -3893,6 +3876,241 @@ class SirosWalletTest {
         assertEquals("notif-xyz", store.let { runBlocking { it.getAll() }.single().notificationId })
     }
 
+    // ── Issuance trust gate: an untrusted issuer's credential is never stored ──
+
+    private fun mdocResult(notificationId: String? = null) = CredentialResult(
+        format = "mso_mdoc",
+        credential = "bm90LWFuLW1kb2M",
+        notificationId = notificationId,
+    )
+
+    /** Runs the issuance policy with the REAL evaluateIssuerTrust behind the mdoc check. */
+    private suspend fun gateFor(wallet: SirosWallet, cert: java.security.cert.X509Certificate): String? =
+        issuanceTrustRefusal(listOf(mdocResult()), engineTrust = null) {
+            wallet.evaluateIssuerTrust(listOf(cert.encoded), docType = null)
+        }
+
+    @Test
+    fun issuanceGate_remoteDecisionTrue_isAccepted() = runTest(dispatcher) {
+        val cert = issuerNamingFixtureCert()
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", JsonPrimitive(true)) }
+        assertNull(gateFor(issuerWalletWithLocalRoot(apiClient, cert), cert))
+    }
+
+    @Test
+    fun issuanceGate_remoteDecisionFalse_isRefused_evenWithLocalRootThatWouldAccept() = runTest(dispatcher) {
+        val cert = issuerNamingFixtureCert()
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", JsonPrimitive(false)) }
+        assertNotNull(gateFor(issuerWalletWithLocalRoot(apiClient, cert), cert))
+    }
+
+    @Test
+    fun issuanceGate_unreachableWithNoLocalRoots_isRefused() = runTest(dispatcher) {
+        val cert = issuerNamingFixtureCert()
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws NetworkException("offline")
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+        assertNotNull(gateFor(wallet, cert))
+    }
+
+    @Test
+    fun issuanceGate_unreachableWithPositiveLocalValidation_isAccepted() = runTest(dispatcher) {
+        val cert = issuerNamingFixtureCert()
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws NetworkException("offline")
+        assertNull(gateFor(issuerWalletWithLocalRoot(apiClient, cert), cert))
+    }
+
+    @Test
+    fun issuanceGate_unreachableWithLocalValidationNegative_isRefused() = runTest(dispatcher) {
+        val cert = issuerNamingFixtureCert()
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws NetworkException("offline")
+        // Root configured, but it is not this certificate's issuer.
+        val otherRoot = java.security.cert.CertificateFactory.getInstance("X.509").generateCertificate(
+            checkNotNull(javaClass.getResourceAsStream("/mdoc-issuer-identity/http_uri.pem")),
+        ) as java.security.cert.X509Certificate
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", issuerTrustRootCertificatesPem = listOf("unused")),
+            "issuerTrustRootCertificates\$delegate" to lazy { listOf(otherRoot) },
+        )
+        assertNotNull(gateFor(wallet, cert))
+    }
+
+    @Test
+    fun issuanceGate_backend4xx_isRefused() = runTest(dispatcher) {
+        val cert = issuerNamingFixtureCert()
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws BackendApiException(403, "API request failed: 403", "")
+        assertNotNull(gateFor(issuerWalletWithLocalRoot(apiClient, cert), cert))
+    }
+
+    @Test
+    fun issuanceGate_missingOrUnverifiableIssuerAuth_isRefused() = runTest(dispatcher) {
+        val refusal = issuanceTrustRefusal(listOf(mdocResult()), engineTrust = null) { null }
+        assertNotNull(refusal)
+        assertTrue(refusal!!.contains("issuerAuth"))
+    }
+
+    @Test
+    fun issuanceGate_engineReportedUntrusted_isRefusedEvenForNonMdoc() = runTest(dispatcher) {
+        val sdJwt = CredentialResult(format = "dc+sd-jwt", credential = "x")
+        val untrusted = TrustResult(trusted = false, reason = "not in registry")
+        val trusted = TrustResult(trusted = true)
+        assertNotNull(issuanceTrustRefusal(listOf(sdJwt), untrusted) { null })
+        assertNull(issuanceTrustRefusal(listOf(sdJwt), trusted) { null })
+        assertNull(issuanceTrustRefusal(listOf(sdJwt), null) { null })
+    }
+
+    /** Wires a wallet to a mock engine, runs [emit], and returns what was observably touched. */
+    private class RefusalHarness(
+        val store: FakeCredentialStore,
+        val listener: WalletEventListener,
+        val apiClient: BackendApiClient,
+        val engine: WalletEngineSession,
+        val state: MutableStateFlow<WalletState>,
+    )
+
+    private fun TestScope.refusalHarness(
+        progress: MutableSharedFlow<FlowProgressMessage>,
+        complete: MutableSharedFlow<FlowCompleteMessage>,
+        existing: List<StoredCredential> = emptyList(),
+    ): RefusalHarness {
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val store = FakeCredentialStore(existing.toMutableList())
+        val keystore = mockk<KeystoreManager>()
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        every { keystore.isUnlocked } returns true
+        coEvery { keystore.exportEncryptedContainer() } returns """{"prfKeys":[],"jwe":"x"}""".toByteArray()
+        coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+        val engine = mockEngineConstructor(progressFlow = progress, flowComplete = complete)
+        every { engine.sendCredentialNotification(any(), any(), any(), any()) } just runs
+        val state = MutableStateFlow<WalletState>(
+            WalletState.FlowActive(
+                userId = "u", displayName = "A", flowId = "f1", flowType = "issuance",
+                status = "in_progress", credentials = emptyList(),
+            ),
+        )
+        val wallet = newWallet(
+            "_state" to state,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to sessionStore,
+            "apiClient" to apiClient,
+            "eventListener" to listener,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        return RefusalHarness(store, listener, apiClient, engine, state)
+    }
+
+    @Test
+    fun flowComplete_unverifiableMdoc_isRefused_nothingStoredCapturedOrSynced() = runTest(dispatcher) {
+        val progress = MutableSharedFlow<FlowProgressMessage>()
+        val complete = MutableSharedFlow<FlowCompleteMessage>()
+        val h = refusalHarness(progress, complete)
+
+        complete.emit(
+            FlowCompleteMessage(
+                flowId = "f1",
+                credentials = listOf(mdocResult(notificationId = "notif-1")),
+                refreshToken = "secret-refresh-token",
+            ),
+        )
+        advanceUntilIdle()
+
+        assertTrue(runBlocking { h.store.getAll() }.isEmpty())
+        coVerify(exactly = 0) { h.apiClient.updatePrivateData(any()) }
+        verify(exactly = 1) {
+            h.engine.sendCredentialNotification(
+                flowId = "f1",
+                notificationId = "notif-1",
+                event = CredentialNotificationEvent.FAILURE,
+                eventDescription = "issuer_not_trusted",
+            )
+        }
+        verify(exactly = 0) {
+            h.engine.sendCredentialNotification(any(), any(), CredentialNotificationEvent.ACCEPTED, any())
+        }
+        verify(exactly = 1) { h.listener.onIssuerNotTrusted("f1", any(), any()) }
+        verify(exactly = 1) { h.listener.onFlowError("f1", ISSUER_NOT_TRUSTED_MESSAGE, any()) }
+        verify(exactly = 0) { h.listener.onFlowComplete(any(), any()) }
+        verify(exactly = 0) { h.listener.onCredentialReceived(any()) }
+        assertTrue(h.state.value is WalletState.Ready)
+    }
+
+    @Test
+    fun flowComplete_engineReportedUntrustedIssuer_isRefusedForSdJwt() = runTest(dispatcher) {
+        val testCredential = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9."
+        val progress = MutableSharedFlow<FlowProgressMessage>()
+        val complete = MutableSharedFlow<FlowCompleteMessage>()
+        val h = refusalHarness(progress, complete)
+
+        progress.emit(
+            FlowProgressMessage(
+                flowId = "f1",
+                step = "trust_evaluated",
+                payload = buildJsonObject {
+                    put("issuer_trust_evaluated", JsonPrimitive("true"))
+                    put("issuer", JsonPrimitive("https://issuer.example"))
+                    put("trusted", JsonPrimitive("false"))
+                },
+            ),
+        )
+        advanceUntilIdle()
+        complete.emit(
+            FlowCompleteMessage(
+                flowId = "f1",
+                credentials = listOf(CredentialResult(format = "dc+sd-jwt", credential = testCredential, notificationId = "n")),
+            ),
+        )
+        advanceUntilIdle()
+
+        assertTrue(runBlocking { h.store.getAll() }.isEmpty())
+        coVerify(exactly = 0) { h.apiClient.updatePrivateData(any()) }
+        verify(exactly = 1) { h.listener.onIssuerNotTrusted("f1", "https://issuer.example", any()) }
+        verify(exactly = 1) {
+            h.engine.sendCredentialNotification("f1", "n", CredentialNotificationEvent.FAILURE, any())
+        }
+    }
+
+    @Test
+    fun flowComplete_engineReportedTrustedIssuer_storesSdJwt() = runTest(dispatcher) {
+        val testCredential = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9."
+        val progress = MutableSharedFlow<FlowProgressMessage>()
+        val complete = MutableSharedFlow<FlowCompleteMessage>()
+        val h = refusalHarness(progress, complete)
+
+        progress.emit(
+            FlowProgressMessage(
+                flowId = "f1",
+                step = "trust_evaluated",
+                payload = buildJsonObject {
+                    put("issuer_trust_evaluated", JsonPrimitive("true"))
+                    put("issuer", JsonPrimitive("https://issuer.example"))
+                    put("trusted", JsonPrimitive("true"))
+                },
+            ),
+        )
+        advanceUntilIdle()
+        complete.emit(
+            FlowCompleteMessage(flowId = "f1", credentials = listOf(CredentialResult(format = "dc+sd-jwt", credential = testCredential))),
+        )
+        advanceUntilIdle()
+
+        assertEquals(1, runBlocking { h.store.getAll() }.size)
+        verify(exactly = 0) { h.listener.onIssuerNotTrusted(any(), any(), any()) }
+    }
+
     @Test
     fun connectEngine_flowComplete_omits_credential_notification_without_notification_id() = runTest(dispatcher) {
         val testCredential = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9."
@@ -5012,7 +5230,6 @@ class SirosWalletTest {
             "apiClient" to apiClient,
             "keystore" to keystore,
             "credentialStore" to store,
-            "trustCache" to TrustCache(),
             "_presentationHistory" to mutableListOf<PresentationRecord>(),
         )
 
@@ -5078,7 +5295,6 @@ class SirosWalletTest {
             "apiClient" to apiClient,
             "keystore" to keystore,
             "credentialStore" to store,
-            "trustCache" to TrustCache(),
             "_presentationHistory" to mutableListOf<PresentationRecord>(),
         )
 
@@ -5136,7 +5352,6 @@ class SirosWalletTest {
             "apiClient" to apiClient,
             "keystore" to keystore,
             "credentialStore" to store,
-            "trustCache" to TrustCache(),
             "_presentationHistory" to mutableListOf<PresentationRecord>(),
         )
 
@@ -5193,7 +5408,6 @@ class SirosWalletTest {
                 "apiClient" to apiClient,
                 "keystore" to keystore,
                 "credentialStore" to store,
-                "trustCache" to TrustCache(),
                 "_presentationHistory" to mutableListOf<PresentationRecord>(),
             )
 
@@ -5261,7 +5475,6 @@ class SirosWalletTest {
                 "apiClient" to apiClient,
                 "keystore" to keystore,
                 "credentialStore" to store,
-                "trustCache" to TrustCache(),
                 "_presentationHistory" to mutableListOf<PresentationRecord>(),
             )
 
@@ -5319,7 +5532,6 @@ class SirosWalletTest {
             "apiClient" to apiClient,
             "keystore" to mockk<KeystoreManager>(relaxed = true),
             "credentialStore" to store,
-            "trustCache" to TrustCache(),
             "_presentationHistory" to mutableListOf<PresentationRecord>(),
         )
 
@@ -5352,7 +5564,6 @@ class SirosWalletTest {
             "apiClient" to apiClient,
             "keystore" to keystore,
             "credentialStore" to store,
-            "trustCache" to TrustCache(),
             "_presentationHistory" to mutableListOf<PresentationRecord>(),
         )
 
@@ -5413,7 +5624,6 @@ class SirosWalletTest {
             "apiClient" to apiClient,
             "keystore" to keystore,
             "credentialStore" to store,
-            "trustCache" to TrustCache(),
             "_presentationHistory" to mutableListOf<PresentationRecord>(),
         )
 
@@ -5635,6 +5845,47 @@ class SirosWalletTest {
         assertEquals(sha256HexOf(der), subjectId)
         assertEquals(subjectId, request.captured["resource"]!!.jsonObject["id"]?.jsonPrimitive?.content)
         assertEquals("mdoc-reader-auth", request.captured["action"]!!.jsonObject["name"]?.jsonPrimitive?.content)
+    }
+
+    // -- Trust decision cache wiring: one cache across every evaluate call site.
+
+    @Test
+    fun trustDecisionCache_sameIssuerEvaluatedTwice_callsBackendOnce_andLogoutStyleClearReasks() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", JsonPrimitive(false)) }
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "trustDecisionCache" to TrustDecisionCache(java.time.Duration.ofMinutes(5)),
+        )
+        val cert = issuerNamingFixtureCert()
+
+        assertTrue(!wallet.evaluateIssuerTrust(listOf(cert.encoded), "org.iso.18013.5.1.mDL").trusted)
+        assertTrue(!wallet.evaluateIssuerTrust(listOf(cert.encoded), "org.iso.18013.5.1.mDL").trusted)
+        coVerify(exactly = 1) { apiClient.evaluateTrust(any()) }
+
+        // A different doc type is a different question; the reader action too.
+        wallet.evaluateIssuerTrust(listOf(cert.encoded), "eu.europa.ec.eudi.pid.1")
+        wallet.evaluateReaderTrust(listOf(cert.encoded))
+        coVerify(exactly = 3) { apiClient.evaluateTrust(any()) }
+
+        (getField(wallet, "trustDecisionCache") as TrustDecisionCache).clear()
+        wallet.evaluateIssuerTrust(listOf(cert.encoded), "org.iso.18013.5.1.mDL")
+        coVerify(exactly = 4) { apiClient.evaluateTrust(any()) }
+    }
+
+    @Test
+    fun trustDecisionCache_errorsAreNotCachedByTheWallet() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws NetworkException("offline")
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "trustDecisionCache" to TrustDecisionCache(java.time.Duration.ofMinutes(5)),
+        )
+        wallet.evaluateReaderTrust(listOf(ByteArray(4)))
+        wallet.evaluateReaderTrust(listOf(ByteArray(4)))
+        coVerify(exactly = 2) { apiClient.evaluateTrust(any()) }
     }
 
     // -- Fallback to local validation: genuine unreachability only.
@@ -7056,6 +7307,13 @@ class SirosWalletTest {
         // (flow_complete/flow_error/reportSignFailure/cancelCurrentFlow)
         // now discards this flow's ZK issuance preparation, so a null map
         // NPEs there.
+        // Disabled by default so cache behaviour never leaks into other tests.
+        if ("trustDecisionCache" !in values) {
+            values["trustDecisionCache"] = TrustDecisionCache(java.time.Duration.ZERO)
+        }
+        if ("serverIssuerTrustByFlow" !in values) {
+            values["serverIssuerTrustByFlow"] = java.util.concurrent.ConcurrentHashMap<String, TrustResult>()
+        }
         if ("zkPreparationsByFlow" !in values) {
             values["zkPreparationsByFlow"] =
                 java.util.concurrent.ConcurrentHashMap<String, org.siros.sdk.credentials.ZkIssuancePreparation>()
@@ -7697,7 +7955,7 @@ class SirosWalletTest {
         val api = mockk<BackendApiClient>()
         coEvery { api.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
         setField(fx.wallet, "apiClient", api)
-        setField(fx.wallet, "trustCache", TrustCache())
+        setField(fx.wallet, "trustDecisionCache", TrustDecisionCache(java.time.Duration.ZERO))
         setField(fx.wallet, "_presentationHistory", mutableListOf<PresentationRecord>())
     }
 

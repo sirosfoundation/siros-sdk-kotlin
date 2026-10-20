@@ -122,6 +122,7 @@ import org.siros.sdk.wallet.dcapi.DCAPIRequestParser
 import org.siros.sdk.transport.CredentialNotifier
 import org.siros.sdk.transport.engine.CredentialMatch
 import org.siros.sdk.transport.engine.CredentialNotificationEvent
+import org.siros.sdk.transport.engine.CredentialResult
 import org.siros.sdk.transport.engine.FlowError
 import org.siros.sdk.transport.engine.ProofObject
 import org.siros.sdk.transport.engine.SignRequestMessage
@@ -3707,13 +3708,13 @@ class SirosWallet private constructor(
                 context = null,
             )
         } catch (e: TrustEvaluationFailedClosedException) {
-            // Deliberately ahead of the cache: a refusal, or REMOTE_ONLY with
-            // an unreachable backend, must not be answered by a stale positive.
-            Timber.e(e, "DC API trust evaluation failed closed for $subjectId - not consulting the trust cache")
+            // A refusal, or REMOTE_ONLY with an unreachable backend: fail closed.
+            Timber.e(e, "DC API trust evaluation failed closed for $subjectId")
             TrustResult(trusted = false, identifier = subjectId, reason = e.message)
         } catch (e: Exception) {
+            // No stale answer stands in for a failed evaluation (see TrustDecisionCache).
             Timber.w(e, "DC API trust evaluation failed for $subjectId")
-            trustCache.get(subjectId) ?: TrustResult(trusted = false, identifier = subjectId, reason = e.message)
+            TrustResult(trusted = false, identifier = subjectId, reason = e.message)
         }
 
         // Unlike the QR/redirect flow, there is no engine round-trip here to
@@ -4709,7 +4710,7 @@ class SirosWallet private constructor(
     private val pendingAuthorizations = mutableMapOf<String, PendingAuthorization>()
 
     /** Persistent trust cache for degraded-mode operation. */
-    private val trustCache = TrustCache()
+    private val trustDecisionCache = TrustDecisionCache(config.trustDecisionCacheTtl)
 
     /**
      * Flow IDs that have already reached a terminal state (error or complete).
@@ -5169,6 +5170,16 @@ class SirosWallet private constructor(
     }
 
     private var apiClient: BackendApiClient? = null
+        set(value) {
+            // A new, dropped or logged-out backend connection must not inherit
+            // decisions the previous one obtained.
+            field = value
+            trustDecisionCache.clear()
+        }
+
+    /** Every `/v1/evaluate` call goes through here; see [TrustDecisionCache]. */
+    private suspend fun evaluateTrustCached(client: BackendApiClient, request: JsonObject): JsonObject =
+        trustDecisionCache.getOrEvaluate(TrustDecisionCache.keyFor(request)) { client.evaluateTrust(request) }
     private var engineSession: WalletEngineSession? = null
     /** Collects [engineSession]'s state to catch [WalletEngineSession.State.REAUTH_REQUIRED]
      *  transitions from the automatic background reconnect loop, which never
@@ -6233,7 +6244,7 @@ class SirosWallet private constructor(
                 }
                 request?.get("context")?.let { put("context", it) }
             }
-            val response = apiClient!!.evaluateTrust(evaluationRequest)
+            val response = evaluateTrustCached(apiClient!!, evaluationRequest)
             val decision = response["decision"]?.jsonPrimitive?.boolean ?: false
             val context = response["context"]?.jsonObject
 
@@ -6693,7 +6704,8 @@ class SirosWallet private constructor(
                     )
                     // Only populate the trust cache — do NOT store in lastTrustResults
                     // (that map is for verifier consent UI in credential_selection step)
-                    trustCache.put(trustResult.identifier ?: "", trustResult)
+                    // Kept per flow for the issuance gate (issuanceTrustRefusal).
+                    serverIssuerTrustByFlow[msg.flowId] = trustResult
                     Timber.i("Server-side issuer trust: trusted=${trustResult.trusted} for ${trustResult.identifier}")
                 }
 
@@ -6790,6 +6802,20 @@ class SirosWallet private constructor(
                 var storedCount = 0
                 var storeFailureReason: String? = null
 
+                // Issuance trust gate (fail closed): decided before ANYTHING is
+                // stored, superseded, captured or synced. See issuanceTrustRefusal.
+                val engineIssuerTrust = serverIssuerTrustByFlow.remove(msg.flowId)
+                val issuanceCredentials = msg.credentials.orEmpty()
+                val trustRefusal = if (issuanceCredentials.isEmpty()) {
+                    null
+                } else {
+                    issuanceTrustRefusal(issuanceCredentials, engineIssuerTrust) { mdocIssuanceTrust(it) }
+                }
+                if (trustRefusal != null) {
+                    refuseUntrustedIssuance(msg.flowId, issuanceCredentials, engineIssuerTrust, trustRefusal)
+                    return@collect
+                }
+
                 // Shared across every copy in this response so the UI can group
                 // them into one card (see StoredCredential.batchId) - ALWAYS
                 // assigned, even for a single-credential issuance, matching
@@ -6862,19 +6888,7 @@ class SirosWallet private constructor(
                             storeFailureReason = "Received credential could not be read (${e.message ?: e::class.simpleName})"
                             return@forEachIndexed
                         }
-                        // VICAL issuer-trust (ISO 18013-5 Annex C): defensive
-                        // check on the newly-issued credential's issuerAuth,
-                        // surfaced via logging only - not a blocking gate,
-                        // same convention as evaluateReaderTrust's remote/
-                        // local-fallback reader-trust check at presentation
-                        // time (see evaluateIssuerTrust's doc comment).
-                        val issuerTrust = verifyAndEvaluateIssuerTrust(parsed.issuerSigned.issuerAuth, parsed.docType)
-                        if (issuerTrust != null) {
-                            Timber.i(
-                                "mdoc issuer trust for docType=${parsed.docType}: " +
-                                    "trusted=${issuerTrust.trusted} reason=${issuerTrust.reason}",
-                            )
-                        }
+                        // Issuer trust was already established by the gate above.
                         val metadata = flowOffer?.let { offer ->
                             val mddlSchema = try {
                                 mddlSchemaFetcher.fetch(
@@ -7153,6 +7167,7 @@ class SirosWallet private constructor(
                 Timber.e("Flow ${msg.flowId} error: ${msg.error.code} — ${msg.error.message}")
                 val fid = msg.flowId ?: "unknown"
                 terminatedFlowIds.add(fid)
+                serverIssuerTrustByFlow.remove(fid)
                 pendingMatchResultsByFlow.remove(fid)
                 val redirectUri = msg.error.details?.get("redirect_uri")?.jsonPrimitive?.contentOrNull
                 eventListener?.onFlowError(fid, msg.error.message, redirectUri)
@@ -7248,9 +7263,9 @@ class SirosWallet private constructor(
         scope.launch {
             val request = payload["request"]?.jsonObject
             val subjectId = request?.get("subject_id")?.jsonPrimitive?.contentOrNull
-
+            val subjectType = request?.get("subject_type")?.jsonPrimitive?.contentOrNull
+            
             try {
-                val subjectType = request?.get("subject_type")?.jsonPrimitive?.contentOrNull
 
                 if (subjectId.isNullOrBlank()) {
                     Timber.e("Trust evaluation request missing subject_id")
@@ -7330,9 +7345,6 @@ class SirosWallet private constructor(
                 // Store for use in credential selection UI
                 lastTrustResults[flowId] = trustResult
 
-                // Populate trust cache (only positive results are stored)
-                trustCache.put(subjectId, trustResult)
-
                 Timber.i(
                     "Trust evaluation result: decision=${trustResult.trusted} " +
                         "framework=${trustResult.framework} for $subjectId"
@@ -7348,15 +7360,11 @@ class SirosWallet private constructor(
             } catch (e: Exception) {
                 Timber.e(e, "Trust evaluation failed")
 
-                // Degraded mode: check cache for a recent positive result
-                val cached = trustCache.get(subjectId ?: "")
-                if (cached != null) {
-                    Timber.w("Using cached trust result for $subjectId (backend unreachable)")
-                    lastTrustResults[flowId] = cached
-                    engine.sendTrustResult(flowId, true)
-                } else {
-                    engine.sendTrustResult(flowId, false, e.message ?: "Trust evaluation failed")
-                }
+                // No degraded mode: a failed evaluation is a refusal. A stale
+                // answer never stands in for an unreachable backend (only a
+                // still-fresh TrustDecisionCache entry answers, and that is
+                // consulted before the call, not after its failure).
+                engine.sendTrustResult(flowId, false, e.message ?: "Trust evaluation failed")
             }
         }
     }
@@ -7632,7 +7640,7 @@ class SirosWallet private constructor(
 
         return try {
             Timber.d("Calling /v1/evaluate for $subjectId")
-            val response = client.evaluateTrust(evaluationRequest)
+            val response = evaluateTrustCached(client, evaluationRequest)
 
             val decision = response["decision"]?.jsonPrimitive?.boolean ?: false
             val respContext = response["context"]?.jsonObject
@@ -7950,7 +7958,7 @@ class SirosWallet private constructor(
         }
 
         Timber.d("Calling /v1/evaluate for $subjectPrefix $subjectId ($actionName)")
-        val response = client.evaluateTrust(evaluationRequest)
+        val response = evaluateTrustCached(client, evaluationRequest)
 
         val decision = response["decision"]?.jsonPrimitive?.boolean ?: false
         val respContext = response["context"]?.jsonObject
@@ -8037,6 +8045,69 @@ class SirosWallet private constructor(
                 .onFailure { Timber.w(it, "Failed to parse a configured VICAL root certificate PEM") }
                 .getOrNull()
         }
+    }
+
+    /** Per-flow server-side issuer trust reported by the engine; see [issuanceTrustRefusal]. */
+    private val serverIssuerTrustByFlow = java.util.concurrent.ConcurrentHashMap<String, TrustResult>()
+
+    /** Decodes an issued `mso_mdoc` credential and evaluates its issuer; null if it cannot be verified. */
+    private suspend fun mdocIssuanceTrust(credential: CredentialResult): TrustResult? {
+        val parsed = try {
+            val bytes = android.util.Base64.decode(
+                credential.credential,
+                android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP,
+            )
+            org.siros.sdk.credentials.mdoc.MdocCbor.parseStoredCredential(bytes)
+        } catch (e: Exception) {
+            Timber.w(e, "Issued mdoc credential could not be parsed for the issuer trust check")
+            return null
+        }
+        return verifyAndEvaluateIssuerTrust(parsed.issuerSigned.issuerAuth, parsed.docType)
+    }
+
+    /**
+     * Ends an issuance whose issuer trust was not established: nothing is
+     * stored, no refresh token is captured, nothing is synced, a superseded
+     * renewal source is left untouched, and the issuer is told the wallet did
+     * not accept the credential (OID4VCI `credential_failure`, best effort,
+     * no detail beyond a fixed code).
+     */
+    private suspend fun refuseUntrustedIssuance(
+        flowId: String,
+        credentials: List<CredentialResult>,
+        engineTrust: TrustResult?,
+        reason: String,
+    ) {
+        val issuer = activeOffer?.credentialIssuerIdentifier ?: engineTrust?.identifier
+        Timber.e("Refusing issuance for flow $flowId from ${issuer ?: "unknown issuer"}: $reason")
+        credentials.forEach { credential ->
+            credential.notificationId?.let { notificationId ->
+                try {
+                    credentialNotifier?.sendCredentialNotification(
+                        flowId = flowId,
+                        notificationId = notificationId,
+                        event = CredentialNotificationEvent.FAILURE,
+                        eventDescription = "issuer_not_trusted",
+                    )
+                } catch (e: Exception) {
+                    Timber.w(e, "credential_failure notification failed (best effort)")
+                }
+            }
+        }
+        resetIssuanceGuards()
+        discardZkIssuancePreparation(flowId)
+        val current = _state.value
+        val userId = (current as? WalletState.FlowActive)?.userId
+            ?: (current as? WalletState.Ready)?.userId ?: ""
+        val displayName = (current as? WalletState.FlowActive)?.displayName
+            ?: (current as? WalletState.Ready)?.displayName
+        _state.value = WalletState.Ready(
+            userId = userId,
+            displayName = displayName,
+            credentials = credentialStore.getAll(),
+        )
+        eventListener?.onIssuerNotTrusted(flowId, issuer, reason)
+        eventListener?.onFlowError(flowId, ISSUER_NOT_TRUSTED_MESSAGE)
     }
 
     /**

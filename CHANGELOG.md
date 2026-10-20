@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **BEHAVIOUR-BREAKING for hosts relying on storing untrusted credentials:
+  issuance is fail-closed on issuer trust.** A credential is stored only if its
+  issuer's trust is established: an mdoc needs a verifiable `issuerAuth` and a
+  positive `evaluateIssuerTrust` (remote `decision=true`, or - only when the
+  backend was genuinely unreachable - a positive local validation against
+  configured roots); a negative decision, a 4xx/validation rejection,
+  unreachable with no (or negative) local roots, or a missing/unverifiable
+  `issuerAuth` refuses the issuance. Other formats are refused when the engine's
+  server-side issuer trust (`trust_evaluated`) was negative. A refusal stores
+  nothing, captures no refresh token, syncs nothing, leaves a renewal's
+  superseded batch in place, sends the OID4VCI `credential_failure`
+  notification (best effort, no detail) and ends the flow with the new
+  `WalletEventListener.onIssuerNotTrusted` plus `onFlowError` carrying the
+  default wording (string resource `siros_issuer_not_trusted`, localised
+  en/sv/fi/el/pt). There is no host switch to turn this off.
+- **One trust-decision cache replaces `TrustCache`** (removed). Every
+  `/v1/evaluate` call (mdoc issuer/reader, DC API, engine-relayed and WMP trust
+  evaluation) goes through `TrustDecisionCache`: successful decisions (allow
+  and deny) only, keyed by a hash of the whole request (action, subject, full
+  certificate chain / key material, context), `WalletConfig.trustDecisionCacheTtl`
+  (default 5 minutes, `Duration.ZERO` disables), in memory, 256 entries LRU,
+  single-flight for identical concurrent requests, cleared when the backend
+  connection is dropped or replaced (logout, account deletion, reconnect).
+  Errors and timeouts are never cached and an expired entry is never served,
+  not even while the backend is unreachable; the old "cached positive while the
+  backend is unreachable" fallback is gone. Trade-off: a trust revocation can
+  take up to the TTL to take effect.
 - **BREAKING (unreleased TS12 API): payment SCA takes its authentication
   factors from the signing operation, not from a provider.**
   `siros-wscd-manager` 0.9.1 -> 0.10.0 (UniFFI bindings regenerated:
