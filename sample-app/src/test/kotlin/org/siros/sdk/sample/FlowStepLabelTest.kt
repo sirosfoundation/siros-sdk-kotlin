@@ -62,3 +62,17 @@ class FlowStepLabelTest {
         }
     }
 }
+
+class SilentCancellationTest {
+    @org.junit.Test
+    fun `a user cancel is silent, an internal timeout is a failure`() {
+        org.junit.Assert.assertTrue(isSilentCancellation(kotlinx.coroutines.CancellationException("cancelled")))
+        org.junit.Assert.assertFalse(isSilentCancellation(IllegalStateException("x")))
+        val timeout = try {
+            kotlinx.coroutines.runBlocking { kotlinx.coroutines.withTimeout(1) { kotlinx.coroutines.delay(1000) } }
+            null
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) { e }
+        org.junit.Assert.assertNotNull(timeout)
+        org.junit.Assert.assertFalse(isSilentCancellation(timeout!!))
+    }
+}

@@ -3374,8 +3374,10 @@ class SirosWallet private constructor(
             )
             advanceIssuanceStart(epoch, WalletState.FlowActive.STEP_PREPARING_ISSUANCE)
 
-            activeOffer = offer
-            activeVctmDocument = try {
+            // Lookup results stay local until the epoch is re-checked below: a
+            // cancelled attempt must not publish into fields a newer attempt
+            // now owns.
+            val vctmDocument = try {
                 vctmFetcher.fetchDocument(
                     issuerUrl = offer.credentialIssuerIdentifier,
                     scope = offer.credentialConfigurationId,
@@ -3390,13 +3392,12 @@ class SirosWallet private constructor(
                 Timber.w(e, "Failed to fetch VCTM for ${offer.credentialConfigurationId}")
                 null
             }
-            activeVctm = activeVctmDocument?.vctm
             // The mdoc half of the same lookup. Previously fetched on demand in
             // resolveEffectiveKeystoreForIssuance and thrown away; kept now
             // because verifyIssuedType needs the authorised doctype at
             // flow_complete, and because the fetcher is cached this is the same
             // request that path already makes rather than an extra one.
-            activeMddlSchema = try {
+            val mddlSchema = try {
                 mddlSchemaFetcher.fetch(
                     issuerUrl = offer.credentialIssuerIdentifier,
                     scope = offer.credentialConfigurationId,
@@ -3406,6 +3407,11 @@ class SirosWallet private constructor(
                 Timber.w(e, "Failed to fetch MDDL schema for ${offer.credentialConfigurationId}")
                 null
             }
+            advanceIssuanceStart(epoch, WalletState.FlowActive.STEP_STARTING_FLOW)
+            activeOffer = offer
+            activeVctmDocument = vctmDocument
+            activeVctm = vctmDocument?.vctm
+            activeMddlSchema = mddlSchema
             val credentialOffer = kotlinx.serialization.json.buildJsonObject {
                 put("credential_issuer", kotlinx.serialization.json.JsonPrimitive(
                     offer.credentialIssuerIdentifier
@@ -3431,7 +3437,7 @@ class SirosWallet private constructor(
                     }
                 })
             }
-            advanceIssuanceStart(epoch, WalletState.FlowActive.STEP_STARTING_FLOW)
+            issuanceStartSent = true
             engine.startIssuance(
                 offer = credentialOffer.toString(),
                 redirectUri = config.redirectUri.ifBlank { null },
@@ -3446,8 +3452,7 @@ class SirosWallet private constructor(
             // session. Also drops the pending flow state (see
             // failIssuanceStart); a cancelled start was already reset by
             // cancelCurrentFlow.
-            failIssuanceStart(epoch)
-            throw e
+            throwUnlessStale(epoch, e)
         }
     }
 
@@ -3538,9 +3543,9 @@ class SirosWallet private constructor(
             connectEngineForIssuance(engine, epoch)
             advanceIssuanceStart(epoch, WalletState.FlowActive.STEP_PREPARING_ISSUANCE)
             val redirectUri = config.redirectUri.ifBlank { null }
-            resolveOfferForDisplay(offerUri)?.let { offer ->
-                activeOffer = offer
-                activeVctm = try {
+            val displayOffer = resolveOfferForDisplay(offerUri)
+            val displayVctm = displayOffer?.let { offer ->
+                try {
                     vctmFetcher.fetch(
                         issuerUrl = offer.credentialIssuerIdentifier,
                         scope = offer.credentialConfigurationId,
@@ -3551,13 +3556,20 @@ class SirosWallet private constructor(
                     null
                 }
             }
+            // Lookup results are published only after the epoch re-check: a
+            // cancelled attempt must not write into a newer attempt's fields.
+            advanceIssuanceStart(epoch, WalletState.FlowActive.STEP_STARTING_FLOW)
+            if (displayOffer != null) {
+                activeOffer = displayOffer
+                activeVctm = displayVctm
+            }
             // OAuth Client Attestation is no longer resolved here: the engine
             // asks for it via a `request_attestation` sign request once it has
             // resolved the issuer's authorization server itself - see
             // handleRequestAttestation. That spares this side a second fetch
             // of a possibly single-use credential_offer_uri and a duplicate
             // authorization_servers/client_id discovery.
-            advanceIssuanceStart(epoch, WalletState.FlowActive.STEP_STARTING_FLOW)
+            issuanceStartSent = true
             when (val start = resolveIssuanceStart(offerUri)) {
                 is IssuanceStart.Offer -> engine.startIssuance(
                     offer = start.offer,
@@ -3574,8 +3586,7 @@ class SirosWallet private constructor(
             // See startIssuanceByOffer's matching catch block: the flow was
             // never registered server-side, so nothing will ever clear
             // issuanceInFlight via the normal flow_complete/flow_error path.
-            failIssuanceStart(epoch)
-            throw e
+            throwUnlessStale(epoch, e)
         }
     }
 
@@ -4177,7 +4188,11 @@ class SirosWallet private constructor(
         if (current is WalletState.FlowActive) {
             // A pending state has no engine flow yet, so there is nothing to
             // cancel server-side or to discard.
-            if (!current.isPending) {
+            if (current.isPending) {
+                // The engine may already have the start without having named a
+                // flow yet; its first event will be cancelled when it arrives.
+                if (issuanceStartSent) abandonedStartTimes.add(System.currentTimeMillis())
+            } else {
                 try {
                     engineSession?.cancelFlow(current.flowId)
                 } catch (e: Exception) {
@@ -5248,6 +5263,48 @@ class SirosWallet private constructor(
      */
     private val issuanceStartEpoch = java.util.concurrent.atomic.AtomicInteger(0)
 
+    /** True once the current start has sent `flow_start` but no engine flow id has arrived yet. */
+    @Volatile
+    private var issuanceStartSent = false
+
+    /**
+     * Starts that were cancelled after `flow_start` went out, as the times they
+     * were cancelled. The engine assigns the flow id only in its first progress
+     * event, so the cancelled flow can only be identified when that event
+     * arrives: the first unknown flow id after such a cancel (events are
+     * ordered per session) is cancelled server-side and its events are ignored.
+     * Entries expire so a start the engine never acted on cannot swallow a
+     * later, legitimate flow.
+     */
+    private val abandonedStartTimes = java.util.concurrent.CopyOnWriteArrayList<Long>()
+    private val abandonedFlowIds: MutableSet<String> =
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
+
+    /**
+     * Whether an engine event belongs to a flow the user already cancelled
+     * (see [abandonedStartTimes]); when it is the first event of such a flow,
+     * cancels it on the engine and remembers its id.
+     */
+    private fun isAbandonedFlowEvent(flowId: String?): Boolean {
+        if (flowId == null) return false
+        if (flowId in abandonedFlowIds) return true
+        val now = System.currentTimeMillis()
+        abandonedStartTimes.removeAll { now - it > ABANDONED_START_TTL_MS }
+        val current = _state.value
+        val known = (current as? WalletState.FlowActive)?.takeIf { !it.isPending }?.flowId == flowId ||
+            flowId in terminatedFlowIds
+        if (known || abandonedStartTimes.isEmpty()) return false
+        abandonedStartTimes.removeAt(0)
+        abandonedFlowIds.add(flowId)
+        terminatedFlowIds.add(flowId)
+        try {
+            engineSession?.cancelFlow(flowId)
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to cancel abandoned flow $flowId")
+        }
+        return true
+    }
+
     /**
      * Publish the synchronous pre-engine state of an issuance start: the first
      * thing a start call does, before any network work, so a host can show the
@@ -5261,6 +5318,7 @@ class SirosWallet private constructor(
      */
     private fun beginIssuanceStart(): Int {
         val epoch = issuanceStartEpoch.incrementAndGet()
+        issuanceStartSent = false
         val current = _state.value
         if (current is WalletState.Ready) {
             _state.value = WalletState.FlowActive(
@@ -5292,12 +5350,27 @@ class SirosWallet private constructor(
     }
 
     /**
+     * Failure path of a start: a current attempt restores [WalletState.Ready]
+     * and rethrows [e]; an attempt that was cancelled meanwhile unwinds
+     * silently with a [kotlinx.coroutines.CancellationException], so a late
+     * network failure cannot surface as an error over the user's cancel or a
+     * newer attempt. The cancelled attempt leaves state alone - the cancel
+     * already reset it and it may now belong to a newer attempt.
+     */
+    private fun throwUnlessStale(epoch: Int, e: Exception): Nothing {
+        if (issuanceStartEpoch.get() != epoch) {
+            throw kotlinx.coroutines.CancellationException("Issuance start cancelled").apply { initCause(e) }
+        }
+        failIssuanceStart(epoch)
+        throw e
+    }
+
+    /**
      * A start that failed before the engine reported any flow: clear the
      * pending state so the host is not left on a spinner that nothing will ever
      * clear. The exception itself is the error; this only restores [WalletState.Ready].
      */
     private fun failIssuanceStart(epoch: Int) {
-        if (issuanceStartEpoch.get() != epoch) return
         issuanceInFlight = false
         pendingRenewalSourceBatchId = null
         activeOffer = null
@@ -6395,6 +6468,7 @@ class SirosWallet private constructor(
         // Observe sign requests → auto-sign with keystore
         scope.launch {
             engine.signRequests().collect { msg ->
+                if (msg.flowId in abandonedFlowIds) return@collect
                 // An SCA request waits on the user (up to the consent limit); doing that inside this
                 // sequential collector would stall every other sign request (issuance proofs, client
                 // auth, attestation), so it is handled in its own coroutine.
@@ -6761,6 +6835,7 @@ class SirosWallet private constructor(
         // Observe flow progress
         scope.launch {
             engine.flowProgress().collect { msg ->
+                if (isAbandonedFlowEvent(msg.flowId)) return@collect
                 Timber.d("Flow ${msg.flowId} progress: ${msg.step}")
 
                 // Handle trust evaluation — matching wallet-frontend reference implementation
@@ -6881,6 +6956,7 @@ class SirosWallet private constructor(
         // Observe flow completion → sync new credentials
         scope.launch {
             engine.flowComplete().collect { msg ->
+                if (msg.flowId in abandonedFlowIds) return@collect
                 Timber.i("Flow ${msg.flowId} complete")
                 terminatedFlowIds.add(msg.flowId)
                 pendingMatchResultsByFlow.remove(msg.flowId)
@@ -7252,6 +7328,7 @@ class SirosWallet private constructor(
         // Observe flow errors
         scope.launch {
             engine.flowErrors().collect { msg ->
+                if (msg.flowId != null && msg.flowId in abandonedFlowIds) return@collect
                 Timber.e("Flow ${msg.flowId} error: ${msg.error.code} — ${msg.error.message}")
                 val fid = msg.flowId ?: "unknown"
                 terminatedFlowIds.add(fid)
@@ -8501,6 +8578,7 @@ class SirosWallet private constructor(
 
         /** Thrown wherever a call needs the backend and the wallet has no session yet. */
         private const val NOT_CONNECTED = "Not connected"
+        private const val ABANDONED_START_TTL_MS = 30_000L
 
         /** Shown when a sign request fails without a message. */
         private const val SIGNING_FAILED_MESSAGE = "Signing failed"

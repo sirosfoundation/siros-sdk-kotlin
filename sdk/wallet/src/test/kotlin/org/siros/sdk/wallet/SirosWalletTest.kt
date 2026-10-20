@@ -7082,6 +7082,94 @@ class SirosWalletTest {
         assertEquals("offer_parsed", s.status)
     }
 
+    @Test
+    fun failureOfACancelledStart_unwindsAsCancellation_notAsTheNetworkError() = runTest(dispatcher) {
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        // Fails only after the cancel, past every epoch check, so it is the
+        // network error itself that has to be suppressed.
+        coEvery { engine.awaitConnected(any()) } coAnswers {
+            gate.await()
+            throw IllegalStateException("Engine WebSocket connection failed")
+        }
+        coEvery { engine.forceReconnect() } just runs
+        val wallet = startingWallet(engine, stateFlow)
+        var result: Throwable? = null
+        val job = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            result = runCatching { wallet.startIssuanceByOffer(startOffer) }.exceptionOrNull()
+        }
+        wallet.cancelCurrentFlow()
+        gate.complete(Unit)
+        job.join()
+
+        assertTrue("a late failure after cancel must not surface as an error, was $result",
+            result is kotlinx.coroutines.CancellationException)
+        assertTrue(stateFlow.value is WalletState.Ready)
+    }
+
+    @Test
+    fun cancelDuringMetadataFetch_doesNotPublishIntoSharedFields() = runTest(dispatcher) {
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val vctmFetcher = mockk<org.siros.sdk.credentials.VctmFetcher>(relaxed = true)
+        val reached = kotlinx.coroutines.CompletableDeferred<Unit>()
+        coEvery { vctmFetcher.fetchDocument(any(), any(), any(), any(), any()) } coAnswers {
+            reached.complete(Unit)
+            gate.await()
+            null
+        }
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val wallet = newWallet(
+            "_state" to stateFlow,
+            "engineSession" to engine,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "vctmFetcher" to vctmFetcher,
+        )
+        val job = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            runCatching { wallet.startIssuanceByOffer(startOffer) }
+        }
+        // Wait until the start is parked inside the metadata fetch (after the
+        // entitlement check, which runs on the IO dispatcher), then cancel.
+        reached.await()
+        wallet.cancelCurrentFlow()
+        setField(wallet, "activeOffer", null)
+        gate.complete(Unit)
+        job.join()
+
+        assertNull("cancelled start published its offer", getField(wallet, "activeOffer"))
+        verify(exactly = 0) { engine.startIssuance(any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun cancelAfterFlowStartSent_cancelsTheFlowOnItsFirstEvent_andIgnoresIt() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val engine = mockEngineConstructor(progressFlow = progressFlow)
+        every { engine.startIssuance(any(), any(), any(), any(), any(), any()) } just runs
+        every { engine.cancelFlow(any()) } just runs
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val wallet = newWallet(
+            "_state" to stateFlow,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", tenantId = "tenant-1"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to listener,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        wallet.startIssuanceByOffer(startOffer) // flow_start is out, no flow id yet
+        wallet.cancelCurrentFlow()
+        assertTrue(stateFlow.value is WalletState.Ready)
+
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-late", step = "parsing_offer"))
+        advanceUntilIdle()
+
+        verify(exactly = 1) { engine.cancelFlow("flow-late") }
+        assertTrue("the cancelled flow must not reopen: ${stateFlow.value}", stateFlow.value is WalletState.Ready)
+    }
+
     private fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {
         val wallet = allocateInstance(SirosWallet::class.java) as SirosWallet
         val values = fields.toMap(mutableMapOf())
@@ -7119,6 +7207,14 @@ class SirosWalletTest {
             val registry = mockk<AccountRegistry>(relaxed = true)
             every { registry.listAccounts() } returns emptyList()
             values["accountRegistry"] = registry
+        }
+        if ("abandonedStartTimes" !in values) {
+            values["abandonedStartTimes"] = java.util.concurrent.CopyOnWriteArrayList<Long>()
+        }
+        if ("abandonedFlowIds" !in values) {
+            values["abandonedFlowIds"] = java.util.Collections.newSetFromMap(
+                java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+            )
         }
         if ("issuanceStartEpoch" !in values) {
             values["issuanceStartEpoch"] = java.util.concurrent.atomic.AtomicInteger(0)
