@@ -250,6 +250,13 @@ public final class org/siros/sdk/wallet/ConsentString : java/lang/Enum {
 	public static final field CLAIM Lorg/siros/sdk/wallet/ConsentString;
 	public static final field FOOTER Lorg/siros/sdk/wallet/ConsentString;
 	public static final field LEGACY_PSEUDONYM Lorg/siros/sdk/wallet/ConsentString;
+	public static final field PREDICATE_DATE_EQ Lorg/siros/sdk/wallet/ConsentString;
+	public static final field PREDICATE_DATE_GE Lorg/siros/sdk/wallet/ConsentString;
+	public static final field PREDICATE_DATE_GT Lorg/siros/sdk/wallet/ConsentString;
+	public static final field PREDICATE_DATE_IN Lorg/siros/sdk/wallet/ConsentString;
+	public static final field PREDICATE_DATE_LE Lorg/siros/sdk/wallet/ConsentString;
+	public static final field PREDICATE_DATE_LT Lorg/siros/sdk/wallet/ConsentString;
+	public static final field PREDICATE_DATE_NE Lorg/siros/sdk/wallet/ConsentString;
 	public static final field PREDICATE_EQ Lorg/siros/sdk/wallet/ConsentString;
 	public static final field PREDICATE_GE Lorg/siros/sdk/wallet/ConsentString;
 	public static final field PREDICATE_GT Lorg/siros/sdk/wallet/ConsentString;
