@@ -7165,7 +7165,7 @@ class SirosWalletTest {
         wallet.cancelCurrentFlow()
         assertTrue(stateFlow.value is WalletState.Ready)
 
-        progressFlow.emit(FlowProgressMessage(flowId = "flow-late", step = "parsing_offer", connectionGeneration = engineGeneration.get()))
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-late", step = "parsing_offer").also { it.connectionGeneration = engineGeneration.get() })
         advanceUntilIdle()
 
         verify(exactly = 1) { engine.cancelFlow("flow-late") }
@@ -7203,7 +7203,7 @@ class SirosWalletTest {
         wallet.cancelCurrentFlow()
 
         flowErrors.emit(
-            FlowErrorMessage(flowId = "flow-late", error = org.siros.sdk.transport.engine.FlowError(code = "x", message = "boom"), connectionGeneration = engineGeneration.get())
+            FlowErrorMessage(flowId = "flow-late", error = org.siros.sdk.transport.engine.FlowError(code = "x", message = "boom")).also { it.connectionGeneration = engineGeneration.get() }
         )
         advanceUntilIdle()
 
@@ -7223,7 +7223,7 @@ class SirosWalletTest {
         // The retry replaces the socket; the cancelled flow's reply can no longer arrive.
         wallet.startIssuanceByOffer(startOffer)
 
-        progressFlow.emit(FlowProgressMessage(flowId = "flow-retry", step = "parsing_offer", connectionGeneration = engineGeneration.get()))
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-retry", step = "parsing_offer").also { it.connectionGeneration = engineGeneration.get() })
         advanceUntilIdle()
 
         verify(exactly = 0) { engine.cancelFlow(any()) }
@@ -7272,7 +7272,7 @@ class SirosWalletTest {
         method.isAccessible = true
         method.callSuspend(wallet, engine)
 
-        progressFlow.emit(FlowProgressMessage(flowId = "flow-presentation", step = "parsing_request", connectionGeneration = engineGeneration.get()))
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-presentation", step = "parsing_request").also { it.connectionGeneration = engineGeneration.get() })
         advanceUntilIdle()
 
         verify(exactly = 0) { engine.cancelFlow(any()) }
@@ -7303,17 +7303,66 @@ class SirosWalletTest {
         wallet.startIssuanceByOffer(startOffer)    // retry: new connection
 
         // The retry's own first event arrives first and must not be taken for the cancelled flow...
-        progressFlow.emit(FlowProgressMessage(flowId = "flow-new", step = "parsing_offer", connectionGeneration = engineGeneration.get()))
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-new", step = "parsing_offer").also { it.connectionGeneration = engineGeneration.get() })
         advanceUntilIdle()
         assertEquals("flow-new", (stateFlow.value as WalletState.FlowActive).flowId)
         verify(exactly = 0) { engine.cancelFlow("flow-new") }
 
         // ...and the buffered completion of the cancelled start, still tagged with
         // the old connection, is dropped instead of acting on the retry's state.
-        completes.emit(FlowCompleteMessage(flowId = "flow-old", connectionGeneration = oldGeneration))
+        completes.emit(FlowCompleteMessage(flowId = "flow-old").also { it.connectionGeneration = oldGeneration })
         advanceUntilIdle()
         verify(exactly = 1) { engine.cancelFlow("flow-old") }
         assertEquals("flow-new", (stateFlow.value as WalletState.FlowActive).flowId)
+    }
+
+    @Test
+    fun reconnectBetweenSendAndCancel_stillMatchesTheConnectionTheStartWasSentOn() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val (wallet, engine) = abandonedStartWallet(progressFlow, listener = listener, stateFlow = stateFlow)
+        advanceUntilIdle()
+        wallet.startIssuanceByOffer(startOffer)
+        val sentOn = engineGeneration.get()
+        engineGeneration.incrementAndGet() // automatic reconnect before the user cancels
+        wallet.cancelCurrentFlow()
+
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-late", step = "parsing_offer").also { it.connectionGeneration = sentOn })
+        advanceUntilIdle()
+
+        verify(exactly = 1) { engine.cancelFlow("flow-late") }
+        assertTrue(stateFlow.value is WalletState.Ready)
+    }
+
+    @Test
+    fun sessionReplacement_doesNotReuseAnAbandonedMarkerFromTheOldSession() = runTest(dispatcher) {
+        val progress1 = MutableSharedFlow<FlowProgressMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val (wallet, engine1) = abandonedStartWallet(progress1, listener = listener, stateFlow = stateFlow)
+        advanceUntilIdle()
+        wallet.startIssuanceByOffer(startOffer)
+        val generation = engineGeneration.get()
+        wallet.cancelCurrentFlow()               // marker: session 1, generation g
+        every { engine1.disconnect() } just runs
+
+        // Logout/login: a brand new session whose generations restart at the same number.
+        val progress2 = MutableSharedFlow<FlowProgressMessage>()
+        val engine2 = mockEngineConstructor(progressFlow = progress2)
+        every { engine2.startIssuance(any(), any(), any(), any(), any(), any()) } just runs
+        every { engine2.cancelFlow(any()) } just runs
+        engineGeneration.set(generation - 1) // so the new session's first connection is generation g again
+        invokeConnectEngine(wallet, "app-token-2")
+        advanceUntilIdle()
+        wallet.startIssuanceByOffer(startOffer)
+        assertEquals(generation, engineGeneration.get())
+
+        progress2.emit(FlowProgressMessage(flowId = "flow-legit", step = "parsing_offer").also { it.connectionGeneration = generation })
+        advanceUntilIdle()
+
+        verify(exactly = 0) { engine2.cancelFlow(any()) }
+        assertEquals("flow-legit", (stateFlow.value as WalletState.FlowActive).flowId)
     }
 
     private fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {

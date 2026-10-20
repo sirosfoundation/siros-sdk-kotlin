@@ -844,6 +844,28 @@ class WalletEngineSessionTest {
     }
 
     @Test
+    fun overlappingForceReconnect_supersededRejectionDoesNotSignalReauthOverTheNewerConnection() = runTest {
+        val session = WalletEngineSession(baseUrl = "https://wallet.example.com", tenantId = "t", client = client)
+        val gate = kotlinx.coroutines.CompletableDeferred<String>()
+        var calls = 0
+        var rejected = 0
+        session.connect(
+            "app-token",
+            tokenProvider = { if (calls++ == 0) { gate.await(); throw AuthException("expired", code = 401) } else "fresh-token" },
+            onAuthRejected = { rejected++ },
+        )
+        val first = launch(start = CoroutineStart.UNDISPATCHED) { session.forceReconnect() }
+        session.forceReconnect()
+        val stateBefore = session.state.value
+        gate.complete("unused") // the older call now fails with 401, after the newer one succeeded
+        first.join()
+
+        assertEquals("the stale rejection must not reach the wallet", 0, rejected)
+        assertEquals(stateBefore, session.state.value)
+        assertTrue(session.state.value != WalletEngineSession.State.REAUTH_REQUIRED)
+    }
+
+    @Test
     fun forceReconnect_signals_reauth_required_when_token_provider_rejects_with_401() = runTest {
         val session = WalletEngineSession(
             baseUrl = "https://wallet.example.com",

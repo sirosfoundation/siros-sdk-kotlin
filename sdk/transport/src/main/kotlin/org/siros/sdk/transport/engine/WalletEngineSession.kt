@@ -317,13 +317,17 @@ class WalletEngineSession(
      * @return the token to reconnect with, or null if reconnecting should
      *   stop (state has already been updated to reflect why).
      */
-    private suspend fun refreshTokenOrSignalReauth(): String? {
+    private suspend fun refreshTokenOrSignalReauth(request: Int? = null): String? {
         val provider = tokenProvider ?: return lastAppToken
+        // A refresh whose caller was superseded (see [forceReconnect]) must not
+        // publish anything: no token, no reauth signal, no state change.
+        fun superseded() = request != null && reconnectRequests.get() != request
         return try {
-            provider().also { lastAppToken = it }
+            provider().also { if (!superseded()) lastAppToken = it }
         } catch (e: CancellationException) {
             throw e
         } catch (e: AuthException) {
+            if (superseded()) return null
             if (e.code == 401 || e.code == 403) {
                 Timber.w(e, "Token refresh rejected (${e.code}) before reconnect - session invalid")
                 onAuthRejected?.invoke()
@@ -334,6 +338,7 @@ class WalletEngineSession(
                 lastAppToken
             }
         } catch (e: Exception) {
+            if (superseded()) return null
             Timber.w(e, "Token refresh failed before reconnect (transient) - retrying with existing token")
             lastAppToken
         }
@@ -362,22 +367,22 @@ class WalletEngineSession(
                 }
                 MessageTypes.FLOW_PROGRESS -> {
                     val msg = json.decodeFromString(FlowProgressMessage.serializer(), text)
-                        .copy(connectionGeneration = generation)
+                        .also { it.connectionGeneration = generation }
                     flowProgressChannel.trySend(msg)
                 }
                 MessageTypes.FLOW_COMPLETE -> {
                     val msg = json.decodeFromString(FlowCompleteMessage.serializer(), text)
-                        .copy(connectionGeneration = generation)
+                        .also { it.connectionGeneration = generation }
                     flowCompleteChannel.trySend(msg)
                 }
                 MessageTypes.FLOW_ERROR -> {
                     val msg = json.decodeFromString(FlowErrorMessage.serializer(), text)
-                        .copy(connectionGeneration = generation)
+                        .also { it.connectionGeneration = generation }
                     flowErrorChannel.trySend(msg)
                 }
                 MessageTypes.SIGN_REQUEST -> {
                     val msg = json.decodeFromString(SignRequestMessage.serializer(), text)
-                        .copy(connectionGeneration = generation)
+                        .also { it.connectionGeneration = generation }
                     signRequestChannel.trySend(msg)
                 }
                 MessageTypes.MATCH_REQUEST -> {
@@ -715,7 +720,7 @@ class WalletEngineSession(
     suspend fun forceReconnect() {
         if (lastAppToken == null) return
         val request = reconnectRequests.incrementAndGet()
-        val token = refreshTokenOrSignalReauth()
+        val token = refreshTokenOrSignalReauth(request)
         // A newer forceReconnect began while this one was refreshing its token
         // (the caller moved on - e.g. a cancelled start that was retried). It
         // owns the socket now; replacing it again would close the newer
