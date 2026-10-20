@@ -85,6 +85,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before `ge`, a `verifier_context`, the reserved meta members, ...) on top of its own shape checks; a vector-driven
   test over `spec/circuit-zk-validator-vectors.json` asserts both directions for every plan the circuit could prove.
   The validator and its vectors are unchanged.
+- **`private_seed` is per issuer (privatedata-spec 2.7, label `org.siros.private_seed/v2`).**
+  `private_seed = HKDF-SHA256(mainKey, salt = "", info = label || lp(credentialType) || lp(issuer))[:16]`,
+  `psc = SHA-256(private_seed)`, `lp(x)` = 2-byte big-endian length then the UTF-8 bytes; an empty field or one over
+  65535 bytes is refused (no seed). The issuer is the Credential Issuer Identifier exactly as the credential stores
+  it (`credentialIssuerIdentifier`, no normalisation: a trailing slash is another psc), so different issuers see
+  different psc values for one person. `HolderWitnessSource.privateSeedCommitment(credentialType, issuer)`,
+  `CircuitZkWitnessProvider.witness/privateSeedMatches` and `CircuitZkFunctionHandler.commitmentCheck` take the
+  issuer, `CircuitZkPresenter.Request.issuer` carries it (null refuses a function that needs the device seed) and
+  `handleCircuitZkDcApi` passes the stored identifier. The spec's `derived-secrets.json` is vendored verbatim
+  (privatedata-spec `1b796d2`): all 11 vectors, the 4 refused inputs and the 5 must-differ pairs reproduce. The
+  v1 label was never released; `spec/private-seed-vectors.*` and its generator are removed.
 - **PROPOSAL: `zk-claim-disclosure-v1`, a `circuit_zk` function for the legacy
   proof systems** (`CircuitZkLegacyDisclosure`; the id is one constant, the
   rulebook owners decide the name). Params `claims`, `systems` (the verifier's
