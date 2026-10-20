@@ -8076,6 +8076,30 @@ class SirosWalletTest {
         retry.join()
     }
 
+    @Test
+    fun cancelledStart_whoseFirstReplyIsAnErrorWithoutAFlowId_isIgnored() = runTest(dispatcher) {
+        val flowErrors = MutableSharedFlow<FlowErrorMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val (wallet, engine) = abandonedStartWallet(MutableSharedFlow(), flowErrors, listener, stateFlow)
+        advanceUntilIdle()
+        wallet.startIssuanceByOffer(startOffer)
+        wallet.cancelCurrentFlow()
+        wallet.startIssuanceByOffer(startOffer) // immediate retry; its reconnect has not replaced the socket yet in the old reply's view
+        val sentOn = engineGeneration.get() - 1  // the cancelled start's connection
+
+        flowErrors.emit(
+            FlowErrorMessage(flowId = null, error = org.siros.sdk.transport.engine.FlowError(code = "x", message = "boom"))
+                .also { it.connectionGeneration = sentOn }
+        )
+        advanceUntilIdle()
+
+        verify(exactly = 0) { listener.onFlowError(any(), any(), any()) }
+        verify(exactly = 0) { engine.cancelFlow(any()) }
+        assertTrue("retry keeps its pending state", (stateFlow.value as WalletState.FlowActive).isPending)
+        assertTrue(getField(wallet, "issuanceInFlight") as Boolean)
+    }
+
     private fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {
         val wallet = allocateInstance(SirosWallet::class.java) as SirosWallet
         val values = fields.toMap(mutableMapOf())

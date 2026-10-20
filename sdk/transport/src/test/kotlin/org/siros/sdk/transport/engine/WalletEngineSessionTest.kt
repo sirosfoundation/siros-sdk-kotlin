@@ -802,8 +802,13 @@ class WalletEngineSessionTest {
 
         session.forceReconnect()
 
-        // The purge marker is queued before anything the new connection delivers,
-        // so the first item each channel yields must be the new connection's.
+        // The reader processes the purge marker before anything the new connection
+        // delivers: once the new handshake envelope is seen, the purge has run.
+        session.messages().test {
+            listener.onMessage(webSocket, """{"type":"handshake_complete","session_id":"s2"}""")
+            while (awaitItem().type != MessageTypes.HANDSHAKE_COMPLETE) { /* keep consuming */ }
+            cancelAndIgnoreRemainingEvents()
+        }
         session.matchRequests().test {
             listener.onMessage(webSocket, """{"type":"match_request","flow_id":"new-flow","dcql_query":{}}""")
             assertEquals("new-flow", awaitItem().flowId)

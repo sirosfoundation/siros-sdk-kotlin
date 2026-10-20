@@ -5336,10 +5336,18 @@ class SirosWallet private constructor(
      * cancels it on the engine and remembers its id.
      */
     private fun isAbandonedFlowEvent(engine: WalletEngineSession, flowId: String?, generation: Int): Boolean {
-        if (flowId == null) return false
-        if (flowId in abandonedFlowIds) return true
         val now = System.currentTimeMillis()
         abandonedStarts.removeAll { now - it.time > ABANDONED_START_TTL_MS }
+        if (flowId == null) {
+            // An error that names no flow can still be the cancelled start's reply:
+            // its session and connection generation say so. There is no flow to
+            // cancel and nothing to remember; the marker is simply used up.
+            val marker = abandonedStarts.firstOrNull { it.session === engine && it.generation == generation }
+                ?: return false
+            abandonedStarts.remove(marker)
+            return true
+        }
+        if (flowId in abandonedFlowIds) return true
         val current = _state.value
         val known = (current as? WalletState.FlowActive)?.takeIf { !it.isPending }?.flowId == flowId ||
             flowId in terminatedFlowIds
