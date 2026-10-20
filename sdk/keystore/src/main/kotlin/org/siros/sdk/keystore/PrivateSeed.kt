@@ -188,19 +188,3 @@ class FixedRootHolderWitnessSource(rootKey: ByteArray) : HolderWitnessSource {
         serving: org.siros.sdk.credentials.CircuitZkServing?,
     ): CircuitZkPresenter = delegate.circuitZkPresenter(prover, circuits, validator, handlers, residency, userValue, serving)
 }
-
-/**
- * The holder-generated pseudonym commitment for one issuer (privatedata-spec 2.7
- * section 5.4.1): `psc = SHA-256(private_seed)` with the seed derived per
- * (credential type, issuer). [issuer] is the exact `credential_issuer`
- * identifier string from the issuer's metadata, used verbatim: a trailing slash
- * or other spelling difference yields a different `psc`, by design.
- *
- * Implemented by the keystores over [PrivateSeed] once its per-issuer
- * derivation lands; the wallet refuses to issue under an issuer that asks for a
- * commitment when its keystore is not one.
- */
-interface HolderCommitmentSource {
-    /** 32-byte `psc` for ([credentialType], [issuer]). Never log it. */
-    fun psc(credentialType: String, issuer: String): ByteArray
-}

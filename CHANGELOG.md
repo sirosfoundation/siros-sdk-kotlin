@@ -16,10 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   base64url-without-padding of the 32-byte `psc` to the `jwt` proof payload
   before signing. The issuer string is used verbatim (a trailing slash is a
   different commitment). Fail-closed: an unknown commitment name, a missing
-  type/issuer, a keystore that is not a `HolderCommitmentSource`, an
+  type/issuer, a keystore that is not a `HolderWitnessSource`, an
   attestation-type proof, or a value that is not 32 bytes fails the flow instead
-  of sending a proof without the claim. The value is never logged. New:
-  `HolderCommitmentSource` (keystore), `KeystoreManager.generateProof(..., extraClaims)`
+  of sending a proof without the claim, and still runs `onWscdOperationEnd`. The
+  commitment is `HolderWitnessSource.privateSeedCommitment(type, issuer)` (seed v2). The value is never logged. New:
+  `KeystoreManager.generateProof(..., extraClaims)`
   (non-empty claims refused by a conformer that cannot place them),
   `SignRequestParams`/`SignSubFlowParams` members.
 - **`PSC_CONFLICT` as a typed error.** The issuer's refusal of a different

@@ -4368,14 +4368,16 @@ class SirosWalletTest {
 
     // ---- holder commitments (org.siros.psc) in the proof JWT; https://github.com/SUNET/vc/issues/823 ----
 
-    private class PscKeystore(private val delegate: KeystoreManager) :
-        KeystoreManager by delegate, org.siros.sdk.keystore.HolderCommitmentSource {
-        val asked = mutableListOf<Pair<String, String>>()
-        override fun psc(credentialType: String, issuer: String): ByteArray {
-            asked += credentialType to issuer
-            return java.security.MessageDigest.getInstance("SHA-256")
-                .digest("$credentialType|$issuer".toByteArray(Charsets.UTF_8))
+    /** A keystore that is also a [org.siros.sdk.keystore.HolderWitnessSource]; records what it was asked. */
+    private fun pscKeystore(asked: MutableList<Pair<String, String>>): KeystoreManager {
+        val ks = mockk<KeystoreManager>(moreInterfaces = arrayOf(org.siros.sdk.keystore.HolderWitnessSource::class))
+        val src = ks as org.siros.sdk.keystore.HolderWitnessSource
+        every { src.privateSeedCommitment(any(), any()) } answers {
+            val t = firstArg<String>(); val i = secondArg<String>()
+            asked += t to i
+            java.security.MessageDigest.getInstance("SHA-256").digest("$t|$i".toByteArray(Charsets.UTF_8))
         }
+        return ks
     }
 
     private fun pscClaimFor(type: String, issuer: String): String = java.util.Base64.getUrlEncoder().withoutPadding()
@@ -4385,13 +4387,14 @@ class SirosWalletTest {
         keystore: KeystoreManager,
         params: SignRequestParams,
         listener: WalletEventListener? = null,
+        config: WalletConfig = WalletConfig(backendUrl = "https://wallet.example.com"),
     ) {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         mockEngineConstructor(signRequests = signFlow)
         val wallet = newWallet(
             "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
-            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "config" to config,
             "keystore" to keystore,
             "credentialStore" to FakeCredentialStore(mutableListOf()),
             "eventListener" to listener,
@@ -4413,12 +4416,10 @@ class SirosWalletTest {
         }
         timber.log.Timber.plant(tree)
         try {
-            val inner = mockk<KeystoreManager>()
+            val asked = mutableListOf<Pair<String, String>>()
+            val keystore = pscKeystore(asked)
             val captured = slot<Map<String, String>>()
-            coEvery {
-                inner.generateProof(any(), any(), any(), any(), capture(captured))
-            } returns "proof-jwt"
-            val keystore = PscKeystore(inner)
+            coEvery { keystore.generateProof(any(), any(), any(), any(), capture(captured)) } returns "proof-jwt"
             generateProofWithCommitments(
                 keystore,
                 SignRequestParams(
@@ -4431,11 +4432,27 @@ class SirosWalletTest {
             // The trailing slash is part of the issuer string: the commitment for the
             // slash-less spelling is a different value and was never asked for.
             assertNotEquals(pscClaimFor("urn:eudi:pid:1", "https://issuer.example"), captured.captured.getValue("org.siros.psc"))
-            assertEquals(listOf("urn:eudi:pid:1" to "https://issuer.example/"), keystore.asked)
+            assertEquals(listOf("urn:eudi:pid:1" to "https://issuer.example/"), asked)
             assertFalse("the commitment must never be logged", logged.contains(captured.captured.getValue("org.siros.psc")))
         } finally {
             timber.log.Timber.uproot(tree)
         }
+    }
+
+    @Test
+    fun generateProof_withHolderCommitments_everyProofOfABatchCarriesTheClaim() = runTest(dispatcher) {
+        val keystore = pscKeystore(mutableListOf())
+        val captured = mutableListOf<Map<String, String>>()
+        coEvery { keystore.generateProof(any(), any(), any(), any(), capture(captured)) } returns "proof-jwt"
+        generateProofWithCommitments(
+            keystore,
+            SignRequestParams(
+                audience = "aud-1", nonce = "n-1", count = 3, holderCommitments = listOf("psc"),
+                credentialType = "eu.europa.ec.eudi.nym_auth.1", credentialIssuer = "https://issuer.example",
+            ),
+        )
+        assertEquals(3, captured.size)
+        assertTrue(captured.all { it == mapOf("org.siros.psc" to pscClaimFor("eu.europa.ec.eudi.nym_auth.1", "https://issuer.example")) })
     }
 
     @Test
@@ -4451,6 +4468,7 @@ class SirosWalletTest {
     fun generateProof_withHolderCommitments_refusesWhenTheKeystoreCannotDeriveOne() = runTest(dispatcher) {
         val keystore = mockk<KeystoreManager>()
         val listener = mockk<WalletEventListener>(relaxed = true)
+        var ended = 0
         generateProofWithCommitments(
             keystore,
             SignRequestParams(
@@ -4458,7 +4476,10 @@ class SirosWalletTest {
                 credentialType = "t", credentialIssuer = "https://issuer.example",
             ),
             listener,
+            WalletConfig(backendUrl = "https://wallet.example.com", onWscdOperationEnd = { ended++ }),
         )
+        // The hardware-operation cleanup still ran on the refusal path.
+        assertEquals(1, ended)
         // The flow is failed, visibly, rather than answered with a proof lacking the claim.
         verify(exactly = 1) { listener.onFlowError("flow-psc", any(), any()) }
         // Not even the plain form: the proof is not made without the claim the issuer asked for.

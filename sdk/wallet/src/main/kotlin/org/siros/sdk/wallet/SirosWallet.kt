@@ -6183,13 +6183,15 @@ class SirosWallet private constructor(
             ))
         } else {
             val effectiveKeystore = resolveEffectiveKeystoreForIssuance()
-            // Derived before the key is used: a refusal costs nothing. The value is
-            // never logged; it is signed into the proof payload only.
-            val commitmentClaims = HolderCommitments.proofClaims(
-                holderCommitments, credentialType, credentialIssuer,
-                effectiveKeystore as? org.siros.sdk.keystore.HolderCommitmentSource,
-            )
             try {
+                // Derived before any key is used, inside the try so that a refusal
+                // also runs onWscdOperationEnd (resolveEffectiveKeystoreForIssuance
+                // may have started a hardware operation). Never logged.
+                val witness = effectiveKeystore as? org.siros.sdk.keystore.HolderWitnessSource
+                val commitmentClaims = HolderCommitments.proofClaims(
+                    holderCommitments, credentialType, credentialIssuer,
+                    witness?.let { w -> { type: String, issuer: String -> w.privateSeedCommitment(type, issuer) } },
+                )
                 (1..count).map {
                     // The four-argument form when there is nothing to add: a keystore
                     // that predates extra claims keeps working for every issuer that

@@ -2,7 +2,6 @@
 package org.siros.sdk.wallet
 
 import org.siros.sdk.credentials.WalletException
-import org.siros.sdk.keystore.HolderCommitmentSource
 
 /**
  * The holder commitments an issuer asks for in the OpenID4VCI proof JWT
@@ -16,7 +15,7 @@ import org.siros.sdk.keystore.HolderCommitmentSource
  * possession covers it.
  *
  * Fail-closed throughout: an unknown commitment name, a missing type or issuer,
- * a keystore that is not a [HolderCommitmentSource], or a value that is not 32
+ * a keystore that is not a [org.siros.sdk.keystore.HolderWitnessSource], or a value that is not 32
  * bytes refuses the proof. Nothing here ever logs or puts a commitment value in
  * a message.
  */
@@ -33,7 +32,7 @@ internal object HolderCommitments {
         requested: List<String>?,
         credentialType: String?,
         credentialIssuer: String?,
-        source: HolderCommitmentSource?,
+        derive: ((credentialType: String, issuer: String) -> ByteArray)?,
     ): Map<String, String> {
         if (requested.isNullOrEmpty()) return emptyMap()
         val unknown = requested.filter { it != PSC }
@@ -49,13 +48,13 @@ internal object HolderCommitments {
                 errorCode = "holder_commitment_unavailable",
             )
         }
-        if (source == null) {
+        if (derive == null) {
             throw WalletException(
                 "The issuer asked for a holder commitment but this wallet's keystore cannot derive one",
                 errorCode = "holder_commitment_unavailable",
             )
         }
-        val psc = source.psc(credentialType, credentialIssuer)
+        val psc = derive(credentialType, credentialIssuer)
         try {
             if (psc.size != PSC_BYTES) {
                 throw WalletException(

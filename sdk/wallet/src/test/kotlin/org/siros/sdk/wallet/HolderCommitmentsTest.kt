@@ -10,21 +10,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import org.siros.sdk.credentials.WalletException
-import org.siros.sdk.keystore.HolderCommitmentSource
 
 class HolderCommitmentsTest {
 
     /** A psc that depends on (type, issuer) as exact strings, so a spelling difference shows. */
-    private val source = object : HolderCommitmentSource {
-        override fun psc(credentialType: String, issuer: String): ByteArray =
-            MessageDigest.getInstance("SHA-256").digest("$credentialType|$issuer".toByteArray(Charsets.UTF_8))
+    private val source: (String, String) -> ByteArray = { credentialType, issuer ->
+        MessageDigest.getInstance("SHA-256").digest("$credentialType|$issuer".toByteArray(Charsets.UTF_8))
     }
 
     private fun claims(
         requested: List<String>? = listOf("psc"),
         type: String? = "urn:eudi:pid:1",
         issuer: String? = "https://issuer.example",
-        src: HolderCommitmentSource? = source,
+        src: ((String, String) -> ByteArray)? = source,
     ) = HolderCommitments.proofClaims(requested, type, issuer, src)
 
     private fun refused(block: () -> Unit): WalletException {
@@ -44,7 +42,7 @@ class HolderCommitmentsTest {
         assertFalse(value.contains("="))
         assertFalse(value.contains("+") || value.contains("/"))
         assertEquals(
-            listOf(*source.psc("urn:eudi:pid:1", "https://issuer.example").toTypedArray()),
+            listOf(*source("urn:eudi:pid:1", "https://issuer.example").toTypedArray()),
             Base64.getUrlDecoder().decode(value).toList(),
         )
     }
@@ -87,23 +85,14 @@ class HolderCommitmentsTest {
 
     @Test
     fun `a commitment that is not 32 bytes refuses`() {
-        val short = object : HolderCommitmentSource {
-            override fun psc(credentialType: String, issuer: String) = ByteArray(31)
-        }
-        refused { claims(src = short) }
-        val long = object : HolderCommitmentSource {
-            override fun psc(credentialType: String, issuer: String) = ByteArray(33)
-        }
-        refused { claims(src = long) }
+        refused { claims(src = { _, _ -> ByteArray(31) }) }
+        refused { claims(src = { _, _ -> ByteArray(33) }) }
     }
 
     @Test
     fun `the commitment is wiped after use and appears in no refusal message`() {
         val handedOut = ByteArray(31) { 7 }
-        val s = object : HolderCommitmentSource {
-            override fun psc(credentialType: String, issuer: String) = handedOut
-        }
-        val e = refused { claims(src = s) }
+        val e = refused { claims(src = { _, _ -> handedOut }) }
         assertTrue(handedOut.all { it == 0.toByte() })
         assertFalse(e.message.orEmpty().contains(Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(31) { 7 })))
     }
