@@ -80,6 +80,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   credential key proofs.
 - **New permission: `android.permission.ACCESS_NETWORK_STATE`** (normal, install-time), declared in `sdk/wallet`'s manifest and merged
   into the host: the circuit catalog refresh also runs when a network becomes available.
+- **The nymauth adapter runs the validator's rule set (CIRCUIT-6).** The adapter refuses every plan the wallet's
+  `RulebookCircuitZkValidator` refuses (restricted to `known-offender-matching-ssc`: an age span under 365 days, `le`
+  before `ge`, a `verifier_context`, the reserved meta members, ...) on top of its own shape checks; a vector-driven
+  test over `spec/circuit-zk-validator-vectors.json` asserts both directions for every plan the circuit could prove.
+  The validator and its vectors are unchanged.
 - **PROPOSAL: `zk-claim-disclosure-v1`, a `circuit_zk` function for the legacy
   proof systems** (`CircuitZkLegacyDisclosure`; the id is one constant, the
   rulebook owners decide the name). Params `claims`, `systems` (the verifier's

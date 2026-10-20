@@ -19,6 +19,9 @@ import org.siros.sdk.credentials.CircuitZkCircuit
 import org.siros.sdk.credentials.CircuitZkFunction
 import org.siros.sdk.credentials.CircuitZkLegacyDisclosure
 import org.siros.sdk.credentials.CircuitZkPlan
+import org.siros.sdk.credentials.RulebookCircuitZkValidator
+import org.siros.sdk.credentials.CircuitZkVerdict
+import org.siros.sdk.credentials.CircuitZkRuleSet
 import org.siros.sdk.credentials.NymPseudonym
 import org.siros.sdk.credentials.NymSeedKind
 import org.siros.sdk.credentials.ResultValue
@@ -114,11 +117,7 @@ class NymAuthCircuitZkAdapter(
         }
 
         // 1. What the circuits prove.
-        val pseudonymFn = input.plan.functions.singleOrNull { it.id == PseudonymFunctionHandler.functionId } ?: throw refuse()
-        val ageFn = input.plan.functions.filter { it.id == AgeCheckFunctionHandler.functionId }.also { if (it.size > 1) throw refuse() }.firstOrNull()
-        if (input.plan.functions.any { it !== pseudonymFn && it !== ageFn }) throw refuse()
-        val config = (pseudonymFn.params["config"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: throw refuse()
-        if (config != SUPPORTED_CONFIG) throw refuse()
+        val (pseudonymFn, ageFn, config) = planParts(input.plan)
         val info = NymPseudonym.describe(config)
         if (info == null || info.seedKind != NymSeedKind.SECRET || info.userValue || !info.verifierId || info.verifierContext) throw refuse()
         val witness = input.witnesses[pseudonymFn.handle] ?: throw refuse()
@@ -205,6 +204,37 @@ class NymAuthCircuitZkAdapter(
     }
 
     private fun refuse() = CircuitZkError.AccessDenied(CircuitZkStep.PROVE)
+
+    /**
+     * The rulebook rules this adapter proves with: the very rules the wallet's validator applies, restricted to the one
+     * configuration the circuit is built for. The prover therefore refuses everything the validator refuses (a
+     * `verifier_context` where none is allowed, an age span under 365 days, `le` before `ge`, ...), on top of its own
+     * shape checks below.
+     */
+    private val validator = RulebookCircuitZkValidator(
+        CircuitZkRuleSet.rulebookV03(
+            listOf(CircuitZkRuleSet.Companion.PseudonymConfig(SUPPORTED_CONFIG, usesVerifierInput = true, requiresVerifierContext = false)),
+        ),
+    )
+
+    /** The pseudonym function, the optional age check and the pseudonym config of [plan], or a refusal. */
+    private fun planParts(plan: CircuitZkPlan): Triple<CircuitZkFunction, CircuitZkFunction?, String> {
+        if (validator.validate(plan) !is CircuitZkVerdict.Ok) throw refuse()
+        val pseudonymFn = plan.functions.singleOrNull { it.id == PseudonymFunctionHandler.functionId } ?: throw refuse()
+        val ageFn = plan.functions.filter { it.id == AgeCheckFunctionHandler.functionId }.also { if (it.size > 1) throw refuse() }.firstOrNull()
+        if (plan.functions.any { it !== pseudonymFn && it !== ageFn }) throw refuse()
+        val config = (pseudonymFn.params["config"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: throw refuse()
+        if (config != SUPPORTED_CONFIG) throw refuse()
+        return Triple(pseudonymFn, ageFn, config)
+    }
+
+    /** Whether [plan] is one this adapter proves (the shape only; the data is checked when proving). */
+    internal fun acceptsPlan(plan: CircuitZkPlan): Boolean = try {
+        planParts(plan)
+        true
+    } catch (e: CircuitZkError.AccessDenied) {
+        false
+    }
 
     /**
      * Each native failure is a refusal, none a crash and none a leak: the verifier sees the bare `access_denied`,
