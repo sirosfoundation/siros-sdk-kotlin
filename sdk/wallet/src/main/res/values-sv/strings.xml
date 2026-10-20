@@ -14,4 +14,6 @@
     <string name="siros_dcapi_refused_proof_failed">Din plånbok kunde inte skapa beviset, så ingenting delades. Försök igen.</string>
     <!-- Unreviewed translation. Shown when the issuer refuses the wallet's pseudonym commitment (PSC_CONFLICT). -->
     <string name="siros_psc_conflict">Utfärdaren har redan ett annat pseudonymåtagande registrerat för dig. Om du har tappat bort din plånbok, be utfärdaren återställa det.</string>
+    <!-- Shown when an issuance is refused because the issuer's trust could not be established. -->
+    <string name="siros_issuer_not_trusted">Utfärdaren kunde inte verifieras som betrodd, så legitimationen lades inte till.</string>
 </resources>

@@ -18,4 +18,6 @@
     <string name="siros_dcapi_refused_proof_failed">Your wallet could not create the proof, so nothing was shared. Please try again.</string>
     <!-- Unreviewed translation. Shown when the issuer refuses the wallet's pseudonym commitment (PSC_CONFLICT). -->
     <string name="siros_psc_conflict">This issuer already has a different pseudonym commitment on record for you. If you lost your wallet, ask the issuer to reset it.</string>
+    <!-- Shown when an issuance is refused because the issuer's trust could not be established. -->
+    <string name="siros_issuer_not_trusted">This issuer could not be verified as trusted, so the credential was not added.</string>
 </resources>

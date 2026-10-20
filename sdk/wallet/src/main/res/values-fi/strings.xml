@@ -14,4 +14,6 @@
     <string name="siros_dcapi_refused_proof_failed">Lompakkosi ei voinut luoda todistetta, joten mitään ei jaettu. Yritä uudelleen.</string>
     <!-- Unreviewed translation. Shown when the issuer refuses the wallet's pseudonym commitment (PSC_CONFLICT). -->
     <string name="siros_psc_conflict">Myöntäjällä on jo sinusta tallessa eri pseudonyymisitoumus. Jos menetit lompakkosi, pyydä myöntäjää nollaamaan se.</string>
+    <!-- Shown when an issuance is refused because the issuer's trust could not be established. -->
+    <string name="siros_issuer_not_trusted">Myöntäjää ei voitu todentaa luotetuksi, joten tunnistetietoa ei lisätty.</string>
 </resources>

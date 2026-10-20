@@ -14,4 +14,6 @@
     <string name="siros_dcapi_refused_proof_failed">A sua carteira não conseguiu criar a prova, por isso nada foi partilhado. Tente novamente.</string>
     <!-- Unreviewed translation. Shown when the issuer refuses the wallet's pseudonym commitment (PSC_CONFLICT). -->
     <string name="siros_psc_conflict">Este emissor já tem registado um compromisso de pseudónimo diferente para si. Se perdeu a sua carteira, peça ao emissor para o repor.</string>
+    <!-- Shown when an issuance is refused because the issuer's trust could not be established. -->
+    <string name="siros_issuer_not_trusted">Não foi possível verificar este emissor como fidedigno, por isso a credencial não foi adicionada.</string>
 </resources>
