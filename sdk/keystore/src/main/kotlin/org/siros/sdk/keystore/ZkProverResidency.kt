@@ -144,6 +144,7 @@ class ZkProverResidency {
                     // Nothing concerns the resident: the requests just evaluated are consumed, and ONLY those (a newer one recorded
                     // after this decision stays for the next drain).
                     pendingRetirements.clear()
+                    releaseWhenIdle = false
                 }
                 true
             } else {

@@ -279,6 +279,23 @@ class ZkProverResidencyTest {
     }
 
     @Test
+    fun `a release recorded while nothing is resident is consumed by the drain, never recursed on`() = runBlocking {
+        val residency = ZkProverResidency()
+        // The load fails, so nothing becomes resident; a release is recorded between the cleanup decision and the unlock.
+        var recorded = false
+        residency.onUseCleanupDecided = { if (!recorded) { recorded = true; residency.release() } }
+        try {
+            residency.use<FakeProver, Unit>("sys:circ-1", { throw IllegalStateException("load failed") }) { }
+        } catch (e: IllegalStateException) {
+            // expected
+        }
+        assertNull(residency.residentKey)
+        // The consumed request does not linger: the next prover stays resident after its use.
+        residency.use("sys:circ-2", { FakeProver("b") }) { it }
+        assertEquals("sys:circ-2", residency.residentKey)
+    }
+
+    @Test
     fun `a release overlapping a nonmatching retirement is applied, not discarded`() = runBlocking {
         val residency = ZkProverResidency()
         val p = residency.use("sys:circ-1", { FakeProver("a") }) { it }
