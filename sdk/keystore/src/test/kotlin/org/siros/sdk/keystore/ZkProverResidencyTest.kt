@@ -272,4 +272,22 @@ class ZkProverResidencyTest {
         assertTrue(withTimeout(5000) { job.await() }.closed)
         assertNull(residency.residentKey)
     }
+
+    @Test
+    fun `a retirement between taking the residency and knowing the incoming key is kept, for an empty or a different resident`() = runBlocking {
+        for (previous in listOf<String?>(null, "sys:circ-other")) {
+            val residency = ZkProverResidency()
+            previous?.let { residency.use(it, { FakeProver("old") }) { p -> p } }
+            val entered = java.util.concurrent.CountDownLatch(1)
+            val proceed = java.util.concurrent.CountDownLatch(1)
+            residency.onUseEntered = { entered.countDown(); proceed.await(10, java.util.concurrent.TimeUnit.SECONDS) }
+            val job = async(Dispatchers.Default) { residency.use("sys:circ-new", { FakeProver("new") }) { it } }
+            assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            // Neither the resident nor any loading key matches yet: the retirement must still be kept.
+            residency.releaseCircuit("circ-new")
+            proceed.countDown()
+            assertTrue("previous=$previous", withTimeout(5000) { job.await() }.closed)
+            assertNull(residency.residentKey)
+        }
+    }
 }

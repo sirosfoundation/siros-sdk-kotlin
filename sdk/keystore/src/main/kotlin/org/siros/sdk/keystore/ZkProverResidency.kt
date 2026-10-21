@@ -44,8 +44,12 @@ class ZkProverResidency {
     @Volatile private var resident: Resident? = null
     @Volatile private var releaseWhenIdle = false
 
-    /** The key being loaded by a [use] that has the mutex but has not yet stored its [Resident]; null when none. */
-    @Volatile private var loadingKey: String? = null
+    /**
+     * Circuit ids retired while a [use] was in flight, whatever the resident or the loading prover was at that moment. They are
+     * kept until that use's cleanup, which applies them to whatever prover is resident THEN: a retirement can therefore never fall
+     * into a window where the incoming key is not yet known (entry, eviction, load). Guarded by [stateLock].
+     */
+    private val pendingRetirements = HashSet<String>()
 
     /** Test hook: runs right after [use] took the mutex, before it looks at the resident. */
     @Volatile internal var onUseEntered: (() -> Unit)? = null
@@ -66,32 +70,21 @@ class ZkProverResidency {
         mutex.lock()
         try {
             onUseEntered?.invoke()
-            // No reset of [releaseWhenIdle] here: a request is only ever recorded while a use is in flight and is consumed (and cleared)
-            // by that use's cleanup before the mutex is released, so on entry the flag is already false, and clearing it now could
-            // erase a retirement recorded after this use acquired the mutex.
+            // No reset of [releaseWhenIdle] or [pendingRetirements] here: a request is only ever recorded while a use is in flight and
+            // is consumed (and cleared) by that use's cleanup before the mutex is released, so on entry they are already empty, and
+            // clearing now could erase a retirement recorded after this use acquired the mutex.
             val current = resident
             val prover: T = if (current != null && current.key == key) {
                 @Suppress("UNCHECKED_CAST")
                 current.prover as T
             } else {
-                // The incoming key is visible from here on, before the old prover is evicted and while the new one loads: a retirement
-                // arriving at any point of the switch sees [loadingKey] and defers to the end of the use.
-                synchronized(stateLock) { loadingKey = key }
                 if (current != null) {
                     Timber.i("Releasing resident ZK prover '${current.key}' to load '$key'")
                     destroyQuietly(current)
                     synchronized(stateLock) { resident = null }
                 }
-                val loaded = try {
-                    load()
-                } catch (t: Throwable) {
-                    synchronized(stateLock) { loadingKey = null }
-                    throw t
-                }
-                synchronized(stateLock) {
-                    resident = Resident(key, loaded)
-                    loadingKey = null
-                }
+                val loaded = load()
+                synchronized(stateLock) { resident = Resident(key, loaded) }
                 loaded
             }
             return block(prover)
@@ -99,7 +92,9 @@ class ZkProverResidency {
             // The cleanup and the unlock are one step under [stateLock]: a retirement that found the mutex held registered its
             // request under the same lock, so it is either seen here or happens after the unlock and finds the residency idle.
             synchronized(stateLock) {
-                if (releaseWhenIdle) {
+                val retired = pendingRetirements.isNotEmpty() && resident?.let { r -> pendingRetirements.any { keyHasCircuit(r.key, it) } } == true
+                pendingRetirements.clear()
+                if (releaseWhenIdle || retired) {
                     releaseWhenIdle = false
                     resident?.let { destroyQuietly(it) }
                     resident = null
@@ -140,7 +135,7 @@ class ZkProverResidency {
      * id as a run of whole `:`-separated segments (`longfellow-libzk-v1:<id>:<n>`, `vega-mc-p256-v1:<id>`,
      * `<system>:<id>:<hash>`), and the id itself may contain colons (`urn:circuits:longfellow:nym_auth:v1`), so the id is
      * looked for as a whole run, not as one segment. Like [release]: at once when idle, else when the proof using it ends,
-     * which includes a prover that is still loading.
+     * which includes a prover that is still being loaded or evicted.
      */
     fun releaseCircuit(circuitId: String) {
         synchronized(stateLock) {
@@ -154,9 +149,10 @@ class ZkProverResidency {
                 } finally {
                     mutex.unlock()
                 }
-            } else if (loadingKey?.let { keyHasCircuit(it, circuitId) } == true || resident?.key?.let { keyHasCircuit(it, circuitId) } == true) {
+            } else {
+                // A use is in flight: keep the id, whatever is resident or loading right now (see [pendingRetirements]).
                 onRetirementDeferred?.invoke()
-                releaseWhenIdle = true
+                pendingRetirements.add(circuitId)
             }
         }
     }
