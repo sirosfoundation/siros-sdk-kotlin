@@ -234,6 +234,37 @@ class ZkProverResidencyTest {
     }
 
     @Test
+    fun `a queued unconfined use resumed by an unlock does not block release while its eviction close is slow`() = runBlocking {
+        val residency = ZkProverResidency()
+        val closing = java.util.concurrent.CountDownLatch(1)
+        val letClose = java.util.concurrent.CountDownLatch(1)
+        val slow = object : AutoCloseable {
+            override fun close() { closing.countDown(); letClose.await(20, java.util.concurrent.TimeUnit.SECONDS) }
+        }
+        val started = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        val first = async(Dispatchers.Default) {
+            residency.use("sys:circ-1", { slow }) { started.complete(Unit); finish.await() }
+        }
+        withTimeout(5000) { started.await() }
+        // A second use queues on the residency from an unconfined dispatcher: the unlock of the first resumes it INLINE.
+        val second = async(Dispatchers.Unconfined) { residency.use("sys:circ-2", { FakeProver("b") }) { it } }
+        finish.complete(Unit)
+        // The first use's thread now runs the slow eviction close (inline resumption). A release from another thread must not wait for it.
+        assertTrue(closing.await(5, java.util.concurrent.TimeUnit.SECONDS))
+        val returned = java.util.concurrent.CountDownLatch(1)
+        Thread { residency.release(); returned.countDown() }.start()
+        val released = returned.await(3, java.util.concurrent.TimeUnit.SECONDS)
+        letClose.countDown()
+        assertTrue("release() must return while a close runs on another thread", released)
+        first.await()
+        // The deferred release is applied once the second use ends.
+        val p = withTimeout(5000) { second.await() }
+        assertTrue("the release recorded meanwhile closed the prover that was loaded", p.closed)
+        assertNull(residency.residentKey)
+    }
+
+    @Test
     fun `a release overlapping a nonmatching retirement is applied, not discarded`() = runBlocking {
         val residency = ZkProverResidency()
         val p = residency.use("sys:circ-1", { FakeProver("a") }) { it }

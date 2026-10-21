@@ -35,9 +35,11 @@ class ZkProverResidency {
     private val mutex = Mutex()
 
     /**
-     * Guards the retirement protocol: the decision of [release]/[releaseCircuit] (idle now, or deferred) and the end-of-use cleanup of
-     * [use] (including the unlock of [mutex]) happen under it, so a request registered while a use is in flight is always seen by that
-     * use's cleanup, and a request that finds the residency idle destroys the prover itself. Never held across a suspension.
+     * Guards the retirement protocol: the decision of [release]/[releaseCircuit] (idle now, or deferred) and the end-of-use decision of
+     * [use] happen under it, so a request registered while a use is in flight is always seen by that use's cleanup. [mutex] is NEVER
+     * unlocked under it (unlocking can resume a queued caller inline, whose own slow close would then run holding this monitor and block
+     * a main-thread release): a request recorded between a decision and the unlock is picked up by [drainDeferred], which runs after
+     * every unlock. Never held across a suspension or a close.
      */
     private val stateLock = Any()
 
@@ -57,7 +59,7 @@ class ZkProverResidency {
     /** Test hook: runs inside the retirement decision, after a deferral was decided and before it is recorded. */
     @Volatile internal var onRetirementDeferred: (() -> Unit)? = null
 
-    /** Test hook: runs in [release] and [releaseCircuit] after the decision left [stateLock], where a concurrent request can interleave. */
+    /** Test hook: runs in [release] and [releaseCircuit] after the decision left [stateLock], before the mutex is unlocked: a concurrent request can interleave. */
     @Volatile internal var onReleaseDecided: (() -> Unit)? = null
 
     /** The key of the prover currently loaded, or null. For diagnostics and tests. */
@@ -92,26 +94,52 @@ class ZkProverResidency {
             }
             return block(prover)
         } finally {
-            // The decision (and, when nothing is to be closed, the unlock) is one step under [stateLock]: a retirement that found the
-            // mutex held registered its request under the same lock, so it is either seen here or happens after the unlock and finds
-            // the residency idle. A prover that is to be closed is DETACHED under the lock and closed OUTSIDE it, with the mutex still
-            // held, so a slow close never blocks a caller of [release] (the main thread, on a memory trim).
+            // The decision is one step under [stateLock]: a retirement that found the mutex held registered its request under the same
+            // lock, so it is either seen here or happens after the decision and is picked up by [drainDeferred] once the mutex is
+            // unlocked (outside the lock). A prover that is to be closed is DETACHED under the lock and closed OUTSIDE it, with the
+            // mutex still held, so a slow close never blocks a caller of [release] (the main thread, on a memory trim).
             var toClose: Resident? = null
-            val unlocked = synchronized(stateLock) {
+            val close = synchronized(stateLock) {
                 val retired = pendingRetirements.isNotEmpty() && resident?.let { r -> pendingRetirements.any { keyHasCircuit(r.key, it) } } == true
                 if (releaseWhenIdle || retired) {
                     toClose = resident
                     resident = null
-                    false
+                    true
                 } else {
                     releaseWhenIdle = false
                     pendingRetirements.clear()
-                    mutex.unlock()
-                    true
+                    false
                 }
             }
-            if (!unlocked) closeThenUnlock(toClose)
+            if (close) closeThenUnlock(toClose) else unlockThenDrain()
         }
+    }
+
+    /** Unlocks [mutex] outside [stateLock], then applies whatever was recorded in the meantime. */
+    private fun unlockThenDrain() {
+        mutex.unlock()
+        drainDeferred()
+    }
+
+    /**
+     * Applies a request recorded after the decision that preceded the last unlock: if nothing is using the residency, it is taken and
+     * the prover (when the request concerns it) is closed; if a use holds it, that use's own cleanup applies the request.
+     */
+    private fun drainDeferred() {
+        var detached: Resident? = null
+        val acquired = synchronized(stateLock) {
+            if ((releaseWhenIdle || pendingRetirements.isNotEmpty()) && mutex.tryLock()) {
+                val r = resident
+                if (r != null && (releaseWhenIdle || pendingRetirements.any { keyHasCircuit(r.key, it) })) {
+                    detached = r
+                    resident = null
+                }
+                true
+            } else {
+                false
+            }
+        }
+        if (acquired) closeThenUnlock(detached)
     }
 
     /**
@@ -125,8 +153,8 @@ class ZkProverResidency {
             synchronized(stateLock) {
                 releaseWhenIdle = false
                 pendingRetirements.clear()
-                mutex.unlock()
             }
+            unlockThenDrain()
         }
     }
 
@@ -144,9 +172,6 @@ class ZkProverResidency {
             if (mutex.tryLock()) {
                 detached = resident
                 resident = null
-                // Nothing to close: unlock in the same step, so a request recorded after this decision finds the residency idle
-                // (or in use) instead of being cleared by a cleanup that has nothing to apply it to.
-                if (detached == null) mutex.unlock()
                 true
             } else {
                 releaseWhenIdle = true
@@ -154,9 +179,10 @@ class ZkProverResidency {
             }
         }
         onReleaseDecided?.invoke()
-        if (acquired && detached != null) {
+        if (acquired) {
             detached?.let { Timber.i("Releasing resident ZK prover '${it.key}'") }
-            closeThenUnlock(detached)
+            // Nothing to close: the mutex is only unlocked, and a request recorded since the decision is drained.
+            if (detached != null) closeThenUnlock(detached) else unlockThenDrain()
         }
     }
 
@@ -172,8 +198,6 @@ class ZkProverResidency {
         val acquired = synchronized(stateLock) {
             if (mutex.tryLock()) {
                 detached = resident?.takeIf { keyHasCircuit(it.key, circuitId) }?.also { resident = null }
-                // A nonmatching (or absent) resident stays: unlock in the same step, so a request recorded meanwhile is not cleared.
-                if (detached == null) mutex.unlock()
                 true
             } else {
                 // A use is in flight: keep the id, whatever is resident or loading right now (see [pendingRetirements]).
@@ -183,9 +207,9 @@ class ZkProverResidency {
             }
         }
         onReleaseDecided?.invoke()
-        if (acquired && detached != null) {
+        if (acquired) {
             detached?.let { Timber.i("Releasing resident ZK prover '${it.key}': its circuit was retired") }
-            closeThenUnlock(detached)
+            if (detached != null) closeThenUnlock(detached) else unlockThenDrain()
         }
     }
 
