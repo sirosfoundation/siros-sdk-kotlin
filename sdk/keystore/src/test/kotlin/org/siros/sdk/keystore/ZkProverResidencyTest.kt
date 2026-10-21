@@ -290,4 +290,30 @@ class ZkProverResidencyTest {
             assertNull(residency.residentKey)
         }
     }
+
+    @Test
+    fun `release returns at once while a deferred cleanup is paused in close`() = runBlocking {
+        val residency = ZkProverResidency()
+        val closing = java.util.concurrent.CountDownLatch(1)
+        val letClose = java.util.concurrent.CountDownLatch(1)
+        val slow = object : AutoCloseable {
+            override fun close() { closing.countDown(); letClose.await(10, java.util.concurrent.TimeUnit.SECONDS) }
+        }
+        val started = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        val job = async(Dispatchers.Default) {
+            residency.use("sys:circ-1", { slow }) { started.complete(Unit); finish.await() }
+        }
+        withTimeout(5000) { started.await() }
+        residency.releaseCircuit("circ-1")          // deferred: applied by the use's cleanup
+        finish.complete(Unit)
+        assertTrue(closing.await(5, java.util.concurrent.TimeUnit.SECONDS))   // the cleanup is now inside close()
+        // The main thread's memory trim must not wait for that close.
+        val returned = java.util.concurrent.CountDownLatch(1)
+        Thread { residency.release(); returned.countDown() }.start()
+        assertTrue("release() blocked on a slow close", returned.await(2, java.util.concurrent.TimeUnit.SECONDS))
+        letClose.countDown()
+        withTimeout(5000) { job.await() }
+        assertNull(residency.residentKey)
+    }
 }

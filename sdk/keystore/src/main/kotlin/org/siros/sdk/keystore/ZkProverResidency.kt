@@ -89,16 +89,39 @@ class ZkProverResidency {
             }
             return block(prover)
         } finally {
-            // The cleanup and the unlock are one step under [stateLock]: a retirement that found the mutex held registered its
-            // request under the same lock, so it is either seen here or happens after the unlock and finds the residency idle.
-            synchronized(stateLock) {
+            // The decision (and, when nothing is to be closed, the unlock) is one step under [stateLock]: a retirement that found the
+            // mutex held registered its request under the same lock, so it is either seen here or happens after the unlock and finds
+            // the residency idle. A prover that is to be closed is DETACHED under the lock and closed OUTSIDE it, with the mutex still
+            // held, so a slow close never blocks a caller of [release] (the main thread, on a memory trim).
+            var toClose: Resident? = null
+            val unlocked = synchronized(stateLock) {
                 val retired = pendingRetirements.isNotEmpty() && resident?.let { r -> pendingRetirements.any { keyHasCircuit(r.key, it) } } == true
-                pendingRetirements.clear()
                 if (releaseWhenIdle || retired) {
-                    releaseWhenIdle = false
-                    resident?.let { destroyQuietly(it) }
+                    toClose = resident
                     resident = null
+                    false
+                } else {
+                    releaseWhenIdle = false
+                    pendingRetirements.clear()
+                    mutex.unlock()
+                    true
                 }
+            }
+            if (!unlocked) closeThenUnlock(toClose)
+        }
+    }
+
+    /**
+     * Closes the detached [r] while still holding the mutex (so no use can start and none of its requests is lost to a stale flag),
+     * then clears whatever was recorded meanwhile (the prover those requests were about is gone) and unlocks.
+     */
+    private fun closeThenUnlock(r: Resident?) {
+        try {
+            r?.let { destroyQuietly(it) }
+        } finally {
+            synchronized(stateLock) {
+                releaseWhenIdle = false
+                pendingRetirements.clear()
                 mutex.unlock()
             }
         }
@@ -110,23 +133,23 @@ class ZkProverResidency {
      * with nothing resident.
      */
     fun release() {
-        // Never blocks on a proof: this is called from lifecycle callbacks on the main thread while a proof may be holding the
-        // mutex for seconds. Under [stateLock] (held only briefly): acquiring the mutex means nothing is using the prover and it
-        // can go now; failing to means a proof is running, and its cleanup applies the deferred release under the same lock.
-        synchronized(stateLock) {
+        // Never blocks on a proof or on a close: this is called from lifecycle callbacks on the main thread. Under [stateLock] (held
+        // only briefly): acquiring the mutex means nothing is using the prover, so it is detached and closed outside the lock; failing
+        // to means a proof is running, and its cleanup applies the deferred release.
+        var detached: Resident? = null
+        val acquired = synchronized(stateLock) {
             if (mutex.tryLock()) {
-                try {
-                    resident?.let {
-                        Timber.i("Releasing resident ZK prover '${it.key}'")
-                        destroyQuietly(it)
-                    }
-                    resident = null
-                } finally {
-                    mutex.unlock()
-                }
+                detached = resident
+                resident = null
+                true
             } else {
                 releaseWhenIdle = true
+                false
             }
+        }
+        if (acquired) {
+            detached?.let { Timber.i("Releasing resident ZK prover '${it.key}'") }
+            closeThenUnlock(detached)
         }
     }
 
@@ -138,22 +161,21 @@ class ZkProverResidency {
      * which includes a prover that is still being loaded or evicted.
      */
     fun releaseCircuit(circuitId: String) {
-        synchronized(stateLock) {
+        var detached: Resident? = null
+        val acquired = synchronized(stateLock) {
             if (mutex.tryLock()) {
-                try {
-                    resident?.takeIf { keyHasCircuit(it.key, circuitId) }?.let {
-                        Timber.i("Releasing resident ZK prover '${it.key}': its circuit was retired")
-                        destroyQuietly(it)
-                        resident = null
-                    }
-                } finally {
-                    mutex.unlock()
-                }
+                detached = resident?.takeIf { keyHasCircuit(it.key, circuitId) }?.also { resident = null }
+                true
             } else {
                 // A use is in flight: keep the id, whatever is resident or loading right now (see [pendingRetirements]).
                 onRetirementDeferred?.invoke()
                 pendingRetirements.add(circuitId)
+                false
             }
+        }
+        if (acquired) {
+            detached?.let { Timber.i("Releasing resident ZK prover '${it.key}': its circuit was retired") }
+            closeThenUnlock(detached)
         }
     }
 
