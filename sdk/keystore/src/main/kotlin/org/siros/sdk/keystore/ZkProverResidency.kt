@@ -57,6 +57,9 @@ class ZkProverResidency {
     /** Test hook: runs inside the retirement decision, after a deferral was decided and before it is recorded. */
     @Volatile internal var onRetirementDeferred: (() -> Unit)? = null
 
+    /** Test hook: runs in [release] and [releaseCircuit] after the decision left [stateLock], where a concurrent request can interleave. */
+    @Volatile internal var onReleaseDecided: (() -> Unit)? = null
+
     /** The key of the prover currently loaded, or null. For diagnostics and tests. */
     val residentKey: String? get() = resident?.key
 
@@ -141,13 +144,17 @@ class ZkProverResidency {
             if (mutex.tryLock()) {
                 detached = resident
                 resident = null
+                // Nothing to close: unlock in the same step, so a request recorded after this decision finds the residency idle
+                // (or in use) instead of being cleared by a cleanup that has nothing to apply it to.
+                if (detached == null) mutex.unlock()
                 true
             } else {
                 releaseWhenIdle = true
                 false
             }
         }
-        if (acquired) {
+        onReleaseDecided?.invoke()
+        if (acquired && detached != null) {
             detached?.let { Timber.i("Releasing resident ZK prover '${it.key}'") }
             closeThenUnlock(detached)
         }
@@ -165,6 +172,8 @@ class ZkProverResidency {
         val acquired = synchronized(stateLock) {
             if (mutex.tryLock()) {
                 detached = resident?.takeIf { keyHasCircuit(it.key, circuitId) }?.also { resident = null }
+                // A nonmatching (or absent) resident stays: unlock in the same step, so a request recorded meanwhile is not cleared.
+                if (detached == null) mutex.unlock()
                 true
             } else {
                 // A use is in flight: keep the id, whatever is resident or loading right now (see [pendingRetirements]).
@@ -173,7 +182,8 @@ class ZkProverResidency {
                 false
             }
         }
-        if (acquired) {
+        onReleaseDecided?.invoke()
+        if (acquired && detached != null) {
             detached?.let { Timber.i("Releasing resident ZK prover '${it.key}': its circuit was retired") }
             closeThenUnlock(detached)
         }

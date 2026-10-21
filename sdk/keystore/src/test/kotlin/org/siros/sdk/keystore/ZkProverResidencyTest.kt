@@ -234,6 +234,25 @@ class ZkProverResidencyTest {
     }
 
     @Test
+    fun `a release overlapping a nonmatching retirement is applied, not discarded`() = runBlocking {
+        val residency = ZkProverResidency()
+        val p = residency.use("sys:circ-1", { FakeProver("a") }) { it }
+        // A release (and a matching retirement, in the second round) arrives right after the nonmatching retirement decided.
+        var overlapped = false
+        residency.onReleaseDecided = { if (!overlapped) { overlapped = true; residency.release() } }
+        residency.releaseCircuit("circ-other")
+        assertTrue("the overlapping release closed the resident prover", p.closed)
+        assertNull(residency.residentKey)
+
+        val q = residency.use("sys:circ-2", { FakeProver("b") }) { it }
+        overlapped = false
+        residency.onReleaseDecided = { if (!overlapped) { overlapped = true; residency.releaseCircuit("circ-2") } }
+        residency.releaseCircuit("circ-other")
+        assertTrue("the overlapping matching retirement closed it", q.closed)
+        assertNull(residency.residentKey)
+    }
+
+    @Test
     fun `a retirement of the incoming circuit while the old prover is being evicted is not lost`() = runBlocking {
         val closing = java.util.concurrent.CountDownLatch(1)
         val letClose = java.util.concurrent.CountDownLatch(1)
