@@ -62,6 +62,12 @@ class ZkProverResidency {
     /** Test hook: runs in [release] and [releaseCircuit] after the decision left [stateLock], before the mutex is unlocked: a concurrent request can interleave. */
     @Volatile internal var onReleaseDecided: (() -> Unit)? = null
 
+    /** Test hook: runs in [use]'s cleanup after its decision left [stateLock], before the mutex is unlocked. */
+    @Volatile internal var onUseCleanupDecided: (() -> Unit)? = null
+
+    /** Test hook: runs in [drainDeferred] after its decision left [stateLock], before the mutex is unlocked or the prover closed. */
+    @Volatile internal var onDrainDecided: (() -> Unit)? = null
+
     /** The key of the prover currently loaded, or null. For diagnostics and tests. */
     val residentKey: String? get() = resident?.key
 
@@ -111,6 +117,7 @@ class ZkProverResidency {
                     false
                 }
             }
+            onUseCleanupDecided?.invoke()
             if (close) closeThenUnlock(toClose) else unlockThenDrain()
         }
     }
@@ -133,13 +140,19 @@ class ZkProverResidency {
                 if (r != null && (releaseWhenIdle || pendingRetirements.any { keyHasCircuit(r.key, it) })) {
                     detached = r
                     resident = null
+                } else {
+                    // Nothing concerns the resident: the requests just evaluated are consumed, and ONLY those (a newer one recorded
+                    // after this decision stays for the next drain).
+                    pendingRetirements.clear()
                 }
                 true
             } else {
                 false
             }
         }
-        if (acquired) closeThenUnlock(detached)
+        if (!acquired) return
+        onDrainDecided?.invoke()
+        if (detached != null) closeThenUnlock(detached) else unlockThenDrain()
     }
 
     /**

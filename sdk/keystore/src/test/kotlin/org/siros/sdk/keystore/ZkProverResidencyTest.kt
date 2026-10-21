@@ -265,6 +265,20 @@ class ZkProverResidencyTest {
     }
 
     @Test
+    fun `a release arriving after a drain decided to keep the resident is still applied`() = runBlocking {
+        val residency = ZkProverResidency()
+        var recorded = false
+        // A nonmatching retirement is recorded between the use's cleanup decision and its unlock.
+        residency.onUseCleanupDecided = { if (!recorded) { recorded = true; residency.releaseCircuit("circ-other") } }
+        var released = false
+        // The drain that picks it up keeps the resident; a release arrives right after that decision.
+        residency.onDrainDecided = { if (!released) { released = true; residency.release() } }
+        val p = residency.use("sys:circ-1", { FakeProver("a") }) { it }
+        assertTrue("the release recorded after the drain's decision closed the prover", p.closed)
+        assertNull(residency.residentKey)
+    }
+
+    @Test
     fun `a release overlapping a nonmatching retirement is applied, not discarded`() = runBlocking {
         val residency = ZkProverResidency()
         val p = residency.use("sys:circ-1", { FakeProver("a") }) { it }
