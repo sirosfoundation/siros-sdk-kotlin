@@ -232,4 +232,44 @@ class ZkProverResidencyTest {
         assertTrue("the retired prover is released, not left resident", p.closed)
         assertNull(residency.residentKey)
     }
+
+    @Test
+    fun `a retirement of the incoming circuit while the old prover is being evicted is not lost`() = runBlocking {
+        val closing = java.util.concurrent.CountDownLatch(1)
+        val letClose = java.util.concurrent.CountDownLatch(1)
+        // Closing the old prover is slow: the switch is observable in the middle.
+        val slow = object : AutoCloseable {
+            var closed = false
+            override fun close() { closing.countDown(); letClose.await(10, java.util.concurrent.TimeUnit.SECONDS); closed = true }
+        }
+        val other = ZkProverResidency()
+        other.use("sys:circ-old", { slow }) { it }
+        var incoming: FakeProver? = null
+        val job = async(Dispatchers.Default) { other.use("sys:circ-new", { FakeProver("new").also { incoming = it } }) { it } }
+        assertTrue(closing.await(5, java.util.concurrent.TimeUnit.SECONDS))
+        // The old prover is mid-close; the incoming key must already count as being loaded.
+        other.releaseCircuit("circ-new")
+        letClose.countDown()
+        val p = withTimeout(5000) { job.await() }
+        assertTrue("retired during the switch, so released when the use ended", p.closed)
+        assertNull(other.residentKey)
+    }
+
+    @Test
+    fun `a retirement recorded just after a same-key use took the residency is not erased by its entry`() = runBlocking {
+        val residency = ZkProverResidency()
+        val p0 = residency.use("sys:circ-1", { FakeProver("a") }) { it }
+        assertFalse(p0.closed)
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val proceed = java.util.concurrent.CountDownLatch(1)
+        residency.onUseEntered = { entered.countDown(); proceed.await(10, java.util.concurrent.TimeUnit.SECONDS) }
+        val job = async(Dispatchers.Default) {
+            residency.use<FakeProver, FakeProver>("sys:circ-1", { error("resident is reused") }) { it }
+        }
+        assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+        residency.releaseCircuit("circ-1")   // recorded after the use took the mutex, before it looked at the resident
+        proceed.countDown()
+        assertTrue(withTimeout(5000) { job.await() }.closed)
+        assertNull(residency.residentKey)
+    }
 }

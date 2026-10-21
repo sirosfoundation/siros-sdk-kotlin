@@ -47,6 +47,9 @@ class ZkProverResidency {
     /** The key being loaded by a [use] that has the mutex but has not yet stored its [Resident]; null when none. */
     @Volatile private var loadingKey: String? = null
 
+    /** Test hook: runs right after [use] took the mutex, before it looks at the resident. */
+    @Volatile internal var onUseEntered: (() -> Unit)? = null
+
     /** Test hook: runs inside the retirement decision, after a deferral was decided and before it is recorded. */
     @Volatile internal var onRetirementDeferred: (() -> Unit)? = null
 
@@ -62,22 +65,23 @@ class ZkProverResidency {
     suspend fun <T : AutoCloseable, R> use(key: String, load: suspend () -> T, block: suspend (T) -> R): R {
         mutex.lock()
         try {
-            // A release requested between a previous proof's end and this
-            // call is moot: the host is proving again, so the resident
-            // prover is wanted, not memory to be reclaimed.
-            synchronized(stateLock) { releaseWhenIdle = false }
+            onUseEntered?.invoke()
+            // No reset of [releaseWhenIdle] here: a request is only ever recorded while a use is in flight and is consumed (and cleared)
+            // by that use's cleanup before the mutex is released, so on entry the flag is already false, and clearing it now could
+            // erase a retirement recorded after this use acquired the mutex.
             val current = resident
             val prover: T = if (current != null && current.key == key) {
                 @Suppress("UNCHECKED_CAST")
                 current.prover as T
             } else {
+                // The incoming key is visible from here on, before the old prover is evicted and while the new one loads: a retirement
+                // arriving at any point of the switch sees [loadingKey] and defers to the end of the use.
+                synchronized(stateLock) { loadingKey = key }
                 if (current != null) {
                     Timber.i("Releasing resident ZK prover '${current.key}' to load '$key'")
                     destroyQuietly(current)
                     synchronized(stateLock) { resident = null }
                 }
-                // A retirement arriving while this loads must not be lost: it sees [loadingKey] and defers to the end of the use.
-                synchronized(stateLock) { loadingKey = key }
                 val loaded = try {
                     load()
                 } catch (t: Throwable) {
