@@ -25,6 +25,7 @@ import org.siros.sdk.transport.wmp.FlowCompleteParams
 import org.siros.sdk.transport.wmp.FlowErrorParams
 import org.siros.sdk.transport.wmp.FlowProgressParams
 import org.siros.sdk.transport.wmp.FlowStartParams
+import org.siros.sdk.transport.wmp.FlowStartRefusedException
 import org.siros.sdk.transport.wmp.JsonRpcResponse
 import org.siros.sdk.transport.wmp.WmpCodec
 import org.siros.sdk.transport.wmp.WmpMeta
@@ -1173,7 +1174,7 @@ class OpenID4xProfileTest {
     }
 
     @Test
-    fun aFullTableOfPendingSubFlowsRefusesANewStartAndEvictsNone() = runBlocking {
+    fun aFullTableOfPendingSubFlowsRefusesANewStartAsARequestAndEvictsNone() = runBlocking {
         val gates = (1..3).associate { "s$it" to CompletableDeferred<Unit>() }
         val (profile, ctx) = attached(
             OpenID4xConfig(onSignRequest = { flowId, _ -> gates.getValue("s" + flowId.removePrefix("p")).await(); SignSubFlowResult(vpToken = flowId) }),
@@ -1181,14 +1182,15 @@ class OpenID4xProfileTest {
         profile.maxSubFlows = 3
         for (i in 1..3) profile.startFlow(signStart(subFlowId = "s$i", parent = "p$i"))
 
-        profile.startFlow(signStart(subFlowId = "s4", parent = "p4"))
+        // Refused as a request: the start fails, so the peer answers it with an error response. No flow error is sent for it.
+        val refusal = runCatching { profile.startFlow(signStart(subFlowId = "s4", parent = "p4")) }.exceptionOrNull()
 
-        val refusal = withTimeout(5_000) { while (ctx.sent(WmpMethods.FLOW_ERROR).isEmpty()) delay(10); ctx.sent(WmpMethods.FLOW_ERROR).single() }
-        assertEquals(JsonPrimitive("s4"), refusal["flow_id"])
-        assertEquals(JsonPrimitive(-31006), refusal["code"])
-        assertEquals(JsonPrimitive("too many pending requests"), refusal["message"])
+        assertTrue("the start is refused: $refusal", refusal is FlowStartRefusedException)
+        assertEquals("too many pending requests", refusal!!.message)
+        assertTrue("nothing is sent on a sub-flow for it", ctx.notifications.isEmpty())
         gates.values.forEach { it.complete(Unit) }
         assertEquals("none of the pending sub-flows was evicted: all three are still answered", 3, ctx.sent(WmpMethods.FLOW_COMPLETE).size)
+        assertTrue(ctx.sent(WmpMethods.FLOW_ERROR).isEmpty())
     }
 
     @Test

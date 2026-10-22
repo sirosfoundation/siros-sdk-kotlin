@@ -1986,6 +1986,10 @@ public final class org/siros/sdk/transport/wmp/FlowStartParams$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class org/siros/sdk/transport/wmp/FlowStartRefusedException : java/lang/Exception {
+	public fun <init> (Ljava/lang/String;)V
+}
+
 public final class org/siros/sdk/transport/wmp/FlowStartResult {
 	public static final field Companion Lorg/siros/sdk/transport/wmp/FlowStartResult$Companion;
 	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;)V

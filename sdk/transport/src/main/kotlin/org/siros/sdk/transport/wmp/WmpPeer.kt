@@ -247,7 +247,16 @@ class WmpPeer(
                 val handler = registry.flowHandler(p.flowType)
                 if (handler != null) {
                     trackFlowType(p.flowId, p.flowType)
-                    val result = handler.startFlow(p)
+                    val result = try {
+                        handler.startFlow(p)
+                    } catch (e: FlowStartRefusedException) {
+                        // The handler refuses the request itself: an error response, nothing started, nothing tracked.
+                        forgetFlowType(p.flowId)
+                        if (msg.id != null) {
+                            session.sendErrorResponse(msg.id, WmpErrorCodes.FLOW_ERROR, e.message ?: "flow start refused")
+                        }
+                        return
+                    }
                     if (msg.id != null) {
                         session.sendResponse(msg.id, codec.encodeParams(result))
                     }

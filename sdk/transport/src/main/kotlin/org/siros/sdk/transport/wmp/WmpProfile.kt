@@ -101,3 +101,10 @@ interface WmpResolveHandler {
     /** Process a resolve request for a supported type. */
     suspend fun handleResolve(params: ResolveParams): ResolveResult
 }
+
+/**
+ * Thrown from [WmpFlowHandler.startFlow] to refuse a `wmp.flow.start` request outright (for example when the handler has no room):
+ * [WmpPeer] answers the request with an error response carrying [message] and starts nothing, so a refusal needs no flow of its own
+ * and nothing that could be sent after the flow it concerns has ended.
+ */
+class FlowStartRefusedException(message: String) : Exception(message)

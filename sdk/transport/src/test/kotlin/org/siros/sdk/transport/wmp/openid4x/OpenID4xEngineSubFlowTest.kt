@@ -313,4 +313,74 @@ class OpenID4xEngineSubFlowTest {
         )
         peer.close()
     }
+
+    /** A transport whose sends can be held, keeping the peer's send lock taken meanwhile. */
+    private class HoldableTransport(private val inner: FakeTransport) : org.siros.sdk.transport.Transport {
+        @Volatile var hold: CompletableDeferred<Unit>? = null
+        val holding = CompletableDeferred<Unit>()
+        override val state get() = inner.state
+        override suspend fun connect() = inner.connect()
+        override suspend fun send(message: ByteArray) {
+            hold?.let { holding.complete(Unit); it.await() }
+            inner.send(message)
+        }
+        override fun incoming() = inner.incoming()
+        override suspend fun disconnect() = inner.disconnect()
+    }
+
+    @Test
+    fun aRefusedStartBehindAHeldSendNeverSendsAFlowFrameForAnEndedFlow() = runBlocking {
+        val inner = FakeTransport()
+        val transport = HoldableTransport(inner)
+        val peer = WmpPeer(WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 5_000)))
+        val progressed = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val profile = OpenID4xProfile(
+            OpenID4xConfig(
+                onSignRequest = { _, _ -> CompletableDeferred<Unit>().await(); SignSubFlowResult() },
+                onProgress = { flowId, _, _ -> progressed.add(flowId) },
+            ),
+        )
+        profile.maxSubFlows = 1
+        peer.use(profile)
+        connected(inner, peer)
+        // The table holds one pending sub-flow, so the next start is refused.
+        inner.receiveFromServer(signStartFrame("child-1", "call-1", "parent-1"))
+        inner.awaitSent { it["id"] == JsonPrimitive("call-1") }
+
+        val gate = CompletableDeferred<Unit>()
+        transport.hold = gate
+        val held = launch { peer.notify("test.hold", null) } // takes the send lock and keeps it
+        withTimeout(5_000) { transport.holding.await() }
+
+        inner.receiveFromServer(signStartFrame("child-2", "call-2", "parent-2")) // refused; its error response queues behind the held send
+        delay(200)
+        profile.flowEnded("child-2")
+        val cancelling = launch { peer.cancelFlow("parent-2", "user") } // its own notification queues behind the held send too
+        profile.flowEnded("parent-2")
+        gate.complete(Unit)
+        held.join()
+        cancelling.join()
+        inner.awaitSent { it["id"] == JsonPrimitive("call-2") }
+
+        val frames = inner.sentMessages.map { Json.parseToJsonElement(String(it)).jsonObject }
+        val refusal = frames.single { it["id"] == JsonPrimitive("call-2") }
+        assertEquals(JsonPrimitive("too many pending requests"), refusal["error"]!!.jsonObject["message"])
+        assertTrue(
+            "no flow.complete / flow.error is ever sent for the refused (and then ended) sub-flow: $frames",
+            frames.none {
+                (it["method"] == JsonPrimitive("wmp.flow.error") || it["method"] == JsonPrimitive("wmp.flow.complete")) &&
+                    it["params"]?.jsonObject?.get("flow_id") == JsonPrimitive("child-2")
+            },
+        )
+        // The refused flow is not tracked: a late frame for it has no handler, while one for the accepted sub-flow still does.
+        inner.receiveFromServer(
+            """{"jsonrpc":"2.0","method":"wmp.flow.progress","params":{"wmp":{"version":"0.1"},"flow_id":"child-2","step":"late"}}""".toByteArray(),
+        )
+        inner.receiveFromServer(
+            """{"jsonrpc":"2.0","method":"wmp.flow.progress","params":{"wmp":{"version":"0.1"},"flow_id":"child-1","step":"late"}}""".toByteArray(),
+        )
+        withTimeout(5_000) { while ("child-1" !in progressed) delay(10) }
+        assertTrue("a refused start is forgotten by the peer", "child-2" !in progressed)
+        peer.close()
+    }
 }

@@ -623,8 +623,10 @@ class OpenID4xProfile(
             // still on their way, is never evicted. With nothing to evict the new start is refused.
             subFlows.values.filter { it.sent }.forEach { if (subFlows.remove(it.childId, it)) it.lifetime.cancel() }
             if (subFlows.size >= maxSubFlows) {
-                refuseSubFlow(start)
-                return
+                // Refused as a REQUEST (the peer answers the start with an error response), not by a flow error of our own: no
+                // answer task exists for it, so nothing can outlive the flow it would have answered.
+                Timber.w("Too many pending WMP sub-flows; refusing a start")
+                throw FlowStartRefusedException("too many pending requests")
             }
         }
         val parentId = (start.params?.get("parent_flow_id") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
@@ -643,26 +645,6 @@ class OpenID4xProfile(
             return
         }
         job.start()
-    }
-
-    /** The sub-flow table is full of live work: the request is answered with a generic error, nothing is evicted for it. */
-    private fun refuseSubFlow(start: FlowStartParams) {
-        val ctx = peer ?: return
-        Timber.w("Too many pending WMP sub-flows; refusing one")
-        subFlowScope.launch {
-            try {
-                ctx.notify(
-                    WmpMethods.FLOW_ERROR,
-                    ctx.codec.encodeParams(
-                        FlowErrorParams(wmp = WmpMeta(), flowId = start.flowId, code = WMP_ERR_FLOW_ERROR, message = "too many pending requests"),
-                    ),
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Timber.w("Could not refuse a WMP sub-flow (${e.javaClass.simpleName})")
-            }
-        }
     }
 
     /** The boundary around one whole answer task: nothing but cancellation leaves it. */
