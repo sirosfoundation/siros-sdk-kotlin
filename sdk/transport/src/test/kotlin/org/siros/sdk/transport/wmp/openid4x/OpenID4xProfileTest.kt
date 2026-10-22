@@ -1077,4 +1077,143 @@ class OpenID4xProfileTest {
         assertEquals("the callback of an already-ended flow never starts", 0, calls)
         assertTrue("and nothing is answered", ctx.notifications.isEmpty())
     }
+
+    /**
+     * A peer whose sends can be held: [gateOf] names, per frame (by its `flow_id`), the gate it waits on before it checks whether it is
+     * still wanted, as a send queued behind another does at the peer's send lock. [uncancellable] makes that wait ignore cancellation, as
+     * the moment just after the lock was acquired does.
+     */
+    private class GatingPeerContext(
+        private val gateOf: (String?) -> CompletableDeferred<Unit>?,
+        private val uncancellable: Boolean = false,
+    ) : WmpPeerContext {
+        override val codec = WmpCodec()
+        val sent = java.util.concurrent.CopyOnWriteArrayList<Pair<String, JsonObject?>>()
+        val waiting = java.util.concurrent.CopyOnWriteArrayList<String?>()
+        val cancelledWhileWaiting = java.util.concurrent.atomic.AtomicInteger()
+
+        private fun flowOf(params: JsonObject?) = (params?.get("flow_id") as? JsonPrimitive)?.content
+
+        override suspend fun notify(method: String, params: JsonObject?) { sent.add(method to params) }
+
+        override suspend fun notifyIf(method: String, params: JsonObject?, wanted: () -> Boolean): Boolean {
+            val gate = gateOf(flowOf(params))
+            if (gate != null) {
+                waiting.add(flowOf(params))
+                try {
+                    if (uncancellable) kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { gate.await() } else gate.await()
+                } catch (e: CancellationException) {
+                    cancelledWhileWaiting.incrementAndGet()
+                    throw e
+                }
+            }
+            if (!wanted()) return false
+            sent.add(method to params)
+            return true
+        }
+
+        override suspend fun call(method: String, params: JsonObject?): JsonRpcResponse = JsonRpcResponse(id = null)
+    }
+
+    private fun gating(
+        config: OpenID4xConfig,
+        uncancellable: Boolean = false,
+        gateOf: (String?) -> CompletableDeferred<Unit>?,
+    ): Pair<OpenID4xProfile, GatingPeerContext> {
+        val profile = OpenID4xProfile(config)
+        profile.subFlowScope = CoroutineScope(Dispatchers.Unconfined)
+        val ctx = GatingPeerContext(gateOf, uncancellable)
+        profile.init(ctx)
+        return profile to ctx
+    }
+
+    @Test
+    fun aReplayWaitingToSendIsCancelledWithItsSubFlow() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        var holdReplay = false
+        val (profile, ctx) = gating(OpenID4xConfig(onSignRequest = { _, _ -> SignSubFlowResult(vpToken = "t") })) { if (holdReplay) gate else null }
+        profile.startFlow(signStart(subFlowId = "sub-q", parent = "f-q"))
+        assertEquals("the first answer is sent", 1, ctx.sent.size)
+
+        holdReplay = true
+        profile.startFlow(signStart(subFlowId = "sub-q", parent = "f-q")) // a replay, held at the send
+        assertEquals(listOf<String?>("sub-q"), ctx.waiting.toList())
+        profile.flowEnded("f-q")
+
+        assertEquals("the replay is cancelled with the sub-flow it answers", 1, ctx.cancelledWhileWaiting.get())
+        gate.complete(Unit)
+        assertEquals("and nothing more is sent", 1, ctx.sent.size)
+    }
+
+    @Test
+    fun aReplayThatHasAlreadyWonTheSendLockStillSendsNothingOnceItsSubFlowIsStopped() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        var holdReplay = false
+        val (profile, ctx) = gating(OpenID4xConfig(onSignRequest = { _, _ -> SignSubFlowResult(vpToken = "t") }), uncancellable = true) { if (holdReplay) gate else null }
+        profile.startFlow(signStart(subFlowId = "sub-q", parent = "f-q"))
+
+        holdReplay = true
+        profile.startFlow(signStart(subFlowId = "sub-q", parent = "f-q"))
+        profile.flowEnded("f-q") // the replay holds the lock and cannot be interrupted: it must find itself unwanted
+        gate.complete(Unit)
+
+        assertEquals("the stale answer is not sent after the flow ended", 1, ctx.sent.size)
+    }
+
+    @Test
+    fun answeredSubFlowsAreEvictedToMakeRoomForANewStart() = runBlocking {
+        val (profile, ctx) = attached(OpenID4xConfig(onSignRequest = { _, _ -> SignSubFlowResult(vpToken = "t") }))
+        profile.maxSubFlows = 3
+        for (i in 1..3) profile.startFlow(signStart(subFlowId = "s$i", parent = "p$i"))
+
+        profile.startFlow(signStart(subFlowId = "s4", parent = "p4"))
+
+        assertEquals("every start is answered, the full table made room", listOf("s1", "s2", "s3", "s4").map { JsonPrimitive(it) }, ctx.sent(WmpMethods.FLOW_COMPLETE).map { it["flow_id"] })
+        assertTrue(ctx.sent(WmpMethods.FLOW_ERROR).isEmpty())
+    }
+
+    @Test
+    fun aFullTableOfPendingSubFlowsRefusesANewStartAndEvictsNone() = runBlocking {
+        val gates = (1..3).associate { "s$it" to CompletableDeferred<Unit>() }
+        val (profile, ctx) = attached(
+            OpenID4xConfig(onSignRequest = { flowId, _ -> gates.getValue("s" + flowId.removePrefix("p")).await(); SignSubFlowResult(vpToken = flowId) }),
+        )
+        profile.maxSubFlows = 3
+        for (i in 1..3) profile.startFlow(signStart(subFlowId = "s$i", parent = "p$i"))
+
+        profile.startFlow(signStart(subFlowId = "s4", parent = "p4"))
+
+        val refusal = withTimeout(5_000) { while (ctx.sent(WmpMethods.FLOW_ERROR).isEmpty()) delay(10); ctx.sent(WmpMethods.FLOW_ERROR).single() }
+        assertEquals(JsonPrimitive("s4"), refusal["flow_id"])
+        assertEquals(JsonPrimitive(-31006), refusal["code"])
+        assertEquals(JsonPrimitive("too many pending requests"), refusal["message"])
+        gates.values.forEach { it.complete(Unit) }
+        assertEquals("none of the pending sub-flows was evicted: all three are still answered", 3, ctx.sent(WmpMethods.FLOW_COMPLETE).size)
+    }
+
+    @Test
+    fun aSubFlowWhoseAnswerIsDecidedButNotYetSentIsNeverEvicted() = runBlocking {
+        val sendGate = CompletableDeferred<Unit>()
+        val pending = CompletableDeferred<Unit>()
+        val (profile, ctx) = gating(
+            OpenID4xConfig(onSignRequest = { flowId, _ -> if (flowId == "p3") pending.await(); SignSubFlowResult(vpToken = flowId) }),
+        ) { flowId -> if (flowId == "s1") sendGate else null }
+        profile.maxSubFlows = 3
+        // s1's answer is decided but its send is held; s2 is answered and sent; s3 is still pending.
+        profile.startFlow(signStart(subFlowId = "s1", parent = "p1"))
+        profile.startFlow(signStart(subFlowId = "s2", parent = "p2"))
+        profile.startFlow(signStart(subFlowId = "s3", parent = "p3"))
+
+        profile.startFlow(signStart(subFlowId = "s4", parent = "p4"))
+        // s2 (fully sent) is the one that made room; s1 and s3 are untouched and the new start is served.
+        assertEquals(listOf("s2", "s4").map { JsonPrimitive(it) }, ctx.sent.filter { it.first == WmpMethods.FLOW_COMPLETE }.map { it.second!!["flow_id"] })
+
+        sendGate.complete(Unit)
+        pending.complete(Unit)
+        assertEquals(
+            "s1's held answer is still delivered, and so is s3's",
+            setOf("s1", "s2", "s3", "s4").map { JsonPrimitive(it) }.toSet(),
+            ctx.sent.filter { it.first == WmpMethods.FLOW_COMPLETE }.map { it.second!!["flow_id"] }.toSet(),
+        )
+    }
 }

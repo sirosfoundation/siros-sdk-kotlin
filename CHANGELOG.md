@@ -46,6 +46,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       stop found no job to cancel and the callback then started. The registration is re-checked once the job is assigned and
       the job cancelled before it runs. Known gap, not fixed here: a failed answer send after an acknowledged start is not
       retried until the engine reissues the start (https://github.com/sirosfoundation/siros-sdk-kotlin/issues/290).
+    - *Replays share the sub-flow's lifetime, and eviction spares live work.* The original answer task and every replay run under
+      one cancellable lifetime per sub-flow, stopped together by terminal frames, a local `cancelFlow` and close; a send is
+      checked again once the peer holds its send lock (`WmpPeerContext.notifyIf`, default: check, then send), so a replay queued
+      behind another send never sends a stale answer. Making room past 256 entries evicts only sub-flows whose answer was
+      completely sent; with nothing to evict the new start is refused with a generic `-31006` flow error. Known gaps, not fixed
+      here: a failed answer send after an acknowledged start is not retried
+      (https://github.com/sirosfoundation/siros-sdk-kotlin/issues/290), and a callback paused before `BlindIssuance.offer` can
+      allocate a response key after a terminal frame's `drop` (https://github.com/sirosfoundation/siros-sdk-kotlin/issues/291).
     - *Terminal frames stop pending sub-flows first.* `flow.complete` / `flow.error` / `flow.cancel` for the parent or the
       child, and a local `WmpPeer.cancelFlow`, cancel the pending callbacks (a consent prompt, a signature) before the
       callbacks that release the flow's state run. `WmpFlowHandler.flowEnded(flowId)` (default no-op) carries a local end to

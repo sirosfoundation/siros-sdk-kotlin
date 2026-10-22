@@ -496,6 +496,10 @@ class OpenID4xProfile(
             CoroutineExceptionHandler { _, e -> Timber.e("WMP sub-flow work failed (${e.javaClass.simpleName})") },
     )
 
+    /** How many sub-flows are kept at once; a variable only so tests need not create 256 (see [MAX_SUB_FLOWS]). */
+    @Volatile
+    internal var maxSubFlows: Int = MAX_SUB_FLOWS
+
     /** Runs between a sub-flow's registration and the assignment of its job (tests only). */
     @Volatile
     internal var beforeJobAssigned: (() -> Unit)? = null
@@ -507,8 +511,9 @@ class OpenID4xProfile(
      * One sub-flow the engine started, keyed by its own id. The engine re-sends a start under the SAME id when a resumed
      * session reissues it, so this is also how a repeat is told from a new request.
      */
-    private class SubFlow(val childId: String, val parentId: String?) {
-        @Volatile var job: Job? = null
+    private class SubFlow(val childId: String, val parentId: String?, val lifetime: Job) {
+        /** True once every frame of the answer has been sent: only then may the entry be forgotten to make room. */
+        @Volatile var sent: Boolean = false
 
         /** Set the moment the answer is decided (before it is sent), so a failed send can be replayed, never recomputed. */
         @Volatile var answer: SubFlowAnswer? = null
@@ -520,7 +525,7 @@ class OpenID4xProfile(
     override fun close() {
         val all = subFlows.values.toList()
         subFlows.clear()
-        all.forEach { it.job?.cancel() }
+        all.forEach { it.lifetime.cancel() }
         subFlowScope.cancel()
     }
 
@@ -600,33 +605,64 @@ class OpenID4xProfile(
      */
     private fun stopSubFlows(flowId: String) {
         for (sub in subFlows.values.toList()) {
-            if ((sub.childId == flowId || sub.parentId == flowId) && subFlows.remove(sub.childId, sub)) sub.job?.cancel()
+            if ((sub.childId == flowId || sub.parentId == flowId) && subFlows.remove(sub.childId, sub)) sub.lifetime.cancel()
         }
     }
 
     private fun beginSubFlow(start: FlowStartParams) {
-        val parentId = (start.params?.get("parent_flow_id") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
-        val sub = SubFlow(start.flowId, parentId)
-        val existing = subFlows.putIfAbsent(start.flowId, sub)
+        val existing = subFlows[start.flowId]
         if (existing != null) {
             // A repeat (a resumed session reissues the start under the same id): the first start is acknowledged and its work is
             // not run again. An answer already decided is sent again (the first send may have failed); one still pending is simply
-            // left to finish.
-            existing.answer?.let { decided -> subFlowScope.launch { emit(existing, decided) } }
+            // left to finish. The replay shares the sub-flow's lifetime, so a stop cancels it with the original.
+            existing.answer?.let { decided -> subFlowScope.launch(existing.lifetime) { emit(existing, decided) } }
             return
         }
-        if (subFlows.size > MAX_SUB_FLOWS) subFlows.values.filter { it.answer != null }.forEach { subFlows.remove(it.childId, it) }
+        if (subFlows.size >= maxSubFlows) {
+            // Room is made only from sub-flows whose answer has been completely sent; one that is pending, or whose frames are
+            // still on their way, is never evicted. With nothing to evict the new start is refused.
+            subFlows.values.filter { it.sent }.forEach { if (subFlows.remove(it.childId, it)) it.lifetime.cancel() }
+            if (subFlows.size >= maxSubFlows) {
+                refuseSubFlow(start)
+                return
+            }
+        }
+        val parentId = (start.params?.get("parent_flow_id") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+        val sub = SubFlow(start.flowId, parentId, SupervisorJob(subFlowScope.coroutineContext[Job]))
+        if (subFlows.putIfAbsent(start.flowId, sub) != null) {
+            sub.lifetime.cancel()
+            return
+        }
         // Test seam: a stop that lands between the registration above and the job below.
         beforeJobAssigned?.invoke()
-        val job = subFlowScope.launch(start = CoroutineStart.LAZY) { runSubFlow(sub, start) }
-        sub.job = job
+        val job = subFlowScope.launch(sub.lifetime, start = CoroutineStart.LAZY) { runSubFlow(sub, start) }
         // A stop in the gap found no job to cancel and removed the entry: this sub-flow is already over, and its callback (a
-        // signature, a consent prompt) must not start. After this check a stop finds the job and cancels it before it runs.
+        // signature, a consent prompt) must not start. After this check a stop cancels the lifetime, and the job with it.
         if (subFlows[start.flowId] !== sub) {
-            job.cancel()
+            sub.lifetime.cancel()
             return
         }
         job.start()
+    }
+
+    /** The sub-flow table is full of live work: the request is answered with a generic error, nothing is evicted for it. */
+    private fun refuseSubFlow(start: FlowStartParams) {
+        val ctx = peer ?: return
+        Timber.w("Too many pending WMP sub-flows; refusing one")
+        subFlowScope.launch {
+            try {
+                ctx.notify(
+                    WmpMethods.FLOW_ERROR,
+                    ctx.codec.encodeParams(
+                        FlowErrorParams(wmp = WmpMeta(), flowId = start.flowId, code = WMP_ERR_FLOW_ERROR, message = "too many pending requests"),
+                    ),
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.w("Could not refuse a WMP sub-flow (${e.javaClass.simpleName})")
+            }
+        }
     }
 
     /** The boundary around one whole answer task: nothing but cancellation leaves it. */
@@ -665,7 +701,9 @@ class OpenID4xProfile(
             currentCoroutineContext().ensureActive()
             if (subFlows[sub.childId] !== sub) return
             try {
-                ctx.notify(method, params)
+                // Checked again by the peer once it holds its send lock: this send may have queued behind another, and the
+                // sub-flow can have been stopped while it waited.
+                if (!ctx.notifyIf(method, params) { sub.lifetime.isActive && subFlows[sub.childId] === sub }) return
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -673,6 +711,7 @@ class OpenID4xProfile(
                 return
             }
         }
+        sub.sent = true
     }
 
     private suspend fun answerComplete(sub: SubFlow, result: JsonObject, followUps: List<Pair<String, JsonObject>> = emptyList()) {

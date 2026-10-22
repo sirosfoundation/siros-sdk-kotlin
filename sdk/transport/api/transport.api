@@ -2561,6 +2561,7 @@ public final class org/siros/sdk/transport/wmp/WmpPeer : org/siros/sdk/transport
 	public fun getCodec ()Lorg/siros/sdk/transport/wmp/WmpCodec;
 	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
 	public fun notify (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun notifyIf (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/jvm/functions/Function0;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun sendCredentialNotification (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun sendCredentialNotification$default (Lorg/siros/sdk/transport/wmp/WmpPeer;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun sendFlowAction (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -2574,6 +2575,11 @@ public abstract interface class org/siros/sdk/transport/wmp/WmpPeerContext {
 	public abstract fun call (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun getCodec ()Lorg/siros/sdk/transport/wmp/WmpCodec;
 	public abstract fun notify (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun notifyIf (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/jvm/functions/Function0;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/transport/wmp/WmpPeerContext$DefaultImpls {
+	public static fun notifyIf (Lorg/siros/sdk/transport/wmp/WmpPeerContext;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/jvm/functions/Function0;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public abstract interface class org/siros/sdk/transport/wmp/WmpProfile {

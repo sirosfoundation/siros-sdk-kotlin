@@ -107,6 +107,14 @@ class WmpPeer(
         }
     }
 
+    override suspend fun notifyIf(method: String, params: JsonObject?, wanted: () -> Boolean): Boolean {
+        val sent = session.sendNotificationIf(method, params, wanted)
+        if (sent && (method == WmpMethods.FLOW_COMPLETE || method == WmpMethods.FLOW_ERROR)) {
+            (params?.get("flow_id") as? JsonPrimitive)?.content?.let { forgetFlowType(it) }
+        }
+        return sent
+    }
+
     override suspend fun call(method: String, params: JsonObject?): JsonRpcResponse {
         return session.sendRequest(method, params)
     }

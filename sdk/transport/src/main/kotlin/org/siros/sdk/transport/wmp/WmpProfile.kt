@@ -29,6 +29,17 @@ interface WmpPeerContext {
     /** Send a JSON-RPC 2.0 notification (fire-and-forget). */
     suspend fun notify(method: String, params: JsonObject?)
 
+    /**
+     * Send a notification only while [wanted] still holds, checked at the last moment: an implementation that serialises its
+     * sends (a lock around the transport) checks again once it holds the lock, so a message queued behind another send is not
+     * sent after what it answers has ended. Returns whether it was sent. The default checks once, then sends.
+     */
+    suspend fun notifyIf(method: String, params: JsonObject?, wanted: () -> Boolean): Boolean {
+        if (!wanted()) return false
+        notify(method, params)
+        return true
+    }
+
     /** Send a JSON-RPC 2.0 request and wait for the response. */
     suspend fun call(method: String, params: JsonObject?): JsonRpcResponse
 
