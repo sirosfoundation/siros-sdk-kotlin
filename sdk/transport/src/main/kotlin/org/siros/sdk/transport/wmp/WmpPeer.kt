@@ -82,12 +82,19 @@ class WmpPeer(
     suspend fun close(reason: String = "complete") {
         session.close(reason)
         scope.cancel()
+        // A profile that runs work of its own (sub-flow answers) stops it with the session.
+        registry.profiles().forEach { (it as? AutoCloseable)?.close() }
     }
 
     // ---- PeerContext (outgoing) ----
 
     override suspend fun notify(method: String, params: JsonObject?) {
         session.sendNotification(method, params)
+        // A flow this peer finishes itself (a sub-flow it answered) never gets an inbound complete/error to
+        // clear its tracked type, so clear it here.
+        if (method == WmpMethods.FLOW_COMPLETE || method == WmpMethods.FLOW_ERROR) {
+            (params?.get("flow_id") as? JsonPrimitive)?.content?.let { forgetFlowType(it) }
+        }
     }
 
     override suspend fun call(method: String, params: JsonObject?): JsonRpcResponse {

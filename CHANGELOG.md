@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **WMP: the wallet now answers the engine's sign and match sub-flows the way the engine reads them** (go-wallet-backend
+  feat/wmp-integration, `wmphandler.go`). Verified against that code only; no run against a live engine.
+  - **Sub-flows.** The engine asks for a signature or a credential match by starting a child flow (`wmp.flow.start`, flow type
+    `sign` / `match`, `parent_flow_id` in its params) and matches the answer by the CHILD flow's id. `OpenID4xProfile` registers
+    both flow types, acknowledges the start at once, answers on a separate coroutine (a user prompt no longer holds up the
+    acknowledgement the engine waits 30 s for) with `wmp.flow.complete` whose `result` is the response, and reports a failure as
+    `wmp.flow.error`. Before, it dispatched from `wmp.flow.progress` steps and answered with a `wmp.flow.action`
+    `sign_response` / `match_response` on the parent flow with no `message_id` (the engine never gives a WMP client one), which the
+    engine parks until its three-minute sign timeout. That route is removed (no shim).
+  - **Flow actions.** `trust_result` and `credentials_matched` put their members flat next to `action`; go-wmp's
+    `FlowActionParams` reads them under `params`, so the engine saw an empty payload. They are sent under `params` now.
+  - **Trust.** A trust progress is answered only when the engine marks it (`trust_evaluation_required`), which also covers the
+    verifier's `evaluating_verifier_trust` step; the informational `evaluating_trust` message is no longer mistaken for a request
+    (an early answer could satisfy the engine's later wait).
+  - **Error codes.** `wmp.flow.error` carries an integer `code` (go-wmp `FlowErrorParams.Code int`). Sent string codes did not
+    decode there, and an engine error's integer code did not decode here (the handler never ran), so every engine flow error was
+    dropped. `FlowErrorParams.code` now reads either form and writes a numeric one as a number.
+    Unsupported `transaction_data` is `-31005` (the engine reads it as such); other failures `-31006` with a generic message (the
+    failure's own text stays local). New `SignRefusedException`: a deliberate refusal is a flow error with `data.reason = "rejected"`
+    (go-wallet-backend#472), which the engine answers to the verifier as `access_denied`.
+  - `OpenID4xProfile` is `AutoCloseable` and `WmpPeer.close()` closes it, which stops the sub-flow answers still running; a
+    sub-flow the wallet has answered is no longer tracked.
+
 ### Changed
 - **BREAKING (unreleased): engine-blind encryption: the wallet, not the engine, holds the response-encryption keys.**
   The engine now relays ciphertext and never sees an issued credential, a delivered `secret_seed` or a `vp_token`
