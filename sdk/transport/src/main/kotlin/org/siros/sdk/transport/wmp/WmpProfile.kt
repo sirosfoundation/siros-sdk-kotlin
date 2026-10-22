@@ -61,6 +61,12 @@ interface WmpFlowHandler {
 
     /** Called for wmp.flow.cancel on a flow managed by this handler. */
     suspend fun handleCancel(params: FlowCancelParams)
+
+    /**
+     * Called when this peer itself ends [flowId] (a local cancel), before it releases the flow's state, so work the handler
+     * started for the flow can stop first. Inbound terminal frames reach [handleComplete], [handleError] and [handleCancel].
+     */
+    fun flowEnded(flowId: String) {}
 }
 
 /**

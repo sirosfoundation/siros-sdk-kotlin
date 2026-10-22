@@ -80,10 +80,20 @@ class WmpPeer(
 
     /** Close the session and stop dispatching. */
     suspend fun close(reason: String = "complete") {
-        session.close(reason)
-        scope.cancel()
-        // A profile that runs work of its own (sub-flow answers) stops it with the session.
-        registry.profiles().forEach { (it as? AutoCloseable)?.close() }
+        try {
+            session.close(reason)
+        } finally {
+            // Stopping local work never depends on the server having been told: a failed close still cancels the dispatch loop
+            // and stops what a profile runs of its own (sub-flow answers).
+            scope.cancel()
+            registry.profiles().forEach {
+                try {
+                    (it as? AutoCloseable)?.close()
+                } catch (e: Exception) {
+                    Timber.w("Closing a WMP profile failed (${e.javaClass.simpleName})")
+                }
+            }
+        }
     }
 
     // ---- PeerContext (outgoing) ----
@@ -149,6 +159,8 @@ class WmpPeer(
 
     /** Send a flow cancel notification. */
     suspend fun cancelFlow(flowId: String, reason: String? = null) {
+        // Work the flow's handler started stops before the flow's state is released.
+        registry.flowHandler(lookupFlowType(flowId))?.flowEnded(flowId)
         val params = codec.encodeParams(
             FlowCancelParams(wmp = WmpMeta(), flowId = flowId, reason = reason)
         )

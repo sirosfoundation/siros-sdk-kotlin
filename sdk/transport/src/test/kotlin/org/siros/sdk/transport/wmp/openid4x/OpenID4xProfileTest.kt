@@ -1,6 +1,9 @@
 package org.siros.sdk.transport.wmp.openid4x
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -826,5 +829,238 @@ class OpenID4xProfileTest {
             JsonPrimitive("ERR"),
             codec.encodeParams(FlowErrorParams(wmp = WmpMeta(), flowId = "f1", code = "ERR"))["code"],
         )
+    }
+
+    // ---------------------------------------------------------------------------
+    // Review of the sub-flow answers (https://github.com/sirosfoundation/siros-sdk-kotlin/issues/288)
+    // ---------------------------------------------------------------------------
+
+    /** A peer whose every send fails, as a dropped connection does (`WmpHttpSseTransport.send` throws on a failed POST). */
+    private class FailingPeerContext(private val failures: Int = Int.MAX_VALUE) : WmpPeerContext {
+        override val codec = WmpCodec()
+        val sent = java.util.concurrent.CopyOnWriteArrayList<Pair<String, JsonObject?>>()
+        private val attempts = java.util.concurrent.atomic.AtomicInteger()
+        override suspend fun notify(method: String, params: JsonObject?) {
+            if (attempts.incrementAndGet() <= failures) throw java.io.IOException("network down: secret-token-123")
+            sent.add(method to params)
+        }
+        override suspend fun call(method: String, params: JsonObject?): JsonRpcResponse = JsonRpcResponse(id = null)
+    }
+
+    /** Runs [block] and asserts nothing reached the thread's uncaught-exception handler (on Android, the app's crash). */
+    private fun assertNoUncaught(what: String, block: () -> Unit) {
+        val seen = java.util.concurrent.CopyOnWriteArrayList<Throwable>()
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { _, e -> seen += e }
+        try {
+            block()
+        } finally {
+            Thread.setDefaultUncaughtExceptionHandler(previous)
+        }
+        assertTrue("$what: an exception escaped the answer task: $seen", seen.isEmpty())
+    }
+
+    @Test
+    fun aFailedSendNeverEscapesAnAnswerTask() = runBlocking {
+        val variants: List<Pair<String, (OpenID4xProfile) -> FlowStartParams>> = listOf(
+            "a completion" to { _ -> signStart() },
+            "an error reply after a failing callback" to { _ -> signStart() },
+            "an unsupported sign request" to { _ -> signStart() },
+            "an invalid match request" to { _ -> matchStart(parent = null) },
+        )
+        val configs = listOf(
+            OpenID4xConfig(onSignRequest = { _, _ -> SignSubFlowResult(vpToken = "t") }),
+            OpenID4xConfig(onSignRequest = { _, _ -> throw RuntimeException("signing failed: secret-key-id") }),
+            OpenID4xConfig(),
+            OpenID4xConfig(onMatchRequest = { _, _ -> MatchResult(matches = emptyList()) }),
+        )
+        for ((i, variant) in variants.withIndex()) {
+            val profile = OpenID4xProfile(configs[i])
+            profile.subFlowScope = CoroutineScope(Dispatchers.Unconfined)
+            profile.init(FailingPeerContext())
+            assertNoUncaught(variant.first) { runBlocking { profile.startFlow(variant.second(profile)) } }
+        }
+    }
+
+    @Test
+    fun theDefaultSubFlowScopeConsumesWhatEscapesAnAnswerTask() = runBlocking {
+        val profile = OpenID4xProfile()
+        assertNoUncaught("the default scope") {
+            runBlocking {
+                profile.subFlowScope.launch { throw IllegalStateException("boom") }
+                delay(300)
+            }
+        }
+    }
+
+    @Test
+    fun aCallbackThatBlocksPastCloseAnswersNothing() = runBlocking {
+        for (outcome in listOf("returns a result", "throws")) {
+            val entered = java.util.concurrent.CountDownLatch(1)
+            val release = java.util.concurrent.CountDownLatch(1)
+            val profile = OpenID4xProfile(
+                OpenID4xConfig(
+                    onSignRequest = { _, _ ->
+                        entered.countDown()
+                        release.await() // blocking, not cancellable: the callback is mid-signature when the session closes
+                        if (outcome == "throws") throw RuntimeException("late failure")
+                        SignSubFlowResult(vpToken = "late")
+                    },
+                ),
+            )
+            profile.subFlowScope = CoroutineScope(Dispatchers.Default)
+            val ctx = FakePeerContext()
+            profile.init(ctx)
+            profile.startFlow(signStart())
+            assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+
+            profile.close()
+            release.countDown()
+            delay(300)
+
+            assertTrue("a callback that $outcome after close answers nothing: ${ctx.notifications}", ctx.notifications.isEmpty())
+        }
+    }
+
+    @Test
+    fun aRepeatedStartOfTheSameSubFlowRunsTheCallbackOnceAndReplaysTheAnswer() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        var calls = 0
+        val (profile, ctx) = attached(
+            OpenID4xConfig(onSignRequest = { _, _ -> calls++; gate.await(); SignSubFlowResult(vpToken = "t") }),
+        )
+
+        // A resumed session reissues the start under the same child id (wmphandler.go `reissueChildFlow`).
+        val first = profile.startFlow(signStart(subFlowId = "sub-r"))
+        val repeat = profile.startFlow(signStart(subFlowId = "sub-r"))
+
+        assertEquals("both are acknowledged", first, repeat)
+        assertEquals("the pending callback is reused, not run again", 1, calls)
+        gate.complete(Unit)
+        assertEquals(1, ctx.sent(WmpMethods.FLOW_COMPLETE).size)
+
+        // A start that arrives after the answer replays that answer; it never reruns the callback.
+        profile.startFlow(signStart(subFlowId = "sub-r"))
+        val replayed = withTimeout(5_000) { while (ctx.sent(WmpMethods.FLOW_COMPLETE).size < 2) delay(10); ctx.sent(WmpMethods.FLOW_COMPLETE) }
+        assertEquals("the replayed answer is the first one", replayed[0], replayed[1])
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun anAnswerWhoseSendFailedIsReplayedByARepeatedStart() = runBlocking {
+        var calls = 0
+        val profile = OpenID4xProfile(OpenID4xConfig(onSignRequest = { _, _ -> calls++; SignSubFlowResult(vpToken = "t") }))
+        profile.subFlowScope = CoroutineScope(Dispatchers.Unconfined)
+        val ctx = FailingPeerContext(failures = 1)
+        profile.init(ctx)
+
+        profile.startFlow(signStart(subFlowId = "sub-f"))
+        assertTrue("the first send failed", ctx.sent.isEmpty())
+        profile.startFlow(signStart(subFlowId = "sub-f"))
+        withTimeout(5_000) { while (ctx.sent.isEmpty()) delay(10) }
+
+        assertEquals(JsonPrimitive("sub-f"), ctx.sent.single().second!!["flow_id"])
+        assertEquals("the callback is not rerun for the replay", 1, calls)
+    }
+
+    @Test
+    fun aTerminalFrameForTheParentOrTheChildStopsItsPendingSubFlowBeforeItsCallbackRuns() = runBlocking {
+        val terminals: List<Pair<String, suspend (OpenID4xProfile, String) -> Unit>> = listOf(
+            "complete" to { p, id -> p.handleComplete(FlowCompleteParams(wmp = WmpMeta(), flowId = id)) },
+            "error" to { p, id -> p.handleError(FlowErrorParams(wmp = WmpMeta(), flowId = id, code = "-31006", message = "m")) },
+            "cancel" to { p, id -> p.handleCancel(FlowCancelParams(wmp = WmpMeta(), flowId = id)) },
+            "a local cancel" to { p, id -> p.flowEnded(id) },
+        )
+        for ((kind, terminal) in terminals) {
+            for (target in listOf("f1", "sub-1")) { // the parent flow, then the child itself
+                val order = java.util.concurrent.CopyOnWriteArrayList<String>()
+                val gate = CompletableDeferred<Unit>()
+                val (profile, ctx) = attached(
+                    OpenID4xConfig(
+                        onSignRequest = { _, _ ->
+                            try {
+                                gate.await()
+                                SignSubFlowResult(vpToken = "t")
+                            } catch (e: CancellationException) {
+                                order += "stopped"
+                                throw e
+                            }
+                        },
+                        onComplete = { _, _ -> order += "released" },
+                        onError = { _, _, _ -> order += "released" },
+                        onCancel = { order += "released" },
+                    ),
+                )
+                profile.startFlow(signStart(subFlowId = "sub-1", parent = "f1"))
+
+                terminal(profile, target)
+
+                val expected = if (kind == "a local cancel") listOf("stopped") else listOf("stopped", "released")
+                assertEquals("$kind on $target: the pending callback is stopped before the flow's state is released", expected, order.toList())
+                gate.complete(Unit)
+                assertTrue("a stopped sub-flow answers nothing", ctx.notifications.isEmpty())
+            }
+        }
+    }
+
+    @Test
+    fun aDeclinedTransactionIsARejectedRefusalNotUnsupportedTransactionData() = runBlocking {
+        val (profile, ctx) = attached(
+            OpenID4xConfig(
+                onSignRequest = { _, _ ->
+                    throw org.siros.sdk.credentials.TransactionDataError(
+                        org.siros.sdk.credentials.TransactionDataReason.DECLINED,
+                        "the user declined",
+                    )
+                },
+            ),
+        )
+
+        profile.startFlow(signStart(subFlowId = "sub-d"))
+
+        val error = ctx.sent(WmpMethods.FLOW_ERROR).single()
+        assertEquals(JsonPrimitive("sub-d"), error["flow_id"])
+        // The engine reads -31005 as "unsupported transaction data" (wmphandler.go FlowError); a decline is a refusal.
+        assertEquals(JsonPrimitive(-31006), error["code"])
+        assertEquals(JsonPrimitive("rejected"), error["data"]!!.jsonObject["reason"])
+        assertTrue(!error.toString().contains("declined"))
+    }
+
+    @Test
+    fun aValidationFailureOfTheTransactionStaysUnsupportedTransactionData() = runBlocking {
+        val (profile, ctx) = attached(
+            OpenID4xConfig(
+                onSignRequest = { _, _ ->
+                    throw org.siros.sdk.credentials.TransactionDataError(
+                        org.siros.sdk.credentials.TransactionDataReason.INVALID_ENTRY,
+                        "refused",
+                    )
+                },
+            ),
+        )
+
+        profile.startFlow(signStart(subFlowId = "sub-v"))
+
+        val error = ctx.sent(WmpMethods.FLOW_ERROR).single()
+        assertEquals(JsonPrimitive(-31005), error["code"])
+        assertEquals(JsonPrimitive("invalidEntry"), error["message"])
+    }
+
+    @Test
+    fun anExceptionOutsideTheCallbackAndTheSendNeverEscapesAnAnswerTask() = runBlocking {
+        // The codec failing while an error reply is built is outside every inner try: the task's own boundary is what holds.
+        val poisoned = object : WmpPeerContext {
+            override val codec: WmpCodec get() = throw IllegalStateException("codec unavailable: secret-detail")
+            override suspend fun notify(method: String, params: JsonObject?) {}
+            override suspend fun call(method: String, params: JsonObject?): JsonRpcResponse = JsonRpcResponse(id = null)
+        }
+        for (start in listOf(signStart(), matchStart(parent = null))) {
+            val profile = OpenID4xProfile(
+                OpenID4xConfig(onSignRequest = { _, _ -> SignSubFlowResult(vpToken = "t") }, onMatchRequest = { _, _ -> MatchResult(matches = emptyList()) }),
+            )
+            profile.subFlowScope = CoroutineScope(Dispatchers.Unconfined)
+            profile.init(poisoned)
+            assertNoUncaught(start.flowType) { runBlocking { profile.startFlow(start) } }
+        }
     }
 }

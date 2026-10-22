@@ -1,5 +1,7 @@
 package org.siros.sdk.transport.wmp.openid4x
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -180,6 +182,124 @@ class OpenID4xEngineSubFlowTest {
         withTimeout(5_000) { while ("top-1" !in progressed) delay(10) }
 
         assertTrue("the answered sub-flow's id was forgotten, so its late frame has no handler", "child-4" !in progressed)
+        peer.close()
+    }
+
+    /** A transport whose sends can be made to fail, as a dropped connection does. */
+    private class FlakyTransport(private val inner: FakeTransport) : org.siros.sdk.transport.Transport {
+        @Volatile var failSends = false
+        override val state get() = inner.state
+        override suspend fun connect() = inner.connect()
+        override suspend fun send(message: ByteArray) {
+            if (failSends) throw java.io.IOException("connection lost")
+            inner.send(message)
+        }
+        override fun incoming() = inner.incoming()
+        override suspend fun disconnect() = inner.disconnect()
+    }
+
+    private fun signStartFrame(id: String, callId: String, parent: String) =
+        """{"jsonrpc":"2.0","id":"$callId","method":"wmp.flow.start","params":{"wmp":{"version":"0.1"},"flow_type":"sign","flow_id":"$id","params":{"action":"sign_presentation","nonce":"n","audience":"a","parent_flow_id":"$parent"}}}"""
+            .toByteArray()
+
+    @Test
+    fun closingThePeerStopsTheSubFlowAnswersEvenWhenTellingTheServerFails() = runBlocking {
+        val inner = FakeTransport()
+        val transport = FlakyTransport(inner)
+        val peer = WmpPeer(WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 5_000)))
+        val gate = CompletableDeferred<Unit>()
+        val stopped = CompletableDeferred<Unit>()
+        peer.use(
+            OpenID4xProfile(
+                OpenID4xConfig(
+                    onSignRequest = { _, _ ->
+                        try {
+                            gate.await()
+                            SignSubFlowResult(vpToken = "t")
+                        } catch (e: CancellationException) {
+                            stopped.complete(Unit)
+                            throw e
+                        }
+                    },
+                ),
+            ),
+        )
+        connected(inner, peer)
+        inner.receiveFromServer(signStartFrame("child-c", "call-c", "parent-c"))
+        inner.awaitSent { it["id"] == JsonPrimitive("call-c") }
+
+        transport.failSends = true
+        val failure = runCatching { peer.close() }.exceptionOrNull()
+
+        assertTrue("closing the session failed, as arranged", failure != null)
+        withTimeout(5_000) { stopped.await() }
+        Unit
+    }
+
+    @Test
+    fun aSubFlowStartRepeatedAfterResumptionDoesNotRerunThePendingCallback() = runBlocking {
+        val transport = FakeTransport()
+        val peer = WmpPeer(WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 5_000)))
+        val gate = CompletableDeferred<Unit>()
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        peer.use(OpenID4xProfile(OpenID4xConfig(onSignRequest = { _, _ -> calls.incrementAndGet(); gate.await(); SignSubFlowResult(vpToken = "t") })))
+        connected(transport, peer)
+
+        transport.receiveFromServer(signStartFrame("child-d", "call-1", "parent-d"))
+        transport.awaitSent { it["id"] == JsonPrimitive("call-1") }
+        // The engine reissues the same child id on the resumed session.
+        transport.receiveFromServer(signStartFrame("child-d", "call-2", "parent-d"))
+        transport.awaitSent { it["id"] == JsonPrimitive("call-2") }
+
+        assertEquals("one callback for one request", 1, calls.get())
+        gate.complete(Unit)
+        transport.awaitSent { it["method"] == JsonPrimitive("wmp.flow.complete") }
+        assertEquals(
+            1,
+            transport.sentMessages.count { String(it).contains("wmp.flow.complete") },
+        )
+        peer.close()
+    }
+
+    @Test
+    fun cancellingAParentFlowLocallyStopsItsPendingSubFlow() = runBlocking {
+        val transport = FakeTransport()
+        val peer = WmpPeer(WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 5_000)))
+        val gate = CompletableDeferred<Unit>()
+        val stopped = CompletableDeferred<Unit>()
+        peer.use(
+            OpenID4xProfile(
+                OpenID4xConfig(
+                    onSignRequest = { _, _ ->
+                        try {
+                            gate.await()
+                            SignSubFlowResult(vpToken = "t")
+                        } catch (e: CancellationException) {
+                            stopped.complete(Unit)
+                            throw e
+                        }
+                    },
+                ),
+            ),
+        )
+        connected(transport, peer)
+        // The parent flow, tracked as the engine started it.
+        transport.receiveFromServer(
+            """{"jsonrpc":"2.0","id":"call-p","method":"wmp.flow.start","params":{"wmp":{"version":"0.1"},"flow_type":"oid4vp","flow_id":"parent-e"}}""".toByteArray(),
+        )
+        transport.awaitSent { it["id"] == JsonPrimitive("call-p") }
+        transport.receiveFromServer(signStartFrame("child-e", "call-e", "parent-e"))
+        transport.awaitSent { it["id"] == JsonPrimitive("call-e") }
+
+        peer.cancelFlow("parent-e", "user")
+
+        withTimeout(5_000) { stopped.await() }
+        gate.complete(Unit)
+        delay(200)
+        assertTrue(
+            "the stopped sub-flow answers nothing",
+            transport.sentMessages.none { String(it).contains("wmp.flow.complete") },
+        )
         peer.close()
     }
 }

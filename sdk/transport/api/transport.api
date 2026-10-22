@@ -2419,6 +2419,7 @@ public final class org/siros/sdk/transport/wmp/WmpErrorCodes {
 }
 
 public abstract interface class org/siros/sdk/transport/wmp/WmpFlowHandler {
+	public abstract fun flowEnded (Ljava/lang/String;)V
 	public abstract fun getFlowTypes ()Ljava/util/List;
 	public abstract fun handleAction (Lorg/siros/sdk/transport/wmp/FlowActionParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun handleCancel (Lorg/siros/sdk/transport/wmp/FlowCancelParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -2426,6 +2427,10 @@ public abstract interface class org/siros/sdk/transport/wmp/WmpFlowHandler {
 	public abstract fun handleError (Lorg/siros/sdk/transport/wmp/FlowErrorParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun handleProgress (Lorg/siros/sdk/transport/wmp/FlowProgressParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun startFlow (Lorg/siros/sdk/transport/wmp/FlowStartParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/transport/wmp/WmpFlowHandler$DefaultImpls {
+	public static fun flowEnded (Lorg/siros/sdk/transport/wmp/WmpFlowHandler;Ljava/lang/String;)V
 }
 
 public final class org/siros/sdk/transport/wmp/WmpHttpSseTransport : org/siros/sdk/transport/Transport {
@@ -2957,6 +2962,7 @@ public final class org/siros/sdk/transport/wmp/openid4x/OpenID4xProfile : java/l
 	public fun <init> (Lorg/siros/sdk/transport/wmp/openid4x/OpenID4xConfig;)V
 	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/openid4x/OpenID4xConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun close ()V
+	public fun flowEnded (Ljava/lang/String;)V
 	public fun getCapabilities ()Ljava/util/List;
 	public fun getFlowTypes ()Ljava/util/List;
 	public fun getName ()Ljava/lang/String;

@@ -30,6 +30,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (go-wallet-backend#472), which the engine answers to the verifier as `access_denied`.
   - `OpenID4xProfile` is `AutoCloseable` and `WmpPeer.close()` closes it, which stops the sub-flow answers still running; a
     sub-flow the wallet has answered is no longer tracked.
+  - **Review of the sub-flow answers** (https://github.com/sirosfoundation/siros-sdk-kotlin/issues/288):
+    - *No crash from an answer task.* Each answer task has its own boundary and the default scope a `CoroutineExceptionHandler`;
+      a failed send (the HTTP+SSE transport throws on a failed POST) is logged by class name and dropped, never rethrown, and
+      the error reply and the unsupported / invalid-request replies are inside the same boundary. A completion no longer has an
+      error reply chained to a failed send, and `credentials_matched` travels with the completion instead of after it.
+    - *`WmpPeer.close()` cleans up in a `finally`*: the dispatch loop and the profiles' work stop even when telling the server
+      fails.
+    - *No late answers.* Cancellation is checked before each frame is sent and the sub-flow must still be registered, so a
+      callback that was blocking when the session closed (or its flow ended) and returns afterwards answers nothing.
+    - *Repeated starts.* The engine reissues a start under the same child id after a resumption. The profile keeps each
+      sub-flow by its id: a repeat is acknowledged, a pending callback is reused (never run again) and a decided answer is
+      replayed (also when its first send failed). Entries are forgotten when their flow ends, on close, and past 256.
+    - *Terminal frames stop pending sub-flows first.* `flow.complete` / `flow.error` / `flow.cancel` for the parent or the
+      child, and a local `WmpPeer.cancelFlow`, cancel the pending callbacks (a consent prompt, a signature) before the
+      callbacks that release the flow's state run. `WmpFlowHandler.flowEnded(flowId)` (default no-op) carries a local end to
+      the handler.
+    - *A declined transaction is a refusal.* `TransactionDataError` with reason `DECLINED` is answered like
+      `SignRefusedException` (`-31006`, `data.reason = "rejected"`), not as unsupported transaction data (`-31005`), which stays
+      for validation failures.
 
 ## [0.21.0] - 2026-10-22
 

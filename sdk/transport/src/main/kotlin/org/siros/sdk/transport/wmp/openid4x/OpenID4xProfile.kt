@@ -3,7 +3,12 @@
 package org.siros.sdk.transport.wmp.openid4x
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -18,10 +23,12 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import org.siros.sdk.credentials.TransactionDataError
+import org.siros.sdk.credentials.TransactionDataReason
 import org.siros.sdk.transport.StringOrStringListSerializer
 import org.siros.sdk.transport.engine.CredentialRef
 import org.siros.sdk.transport.wmp.*
 import timber.log.Timber
+import java.util.concurrent.ConcurrentHashMap
 
 // ---------------------------------------------------------------------------
 // Flow Type Constants
@@ -449,6 +456,9 @@ data class TrustResult(
 private const val WMP_ERR_CAPABILITY_NOT_SUPPORTED = "-31005"
 private const val WMP_ERR_FLOW_ERROR = "-31006"
 
+/** The most sub-flows kept at once; past it the answered ones are forgotten (their replay is no longer possible). */
+private const val MAX_SUB_FLOWS = 256
+
 /** The member the engine sets on a trust progress that wants an answer (its informational progress lacks it). */
 private const val TRUST_EVALUATION_REQUIRED = "trust_evaluation_required"
 
@@ -475,12 +485,38 @@ class OpenID4xProfile(
 
     private var peer: WmpPeerContext? = null
 
-    /** Where sub-flow answers run, off the dispatch loop so the acknowledgement is never held up by a user prompt. */
+    /**
+     * Where sub-flow answers run, off the dispatch loop so the acknowledgement is never held up by a user prompt. The
+     * handler is the last boundary: nothing that escapes an answer task may reach the thread's uncaught-exception
+     * handler (on Android, the app's crash).
+     */
     @Volatile
-    internal var subFlowScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    internal var subFlowScope: CoroutineScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default +
+            CoroutineExceptionHandler { _, e -> Timber.e("WMP sub-flow work failed (${e.javaClass.simpleName})") },
+    )
 
-    /** Stops the sub-flow answers still running; [WmpPeer.close] calls it. */
+    /** What the wallet has decided to answer on a sub-flow: the frames to send, in order. */
+    private class SubFlowAnswer(val frames: List<Pair<String, JsonObject>>)
+
+    /**
+     * One sub-flow the engine started, keyed by its own id. The engine re-sends a start under the SAME id when a resumed
+     * session reissues it, so this is also how a repeat is told from a new request.
+     */
+    private class SubFlow(val childId: String, val parentId: String?) {
+        @Volatile var job: Job? = null
+
+        /** Set the moment the answer is decided (before it is sent), so a failed send can be replayed, never recomputed. */
+        @Volatile var answer: SubFlowAnswer? = null
+    }
+
+    private val subFlows = ConcurrentHashMap<String, SubFlow>()
+
+    /** Stops the sub-flow answers still running and forgets them; [WmpPeer.close] calls it, also when closing the session failed. */
     override fun close() {
+        val all = subFlows.values.toList()
+        subFlows.clear()
+        all.forEach { it.job?.cancel() }
         subFlowScope.cancel()
     }
 
@@ -501,8 +537,7 @@ class OpenID4xProfile(
     override suspend fun startFlow(params: FlowStartParams): FlowStartResult {
         // The engine waits for this acknowledgement (30 s), not for the answer: start the work and return.
         when (params.flowType) {
-            OID4FlowTypes.SIGN -> subFlowScope.launch { answerSignSubFlow(params) }
-            OID4FlowTypes.MATCH -> subFlowScope.launch { answerMatchSubFlow(params) }
+            OID4FlowTypes.SIGN, OID4FlowTypes.MATCH -> beginSubFlow(params)
         }
         return FlowStartResult(flowId = params.flowId, flowType = params.flowType)
     }
@@ -534,26 +569,134 @@ class OpenID4xProfile(
     }
 
     override suspend fun handleComplete(params: FlowCompleteParams) {
+        stopSubFlows(params.flowId)
         config.onComplete?.invoke(params.flowId, params.result)
     }
 
     override suspend fun handleError(params: FlowErrorParams) {
+        stopSubFlows(params.flowId)
         config.onError?.invoke(params.flowId, params.code, params.message)
     }
 
     override suspend fun handleCancel(params: FlowCancelParams) {
         Timber.d("OpenID4x flow cancelled: ${params.flowId} reason=${params.reason}")
+        stopSubFlows(params.flowId)
         config.onCancel?.invoke(params.flowId)
     }
 
     // ---- Sub-flow answers ----
 
-    private suspend fun answerSignSubFlow(start: FlowStartParams) {
+    /** A flow this peer has ended itself (a local cancel): the sub-flows of it stop before its state is released. */
+    override fun flowEnded(flowId: String) = stopSubFlows(flowId)
+
+    /**
+     * Stops the sub-flows whose child or parent id is [flowId] and forgets them: a callback still waiting (a consent prompt, a
+     * signature) is cancelled, and one that ignores cancellation and returns late finds its sub-flow gone and answers nothing.
+     * Runs BEFORE the terminal callbacks that release the flow's state.
+     */
+    private fun stopSubFlows(flowId: String) {
+        for (sub in subFlows.values.toList()) {
+            if ((sub.childId == flowId || sub.parentId == flowId) && subFlows.remove(sub.childId, sub)) sub.job?.cancel()
+        }
+    }
+
+    private fun beginSubFlow(start: FlowStartParams) {
+        val parentId = (start.params?.get("parent_flow_id") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+        val sub = SubFlow(start.flowId, parentId)
+        val existing = subFlows.putIfAbsent(start.flowId, sub)
+        if (existing != null) {
+            // A repeat (a resumed session reissues the start under the same id): the first start is acknowledged and its work is
+            // not run again. An answer already decided is sent again (the first send may have failed); one still pending is simply
+            // left to finish.
+            existing.answer?.let { decided -> subFlowScope.launch { emit(existing, decided) } }
+            return
+        }
+        if (subFlows.size > MAX_SUB_FLOWS) subFlows.values.filter { it.answer != null }.forEach { subFlows.remove(it.childId, it) }
+        // Registered before it runs, so a stop that races the launch finds the job.
+        val job = subFlowScope.launch(start = CoroutineStart.LAZY) { runSubFlow(sub, start) }
+        sub.job = job
+        job.start()
+    }
+
+    /** The boundary around one whole answer task: nothing but cancellation leaves it. */
+    private suspend fun runSubFlow(sub: SubFlow, start: FlowStartParams) {
+        try {
+            when (start.flowType) {
+                OID4FlowTypes.SIGN -> answerSignSubFlow(sub, start)
+                OID4FlowTypes.MATCH -> answerMatchSubFlow(sub, start)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Text stays out of the log: it can name keys or credentials.
+            Timber.e("WMP sub-flow answer failed (${e.javaClass.simpleName})")
+        }
+    }
+
+    /**
+     * Records [frames] as the sub-flow's answer and sends them. Recorded first, so a send that fails is replayed by a repeated
+     * start rather than lost.
+     */
+    private suspend fun answer(sub: SubFlow, frames: List<Pair<String, JsonObject>>) {
+        val decided = SubFlowAnswer(frames)
+        sub.answer = decided
+        emit(sub, decided)
+    }
+
+    /**
+     * Sends an answer's frames, unless the sub-flow has been stopped in the meantime (its flow ended or was cancelled, or the
+     * profile closed): cancellation is cooperative, so a callback that was blocking when that happened still returns here.
+     * A failed send is logged and dropped; it never reaches the app (the connection is down and the engine retries).
+     */
+    private suspend fun emit(sub: SubFlow, decided: SubFlowAnswer) {
         val ctx = peer ?: return
-        val subFlowId = start.flowId
+        for ((method, params) in decided.frames) {
+            currentCoroutineContext().ensureActive()
+            if (subFlows[sub.childId] !== sub) return
+            try {
+                ctx.notify(method, params)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.w("Could not send a WMP sub-flow answer (${e.javaClass.simpleName})")
+                return
+            }
+        }
+    }
+
+    private suspend fun answerComplete(sub: SubFlow, result: JsonObject, followUps: List<Pair<String, JsonObject>> = emptyList()) {
+        val ctx = peer ?: return
+        answer(
+            sub,
+            listOf(
+                WmpMethods.FLOW_COMPLETE to ctx.codec.encodeParams(
+                    FlowCompleteParams(wmp = WmpMeta(), flowId = sub.childId, result = result),
+                ),
+            ) + followUps,
+        )
+    }
+
+    private suspend fun answerError(sub: SubFlow, code: String, message: String, data: JsonObject?) {
+        val ctx = peer ?: return
+        answer(
+            sub,
+            listOf(
+                WmpMethods.FLOW_ERROR to ctx.codec.encodeParams(
+                    FlowErrorParams(wmp = WmpMeta(), flowId = sub.childId, code = code, message = message, data = data),
+                ),
+            ),
+        )
+    }
+
+    /** A deliberate refusal: a flow error with `data.reason = "rejected"`, which the engine answers to the verifier as access_denied. */
+    private suspend fun answerRefused(sub: SubFlow) =
+        answerError(sub, WMP_ERR_FLOW_ERROR, "sign request refused", buildJsonObject { put("reason", JsonPrimitive("rejected")) })
+
+    private suspend fun answerSignSubFlow(sub: SubFlow, start: FlowStartParams) {
+        val ctx = peer ?: return
         val handler = config.onSignRequest
         if (handler == null) {
-            sendSubFlowError(subFlowId, WMP_ERR_CAPABILITY_NOT_SUPPORTED, "sign requests are not supported", null)
+            answerError(sub, WMP_ERR_CAPABILITY_NOT_SUPPORTED, "sign requests are not supported", null)
             return
         }
         val signParams = start.params?.let {
@@ -567,63 +710,64 @@ class OpenID4xProfile(
         // The wallet keeps its per-flow state under the PARENT flow's id (the one it started), not the sub-flow's.
         val parentFlowId = signParams?.parentFlowId
         if (signParams == null || parentFlowId.isNullOrBlank()) {
-            sendSubFlowError(subFlowId, WMP_ERR_FLOW_ERROR, "invalid sign request", null)
+            answerError(sub, WMP_ERR_FLOW_ERROR, "invalid sign request", null)
             return
         }
 
         try {
-            sendSubFlowComplete(subFlowId, signResultJson(handler.invoke(parentFlowId, signParams)))
+            answerComplete(sub, signResultJson(handler.invoke(parentFlowId, signParams)))
         } catch (e: CancellationException) {
             throw e
         } catch (e: TransactionDataError) {
-            // A refused transaction_data request names its reason (the verifier-facing OpenID4VP error); the engine
-            // reads capability-not-supported as "unsupported transaction data" and tells the verifier.
-            Timber.w("Sign request refused: transaction_data (${e.reason.code})")
-            sendSubFlowError(
-                subFlowId, WMP_ERR_CAPABILITY_NOT_SUPPORTED, e.reason.code,
-                buildJsonObject { put("verifier_error", JsonPrimitive(e.verifierError)) },
-            )
+            if (e.reason == TransactionDataReason.DECLINED) {
+                // The user declined the transaction: a refusal like any other, not an unsupported request (the engine reads
+                // capability-not-supported as "unsupported transaction data" and would tell the verifier that).
+                Timber.w("Sign request declined by the user (transaction_data)")
+                answerRefused(sub)
+            } else {
+                // A refused transaction_data request names its reason (the verifier-facing OpenID4VP error); the engine reads
+                // capability-not-supported as "unsupported transaction data" and tells the verifier.
+                Timber.w("Sign request refused: transaction_data (${e.reason.code})")
+                answerError(
+                    sub, WMP_ERR_CAPABILITY_NOT_SUPPORTED, e.reason.code,
+                    buildJsonObject { put("verifier_error", JsonPrimitive(e.verifierError)) },
+                )
+            }
         } catch (e: SignRefusedException) {
             Timber.w("Sign request refused by the wallet")
-            sendSubFlowError(
-                subFlowId, WMP_ERR_FLOW_ERROR, "sign request refused",
-                buildJsonObject { put("reason", JsonPrimitive("rejected")) },
-            )
+            answerRefused(sub)
         } catch (e: Exception) {
             // The reason stays local: the engine relays a flow error's message, and a sign failure's text can
             // name keys or credentials.
             Timber.e("Sign request handler failed (${e.javaClass.simpleName})")
-            sendSubFlowError(subFlowId, WMP_ERR_FLOW_ERROR, "sign request failed", null)
+            answerError(sub, WMP_ERR_FLOW_ERROR, "sign request failed", null)
         }
     }
 
-    private suspend fun answerMatchSubFlow(start: FlowStartParams) {
-        val subFlowId = start.flowId
+    private suspend fun answerMatchSubFlow(sub: SubFlow, start: FlowStartParams) {
         val handler = config.onMatchRequest
         if (handler == null) {
-            sendSubFlowError(subFlowId, WMP_ERR_CAPABILITY_NOT_SUPPORTED, "match requests are not supported", null)
+            answerError(sub, WMP_ERR_CAPABILITY_NOT_SUPPORTED, "match requests are not supported", null)
             return
         }
         val payload = start.params
         val parentFlowId = (payload?.get("parent_flow_id") as? JsonPrimitive)?.contentOrNull
         if (parentFlowId.isNullOrBlank()) {
-            sendSubFlowError(subFlowId, WMP_ERR_FLOW_ERROR, "invalid match request", null)
+            answerError(sub, WMP_ERR_FLOW_ERROR, "invalid match request", null)
             return
         }
 
         try {
             val result = handler.invoke(parentFlowId, payload)
-            sendSubFlowComplete(subFlowId, matchResultJson(result))
-            if (result.matches.isEmpty()) {
-                // An empty answer also ends the presentation at once (credentials_matched, an action on the
-                // PARENT flow) instead of leaving it to the engine's user-interaction timeout.
-                sendCredentialsMatched(parentFlowId, result)
-            }
+            // An empty answer also ends the presentation at once (credentials_matched, an action on the PARENT flow) instead
+            // of leaving it to the engine's user-interaction timeout. It travels with the completion, and is replayed with it.
+            val followUps = if (result.matches.isEmpty()) listOf(credentialsMatchedFrame(parentFlowId, result)) else emptyList()
+            answerComplete(sub, matchResultJson(result), followUps)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Timber.e("Match request handler failed (${e.javaClass.simpleName})")
-            sendSubFlowError(subFlowId, WMP_ERR_FLOW_ERROR, "match request failed", null)
+            answerError(sub, WMP_ERR_FLOW_ERROR, "match request failed", null)
         }
     }
 
@@ -678,24 +822,6 @@ class OpenID4xProfile(
         }
     }
 
-    private suspend fun sendSubFlowComplete(subFlowId: String, result: JsonObject) {
-        val ctx = peer ?: return
-        ctx.notify(
-            WmpMethods.FLOW_COMPLETE,
-            ctx.codec.encodeParams(FlowCompleteParams(wmp = WmpMeta(), flowId = subFlowId, result = result)),
-        )
-    }
-
-    private suspend fun sendSubFlowError(subFlowId: String, code: String, message: String, data: JsonObject?) {
-        val ctx = peer ?: return
-        ctx.notify(
-            WmpMethods.FLOW_ERROR,
-            ctx.codec.encodeParams(
-                FlowErrorParams(wmp = WmpMeta(), flowId = subFlowId, code = code, message = message, data = data),
-            ),
-        )
-    }
-
     /**
      * A generic flow action on the parent flow. The action's members go under `params`, where go-wmp's
      * `FlowActionParams` reads them (`wmphandler.go` takes the engine's payload from it); they were sent flat
@@ -709,14 +835,17 @@ class OpenID4xProfile(
         )
     }
 
-    private suspend fun sendCredentialsMatched(flowId: String, result: MatchResult) {
-        val ctx = peer ?: return
-        sendFlowAction(
-            flowId, OID4Action.CREDENTIALS_MATCHED,
-            buildJsonObject {
-                put("matches", ctx.codec.json.encodeToJsonElement(ListSerializer(CredentialMatch.serializer()), result.matches))
-                result.noMatchReason?.let { put("no_match_reason", JsonPrimitive(it)) }
-            },
+    /** `credentials_matched`, an action on the PARENT flow, as the frame to send (members under `params`, see [sendFlowAction]). */
+    private fun credentialsMatchedFrame(flowId: String, result: MatchResult): Pair<String, JsonObject> {
+        val ctx = peer ?: throw IllegalStateException("profile is not attached to a peer")
+        return WmpMethods.FLOW_ACTION to ctx.codec.encodeParams(
+            FlowActionParams(
+                wmp = WmpMeta(), flowId = flowId, action = OID4Action.CREDENTIALS_MATCHED,
+                params = buildJsonObject {
+                    put("matches", ctx.codec.json.encodeToJsonElement(ListSerializer(CredentialMatch.serializer()), result.matches))
+                    result.noMatchReason?.let { put("no_match_reason", JsonPrimitive(it)) }
+                },
+            ),
         )
     }
 
