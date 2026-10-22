@@ -31,7 +31,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `OpenID4xProfile` is `AutoCloseable` and `WmpPeer.close()` closes it, which stops the sub-flow answers still running; a
     sub-flow the wallet has answered is no longer tracked.
 
+## [0.21.0] - 2026-10-22
+
+BREAKING: engine-blind encryption. The wallet, not the engine, now holds the OID4VCI credential-response key and builds the OID4VP direct_post.jwt response, so the engine relays ciphertext and never sees credentials, the delivered secret seed or a vp_token. This SDK REQUIRES a backend with go-wallet-backend #469 + #471; an older backend cannot issue to it or complete direct_post.jwt presentations, and an upgraded backend cannot serve an older SDK (no compatibility shims).
+
+Issuance: generate_proof requests carrying credential_response_encryption are answered with a fresh per-request public JWK (credential_response_encryption_jwk, or key-only when the config has no proof types); the new sign action decrypt_credential_response {jwe, deferred} is answered with exactly one of credential_count, transaction_id (+ optional interval) or error; credentials, the response-level credential_metadata (so the secret_seed receipt check) and the notification_id now come from the wallet's own decryption.
+
+Presentation: for direct_post.jwt the wallet returns response_jwe (JARM JWE built from the engine's response_encryption + verified_request.client_id) instead of vp_token; other response modes are unchanged.
+
+Removed/changed API: FlowCompleteMessage.credentialMetadataEncryptedResponse and the credential_metadata* entries of redacted_members are gone (FlowCompleteMessage/FlowCompleteResult.credentialMetadata remain but carry only display and claims, and only from plain issuer responses); CredentialResult.credential defaults to empty (encrypted placeholders; non-encrypted completions without credential values are refused at decode); SignResponseMessage/SignSubFlowResult gain credential_response_encryption_jwk, credential_count, transaction_id, interval, response_jwe, error_code, error; new VerifiedRequest, OpenID4xConfig.onCancel, WalletEngineSession.connectionGenerations. Renewals no longer delete the old credential batch before a replacement is stored.
+
+Scope/known limits: legacy engine WebSocket path only; WMP path is unchanged and not conformant with go-wallet-backend #163's child-flow protocol (a conformance fix, https://github.com/sirosfoundation/siros-sdk-kotlin/pull/285, is NOT included in this release and is tracked in https://github.com/sirosfoundation/siros-sdk-kotlin/issues/288); a narrow legacy socket-replacement race is tracked in https://github.com/sirosfoundation/siros-sdk-kotlin/issues/287; nothing has been tested end to end against a real engine.
+
+In this release, besides the engine-blind encryption work (#283) and the engine socket single-flight fix (#282):
+
+- **`zkp_req` over the redirect transport (QR / same-device, `direct_post.jwt`)**
+  (https://github.com/sirosfoundation/siros-sdk-kotlin/pull/280): the engine session matches, proves and answers `zkp_req`
+  requests with the shared circuit_zk core, with one-at-a-time presentation, per-query consumption eligibility, and a pending
+  signing that ends with its connection.
+- **`response_jwe` for the redirect `zkp_req` answer**
+  (https://github.com/sirosfoundation/siros-sdk-kotlin/pull/284): when the engine asks for client-side encryption the wallet
+  builds and encrypts the JARM response itself and answers `response_jwe` with no `vp_token`; failures are refused with the
+  message id, never answered in the clear.
+- **Private data schema version 4** (privatedata-spec 3.0,
+  https://github.com/sirosfoundation/siros-sdk-kotlin/pull/281): `S.schemaVersion` 4, a typed `UnsupportedSchemaVersionException`
+  instead of overwriting a container this SDK does not implement, `set_extension` events for extension changes, and verbatim
+  preservation of unknown keypair, presentation, credential, extension and `S` members.
+- **Not included:** the WMP child-flow conformance (https://github.com/sirosfoundation/siros-sdk-kotlin/pull/285, issue
+  https://github.com/sirosfoundation/siros-sdk-kotlin/issues/288). The WMP path is unchanged in this release.
+
+The entries below are the detailed changes that make up this release.
+
 ### Changed
+- **Redirect `zkp_req` presentations answer `response_jwe` when the engine asks for client-side encryption**
+  (go-wallet-backend#471; builds on #280 and the engine-blind helpers of #283). When the `sign_presentation` request carries
+  `response_encryption`, `handleCircuitZkEngineSignPresentation` builds the JARM response itself
+  (`BlindPresentation.responseJwe`: `vp_token` `{queryId: [base64url CBOR ZkpPresentation]}`, `state` echoed,
+  `aud` = `verified_request.client_id`, protected header `alg`/`enc` as requested and the verifier JWK's `kid`)
+  and answers `{response_jwe}` with NO `vp_token`; a refusal or error never carries one. A request that asks for
+  encryption without a `verified_request.client_id`, a selected credential that is gone, a key/algorithm that cannot be applied
+  or an oversized response is refused (`SIGN_REFUSED` with the message id), never answered in the clear. Without
+  `response_encryption` (plain response modes) the answer is the `vp_token` as before. A refusal is sent before the local
+  cleanup and best effort: a socket that rejects the frame no longer throws out of the signing launch.
+
+### Fixed
+- The sample consent screen judged a `zkp_req` query's candidates by their stored (mdoc) format, so under `CONSUME_NON_ZKP`
+  a second presentation of the same credential disabled Share or dropped the credential although the SDK permits reuse for
+  a proof. New `CredentialUtils.eligibleInstancesByQuery(...)` takes the ZK status from the query that answers each credential (`zkp_req` and legacy `mso_mdoc_zk`; the first matching query, as the engine's sign handlers classify it); the screen uses it
+  for both the exhausted-query check and the accepted ids (so overlapping raw/ZK queries never submit a consumed credential). A pending `zkp_req` signing is also cancelled when `forceReconnect()`
+  moves the engine to `CONNECTING`, so a stale consent dialog no longer holds the presentation lock for DC API requests. `signMdocPresentationForProximity` now takes the same lock, so a proximity presentation cannot use the single copy a pending redirect presentation is about to consume.
+
+### Changed
+- **Private data: `S.schemaVersion` 4** (privatedata-spec 3.0,
+  https://github.com/sirosfoundation/privatedata-spec/pull/9 at main merge commit 64315a5, with the vector fixes of https://github.com/sirosfoundation/privatedata-spec/pull/10). `JweKeystore`
+  now writes `S.schemaVersion` 4 (it wrote 3). A version 3 container it rewrites is
+  migrated by that number alone; everything else is carried through unchanged, including
+  unknown members of `S`, of credential entries and of `metadata` entries. `S.credentials[].metadata`
+  and `S.extensions` are version 4 members, so they are only ever written into a version 4
+  container (the SDK always rewrites at 4); containers written earlier that already carry them
+  under version 3 are read as version 4. The SDK does not fold or merge events (its only events are
+  the `set_extension` ones below), so the ETag/`If-Match` handling is unchanged.
+- `S.keypairs[]` entries the SDK cannot read (non-objects, legacy shapes, no parseable private key) and
+  unknown members of readable entries are now written back verbatim and in place (spec 3.0 section 6);
+  they used to be dropped on rewrite. Keys generated in a session are appended after them.
+  Likewise `S.presentations[]` entries are written back verbatim (`transactionId`, `data`, unknown
+  members) unless their record changed, and entries this SDK cannot read are kept in place.
+  `S.extensions` namespaces that are not objects and entry values that are not strings are written
+  back unchanged and in place (they used to be dropped); `setExtensionEntry` into such a namespace
+  fails at export instead of overwriting the peer's value.
+- **`set_extension` events (spec 3.0 section 6.1.3).** The SDK keeps no event log, but every change to
+  `S.extensions` (set, change, removal as a tombstone with `value` null) is now also appended to `events`
+  by `exportEncryptedContainer`: type `set_extension`, `schemaVersion` 4, a random non-zero 32-bit `eventId`,
+  `timestampSeconds`, and `parentHash` chained as wallet-frontend chains events (hash of the previous event,
+  or `lastEventHash` when `events` is empty; SHA-256 hex of the key-sorted compact JSON, checked against the
+  chain in the spec's vectors, including JavaScript key order, number and string serialization). A new event for a key always sorts after earlier ones for it (`timestampSeconds`, then `eventId`, as the merge rule orders them). `lastEventHash` is left as authored. Events are derived from the difference
+  to the entries loaded or last exported (plus an explicit set that the event history contradicts), so repeated exports append nothing twice. `set_extension` events
+  stamped 3 by earlier clients are read and kept; the SDK never writes one.
+- **Older SDK releases have no such guard.** The Kotlin exporter before this change unconditionally
+  wrote version 3, so an older SDK that rewrites a version 4 container silently downgrades it
+  instead of refusing. Integrators must not rely on the refusal until every SDK that shares an
+  account is on a release with this change.
+- **Breaking for clients still on version 3 only:** wallet-frontend (and older SDKs) that do not
+  implement version 4 will refuse to rewrite a container this SDK has rewritten, until updated.
+- The vendored privatedata-spec vectors are re-copied verbatim from privatedata-spec main at 64315a5 (with the fixtures
+  they reference); `vectors.PROVENANCE.txt` records the commit and digests.
+
 - **BREAKING (unreleased): engine-blind encryption: the wallet, not the engine, holds the response-encryption keys.**
   The engine now relays ciphertext and never sees an issued credential, a delivered `secret_seed` or a `vp_token`
   (go-wallet-backend#463 had to state that the engine decrypted the seed in clear). No compatibility shim: engine and
@@ -137,6 +221,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `response_jwe`, `error`, and `CredentialResult.credential` defaulting to empty.
 
 ### Added
+- **`UnsupportedSchemaVersionException`** (`errorCode` `unsupported_schema_version`; `kind`
+  `STATE_VERSION`, `EVENT_VERSION` or `EVENT_TYPE`). `JweKeystore.exportEncryptedContainer()`
+  throws it, before building or storing anything, when the unlocked container has an
+  `S.schemaVersion` other than 3 or 4 (absent counts as 1; 1 and 2 are not migrated here), an event
+  whose `schemaVersion` is not an integer from 1 to 4, or an event type the implemented versions do
+  not define (the ten types are the nine of wallet-frontend plus `set_extension`, accepted stamped 3 or 4).
+  Reading is unaffected, so credentials stay usable. `SirosWallet` reports it as its own
+  `onFlowError("sync", ...)` and neither stores nor uploads the container, so the backend copy is intact.
+  Previously such a container was silently rewritten as version 3.
+
+
+- **`zkp_req` over the redirect transport (QR / same-device, `direct_post.jwt`).** The engine
+  session now matches, proves and answers `zkp_req` requests: the verifier's `client_metadata`
+  (new optional field of `match_request` and `sign_request` params) reaches the matcher, and the
+  proof is bound to the redirect OpenID4VPHandover over `[client id, nonce, JWK thumbprint,
+  response_uri]`. A missing thumbprint, response_uri, trust result or consent handler, an
+  untrusted verifier, a mismatched audience or `transaction_data` is refused and the flow
+  cancelled. The answering core is shared with the DC API path (`answerCircuitZkQueries`).
+  A refusal at the sign step is answered with `sign_response` `error_code` SIGN_REFUSED
+  (`WalletEngineSession.sendSignRefusal`, wmp spec 3.2.6): the engine ends signing at once and
+  tells the verifier `access_denied` with no description.
+  zkp_req presentations run one at a time (a consumed copy is never presented twice), and a flow, connection or session that ends while the user is asked proves nothing.
+  The PDP's verifier ids are mapped in ONE place (`AuthZENSource`) for every trust path: `semantic` (must carry `semantic_id:`)
+  verbatim, `x509_san_dns` (go-trust returns the bare A-label) as `x509_san_dns:<dns>`; any other type is never used.
+  A `zkp_req` request the wallet cannot answer is refused with its own stable, content-free code (logged) and a reason the user may
+  be shown: `disabled`, `no-circuit`, `no-credential`, `predicate-unsatisfied`, `no-verifier-id` (checked at match time from the
+  flow's trust result), and the generic ones for an unreadable, mixed or unsupported request.
+  The engine's own trust decision (`verifier_trust_evaluated` progress) is ingested; a request is
+  answered only for the signed client-id schemes (x509_san_dns, x509_san_uri, x509_hash); what is
+  proved is the store's current credential, and a cancelled or ended flow stops a pending signing.
+  The circuit catalog's `proofSystem` field is the identity offered to verifiers
+  (`ZkCircuitDescriptor.proofSystem`); entries without it are not offered for `zkp_req`.
 - **Holder-generated pseudonym commitment (`org.siros.psc`) in the OpenID4VCI
   proof JWT** (tracking issue https://github.com/SUNET/vc/issues/823). When the
   engine's `generate_proof` sign request (legacy engine and WMP sign sub-flow)
@@ -394,9 +510,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING (unreleased): the response is the rulebook's base64url CBOR `ZkpPresentation`.** `vp_token[queryId]` is an array of
   strings, each the unpadded base64url of `{system_id, proof, issuer_key_set, ? proof_time, results}`
   (`CircuitZkResponsePresentation`; `CircuitZkPresenter.Result.presentation` / `.json`; `base64Url` is gone, and the earlier
-  CBOR/JSON presentation classes with `circuit_id`/`x5chain` are removed). `issuer_key_set` is the credential's own
-  `issuerAuth` `x5chain` (DER, leaf first, at most 8 certificates of at most 4096 bytes each, checked before any proof is
-  made; the verifier validates them through go-trust and takes the issuer key from the leaf). `proof_time` (tag 0) is the
+  CBOR/JSON presentation classes with `circuit_id`/`x5chain` are removed). `issuer_key_set` holds exactly ONE element, the
+  Document Signer leaf certificate (first of the credential's `issuerAuth` `x5chain`, DER, at most 4096 bytes; never an
+  intermediate or the root, which made the vc verifier refuse the nym_auth system); a credential with no usable leaf is refused
+  before any proof is made (`CircuitZkStep.ISSUER_KEY` / `ISSUER_KEY_UNUSABLE`). The response validator still accepts up to 8
+  elements of 4096 bytes. The verifier validates the certificate through go-trust and takes the issuer key from it. `proof_time` (tag 0) is the
   EXACT 20-byte form `YYYY-MM-DDThh:mm:ssZ` and required for `mso_mdoc`: the prover's own time input when it has one, else the
   device clock, rendered by the one function `ProofTime.render`. A pseudonym is 32 bytes for `sha-256`, a predicate result is
   `true`; no item type is skipped. `CircuitZkResponseValidator` (strict CBOR: definite lengths, no duplicate keys, no trailing
