@@ -13309,14 +13309,25 @@ class SirosWalletTest {
             val ctx = RecordingPeerContext()
             profile.init(ctx)
             // The callback passes its liveness check and stops just before it claims the flow's state.
-            val running = java.util.concurrent.Executors.newSingleThreadExecutor().submit { runBlocking { profile.handleProgress(wmpKeyOnlyRequest()) } }
+            // The engine's sign sub-flow: the start is acknowledged at once and the answer runs on the profile's own coroutine, which
+            // is what pauses at the hook.
+            val running = java.util.concurrent.Executors.newSingleThreadExecutor().submit { runBlocking { profile.startFlow(wmpKeyOnlyRequest()) } }
             assertTrue(paused.await(5, java.util.concurrent.TimeUnit.SECONDS))
             teardown(wallet)
             release.countDown()
             running.get(5, java.util.concurrent.TimeUnit.SECONDS)
+            runBlocking {
+                kotlinx.coroutines.withTimeout(10_000) {
+                    while (ctx.notifications.none { it.first == "wmp.flow.complete" || it.first == "wmp.flow.error" }) kotlinx.coroutines.delay(10)
+                }
+            }
             assertFalse("the teardown is not undone by the late claim", blind.holdsKey("flow-late"))
             assertEquals(null, blind.take("flow-late"))
-            assertTrue("no key is answered", ctx.notifications.none { it.second?.containsKey("credential_response_encryption_jwk") == true })
+            assertFalse("no key is answered", ctx.answeredWithTheResponseKey())
+            assertTrue(
+                "the refused sub-flow ends with a flow error",
+                ctx.notifications.any { it.first == "wmp.flow.error" && it.second?.get("flow_id") == JsonPrimitive("sub-flow-late") },
+            )
         }
     }
 
