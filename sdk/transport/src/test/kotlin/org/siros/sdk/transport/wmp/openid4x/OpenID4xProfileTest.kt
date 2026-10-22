@@ -267,6 +267,17 @@ class OpenID4xProfileTest {
     }
 
     @Test
+    fun handleCancelTellsTheConfiguredCancelCallbackTheFlowId() = runBlocking {
+        val cancelled = mutableListOf<String>()
+        val profile = OpenID4xProfile(OpenID4xConfig(onCancel = { cancelled += it }))
+        profile.init(FakePeerContext())
+        profile.handleCancel(FlowCancelParams(wmp = WmpMeta(), flowId = "f-cancel", reason = "user"))
+        assertEquals(listOf("f-cancel"), cancelled)
+        // No callback configured: still fine.
+        OpenID4xProfile().handleCancel(FlowCancelParams(wmp = WmpMeta(), flowId = "f2"))
+    }
+
+    @Test
     fun handleCompleteCallsOnComplete() = runBlocking {
         var capturedFlowId: String? = null
         var capturedResult: JsonObject? = null
