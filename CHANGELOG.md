@@ -42,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - *Repeated starts.* The engine reissues a start under the same child id after a resumption. The profile keeps each
       sub-flow by its id: a repeat is acknowledged, a pending callback is reused (never run again) and a decided answer is
       replayed (also when its first send failed). Entries are forgotten when their flow ends, on close, and past 256.
+    - *A stop during job registration.* A sub-flow's entry is registered before its job exists; if its flow ends in that gap the
+      stop found no job to cancel and the callback then started. The registration is re-checked once the job is assigned and
+      the job cancelled before it runs. Known gap, not fixed here: a failed answer send after an acknowledged start is not
+      retried until the engine reissues the start (https://github.com/sirosfoundation/siros-sdk-kotlin/issues/290).
     - *Terminal frames stop pending sub-flows first.* `flow.complete` / `flow.error` / `flow.cancel` for the parent or the
       child, and a local `WmpPeer.cancelFlow`, cancel the pending callbacks (a consent prompt, a signature) before the
       callbacks that release the flow's state run. `WmpFlowHandler.flowEnded(flowId)` (default no-op) carries a local end to

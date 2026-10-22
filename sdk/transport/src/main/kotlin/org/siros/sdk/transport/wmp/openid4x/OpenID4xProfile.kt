@@ -496,6 +496,10 @@ class OpenID4xProfile(
             CoroutineExceptionHandler { _, e -> Timber.e("WMP sub-flow work failed (${e.javaClass.simpleName})") },
     )
 
+    /** Runs between a sub-flow's registration and the assignment of its job (tests only). */
+    @Volatile
+    internal var beforeJobAssigned: (() -> Unit)? = null
+
     /** What the wallet has decided to answer on a sub-flow: the frames to send, in order. */
     private class SubFlowAnswer(val frames: List<Pair<String, JsonObject>>)
 
@@ -612,9 +616,16 @@ class OpenID4xProfile(
             return
         }
         if (subFlows.size > MAX_SUB_FLOWS) subFlows.values.filter { it.answer != null }.forEach { subFlows.remove(it.childId, it) }
-        // Registered before it runs, so a stop that races the launch finds the job.
+        // Test seam: a stop that lands between the registration above and the job below.
+        beforeJobAssigned?.invoke()
         val job = subFlowScope.launch(start = CoroutineStart.LAZY) { runSubFlow(sub, start) }
         sub.job = job
+        // A stop in the gap found no job to cancel and removed the entry: this sub-flow is already over, and its callback (a
+        // signature, a consent prompt) must not start. After this check a stop finds the job and cancels it before it runs.
+        if (subFlows[start.flowId] !== sub) {
+            job.cancel()
+            return
+        }
         job.start()
     }
 

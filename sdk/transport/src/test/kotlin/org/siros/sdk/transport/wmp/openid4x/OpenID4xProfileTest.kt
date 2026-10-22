@@ -1063,4 +1063,18 @@ class OpenID4xProfileTest {
             assertNoUncaught(start.flowType) { runBlocking { profile.startFlow(start) } }
         }
     }
+
+    @Test
+    fun aStopBetweenRegistrationAndJobAssignmentKeepsTheCallbackFromStarting() = runBlocking {
+        var calls = 0
+        val (profile, ctx) = attached(OpenID4xConfig(onSignRequest = { _, _ -> calls++; SignSubFlowResult(vpToken = "t") }))
+        // The flow ends in the gap: its entry is registered but it has no job yet, so the stop finds nothing to cancel.
+        profile.beforeJobAssigned = { profile.flowEnded("f1") }
+
+        profile.startFlow(signStart(subFlowId = "sub-g", parent = "f1"))
+        delay(200)
+
+        assertEquals("the callback of an already-ended flow never starts", 0, calls)
+        assertTrue("and nothing is answered", ctx.notifications.isEmpty())
+    }
 }

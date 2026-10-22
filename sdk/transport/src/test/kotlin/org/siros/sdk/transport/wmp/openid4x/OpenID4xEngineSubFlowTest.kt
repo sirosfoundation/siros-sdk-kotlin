@@ -208,11 +208,13 @@ class OpenID4xEngineSubFlowTest {
         val transport = FlakyTransport(inner)
         val peer = WmpPeer(WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 5_000)))
         val gate = CompletableDeferred<Unit>()
+        val entered = CompletableDeferred<Unit>()
         val stopped = CompletableDeferred<Unit>()
         peer.use(
             OpenID4xProfile(
                 OpenID4xConfig(
                     onSignRequest = { _, _ ->
+                        entered.complete(Unit)
                         try {
                             gate.await()
                             SignSubFlowResult(vpToken = "t")
@@ -227,6 +229,8 @@ class OpenID4xEngineSubFlowTest {
         connected(inner, peer)
         inner.receiveFromServer(signStartFrame("child-c", "call-c", "parent-c"))
         inner.awaitSent { it["id"] == JsonPrimitive("call-c") }
+        // The acknowledgement does not say the callback has begun: close only once it is waiting.
+        withTimeout(5_000) { entered.await() }
 
         transport.failSends = true
         val failure = runCatching { peer.close() }.exceptionOrNull()
@@ -242,11 +246,14 @@ class OpenID4xEngineSubFlowTest {
         val peer = WmpPeer(WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 5_000)))
         val gate = CompletableDeferred<Unit>()
         val calls = java.util.concurrent.atomic.AtomicInteger()
-        peer.use(OpenID4xProfile(OpenID4xConfig(onSignRequest = { _, _ -> calls.incrementAndGet(); gate.await(); SignSubFlowResult(vpToken = "t") })))
+        val entered = CompletableDeferred<Unit>()
+        peer.use(OpenID4xProfile(OpenID4xConfig(onSignRequest = { _, _ -> calls.incrementAndGet(); entered.complete(Unit); gate.await(); SignSubFlowResult(vpToken = "t") })))
         connected(transport, peer)
 
         transport.receiveFromServer(signStartFrame("child-d", "call-1", "parent-d"))
         transport.awaitSent { it["id"] == JsonPrimitive("call-1") }
+        // The callback has begun (and is waiting) before the start is repeated: the count below then means "not run again".
+        withTimeout(5_000) { entered.await() }
         // The engine reissues the same child id on the resumed session.
         transport.receiveFromServer(signStartFrame("child-d", "call-2", "parent-d"))
         transport.awaitSent { it["id"] == JsonPrimitive("call-2") }
@@ -266,11 +273,13 @@ class OpenID4xEngineSubFlowTest {
         val transport = FakeTransport()
         val peer = WmpPeer(WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 5_000)))
         val gate = CompletableDeferred<Unit>()
+        val entered = CompletableDeferred<Unit>()
         val stopped = CompletableDeferred<Unit>()
         peer.use(
             OpenID4xProfile(
                 OpenID4xConfig(
                     onSignRequest = { _, _ ->
+                        entered.complete(Unit)
                         try {
                             gate.await()
                             SignSubFlowResult(vpToken = "t")
@@ -290,6 +299,8 @@ class OpenID4xEngineSubFlowTest {
         transport.awaitSent { it["id"] == JsonPrimitive("call-p") }
         transport.receiveFromServer(signStartFrame("child-e", "call-e", "parent-e"))
         transport.awaitSent { it["id"] == JsonPrimitive("call-e") }
+        // The acknowledgement does not say the callback has begun: cancel only once it is waiting.
+        withTimeout(5_000) { entered.await() }
 
         peer.cancelFlow("parent-e", "user")
 
