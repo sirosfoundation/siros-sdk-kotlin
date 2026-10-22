@@ -52,6 +52,7 @@ class WalletEngineSessionTest {
         }
         // Returning [client] itself from build() keeps every test's existing
         // newWebSocket stub above meaningful without needing a second one.
+        every { webSocket.send(any<String>()) } returns true
         every { client.newBuilder() } returns builder
         every { builder.pingInterval(any(), any()) } returns builder
         every { builder.build() } returns client
@@ -114,7 +115,7 @@ class WalletEngineSessionTest {
         // The very first connection must use the hardcoded default, not
         // whatever a server that hasn't spoken yet might eventually say.
         verify(exactly = 1) {
-            builder.pingInterval(WalletEngineSession.DEFAULT_PING_INTERVAL_MS, TimeUnit.MILLISECONDS)
+            builder.pingInterval(10_000L, TimeUnit.MILLISECONDS)
         }
 
         // onMessage only enqueues the frame for WalletEngineSession's own
@@ -124,7 +125,7 @@ class WalletEngineSessionTest {
         session.messages().test {
             listener.onMessage(
                 webSocket,
-                """{"type":"handshake_complete","session_id":"session-123","config":{"ping_interval_ms":7000}}""",
+                """{"type":"handshake_complete","session_id":"session-123","config":{"ping_interval_ms":15000}}""",
             )
             awaitItem()
             cancelAndIgnoreRemainingEvents()
@@ -136,7 +137,7 @@ class WalletEngineSessionTest {
 
         session.forceReconnect()
 
-        verify(exactly = 1) { builder.pingInterval(7000L, TimeUnit.MILLISECONDS) }
+        verify(exactly = 1) { builder.pingInterval(15000L, TimeUnit.MILLISECONDS) }
         verify(exactly = 2) { client.newWebSocket(any(), any()) }
     }
 
@@ -316,6 +317,34 @@ class WalletEngineSessionTest {
             assertEquals(emptySet<String>(), message.credentialMetadata!!.members.keys)
             assertTrue(!message.toString().contains("00112233445566778899aabbccddeeff"))
             assertTrue(!message.credentials.toString().contains("secret-credential"))
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun a_plain_completion_must_carry_a_value_for_every_credential_but_an_encrypted_one_may_not() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        fun decode(body: String) = json.decodeFromString(FlowCompleteMessage.serializer(), """{"type":"flow_complete","flow_id":"f",$body}""")
+        // Missing, empty, and one entry among several: refused.
+        assertThrows(IllegalArgumentException::class.java) { decode(""""credentials":[{"format":"dc+sd-jwt"}]""") }
+        assertThrows(IllegalArgumentException::class.java) { decode(""""credentials":[{"format":"dc+sd-jwt","credential":""}]""") }
+        assertThrows(IllegalArgumentException::class.java) {
+            decode(""""credentials":[{"format":"dc+sd-jwt","credential":"x"},{"format":"dc+sd-jwt"}]""")
+        }
+        // Encrypted placeholders are valid; so is a completion with no credentials at all (a presentation).
+        assertEquals(2, decode(""""credentials":[{"format":"dc+sd-jwt"},{"format":"dc+sd-jwt"}],"credential_response_encrypted":true""").credentials!!.size)
+        assertEquals(null, decode(""""redirect_uri":"https://x"""").credentials)
+        assertEquals("x", decode(""""credentials":[{"format":"dc+sd-jwt","credential":"x"}]""").credentials!!.single().credential)
+    }
+
+    @Test
+    fun a_malformed_plain_completion_frame_emits_nothing_and_does_not_stop_the_next_frame() = runTest {
+        val session = WalletEngineSession(baseUrl = "https://wallet.example.com", tenantId = "tenant-42", client = client)
+        session.connect("app-token")
+        session.flowComplete().test {
+            listener.onMessage(webSocket, """{"type":"flow_complete","flow_id":"bad","credentials":[{"format":"dc+sd-jwt"}]}""")
+            listener.onMessage(webSocket, """{"type":"flow_complete","flow_id":"good","credentials":[{"format":"dc+sd-jwt","credential":"j"}]}""")
+            assertEquals("good", awaitItem().flowId)
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -1120,6 +1149,24 @@ class WalletEngineSessionTest {
         // The superseded call must not cancel/replace the newer caller's socket.
         verify(exactly = 2) { client.newWebSocket(any(), any()) }
         verify(exactly = 1) { webSocket.cancel() }
+    }
+
+    @Test
+    fun overlappingForceReconnect_publishesOnlyTheSocketThatWasActuallyInstalled() = runTest {
+        val session = WalletEngineSession(baseUrl = "https://wallet.example.com", tenantId = "t", client = client)
+        val gate = kotlinx.coroutines.CompletableDeferred<String>()
+        var calls = 0
+        session.connect("app-token", tokenProvider = { if (calls++ == 0) gate.await() else "fresh-token" })
+        assertEquals(1, session.connectionGenerations.value)
+
+        val first = launch(start = CoroutineStart.UNDISPATCHED) { session.forceReconnect() }
+        session.forceReconnect()
+        assertEquals("the newer caller's socket is published", 2, session.connectionGenerations.value)
+        gate.complete("stale-token")
+        first.join()
+        // The superseded call installed nothing, so nothing more is published, and the flow and the counter agree.
+        assertEquals(2, session.connectionGenerations.value)
+        assertEquals(session.connectionGeneration, session.connectionGenerations.value)
     }
 
     @Test
