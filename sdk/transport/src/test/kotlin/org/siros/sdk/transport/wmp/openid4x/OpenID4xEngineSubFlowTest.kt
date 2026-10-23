@@ -383,4 +383,55 @@ class OpenID4xEngineSubFlowTest {
         assertTrue("a refused start is forgotten by the peer", "child-2" !in progressed)
         peer.close()
     }
+
+    @Test
+    fun aParentThatEndsWithAPendingChildLeavesNoRoutingForTheChild() = runBlocking {
+        for (ending in listOf("complete", "cancel")) {
+            val transport = FakeTransport()
+            val peer = WmpPeer(WmpSession(transport, config = WmpSessionConfig(requestTimeoutMs = 5_000)))
+            val progressed = java.util.concurrent.CopyOnWriteArrayList<String>()
+            val entered = CompletableDeferred<Unit>()
+            peer.use(
+                OpenID4xProfile(
+                    OpenID4xConfig(
+                        onSignRequest = { _, _ -> entered.complete(Unit); CompletableDeferred<Unit>().await(); SignSubFlowResult() },
+                        onProgress = { flowId, _, _ -> progressed.add(flowId) },
+                    ),
+                ),
+            )
+            connected(transport, peer)
+            transport.receiveFromServer(
+                """{"jsonrpc":"2.0","id":"call-p","method":"wmp.flow.start","params":{"wmp":{"version":"0.1"},"flow_type":"oid4vp","flow_id":"parent-$ending"}}""".toByteArray(),
+            )
+            transport.awaitSent { it["id"] == JsonPrimitive("call-p") }
+            transport.receiveFromServer(signStartFrame("child-$ending", "call-c", "parent-$ending"))
+            transport.awaitSent { it["id"] == JsonPrimitive("call-c") }
+            withTimeout(5_000) { entered.await() }
+
+            // The parent ends while its child is pending: the engine's terminal frame, or a local cancel.
+            if (ending == "complete") {
+                transport.receiveFromServer(
+                    """{"jsonrpc":"2.0","method":"wmp.flow.complete","params":{"wmp":{"version":"0.1"},"flow_id":"parent-$ending","result":{}}}""".toByteArray(),
+                )
+                withTimeout(5_000) { while (transport.sentMessages.isEmpty()) delay(10) }
+                delay(300)
+            } else {
+                peer.cancelFlow("parent-$ending", "user")
+            }
+            // A late frame for the child has no handler; a frame for a flow that is still tracked does.
+            transport.receiveFromServer(
+                """{"jsonrpc":"2.0","id":"call-o","method":"wmp.flow.start","params":{"wmp":{"version":"0.1"},"flow_type":"oid4vci","flow_id":"other-$ending"}}""".toByteArray(),
+            )
+            transport.awaitSent { it["id"] == JsonPrimitive("call-o") }
+            transport.receiveFromServer(
+                """{"jsonrpc":"2.0","method":"wmp.flow.progress","params":{"wmp":{"version":"0.1"},"flow_id":"child-$ending","step":"late"}}""".toByteArray(),
+            )
+            transport.receiveFromServer(
+                """{"jsonrpc":"2.0","method":"wmp.flow.progress","params":{"wmp":{"version":"0.1"},"flow_id":"other-$ending","step":"s"}}""".toByteArray(),
+            )
+            withTimeout(5_000) { while ("other-$ending" !in progressed) delay(10) }
+            assertTrue("$ending: the stopped child's routing was released: $progressed", "child-$ending" !in progressed)
+            peer.close()
+        }
+    }
 }

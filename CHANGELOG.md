@@ -50,7 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
       one cancellable lifetime per sub-flow, stopped together by terminal frames, a local `cancelFlow` and close; a send is
       checked again once the peer holds its send lock (`WmpPeerContext.notifyIf`, default: check, then send), so a replay queued
       behind another send never sends a stale answer. Making room past 256 entries evicts only sub-flows whose answer was
-      completely sent; with nothing to evict the new start is refused AS A REQUEST (`FlowStartRefusedException`: `WmpPeer` answers the `wmp.flow.start` with an error response "too many pending requests" and tracks nothing), so no answer task exists that could send a flow frame after the flow it concerns has ended. Known gaps, not fixed
+      completely sent; with nothing to evict the new start is refused AS A REQUEST (`FlowStartRefusedException`: `WmpPeer` answers the `wmp.flow.start` with an error response "too many pending requests" and tracks nothing), so no answer task exists that could send a flow frame after the flow it concerns has ended. A sub-flow stopped because its parent ended releases the peer's routing entry for it (`WmpPeerContext.forgetFlow`, default no-op), without sending anything, and a replay waiting to send keeps its sub-flow out of eviction until it has been sent. Known gaps, not fixed
       here: a failed answer send after an acknowledged start is not retried
       (https://github.com/sirosfoundation/siros-sdk-kotlin/issues/290), and a callback paused before `BlindIssuance.offer` can
       allocate a response key after a terminal frame's `drop` (https://github.com/sirosfoundation/siros-sdk-kotlin/issues/291).

@@ -40,6 +40,13 @@ interface WmpPeerContext {
         return true
     }
 
+    /**
+     * Forget everything the peer tracks for [flowId] (which handler a later frame for it is routed to), without sending anything.
+     * A handler calls it for a flow it stopped itself, one that will never send the terminal frame that clears it. The default
+     * does nothing.
+     */
+    fun forgetFlow(flowId: String) {}
+
     /** Send a JSON-RPC 2.0 request and wait for the response. */
     suspend fun call(method: String, params: JsonObject?): JsonRpcResponse
 

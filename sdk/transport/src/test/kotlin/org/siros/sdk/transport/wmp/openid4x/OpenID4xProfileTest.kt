@@ -1218,4 +1218,27 @@ class OpenID4xProfileTest {
             ctx.sent.filter { it.first == WmpMethods.FLOW_COMPLETE }.map { it.second!!["flow_id"] }.toSet(),
         )
     }
+
+    @Test
+    fun aReplayHeldAtTheSendLockIsNotEvictedUnderTablePressure() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        val pending = CompletableDeferred<Unit>()
+        var holdS1 = false
+        val (profile, ctx) = gating(
+            OpenID4xConfig(onSignRequest = { flowId, _ -> if (flowId == "p2") pending.await(); SignSubFlowResult(vpToken = flowId) }),
+        ) { flowId -> if (holdS1 && flowId == "s1") gate else null }
+        profile.maxSubFlows = 2
+        profile.startFlow(signStart(subFlowId = "s1", parent = "p1")) // answered and sent
+        profile.startFlow(signStart(subFlowId = "s2", parent = "p2")) // pending: the table is full
+
+        holdS1 = true
+        profile.startFlow(signStart(subFlowId = "s1", parent = "p1")) // a replay of s1, held at the send lock
+        val refusal = runCatching { profile.startFlow(signStart(subFlowId = "s3", parent = "p3")) }.exceptionOrNull()
+
+        assertTrue("the table is full of live work, so the new start is refused: $refusal", refusal is FlowStartRefusedException)
+        gate.complete(Unit)
+        pending.complete(Unit)
+        val s1Frames = ctx.sent.filter { it.first == WmpMethods.FLOW_COMPLETE && it.second!!["flow_id"] == JsonPrimitive("s1") }
+        assertEquals("the held replay was not evicted: s1 is answered twice", 2, s1Frames.size)
+    }
 }

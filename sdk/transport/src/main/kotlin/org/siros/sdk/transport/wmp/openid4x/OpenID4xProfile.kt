@@ -605,7 +605,12 @@ class OpenID4xProfile(
      */
     private fun stopSubFlows(flowId: String) {
         for (sub in subFlows.values.toList()) {
-            if ((sub.childId == flowId || sub.parentId == flowId) && subFlows.remove(sub.childId, sub)) sub.lifetime.cancel()
+            if ((sub.childId == flowId || sub.parentId == flowId) && subFlows.remove(sub.childId, sub)) {
+                sub.lifetime.cancel()
+                // The child will never send the terminal frame that clears the peer's routing entry for it: release it here, so a
+                // late frame for it reaches no handler and ended parents leave nothing behind. Nothing is sent.
+                peer?.forgetFlow(sub.childId)
+            }
         }
     }
 
@@ -615,7 +620,12 @@ class OpenID4xProfile(
             // A repeat (a resumed session reissues the start under the same id): the first start is acknowledged and its work is
             // not run again. An answer already decided is sent again (the first send may have failed); one still pending is simply
             // left to finish. The replay shares the sub-flow's lifetime, so a stop cancels it with the original.
-            existing.answer?.let { decided -> subFlowScope.launch(existing.lifetime) { emit(existing, decided) } }
+            existing.answer?.let { decided ->
+                // Not evictable while the replay is on its way: `sent` was set by the original answer, and only the replay's own
+                // completed send restores it.
+                existing.sent = false
+                subFlowScope.launch(existing.lifetime) { emit(existing, decided) }
+            }
             return
         }
         if (subFlows.size >= maxSubFlows) {

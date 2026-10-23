@@ -107,6 +107,8 @@ class WmpPeer(
         }
     }
 
+    override fun forgetFlow(flowId: String) = forgetFlowType(flowId)
+
     override suspend fun notifyIf(method: String, params: JsonObject?, wanted: () -> Boolean): Boolean {
         val sent = session.sendNotificationIf(method, params, wanted)
         if (sent && (method == WmpMethods.FLOW_COMPLETE || method == WmpMethods.FLOW_ERROR)) {
