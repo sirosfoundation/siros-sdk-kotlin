@@ -3452,7 +3452,9 @@ class SirosWallet private constructor(
 
     /** The catalog is only ever read by the tenant, backend and user it was fetched for. */
     private fun issuerCatalogScopeKey(): String {
-        val userId = (_state.value as? WalletState.Ready)?.userId ?: (_state.value as? WalletState.FlowActive)?.userId ?: ""
+        val state = _state.value
+        val userId = (state as? WalletState.Ready)?.userId ?: (state as? WalletState.FlowActive)?.userId
+            ?: (state as? WalletState.KeystoreLocked)?.userId ?: ""
         return "${config.tenantId}|${config.backendUrl}|$userId"
     }
 

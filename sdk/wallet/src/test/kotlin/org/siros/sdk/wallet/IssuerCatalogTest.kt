@@ -232,4 +232,52 @@ class IssuerCatalogTest {
         store.clear()
         assertNull(store.load())
     }
+
+    @Test
+    fun aLogoutDuringThePersistedReadCannotRepublishTheOldUsersCatalog() = runTest {
+        val inner = InMemoryIssuerCatalogStore()
+        harness(store = inner).catalog.get("user-a")
+        val gate = CompletableDeferred<Unit>()
+        val slow = object : IssuerCatalogStore {
+            override suspend fun load(): String? { gate.await(); return inner.load() }
+            override suspend fun save(text: String) = inner.save(text)
+            override suspend fun clear() = inner.clear()
+        }
+        val h = harness(backend = Backend(), store = slow)
+        val read = async { runCatching { h.catalog.get("user-a") } }
+        runCurrent()
+        h.catalog.clearMemory() // logout while the persisted copy is being read
+        gate.complete(Unit)
+        runCurrent()
+        assertTrue("the invalidated read was aborted", read.await().isFailure)
+        assertTrue("nothing of the old user was republished", h.catalog.state.value.offers.isEmpty())
+        assertEquals("and no refresh was started for it", 0, h.backend.issuerCalls)
+    }
+
+    @Test
+    fun anotherScopeNeverSeesThePreviousScopesOffers_evenWhenItsOwnFetchFails() = runTest {
+        val h = harness()
+        h.catalog.get("user-a")
+        h.backend.failIssuers = true
+        try {
+            h.catalog.get("user-b")
+            fail("returned user-a's offers for user-b")
+        } catch (_: IssuerCatalogUnavailable) {
+        }
+        assertTrue(h.catalog.state.value.offers.isEmpty())
+    }
+
+    @Test
+    fun cancellingARefreshCancelsItsMetadataRequests() = runTest {
+        val h = harness()
+        h.backend.hangMetadata += 1L
+        h.backend.hangMetadata += 2L
+        val refresh = async { runCatching { h.catalog.refresh("k") } }
+        runCurrent()
+        assertEquals(2, h.backend.metadataCalls.size)
+        h.catalog.clearMemory()
+        runCurrent()
+        refresh.await()
+        assertEquals("nothing is still running or queued after the cancellation", 0, h.scope.coroutineContext[kotlinx.coroutines.Job]!!.children.count { it.isActive })
+    }
 }

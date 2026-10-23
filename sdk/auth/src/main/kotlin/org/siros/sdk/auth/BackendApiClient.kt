@@ -571,16 +571,32 @@ class BackendApiClient(
         }
     }
 
-    private fun execute(request: Request): JsonObject {
+    private suspend fun execute(request: Request): JsonObject {
         return executeRaw(request).jsonObject
     }
 
-    private fun executeRaw(request: Request): JsonElement {
-        val response = try {
-            httpClient.newCall(request).execute()
-        } catch (e: java.io.IOException) {
-            throw NetworkException("Network error: ${request.url}", e)
+    /**
+     * Sends the request asynchronously so that cancelling the calling coroutine (a timeout, a logout) cancels the underlying
+     * [okhttp3.Call] too, instead of leaving the request running to completion.
+     */
+    private suspend fun executeRaw(request: Request): JsonElement {
+        val response = kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+            val call = httpClient.newCall(request)
+            cont.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : okhttp3.Callback {
+                override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+                    cont.resumeWith(Result.failure(NetworkException("Network error: ${request.url}", e)))
+                }
+
+                override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                    cont.resumeWith(Result.success(response))
+                }
+            })
         }
+        return withContext(kotlinx.coroutines.Dispatchers.IO) { parseResponse(request, response) }
+    }
+
+    private fun parseResponse(request: Request, response: okhttp3.Response): JsonElement {
         val responseBody = response.body?.string() ?: "{}"
 
         if (!response.isSuccessful) {
