@@ -237,6 +237,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
     val showAddCredential by viewModel.showAddCredential.collectAsState()
     val showIDVPreparation by viewModel.showIDVPreparation.collectAsState()
     val availableCredentials by viewModel.availableCredentials.collectAsState()
+    val isRefreshingOffers by viewModel.isRefreshingOffers.collectAsState()
     val isLoadingOffers by viewModel.isLoadingOffers.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -610,6 +611,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                     AddCredentialScreen(
                         offers = availableCredentials,
                         isLoading = isLoadingOffers,
+                        isRefreshing = isRefreshingOffers,
                         onOfferSelected = viewModel::selectCredentialOffer,
                         pendingOffer = pendingOffer,
                         onConfirmIssuance = viewModel::confirmIssuance,

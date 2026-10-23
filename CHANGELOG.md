@@ -11,6 +11,218 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING: every superseded secret-bearing shape is gone; only Credential Auxiliary Data v0.1 (`auxiliary_data`, rulebook v0.5, vc#850) remains. Credentials issued with the legacy seed delivery must be re-issued.** Removed: the `org.siros.secret_seed` response member and its receipt, the `org.siros.psc` proof claim and the `holder_commitments` request field (`SignRequestParams`, WMP `SignSubFlowParams`; the wallet no longer answers a names-only holder-commitment request), the `PSC_CONFLICT` flow error and `PseudonymCommitmentConflictException` / `WalletEventListener.onPseudonymCommitmentConflict` (only `AUXILIARY_DATA_CONFLICT` is a typed conflict now; `PSC_CONFLICT` is an ordinary flow error), `WalletConfig.secretSeedNamespace`, `LegacyOrgSirosShape`, `SecretSeedDelivery`, the legacy `ssc` readers of `SecretSeedCommitment` and the `siros_psc_conflict` strings. A Credential Response whose `credential_metadata` carries any of `org.siros.secret_seed`, `org.siros.holder_commitments`, `org.siros.psc`, `holder_commitments` or `secret_members` is refused with the new `DeliveredMetadataRefusal.LEGACY_SECRET_MEMBER` (nothing stored, `credential_failure` sent as before); an issuer configuration that carries such a member in its metadata is not offered. The presence of any of those five member names is kept through decoding as a value-free marker (issuer metadata: `CredentialDisplayMetadata.carriesLegacyMember`; the engine's plain-completion relay: `ResponseCredentialMetadata.legacyMemberPresent`), so such a configuration is not offered and such a plain completion is refused with nothing stored; every response of a flow is checked when opened, not only the last one's metadata. A credential already stored with a legacy `org.siros.secret_seed` metadata entry is not read any more: it has no seed, a pseudonym proof for it is refused, and the entry is kept uninterpreted (never thrown on, never shown); re-issue the credential.
 
 ### Added
+- **The credential catalog is cached in the SDK (stale-while-revalidate).** `getAvailableCredentials()` re-fetched the issuer list and then each
+  issuer's metadata one after the other on every call (minutes on a slow link). It now returns the cached offers at once (memory, else a copy in
+  app-private no-backup storage, so a cold start shows it too) and refreshes in the background when they are older than 10 minutes, after a login
+  or session resume, and on demand (`refreshAvailableCredentials()`). New `SirosWallet.availableCredentials: StateFlow<AvailableCredentials>`
+  (`offers`, `refreshing`, `fetchedAtMillis`, `lastRefreshFailed`) tells the UI when fresh data arrives. Only a first-ever call waits for the
+  network (and throws only if nothing is cached and the issuer list cannot be fetched). Per-issuer metadata is fetched in parallel with a timeout; an
+  issuer that fails or times out keeps its previous entry, so a failure never blanks the list; an issuer no longer listed is dropped; refreshes
+  are single-flight. The cache belongs to one tenant, backend and signed-in user and is cleared on logout and `destroy()`. The offers are derived
+  from the cached metadata every time the catalog is assembled, so the record of configurations that advertise a delivered seed is populated for
+  cached reads too. The backend's issuer endpoints send no ETag, so no conditional requests are made. The sample add-credential screen shows the
+  cached list immediately and a thin progress bar while it refreshes.
+
+### Changed
+- A `zkp_req` presentation that proves a pseudonym or an age check no longer asks the user to confirm what is shared, because it shares no
+  data. New `PresentationRequest.disclosesNoClaims` is true ONLY when every matched query is a `zkp_req` query whose plan consists solely of
+  the `pseudonym` and `age_check` functions. Anything else keeps every step: the legacy `zk-claim-disclosure-v1` claim disclosure (including
+  `mso_mdoc_zk`-style age-over-18), unknown functions, custom predicate functions, an empty or missing plan, a request that mixes such a
+  query with another, and every query in another format (also one that lists no claims, which may ask for the whole credential). New
+  `PresentationRequest.consentStepCount` is 1 for a request that discloses no claims, otherwise preview + one step per query + summary as
+  before. The sample consent screen follows it: choose the credential, then Share or Decline, with no empty claim-selection or summary step,
+  and the overview says that no data fields are shared instead of "0 data fields requested".
+
+## [0.21.0] - 2026-10-22
+
+BREAKING: engine-blind encryption. The wallet, not the engine, now holds the OID4VCI credential-response key and builds the OID4VP direct_post.jwt response, so the engine relays ciphertext and never sees credentials, the delivered secret seed or a vp_token. This SDK REQUIRES a backend with go-wallet-backend #469 + #471; an older backend cannot issue to it or complete direct_post.jwt presentations, and an upgraded backend cannot serve an older SDK (no compatibility shims).
+
+Issuance: generate_proof requests carrying credential_response_encryption are answered with a fresh per-request public JWK (credential_response_encryption_jwk, or key-only when the config has no proof types); the new sign action decrypt_credential_response {jwe, deferred} is answered with exactly one of credential_count, transaction_id (+ optional interval) or error; credentials, the response-level credential_metadata (so the secret_seed receipt check) and the notification_id now come from the wallet's own decryption.
+
+Presentation: for direct_post.jwt the wallet returns response_jwe (JARM JWE built from the engine's response_encryption + verified_request.client_id) instead of vp_token; other response modes are unchanged.
+
+Removed/changed API: FlowCompleteMessage.credentialMetadataEncryptedResponse and the credential_metadata* entries of redacted_members are gone (FlowCompleteMessage/FlowCompleteResult.credentialMetadata remain but carry only display and claims, and only from plain issuer responses); CredentialResult.credential defaults to empty (encrypted placeholders; non-encrypted completions without credential values are refused at decode); SignResponseMessage/SignSubFlowResult gain credential_response_encryption_jwk, credential_count, transaction_id, interval, response_jwe, error_code, error; new VerifiedRequest, OpenID4xConfig.onCancel, WalletEngineSession.connectionGenerations. Renewals no longer delete the old credential batch before a replacement is stored.
+
+Scope/known limits: legacy engine WebSocket path only; WMP path is unchanged and not conformant with go-wallet-backend #163's child-flow protocol (a conformance fix, https://github.com/sirosfoundation/siros-sdk-kotlin/pull/285, is NOT included in this release and is tracked in https://github.com/sirosfoundation/siros-sdk-kotlin/issues/288); a narrow legacy socket-replacement race is tracked in https://github.com/sirosfoundation/siros-sdk-kotlin/issues/287; nothing has been tested end to end against a real engine.
+
+In this release, besides the engine-blind encryption work (#283) and the engine socket single-flight fix (#282):
+
+- **`zkp_req` over the redirect transport (QR / same-device, `direct_post.jwt`)**
+  (https://github.com/sirosfoundation/siros-sdk-kotlin/pull/280): the engine session matches, proves and answers `zkp_req`
+  requests with the shared circuit_zk core, with one-at-a-time presentation, per-query consumption eligibility, and a pending
+  signing that ends with its connection.
+- **`response_jwe` for the redirect `zkp_req` answer**
+  (https://github.com/sirosfoundation/siros-sdk-kotlin/pull/284): when the engine asks for client-side encryption the wallet
+  builds and encrypts the JARM response itself and answers `response_jwe` with no `vp_token`; failures are refused with the
+  message id, never answered in the clear.
+- **Private data schema version 4** (privatedata-spec 3.0,
+  https://github.com/sirosfoundation/siros-sdk-kotlin/pull/281): `S.schemaVersion` 4, a typed `UnsupportedSchemaVersionException`
+  instead of overwriting a container this SDK does not implement, `set_extension` events for extension changes, and verbatim
+  preservation of unknown keypair, presentation, credential, extension and `S` members.
+- **Not included:** the WMP child-flow conformance (https://github.com/sirosfoundation/siros-sdk-kotlin/pull/285, issue
+  https://github.com/sirosfoundation/siros-sdk-kotlin/issues/288). The WMP path is unchanged in this release.
+
+The entries below are the detailed changes that make up this release.
+
+### Changed
+- **Redirect `zkp_req` presentations answer `response_jwe` when the engine asks for client-side encryption**
+  (go-wallet-backend#471; builds on #280 and the engine-blind helpers of #283). When the `sign_presentation` request carries
+  `response_encryption`, `handleCircuitZkEngineSignPresentation` builds the JARM response itself
+  (`BlindPresentation.responseJwe`: `vp_token` `{queryId: [base64url CBOR ZkpPresentation]}`, `state` echoed,
+  `aud` = `verified_request.client_id`, protected header `alg`/`enc` as requested and the verifier JWK's `kid`)
+  and answers `{response_jwe}` with NO `vp_token`; a refusal or error never carries one. A request that asks for
+  encryption without a `verified_request.client_id`, a selected credential that is gone, a key/algorithm that cannot be applied
+  or an oversized response is refused (`SIGN_REFUSED` with the message id), never answered in the clear. Without
+  `response_encryption` (plain response modes) the answer is the `vp_token` as before. A refusal is sent before the local
+  cleanup and best effort: a socket that rejects the frame no longer throws out of the signing launch.
+
+### Fixed
+- The sample consent screen judged a `zkp_req` query's candidates by their stored (mdoc) format, so under `CONSUME_NON_ZKP`
+  a second presentation of the same credential disabled Share or dropped the credential although the SDK permits reuse for
+  a proof. New `CredentialUtils.eligibleInstancesByQuery(...)` takes the ZK status from the query that answers each credential (`zkp_req` and legacy `mso_mdoc_zk`; the first matching query, as the engine's sign handlers classify it); the screen uses it
+  for both the exhausted-query check and the accepted ids (so overlapping raw/ZK queries never submit a consumed credential). A pending `zkp_req` signing is also cancelled when `forceReconnect()`
+  moves the engine to `CONNECTING`, so a stale consent dialog no longer holds the presentation lock for DC API requests. `signMdocPresentationForProximity` now takes the same lock, so a proximity presentation cannot use the single copy a pending redirect presentation is about to consume.
+
+### Changed
+- **Private data: `S.schemaVersion` 4** (privatedata-spec 3.0,
+  https://github.com/sirosfoundation/privatedata-spec/pull/9 at main merge commit 64315a5, with the vector fixes of https://github.com/sirosfoundation/privatedata-spec/pull/10). `JweKeystore`
+  now writes `S.schemaVersion` 4 (it wrote 3). A version 3 container it rewrites is
+  migrated by that number alone; everything else is carried through unchanged, including
+  unknown members of `S`, of credential entries and of `metadata` entries. `S.credentials[].metadata`
+  and `S.extensions` are version 4 members, so they are only ever written into a version 4
+  container (the SDK always rewrites at 4); containers written earlier that already carry them
+  under version 3 are read as version 4. The SDK does not fold or merge events (its only events are
+  the `set_extension` ones below), so the ETag/`If-Match` handling is unchanged.
+- `S.keypairs[]` entries the SDK cannot read (non-objects, legacy shapes, no parseable private key) and
+  unknown members of readable entries are now written back verbatim and in place (spec 3.0 section 6);
+  they used to be dropped on rewrite. Keys generated in a session are appended after them.
+  Likewise `S.presentations[]` entries are written back verbatim (`transactionId`, `data`, unknown
+  members) unless their record changed, and entries this SDK cannot read are kept in place.
+  `S.extensions` namespaces that are not objects and entry values that are not strings are written
+  back unchanged and in place (they used to be dropped); `setExtensionEntry` into such a namespace
+  fails at export instead of overwriting the peer's value.
+- **`set_extension` events (spec 3.0 section 6.1.3).** The SDK keeps no event log, but every change to
+  `S.extensions` (set, change, removal as a tombstone with `value` null) is now also appended to `events`
+  by `exportEncryptedContainer`: type `set_extension`, `schemaVersion` 4, a random non-zero 32-bit `eventId`,
+  `timestampSeconds`, and `parentHash` chained as wallet-frontend chains events (hash of the previous event,
+  or `lastEventHash` when `events` is empty; SHA-256 hex of the key-sorted compact JSON, checked against the
+  chain in the spec's vectors, including JavaScript key order, number and string serialization). A new event for a key always sorts after earlier ones for it (`timestampSeconds`, then `eventId`, as the merge rule orders them). `lastEventHash` is left as authored. Events are derived from the difference
+  to the entries loaded or last exported (plus an explicit set that the event history contradicts), so repeated exports append nothing twice. `set_extension` events
+  stamped 3 by earlier clients are read and kept; the SDK never writes one.
+- **Older SDK releases have no such guard.** The Kotlin exporter before this change unconditionally
+  wrote version 3, so an older SDK that rewrites a version 4 container silently downgrades it
+  instead of refusing. Integrators must not rely on the refusal until every SDK that shares an
+  account is on a release with this change.
+- **Breaking for clients still on version 3 only:** wallet-frontend (and older SDKs) that do not
+  implement version 4 will refuse to rewrite a container this SDK has rewritten, until updated.
+- The vendored privatedata-spec vectors are re-copied verbatim from privatedata-spec main at 64315a5 (with the fixtures
+  they reference); `vectors.PROVENANCE.txt` records the commit and digests.
+
+- **BREAKING (unreleased): engine-blind encryption: the wallet, not the engine, holds the response-encryption keys.**
+  The engine now relays ciphertext and never sees an issued credential, a delivered `secret_seed` or a `vp_token`
+  (go-wallet-backend#463 had to state that the engine decrypted the seed in clear). No compatibility shim: engine and
+  wallet change together. Both transports (legacy engine WebSocket and WMP sign sub-flow) carry the same members.
+  - **Issuance.** A `generate_proof` request carrying `credential_response_encryption {alg, enc, required}` is answered with
+    the public JWK (`credential_response_encryption_jwk`) of a FRESH ephemeral P-256 key per request; the private key is held
+    in memory per flow (`BlindIssuance`) and forgotten at flow completion, error, cancel, logout and when the connection is
+    replaced. `required` with a pair the wallet cannot decrypt fails the issuance before any proof is made. The new sign action
+    `decrypt_credential_response {jwe, deferred}` opens the issuer's JWE (ECDH-ES and ECDH-ES+A128KW/A192KW/A256KW with
+    A128/A192/A256GCM and A128CBC-HS256/A192CBC-HS384/A256CBC-HS512; any other pair than the negotiated one is refused) and
+    answers with `transaction_id`/`interval` only, or `error`. An encrypted `flow_complete` (`credential_response_encrypted`)
+    lists its credentials without values: each is filled from the wallet's own decrypted response, entry by entry (a count
+    mismatch or a missing response refuses the issuance, `DeliveredMetadataRefusal.RESPONSE_UNAVAILABLE`, nothing stored).
+    The delivered `credential_metadata` (and so the `secret_seed` receipt check) and the `notification_id` come from that
+    response, never from the engine. `FlowCompleteMessage.credentialMetadata`, `credentialMetadataEncryptedResponse` and the
+    `credential_metadata*` members of `redacted_members` (and `FlowCompleteResult`'s) are removed; `redacted_members` lists the
+    renewal material only. A PLAIN (unencrypted) issuer response may still relay the display-only members of its
+    response-level `credential_metadata` on `flow_complete`: `FlowCompleteMessage.credentialMetadata` and
+    `FlowCompleteResult.credentialMetadata` are decoded through an allowlist (`display`, `claims`), every other member is
+    dropped on decoding (an extension such as `org.siros.secret_seed` is never taken from the engine's frame and is never
+    stored or merged), and the member is ignored when `credential_response_encrypted` is true, where only the wallet's own
+    decrypted object is read.
+  - **Presentation.** A `direct_post.jwt` `sign_presentation` carrying `response_encryption {jwk, alg, enc}` is answered with
+    `response_jwe`, not `vp_token`: the wallet builds the `vp_token` (the DCQL `{queryId: [token]}` object, moved from the
+    engine), the JARM claims (`iss`, `aud`, `iat`, `exp` = `iat` + 300, `vp_token`, `state`) and the compact JWE (`kid` and
+    `cty: JWT` in the protected header; EC or RSA verifier keys). `aud` is the `client_id` of the engine's `verified_request`,
+    never the request's `audience`; without it nothing is built (fail closed). The engine alone POSTs. Other response modes are
+    unchanged and engine-visible by the verifier's choice.
+  - **Final engine shapes (go-wallet-backend #469 / #471).** `decrypt_credential_response` answers EXACTLY ONE of
+    `credential_count` (1..256, credentials issued; new `SignResponseMessage`/`SignSubFlowResult` member), `transaction_id`
+    with an OPTIONAL `interval` (deferred; no client-side default, a deferred answer may report a `transaction_id` again) or
+    `error`; a response with both or neither, or more than 256 credentials, is refused and, when it decrypted and carried a
+    `notification_id`, reported to the issuer (`credential_failure`) BEFORE the error answer. A `generate_proof` with
+    `credential_response_encryption` and no `proof_types_supported` is key-only: the key and no proofs, on both transports.
+    The advertised JWK has exactly `kty, crv, x, y, use, alg`. The encrypted presentation response is checked against the
+    engine's rules before it is sent (five base64url segments, none empty except the encrypted-key segment of direct
+    `ECDH-ES`; at most 4 MiB; protected header `alg`/`enc` equal to the request's and `kid` equal to the JWK's, none when the
+    JWK has none) and is never sent with a `vp_token`; it is built only when `response_encryption` is present and only for
+    `direct_post.jwt` (plain `direct_post`/`query`/`fragment` keep returning `vp_token`). `CredentialResponseKey` and
+    `AuthorizationResponseEncryption` are `internal` to sdk:wallet (no new public API for them).
+  - **Review follow-ups.** The response keys and opened responses are cleared synchronously by `logout()`/`endSessionLocally()` and
+    `destroy()` (not only when a later connection replaces the old one). On WMP, a `generate_proof`/`decrypt_credential_response`
+    that fails, an engine flow error and every completion release the flow's key and opened response (after a completion has
+    been processed against the response it needs). A required encryption the wallet cannot provide now answers the engine's
+    request with an error `sign_response` carrying the ORIGINAL `message_id` instead of leaving it to wait out its signing
+    timeout. The decrypted response-level `credential_metadata` is checked wallet-side with the limits the engine used to enforce
+    (1 MiB encoded, depth 16, 256 members per object, member names of at most 256 bytes, no duplicate names at the top level or
+    inside `org.siros.secret_seed`) before anything is retained or passed to the receipt check; a response that fails them is
+    refused and, when it decrypted and carried a `notification_id`, reported as `credential_failure`.
+  - **Review follow-ups, round 2.** An ENCRYPTED completion's `notification_id` is the one in the response the wallet decrypted
+    (none when it had none), never the engine frame's, on both transports; a plain completion keeps the engine's. The response
+    key and opened response are released per FLOW (a presentation or an unrelated failure no longer clears another flow's), on
+    sign failure, refusal, engine flow error, local cancel, completion and, new, an incoming `wmp.flow.cancel`
+    (`OpenID4xConfig.onCancel`); session-wide teardown and connection replacement still clear everything. An empty query id is
+    treated as no query id when shaping the `vp_token`. A `direct_post.jwt` presentation is built only from one token per
+    selected credential (a credential that left the store is an error, never a partial response), and any failure building the
+    encrypted response (no verified `client_id`, unsupported pair, oversized, missing token) is answered with a sanitized
+    error-only `sign_response` for the original `message_id` before local cleanup, on the ordinary and the `transaction_data`
+    handlers, with no plaintext fallback.
+  - **Review follow-ups, round 3.** `BlindIssuance.offer` claims the flow's state before it generates the key and stores the key
+    only while that state is still the flow's, so a `clear()`/`drop()` that finishes during generation (a WMP handler can
+    outlive the teardown that cancelled its scope) is not undone; the offer then fails. `reloginAfterCutOff()` clears the holder
+    at the start of its teardown, whatever the replacement login does. A new socket on the SAME engine session (a forced or
+    automatic reconnect) drops the private key of every flow that lived on an older one; what such a flow had already opened is
+    kept for 30 s (so a completion buffered before the replacement can still be processed) and then forgotten. A pending
+    (`transaction_id`) response is validated and answered but retains nothing; only a response that carries credentials is kept.
+  - **Review follow-ups, round 4.** `logout()` and `destroy()` now really close the WMP peer: it is captured before the field is
+    nulled (the old asynchronous `wmpPeer?.close()` read the field after it was null, so it never closed) and closed on a scope
+    of its own, so a `destroy()` that cancels the wallet's scope does not cancel it. A request that reaches an ENDED session is
+    refused before it allocates anything: the WMP callbacks check the session generation and `isDestroyed`, and the legacy
+    sign-request collector ignores requests of a session that was ended or replaced. A `generate_proof`/
+    `decrypt_credential_response` stamped with an older socket of the session is dropped (no key, no answer), and an accepted
+    offer is tied to the generation stamped on its frame, not the one current when it happens to be processed.
+  - **Review follow-ups, round 5.** FIXES A REGRESSION OF ROUND 4: the WMP callbacks were bound to the session generation captured when
+    the profile was built, but a registration or login ends that generation right after connecting, so every WMP sign request of a
+    freshly logged-in wallet was refused as belonging to an ended session. They are now bound to the lifetime of their own WMP peer
+    (ended by logout, destroy, the re-login teardown and the replacement of the peer); registration and login share
+    `connectEngineForNewSession()`. `WalletEngineSession.connectionGenerations` (new, a `StateFlow<Int>` beside
+    `connectionGeneration`) publishes every new socket, and the wallet observes it instead of inferring a replacement from
+    `state`: an automatic reconnect publishes RECONNECTING before its backoff and increments the generation later with no
+    state change of its own. Under the single-flight reconnect, the generation is incremented and published in the one atomic step
+    that installs the socket (`doConnect`, under `connLock`); a superseded attempt returns before it and publishes nothing.
+  - **Review follow-up: malformed plain completions.** `CredentialResult.credential` now defaults to empty (an encrypted completion's
+    placeholders), which would have let a plain completion without a credential value decode. `FlowCompleteMessage` and the WMP
+    `FlowCompleteResult` now refuse, at decoding, a completion that is not `credential_response_encrypted` unless every credential
+    has a non-empty value (as a missing value always did before this PR); encrypted placeholders stay valid. A renewal no longer
+    deletes the old batch and its refresh token BEFORE the replacement is known: they are removed only once at least one
+    replacement credential has been stored, so a rejected, unreadable or (encrypted) unavailable replacement leaves the old
+    batch in place.
+  - **Review follow-ups, round 7.** The liveness check of a WMP callback (and the guards of the legacy sign-request collector) and the
+    claim of the flow's response-key state were separate operations, so a logout or destroy between them was undone by the late
+    claim. `BlindIssuance.epoch` (counts session-wide teardowns) is read BEFORE the liveness check, handed to `offer`, and
+    re-checked under the holder's lock when the state is claimed; a teardown after the claim removes the claimed state, which the
+    key insertion notices. A legacy request of a session that ended in the meantime is not answered. A PENDING (`transaction_id`)
+    response that carries `org.siros.secret_seed` is refused like any deferred seed (its metadata used to be dropped unread), with
+    its `notification_id` kept so `credential_failure` reaches the issuer on both transports.
+  - **Refusal.** `SignResponseMessage` gains `error_code` (`SIGN_REFUSED`) and `error`, and cannot carry `response_jwe`
+    together with either, so the encrypted-response member can never shadow a refusal (same for `SignSubFlowResult`).
+  - New public API: `VerifiedRequest`, `CredentialResponseEncryptionRequest`, `ResponseEncryptionRequest` (sdk:transport; the
+    key and JWE machinery, `CredentialResponseKey` and `AuthorizationResponseEncryption`, is `internal` to sdk:wallet), `SignRequestParams`/`SignSubFlowParams`
+    members `credential_response_encryption`, `jwe`, `deferred`, `response_encryption`, `state`, `verified_request`,
+    `SignResponseMessage`/`SignSubFlowResult` members `credential_response_encryption_jwk`, `transaction_id`, `interval`,
+    `response_jwe`, `error`, and `CredentialResult.credential` defaulting to empty.
+
+### Added
 - **Fido2EnrolmentSession: "discover, then ask" enrolment of a FIDO2 security key (siros-wscd-manager 0.12.0).** The PIN dialog used to be built before the key was known (always ENTER, or a typed-ahead guess), so a fresh key was asked for a PIN it did not have. Now the first tap only DESCRIBES the key (`WscdManager.describeFido2Authenticator()` -> `Fido2AuthenticatorInfo`: PIN state, minimum PIN length, remaining attempts, AAGUID, versions, extensions, options, suitability; no PIN is asked for or sent), a key that cannot be enrolled (`Fido2Suitability.Unsuitable`, or a blocked PIN) is refused BEFORE any PIN is collected, and the dialog fits the key: ENTER for a key with a PIN, CHOOSE + CONFIRM (minimum length from the key) for one without, nothing for a key without PIN support. On the second tap (or the same USB connection) the key is described AGAIN and compared (PIN state, minimum PIN length, AAGUID); any difference wipes the typed PIN and restarts the dialog from what the key now says (bounded), so a PIN is never sent on the strength of the first description. The ceremony's PIN prompts are answered from the collected PIN through `Fido2EnrolmentSession.answer` (consulted by the host's `AuthProvider` first); a prompt of another kind than the dialog was built for fails the enrolment as `Fido2EnrolmentFailure.KEY_CHANGED`. Every PIN buffer is wiped. `Fido2Enrolment.info.aaguid` names the authenticator model (result only; no policy or UI). The sample app only shows the dialogs. The suitability is advisory until checked on hardware (the previewSign extension name is unverified on a real key; a blocked PIN is Unsuitable on a raw transport). Authentication and rotation with an enrolled key are unchanged (typed-ahead PIN, one tap). New strings in en, sv, fi, pt, el. `WscdManager` gains `describeFido2Authenticator()`.
 - **The credential catalog is the BASELINE key-storage tier at issuance (`WalletConfig.credentialTierCatalog`).** Until now the tier came only from the issuer's own type metadata, and when it declared none (likely for the ARF 1.8 PID) no filter applied, so the default soft keystore made the key and the FIDO2 token was never asked for. With a `CredentialTierCatalog` configured (`Ts11CredentialTierCatalog` reads the TS11 registry, cached with a TTL and a hard stale limit) the required tier is the catalog's for the credential type, RAISED (never lowered) by the issuer's `attestation_los`. It fails closed: a type the catalog does not list, a catalog that cannot be consulted, or a tier that is not a known ISO 18045 tier refuses issuance with `KeyStorageTierUndeterminedException` (no fallback to a weaker keystore); a tier no registered, onboarded plugin meets is the existing `NoEligibleWscdPluginException` / `NoOnboardedWscdException`. A user override can only choose among plugins that meet the resulting tier. A catalog needs `availableKeystores`. The resumed-authorization path (after the browser) no longer skips the decision: it restores the offer context of the flow it resumes, and with a catalog an issuance with no active offer is refused rather than served by the default keystore. The catalog reads EVERY declaration the registry publishes (duplicates are merged fail-closed: the highest tier wins in either order, an unknown tier or a missing one is kept so the wallet refuses it), indexes every identity an entry states (its `vct` and its `doctype`), and treats an INCOMPLETE read (a page, a source or a schema document that failed) as no new answer: the previous snapshot is kept with its original stale deadline, and without one the answer is `Unavailable`. The resumed-authorization context is resolved locally and published only if the attempt is still current (no cancel, new issuance or session change), a malformed auxiliary-data advertisement is recorded and refused before any fallback, and the offer's advertised `vct`/`doctype` is the catalog key when the type-metadata lookup fails. A callback for a cancelled or superseded attempt resumes nothing (each saved authorization is bound to its issuance attempt, and an offer context is reused only if it belongs to that authorization); the resume holds the issuance guards until it completes or fails, so a competing start is refused; its type-metadata lookup passes the offer's `vct`; and with a catalog, metadata that names another type than the offer advertised is refused before the catalog is asked. A registry.json answer with fewer entries than it declares, and a page that carries neither `data` nor `schemas` (`{}`, an error object), are incomplete reads; the resume publishes the raw VCTM document together with the parsed VCTM, and a resumed start whose connection is lost before the engine's first reply releases the issuance guard. Null (the default) keeps the previous behaviour. Not yet: presentation-time checks, trust-list binding (`trustedAuthorities`), sample wiring.
 

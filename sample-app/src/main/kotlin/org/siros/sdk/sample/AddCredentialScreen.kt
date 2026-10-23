@@ -71,6 +71,7 @@ import org.siros.sdk.credentials.CredentialOffer
 fun AddCredentialScreen(
     offers: List<CredentialOffer>,
     isLoading: Boolean,
+    isRefreshing: Boolean = false,
     onOfferSelected: (CredentialOffer) -> Unit,
     pendingOffer: CredentialOffer? = null,
     onConfirmIssuance: () -> Unit = {},
@@ -169,6 +170,10 @@ fun AddCredentialScreen(
     }
 
     Column(modifier = modifier.fillMaxSize()) {
+        // The list shown is the SDK's cached catalog; this only says that it is being refreshed in the background.
+        if (isRefreshing && !isLoading) {
+            androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
         if (isLoading) {
             Box(
                 modifier = Modifier.fillMaxSize(),

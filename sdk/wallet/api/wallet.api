@@ -69,6 +69,23 @@ public final class org/siros/sdk/wallet/AuxiliaryDataRefusedException$Reason : j
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Lorg/siros/sdk/wallet/AuxiliaryDataRefusedException$Reason;
 	public static fun values ()[Lorg/siros/sdk/wallet/AuxiliaryDataRefusedException$Reason;
+public final class org/siros/sdk/wallet/AvailableCredentials {
+	public fun <init> ()V
+	public fun <init> (Ljava/util/List;ZJZ)V
+	public synthetic fun <init> (Ljava/util/List;ZJZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Z
+	public final fun component3 ()J
+	public final fun component4 ()Z
+	public final fun copy (Ljava/util/List;ZJZ)Lorg/siros/sdk/wallet/AvailableCredentials;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/AvailableCredentials;Ljava/util/List;ZJZILjava/lang/Object;)Lorg/siros/sdk/wallet/AvailableCredentials;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getFetchedAtMillis ()J
+	public final fun getLastRefreshFailed ()Z
+	public final fun getOffers ()Ljava/util/List;
+	public final fun getRefreshing ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
 }
 
 public final class org/siros/sdk/wallet/CachedAccount {
@@ -396,6 +413,21 @@ public final class org/siros/sdk/wallet/FileFetchCache : org/siros/sdk/credentia
 public final class org/siros/sdk/wallet/FileFetchCache$Companion {
 }
 
+public final class org/siros/sdk/wallet/FileIssuerCatalogStore : org/siros/sdk/wallet/IssuerCatalogStore {
+	public fun <init> (Landroid/content/Context;)V
+	public fun <init> (Ljava/io/File;)V
+	public fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun load (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun save (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/wallet/InMemoryIssuerCatalogStore : org/siros/sdk/wallet/IssuerCatalogStore {
+	public fun <init> ()V
+	public fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun load (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun save (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
 public abstract class org/siros/sdk/wallet/IssuanceStart {
 }
 
@@ -430,6 +462,10 @@ public final class org/siros/sdk/wallet/KeyStorageTierUndeterminedException : or
 	public final fun getCredentialType ()Ljava/lang/String;
 	public final fun getIssuer ()Ljava/lang/String;
 	public final fun getReason ()Ljava/lang/String;
+public abstract interface class org/siros/sdk/wallet/IssuerCatalogStore {
+	public abstract fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun load (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun save (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class org/siros/sdk/wallet/MdocIssuerIdentity {
@@ -610,6 +646,7 @@ public final class org/siros/sdk/wallet/SirosWallet {
 	public final fun evaluateReaderTrust (Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun forgetAccount (Ljava/lang/String;)V
 	public final fun getAccessToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getAvailableCredentials ()Lkotlinx/coroutines/flow/StateFlow;
 	public final fun getAvailableCredentials (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun getCapabilities ()Lorg/siros/sdk/wallet/WalletCapabilities;
 	public final fun getCircuitZkCircuits ()Ljava/util/List;
@@ -651,6 +688,7 @@ public final class org/siros/sdk/wallet/SirosWallet {
 	public final fun login (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun login$default (Lorg/siros/sdk/wallet/SirosWallet;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun logout ()V
+	public final fun refreshAvailableCredentials (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun refreshCredentialStatuses (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun register (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun renamePasskey (Ljava/lang/String;Ljava/lang/String;)V
