@@ -94,6 +94,24 @@ class NoEligibleWscdPluginException(
 )
 
 /**
+ * Thrown by `SirosWallet` when the plugin [WscdSelectionPolicy.resolve] chose needs a physical
+ * authenticator (e.g. a FIDO2 token) and none is reachable - or presence could not be determined,
+ * which is treated the same. Raised BEFORE any PIN request, so the user is never asked for a PIN
+ * nothing can use. Distinct from [NoEligibleWscdPluginException] (no registered plugin has a
+ * sufficient tier): here the plugin is sufficient but has no token to run on. The message is
+ * suitable to show the user.
+ */
+class WscdAuthenticatorNotPresentException(
+    /** Null when the wallet was using its default keystore with no credential type in scope. */
+    val issuer: String?,
+    val credentialType: String?,
+    val pluginId: String,
+) : WscdSelectionException(
+    "No applicable WSCD is available: the '$pluginId' authenticator is not present" +
+        (if (issuer != null) " (issuer=$issuer credentialType=$credentialType)" else "")
+)
+
+/**
  * Thrown by [WscdSelectionPolicy.resolve] when two or more of the host app's
  * registered plugins meet the credential type's declared `requiredTier`, but
  * there was no way to have the user pick which one: either no
