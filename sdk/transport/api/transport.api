@@ -1986,6 +1986,10 @@ public final class org/siros/sdk/transport/wmp/FlowStartParams$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
+public final class org/siros/sdk/transport/wmp/FlowStartRefusedException : java/lang/Exception {
+	public fun <init> (Ljava/lang/String;)V
+}
+
 public final class org/siros/sdk/transport/wmp/FlowStartResult {
 	public static final field Companion Lorg/siros/sdk/transport/wmp/FlowStartResult$Companion;
 	public fun <init> (Lorg/siros/sdk/transport/wmp/WmpMeta;Ljava/lang/String;Ljava/lang/String;)V
@@ -2419,6 +2423,7 @@ public final class org/siros/sdk/transport/wmp/WmpErrorCodes {
 }
 
 public abstract interface class org/siros/sdk/transport/wmp/WmpFlowHandler {
+	public abstract fun flowEnded (Ljava/lang/String;)V
 	public abstract fun getFlowTypes ()Ljava/util/List;
 	public abstract fun handleAction (Lorg/siros/sdk/transport/wmp/FlowActionParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun handleCancel (Lorg/siros/sdk/transport/wmp/FlowCancelParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -2426,6 +2431,10 @@ public abstract interface class org/siros/sdk/transport/wmp/WmpFlowHandler {
 	public abstract fun handleError (Lorg/siros/sdk/transport/wmp/FlowErrorParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun handleProgress (Lorg/siros/sdk/transport/wmp/FlowProgressParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun startFlow (Lorg/siros/sdk/transport/wmp/FlowStartParams;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/transport/wmp/WmpFlowHandler$DefaultImpls {
+	public static fun flowEnded (Lorg/siros/sdk/transport/wmp/WmpFlowHandler;Ljava/lang/String;)V
 }
 
 public final class org/siros/sdk/transport/wmp/WmpHttpSseTransport : org/siros/sdk/transport/Transport {
@@ -2553,9 +2562,11 @@ public final class org/siros/sdk/transport/wmp/WmpPeer : org/siros/sdk/transport
 	public final fun connect (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun connect$default (Lorg/siros/sdk/transport/wmp/WmpPeer;Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun flowEvents ()Lkotlinx/coroutines/flow/Flow;
+	public fun forgetFlow (Ljava/lang/String;)V
 	public fun getCodec ()Lorg/siros/sdk/transport/wmp/WmpCodec;
 	public final fun getState ()Lkotlinx/coroutines/flow/StateFlow;
 	public fun notify (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun notifyIf (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/jvm/functions/Function0;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun sendCredentialNotification (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun sendCredentialNotification$default (Lorg/siros/sdk/transport/wmp/WmpPeer;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun sendFlowAction (Ljava/lang/String;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -2567,8 +2578,15 @@ public final class org/siros/sdk/transport/wmp/WmpPeer : org/siros/sdk/transport
 
 public abstract interface class org/siros/sdk/transport/wmp/WmpPeerContext {
 	public abstract fun call (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun forgetFlow (Ljava/lang/String;)V
 	public abstract fun getCodec ()Lorg/siros/sdk/transport/wmp/WmpCodec;
 	public abstract fun notify (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun notifyIf (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/jvm/functions/Function0;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/transport/wmp/WmpPeerContext$DefaultImpls {
+	public static fun forgetFlow (Lorg/siros/sdk/transport/wmp/WmpPeerContext;Ljava/lang/String;)V
+	public static fun notifyIf (Lorg/siros/sdk/transport/wmp/WmpPeerContext;Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/jvm/functions/Function0;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public abstract interface class org/siros/sdk/transport/wmp/WmpProfile {
@@ -2919,8 +2937,10 @@ public final class org/siros/sdk/transport/wmp/openid4x/OID4Action {
 
 public final class org/siros/sdk/transport/wmp/openid4x/OID4FlowTypes {
 	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/OID4FlowTypes;
+	public static final field MATCH Ljava/lang/String;
 	public static final field OID4VCI Ljava/lang/String;
 	public static final field OID4VP Ljava/lang/String;
+	public static final field SIGN Ljava/lang/String;
 }
 
 public final class org/siros/sdk/transport/wmp/openid4x/OpenID4xConfig {
@@ -2950,10 +2970,12 @@ public final class org/siros/sdk/transport/wmp/openid4x/OpenID4xConfig {
 	public fun toString ()Ljava/lang/String;
 }
 
-public final class org/siros/sdk/transport/wmp/openid4x/OpenID4xProfile : org/siros/sdk/transport/wmp/WmpFlowHandler, org/siros/sdk/transport/wmp/WmpProfile {
+public final class org/siros/sdk/transport/wmp/openid4x/OpenID4xProfile : java/lang/AutoCloseable, org/siros/sdk/transport/wmp/WmpFlowHandler, org/siros/sdk/transport/wmp/WmpProfile {
 	public fun <init> ()V
 	public fun <init> (Lorg/siros/sdk/transport/wmp/openid4x/OpenID4xConfig;)V
 	public synthetic fun <init> (Lorg/siros/sdk/transport/wmp/openid4x/OpenID4xConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun close ()V
+	public fun flowEnded (Ljava/lang/String;)V
 	public fun getCapabilities ()Ljava/util/List;
 	public fun getFlowTypes ()Ljava/util/List;
 	public fun getName ()Ljava/lang/String;
@@ -3004,6 +3026,10 @@ public final class org/siros/sdk/transport/wmp/openid4x/ProofType {
 	public static final field CWT Ljava/lang/String;
 	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/ProofType;
 	public static final field JWT Ljava/lang/String;
+}
+
+public final class org/siros/sdk/transport/wmp/openid4x/SignRefusedException : java/lang/Exception {
+	public fun <init> (Ljava/lang/String;)V
 }
 
 public final class org/siros/sdk/transport/wmp/openid4x/SignSubFlowParams {
@@ -3194,6 +3220,7 @@ public final class org/siros/sdk/transport/wmp/openid4x/VCIStep {
 
 public final class org/siros/sdk/transport/wmp/openid4x/VPStep {
 	public static final field AWAITING_CONSENT Ljava/lang/String;
+	public static final field EVALUATING_VERIFIER_TRUST Ljava/lang/String;
 	public static final field GENERATING_PRESENTATION Ljava/lang/String;
 	public static final field INSTANCE Lorg/siros/sdk/transport/wmp/openid4x/VPStep;
 	public static final field MATCHING_CREDENTIALS Ljava/lang/String;

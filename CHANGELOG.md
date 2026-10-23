@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **WMP: the wallet now answers the engine's sign and match sub-flows the way the engine reads them** (go-wallet-backend
+  feat/wmp-integration, `wmphandler.go`). Verified against that code only; no run against a live engine.
+  - **Sub-flows.** The engine asks for a signature or a credential match by starting a child flow (`wmp.flow.start`, flow type
+    `sign` / `match`, `parent_flow_id` in its params) and matches the answer by the CHILD flow's id. `OpenID4xProfile` registers
+    both flow types, acknowledges the start at once, answers on a separate coroutine (a user prompt no longer holds up the
+    acknowledgement the engine waits 30 s for) with `wmp.flow.complete` whose `result` is the response, and reports a failure as
+    `wmp.flow.error`. Before, it dispatched from `wmp.flow.progress` steps and answered with a `wmp.flow.action`
+    `sign_response` / `match_response` on the parent flow with no `message_id` (the engine never gives a WMP client one), which the
+    engine parks until its three-minute sign timeout. That route is removed (no shim).
+  - **Flow actions.** `trust_result` and `credentials_matched` put their members flat next to `action`; go-wmp's
+    `FlowActionParams` reads them under `params`, so the engine saw an empty payload. They are sent under `params` now.
+  - **Trust.** A trust progress is answered only when the engine marks it (`trust_evaluation_required`), which also covers the
+    verifier's `evaluating_verifier_trust` step; the informational `evaluating_trust` message is no longer mistaken for a request
+    (an early answer could satisfy the engine's later wait).
+  - **Error codes.** `wmp.flow.error` carries an integer `code` (go-wmp `FlowErrorParams.Code int`). Sent string codes did not
+    decode there, and an engine error's integer code did not decode here (the handler never ran), so every engine flow error was
+    dropped. `FlowErrorParams.code` now reads either form and writes a numeric one as a number.
+    Unsupported `transaction_data` is `-31005` (the engine reads it as such); other failures `-31006` with a generic message (the
+    failure's own text stays local). New `SignRefusedException`: a deliberate refusal is a flow error with `data.reason = "rejected"`
+    (go-wallet-backend#472), which the engine answers to the verifier as `access_denied`.
+  - `OpenID4xProfile` is `AutoCloseable` and `WmpPeer.close()` closes it, which stops the sub-flow answers still running; a
+    sub-flow the wallet has answered is no longer tracked.
+  - **Review of the sub-flow answers** (https://github.com/sirosfoundation/siros-sdk-kotlin/issues/288):
+    - *No crash from an answer task.* Each answer task has its own boundary and the default scope a `CoroutineExceptionHandler`;
+      a failed send (the HTTP+SSE transport throws on a failed POST) is logged by class name and dropped, never rethrown, and
+      the error reply and the unsupported / invalid-request replies are inside the same boundary. A completion no longer has an
+      error reply chained to a failed send, and `credentials_matched` travels with the completion instead of after it.
+    - *`WmpPeer.close()` cleans up in a `finally`*: the dispatch loop and the profiles' work stop even when telling the server
+      fails.
+    - *No late answers.* Cancellation is checked before each frame is sent and the sub-flow must still be registered, so a
+      callback that was blocking when the session closed (or its flow ended) and returns afterwards answers nothing.
+    - *Repeated starts.* The engine reissues a start under the same child id after a resumption. The profile keeps each
+      sub-flow by its id: a repeat is acknowledged, a pending callback is reused (never run again) and a decided answer is
+      replayed (also when its first send failed). Entries are forgotten when their flow ends, on close, and past 256.
+    - *A stop during job registration.* A sub-flow's entry is registered before its job exists; if its flow ends in that gap the
+      stop found no job to cancel and the callback then started. The registration is re-checked once the job is assigned and
+      the job cancelled before it runs. Known gap, not fixed here: a failed answer send after an acknowledged start is not
+      retried until the engine reissues the start (https://github.com/sirosfoundation/siros-sdk-kotlin/issues/290).
+    - *Replays share the sub-flow's lifetime, and eviction spares live work.* The original answer task and every replay run under
+      one cancellable lifetime per sub-flow, stopped together by terminal frames, a local `cancelFlow` and close; a send is
+      checked again once the peer holds its send lock (`WmpPeerContext.notifyIf`, default: check, then send), so a replay queued
+      behind another send never sends a stale answer. Making room past 256 entries evicts only sub-flows whose answer was
+      completely sent; with nothing to evict the new start is refused AS A REQUEST (`FlowStartRefusedException`: `WmpPeer` answers the `wmp.flow.start` with an error response "too many pending requests" and tracks nothing), so no answer task exists that could send a flow frame after the flow it concerns has ended. A sub-flow stopped because its parent ended releases the peer's routing entry for it (`WmpPeerContext.forgetFlow`, default no-op), without sending anything, and a replay waiting to send keeps its sub-flow out of eviction until it has been sent. Known gaps, not fixed
+      here: a failed answer send after an acknowledged start is not retried
+      (https://github.com/sirosfoundation/siros-sdk-kotlin/issues/290), and a callback paused before `BlindIssuance.offer` can
+      allocate a response key after a terminal frame's `drop` (https://github.com/sirosfoundation/siros-sdk-kotlin/issues/291).
+    - *Terminal frames stop pending sub-flows first.* `flow.complete` / `flow.error` / `flow.cancel` for the parent or the
+      child, and a local `WmpPeer.cancelFlow`, cancel the pending callbacks (a consent prompt, a signature) before the
+      callbacks that release the flow's state run. `WmpFlowHandler.flowEnded(flowId)` (default no-op) carries a local end to
+      the handler.
+    - *A declined transaction is a refusal.* `TransactionDataError` with reason `DECLINED` is answered like
+      `SignRefusedException` (`-31006`, `data.reason = "rejected"`), not as unsupported transaction data (`-31005`), which stays
+      for validation failures.
+
 ## [0.21.1] - 2026-10-23
 
 Patch release on 0.21.0: review follow-ups to the engine-blind encryption contract (https://github.com/sirosfoundation/siros-sdk-kotlin/pull/293) and a consent-step change for ZK pseudonym/age proofs (https://github.com/sirosfoundation/siros-sdk-kotlin/pull/292). Not included: https://github.com/sirosfoundation/siros-sdk-kotlin/pull/294, https://github.com/sirosfoundation/siros-sdk-kotlin/pull/298 and https://github.com/sirosfoundation/siros-sdk-kotlin/pull/285 (still open).
