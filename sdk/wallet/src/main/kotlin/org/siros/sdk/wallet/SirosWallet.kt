@@ -1674,6 +1674,8 @@ class SirosWallet private constructor(
         )
         hydrateReloadedCredentials()
         reloadPresentationHistory()
+        // Warm the issuer catalog (list and metadata) while the user is still on the home screen.
+        issuerCatalog.refreshInBackground(issuerCatalogScopeKey())
     }
 
     /**
@@ -1898,6 +1900,9 @@ class SirosWallet private constructor(
         // The response keys and everything opened with them are session material: gone with the session, synchronously,
         // not at the next connection (a wallet that stays logged out never makes one).
         blindIssuance.clear()
+        // The issuer catalog belongs to the session's user: unreadable from here on, the stored copy removed in the background.
+        issuerCatalog.clearMemory()
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch { issuerCatalog.clearStore() }
         keystore.lock()
         sessionStore.clear()  // clears active account's session only
         accountRegistry.activeAccountId = null
@@ -2111,6 +2116,7 @@ class SirosWallet private constructor(
             )
             hydrateReloadedCredentials()
             reloadPresentationHistory()
+            issuerCatalog.refreshInBackground(issuerCatalogScopeKey())
             Timber.i("Keystore unlocked after session resume")
         } catch (e: KeystoreException) {
             Timber.e(e, "Keystore unlock failed: corrupt container")
@@ -2148,6 +2154,8 @@ class SirosWallet private constructor(
         bumpSessionGeneration()
         activity.applicationContext.unregisterComponentCallbacks(memoryPressureCallbacks)
         circuitCatalogRefreshJob?.cancel()
+        issuerCatalog.clearMemory()
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch { issuerCatalog.clearStore() }
         circuitCatalogNetworkCallback?.let {
             try {
                 (activity.applicationContext.getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager)
@@ -3427,26 +3435,42 @@ class SirosWallet private constructor(
      * Returns a flat list of [CredentialOffer] items ready for display in a
      * picker UI. Each item can be passed to [startIssuanceByOffer].
      */
-    suspend fun getAvailableCredentials(): List<CredentialOffer> = withContext(Dispatchers.IO) {
-        val issuers = getIssuers()
-        Timber.d("getAvailableCredentials: ${issuers.size} issuers")
-        val client = apiClient ?: throw WalletException(NOT_CONNECTED)
-        val offers = mutableListOf<CredentialOffer>()
+    suspend fun getAvailableCredentials(): List<CredentialOffer> = issuerCatalog.get(issuerCatalogScopeKey())
 
-        for (issuer in issuers) {
-            try {
-                val metadataJson = client.getIssuerMetadata(issuer.id)
-                val metadata = json.decodeFromJsonElement(IssuerMetadata.serializer(), metadataJson)
-                for (configId in metadata.credentialConfigurationsSupported.keys) {
-                    buildCredentialOfferFromMetadata(issuer.credentialIssuerIdentifier, configId, metadata)
-                        ?.let { offers.add(it) }
-                }
-            } catch (e: Exception) {
-                Timber.w(e, "Failed to fetch metadata for ${issuer.credentialIssuerIdentifier}")
-            }
-        }
-        offers
+    /**
+     * The credential offers the wallet knows about and whether it is refreshing them: the cached list at once (also after a cold start,
+     * from app-private storage), updated when a background refresh finishes. [getAvailableCredentials] and [refreshAvailableCredentials]
+     * feed it. Scoped to the tenant, backend and signed-in user, and cleared on logout and [destroy].
+     */
+    val availableCredentials: kotlinx.coroutines.flow.StateFlow<AvailableCredentials> get() = issuerCatalog.state
+
+    /**
+     * Refresh the issuer list and every issuer's metadata now (per-issuer in parallel; an issuer that fails keeps its previous entry)
+     * and return when done. Joins a refresh that is already running. [availableCredentials] updates when it finishes.
+     */
+    suspend fun refreshAvailableCredentials() = issuerCatalog.refresh(issuerCatalogScopeKey())
+
+    /** The catalog is only ever read by the tenant, backend and user it was fetched for. */
+    private fun issuerCatalogScopeKey(): String {
+        val userId = (_state.value as? WalletState.Ready)?.userId ?: (_state.value as? WalletState.FlowActive)?.userId ?: ""
+        return "${config.tenantId}|${config.backendUrl}|$userId"
     }
+
+    /** Builds the issuer catalog over this wallet's backend client; internal so a test wallet can be given one. */
+    internal fun newIssuerCatalog(catalogScope: CoroutineScope, store: IssuerCatalogStore): IssuerCatalog = IssuerCatalog(
+        scope = catalogScope,
+        store = store,
+        fetchIssuers = { getIssuers() },
+        fetchMetadata = { issuer ->
+            withContext(Dispatchers.IO) { (apiClient ?: throw WalletException(NOT_CONNECTED)).getIssuerMetadata(issuer.id) }
+        },
+        buildOffers = { issuer, metadataJson ->
+            val metadata = json.decodeFromJsonElement(IssuerMetadata.serializer(), metadataJson)
+            metadata.credentialConfigurationsSupported.keys.mapNotNull {
+                buildCredentialOfferFromMetadata(issuer.credentialIssuerIdentifier, it, metadata)
+            }
+        },
+    )
 
     /**
      * Build a [CredentialOffer] (display name/logo/colors) for one credential
@@ -5596,6 +5620,9 @@ class SirosWallet private constructor(
      */
     private val displayMetadataCache: org.siros.sdk.credentials.FetchCache =
         FileFetchCache(activity.applicationContext)
+
+    /** Stale-while-revalidate cache of the issuer list, issuer metadata and the offers derived from them (see [IssuerCatalog]). */
+    private val issuerCatalog: IssuerCatalog = newIssuerCatalog(scope, FileIssuerCatalogStore(activity.applicationContext))
 
     private val vctmFetcher = VctmFetcher(
         httpGet = ::fetchTypeMetadataUrl,

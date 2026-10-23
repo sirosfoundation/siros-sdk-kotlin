@@ -625,6 +625,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _isLoadingOffers = MutableStateFlow(false)
     val isLoadingOffers: StateFlow<Boolean> = _isLoadingOffers
 
+    /** The SDK is refreshing the issuer catalog in the background while a (cached) list is already shown: a subtle indicator only. */
+    private val _isRefreshingOffers = MutableStateFlow(false)
+    val isRefreshingOffers: StateFlow<Boolean> = _isRefreshingOffers
+    private var offersJob: kotlinx.coroutines.Job? = null
+
     private val _showAddCredential = MutableStateFlow(false)
     val showAddCredential: StateFlow<Boolean> = _showAddCredential
 
@@ -1345,26 +1350,37 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         wallet.renamePasskey(credentialId, nickname)
     }
 
-    /** Open the add-credential screen — fetches available offers from issuers. */
+    /**
+     * Open the add-credential screen. The SDK keeps a stale-while-revalidate catalog of the issuers' offers: a cached list is shown at
+     * once (also after a cold start) and replaced when the background refresh finishes; only a first-ever load shows the spinner.
+     */
     fun openAddCredential() {
         _showAddCredential.value = true
-        _isLoadingOffers.value = true
-        viewModelScope.launch {
+        // Filter out the plain "siros_id" offer: the "Scan Physical ID card" row above the list (onStartIDV/startIDV()) is the one,
+        // unified path to a SIROS ID credential - it drives real FaceTec identity verification before issuance. Leaving the
+        // no-questions-asked issuer offer alongside it would give the user two competing, confusing routes to the same credential,
+        // one of which silently skips verification.
+        fun shown(offers: List<CredentialOffer>) = offers.filterNot { it.credentialConfigurationId == SIROS_ID_CREDENTIAL_CONFIGURATION_ID }
+        val cached = shown(wallet.availableCredentials.value.offers)
+        if (cached.isNotEmpty()) _availableCredentials.value = cached
+        _isLoadingOffers.value = cached.isEmpty()
+        offersJob?.cancel()
+        offersJob = viewModelScope.launch {
+            // Updates (the refresh finishing) reach the list while the screen is open.
+            launch {
+                wallet.availableCredentials.collect { catalog ->
+                    _isRefreshingOffers.value = catalog.refreshing
+                    if (catalog.offers.isNotEmpty()) _availableCredentials.value = shown(catalog.offers)
+                }
+            }
             try {
-                // Filter out the plain "siros_id" offer: the "Scan Physical ID
-                // card" row above the list (onStartIDV/startIDV()) is the one,
-                // unified path to a SIROS ID credential - it drives real
-                // FaceTec identity verification before issuance. Leaving the
-                // no-questions-asked issuer offer alongside it would give the
-                // user two competing, confusing routes to the same
-                // credential, one of which silently skips verification.
-                _availableCredentials.value = wallet.getAvailableCredentials()
-                    .filterNot { it.credentialConfigurationId == SIROS_ID_CREDENTIAL_CONFIGURATION_ID }
+                _availableCredentials.value = shown(wallet.getAvailableCredentials())
                 android.util.Log.d("SIROS_VM", "Available credentials: ${_availableCredentials.value.size}")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 android.util.Log.e("SIROS_VM", "getAvailableCredentials failed", e)
-                _availableCredentials.value = emptyList()
-                _errorMessage.value = e.message ?: "Failed to load available credentials"
+                if (_availableCredentials.value.isEmpty()) _errorMessage.value = e.message ?: "Failed to load available credentials"
             } finally {
                 _isLoadingOffers.value = false
             }
@@ -1374,6 +1390,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     /** Close the add-credential screen. */
     fun closeAddCredential() {
         _showAddCredential.value = false
+        offersJob?.cancel()
+        offersJob = null
+        _isRefreshingOffers.value = false
     }
 
     /** User picked a credential to issue. */

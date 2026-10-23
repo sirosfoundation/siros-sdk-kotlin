@@ -257,10 +257,15 @@ class SirosWalletTest {
             "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
             "apiClient" to apiClient,
             "json" to Json { ignoreUnknownKeys = true },
+            "config" to WalletConfig(backendUrl = "https://backend.example.com"),
         )
 
         val offers = wallet.getAvailableCredentials()
 
+        coVerify(exactly = 1) { apiClient.getIssuerMetadata(7) }
+        // The second call is served from the SDK's cache: no further request to the backend.
+        assertEquals(offers, wallet.getAvailableCredentials())
+        coVerify(exactly = 1) { apiClient.getIssuers() }
         coVerify(exactly = 1) { apiClient.getIssuerMetadata(7) }
         assertEquals(1, offers.size)
         assertEquals("pid", offers.single().credentialConfigurationId)
@@ -11330,6 +11335,11 @@ class SirosWalletTest {
         }
         if ("readerTrustRootCertificates\$delegate" !in values) {
             setField(wallet, "readerTrustRootCertificates\$delegate", lazy { emptyList<java.security.cert.X509Certificate>() })
+        }
+        // allocateInstance skips the issuer catalog's initializer too; the wallet's own factory builds it over the fields set above.
+        if ("issuerCatalog" !in values) {
+            val catalogScope = (values["scope"] as? CoroutineScope) ?: CoroutineScope(Dispatchers.Unconfined + SupervisorJob())
+            setField(wallet, "issuerCatalog", wallet.newIssuerCatalog(catalogScope, InMemoryIssuerCatalogStore()))
         }
         return wallet
     }

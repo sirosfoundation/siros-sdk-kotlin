@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **The credential catalog is cached in the SDK (stale-while-revalidate).** `getAvailableCredentials()` re-fetched the issuer list and then each
+  issuer's metadata one after the other on every call (minutes on a slow link). It now returns the cached offers at once (memory, else a copy in
+  app-private no-backup storage, so a cold start shows it too) and refreshes in the background when they are older than 10 minutes, after a login
+  or session resume, and on demand (`refreshAvailableCredentials()`). New `SirosWallet.availableCredentials: StateFlow<AvailableCredentials>`
+  (`offers`, `refreshing`, `fetchedAtMillis`, `lastRefreshFailed`) tells the UI when fresh data arrives. Only a first-ever call waits for the
+  network (and throws only if nothing is cached and the issuer list cannot be fetched). Per-issuer metadata is fetched in parallel with a timeout; an
+  issuer that fails or times out keeps its previous entry, so a failure never blanks the list; an issuer no longer listed is dropped; refreshes
+  are single-flight. The cache belongs to one tenant, backend and signed-in user and is cleared on logout and `destroy()`. The offers are derived
+  from the cached metadata every time the catalog is assembled, so the record of configurations that advertise a delivered seed is populated for
+  cached reads too. The backend's issuer endpoints send no ETag, so no conditional requests are made. The sample add-credential screen shows the
+  cached list immediately and a thin progress bar while it refreshes.
+
 ### Changed
 - A `zkp_req` presentation that proves a pseudonym or an age check no longer asks the user to confirm what is shared, because it shares no
   data. New `PresentationRequest.disclosesNoClaims` is true ONLY when every matched query is a `zkp_req` query whose plan consists solely of
