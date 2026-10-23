@@ -617,7 +617,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                         onConfirmIssuance = viewModel::confirmIssuance,
                         onCancelIssuance = viewModel::cancelIssuance,
                         onStartIDV = viewModel::openIDVPreparation,
-                        onRetry = viewModel::openAddCredential,
+                        onRetry = viewModel::retryAvailableCredentials,
                         modifier = Modifier.padding(padding),
                     )
                 }

@@ -1401,7 +1401,9 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             launch {
                 wallet.availableCredentials.collect { catalog ->
                     _isRefreshingOffers.value = catalog.refreshing
-                    if (catalog.offers.isNotEmpty()) _availableCredentials.value = shown(catalog.offers)
+                    // An empty list is a legitimate result too (the last issuer or configuration was removed); a failed refresh
+                    // keeps the stale offers in the SDK, so it never arrives here as an empty list.
+                    if (catalog.fetchedAtMillis > 0L) _availableCredentials.value = shown(catalog.offers)
                 }
             }
             try {
@@ -1412,6 +1414,23 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             } catch (e: Exception) {
                 android.util.Log.e("SIROS_VM", "getAvailableCredentials failed", e)
                 if (_availableCredentials.value.isEmpty()) _errorMessage.value = e.message ?: "Failed to load available credentials"
+            } finally {
+                _isLoadingOffers.value = false
+            }
+        }
+    }
+
+    /** Retry from the empty/error state of the add-credential screen: an explicit refresh, not a cache read. */
+    fun retryAvailableCredentials() {
+        _isLoadingOffers.value = _availableCredentials.value.isEmpty()
+        viewModelScope.launch {
+            try {
+                wallet.refreshAvailableCredentials()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.e("SIROS_VM", "refreshAvailableCredentials failed", e)
+                _errorMessage.value = e.message ?: "Failed to load available credentials"
             } finally {
                 _isLoadingOffers.value = false
             }

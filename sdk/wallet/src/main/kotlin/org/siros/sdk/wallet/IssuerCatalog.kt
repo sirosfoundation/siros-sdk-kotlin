@@ -15,6 +15,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
@@ -83,7 +85,7 @@ class FileIssuerCatalogStore(private val file: File) : IssuerCatalogStore {
                 tmp.writeText(text)
                 if (!tmp.renameTo(file)) {
                     file.writeText(text)
-                    tmp.delete()
+                    if (!tmp.delete()) Timber.w("Issuer catalog temp file could not be deleted")
                 }
             } catch (e: Exception) {
                 Timber.w(e, "Issuer catalog could not be persisted")
@@ -94,8 +96,9 @@ class FileIssuerCatalogStore(private val file: File) : IssuerCatalogStore {
     override suspend fun clear() = withContext(Dispatchers.IO) {
         mutex.withLock {
             try {
-                file.delete()
-                File(file.parentFile, file.name + ".tmp").delete()
+                if (file.exists() && !file.delete()) Timber.w("Issuer catalog file could not be deleted")
+                val tmp = File(file.parentFile, file.name + ".tmp")
+                if (tmp.exists() && !tmp.delete()) Timber.w("Issuer catalog temp file could not be deleted")
             } catch (e: Exception) {
                 Timber.w(e, "Issuer catalog file could not be deleted")
             }
@@ -139,11 +142,12 @@ internal class IssuerCatalog(
     private class Snapshot(val scopeKey: String, val fetchedAtMillis: Long, val entries: List<Entry>)
 
     private val json = Json { ignoreUnknownKeys = true }
-    private val lock = Any() // guards the fields below; never held across a suspension
+    private val lock = Any() // guards the fields below and every publication; never held across a suspension
     private var snapshot: Snapshot? = null
     private var loadedFromStore = false
     private var inFlight: Deferred<Unit>? = null
     private var inFlightKey: String? = null
+    private var currentScope: String? = null
     private var epoch = 0
 
     private val _state = MutableStateFlow(AvailableCredentials())
@@ -151,6 +155,7 @@ internal class IssuerCatalog(
 
     /** The offers, cache first (see the class doc). Throws only when nothing is cached and the issuer list cannot be fetched. */
     suspend fun get(scopeKey: String): List<CredentialOffer> {
+        enterScope(scopeKey)
         val cached = cachedFor(scopeKey)
         if (cached != null) {
             if (clock() - cached.fetchedAtMillis > ttlMillis) refreshInBackground(scopeKey)
@@ -167,16 +172,13 @@ internal class IssuerCatalog(
         scope.launch { try { refresh(scopeKey) } catch (e: CancellationException) { throw e } catch (e: Exception) { Timber.w(e, "Catalog refresh failed") } }
     }
 
-    /** Refreshes now and returns when done; joins a refresh that is already running (single flight). */
+    /** Refreshes now and returns when done; joins a refresh that is already running or about to (single flight). */
     suspend fun refresh(scopeKey: String) {
         val job = synchronized(lock) {
-            // A refresh for another scope (another user, backend or tenant) is not joined: it is replaced.
-            val running = inFlight?.takeIf { it.isActive }
+            resetIfOtherScopeLocked(scopeKey)
+            val running = inFlight?.takeIf { !it.isCompleted }
             if (running != null && inFlightKey == scopeKey) running
-            else {
-                running?.cancel()
-                scope.async(start = kotlinx.coroutines.CoroutineStart.LAZY) { runRefresh(scopeKey) }.also { inFlight = it; inFlightKey = scopeKey }
-            }
+            else scope.async(start = kotlinx.coroutines.CoroutineStart.LAZY) { runRefresh(scopeKey) }.also { inFlight = it; inFlightKey = scopeKey }
         }
         job.start()
         job.await()
@@ -187,14 +189,8 @@ internal class IssuerCatalog(
      * refresh. Follow with [clearStore] to remove the persisted copy.
      */
     fun clearMemory() {
-        val running = synchronized(lock) {
-            epoch++
-            snapshot = null
-            loadedFromStore = true // nothing to load after a clear
-            inFlight.also { inFlight = null }
-        }
+        val running = synchronized(lock) { invalidateLocked(loaded = true) }
         running?.cancel()
-        _state.value = AvailableCredentials()
     }
 
     /** Removes the persisted copy. */
@@ -206,12 +202,37 @@ internal class IssuerCatalog(
         clearStore()
     }
 
-    /** The in-memory snapshot of [scopeKey], loading the persisted one on first use. Publishes it. */
+    /** Invalidates everything of the current scope (generation, snapshot, published state, running refresh) in one critical section. */
+    private fun invalidateLocked(loaded: Boolean): Deferred<Unit>? {
+        epoch++
+        snapshot = null
+        loadedFromStore = loaded
+        currentScope = null
+        _state.value = AvailableCredentials()
+        return inFlight.also { inFlight = null; inFlightKey = null }
+    }
+
+    private fun resetIfOtherScopeLocked(scopeKey: String) {
+        val known = currentScope
+        if (known != null && known != scopeKey) {
+            // Another user, backend or tenant: nothing of the previous scope stays readable, published or running.
+            invalidateLocked(loaded = false)?.cancel()
+        }
+        currentScope = scopeKey
+    }
+
+    private fun enterScope(scopeKey: String) = synchronized(lock) { resetIfOtherScopeLocked(scopeKey) }
+
+    /**
+     * The in-memory snapshot of [scopeKey], loading the persisted one on first use, publishing it. Throws [CancellationException] when
+     * the catalog was invalidated (logout, another scope) while the persisted copy was being read: that call must not publish or refresh.
+     */
     private suspend fun cachedFor(scopeKey: String): Snapshot? {
-        synchronized(lock) {
+        val startEpoch = synchronized(lock) {
             val have = snapshot
             if (have != null) return have.takeIf { it.scopeKey == scopeKey }
             if (loadedFromStore) return null
+            epoch
         }
         val persisted = try {
             store.load()?.let { json.decodeFromString(Snapshot.serializer(), it) }
@@ -222,22 +243,31 @@ internal class IssuerCatalog(
             null
         }
         synchronized(lock) {
+            if (epoch != startEpoch) throw CancellationException("The issuer catalog was invalidated while it was being loaded")
             if (snapshot == null) {
                 loadedFromStore = true
                 if (persisted != null && persisted.scopeKey == scopeKey) {
                     snapshot = persisted
-                    publish(persisted, refreshing = false, failed = false)
+                    publishLocked(persisted, refreshing = false, failed = false)
                 }
             }
             return snapshot?.takeIf { it.scopeKey == scopeKey }
         }
     }
 
-    private fun publish(s: Snapshot, refreshing: Boolean, failed: Boolean) {
+    private fun publishLocked(s: Snapshot, refreshing: Boolean, failed: Boolean) {
         val offers = s.entries.flatMap { e ->
             try { buildOffers(e.issuer, e.metadata) } catch (ex: Exception) { Timber.w(ex, "Offers of ${e.issuer.credentialIssuerIdentifier} unusable"); emptyList() }
         }
         _state.value = AvailableCredentials(offers, refreshing, s.fetchedAtMillis, failed)
+    }
+
+    /** Updates the published flags of the refresh started in generation [gen]; a refresh of an invalidated generation touches nothing. */
+    private fun markState(gen: Int, refreshing: Boolean, failed: Boolean? = null) {
+        synchronized(lock) {
+            if (epoch != gen) return
+            _state.value = _state.value.copy(refreshing = refreshing, lastRefreshFailed = failed ?: _state.value.lastRefreshFailed)
+        }
     }
 
     private suspend fun runRefresh(scopeKey: String) {
@@ -245,7 +275,7 @@ internal class IssuerCatalog(
         // Load the persisted copy first so a refresh after a cold start also keeps the stale entries of issuers that now fail.
         cachedFor(scopeKey)
         val previous = synchronized(lock) { snapshot?.takeIf { it.scopeKey == scopeKey } }
-        _state.value = _state.value.copy(refreshing = true)
+        markState(myEpoch, refreshing = true)
         try {
             val issuers = try {
                 fetchIssuers()
@@ -253,37 +283,46 @@ internal class IssuerCatalog(
                 throw e
             } catch (e: Exception) {
                 Timber.w(e, "Issuer list could not be refreshed; keeping what is cached")
-                _state.value = _state.value.copy(refreshing = false, lastRefreshFailed = true)
+                markState(myEpoch, refreshing = false, failed = true)
                 return
             }
-            val gate = Semaphore(maxParallel)
-            val fetched: List<Entry?> = issuers.map { issuer ->
-                scope.async {
-                    gate.acquire()
-                    try {
-                        val meta = withTimeoutOrNull(issuerTimeoutMillis) {
-                            try { fetchMetadata(issuer) } catch (e: CancellationException) { throw e } catch (e: Exception) {
-                                Timber.w(e, "Metadata of ${issuer.credentialIssuerIdentifier} could not be refreshed"); null
-                            }
-                        }
-                        if (meta != null) Entry(issuer, meta)
-                        else previous?.entries?.firstOrNull { it.issuer.id == issuer.id }?.let { Entry(issuer, it.metadata) } // stale beats nothing
-                    } finally {
-                        gate.release()
-                    }
+            val next = Snapshot(scopeKey, clock(), fetchAll(issuers, previous))
+            val published = synchronized(lock) {
+                if (epoch == myEpoch) {
+                    snapshot = next
+                    publishLocked(next, refreshing = false, failed = false)
+                    true
+                } else {
+                    false
                 }
-            }.awaitAll()
-            val next = Snapshot(scopeKey, clock(), fetched.filterNotNull())
-            val stillCurrent = synchronized(lock) {
-                if (epoch == myEpoch) { snapshot = next; true } else false
             }
-            if (stillCurrent) {
-                publish(next, refreshing = false, failed = false)
-                store.save(json.encodeToString(Snapshot.serializer(), next))
-            }
+            if (published) store.save(json.encodeToString(Snapshot.serializer(), next))
         } finally {
-            if (_state.value.refreshing) _state.value = _state.value.copy(refreshing = false)
+            markState(myEpoch, refreshing = false)
         }
+    }
+
+    /** Every issuer's entry: fresh metadata, else the previous entry (stale beats nothing), else none. Jobs die with the refresh. */
+    private suspend fun fetchAll(issuers: List<IssuerEntry>, previous: Snapshot?): List<Entry> = coroutineScope {
+        val gate = Semaphore(maxParallel)
+        issuers.map { issuer ->
+            async {
+                gate.withPermit {
+                    val meta = withTimeoutOrNull(issuerTimeoutMillis) { fetchMetadataOrNull(issuer) }
+                    if (meta != null) Entry(issuer, meta)
+                    else previous?.entries?.firstOrNull { it.issuer.id == issuer.id }?.let { Entry(issuer, it.metadata) }
+                }
+            }
+        }.awaitAll().filterNotNull()
+    }
+
+    private suspend fun fetchMetadataOrNull(issuer: IssuerEntry): JsonObject? = try {
+        fetchMetadata(issuer)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Timber.w(e, "Metadata of ${issuer.credentialIssuerIdentifier} could not be refreshed")
+        null
     }
 
     companion object {
