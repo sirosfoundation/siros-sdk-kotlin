@@ -58,6 +58,17 @@ interface Signer {
      */
     suspend fun attestationChain(keyId: String): AttestationChain?
 
+    /** Whether [generateAttestedKey] works: this signer can bind a key to an attestation challenge and report its chain. */
+    val supportsAttestedKeyGeneration: Boolean get() = false
+
+    /**
+     * Generate a keypair whose key attestation carries [attestationChallenge] (the Android Keystore's
+     * `setAttestationChallenge`), so [attestationChain] proves the key and the challenge. Only a signer with
+     * [supportsAttestedKeyGeneration] implements it.
+     */
+    suspend fun generateAttestedKey(algorithm: String, attestationChallenge: ByteArray): String =
+        throw UnsupportedOperationException("This signer cannot generate challenge-attested keys")
+
     /**
      * Export the public key in JWK format (JSON-encoded bytes).
      */
@@ -147,7 +158,18 @@ data class SignerKeyInfo(
 data class AttestationChain(
     val certificates: List<ByteArray>,
     val clientDataHash: ByteArray,
-)
+    /**
+     * What [certificates] is: [FORMAT_FIDO2_PACKED] (one raw CBOR attestationObject, with [clientDataHash]) or
+     * [FORMAT_ANDROID_KEY] (an X.509 chain, DER, LEAF FIRST, as the Android Keystore returns it; [clientDataHash] is empty
+     * because the attestation challenge is carried inside the leaf).
+     */
+    val format: String = FORMAT_FIDO2_PACKED,
+) {
+    companion object {
+        const val FORMAT_FIDO2_PACKED = "fido2-packed"
+        const val FORMAT_ANDROID_KEY = "android-key"
+    }
+}
 
 /**
  * Extended key metadata including plugin association and creation timestamp.

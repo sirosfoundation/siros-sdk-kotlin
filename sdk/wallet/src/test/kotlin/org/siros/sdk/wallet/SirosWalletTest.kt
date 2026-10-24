@@ -11649,7 +11649,7 @@ class SirosWalletTest {
         assertTrue(getField(wallet, "issuanceInFlight") as Boolean)
     }
 
-    private fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {
+    internal fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {
         val wallet = allocateInstance(SirosWallet::class.java) as SirosWallet
         val values = fields.toMap(mutableMapOf())
         val stateFlow = values["_state"] as? MutableStateFlow<WalletState>

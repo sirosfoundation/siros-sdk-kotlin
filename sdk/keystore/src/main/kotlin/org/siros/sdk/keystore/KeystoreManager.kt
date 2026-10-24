@@ -391,6 +391,16 @@ interface KeystoreManager {
      */
     suspend fun attestationChain(keyId: String): AttestationChain? = null
 
+    /** Whether [generateAttestedKey] works (see [Signer.supportsAttestedKeyGeneration]). Default: no. */
+    val supportsAttestedKeyGeneration: Boolean get() = false
+
+    /** Generate a key whose attestation carries [attestationChallenge] (see [Signer.generateAttestedKey]). Default: unsupported. */
+    suspend fun generateAttestedKey(algorithm: String, attestationChallenge: ByteArray): String =
+        throw UnsupportedOperationException("This keystore cannot generate challenge-attested keys")
+
+    /** Delete a key this keystore generated (for example an instance key that must be replaced). Default: nothing to delete. */
+    suspend fun deleteKey(keyId: String) {}
+
     /**
      * Generate [count] fresh keypairs and build a single OID4VCI `attestation`
      * proof-type Key Attestation JWT (spec: "Key Attestation in JWT format",

@@ -296,6 +296,7 @@ class BackendApiClient(
      *   instance so that suspending or revoking the instance also refuses
      *   login with that passkey (SID-AUTH-06, go-wallet-backend#319). Optional;
      *   older backends ignore it.
+     * @param keyAttestation optional instance-key evidence, sent as `key_attestation`.
      * @return WIA JWT string
      */
     suspend fun generateWIA(
@@ -304,6 +305,7 @@ class BackendApiClient(
         clientId: String? = null,
         nativeAttestation: JsonObject? = null,
         credentialId: String? = null,
+        keyAttestation: JsonObject? = null,
     ): String {
         val body = kotlinx.serialization.json.buildJsonObject {
             put("pop", kotlinx.serialization.json.JsonPrimitive(pop))
@@ -316,6 +318,10 @@ class BackendApiClient(
             }
             if (!credentialId.isNullOrBlank()) {
                 put("credential_id", kotlinx.serialization.json.JsonPrimitive(credentialId))
+            }
+            // Evidence about the instance key itself ({"type":"android_key","x5c":[...]}); absent: no evidence, home unknown.
+            if (keyAttestation != null) {
+                put("key_attestation", keyAttestation)
             }
         }
         val result = post("/wallet-provider/wia/generate", body)

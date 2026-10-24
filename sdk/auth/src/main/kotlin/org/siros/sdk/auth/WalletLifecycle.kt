@@ -149,6 +149,15 @@ const val ERROR_ERASURE_INCOMPLETE: String = "ERASURE_INCOMPLETE"
 /** Backend error code for a `credential_id` that is not one of the caller's own passkeys. */
 const val ERROR_CREDENTIAL_NOT_OWNED: String = "CREDENTIAL_NOT_OWNED"
 
+/** WIA refused because the instance-key evidence is wrong (HTTP 400): nothing was recorded; a retry needs a NEW key and challenge. */
+const val ERROR_KEY_ATTESTATION_INVALID: String = "KEY_ATTESTATION_INVALID"
+
+/** The evidence could not be judged right now (HTTP 503, e.g. no fresh revocation list): retry later with a NEW key and challenge. */
+const val ERROR_KEY_ATTESTATION_UNAVAILABLE: String = "KEY_ATTESTATION_UNAVAILABLE"
+
+/** The backend does not know this `key_attestation` type (HTTP 400, before the challenge is consumed): retry without evidence. */
+const val ERROR_KEY_ATTESTATION_TYPE_UNSUPPORTED: String = "KEY_ATTESTATION_TYPE_UNSUPPORTED"
+
 private val errorJson = Json { ignoreUnknownKeys = true }
 
 /**

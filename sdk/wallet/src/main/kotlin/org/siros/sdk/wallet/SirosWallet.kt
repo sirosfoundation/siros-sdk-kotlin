@@ -54,6 +54,9 @@ import org.siros.sdk.auth.LocalAuthProvider
 import org.siros.sdk.auth.PrfOutput
 import org.siros.sdk.auth.DeactivationOutcome
 import org.siros.sdk.auth.ERROR_CREDENTIAL_NOT_OWNED
+import org.siros.sdk.auth.ERROR_KEY_ATTESTATION_INVALID
+import org.siros.sdk.auth.ERROR_KEY_ATTESTATION_TYPE_UNSUPPORTED
+import org.siros.sdk.auth.ERROR_KEY_ATTESTATION_UNAVAILABLE
 import org.siros.sdk.auth.WalletInstance
 import org.siros.sdk.auth.WalletInstanceStatus
 import org.siros.sdk.auth.WalletLifecycleRefusal
@@ -2954,7 +2957,7 @@ class SirosWallet private constructor(
             if (current != null && keystore.listKeys().any { it.keyId == current }) {
                 current
             } else {
-                val keyId = keystore.generateKey("ES256")
+                val keyId = generateInstanceKey()
                 if (sessionStore.activeAccountId != account) {
                     throw WalletException("Account changed while generating the wallet instance key")
                 }
@@ -3001,11 +3004,133 @@ class SirosWallet private constructor(
             // The session this attestation is being fetched for; see where it
             // is published below.
             val generation = sessionGeneration
-            val keyId = ensureInstanceKeyId()
-            val challengeResponse = client.requestWIAChallenge()
-            val challenge = challengeResponse["challenge"]?.jsonPrimitive?.contentOrNull
-                ?: return null
-            val pop = keystore.generateKeyProof(
+            val firstKeyId = ensureInstanceKeyId()
+            // Instance-key evidence (Android Keystore): a key generated for challenge C has to be used with exactly that C.
+            val pending = takePendingInstanceKeyEvidence(firstKeyId)
+            val wia = obtainWia(client, firstKeyId, pending)
+            // Only publish a WIA that still belongs to the session that asked
+            // for it. This function suspends several times, and a logout,
+            // account switch or new login landing in that window resets the
+            // cache; storing afterwards would make [thisInstanceId] and
+            // currentWalletInstanceId() answer with the PREVIOUS account's
+            // thumbprint for the new session. The caller still gets its own
+            // result - it is only the cache that is refused.
+            if (sessionGeneration == generation) {
+                cachedWia = wia
+                cachedWiaExpiresAt = CredentialUtils.parseJwtPayload(wia)
+                    ?.get("exp")?.jsonPrimitive?.longOrNull ?: (now + 300)
+            }
+            wia
+        } catch (e: Exception) {
+            Timber.w(e, "Failed to obtain Wallet Instance Attestation")
+            null
+        }
+    }
+
+    /** Instance-key evidence whose key was generated for [challenge] and has not been used for a WIA yet. */
+    private class PendingInstanceKeyEvidence(val keyId: String, val challenge: String, val createdAtMillis: Long)
+
+    @Volatile
+    private var pendingInstanceKeyEvidence: PendingInstanceKeyEvidence? = null
+
+    private fun takePendingInstanceKeyEvidence(keyId: String): PendingInstanceKeyEvidence? {
+        val p = pendingInstanceKeyEvidence ?: return null
+        pendingInstanceKeyEvidence = null
+        return p.takeIf { it.keyId == keyId }
+    }
+
+    /**
+     * Generates this installation's instance key. When the keystore can bind a key to an attestation challenge (the Android
+     * Keystore signer) the WIA challenge C is fetched FIRST and the key is generated for SHA-256("siros-instance-key-v1" || C), and
+     * remembered so the next WIA uses that very C with the key's chain; otherwise (or when the challenge cannot be fetched) a
+     * plain key, exactly as before, and no evidence.
+     */
+    private suspend fun generateInstanceKey(): String {
+        if (keystore.supportsAttestedKeyGeneration) {
+            try {
+                val c = apiClient?.requestWIAChallenge()?.get("challenge")?.jsonPrimitive?.contentOrNull
+                if (c != null) {
+                    val keyId = keystore.generateAttestedKey("ES256", InstanceKeyEvidence.challengeHash(c))
+                    pendingInstanceKeyEvidence = PendingInstanceKeyEvidence(keyId, c, instanceKeyClock())
+                    return keyId
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.w(e, "Attested instance key generation failed, using a plain key")
+            }
+        }
+        return keystore.generateKey("ES256")
+    }
+
+    /** Replaces the instance key (one key per challenge: a failed attempt needs a NEW key and challenge). Returns the new key id. */
+    private suspend fun rotateInstanceKey(oldKeyId: String): String {
+        val account = sessionStore.activeAccountId
+        return instanceKeyMutex.withLock {
+            val keyId = generateInstanceKey()
+            if (sessionStore.activeAccountId != account) {
+                throw WalletException("Account changed while replacing the wallet instance key")
+            }
+            sessionStore.instanceKeyId = keyId
+            persistAndSyncKeystore()
+            try {
+                keystore.deleteKey(oldKeyId)
+            } catch (e: Exception) {
+                Timber.w(e, "The replaced instance key could not be deleted")
+            }
+            keyId
+        }
+    }
+
+    /** Overridable clock for the freshness of a pending challenge (tests). */
+    internal var instanceKeyClock: () -> Long = System::currentTimeMillis
+
+    /**
+     * The WIA for [keyId]. With evidence pending for it, the key's chain goes along; a refused or unjudgeable chain (or a challenge
+     * that went stale before it could be used) is retried ONCE with a NEW key and a new challenge, an old backend that does not
+     * know the evidence type is retried at once without it (its challenge was not consumed), and anything else propagates (the
+     * caller treats a missing WIA as best-effort).
+     */
+    private suspend fun obtainWia(client: BackendApiClient, keyId: String, pending: PendingInstanceKeyEvidence?): String {
+        var key = keyId
+        var evidence = pending
+        if (evidence != null && instanceKeyClock() - evidence.createdAtMillis > INSTANCE_KEY_CHALLENGE_FRESH_MS) {
+            // The challenge is single use and short lived: do not spend it, replace the key.
+            Timber.w("The instance key challenge went stale before use; replacing the key")
+            key = rotateInstanceKey(key)
+            evidence = takePendingInstanceKeyEvidence(key)
+        }
+        var rotated = false
+        while (true) {
+            val challenge = evidence?.challenge ?: client.requestWIAChallenge()["challenge"]?.jsonPrimitive?.contentOrNull
+                ?: throw WalletException("The backend gave no WIA challenge")
+            val keyAttestation = evidence?.let { InstanceKeyEvidence.androidKey(keystore.attestationChain(key)) }
+            try {
+                return requestWia(client, key, challenge, keyAttestation)
+            } catch (e: BackendApiException) {
+                if (keyAttestation == null) throw e
+                when (e.apiErrorCode()) {
+                    ERROR_KEY_ATTESTATION_TYPE_UNSUPPORTED -> {
+                        // The challenge is not consumed: the same attempt without evidence.
+                        Timber.i("The backend does not know the instance-key evidence type; continuing without it")
+                        return requestWia(client, key, challenge, null)
+                    }
+                    ERROR_KEY_ATTESTATION_INVALID, ERROR_KEY_ATTESTATION_UNAVAILABLE -> {
+                        if (rotated) throw e
+                        Timber.w("Instance-key evidence was refused (${e.apiErrorCode()}); retrying once with a new key and challenge")
+                        rotated = true
+                        key = rotateInstanceKey(key)
+                        evidence = takePendingInstanceKeyEvidence(key)
+                    }
+                    else -> throw e
+                }
+            }
+        }
+    }
+
+    /** One PoP-signed WIA request for [keyId] and [challenge], with [keyAttestation] when there is evidence. */
+    private suspend fun requestWia(client: BackendApiClient, keyId: String, challenge: String, keyAttestation: kotlinx.serialization.json.JsonObject?): String {
+        val pop = keystore.generateKeyProof(
                 keyId = keyId,
                 typ = "oauth-client-attestation-pop+jwt",
                 // iss doesn't need to equal client_id for THIS PoP - it's
@@ -3060,6 +3185,7 @@ class SirosWallet private constructor(
                     clientId = clientId,
                     nativeAttestation = nativeAttestation,
                     credentialId = linkedCredentialId,
+                    keyAttestation = keyAttestation,
                 )
             } catch (e: BackendApiException) {
                 // The passkey this session recorded is not one of the
@@ -3080,25 +3206,10 @@ class SirosWallet private constructor(
                     clientId = clientId,
                     nativeAttestation = nativeAttestation,
                     credentialId = null,
+                    keyAttestation = keyAttestation,
                 )
             }
-            // Only publish a WIA that still belongs to the session that asked
-            // for it. This function suspends several times, and a logout,
-            // account switch or new login landing in that window resets the
-            // cache; storing afterwards would make [thisInstanceId] and
-            // currentWalletInstanceId() answer with the PREVIOUS account's
-            // thumbprint for the new session. The caller still gets its own
-            // result - it is only the cache that is refused.
-            if (sessionGeneration == generation) {
-                cachedWia = wia
-                cachedWiaExpiresAt = CredentialUtils.parseJwtPayload(wia)
-                    ?.get("exp")?.jsonPrimitive?.longOrNull ?: (now + 300)
-            }
-            wia
-        } catch (e: Exception) {
-            Timber.w(e, "Failed to obtain Wallet Instance Attestation")
-            null
-        }
+        return wia
     }
 
     /**
@@ -10832,6 +10943,9 @@ class SirosWallet private constructor(
         /** Thrown wherever a call needs the backend and the wallet has no session yet. */
         private const val NOT_CONNECTED = "Not connected"
         private const val ABANDONED_START_TTL_MS = 30_000L
+
+        /** How long a challenge fetched for a freshly generated instance key is spent as is; older, the key is replaced instead. */
+        private const val INSTANCE_KEY_CHALLENGE_FRESH_MS = 120_000L
 
         /** The engine's `flow_error` code for a flow it does not know (session replaced, flow already ended). */
         internal const val ERROR_UNKNOWN_FLOW = "UNKNOWN_FLOW"

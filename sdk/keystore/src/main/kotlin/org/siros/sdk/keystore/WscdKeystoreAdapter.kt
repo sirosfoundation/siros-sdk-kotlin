@@ -214,6 +214,18 @@ class WscdKeystoreAdapter private constructor(
         return signer.generateKey(algorithm)
     }
 
+    override val supportsAttestedKeyGeneration: Boolean get() = signer.supportsAttestedKeyGeneration
+
+    override suspend fun generateAttestedKey(algorithm: String, attestationChallenge: ByteArray): String {
+        checkUnlocked()
+        return signer.generateAttestedKey(algorithm, attestationChallenge)
+    }
+
+    override suspend fun deleteKey(keyId: String) {
+        checkUnlocked()
+        signer.deleteKey(keyId)
+    }
+
     override suspend fun sign(keyId: String, payload: ByteArray, algorithm: String): ByteArray {
         checkUnlocked()
         return signer.sign(keyId, payload)
