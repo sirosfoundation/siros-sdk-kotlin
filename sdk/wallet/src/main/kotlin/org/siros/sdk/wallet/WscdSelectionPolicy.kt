@@ -385,6 +385,8 @@ class WscdSelectionPolicy(
     private val defaultMapping: Map<String, String>? = null,
     private val requestChoice: RequestWscdChoice? = null,
     private val userOverrideStore: WscdUserOverrideStore = NoopWscdUserOverrideStore,
+    /** TEST FACILITY ONLY: plugin id to the tier assumed for it instead of [WscdPluginCapabilities]'s (empty by default). */
+    private val testOnlyTierOverrides: Map<String, String> = emptyMap(),
 ) {
     companion object {
         /**
@@ -471,7 +473,7 @@ class WscdSelectionPolicy(
         // whether to actually use one.
         fun isEligible(pluginId: String): Boolean {
             if (requiredTier == null) return true
-            val tier = WscdPluginCapabilities.tierOf(pluginId) ?: return false
+            val tier = testOnlyTierOverrides[pluginId] ?: WscdPluginCapabilities.tierOf(pluginId) ?: return false
             return WscdPluginCapabilities.meets(tier, requiredTier)
         }
 

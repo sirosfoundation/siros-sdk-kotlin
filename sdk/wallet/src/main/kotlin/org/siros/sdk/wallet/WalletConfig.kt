@@ -443,8 +443,21 @@ data class WalletConfig(
      * disables the cache. Default 5 minutes.
      */
     val trustDecisionCacheTtl: java.time.Duration = java.time.Duration.ofMinutes(5),
+    /**
+     * TEST FACILITY ONLY, empty (no effect) by default. Per WSCD plugin id (a key of [availableKeystores]), replaces the
+     * `key_storage` / `user_authentication` assurance that plugin attests and the tier the wallet's plugin selection assumes for it,
+     * so PID issuance can be exercised with the software WSCA. A [org.siros.sdk.keystore.WscdAssuranceOverride] is validated when it
+     * is built (an invalid tier never reaches here). The wallet logs a loud warning at construction when this is non-empty.
+     *
+     * It changes what THIS wallet claims, not what an issuer or the wallet provider accepts: the backend's key attestation
+     * endpoint lowers an elevated assertion it cannot back (no platform integrity or FIDO2 evidence), and a real PID issuer
+     * must not trust a self-attested key. It only helps against wallet-side gating. Never read from remote configuration or
+     * from the engine.
+     */
+    val testOnlyWscdAssuranceOverrides: Map<String, org.siros.sdk.keystore.WscdAssuranceOverride> = emptyMap(),
 ) {
     init {
+        require(testOnlyWscdAssuranceOverrides.keys.none { it.isBlank() }) { "a WSCD assurance override needs a plugin id" }
         require(secretSeedNamespace.isNotBlank()) { "secretSeedNamespace must not be blank" }
         VerifierIdTypeOrder.require(circuitZkVerifierIdTypes)
     }

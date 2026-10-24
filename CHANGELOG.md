@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **TEST-ONLY override of the assurance a WSCD plugin attests (https://github.com/sirosfoundation/siros-sdk-kotlin/issues/306).** `WalletConfig.testOnlyWscdAssuranceOverrides` (plugin id of `availableKeystores` to `WscdAssuranceOverride(keyStorage, userAuthentication?)`) replaces the `key_storage` / `user_authentication` a `WscdKeystoreAdapter` reports and attests (the self-attested key attestation and the `security_properties` it sends to the wallet provider), and the tier `WscdSelectionPolicy` assumes for that plugin, so PID issuance can be exercised with the software WSCA. Off by default (empty map, no behaviour change); a loud warning is logged at wallet construction when set; the tiers must be `iso_18045_basic|moderate|high` (anything else throws when the override is built); certification and every other claim are untouched; nothing reads it from remote configuration or the engine. It changes what THIS wallet claims: the wallet provider backend's key attestation endpoint lowers an elevated assertion it cannot back (no platform integrity or FIDO2 evidence for the batch), so the override helps against wallet-side gating only, and a real PID issuer must not trust a self-attested key. Only ISO 18045 attack-potential values are covered; an ISO 29115 level-of-assurance claim would need the same override extended.
+
 ## [0.21.1] - 2026-10-23
 
 Patch release on 0.21.0: review follow-ups to the engine-blind encryption contract (https://github.com/sirosfoundation/siros-sdk-kotlin/pull/293) and a consent-step change for ZK pseudonym/age proofs (https://github.com/sirosfoundation/siros-sdk-kotlin/pull/292). Not included: https://github.com/sirosfoundation/siros-sdk-kotlin/pull/294, https://github.com/sirosfoundation/siros-sdk-kotlin/pull/298 and https://github.com/sirosfoundation/siros-sdk-kotlin/pull/285 (still open).
