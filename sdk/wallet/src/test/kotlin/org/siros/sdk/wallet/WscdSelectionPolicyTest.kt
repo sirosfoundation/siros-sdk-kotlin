@@ -204,6 +204,24 @@ class WscdSelectionPolicyTest {
     // ── 3. Default-mapping hit ───────────────────────────────────────
 
     @Test
+    fun testOnlyTierOverride_makesTheSoftkeyEligibleForAHighTierCredential_andOnlyForThatPlugin() = runTest {
+        val noOverride = WscdSelectionPolicy(tofuStore = InMemoryWscdTofuStore())
+        try {
+            noOverride.resolve(issuer, credentialType, "iso_18045_high", setOf("softkey"))
+            fail("softkey must not meet a high tier without the override")
+        } catch (_: NoEligibleWscdPluginException) {
+        }
+        val withOverride = WscdSelectionPolicy(tofuStore = InMemoryWscdTofuStore(), testOnlyTierOverrides = mapOf("softkey" to "iso_18045_high"))
+        assertEquals("softkey", withOverride.resolve(issuer, credentialType, "iso_18045_high", setOf("softkey")))
+        // Another plugin is untouched by an override for softkey.
+        try {
+            withOverride.resolve(issuer, credentialType, "iso_18045_high", setOf("other-plugin"))
+            fail("an override for softkey must not make another plugin eligible")
+        } catch (_: NoEligibleWscdPluginException) {
+        }
+    }
+
+    @Test
     fun resolve_usesDefaultMapping_whenNoTofuAndSufficient() = runTest {
         val tofu = InMemoryWscdTofuStore()
         val policy = WscdSelectionPolicy(

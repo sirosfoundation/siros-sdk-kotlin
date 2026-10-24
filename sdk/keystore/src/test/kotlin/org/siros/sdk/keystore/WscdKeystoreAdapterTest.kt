@@ -342,6 +342,57 @@ class WscdKeystoreAdapterTest {
         assertEquals(listOf("iso_18045_basic"), claims.getClaim("key_storage"))
     }
 
+    private val sharedJwk by lazy { realPublicKeyJwkJson() }
+
+    private suspend fun attestationClaims(override: WscdAssuranceOverride?): Map<String, Any?> {
+        val signer = createMockSigner()
+        val jwk = sharedJwk
+        coEvery { signer.exportPublicKey(any()) } returns jwk.toByteArray()
+        val adapter = WscdKeystoreAdapter(signer)
+        adapter.testOnlyAssuranceOverride = override
+        adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+        val jwt = adapter.generateKeyAttestation(nonce = "n", count = 1)
+        return com.nimbusds.jwt.SignedJWT.parse(jwt).jwtClaimsSet.claims.toMap()
+    }
+
+    @Test
+    fun testOnlyOverride_unsetLeavesTheAttestationUnchanged_setChangesExactlyKeyStorageAndUserAuthentication() = runTest {
+        val plain = attestationClaims(null)
+        assertEquals(listOf("iso_18045_moderate"), plain["key_storage"]) // the mock's "hardware"
+        assertTrue(plain["user_authentication"] != null)
+        val overridden = attestationClaims(WscdAssuranceOverride("iso_18045_high", "iso_18045_moderate"))
+        assertEquals(listOf("iso_18045_high"), overridden["key_storage"])
+        assertEquals(listOf("iso_18045_moderate"), overridden["user_authentication"])
+        val volatileClaims = setOf("iat", "key_storage", "user_authentication")
+        assertEquals(
+            "every other claim is exactly what it was",
+            plain.filterKeys { it !in volatileClaims }, overridden.filterKeys { it !in volatileClaims },
+        )
+        assertEquals(plain.keys, overridden.keys)
+    }
+
+    @Test
+    fun testOnlyOverride_withoutAUserAuthenticationTierKeepsThePluginsOwn() = runTest {
+        val plain = attestationClaims(null)
+        val overridden = attestationClaims(WscdAssuranceOverride("iso_18045_high"))
+        assertEquals(listOf("iso_18045_high"), overridden["key_storage"])
+        assertEquals(plain["user_authentication"], overridden["user_authentication"])
+    }
+
+    @Test
+    fun testOnlyOverride_alsoChangesWhatTheBackendAttestationRequestReports() = runTest {
+        val signer = createMockSigner()
+        val adapter = WscdKeystoreAdapter(signer)
+        adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+        assertEquals(listOf("hardware"), adapter.securityProperties("test-key-1").keyStorage)
+        adapter.testOnlyAssuranceOverride = WscdAssuranceOverride("iso_18045_high", "iso_18045_high")
+        val props = adapter.securityProperties("test-key-1")
+        assertEquals(listOf("iso_18045_high"), props.keyStorage)
+        assertEquals(listOf("iso_18045_high"), props.userAuthentication)
+        // Certification is not part of the override.
+        assertEquals(createMockSigner().securityProperties("x").certification, props.certification)
+    }
+
     @Test
     fun generateKeyAttestationDefaultsKeyStorageWhenSecurityPropertiesUnavailable() = runTest {
         val signer = mockk<Signer>(relaxed = true).also {

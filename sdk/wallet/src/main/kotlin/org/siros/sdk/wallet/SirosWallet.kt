@@ -5672,7 +5672,20 @@ class SirosWallet private constructor(
         defaultMapping = config.defaultWscdMapping,
         requestChoice = config.requestWscdChoice,
         userOverrideStore = SessionStoreWscdUserOverrideStore(sessionStore),
+        testOnlyTierOverrides = config.testOnlyWscdAssuranceOverrides.mapValues { it.value.keyStorage },
     )
+
+    init {
+        // TEST FACILITY: loud, once per wallet, and applied only to adapters the host registered under that plugin id.
+        config.testOnlyWscdAssuranceOverrides.forEach { (pluginId, override) ->
+            Timber.w(
+                "TEST-ONLY WSCD assurance override ACTIVE for plugin '%s': %s. This wallet now CLAIMS that assurance; " +
+                    "it is not real and must never be used for real PID issuance.",
+                pluginId, override,
+            )
+        }
+        applyWscdAssuranceOverrides(config.testOnlyWscdAssuranceOverrides, config.availableKeystores)
+    }
 
     /**
      * The active account's persisted WSCD TOFU mapping (see

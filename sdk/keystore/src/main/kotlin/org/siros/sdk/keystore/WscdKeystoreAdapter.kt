@@ -648,8 +648,22 @@ class WscdKeystoreAdapter private constructor(
     /**
      * Return the security properties for a key.
      */
-    override suspend fun securityProperties(keyId: String): SignerSecurityProperties {
-        return signer.securityProperties(keyId)
+    override suspend fun securityProperties(keyId: String): SignerSecurityProperties =
+        withTestOverride(signer.securityProperties(keyId))
+
+    /**
+     * TEST FACILITY ONLY, off (null) by default: replaces the `key_storage` / `user_authentication` this adapter reports and
+     * attests (see [WscdAssuranceOverride]). Set by the wallet from its test-only configuration, never from anything remote.
+     */
+    @Volatile
+    var testOnlyAssuranceOverride: WscdAssuranceOverride? = null
+
+    private fun withTestOverride(base: SignerSecurityProperties): SignerSecurityProperties {
+        val o = testOnlyAssuranceOverride ?: return base
+        return base.copy(
+            keyStorage = listOf(o.keyStorage),
+            userAuthentication = o.userAuthentication?.let { listOf(it) } ?: base.userAuthentication,
+        )
     }
 
     // ── Credential storage (delegated to credentialsKeystore) ───────
@@ -713,6 +727,9 @@ class WscdKeystoreAdapter private constructor(
             signer.securityProperties(signingKey.keyId)
         } catch (_: Exception) {
             null
+        }?.let { withTestOverride(it) } ?: testOnlyAssuranceOverride?.let {
+            // The signer reported nothing: the override alone still decides the two claims it covers.
+            withTestOverride(SignerSecurityProperties(keyStorage = listOf("iso_18045_basic")))
         }
 
         val header = JWSHeader.Builder(JWSAlgorithm.ES256)
