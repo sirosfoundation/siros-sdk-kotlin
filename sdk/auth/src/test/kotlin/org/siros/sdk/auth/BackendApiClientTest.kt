@@ -52,6 +52,21 @@ class BackendApiClientTest {
     }
 
     @Test
+    fun cancelling_while_the_body_trickles_cancels_the_underlying_call() = runBlocking {
+        // Headers arrive at once, the body is throttled to a crawl: only a cancellation that reaches the Call can end it early.
+        server.enqueue(
+            MockResponse().setBody("{" + "\"x\":\"" + "a".repeat(2000) + "\"}")
+                .throttleBody(10, 1, java.util.concurrent.TimeUnit.SECONDS),
+        )
+        val client = newClient()
+        val started = System.currentTimeMillis()
+        val result = kotlinx.coroutines.withTimeoutOrNull(500) { client.getAccountInfo() }
+        val took = System.currentTimeMillis() - started
+        assertEquals(null, result)
+        assertTrue("the request was cut at the timeout, not left to finish the body ($took ms)", took < 3_000)
+    }
+
+    @Test
     fun unauthenticated_request_omits_authorization_header() = runBlocking {
         server.enqueue(MockResponse().setBody("{}"))
 
