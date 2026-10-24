@@ -280,4 +280,16 @@ class IssuerCatalogTest {
         refresh.await()
         assertEquals("nothing is still running or queued after the cancellation", 0, h.scope.coroutineContext[kotlinx.coroutines.Job]!!.children.count { it.isActive })
     }
+
+    @Test
+    fun aBackgroundRefreshQueuedBeforeALogoutNeverFetchesOrPublishes() = runTest {
+        val h = harness()
+        h.catalog.refreshInBackground("user-a") // queued: the dispatcher has not run it yet
+        h.catalog.clearMemory() // logout before it runs
+        runCurrent()
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals("no fetch was made for the logged-out user", 0, h.backend.issuerCalls)
+        assertTrue(h.catalog.state.value.offers.isEmpty())
+    }
 }

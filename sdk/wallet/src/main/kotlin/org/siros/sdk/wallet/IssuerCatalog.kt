@@ -169,19 +169,32 @@ internal class IssuerCatalog(
 
     /** Starts a refresh without waiting (joins one that is running). Never throws. */
     fun refreshInBackground(scopeKey: String) {
-        scope.launch { try { refresh(scopeKey) } catch (e: CancellationException) { throw e } catch (e: Exception) { Timber.w(e, "Catalog refresh failed") } }
+        // Registered NOW, not when the launch runs: a logout or scope change in between cancels this very job.
+        val job = registerRefresh(scopeKey)
+        scope.launch {
+            try {
+                job.start()
+                job.await()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Timber.w(e, "Catalog refresh failed")
+            }
+        }
     }
 
     /** Refreshes now and returns when done; joins a refresh that is already running or about to (single flight). */
     suspend fun refresh(scopeKey: String) {
-        val job = synchronized(lock) {
-            resetIfOtherScopeLocked(scopeKey)
-            val running = inFlight?.takeIf { !it.isCompleted }
-            if (running != null && inFlightKey == scopeKey) running
-            else scope.async(start = kotlinx.coroutines.CoroutineStart.LAZY) { runRefresh(scopeKey) }.also { inFlight = it; inFlightKey = scopeKey }
-        }
+        val job = registerRefresh(scopeKey)
         job.start()
         job.await()
+    }
+
+    private fun registerRefresh(scopeKey: String): Deferred<Unit> = synchronized(lock) {
+        resetIfOtherScopeLocked(scopeKey)
+        val running = inFlight?.takeIf { !it.isCompleted }
+        if (running != null && inFlightKey == scopeKey) running
+        else scope.async(start = kotlinx.coroutines.CoroutineStart.LAZY) { runRefresh(scopeKey) }.also { inFlight = it; inFlightKey = scopeKey }
     }
 
     /**

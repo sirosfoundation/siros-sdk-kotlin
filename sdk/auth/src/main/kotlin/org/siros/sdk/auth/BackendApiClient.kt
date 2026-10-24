@@ -579,21 +579,25 @@ class BackendApiClient(
      * Sends the request asynchronously so that cancelling the calling coroutine (a timeout, a logout) cancels the underlying
      * [okhttp3.Call] too, instead of leaving the request running to completion.
      */
-    private suspend fun executeRaw(request: Request): JsonElement {
-        val response = kotlinx.coroutines.suspendCancellableCoroutine { cont ->
-            val call = httpClient.newCall(request)
-            cont.invokeOnCancellation { call.cancel() }
-            call.enqueue(object : okhttp3.Callback {
-                override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
-                    cont.resumeWith(Result.failure(NetworkException("Network error: ${request.url}", e)))
-                }
+    private suspend fun executeRaw(request: Request): JsonElement = kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+        val call = httpClient.newCall(request)
+        cont.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : okhttp3.Callback {
+            override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+                cont.resumeWith(Result.failure(NetworkException("Network error: ${request.url}", e)))
+            }
 
-                override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
-                    cont.resumeWith(Result.success(response))
+            override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                // The body is read BEFORE the continuation is resumed, so a cancellation that arrives while a server stalls or
+                // trickles it still reaches Call.cancel().
+                val outcome = try {
+                    Result.success(parseResponse(request, response))
+                } catch (e: Exception) {
+                    Result.failure(e)
                 }
-            })
-        }
-        return withContext(kotlinx.coroutines.Dispatchers.IO) { parseResponse(request, response) }
+                cont.resumeWith(outcome)
+            }
+        })
     }
 
     private fun parseResponse(request: Request, response: okhttp3.Response): JsonElement {
