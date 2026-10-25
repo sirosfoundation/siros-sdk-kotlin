@@ -13,6 +13,7 @@ import kotlin.reflect.jvm.isAccessible
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonArray
@@ -28,6 +29,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.siros.sdk.auth.BackendApiClient
+import org.siros.sdk.auth.keyAttestationNotQualifyingReason
 import org.siros.sdk.credentials.BackendApiException
 import org.siros.sdk.keystore.AttestationChain
 import org.siros.sdk.keystore.KeyInfo
@@ -45,6 +47,9 @@ class InstanceKeyEvidenceFlowTest {
         val api: BackendApiClient,
         val stored: () -> String?,
         val clock: LongArray,
+        val setStored: (String?) -> Unit = {},
+        val setAccount: (String?) -> Unit = {},
+        val fingerprint: Array<String> = arrayOf("os-1"),
     )
 
     private fun jwt(): String {
@@ -54,7 +59,9 @@ class InstanceKeyEvidenceFlowTest {
 
     private fun rig(capable: Boolean = true, existingKey: String? = null, challenges: List<String> = listOf("C-1", "C-2", "C-3")): Rig {
         var stored: String? = existingKey
+        var account: String? = "acct-A"
         val sessionStore = mockk<SessionStore>(relaxed = true)
+        every { sessionStore.activeAccountId } answers { account }
         every { sessionStore.instanceKeyId } answers { stored }
         every { sessionStore.instanceKeyId = any() } answers { stored = firstArg() }
         val keystore = mockk<KeystoreManager>(relaxed = true)
@@ -79,10 +86,14 @@ class InstanceKeyEvidenceFlowTest {
             "keystore" to keystore,
             "apiClient" to api,
             "instanceKeyMutex" to kotlinx.coroutines.sync.Mutex(),
+            "wiaMutex" to kotlinx.coroutines.sync.Mutex(),
+            "dpopBoundInstanceKeys" to java.util.concurrent.ConcurrentHashMap.newKeySet<String>(),
             "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
         )
         wallet.instanceKeyClock = { clock[0] }
-        return Rig(wallet, keystore, api, { stored }, clock)
+        val fingerprint = arrayOf("os-1")
+        wallet.deviceStateFingerprint = { fingerprint[0] }
+        return Rig(wallet, keystore, api, { stored }, clock, { stored = it }, { account = it }, fingerprint)
     }
 
     private fun obtain(wallet: SirosWallet): String? {
@@ -203,5 +214,127 @@ class InstanceKeyEvidenceFlowTest {
             "2b720816b6d9f97343b4ac4e5821bdedcf26915d1795396c869b1706f142d428",
             InstanceKeyEvidence.challengeHash("AAAA").joinToString("") { "%02x".format(it) },
         )
+    }
+
+    private fun invoke(wallet: SirosWallet, name: String): Any? {
+        val m = SirosWallet::class.declaredMemberFunctions.first { it.name == name }
+        m.isAccessible = true
+        return runBlocking { m.callSuspend(wallet) }
+    }
+
+    @Test
+    fun twoConcurrentCallers_shareOneAcquisition_neitherUsesAKeyTheOtherReplaces() {
+        val r = rig()
+        var calls = 0
+        coEvery { r.api.generateWIA(pop = any(), challenge = any(), clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } coAnswers {
+            kotlinx.coroutines.delay(50)
+            if (++calls == 1) throw BackendApiException(400, "invalid", """{"error":"KEY_ATTESTATION_INVALID"}""")
+            jwt()
+        }
+        val results = runBlocking {
+            val a = async(kotlinx.coroutines.Dispatchers.Default) { invoke(r.wallet, "ensureWalletInstanceAttestation") as String? }
+            val b = async(kotlinx.coroutines.Dispatchers.Default) { invoke(r.wallet, "ensureWalletInstanceAttestation") as String? }
+            listOf(a.await(), b.await())
+        }
+        assertTrue(results.all { it != null })
+        assertEquals("both callers got the one WIA", results[0], results[1])
+        assertEquals("one failed attempt and its retry, no second acquisition", 2, calls)
+        coVerify(exactly = 1) { r.keystore.deleteKey("attested-1") }
+        assertEquals("attested-2", r.stored())
+    }
+
+    @Test
+    fun aFailureAfterAnAccountSwitch_neverTouchesTheNewAccountsKey() {
+        val r = rig()
+        coEvery { r.api.generateWIA(pop = any(), challenge = any(), clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } coAnswers {
+            // While account A's request is in flight the user switches to B, who has a key of their own.
+            r.setAccount("acct-B")
+            r.setStored("B-key")
+            throw BackendApiException(400, "invalid", """{"error":"KEY_ATTESTATION_INVALID"}""")
+        }
+        assertNull(obtain(r.wallet))
+        assertEquals("B's key is untouched", "B-key", r.stored())
+        coVerify(exactly = 0) { r.keystore.deleteKey(any()) }
+        coVerify(exactly = 1) { r.keystore.generateAttestedKey(any(), any()) } // only A's original key
+    }
+
+    @Test
+    fun theKeyForDpopIsOnlyHandedOutAfterItsInitialAttestationSettled() {
+        val r = rig()
+        coEvery { r.api.generateWIA(pop = any(), challenge = "C-1", clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } throws
+            BackendApiException(400, "invalid", """{"error":"KEY_ATTESTATION_INVALID"}""")
+        coEvery { r.api.generateWIA(pop = any(), challenge = "C-2", clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } returns jwt()
+        // A DPoP request is the first thing to need the instance key: it must get the REPLACEMENT, never the key that was rotated away.
+        val keyForDpop = invoke(r.wallet, "settledInstanceKeyId") as String
+        assertEquals("attested-2", keyForDpop)
+        assertEquals("attested-2", r.stored())
+    }
+
+    @Test
+    fun aKeyThatTokensAreBoundToIsRetainedWhenItIsReplaced_anUnreferencedOneIsDeleted() {
+        val r = rig()
+        @Suppress("UNCHECKED_CAST")
+        (getFieldOf(r.wallet, "dpopBoundInstanceKeys") as MutableSet<String>).add("attested-1")
+        coEvery { r.api.generateWIA(pop = any(), challenge = "C-1", clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } throws
+            BackendApiException(400, "invalid", """{"error":"KEY_ATTESTATION_INVALID"}""")
+        coEvery { r.api.generateWIA(pop = any(), challenge = "C-2", clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } returns jwt()
+        assertNotNull(obtain(r.wallet))
+        assertEquals("attested-2", r.stored())
+        coVerify(exactly = 0) { r.keystore.deleteKey("attested-1") }
+    }
+
+    private fun getFieldOf(target: Any, name: String): Any? {
+        val f = target.javaClass.getDeclaredField(name)
+        f.isAccessible = true
+        return f.get(target)
+    }
+
+    private fun notQualifying(reason: String) = BackendApiException(
+        400, "not qualifying",
+        """{"error":"KEY_ATTESTATION_NOT_QUALIFYING","message":"secret-message-text","details":{"reason":"$reason"}}""",
+    )
+
+    @Test
+    fun notQualifying_isAHardFailureForThatKey_noRetryNoNewKey_andOnlyTheReasonIsLogged() {
+        val r = rig()
+        coEvery { r.api.generateWIA(pop = any(), challenge = any(), clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } throws notQualifying("bootloader_unlocked")
+        val logged = StringBuilder()
+        val tree = object : timber.log.Timber.Tree() {
+            override fun log(priority: Int, tag: String?, message: String, t: Throwable?) { logged.append(message).append('\n') }
+        }
+        timber.log.Timber.plant(tree)
+        try {
+            assertNull("best-effort: no WIA, issuance goes on", obtain(r.wallet))
+        } finally {
+            timber.log.Timber.uproot(tree)
+        }
+        coVerify(exactly = 1) { r.api.generateWIA(pop = any(), challenge = any(), clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) }
+        coVerify(exactly = 1) { r.keystore.generateAttestedKey(any(), any()) }
+        coVerify(exactly = 0) { r.keystore.deleteKey(any()) }
+        assertTrue(logged.toString(), logged.contains("reason=bootloader_unlocked"))
+        assertTrue("the message body is never logged", !logged.contains("secret-message-text"))
+    }
+
+    @Test
+    fun anUnknownNotQualifyingReasonIsLoggedAsOther() {
+        assertEquals("other", notQualifying("something_new").keyAttestationNotQualifyingReason())
+        assertEquals("other", BackendApiException(400, "x", "not json").keyAttestationNotQualifyingReason())
+        assertEquals("untrusted_root", notQualifying("untrusted_root").keyAttestationNotQualifyingReason())
+    }
+
+    @Test
+    fun aNewAttemptAfterNotQualifying_needsTheDeviceStateToHaveChanged_andOneCallIsOneKey() {
+        val r = rig()
+        coEvery { r.api.generateWIA(pop = any(), challenge = "C-1", clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } throws notQualifying("patch_level_too_old")
+        coEvery { r.api.generateWIA(pop = any(), challenge = "C-2", clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } returns jwt()
+        assertNull(obtain(r.wallet))
+        // Same device state: refused, nothing generated.
+        assertEquals(false, runBlocking { r.wallet.retryInstanceKeyAttestation() })
+        coVerify(exactly = 1) { r.keystore.generateAttestedKey(any(), any()) }
+        // The device was updated: one new key and challenge.
+        r.fingerprint[0] = "os-2"
+        assertEquals(true, runBlocking { r.wallet.retryInstanceKeyAttestation() })
+        coVerify(exactly = 2) { r.keystore.generateAttestedKey(any(), any()) }
+        assertEquals("attested-2", r.stored())
     }
 }

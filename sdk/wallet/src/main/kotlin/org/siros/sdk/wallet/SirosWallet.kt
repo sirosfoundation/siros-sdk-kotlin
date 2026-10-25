@@ -55,6 +55,8 @@ import org.siros.sdk.auth.PrfOutput
 import org.siros.sdk.auth.DeactivationOutcome
 import org.siros.sdk.auth.ERROR_CREDENTIAL_NOT_OWNED
 import org.siros.sdk.auth.ERROR_KEY_ATTESTATION_INVALID
+import org.siros.sdk.auth.ERROR_KEY_ATTESTATION_NOT_QUALIFYING
+import org.siros.sdk.auth.keyAttestationNotQualifyingReason
 import org.siros.sdk.auth.ERROR_KEY_ATTESTATION_TYPE_UNSUPPORTED
 import org.siros.sdk.auth.ERROR_KEY_ATTESTATION_UNAVAILABLE
 import org.siros.sdk.auth.WalletInstance
@@ -2984,6 +2986,9 @@ class SirosWallet private constructor(
     /** Serialises first-use instance-key creation; see [ensureInstanceKeyId]. */
     private val instanceKeyMutex = Mutex()
 
+    /** Serialises whole WIA acquisitions; see [ensureWalletInstanceAttestation]. */
+    private val wiaMutex = Mutex()
+
     /**
      * Obtain (fetching + caching, refreshing before expiry) a Wallet Instance
      * Attestation for this wallet instance from this wallet's own backend
@@ -2997,6 +3002,14 @@ class SirosWallet private constructor(
      * deployment enables this feature.
      */
     private suspend fun ensureWalletInstanceAttestation(): String? {
+        val fastNow = System.currentTimeMillis() / 1000
+        cachedWia?.let { wia -> if (cachedWiaExpiresAt - fastNow > 60) return wia }
+        // The WHOLE acquisition is one critical section (cache recheck, evidence consumption, retries, key replacement, cache
+        // publication): two callers must never use one key while the other replaces it and caches a WIA for the deleted key.
+        return wiaMutex.withLock { acquireWalletInstanceAttestation() }
+    }
+
+    private suspend fun acquireWalletInstanceAttestation(): String? {
         val now = System.currentTimeMillis() / 1000
         cachedWia?.let { wia -> if (cachedWiaExpiresAt - now > 60) return wia }
         return try {
@@ -3004,10 +3017,12 @@ class SirosWallet private constructor(
             // The session this attestation is being fetched for; see where it
             // is published below.
             val generation = sessionGeneration
+            // The account this acquisition is for: a key replacement it triggers touches only THIS account's key.
+            val account = sessionStore.activeAccountId
             val firstKeyId = ensureInstanceKeyId()
             // Instance-key evidence (Android Keystore): a key generated for challenge C has to be used with exactly that C.
             val pending = takePendingInstanceKeyEvidence(firstKeyId)
-            val wia = obtainWia(client, firstKeyId, pending)
+            val wia = obtainWia(client, firstKeyId, pending, account, generation)
             // Only publish a WIA that still belongs to the session that asked
             // for it. This function suspends several times, and a logout,
             // account switch or new login landing in that window resets the
@@ -3046,7 +3061,7 @@ class SirosWallet private constructor(
      * plain key, exactly as before, and no evidence.
      */
     private suspend fun generateInstanceKey(): String {
-        if (keystore.supportsAttestedKeyGeneration) {
+        if (keystore.supportsAttestedKeyGeneration && (evidenceBlockedAt == null || evidenceBlockedAt != deviceStateFingerprint())) {
             try {
                 val c = apiClient?.requestWIAChallenge()?.get("challenge")?.jsonPrimitive?.contentOrNull
                 if (c != null) {
@@ -3063,22 +3078,88 @@ class SirosWallet private constructor(
         return keystore.generateKey("ES256")
     }
 
-    /** Replaces the instance key (one key per challenge: a failed attempt needs a NEW key and challenge). Returns the new key id. */
-    private suspend fun rotateInstanceKey(oldKeyId: String): String {
-        val account = sessionStore.activeAccountId
+    /**
+     * Replaces the instance key [oldKeyId] (one key per challenge: a failed attempt needs a NEW key and challenge). Only when, UNDER
+     * the key mutex, the account and session this acquisition started for are still the active ones and the recorded key is still
+     * [oldKeyId]: account A's failure after a switch to B must never generate into, or overwrite, B's key. Returns the new key id.
+     */
+    private suspend fun rotateInstanceKey(oldKeyId: String, account: String?, generation: Int): String {
         return instanceKeyMutex.withLock {
-            val keyId = generateInstanceKey()
-            if (sessionStore.activeAccountId != account) {
-                throw WalletException("Account changed while replacing the wallet instance key")
+            if (sessionStore.activeAccountId != account || sessionGeneration != generation || sessionStore.instanceKeyId != oldKeyId) {
+                throw WalletException("The session or its instance key changed; the instance key is left alone")
             }
+            val keyId = generateInstanceKey()
             sessionStore.instanceKeyId = keyId
             persistAndSyncKeystore()
-            try {
-                keystore.deleteKey(oldKeyId)
-            } catch (e: Exception) {
-                Timber.w(e, "The replaced instance key could not be deleted")
-            }
+            retireInstanceKey(oldKeyId)
             keyId
+        }
+    }
+
+    /** Instance keys handed out for DPoP in this process: tokens are bound to them, so they are never deleted. */
+    private val dpopBoundInstanceKeys: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /**
+     * Retention rule: a replaced instance key is deleted ONLY when nothing can still refer to it, that is when it was never used for
+     * DPoP in this process and no stored refresh token names it as its `dpop_key_id`. Otherwise it is retained (it is not the
+     * instance key any more, it is only kept for those tokens). The bound is one key per such token plus the keys of this process;
+     * the settled ordering ([settledInstanceKeyId]) means a key only rotates before DPoP ever used it, so in practice a key a
+     * token references is not rotated at all.
+     */
+    private suspend fun retireInstanceKey(keyId: String) {
+        val referenced = keyId in dpopBoundInstanceKeys || exportCredentialRefreshTokens().values.any { it.dpopKeyId == keyId }
+        if (referenced) {
+            Timber.i("The replaced instance key is still referenced by DPoP-bound tokens; it is retained")
+            return
+        }
+        try {
+            keystore.deleteKey(keyId)
+        } catch (e: Exception) {
+            Timber.w(e, "The replaced instance key could not be deleted")
+        }
+    }
+
+    /**
+     * The instance key for DPoP and PoP use, AFTER its initial attestation has been settled: a key that was just generated with
+     * pending evidence completes (or gives up) its WIA acquisition first, which is where a key may still be replaced, so a proof is
+     * never signed with a key that can still rotate. Best-effort like every WIA step.
+     */
+    private suspend fun settledInstanceKeyId(): String {
+        val first = ensureInstanceKeyId()
+        if (pendingInstanceKeyEvidence?.keyId == first) ensureWalletInstanceAttestation()
+        return ensureInstanceKeyId()
+    }
+
+    /** The device state at the time the backend declared this device's instance-key evidence not qualifying (in memory: cleared by a restart). */
+    @Volatile
+    private var evidenceBlockedAt: String? = null
+
+    /** What the host's device looks like for the purpose of "has anything changed that could now qualify": OS build and security patch. */
+    internal var deviceStateFingerprint: () -> String = { android.os.Build.FINGERPRINT + "|" + android.os.Build.VERSION.SECURITY_PATCH }
+
+    /**
+     * Tries instance-key attestation again after the backend found the device's evidence NOT_QUALIFYING. Allowed only when the device
+     * state changed since (a new OS build or security patch); the app restarting also clears the block (it is in memory). Never loops:
+     * one explicit call is one new key and challenge. Returns whether a new attempt was made; the WIA stays best-effort.
+     */
+    suspend fun retryInstanceKeyAttestation(): Boolean {
+        val blocked = evidenceBlockedAt
+        if (blocked != null && blocked == deviceStateFingerprint()) return false
+        if (!keystore.supportsAttestedKeyGeneration) return false
+        val account = sessionStore.activeAccountId
+        val generation = sessionGeneration
+        val old = sessionStore.instanceKeyId ?: return false
+        return try {
+            rotateInstanceKey(old, account, generation)
+            evidenceBlockedAt = null
+            cachedWia = null
+            ensureWalletInstanceAttestation()
+            true
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Timber.w("Instance-key attestation retry failed (${e.javaClass.simpleName})")
+            false
         }
     }
 
@@ -3091,13 +3172,13 @@ class SirosWallet private constructor(
      * know the evidence type is retried at once without it (its challenge was not consumed), and anything else propagates (the
      * caller treats a missing WIA as best-effort).
      */
-    private suspend fun obtainWia(client: BackendApiClient, keyId: String, pending: PendingInstanceKeyEvidence?): String {
+    private suspend fun obtainWia(client: BackendApiClient, keyId: String, pending: PendingInstanceKeyEvidence?, account: String?, generation: Int): String {
         var key = keyId
         var evidence = pending
         if (evidence != null && instanceKeyClock() - evidence.createdAtMillis > INSTANCE_KEY_CHALLENGE_FRESH_MS) {
             // The challenge is single use and short lived: do not spend it, replace the key.
             Timber.w("The instance key challenge went stale before use; replacing the key")
-            key = rotateInstanceKey(key)
+            key = rotateInstanceKey(key, account, generation)
             evidence = takePendingInstanceKeyEvidence(key)
         }
         var rotated = false
@@ -3115,11 +3196,19 @@ class SirosWallet private constructor(
                         Timber.i("The backend does not know the instance-key evidence type; continuing without it")
                         return requestWia(client, key, challenge, null)
                     }
+                    ERROR_KEY_ATTESTATION_NOT_QUALIFYING -> {
+                        // Well formed but not good enough (a property of this device and build): a HARD failure for this key. No retry
+                        // and no new key now; only the reason enum is logged. A new key is tried only after the device state changed.
+                        val reason = e.keyAttestationNotQualifyingReason()
+                        Timber.w("Instance-key evidence does not qualify: reason=$reason")
+                        evidenceBlockedAt = deviceStateFingerprint()
+                        throw e
+                    }
                     ERROR_KEY_ATTESTATION_INVALID, ERROR_KEY_ATTESTATION_UNAVAILABLE -> {
                         if (rotated) throw e
                         Timber.w("Instance-key evidence was refused (${e.apiErrorCode()}); retrying once with a new key and challenge")
                         rotated = true
-                        key = rotateInstanceKey(key)
+                        key = rotateInstanceKey(key, account, generation)
                         evidence = takePendingInstanceKeyEvidence(key)
                     }
                     else -> throw e
@@ -3287,7 +3376,7 @@ class SirosWallet private constructor(
     private suspend fun buildClientAttestationPoP(asUrl: String, clientId: String): String? {
         return try {
             val challenge = fetchAttestationChallenge(asUrl)
-            val keyId = ensureInstanceKeyId()
+            val keyId = settledInstanceKeyId()
             keystore.generateKeyProof(
                 keyId = keyId,
                 typ = "oauth-client-attestation-pop+jwt",
@@ -3405,8 +3494,10 @@ class SirosWallet private constructor(
             // The DPoP key is the wallet instance key of the DEFAULT keystore (the WIA's `cnf` key, see
             // ensureInstanceKeyId), and the proof is made in that same keystore; the keystore resolved for credential
             // key proofs (resolveEffectiveKeystoreForIssuance) is a different thing and is not involved.
-            keyId = keyIdHint?.takeIf { it.isNotBlank() } ?: ensureInstanceKeyId()
+            keyId = keyIdHint?.takeIf { it.isNotBlank() } ?: settledInstanceKeyId()
             if (dpopAsked) {
+                // Tokens are about to be bound to this key: from here it is never deleted by a replacement.
+                dpopBoundInstanceKeys += keyId
                 dpopProof = keystore.generateDPoPProof(
                     keyId = keyId,
                     htm = htm!!,

@@ -575,11 +575,14 @@ public final class org/siros/sdk/auth/WalletLifecycleKt {
 	public static final field ERROR_CREDENTIAL_NOT_OWNED Ljava/lang/String;
 	public static final field ERROR_ERASURE_INCOMPLETE Ljava/lang/String;
 	public static final field ERROR_KEY_ATTESTATION_INVALID Ljava/lang/String;
+	public static final field ERROR_KEY_ATTESTATION_NOT_QUALIFYING Ljava/lang/String;
 	public static final field ERROR_KEY_ATTESTATION_TYPE_UNSUPPORTED Ljava/lang/String;
 	public static final field ERROR_KEY_ATTESTATION_UNAVAILABLE Ljava/lang/String;
 	public static final fun apiErrorCode (Lorg/siros/sdk/credentials/BackendApiException;)Ljava/lang/String;
 	public static final fun apiRefusalMessage (Lorg/siros/sdk/credentials/BackendApiException;)Ljava/lang/String;
 	public static final fun apiRefusalScope (Lorg/siros/sdk/credentials/BackendApiException;)Ljava/lang/String;
+	public static final fun getKEY_ATTESTATION_NOT_QUALIFYING_REASONS ()Ljava/util/Set;
+	public static final fun keyAttestationNotQualifyingReason (Lorg/siros/sdk/credentials/BackendApiException;)Ljava/lang/String;
 }
 
 public final class org/siros/sdk/auth/WalletLifecycleRefusal : java/lang/Enum {

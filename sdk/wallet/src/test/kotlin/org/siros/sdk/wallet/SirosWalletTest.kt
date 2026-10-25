@@ -11660,6 +11660,9 @@ class SirosWalletTest {
         if ("pendingAuthorizations" !in values) {
             values["pendingAuthorizations"] = mutableMapOf<String, Any>()
         }
+        // allocateInstance skips these initializers: the WIA acquisition lock and the set of DPoP-bound instance keys.
+        if ("wiaMutex" !in values) values["wiaMutex"] = kotlinx.coroutines.sync.Mutex()
+        if ("dpopBoundInstanceKeys" !in values) values["dpopBoundInstanceKeys"] = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         if ("pscIssuerByFlow" !in values) {
             values["pscIssuerByFlow"] = java.util.concurrent.ConcurrentHashMap<String, String>()
         }

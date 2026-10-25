@@ -155,6 +155,33 @@ const val ERROR_KEY_ATTESTATION_INVALID: String = "KEY_ATTESTATION_INVALID"
 /** The evidence could not be judged right now (HTTP 503, e.g. no fresh revocation list): retry later with a NEW key and challenge. */
 const val ERROR_KEY_ATTESTATION_UNAVAILABLE: String = "KEY_ATTESTATION_UNAVAILABLE"
 
+/**
+ * The instance-key chain is well formed but does not qualify (HTTP 400, body `{"error","message","details":{"reason":R}}`): a HARD
+ * failure for that key; the reason is one of [KEY_ATTESTATION_NOT_QUALIFYING_REASONS].
+ */
+const val ERROR_KEY_ATTESTATION_NOT_QUALIFYING: String = "KEY_ATTESTATION_NOT_QUALIFYING"
+
+/** The reasons the backend names for [ERROR_KEY_ATTESTATION_NOT_QUALIFYING]; anything else is reported as `other`. */
+val KEY_ATTESTATION_NOT_QUALIFYING_REASONS: Set<String> = setOf(
+    "not_configured", "untrusted_root", "software_security_level", "key_not_generated", "no_sign_purpose",
+    "app_not_allowed", "boot_not_verified", "bootloader_unlocked", "patch_level_too_old", "patch_level_missing", "other",
+)
+
+/**
+ * The `details.reason` of a [ERROR_KEY_ATTESTATION_NOT_QUALIFYING] body, restricted to the known enum (anything else, or no reason,
+ * is `other`): the only part of such a failure that is ever logged.
+ */
+fun BackendApiException.keyAttestationNotQualifyingReason(): String {
+    val reason = try {
+        (errorJson.parseToJsonElement(body.orEmpty()) as? kotlinx.serialization.json.JsonObject)
+            ?.get("details")?.let { it as? kotlinx.serialization.json.JsonObject }
+            ?.get("reason")?.let { it as? kotlinx.serialization.json.JsonPrimitive }?.takeIf { it.isString }?.content
+    } catch (e: Exception) {
+        null
+    }
+    return reason?.takeIf { it in KEY_ATTESTATION_NOT_QUALIFYING_REASONS } ?: "other"
+}
+
 /** The backend does not know this `key_attestation` type (HTTP 400, before the challenge is consumed): retry without evidence. */
 const val ERROR_KEY_ATTESTATION_TYPE_UNSUPPORTED: String = "KEY_ATTESTATION_TYPE_UNSUPPORTED"
 
