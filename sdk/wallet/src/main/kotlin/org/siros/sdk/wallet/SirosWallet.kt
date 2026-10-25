@@ -3009,7 +3009,7 @@ class SirosWallet private constructor(
         return wiaMutex.withLock { acquireWalletInstanceAttestation() }
     }
 
-    private suspend fun acquireWalletInstanceAttestation(): String? {
+    private suspend fun acquireWalletInstanceAttestation(budget: RotationBudget = RotationBudget(1)): String? {
         val now = System.currentTimeMillis() / 1000
         cachedWia?.let { wia -> if (cachedWiaExpiresAt - now > 60) return wia }
         return try {
@@ -3022,7 +3022,10 @@ class SirosWallet private constructor(
             val firstKeyId = ensureInstanceKeyId()
             // Instance-key evidence (Android Keystore): a key generated for challenge C has to be used with exactly that C.
             val pending = takePendingInstanceKeyEvidence(firstKeyId)
-            val wia = obtainWia(client, firstKeyId, pending, account, generation)
+            // The backend already declared this very key NOT_QUALIFYING: no new request (a fresh challenge without evidence would
+            // just be sent for a key it refused) until the key is replaced.
+            if (firstKeyId == refusedInstanceKeyId) throw WalletException("The backend refused this instance key's evidence; no WIA until it is replaced")
+            val wia = obtainWia(client, firstKeyId, pending, account, generation, budget)
             // Only publish a WIA that still belongs to the session that asked
             // for it. This function suspends several times, and a logout,
             // account switch or new login landing in that window resets the
@@ -3084,11 +3087,17 @@ class SirosWallet private constructor(
      * [oldKeyId]: account A's failure after a switch to B must never generate into, or overwrite, B's key. Returns the new key id.
      */
     private suspend fun rotateInstanceKey(oldKeyId: String, account: String?, generation: Int): String {
+        fun stillOurs() = sessionStore.activeAccountId == account && sessionGeneration == generation && sessionStore.instanceKeyId == oldKeyId
         return instanceKeyMutex.withLock {
-            if (sessionStore.activeAccountId != account || sessionGeneration != generation || sessionStore.instanceKeyId != oldKeyId) {
-                throw WalletException("The session or its instance key changed; the instance key is left alone")
-            }
+            if (!stillOurs()) throw WalletException("The session or its instance key changed; the instance key is left alone")
             val keyId = generateInstanceKey()
+            // Generation suspended (the challenge fetch, the key itself): the session may have changed meanwhile. The unused
+            // replacement and its pending evidence are discarded, and nothing of the other account is touched.
+            if (!stillOurs()) {
+                if (pendingInstanceKeyEvidence?.keyId == keyId) pendingInstanceKeyEvidence = null
+                runCatching { keystore.deleteKey(keyId) }
+                throw WalletException("The session or its instance key changed while the replacement was generated; it was discarded")
+            }
             sessionStore.instanceKeyId = keyId
             persistAndSyncKeystore()
             retireInstanceKey(oldKeyId)
@@ -3124,11 +3133,22 @@ class SirosWallet private constructor(
      * pending evidence completes (or gives up) its WIA acquisition first, which is where a key may still be replaced, so a proof is
      * never signed with a key that can still rotate. Best-effort like every WIA step.
      */
-    private suspend fun settledInstanceKeyId(): String {
+    private suspend fun settledInstanceKeyId(): String = wiaMutex.withLock {
+        // Under the WIA lock, always: an in-flight acquisition (which may still replace the key) finishes first, even when its pending
+        // marker has already been consumed; this caller then sees the FINAL key.
         val first = ensureInstanceKeyId()
-        if (pendingInstanceKeyEvidence?.keyId == first) ensureWalletInstanceAttestation()
-        return ensureInstanceKeyId()
+        if (pendingInstanceKeyEvidence?.keyId == first && first != refusedInstanceKeyId) acquireWalletInstanceAttestation()
+        ensureInstanceKeyId()
     }
+
+    /** The one rotation an acquisition (or an explicit retry) may spend, shared by every path that replaces the instance key. */
+    private class RotationBudget(var left: Int) {
+        fun spend(): Boolean = if (left > 0) { left--; true } else false
+    }
+
+    /** The instance key the backend declared NOT_QUALIFYING: no acquisition re-sends it (with a fresh challenge and no evidence) until it is replaced. */
+    @Volatile
+    private var refusedInstanceKeyId: String? = null
 
     /** The device state at the time the backend declared this device's instance-key evidence not qualifying (in memory: cleared by a restart). */
     @Volatile
@@ -3142,18 +3162,23 @@ class SirosWallet private constructor(
      * state changed since (a new OS build or security patch); the app restarting also clears the block (it is in memory). Never loops:
      * one explicit call is one new key and challenge. Returns whether a new attempt was made; the WIA stays best-effort.
      */
-    suspend fun retryInstanceKeyAttestation(): Boolean {
+    suspend fun retryInstanceKeyAttestation(): Boolean = wiaMutex.withLock {
         val blocked = evidenceBlockedAt
-        if (blocked != null && blocked == deviceStateFingerprint()) return false
-        if (!keystore.supportsAttestedKeyGeneration) return false
+        if (blocked != null && blocked == deviceStateFingerprint()) return@withLock false
+        if (!keystore.supportsAttestedKeyGeneration) return@withLock false
         val account = sessionStore.activeAccountId
         val generation = sessionGeneration
-        val old = sessionStore.instanceKeyId ?: return false
-        return try {
+        val old = sessionStore.instanceKeyId ?: return@withLock false
+        try {
+            // Eligibility, cache invalidation, rotation and acquisition are ONE critical section: no in-flight acquisition can cache
+            // a WIA for the retired key, and the stale cache is dropped BEFORE the key is replaced.
+            cachedWia = null
+            cachedWiaExpiresAt = 0
             rotateInstanceKey(old, account, generation)
             evidenceBlockedAt = null
-            cachedWia = null
-            ensureWalletInstanceAttestation()
+            refusedInstanceKeyId = null
+            // This call's one key is the replacement above: the acquisition may not make a second.
+            acquireWalletInstanceAttestation(RotationBudget(0))
             true
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -3172,16 +3197,16 @@ class SirosWallet private constructor(
      * know the evidence type is retried at once without it (its challenge was not consumed), and anything else propagates (the
      * caller treats a missing WIA as best-effort).
      */
-    private suspend fun obtainWia(client: BackendApiClient, keyId: String, pending: PendingInstanceKeyEvidence?, account: String?, generation: Int): String {
+    private suspend fun obtainWia(client: BackendApiClient, keyId: String, pending: PendingInstanceKeyEvidence?, account: String?, generation: Int, budget: RotationBudget): String {
         var key = keyId
         var evidence = pending
         if (evidence != null && instanceKeyClock() - evidence.createdAtMillis > INSTANCE_KEY_CHALLENGE_FRESH_MS) {
             // The challenge is single use and short lived: do not spend it, replace the key.
+            if (!budget.spend()) throw WalletException("The instance key challenge went stale and no replacement is left in this attempt")
             Timber.w("The instance key challenge went stale before use; replacing the key")
             key = rotateInstanceKey(key, account, generation)
             evidence = takePendingInstanceKeyEvidence(key)
         }
-        var rotated = false
         while (true) {
             val challenge = evidence?.challenge ?: client.requestWIAChallenge()["challenge"]?.jsonPrimitive?.contentOrNull
                 ?: throw WalletException("The backend gave no WIA challenge")
@@ -3202,12 +3227,13 @@ class SirosWallet private constructor(
                         val reason = e.keyAttestationNotQualifyingReason()
                         Timber.w("Instance-key evidence does not qualify: reason=$reason")
                         evidenceBlockedAt = deviceStateFingerprint()
+                        refusedInstanceKeyId = key
                         throw e
                     }
                     ERROR_KEY_ATTESTATION_INVALID, ERROR_KEY_ATTESTATION_UNAVAILABLE -> {
-                        if (rotated) throw e
+                        // ONE shared budget: the stale-challenge replacement above, this retry and an explicit retry all draw on it.
+                        if (!budget.spend()) throw e
                         Timber.w("Instance-key evidence was refused (${e.apiErrorCode()}); retrying once with a new key and challenge")
-                        rotated = true
                         key = rotateInstanceKey(key, account, generation)
                         evidence = takePendingInstanceKeyEvidence(key)
                     }

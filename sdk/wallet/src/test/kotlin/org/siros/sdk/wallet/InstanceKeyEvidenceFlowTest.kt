@@ -52,9 +52,12 @@ class InstanceKeyEvidenceFlowTest {
         val fingerprint: Array<String> = arrayOf("os-1"),
     )
 
-    private fun jwt(): String {
+    private var jwtCounter = 0
+
+    /** A WIA-shaped JWT; [tag] makes it distinguishable. */
+    private fun jwt(tag: String = "wia${jwtCounter++}"): String {
         val b = { s: String -> Base64.getUrlEncoder().withoutPadding().encodeToString(s.toByteArray()) }
-        return b("""{"alg":"none"}""") + "." + b("""{"exp":${System.currentTimeMillis() / 1000 + 3600}}""") + ".sig"
+        return b("""{"alg":"none"}""") + "." + b("""{"exp":${System.currentTimeMillis() / 1000 + 3600},"tag":"$tag"}""") + ".sig"
     }
 
     private fun rig(capable: Boolean = true, existingKey: String? = null, challenges: List<String> = listOf("C-1", "C-2", "C-3")): Rig {
@@ -336,5 +339,96 @@ class InstanceKeyEvidenceFlowTest {
         assertEquals(true, runBlocking { r.wallet.retryInstanceKeyAttestation() })
         coVerify(exactly = 2) { r.keystore.generateAttestedKey(any(), any()) }
         assertEquals("attested-2", r.stored())
+    }
+
+    @Test
+    fun aSessionSwitchWhileTheReplacementIsBeingGenerated_discardsTheReplacementAndTouchesNothingOfTheOtherAccount() {
+        val r = rig()
+        var challenges = 0
+        coEvery { r.api.requestWIAChallenge() } coAnswers {
+            val n = ++challenges
+            if (n == 2) { r.setAccount("acct-B"); r.setStored("B-key") } // the REPLACEMENT's challenge fetch: the user switches meanwhile
+            buildJsonObject { put("challenge", JsonPrimitive("C-$n")) }
+        }
+        coEvery { r.api.generateWIA(pop = any(), challenge = any(), clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } throws
+            BackendApiException(400, "invalid", """{"error":"KEY_ATTESTATION_INVALID"}""")
+        assertNull(obtain(r.wallet))
+        assertEquals("B's key is untouched", "B-key", r.stored())
+        coVerify(exactly = 1) { r.keystore.deleteKey("attested-2") } // the unused replacement was discarded
+        coVerify(exactly = 0) { r.keystore.deleteKey("B-key") }
+    }
+
+    @Test
+    fun aDpopCallerArrivingWhileAnAcquisitionIsInFlight_waitsAndGetsTheFinalKey() {
+        val r = rig()
+        coEvery { r.api.generateWIA(pop = any(), challenge = "C-1", clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } coAnswers {
+            kotlinx.coroutines.delay(150)
+            throw BackendApiException(400, "invalid", """{"error":"KEY_ATTESTATION_INVALID"}""")
+        }
+        coEvery { r.api.generateWIA(pop = any(), challenge = "C-2", clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } returns jwt()
+        val keyForDpop = runBlocking {
+            val acquisition = async(kotlinx.coroutines.Dispatchers.Default) { invoke(r.wallet, "ensureWalletInstanceAttestation") }
+            kotlinx.coroutines.delay(60) // the acquisition consumed its pending marker and is waiting for the backend
+            val dpop = async(kotlinx.coroutines.Dispatchers.Default) { invoke(r.wallet, "settledInstanceKeyId") as String }
+            acquisition.await()
+            dpop.await()
+        }
+        assertEquals("the DPoP caller got the key the acquisition ended with, not the one it replaced", "attested-2", keyForDpop)
+    }
+
+    @Test
+    fun anExplicitRetryRunsUnderTheWiaLock_soAnInFlightAcquisitionCannotCacheAWiaForTheRetiredKey() {
+        val r = rig()
+        val slowOld = jwt("old-key-wia")
+        val fresh = jwt("replacement-wia")
+        coEvery { r.api.generateWIA(pop = any(), challenge = "C-1", clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } coAnswers {
+            kotlinx.coroutines.delay(200)
+            slowOld
+        }
+        coEvery { r.api.generateWIA(pop = any(), challenge = "C-2", clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } returns fresh
+        r.fingerprint[0] = "os-2"
+        val cached = runBlocking {
+            val acquisition = async(kotlinx.coroutines.Dispatchers.Default) { invoke(r.wallet, "ensureWalletInstanceAttestation") }
+            kotlinx.coroutines.delay(60)
+            val retry = async(kotlinx.coroutines.Dispatchers.Default) { r.wallet.retryInstanceKeyAttestation() }
+            acquisition.await()
+            retry.await()
+            getFieldOf(r.wallet, "cachedWia") as String?
+        }
+        assertEquals("the cache holds the replacement key's WIA, never the retired key's", fresh, cached)
+    }
+
+    @Test
+    fun oneRotationBudgetIsSharedByTheStaleReplacementTheInvalidRetryAndTheExplicitRetry() {
+        // (a) a stale challenge consumes the budget: a following INVALID does not rotate again.
+        val a = rig()
+        val ensure = SirosWallet::class.declaredMemberFunctions.first { it.name == "ensureInstanceKeyId" }
+        ensure.isAccessible = true
+        runBlocking { ensure.callSuspend(a.wallet) }
+        a.clock[0] += 10 * 60 * 1000
+        coEvery { a.api.generateWIA(pop = any(), challenge = any(), clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } throws
+            BackendApiException(400, "invalid", """{"error":"KEY_ATTESTATION_INVALID"}""")
+        assertNull(obtain(a.wallet))
+        coVerify(exactly = 2) { a.keystore.generateAttestedKey(any(), any()) } // the original and the ONE replacement
+        coVerify(exactly = 1) { a.api.generateWIA(pop = any(), challenge = any(), clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) }
+        // (b) an explicit retry makes exactly one key even when its acquisition is refused.
+        val b = rig()
+        coEvery { b.api.generateWIA(pop = any(), challenge = any(), clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } returns jwt()
+        assertNotNull(obtain(b.wallet))
+        coEvery { b.api.generateWIA(pop = any(), challenge = any(), clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } throws
+            BackendApiException(400, "invalid", """{"error":"KEY_ATTESTATION_INVALID"}""")
+        runBlocking { b.wallet.retryInstanceKeyAttestation() } // refused: false, and no second key
+        coVerify(exactly = 2) { b.keystore.generateAttestedKey(any(), any()) } // the original and the retry's ONE key, no second
+    }
+
+    @Test
+    fun afterNotQualifying_noOtherAcquisitionReSendsTheSameRejectedKey() {
+        val r = rig()
+        coEvery { r.api.generateWIA(pop = any(), challenge = any(), clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } throws notQualifying("bootloader_unlocked")
+        assertNull(obtain(r.wallet))
+        // A DPoP request (settlement) and another acquisition: the rejected key is not sent again, with or without a fresh challenge.
+        invoke(r.wallet, "settledInstanceKeyId")
+        assertNull(obtain(r.wallet))
+        coVerify(exactly = 1) { r.api.generateWIA(pop = any(), challenge = any(), clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) }
     }
 }

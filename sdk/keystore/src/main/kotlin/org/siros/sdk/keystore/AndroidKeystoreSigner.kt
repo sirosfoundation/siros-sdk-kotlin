@@ -2,6 +2,8 @@
 package org.siros.sdk.keystore
 
 import java.math.BigInteger
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.security.interfaces.ECPublicKey
 import java.util.Base64
 import java.util.UUID
@@ -52,11 +54,12 @@ class AndroidKeystoreSigner(
 ) : Signer {
     override val supportsAttestedKeyGeneration: Boolean get() = true
 
-    override suspend fun generateKey(algorithm: String): String = create(algorithm, null)
+    override suspend fun generateKey(algorithm: String): String = withContext(Dispatchers.IO) { create(algorithm, null) }
 
     override suspend fun generateAttestedKey(algorithm: String, attestationChallenge: ByteArray): String {
         require(attestationChallenge.isNotEmpty()) { "an attestation challenge is required" }
-        return create(algorithm, attestationChallenge)
+        // Hardware key generation (StrongBox, attestation provisioning) can block for seconds: never on the caller's (main) dispatcher.
+        return withContext(Dispatchers.IO) { create(algorithm, attestationChallenge) }
     }
 
     private fun create(algorithm: String, challenge: ByteArray?): String {
@@ -75,7 +78,7 @@ class AndroidKeystoreSigner(
         return alias
     }
 
-    override suspend fun sign(keyId: String, data: ByteArray): ByteArray = derToRaw(backend.signDer(keyId, data), 32)
+    override suspend fun sign(keyId: String, data: ByteArray): ByteArray = withContext(Dispatchers.IO) { derToRaw(backend.signDer(keyId, data), 32) }
 
     override suspend fun listKeys(): List<SignerKeyInfo> = backend.aliases().filter { it.startsWith(ALIAS_PREFIX) }.map { SignerKeyInfo(it, "ES256") }
 

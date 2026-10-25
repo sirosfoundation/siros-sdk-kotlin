@@ -23,7 +23,11 @@ class AndroidKeystoreSignerTest {
         val keys = linkedMapOf<String, ECPublicKey>()
         var derSignature: ByteArray = byteArrayOf()
 
+        var generatedOn: String? = null
+        var signedOn: String? = null
+
         override fun generate(alias: String, attestationChallenge: ByteArray?, strongBox: Boolean) {
+            generatedOn = Thread.currentThread().name
             if (strongBox && !strongBoxAvailable) throw AndroidKeyStoreBackend.StrongBoxUnavailable()
             generated += Generated(alias, attestationChallenge?.copyOf(), strongBox)
             keys[alias] = KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair().public as ECPublicKey
@@ -31,7 +35,7 @@ class AndroidKeystoreSignerTest {
 
         override fun certificateChain(alias: String): List<ByteArray> = List(chainLength) { i -> byteArrayOf(alias.length.toByte(), i.toByte()) }
         override fun publicKey(alias: String): ECPublicKey = keys.getValue(alias)
-        override fun signDer(alias: String, data: ByteArray): ByteArray = derSignature
+        override fun signDer(alias: String, data: ByteArray): ByteArray { signedOn = Thread.currentThread().name; return derSignature }
         override fun aliases(): List<String> = keys.keys.toList()
         override fun delete(alias: String) { deleted += alias; keys.remove(alias) }
     }
@@ -162,5 +166,21 @@ class AndroidKeystoreSignerTest {
         val s = signer(FakeBackend())
         assertTrue(s.supportsAttestedKeyGeneration)
         assertTrue(s.migrateKey("k", "other") is MigrationResult.ReEnrollmentRequired)
+    }
+
+    @Test
+    fun hardwareKeyGenerationAndSigningNeverRunOnTheCallersDispatcher() = runTest {
+        val b = FakeBackend()
+        val s = signer(b)
+        val caller = Thread.currentThread().name
+        val id = s.generateAttestedKey("ES256", ByteArray(32) { 1 })
+        val attestedOn = b.generatedOn!!
+        s.generateKey("ES256")
+        val plainOn = b.generatedOn!!
+        b.derSignature = der(ByteArray(32) { 1 }, ByteArray(32) { 2 })
+        s.sign(id, byteArrayOf(1))
+        assertTrue("attested generation ran on $attestedOn, the caller is $caller", attestedOn.startsWith("DefaultDispatcher") && attestedOn != caller)
+        assertTrue("plain generation ran on $plainOn", plainOn.startsWith("DefaultDispatcher"))
+        assertTrue("signing ran on ${b.signedOn}", b.signedOn!!.startsWith("DefaultDispatcher"))
     }
 }
