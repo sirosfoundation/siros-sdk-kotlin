@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Pluggable nymauth implementations.** `NymAuthBinding` (one native implementation of a nymauth proof system: the
+  catalog `system` it serves, load a circuit, prove) is public, with a new `implementation` id (for logs, diagnostics
+  and benchmark records; never sent to verifiers). `UniffiNymAuthNativeProver(bindings)` is public and takes exactly one
+  binding per system; `UniffiNymAuthNativeProver.withBindings(...)` swaps one system's implementation and keeps the
+  defaults for the others; `systems` and `implementationFor(system)` say which implementation serves what. The SDK's
+  bindings are public as `ZkCredVegaNymAuthBinding` (`zk-cred-vega`) and `ZkCredLongfellowNymAuthBinding`
+  (`zk-cred-longfellow`), formerly the internal `VegaNymAuthBinding` and `LongfellowNymAuthBinding`. No default
+  changes: `UniffiNymAuthNativeProver()` and `WalletConfig.circuitZkNativeProver = null` prove as before.
+
 ## [0.21.3] - 2026-10-26
 
 Requires siros-wscd-manager 0.11.0 (CTAP2 setPIN); the Swift SDK takes the same release. Not verified on real hardware. Known follow-ups: https://github.com/sirosfoundation/siros-sdk-kotlin/issues/316; held out: https://github.com/sirosfoundation/siros-sdk-kotlin/pull/312 and https://github.com/sirosfoundation/siros-sdk-kotlin/pull/285.

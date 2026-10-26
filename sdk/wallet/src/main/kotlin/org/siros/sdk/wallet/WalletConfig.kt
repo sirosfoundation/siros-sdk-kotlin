@@ -382,7 +382,9 @@ data class WalletConfig(
      * runs the proof system (see [org.siros.sdk.keystore.NymAuthNativeProver]). Ignored when
      * [circuitZkProver] is set. `null` (default): the UniFFI bindings of `zk-cred-vega` and
      * `zk-cred-longfellow` ([org.siros.sdk.keystore.UniffiNymAuthNativeProver]); a build whose native libraries lack
-     * the nymauth entry points refuses every nymauth request instead of crashing.
+     * the nymauth entry points refuses every nymauth request instead of crashing. To swap the implementation of one
+     * system and keep the others, pass `UniffiNymAuthNativeProver.withBindings(yourBinding)`
+     * ([org.siros.sdk.keystore.NymAuthBinding]).
      */
     val circuitZkNativeProver: org.siros.sdk.keystore.NymAuthNativeProver? = null,
     /**
