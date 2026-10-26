@@ -276,6 +276,8 @@ class CircuitZkProveInput(
     /** Private inputs per function handle. */
     val witnesses: Map<String, CircuitZkFunctionWitness>,
     val signer: ZkWitnessSigner,
+    /** The threads the proof may use ([CircuitZkPresenter.Request.parallel]). */
+    val parallel: Boolean? = null,
 )
 
 /** Output of [CircuitZkProver.prove]. */
@@ -365,6 +367,11 @@ class CircuitZkPresenter(
          * string (a trailing slash) is a different `psc`. Null refuses a function that needs the device seed.
          */
         val issuer: String? = null,
+        /**
+         * The threads the proof may use, for a proof system that runs in parallel (Vega): true one per core, false one, null
+         * the binding's default. Longfellow runs on one.
+         */
+        val parallel: Boolean? = null,
     ) {
         override fun toString() = "CircuitZkPresenter.Request(redacted)"
     }
@@ -509,6 +516,7 @@ class CircuitZkPresenter(
                     verifierContext = request.verifierContext,
                     witnesses = witnesses,
                     signer = signer,
+                    parallel = request.parallel,
                 ),
             )
             if (out.proof.isEmpty()) refuse(CircuitZkStep.PROVE)

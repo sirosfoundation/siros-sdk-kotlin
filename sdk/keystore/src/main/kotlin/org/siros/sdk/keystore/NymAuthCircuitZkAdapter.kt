@@ -184,6 +184,7 @@ class NymAuthCircuitZkAdapter(
                             deviceSignature = deviceSignature,
                             verifierInput = verifierInput,
                             transcriptSeed = input.sessionTranscript,
+                            parallel = input.parallel,
                         ),
                     )
                 } catch (e: NymAuthNativeException) {

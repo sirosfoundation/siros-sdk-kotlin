@@ -162,6 +162,11 @@ class NymAuthProveRequest(
     val deviceSignature: ByteArray,
     val verifierInput: ByteArray,
     val transcriptSeed: ByteArray,
+    /**
+     * The threads the proof may use, for a binding that can run in parallel (zk-cred-vega): true one per core, false one,
+     * null the binding's default (zk-cred-vega: one per core). Longfellow's runtimes run on one.
+     */
+    val parallel: Boolean? = null,
 ) {
     override fun toString() = "NymAuthProveRequest(redacted)"
 }

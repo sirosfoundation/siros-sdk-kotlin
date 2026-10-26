@@ -36,7 +36,7 @@ android {
 
 // The native libraries that carry the nymauth entry points (docs/NATIVE_DEV.md). Until a release of each is published
 // to GitHub Packages these coordinates resolve only from a local build (-PsirosNativeRepo=<dir>).
-val zkCredVegaVersion: String = providers.gradleProperty("zkCredVegaVersion").getOrElse("0.0.7")
+val zkCredVegaVersion: String = providers.gradleProperty("zkCredVegaVersion").getOrElse("0.0.8")
 val zkCredLongfellowVersion: String = providers.gradleProperty("zkCredLongfellowVersion").getOrElse("0.1.2")
 
 // nymauth-native (native/nymauth-native in this repository): Longfellow on Google's longfellow-zk runtime, the default
@@ -58,7 +58,7 @@ val checkNativeLibraries = tasks.register("checkNativeLibraries") {
     group = "verification"
     description = "Checks that zk-cred-vega, zk-cred-longfellow and nymauth-native resolve and carry the nymauth entry points."
     val nativeLibs = listOf(
-        Triple("zk-cred-vega", zkCredVegaVersion, "libzk_cred_vega.so" to "nymauth_vega_load_keys"),
+        Triple("zk-cred-vega", zkCredVegaVersion, "libzk_cred_vega.so" to "nymauth_vega_prove_with"),
         Triple("zk-cred-longfellow", zkCredLongfellowVersion, "libzk_cred_longfellow.so" to "nymauth_initialize_prover"),
         // 0.2.0 carries BBS (bbs_cd) next to Longfellow: its BBS entry point marks a current build.
         Triple("nymauth-native", nymauthNativeVersion, "libnymauth_native.so" to "uniffi_nymauth_native_fn_constructor_bbsprover_load"),

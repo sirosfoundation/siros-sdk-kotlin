@@ -257,6 +257,18 @@ class CatalogCircuitZkProverTest {
     }
 
     @Test
+    fun `the threads asked for reach the native side, and none asked for leaves the binding's default`() {
+        val native = honestNative()
+        val p = prover(native)
+        for (parallel in listOf(false, true)) {
+            prove(p, input().let { CircuitZkProveInput(it.circuit, it.plan, it.credentialBytes, it.sessionTranscript, it.verifierId, it.verifierContext, it.witnesses, it.signer, parallel = parallel) })
+            assertEquals(parallel, native.request!!.parallel)
+        }
+        prove(p, input())
+        assertNull(native.request!!.parallel)
+    }
+
+    @Test
     fun `the native side is handed the inputs the circuit specification defines`() {
         val native = honestNative()
         val i = input()

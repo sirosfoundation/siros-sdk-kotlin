@@ -691,6 +691,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_zk_cred_vega_checksum_func_nymauth_vega_prove(
     ): Int
+    external fun uniffi_zk_cred_vega_checksum_func_nymauth_vega_prove_with(
+    ): Int
     external fun uniffi_zk_cred_vega_checksum_func_nymauth_vega_verify(
     ): Int
     external fun uniffi_zk_cred_vega_checksum_func_nymauth_verifier_input(
@@ -750,6 +752,8 @@ internal object UniffiLib {
     external fun uniffi_zk_cred_vega_fn_func_nymauth_vega_load_keys(`shapes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
     external fun uniffi_zk_cred_vega_fn_func_nymauth_vega_prove(`keys`: Long,`statement`: RustBuffer.ByValue,`holder`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_zk_cred_vega_fn_func_nymauth_vega_prove_with(`keys`: Long,`statement`: RustBuffer.ByValue,`holder`: RustBuffer.ByValue,`threads`: Int,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_zk_cred_vega_fn_func_nymauth_vega_verify(`keys`: Long,`statement`: RustBuffer.ByValue,`proof`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -899,6 +903,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_zk_cred_vega_checksum_func_nymauth_vega_prove() != 64654) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_zk_cred_vega_checksum_func_nymauth_vega_prove_with() != 30683) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_zk_cred_vega_checksum_func_nymauth_vega_verify() != 27828) {
@@ -3271,6 +3278,27 @@ public object FfiConverterSequenceTypeFfiDisclosedClaim: FfiConverterRustBuffer<
         FfiConverterTypeNymAuthVegaKeys.lower(`keys`),
         FfiConverterTypeNymAuthVegaStatement.lower(`statement`),
         FfiConverterTypeNymAuthVegaHolder.lower(`holder`),_status)
+}
+    )
+    }
+    
+
+        /**
+         * [`nymauth_vega_prove`] on `threads` threads: 1 proves on one core, `n` on `n`, and 0 on rayon's
+         * global pool (one thread per core), which is how [`nymauth_vega_prove`] runs. The pools are built
+         * once per thread count and kept. The proof is the same whatever the count; only the time differs.
+         * `holder.secret_seed` is zeroed before this returns, on every path.
+         */
+    @Throws(NymAuthVegaException::class) fun `nymauthVegaProveWith`(`keys`: NymAuthVegaKeys, `statement`: NymAuthVegaStatement, `holder`: NymAuthVegaHolder, `threads`: kotlin.UInt): NymAuthVegaProof {
+            return FfiConverterTypeNymAuthVegaProof.lift(
+    uniffiRustCallWithError(NymAuthVegaException) { _status ->
+    UniffiLib.uniffi_zk_cred_vega_fn_func_nymauth_vega_prove_with(
+    
+        
+        FfiConverterTypeNymAuthVegaKeys.lower(`keys`),
+        FfiConverterTypeNymAuthVegaStatement.lower(`statement`),
+        FfiConverterTypeNymAuthVegaHolder.lower(`holder`),
+        FfiConverterUInt.lower(`threads`),_status)
 }
     )
     }

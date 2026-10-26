@@ -52,7 +52,7 @@ object ZkCredVegaNymAuthBinding : NymAuthBinding {
         if (!java.security.MessageDigest.isEqual(expectedE2, request.challengeDigest)) {
             throw NymAuthNativeException(NymAuthNativeErrorKind.INVALID_INPUT)
         }
-        val proof = nymauthVegaProve(
+        val proof = nymauthVegaProveWith(
             handle as NymAuthVegaKeys,
             NymAuthVegaStatement(
                 issuerKeyX = request.issuerKeyX,
@@ -68,6 +68,8 @@ object ZkCredVegaNymAuthBinding : NymAuthBinding {
                 secretSeed = request.secretSeed.copyOf(),
                 deviceSignature = request.deviceSignature,
             ),
+            // One thread when asked; otherwise 0, rayon's global pool (one per core, as nymauthVegaProve runs).
+            if (request.parallel == false) 1u else 0u,
         )
         NymAuthProveResponse(proof.proof, proof.pseudonym)
     } catch (e: NymAuthVegaException) {

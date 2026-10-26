@@ -702,6 +702,22 @@ class CircuitZkPresenterTest {
     }
 
     @Test
+    fun `the request's threads reach the prover`() {
+        val seen = mutableListOf<Boolean?>()
+        val spy = object : CircuitZkProver {
+            override suspend fun prove(input: CircuitZkProveInput): CircuitZkProveOutput {
+                seen += input.parallel
+                return FakeCircuitZkProver.optIn().prove(input)
+            }
+        }
+        for (parallel in listOf(false, true, null)) {
+            val r = request()
+            present(presenter(spy), CircuitZkPresenter.Request(r.credentialBytes, r.plan, r.verifierId, r.verifierContext, r.sessionTranscript, r.secretSeed, r.issuer, parallel))
+        }
+        assertEquals(listOf(false, true, null), seen)
+    }
+
+    @Test
     fun `the presenter zeroes its copy of the seed and leaves the caller's array alone`() {
         val callers = secretSeedA
         val seen = mutableListOf<ByteArray>()

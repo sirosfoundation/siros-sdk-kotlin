@@ -54,6 +54,8 @@ class CircuitZkResponder(
      *
      * @param secretSeed the credential's `secret_seed`; the presenter works on its own copy. The caller zeroes its array.
      * @param issuer the Credential Issuer Identifier as stored, for functions that need the device seed; null otherwise.
+     * @param parallel the threads a proof system that runs in parallel (Vega) may use: true one per core, false one, null its
+     *   default ([CircuitZkPresenter.Request.parallel]).
      * @throws org.siros.sdk.keystore.CircuitZkError.AccessDenied when the presenter refuses (the holder's data does not
      *   meet the request, or a rule fails): answer it with [OpenId4VpClient.ERROR_ACCESS_DENIED].
      */
@@ -65,6 +67,7 @@ class CircuitZkResponder(
         secretSeed: ByteArray?,
         signer: ZkWitnessSigner,
         issuer: String? = null,
+        parallel: Boolean? = null,
     ): Presentation {
         val result = presenter.present(
             CircuitZkPresenter.Request(
@@ -74,6 +77,7 @@ class CircuitZkResponder(
                 sessionTranscript = request.sessionTranscript(),
                 secretSeed = secretSeed,
                 issuer = issuer,
+                parallel = parallel,
             ),
             signer,
         )
