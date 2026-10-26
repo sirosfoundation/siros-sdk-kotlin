@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Threads for Vega.** `CircuitZkPresenter.Request.parallel` (and `CircuitZkResponder.present`'s `parallel`) reaches the
+  native prover (`CircuitZkProveInput.parallel`, `NymAuthProveRequest.parallel`): zk-cred-vega proves on one thread for
+  false, one per core for true (`nymauthVegaProveWith`); null keeps its default (one per core), so nothing changes for a
+  host that does not ask. Longfellow runs on one thread; BBS already took `BbsCdPresenter.Request.parallel`.
+  `zkCredVegaVersion` is now 0.0.8 (not published yet: `tools/build-native-aars.sh`), vendored bindings regenerated.
 - **`sdk:openid4vp`: a backend-free OpenID4VP client** (new module, `org.siros:siros-sdk-openid4vp`; depends on
   `sdk:keystore` and `sdk:credentials` only, not on the wallet engine). `OpenId4VpClient.fetchRequest` parses an
   `openid4vp://` request by reference (`AuthorizationRequestUri`), fetches the request object (POST with `wallet_metadata`
