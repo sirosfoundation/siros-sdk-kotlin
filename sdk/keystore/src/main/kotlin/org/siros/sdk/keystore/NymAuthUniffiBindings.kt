@@ -14,7 +14,7 @@ import uniffi.zk_cred_vega.NymAuthVegaKeys
 import uniffi.zk_cred_vega.NymAuthVegaStatement
 import uniffi.zk_cred_vega.nymauthChallengeDigest
 import uniffi.zk_cred_vega.nymauthVegaLoadKeys
-import uniffi.zk_cred_vega.nymauthVegaProve
+import uniffi.zk_cred_vega.nymauthVegaProveWith
 import uniffi.zk_cred_longfellow.NymAuthProveRequest as LfProveRequest
 
 /** A direct copy of the readable [ByteBuffer] [circuit]: the UniFFI `&[u8]` parameters need a direct buffer. */
@@ -30,8 +30,8 @@ private fun bytes(circuit: ByteBuffer): ByteArray {
 
 /**
  * The Vega nymauth binding over zk-cred-vega (Microsoft vega-prover): `nymauthVegaLoadKeys(shapes)` runs key setup
- * from the catalog artifact's shapes (the resident, 100+ MB part), `nymauthVegaProve(keys, statement, holder)`
- * proves. The binding approves only shapes on its own list: others are `UnknownCircuit`, mapped to "not supported
+ * from the catalog artifact's shapes (the resident, 100+ MB part), `nymauthVegaProveWith(keys, statement, holder, threads)`
+ * proves (on one thread or one per core, as [NymAuthProveRequest.parallel] asks). The binding approves only shapes on its own list: others are `UnknownCircuit`, mapped to "not supported
  * by this app version". It zeroes its copy of the seed. Every binding error becomes a [NymAuthNativeException]
  * carrying no message of the binding (not the digest, not a rule).
  */
