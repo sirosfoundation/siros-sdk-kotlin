@@ -22,6 +22,22 @@ import org.siros.sdk.keystore.CircuitZkPresenter
  * [OpenId4VpClient.sendPresentation]; a refusal of the presenter ([org.siros.sdk.keystore.CircuitZkError.AccessDenied])
  * is answered with [OpenId4VpClient.sendError].
  */
+/**
+ * The shared matcher's plan of the `zkp_req` query [queryId] of [request], against the request's `client_metadata`.
+ *
+ * @throws OpenId4VpException.Unsupported when the request has no such `zkp_req` query, or the matcher refuses it.
+ */
+internal fun planZkpReq(planner: CircuitZkPlanner, request: AuthorizationRequest, queryId: String): CircuitZkPlan {
+    val query = request.circuitZkQueries.firstOrNull { (it["id"] as? JsonPrimitive)?.content == queryId }
+        ?: throw OpenId4VpException.Unsupported("no zkp_req query $queryId")
+    val planned = try {
+        planner.plan(query, request.clientMetadata)
+    } catch (e: Exception) {
+        CircuitZkPlanResult.InvalidRequest
+    }
+    return (planned as? CircuitZkPlanResult.Plan)?.plan ?: throw OpenId4VpException.Unsupported("the zkp_req query $queryId is not well formed")
+}
+
 class CircuitZkResponder(
     private val presenter: CircuitZkPresenter,
     private val planner: CircuitZkPlanner = SharedCircuitZkPlanner(),
@@ -31,16 +47,7 @@ class CircuitZkResponder(
      *
      * @throws OpenId4VpException.Unsupported when the request has no such `zkp_req` query, or the matcher refuses it.
      */
-    fun plan(request: AuthorizationRequest, queryId: String): CircuitZkPlan {
-        val query = request.circuitZkQueries.firstOrNull { (it["id"] as? JsonPrimitive)?.content == queryId }
-            ?: throw OpenId4VpException.Unsupported("no zkp_req query $queryId")
-        val planned = try {
-            planner.plan(query, request.clientMetadata)
-        } catch (e: Exception) {
-            CircuitZkPlanResult.InvalidRequest
-        }
-        return (planned as? CircuitZkPlanResult.Plan)?.plan ?: throw OpenId4VpException.Unsupported("the zkp_req query $queryId is not well formed")
-    }
+    fun plan(request: AuthorizationRequest, queryId: String): CircuitZkPlan = planZkpReq(planner, request, queryId)
 
     /**
      * Proves [plan] (from [plan]) over the stored mdoc [credentialBytes] and returns the `vp_token` to post.

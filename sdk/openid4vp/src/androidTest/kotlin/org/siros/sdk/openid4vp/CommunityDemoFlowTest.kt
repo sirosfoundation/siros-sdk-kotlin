@@ -18,6 +18,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -213,6 +214,52 @@ class CommunityDemoFlowTest {
         val status = siteCall("/api/vp/session/$id")
         assertEquals(status.toString(), "failed", s(status, "status"))
         assertEquals(status.toString(), "denied", s(status, "failure"))
+    }
+
+    /** community-demo's teen BBS credential (bbs_cd) and its software device key. */
+    private val teenBbs: JsonObject by lazy {
+        json.parseToJsonElement(String(res("teen-bbs.json"))).jsonObject["holders"]!!.jsonArray[0].jsonObject
+    }
+
+    private fun softwareSigner(jwk: JsonObject) = ZkWitnessSigner { alg, data ->
+        require(alg == -7L)
+        val d = BigInteger(1, b64u.decode(s(jwk, "d")))
+        val params = AlgorithmParameters.getInstance("EC").apply { init(ECGenParameterSpec("secp256r1")) }.getParameterSpec(ECParameterSpec::class.java)
+        val key = KeyFactory.getInstance("EC").generatePrivate(ECPrivateKeySpec(d, params))
+        val der = Signature.getInstance("SHA256withECDSA").run { initSign(key); update(data); sign() }
+        var i = 2
+        fun int(): ByteArray {
+            val len = der[i + 1].toInt() and 0xff
+            val v = BigInteger(1, der.copyOfRange(i + 2, i + 2 + len)).toByteArray()
+            i += 2 + len
+            return if (v.size >= 32) v.copyOfRange(v.size - 32, v.size) else ByteArray(32 - v.size) + v
+        }
+        int() + int()
+    }
+
+    /** The teen's BBS phone: the request (tailored by wallet_metadata to bbs_cd), the presentation, the site's verdict. Needs BBS accepted in /tech. */
+    @Test
+    fun presentsBbsToCommunityDemo_andTheSiteVerifies() = runBlocking {
+        assumeTrue("no verifierOrigin given", origin != null)
+        val (id, url) = newSession()
+        val client = client()
+        val request = client.fetchRequest(url, WalletMetadata.circuitZk(emptyList(), listOf(org.siros.sdk.keystore.NymAuthNativeBbsCdBinding)))
+        val query = request.circuitZkQueries.firstOrNull { (it["meta"] as? JsonObject)?.get("source_format")?.jsonPrimitive?.content == "bbs_cd" }
+        assumeTrue("the site offers no bbs_cd zkp_req query (is BBS accepted in /tech?)", query != null)
+        val queryId = s(query!!, "id")
+
+        val responder = BbsCdResponder()
+        val plan = responder.plan(request, queryId)
+        val jwk = teenBbs["device_key"]!!.jsonObject
+        val devicePublicKey = byteArrayOf(4) + b64u.decode(s(jwk, "x")) + b64u.decode(s(jwk, "y"))
+        val t0 = System.nanoTime()
+        val presentation = responder.present(request, queryId, plan, teenBbs["credential"].toString(), devicePublicKey, softwareSigner(jwk))
+        val ms = (System.nanoTime() - t0) / 1_000_000
+        client.sendPresentation(request, presentation.vpToken)
+
+        val status = siteCall("/api/vp/session/$id")
+        println("COMMUNITY-DEMO BBS: ${request.clientId} answered in $ms ms, session ${s(status, "status")}, proof ${status["proof"]}")
+        assertEquals(status.toString(), "verified", s(status, "status"))
     }
 
     private companion object {

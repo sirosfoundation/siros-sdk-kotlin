@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `UntrustedReason`). Not supported: other `client_id` prefixes, by-value requests, `presentation_definition`, plain
   `direct_post`, `transaction_data`. `SirosWallet` does not use it; nothing changes for the engine flow.
 - `AuthorizationResponseEncryption.encryptError`: the encrypted error response (`error`, `state`), for that client.
+- **`sdk:openid4vp` answers `bbs_cd` queries.** `BbsCdResponder` (the counterpart of `CircuitZkResponder`) plans a
+  `zkp_req` query of `source_format` `bbs_cd` and presents it with `BbsCdPresenter`, bound to the verified request object
+  and its OpenID4VPHandover values (`client_id`, `nonce`, `response_uri`, the response-encryption key's thumbprint); the
+  device key signs through the caller's `ZkWitnessSigner`. `WalletMetadata.circuitZk(circuits, bbsCd)` offers the scheme
+  (`urn:mms:bbs-cd:nym_auth:v1`, `bbs-cd-plugins-v0.1`) after the circuits.
 
 - **`bbs_cd` presentations (nym_auth rulebook v0.4), with the device key signing through the SDK.** `BbsCdPresenter`
   presents one planned `zkp_req` query of `source_format` `bbs_cd`: the rulebook's data-independent rules, the scheme

@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import org.siros.sdk.credentials.CircuitZkCircuit
+import org.siros.sdk.keystore.BbsCdBinding
 
 /**
  * The `wallet_metadata` a wallet posts to a `request_uri` (OpenID4VP 1.0 section 10), so the verifier can tailor its
@@ -17,8 +18,11 @@ object WalletMetadata {
      * aliases (`system_id_values`) and their proof systems (`proof_system_values`), and the response encryption this
      * client applies (`ECDH-ES`; `A128GCM`, `A256GCM`). Offer only the circuits the prover has loaded, so the verifier
      * never asks for one the wallet cannot prove.
+     *
+     * @param bbsCd the `bbs_cd` schemes the wallet answers ([BbsCdBinding.systemId], [BbsCdBinding.proofSystem]), listed
+     *   after the circuits; empty for a wallet without a `bbs_cd` credential.
      */
-    fun circuitZk(circuits: Collection<CircuitZkCircuit>): JsonObject {
+    fun circuitZk(circuits: Collection<CircuitZkCircuit>, bbsCd: Collection<BbsCdBinding> = emptyList()): JsonObject {
         val systemIds = LinkedHashSet<String>()
         val proofSystems = LinkedHashSet<String>()
         for (c in circuits) {
@@ -26,12 +30,16 @@ object WalletMetadata {
             systemIds += c.aliases
             proofSystems += c.offeredProofSystem
         }
+        for (b in bbsCd) {
+            systemIds += b.systemId
+            proofSystems += b.proofSystem
+        }
         fun list(values: Collection<String>) = JsonArray(values.map { JsonPrimitive(it) })
         return buildJsonObject {
             put(
                 "vp_formats_supported",
                 buildJsonObject {
-                    if (circuits.isNotEmpty()) {
+                    if (systemIds.isNotEmpty()) {
                         put(
                             AuthorizationRequest.ZKP_REQ_FORMAT,
                             buildJsonObject {
