@@ -1,0 +1,45 @@
+# DEMO ONLY: the BBS demo issuer of the ZKP demo wallet, as its own small library (its own .so and UniFFI
+# namespace, `uniffi.nymauth_demo_issuer`), so the SDK's nymauth-native carries no issuer code. The demo
+# app issues the adult's bbs_cd credential on the phone, bound to a StrongBox key, under a demo issuer
+# whose seed is bundled with the app (community-demo's BBS verifier learns a new issuer key on first use).
+# Never a dependency of the SDK.
+[package]
+name = "nymauth-demo-issuer"
+version = "0.1.0"
+edition = "2024"
+description = "DEMO ONLY: issues nym_auth bbs_cd credentials under a seed-derived demo issuer, for the ZKP demo wallet"
+publish = false
+
+[lib]
+name = "nymauth_demo_issuer"
+crate-type = ["lib", "cdylib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+uniffi = "0.29"
+thiserror = "2"
+p256 = { version = "0.13", features = ["ecdsa"] }
+serde_json = "1"
+nym-bbs = { path = "../../../../readdit-demo/native/bbs/nym-bbs" }
+bbs-cd = { path = "../../../../readdit-demo/native/bbs/vendor/bbs-cd-plugins/crates/bbs-cd" }
+bbs-cd-plugin = { path = "../../../../readdit-demo/native/bbs/vendor/bbs-cd-plugins/crates/bbs-cd-plugin", features = ["parallel"] }
+cd-ecdsa-pop = { path = "../../../../readdit-demo/native/bbs/vendor/bbs-cd-plugins/crates/cd-ecdsa-pop", features = ["parallel"] }
+cd-date-range = { path = "../../../../readdit-demo/native/bbs/vendor/bbs-cd-plugins/crates/cd-date-range" }
+cd-pseudonym = { path = "../../../../readdit-demo/native/bbs/vendor/bbs-cd-plugins/crates/cd-pseudonym" }
+
+[dev-dependencies]
+# The end-to-end test proves with the SDK's library and verifies with community-demo's verifier.
+nymauth-native = { path = "..", default-features = false, features = ["bbs"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
