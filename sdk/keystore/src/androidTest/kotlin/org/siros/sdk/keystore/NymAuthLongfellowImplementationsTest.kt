@@ -142,12 +142,18 @@ class NymAuthLongfellowImplementationsTest {
         return int() + int()
     }
 
-    /** What the SDK handed the native prover and what came back: the verifier's public values and the proof. */
+    /**
+     * What the SDK handed the native prover and what came back: the verifier's public values and the proof. The
+     * response is copied: the adapter zeroes the returned pseudonym once it has checked it.
+     */
     private class Recording(private val inner: UniffiNymAuthNativeProver) : NymAuthNativeProver {
         var request: NymAuthProveRequest? = null
         var response: NymAuthProveResponse? = null
         override suspend fun prove(request: NymAuthProveRequest): NymAuthProveResponse =
-            inner.prove(request).also { this.request = request; this.response = it }
+            inner.prove(request).also {
+                this.request = request
+                this.response = NymAuthProveResponse(it.proof.copyOf(), it.pseudonym.copyOf())
+            }
         fun release() = inner.release()
     }
 
