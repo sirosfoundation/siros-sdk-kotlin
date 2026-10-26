@@ -1,0 +1,160 @@
+public final class org/siros/sdk/openid4vp/AllowedHostsTrustPolicy : org/siros/sdk/openid4vp/VerifierTrustPolicy {
+	public fun <init> (Ljava/util/Collection;)V
+	public fun trusts (Lorg/siros/sdk/openid4vp/VerifierIdentity;)Z
+}
+
+public final class org/siros/sdk/openid4vp/AuthorizationRequest {
+	public static final field ZKP_REQ_FORMAT Ljava/lang/String;
+	public final fun getCertificateChain ()Ljava/util/List;
+	public final fun getCircuitZkQueries ()Ljava/util/List;
+	public final fun getClientId ()Ljava/lang/String;
+	public final fun getClientMetadata ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getClientName ()Ljava/lang/String;
+	public final fun getCredentialQueries ()Ljava/util/List;
+	public final fun getDcqlQuery ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getNonce ()Ljava/lang/String;
+	public final fun getPayload ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getRequestUri ()Ljava/lang/String;
+	public final fun getResponseEncryptionAlg ()Ljava/lang/String;
+	public final fun getResponseEncryptionEnc ()Ljava/lang/String;
+	public final fun getResponseEncryptionJwk ()Lkotlinx/serialization/json/JsonObject;
+	public final fun getResponseEncryptionJwkThumbprint ()Ljava/lang/String;
+	public final fun getResponseUri ()Ljava/lang/String;
+	public final fun getState ()Ljava/lang/String;
+	public final fun getVerifierHost ()Ljava/lang/String;
+	public final fun sessionTranscript ()[B
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/openid4vp/AuthorizationRequestUri {
+	public static final field Companion Lorg/siros/sdk/openid4vp/AuthorizationRequestUri$Companion;
+	public static final field SCHEME Ljava/lang/String;
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Lorg/siros/sdk/openid4vp/AuthorizationRequestUri$RequestUriMethod;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getClientId ()Ljava/lang/String;
+	public final fun getRequestUri ()Ljava/lang/String;
+	public final fun getRequestUriMethod ()Lorg/siros/sdk/openid4vp/AuthorizationRequestUri$RequestUriMethod;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/openid4vp/AuthorizationRequestUri$Companion {
+	public final fun parse (Ljava/lang/String;)Lorg/siros/sdk/openid4vp/AuthorizationRequestUri;
+}
+
+public final class org/siros/sdk/openid4vp/AuthorizationRequestUri$RequestUriMethod : java/lang/Enum {
+	public static final field GET Lorg/siros/sdk/openid4vp/AuthorizationRequestUri$RequestUriMethod;
+	public static final field POST Lorg/siros/sdk/openid4vp/AuthorizationRequestUri$RequestUriMethod;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lorg/siros/sdk/openid4vp/AuthorizationRequestUri$RequestUriMethod;
+	public static fun values ()[Lorg/siros/sdk/openid4vp/AuthorizationRequestUri$RequestUriMethod;
+}
+
+public final class org/siros/sdk/openid4vp/CircuitZkResponder {
+	public fun <init> (Lorg/siros/sdk/keystore/CircuitZkPresenter;Lorg/siros/sdk/credentials/CircuitZkPlanner;)V
+	public synthetic fun <init> (Lorg/siros/sdk/keystore/CircuitZkPresenter;Lorg/siros/sdk/credentials/CircuitZkPlanner;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun plan (Lorg/siros/sdk/openid4vp/AuthorizationRequest;Ljava/lang/String;)Lorg/siros/sdk/credentials/CircuitZkPlan;
+	public final fun present (Lorg/siros/sdk/openid4vp/AuthorizationRequest;Ljava/lang/String;Lorg/siros/sdk/credentials/CircuitZkPlan;[B[BLorg/siros/sdk/credentials/ZkWitnessSigner;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun present$default (Lorg/siros/sdk/openid4vp/CircuitZkResponder;Lorg/siros/sdk/openid4vp/AuthorizationRequest;Ljava/lang/String;Lorg/siros/sdk/credentials/CircuitZkPlan;[B[BLorg/siros/sdk/credentials/ZkWitnessSigner;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/openid4vp/CircuitZkResponder$Presentation {
+	public fun <init> (Ljava/lang/String;Lorg/siros/sdk/keystore/CircuitZkPresenter$Result;)V
+	public final fun getQueryId ()Ljava/lang/String;
+	public final fun getResult ()Lorg/siros/sdk/keystore/CircuitZkPresenter$Result;
+	public final fun getVpToken ()Lkotlinx/serialization/json/JsonObject;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/openid4vp/OpenId4VpClient {
+	public static final field Companion Lorg/siros/sdk/openid4vp/OpenId4VpClient$Companion;
+	public static final field ERROR_ACCESS_DENIED Ljava/lang/String;
+	public static final field ERROR_INVALID_REQUEST Ljava/lang/String;
+	public fun <init> (Lorg/siros/sdk/openid4vp/VerifierTrustPolicy;Lokhttp3/OkHttpClient;Ljava/time/Clock;Z)V
+	public synthetic fun <init> (Lorg/siros/sdk/openid4vp/VerifierTrustPolicy;Lokhttp3/OkHttpClient;Ljava/time/Clock;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun fetchRequest (Ljava/lang/String;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun sendError (Lorg/siros/sdk/openid4vp/AuthorizationRequest;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun sendPresentation (Lorg/siros/sdk/openid4vp/AuthorizationRequest;Lkotlinx/serialization/json/JsonObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/openid4vp/OpenId4VpClient$Companion {
+}
+
+public final class org/siros/sdk/openid4vp/OpenId4VpClient$ResponseResult {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun getRedirectUri ()Ljava/lang/String;
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract class org/siros/sdk/openid4vp/OpenId4VpException : java/lang/Exception {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public final class org/siros/sdk/openid4vp/OpenId4VpException$InvalidRequestUri : org/siros/sdk/openid4vp/OpenId4VpException {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun getReason ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/openid4vp/OpenId4VpException$Network : org/siros/sdk/openid4vp/OpenId4VpException {
+	public fun <init> (Ljava/lang/Throwable;)V
+}
+
+public final class org/siros/sdk/openid4vp/OpenId4VpException$RequestUnavailable : org/siros/sdk/openid4vp/OpenId4VpException {
+	public fun <init> (ILjava/lang/String;)V
+	public final fun getCode ()Ljava/lang/String;
+	public final fun getExpired ()Z
+	public final fun getStatus ()I
+}
+
+public final class org/siros/sdk/openid4vp/OpenId4VpException$ResponseRejected : org/siros/sdk/openid4vp/OpenId4VpException {
+	public fun <init> (ILjava/lang/String;)V
+	public final fun getCode ()Ljava/lang/String;
+	public final fun getExpired ()Z
+	public final fun getStatus ()I
+}
+
+public final class org/siros/sdk/openid4vp/OpenId4VpException$Unsupported : org/siros/sdk/openid4vp/OpenId4VpException {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun getReason ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/openid4vp/OpenId4VpException$Untrusted : org/siros/sdk/openid4vp/OpenId4VpException {
+	public fun <init> (Lorg/siros/sdk/openid4vp/UntrustedReason;)V
+	public final fun getReason ()Lorg/siros/sdk/openid4vp/UntrustedReason;
+}
+
+public final class org/siros/sdk/openid4vp/UntrustedReason : java/lang/Enum {
+	public static final field CERTIFICATE_INVALID Lorg/siros/sdk/openid4vp/UntrustedReason;
+	public static final field CLIENT_ID_MISMATCH Lorg/siros/sdk/openid4vp/UntrustedReason;
+	public static final field EXPIRED Lorg/siros/sdk/openid4vp/UntrustedReason;
+	public static final field MALFORMED Lorg/siros/sdk/openid4vp/UntrustedReason;
+	public static final field NOT_TRUSTED Lorg/siros/sdk/openid4vp/UntrustedReason;
+	public static final field NO_CERTIFICATE Lorg/siros/sdk/openid4vp/UntrustedReason;
+	public static final field SAN_MISMATCH Lorg/siros/sdk/openid4vp/UntrustedReason;
+	public static final field SIGNATURE_INVALID Lorg/siros/sdk/openid4vp/UntrustedReason;
+	public static final field UNSIGNED Lorg/siros/sdk/openid4vp/UntrustedReason;
+	public static final field UNSUPPORTED_ALGORITHM Lorg/siros/sdk/openid4vp/UntrustedReason;
+	public static final field UNSUPPORTED_CLIENT_ID_SCHEME Lorg/siros/sdk/openid4vp/UntrustedReason;
+	public static final field WALLET_NONCE_MISMATCH Lorg/siros/sdk/openid4vp/UntrustedReason;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lorg/siros/sdk/openid4vp/UntrustedReason;
+	public static fun values ()[Lorg/siros/sdk/openid4vp/UntrustedReason;
+}
+
+public final class org/siros/sdk/openid4vp/VerifierIdentity {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;)V
+	public final fun getCertificateChain ()Ljava/util/List;
+	public final fun getClientId ()Ljava/lang/String;
+	public final fun getRequestUri ()Ljava/lang/String;
+	public final fun getResponseUri ()Ljava/lang/String;
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class org/siros/sdk/openid4vp/VerifierTrustPolicy {
+	public abstract fun trusts (Lorg/siros/sdk/openid4vp/VerifierIdentity;)Z
+}
+
+public final class org/siros/sdk/openid4vp/WalletMetadata {
+	public static final field INSTANCE Lorg/siros/sdk/openid4vp/WalletMetadata;
+	public final fun circuitZk (Ljava/util/Collection;)Lkotlinx/serialization/json/JsonObject;
+}
+
