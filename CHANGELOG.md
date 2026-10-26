@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`AuthorizationResponseEncryption` moved from `sdk:wallet` (internal) to `sdk:keystore` (public)**, next to
+  `DCAPIResponseEncryption`: the OpenID4VP `direct_post.jwt` (JARM) builder (`encrypt`, `jwkThumbprint`) and the engine's
+  `response_jwe` conformance rule (`isConformant`, `MAX_RESPONSE_JWE_BYTES`), so an OpenID4VP client below the wallet
+  engine can encrypt its responses the same way. No behaviour change: `SirosWallet` and `BlindPresentation` call the same
+  code, and its tests moved with it (`AuthorizationResponseEncryptionTest`). The issuance side (`CredentialResponseKey`)
+  stays in `sdk:wallet`.
+
 ## [0.21.4] - 2026-10-26
 
 Adds the proof-system preference (https://github.com/sirosfoundation/siros-sdk-kotlin/issues/304) so a wallet can be told to prove with Vega or Longfellow when a verifier offers both. Follow-ups from its review are tracked for the next release.

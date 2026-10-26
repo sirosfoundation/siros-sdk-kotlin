@@ -113,6 +113,7 @@ import org.siros.sdk.keystore.WscdPluginCapabilities
 import org.siros.sdk.keystore.BbsHolderStateVault
 import org.siros.sdk.keystore.CredentialRefreshTokenEntry
 import org.siros.sdk.keystore.DCAPIResponseEncryption
+import org.siros.sdk.keystore.AuthorizationResponseEncryption
 import org.siros.sdk.keystore.EncryptedContainer
 import org.siros.sdk.keystore.JweKeystore
 import org.siros.sdk.keystore.KeypairInfo
