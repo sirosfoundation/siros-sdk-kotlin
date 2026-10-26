@@ -49,7 +49,11 @@ fi
 
 echo "== Kotlin bindings"
 cargo build --release --lib --locked
-lib="$(ls target/release/libnymauth_native.dylib target/release/libnymauth_native.so 2>/dev/null | head -1)"
+lib=""
+for f in target/release/libnymauth_native.dylib target/release/libnymauth_native.so; do
+  if [ -f "$f" ]; then lib="$f"; break; fi
+done
+[ -n "$lib" ] || { echo "build-android: no host library in target/release"; exit 1; }
 cargo run --release --locked --features bindgen --bin uniffi-bindgen -- generate --library "$lib" --language kotlin --out-dir build/kotlin
 
 echo "== AAR"
