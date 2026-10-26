@@ -129,7 +129,8 @@ class BbsCdPresentationTest {
         val thrown = assertThrows(UserCancelled::class.java) {
             runBlocking { BbsCdPresenter().present(request("""{"ge":"2008-10-20","le":"2013-10-19"}"""), ZkWitnessSigner { _, _ -> throw cancelled }) }
         }
-        assertSame(cancelled, thrown)
+        // The same exception, or kotlinx.coroutines' stack-trace-recovery copy of it (the original as its cause).
+        assertTrue(thrown === cancelled || thrown.cause === cancelled)
         // A signature by another key is refused as a device-signature failure.
         val other = ZkWitnessSigner { _, _ -> ByteArray(64) { 1 } }
         val e = assertThrows(CircuitZkError.AccessDenied::class.java) {

@@ -150,7 +150,9 @@ class BbsCdPresenterTest {
         class UserCancelled : Exception("cancelled")
         val e = UserCancelled()
         val thrown = assertThrows(UserCancelled::class.java) { present(FakeBinding { throw e }) }
-        assertSame(e, thrown)
+        // The same exception, or kotlinx.coroutines' stack-trace-recovery copy of it (same class, the original as its cause),
+        // which it makes when an exception crosses dispatchers with assertions on (as in tests).
+        assertTrue(thrown === e || thrown.cause === e)
     }
 
     @Test
