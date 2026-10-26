@@ -14,6 +14,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 /** The resident, system-dispatching native prover over a fake binding (the UniFFI libraries do not load on the JVM). */
@@ -26,7 +27,7 @@ class UniffiNymAuthNativeProverTest {
         }
     }
 
-    private class FakeBinding(override val system: String) : NymAuthBinding {
+    private class FakeBinding(override val system: String, override val implementation: String = "fake") : NymAuthBinding {
         val handles = mutableListOf<Handle>()
         var proves = 0
         var loadFails: NymAuthNativeException? = null
@@ -165,5 +166,59 @@ class UniffiNymAuthNativeProverTest {
         prove(p, request())
         adapter.retire(org.siros.sdk.credentials.ZkCircuitDescriptor(id = "nymauth-vega-mdoc-v1"))
         assertTrue(vega.handles[1].closed)
+    }
+
+    // -------- choosing the implementations --------
+
+    @Test
+    fun `the default prover uses the SDK's own implementations`() {
+        val p = UniffiNymAuthNativeProver()
+        assertEquals(setOf(NymAuthCircuitZkAdapter.VEGA_SYSTEM, NymAuthCircuitZkAdapter.LONGFELLOW_SYSTEM), p.systems)
+        assertEquals("zk-cred-vega", p.implementationFor(NymAuthCircuitZkAdapter.VEGA_SYSTEM))
+        assertEquals("google-longfellow-zk", p.implementationFor(NymAuthCircuitZkAdapter.LONGFELLOW_SYSTEM))
+        assertNull(p.implementationFor("bbs-cd"))
+    }
+
+    @Test
+    fun `withBindings swaps one system's implementation and keeps the others`() {
+        val other = FakeBinding(NymAuthCircuitZkAdapter.LONGFELLOW_SYSTEM, implementation = "other-longfellow")
+        val p = UniffiNymAuthNativeProver.withBindings(other)
+        assertEquals("other-longfellow", p.implementationFor(NymAuthCircuitZkAdapter.LONGFELLOW_SYSTEM))
+        assertEquals("zk-cred-vega", p.implementationFor(NymAuthCircuitZkAdapter.VEGA_SYSTEM))
+        prove(p, request(NymAuthCircuitZkAdapter.LONGFELLOW_SYSTEM, "nymauth-longfellow-mdoc-v1"))
+        assertEquals("the replacement proved", 1, other.proves)
+    }
+
+    @Test
+    fun `withBindings adds a system no default serves`() {
+        val extra = FakeBinding("another-nymauth", implementation = "x")
+        val p = UniffiNymAuthNativeProver.withBindings(extra)
+        assertEquals(3, p.systems.size)
+        assertEquals("x", p.implementationFor("another-nymauth"))
+    }
+
+    @Test
+    fun `a system has exactly one implementation`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            val twice = listOf(FakeBinding(NymAuthCircuitZkAdapter.VEGA_SYSTEM, "a"), FakeBinding(NymAuthCircuitZkAdapter.VEGA_SYSTEM, "b"))
+            UniffiNymAuthNativeProver(twice)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            val a = FakeBinding(NymAuthCircuitZkAdapter.VEGA_SYSTEM, "a")
+            UniffiNymAuthNativeProver.withBindings(a, FakeBinding(NymAuthCircuitZkAdapter.VEGA_SYSTEM, "b"))
+        }
+        assertThrows(IllegalArgumentException::class.java) { UniffiNymAuthNativeProver(emptyList()) }
+    }
+
+    @Test
+    fun `a system without a binding is an unsupported circuit, before anything loads`() {
+        val p = UniffiNymAuthNativeProver(listOf(vega))
+        try {
+            prove(p, request(NymAuthCircuitZkAdapter.LONGFELLOW_SYSTEM, "nymauth-longfellow-mdoc-v1"))
+            fail("proved a system it has no binding for")
+        } catch (e: NymAuthNativeException) {
+            assertEquals(NymAuthNativeErrorKind.UNSUPPORTED_CIRCUIT, e.kind)
+        }
+        assertTrue(vega.handles.isEmpty())
     }
 }

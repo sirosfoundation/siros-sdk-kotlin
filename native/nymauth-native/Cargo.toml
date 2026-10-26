@@ -1,0 +1,67 @@
+# Native nymauth provers for the SIROS SDKs (Kotlin first), through UniFFI.
+#
+# Longfellow: the nym_auth mdoc circuits (the nym-auth-circuits archive's LFC2 pair) on Google's
+# longfellow-zk Rust runtime, through community-demo's own nym-longfellow crate: the code its
+# verifier runs, so a proof made here is checked by the same implementation that checks it there.
+# It is an alternative to zk-cred-longfellow (ISRG's Rust Longfellow) for the SDK's
+# `longfellow-nymauth` system; the SDK chooses per system (NymAuthBinding).
+#
+# BBS: the nym_auth attestation in its bbs_cd encoding (rulebook v0.4), through community-demo's nym-bbs
+# crate on sirosfoundation/bbs-cd-plugins (vendored in readdit-demo, unchanged), with the device key's
+# ecdsa-pop signature made by the caller (a StrongBox key) through `Prover::prove_with`.
+#
+# nym-longfellow and nym-bbs are taken by path from a readdit-demo checkout NEXT TO this repository
+# (../readdit-demo from the siros-sdk-kotlin root: AltmannPeter/readdit-demo, main from commit 50c47ac on,
+# which adds Circuits::from_pair and Layout::parse, with commit 0250f90, branch feat/bbs-prove-with-signer,
+# which adds nym-bbs's Prover::prove_with). To be replaced by a git or vendored dependency before this
+# leaves draft.
+[package]
+name = "nymauth-native"
+version = "0.2.0"
+edition = "2024"
+description = "Native nymauth provers for the SIROS SDKs: Longfellow on Google's longfellow-zk Rust runtime, BBS (bbs_cd)"
+publish = false
+
+[lib]
+name = "nymauth_native"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+# UniFFI's binding generator (Kotlin, Swift), in library mode.
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+default = ["longfellow", "bbs", "counting-alloc"]
+longfellow = ["dep:nym-longfellow"]
+bbs = ["dep:nym-bbs", "dep:cd-ecdsa-pop", "dep:bbs-cd-plugin", "dep:serde_json"]
+# The counting global allocator (community-demo's node/src/alloc.rs), so a proof reports heap_mb and
+# witness_mb in community-demo's meaning. Off for a host that brings its own allocator.
+counting-alloc = []
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+nym-longfellow = { path = "../../../readdit-demo/native/longfellow/nym-longfellow", optional = true }
+nym-bbs = { path = "../../../readdit-demo/native/bbs/nym-bbs", optional = true }
+# The plugin crates nym-bbs is built on (its vendored bbs-cd-plugins, the same paths and features), for the device signer.
+cd-ecdsa-pop = { path = "../../../readdit-demo/native/bbs/vendor/bbs-cd-plugins/crates/cd-ecdsa-pop", features = ["parallel"], optional = true }
+bbs-cd-plugin = { path = "../../../readdit-demo/native/bbs/vendor/bbs-cd-plugins/crates/bbs-cd-plugin", features = ["parallel"], optional = true }
+serde_json = { version = "1", optional = true }
+uniffi = "0.29"
+thiserror = "2"
+p256 = { version = "0.13", features = ["ecdsa"] }
+sha2 = "0.10"
+base64 = "0.22"
+hex = "0.4"
+zeroize = "1"
+
+[dev-dependencies]
+serde_json = "1"
+rand_core = { version = "0.6", features = ["getrandom"] }
+zstd = "0.13"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

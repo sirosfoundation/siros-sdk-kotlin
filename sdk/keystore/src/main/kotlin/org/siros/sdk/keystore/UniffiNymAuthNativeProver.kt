@@ -8,13 +8,25 @@ import kotlinx.coroutines.withContext
 import timber.log.Timber
 
 /**
- * One native nymauth binding (Vega's or Longfellow's), as [UniffiNymAuthNativeProver] drives it: build the resident
- * state of a circuit once, then prove with it. Implemented over the UniFFI Kotlin bindings by [VegaNymAuthBinding] and
- * [LongfellowNymAuthBinding]; a test supplies its own.
+ * One native implementation of a nymauth proof system, as [UniffiNymAuthNativeProver] drives it: build the resident
+ * state of a circuit once, then prove with it. The SDK ships [ZkCredVegaNymAuthBinding] (zk-cred-vega) and
+ * [ZkCredLongfellowNymAuthBinding] (zk-cred-longfellow); a host plugs in another implementation of the same system (the
+ * same circuits, the same [NymAuthProveRequest]) by passing its own binding to [UniffiNymAuthNativeProver].
+ *
+ * The contract every binding keeps: it proves exactly the circuit the request names and refuses one it does not
+ * support ([NymAuthNativeErrorKind.UNSUPPORTED_CIRCUIT]); it checks that its own derivation of `e2` from
+ * `transcriptSeed` equals `challengeDigest`; it zeroes its copies of `secretSeed`; and every failure is a
+ * [NymAuthNativeException] that carries nothing the native side said (no digest, rule or value).
  */
-internal interface NymAuthBinding {
-    /** The catalog `system` this binding proves. */
+interface NymAuthBinding {
+    /** The catalog `system` this binding proves (for example [NymAuthCircuitZkAdapter.LONGFELLOW_SYSTEM]). */
     val system: String
+
+    /**
+     * Which implementation this is, for logs, diagnostics and benchmark records (for example `zk-cred-longfellow`).
+     * Not sent to verifiers: a proof states its circuit, not the code that made it.
+     */
+    val implementation: String
 
     /**
      * Builds the resident state of the circuit [request] names from its verified, decompressed bytes
@@ -28,19 +40,32 @@ internal interface NymAuthBinding {
 }
 
 /**
- * The real [NymAuthNativeProver]: dispatches by catalog `system` to the Vega (`vega-nymauth`) or Longfellow
- * (`longfellow-nymauth`) binding, keeps ONE built circuit resident (keyed by system, circuit id and artifact hash, so
- * a changed artifact is never proved with a stale state), and drops it on [release] (memory pressure) or when its
- * circuit is retired. A different circuit evicts the resident one first: the process holds one native prover at a
- * time. The binding's errors are already [NymAuthNativeException]s (the adapter maps each deliberately); a system no
- * binding is registered for is an unsupported circuit. Proving runs off the caller's dispatcher.
+ * The real [NymAuthNativeProver]: dispatches by catalog `system` to the [NymAuthBinding] the host chose for it (by
+ * default [DEFAULT_BINDINGS]: zk-cred-vega for `vega-nymauth`, nymauth-native for `longfellow-nymauth`), keeps
+ * ONE built circuit resident (keyed by system, circuit id and artifact hash, so a changed artifact is never proved
+ * with a stale state), and drops it on [release] (memory pressure) or when its circuit is retired. A different
+ * circuit evicts the resident one first: the process holds one native prover at a time. The binding's errors are
+ * already [NymAuthNativeException]s (the adapter maps each deliberately); a system no binding is registered for is
+ * an unsupported circuit. Proving runs off the caller's dispatcher.
  */
-class UniffiNymAuthNativeProver internal constructor(
+class UniffiNymAuthNativeProver(
     private val bindings: List<NymAuthBinding>,
 ) : ResidentNymAuthNativeProver {
 
-    /** The standard prover over the UniFFI bindings of `zk-cred-vega` and `zk-cred-longfellow`. */
-    constructor() : this(listOf(VegaNymAuthBinding, LongfellowNymAuthBinding))
+    init {
+        require(bindings.isNotEmpty()) { "A nymauth prover needs at least one binding" }
+        val twice = bindings.groupBy { it.system }.filterValues { it.size > 1 }.keys
+        require(twice.isEmpty()) { "More than one binding for $twice: a system has exactly one implementation" }
+    }
+
+    /** The standard prover: [DEFAULT_BINDINGS]. */
+    constructor() : this(DEFAULT_BINDINGS)
+
+    /** The systems this prover serves. */
+    val systems: Set<String> get() = bindings.mapTo(LinkedHashSet()) { it.system }
+
+    /** The implementation serving [system] ([NymAuthBinding.implementation]), or null when none does. */
+    fun implementationFor(system: String): String? = bindings.firstOrNull { it.system == system }?.implementation
 
     private class Resident(val key: String, val circuitId: String, val binding: NymAuthBinding, val handle: AutoCloseable)
 
@@ -68,6 +93,7 @@ class UniffiNymAuthNativeProver internal constructor(
                             close(current)
                             resident = null
                         }
+                        Timber.i("Loading nymauth circuit '$key' with ${binding.implementation}")
                         binding.load(request).also { resident = Resident(key, request.circuitId, binding, it) }
                     }
                     binding.prove(handle, request)
@@ -116,6 +142,28 @@ class UniffiNymAuthNativeProver internal constructor(
             r.handle.close()
         } catch (e: Exception) {
             Timber.w("Closing the resident nymauth circuit failed (${e.javaClass.simpleName})")
+        }
+    }
+
+    companion object {
+        /**
+         * The SDK's own implementations: zk-cred-vega for `vega-nymauth`, nymauth-native (Google's longfellow-zk, as
+         * community-demo's verifier runs) for `longfellow-nymauth`. ISRG's zk-cred-longfellow stays available:
+         * `withBindings(ZkCredLongfellowNymAuthBinding)`.
+         */
+        val DEFAULT_BINDINGS: List<NymAuthBinding> get() = listOf(ZkCredVegaNymAuthBinding, GoogleLongfellowNymAuthBinding)
+
+        /**
+         * [DEFAULT_BINDINGS] with each of [replacements] taking over its system (a system no default serves is added): the
+         * usual way to swap one implementation and keep the others.
+         */
+        fun withBindings(vararg replacements: NymAuthBinding): UniffiNymAuthNativeProver {
+            val chosen = LinkedHashMap<String, NymAuthBinding>()
+            DEFAULT_BINDINGS.forEach { chosen[it.system] = it }
+            val twice = replacements.groupBy { it.system }.filterValues { it.size > 1 }.keys
+            require(twice.isEmpty()) { "More than one replacement for $twice" }
+            replacements.forEach { chosen[it.system] = it }
+            return UniffiNymAuthNativeProver(chosen.values.toList())
         }
     }
 }

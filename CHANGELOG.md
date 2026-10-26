@@ -21,6 +21,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `direct_post`, `transaction_data`. `SirosWallet` does not use it; nothing changes for the engine flow.
 - `AuthorizationResponseEncryption.encryptError`: the encrypted error response (`error`, `state`), for that client.
 
+- **`bbs_cd` presentations (nym_auth rulebook v0.4), with the device key signing through the SDK.** `BbsCdPresenter`
+  presents one planned `zkp_req` query of `source_format` `bbs_cd`: the rulebook's data-independent rules, the scheme
+  offered by the request (`system_id_values` must name `urn:mms:bbs-cd:nym_auth:v1`; fail closed), the binding's proof,
+  and the SDK's own response checks (`CircuitZkResponseValidator`) on the `vp_token` before it is returned. The binding is
+  pluggable (`BbsCdBinding`, as `NymAuthBinding` is for the circuit systems); the default, `NymAuthNativeBbsCdBinding`,
+  is nymauth-native 0.2.0's `BbsProver` (community-demo's nym-bbs on bbs-cd-plugins 0.1). The device key never reaches
+  native code: the one ecdsa-pop signature is asked of a `ZkWitnessSigner` (ES256; a StrongBox key from
+  `AndroidKeystoreSigner.zkWitnessSigner`), checked against the device key natively, and the signer's own exception (a
+  cancelled prompt) comes back unchanged. An unmet age range is refused before the device is asked. `nymauthNativeVersion`
+  is now 0.2.0 (vendored bindings regenerated). SirosWallet's credential store and engine flow do not present `bbs_cd`.
+- **Longfellow on Google's longfellow-zk runtime, the new default for `longfellow-nymauth`.** `GoogleLongfellowNymAuthBinding`
+  (implementation `google-longfellow-zk`) proves the nym_auth mdoc circuits with nymauth-native (`native/nymauth-native`:
+  community-demo's `nym-longfellow` on Google's longfellow-zk Rust runtime `61a8a73`, the code community-demo's verifier
+  runs). It loads only its approved circuit build, checks the inputs and the holder's data before it proves, and zeroes
+  its copies of the seed; its errors map onto the SDK's `NymAuthNativeException` kinds and refusals. Proofs are about
+  344 kB (zk-cred-longfellow: about 619 kB) and each implementation verifies the other's. `UniffiNymAuthNativeProver()`
+  and `WalletConfig.circuitZkNativeProver = null` now use it; ISRG's zk-cred-longfellow stays available with
+  `UniffiNymAuthNativeProver.withBindings(ZkCredLongfellowNymAuthBinding)`. New dependency of `:sdk:credentials`:
+  `org.siros:nymauth-native:0.1.0` (`-PnymauthNativeVersion`), not published yet: build it with
+  `native/nymauth-native/scripts/build-android.sh` (to ~/.m2); `checkNativeLibraries` checks it. Its UniFFI bindings are
+  vendored under `uniffi/nymauth_native`.
+
 ### Changed
 - **`AuthorizationResponseEncryption` moved from `sdk:wallet` (internal) to `sdk:keystore` (public)**, next to
   `DCAPIResponseEncryption`: the OpenID4VP `direct_post.jwt` (JARM) builder (`encrypt`, `jwkThumbprint`) and the engine's
@@ -28,6 +50,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engine can encrypt its responses the same way. No behaviour change: `SirosWallet` and `BlindPresentation` call the same
   code, and its tests moved with it (`AuthorizationResponseEncryptionTest`). The issuance side (`CredentialResponseKey`)
   stays in `sdk:wallet`.
+- **Pluggable nymauth implementations.** `NymAuthBinding` (one native implementation of a nymauth proof system: the
+  catalog `system` it serves, load a circuit, prove) is public, with a new `implementation` id (for logs, diagnostics
+  and benchmark records; never sent to verifiers). `UniffiNymAuthNativeProver(bindings)` is public and takes exactly one
+  binding per system; `UniffiNymAuthNativeProver.withBindings(...)` swaps one system's implementation and keeps the
+  defaults for the others; `systems` and `implementationFor(system)` say which implementation serves what. The SDK's
+  bindings are public as `ZkCredVegaNymAuthBinding` (`zk-cred-vega`) and `ZkCredLongfellowNymAuthBinding`
+  (`zk-cred-longfellow`), formerly the internal `VegaNymAuthBinding` and `LongfellowNymAuthBinding`. No default
+  changes: `UniffiNymAuthNativeProver()` and `WalletConfig.circuitZkNativeProver = null` prove as before.
 
 ## [0.21.4] - 2026-10-26
 
