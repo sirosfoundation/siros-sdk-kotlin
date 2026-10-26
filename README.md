@@ -19,6 +19,7 @@ Native Android SDK for integrating SIROS ID wallet infrastructure into existing 
 | `sdk:flow` | OID4VCI/OID4VP flow orchestration over WMP |
 | `sdk:credentials` | Credential storage and metadata |
 | `sdk:passkey-provider` | Android Credential Provider Service for passkeys |
+| `sdk:openid4vp` | Backend-free OpenID4VP client: signed requests by reference, `direct_post.jwt` responses, `zkp_req` presentations |
 | `sample-app` | Minimal example wallet app |
 
 ## Architecture

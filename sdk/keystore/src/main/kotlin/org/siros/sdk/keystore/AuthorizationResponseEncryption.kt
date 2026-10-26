@@ -98,6 +98,38 @@ object AuthorizationResponseEncryption {
             put("vp_token", vpToken)
             if (!state.isNullOrEmpty()) put("state", JsonPrimitive(state))
         }
+        return encryptClaims(claims, verifierJwk, alg, enc)
+    }
+
+    /**
+     * The compact JWE of an error response (OpenID4VP 1.0 section 8.5): claims `iss`, `aud`, `iat`, `exp`, `error` and, when the
+     * request had one, `state`; encrypted and checked exactly as [encrypt] does.
+     *
+     * @param error the OAuth error code (`access_denied`, `invalid_request`, ...). No description is sent.
+     * @throws IllegalArgumentException as [encrypt].
+     */
+    fun encryptError(
+        error: String,
+        audience: String,
+        state: String?,
+        verifierJwk: JsonObject,
+        alg: String,
+        enc: String,
+        nowSeconds: Long = System.currentTimeMillis() / 1000,
+    ): String {
+        require(error.isNotEmpty()) { "An error response names an error code" }
+        val claims = buildJsonObject {
+            put("iss", JsonPrimitive(JARM_ISSUER))
+            put("aud", JsonPrimitive(audience))
+            put("iat", JsonPrimitive(nowSeconds))
+            put("exp", JsonPrimitive(nowSeconds + JARM_LIFETIME_SECONDS))
+            put("error", JsonPrimitive(error))
+            if (!state.isNullOrEmpty()) put("state", JsonPrimitive(state))
+        }
+        return encryptClaims(claims, verifierJwk, alg, enc)
+    }
+
+    private fun encryptClaims(claims: JsonObject, verifierJwk: JsonObject, alg: String, enc: String): String {
         val jwk = try {
             JWK.parse(verifierJwk.toString())
         } catch (e: Exception) {

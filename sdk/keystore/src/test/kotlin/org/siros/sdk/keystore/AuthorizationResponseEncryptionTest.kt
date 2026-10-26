@@ -181,5 +181,23 @@ class AuthorizationResponseEncryptionTest {
         val huge = JsonPrimitive("x".repeat(AuthorizationResponseEncryption.MAX_RESPONSE_JWE_BYTES))
         assertThrows(IllegalArgumentException::class.java) { jarm("ECDH-ES", "A128GCM", vp = huge) }
     }
-}
 
+    @Test
+    fun anErrorResponseCarriesTheErrorAndStateAndNoVpToken() {
+        val jwe = AuthorizationResponseEncryption.encryptError(
+            "access_denied", "x509_san_dns:verifier.example", "state-123", publicJwk(verifier), "ECDH-ES", "A128GCM", nowSeconds = 1_700_000_000,
+        )
+        val (header, claims) = decryptJarm(jwe)
+        assertEquals("verifier-key-1", header.keyID)
+        assertEquals("access_denied", claims["error"]!!.jsonPrimitive.content)
+        assertEquals("state-123", claims["state"]!!.jsonPrimitive.content)
+        assertEquals("x509_san_dns:verifier.example", claims["aud"]!!.jsonPrimitive.content)
+        assertEquals(1_700_000_300L, claims["exp"]!!.jsonPrimitive.content.toLong())
+        assertFalse(claims.containsKey("vp_token"))
+        assertFalse(claims.containsKey("error_description"))
+        assertTrue(AuthorizationResponseEncryption.isConformant(jwe, "ECDH-ES", "A128GCM", "verifier-key-1"))
+        assertThrows(IllegalArgumentException::class.java) {
+            AuthorizationResponseEncryption.encryptError("", "a", null, publicJwk(verifier), "ECDH-ES", "A128GCM")
+        }
+    }
+}

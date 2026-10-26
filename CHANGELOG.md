@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`sdk:openid4vp`: a backend-free OpenID4VP client** (new module, `org.siros:siros-sdk-openid4vp`; depends on
+  `sdk:keystore` and `sdk:credentials` only, not on the wallet engine). `OpenId4VpClient.fetchRequest` parses an
+  `openid4vp://` request by reference (`AuthorizationRequestUri`), fetches the request object (POST with `wallet_metadata`
+  and a fresh `wallet_nonce` when the verifier asks for it), verifies it (ES256 by the `x5c` leaf, whose dNSName SAN is the
+  `client_id` host; `client_id`, `wallet_nonce` and `exp` checked), asks the host's `VerifierTrustPolicy` (no default;
+  `AllowedHostsTrustPolicy` for demos) and returns an `AuthorizationRequest` when the request is one it answers: DCQL,
+  `direct_post.jwt` with an ECDH-ES P-256 key, A128GCM or A256GCM. `sendPresentation` and `sendError` post the encrypted
+  response. `CircuitZkResponder` answers `zkp_req` queries with the SDK's `CircuitZkPresenter`, bound to the request's
+  OpenID4VPHandover transcript; `WalletMetadata.circuitZk` builds the metadata. Refusals are typed (`OpenId4VpException`,
+  `UntrustedReason`). Not supported: other `client_id` prefixes, by-value requests, `presentation_definition`, plain
+  `direct_post`, `transaction_data`. `SirosWallet` does not use it; nothing changes for the engine flow.
+- `AuthorizationResponseEncryption.encryptError`: the encrypted error response (`error`, `state`), for that client.
+
 ### Changed
 - **`AuthorizationResponseEncryption` moved from `sdk:wallet` (internal) to `sdk:keystore` (public)**, next to
   `DCAPIResponseEncryption`: the OpenID4VP `direct_post.jwt` (JARM) builder (`encrypt`, `jwkThumbprint`) and the engine's
