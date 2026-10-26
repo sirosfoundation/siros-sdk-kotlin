@@ -51,3 +51,10 @@ impl NymAuthNativeError {
     NymAuthNativeError::Refused { refusal }
   }
 }
+
+/// A host callback (the BBS device signer) that failed with something other than this error.
+impl From<uniffi::UnexpectedUniFFICallbackError> for NymAuthNativeError {
+  fn from(_: uniffi::UnexpectedUniFFICallbackError) -> Self {
+    NymAuthNativeError::Internal
+  }
+}

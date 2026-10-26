@@ -6,15 +6,25 @@
 #   build/kotlin/uniffi/nymauth_native/      the UniFFI Kotlin bindings, which the SDK vendors
 #   build/nymauth-native-<version>.aar       the .so files only (as zk-cred-longfellow's AAR)
 #
+# With --demo-issuer it also builds the ZKP demo wallet's BBS demo issuer (demo-issuer/, DEMO ONLY, never an
+# SDK dependency) the same way, as org.siros:nymauth-demo-issuer:<version>, with its bindings in
+# demo-issuer/build/kotlin/uniffi/nymauth_demo_issuer/ for the demo app to vendor.
+#
 # Needs: rustup targets aarch64-linux-android and x86_64-linux-android, cargo-ndk, an Android NDK
-# (ANDROID_NDK_HOME, or the newest under $ANDROID_HOME/ndk), and readdit-demo (nym-longfellow) checked out
-# next to siros-sdk-kotlin.
+# (ANDROID_NDK_HOME, or the newest under $ANDROID_HOME/ndk), and readdit-demo (nym-longfellow, nym-bbs)
+# checked out next to siros-sdk-kotlin.
 # armeabi-v7a is not built: Google's runtime needs PMULL (AArch64) or PCLMULQDQ (x86-64).
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$here"
-version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 api="${ANDROID_API:-28}"
+demo_issuer=false
+for arg in "$@"; do
+  case "$arg" in
+    --demo-issuer) demo_issuer=true ;;
+    *) echo "build-android: unknown argument $arg (use --demo-issuer)"; exit 1 ;;
+  esac
+done
 
 # A RUSTFLAGS variable would replace .cargo/config.toml's +aes,+sha2 (PMULL), without which
 # Google's GF(2^128) arithmetic does not build for AArch64.
@@ -27,9 +37,13 @@ fi
 [ -d "${ANDROID_NDK_HOME:-}" ] || { echo "build-android: no NDK (set ANDROID_NDK_HOME)"; exit 1; }
 export ANDROID_NDK_HOME
 command -v cargo-ndk >/dev/null || { echo "build-android: cargo install cargo-ndk"; exit 1; }
-[ -d ../../../readdit-demo/native/longfellow/nym-longfellow ] || { echo "build-android: readdit-demo (nym-longfellow) is missing next to siros-sdk-kotlin"; exit 1; }
+for dep in native/longfellow/nym-longfellow native/bbs/nym-bbs; do
+  [ -d "../../../readdit-demo/$dep" ] || { echo "build-android: readdit-demo ($dep) is missing next to siros-sdk-kotlin"; exit 1; }
+done
+grep -q "fn prove_with" ../../../readdit-demo/native/bbs/nym-bbs/src/prover.rs || {
+  echo "build-android: readdit-demo's nym-bbs has no Prover::prove_with (check out feat/bbs-prove-with-signer, or main once it is merged)"; exit 1;
+}
 
-rm -rf build && mkdir -p build/jni build/kotlin build/aar
 # arm64-v8a always; x86_64 (emulators) when its Rust target is installed.
 abis=(-t arm64-v8a)
 if rustup target list --installed 2>/dev/null | grep -q '^x86_64-linux-android$'; then
@@ -37,44 +51,54 @@ if rustup target list --installed 2>/dev/null | grep -q '^x86_64-linux-android$'
 else
   echo "(x86_64 skipped: rustup target add x86_64-linux-android to build it)"
 fi
-echo "== native libraries (API $api)"
-cargo ndk "${abis[@]}" -P "$api" -o build/jni build --release --lib --locked
+objdump="$(ls "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin/llvm-objdump 2>/dev/null | head -1 || true)"
 
-objdump="$(ls "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin/llvm-objdump 2>/dev/null | head -1)"
-if [ -n "$objdump" ]; then
-  n="$("$objdump" -d build/jni/arm64-v8a/libnymauth_native.so | grep -c pmull || true)"
-  echo "arm64-v8a: $n pmull instructions"
-  [ "$n" -gt 0 ] || { echo "build-android: no pmull in the arm64 library (RUSTFLAGS?)"; exit 1; }
-fi
+# build <crate dir> <library name> <artifact id> <manifest package> <check pmull: true/false>
+build() {
+  local dir="$1" lib="$2" artifact="$3" package="$4" pmull="$5"
+  (
+    cd "$dir"
+    local version
+    version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+    rm -rf build && mkdir -p build/jni build/kotlin build/aar
+    echo "== $artifact $version: native libraries (API $api)"
+    cargo ndk "${abis[@]}" -P "$api" -o build/jni build --release --lib --locked
 
-echo "== Kotlin bindings"
-cargo build --release --lib --locked
-lib=""
-for f in target/release/libnymauth_native.dylib target/release/libnymauth_native.so; do
-  if [ -f "$f" ]; then lib="$f"; break; fi
-done
-[ -n "$lib" ] || { echo "build-android: no host library in target/release"; exit 1; }
-cargo run --release --locked --features bindgen --bin uniffi-bindgen -- generate --library "$lib" --language kotlin --out-dir build/kotlin
+    if [ "$pmull" = true ] && [ -n "$objdump" ]; then
+      local n
+      n="$("$objdump" -d "build/jni/arm64-v8a/lib$lib.so" | grep -c pmull || true)"
+      echo "arm64-v8a: $n pmull instructions"
+      [ "$n" -gt 0 ] || { echo "build-android: no pmull in the arm64 library (RUSTFLAGS?)"; exit 1; }
+    fi
 
-echo "== AAR"
-mkdir -p build/aar/jni build/aar-classes/META-INF
-cp -R build/jni/* build/aar/jni/
-echo '<?xml version="1.0" encoding="utf-8"?><manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.siros.nymauthnative"/>' > build/aar/AndroidManifest.xml
-printf 'Manifest-Version: 1.0\n' > build/aar-classes/META-INF/MANIFEST.MF
-(cd build/aar-classes && zip -qr ../aar/classes.jar .)
-(cd build/aar && zip -qr "../nymauth-native-$version.aar" .)
+    echo "== $artifact: Kotlin bindings"
+    cargo build --release --lib --locked
+    local host=""
+    for f in "target/release/lib$lib.dylib" "target/release/lib$lib.so"; do
+      if [ -f "$f" ]; then host="$f"; break; fi
+    done
+    [ -n "$host" ] || { echo "build-android: no host library in $dir/target/release"; exit 1; }
+    cargo run --release --locked --features bindgen --bin uniffi-bindgen -- generate --library "$host" --language kotlin --out-dir build/kotlin
 
-echo "== mavenLocal: org.siros:nymauth-native:$version"
-repo="$HOME/.m2/repository/org/siros/nymauth-native/$version"
-mkdir -p "$repo"
-cp "build/nymauth-native-$version.aar" "$repo/nymauth-native-$version.aar"
-cat > "$repo/nymauth-native-$version.pom" <<POM
+    echo "== $artifact: AAR"
+    mkdir -p build/aar/jni build/aar-classes/META-INF
+    cp -R build/jni/* build/aar/jni/
+    echo "<?xml version=\"1.0\" encoding=\"utf-8\"?><manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" package=\"$package\"/>" > build/aar/AndroidManifest.xml
+    printf 'Manifest-Version: 1.0\n' > build/aar-classes/META-INF/MANIFEST.MF
+    (cd build/aar-classes && zip -qr ../aar/classes.jar .)
+    (cd build/aar && zip -qr "../$artifact-$version.aar" .)
+
+    echo "== mavenLocal: org.siros:$artifact:$version"
+    local repo="$HOME/.m2/repository/org/siros/$artifact/$version"
+    mkdir -p "$repo"
+    cp "build/$artifact-$version.aar" "$repo/$artifact-$version.aar"
+    cat > "$repo/$artifact-$version.pom" <<POM
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <groupId>org.siros</groupId>
-  <artifactId>nymauth-native</artifactId>
+  <artifactId>$artifact</artifactId>
   <version>$version</version>
   <packaging>aar</packaging>
   <dependencies>
@@ -87,5 +111,12 @@ cat > "$repo/nymauth-native-$version.pom" <<POM
   </dependencies>
 </project>
 POM
-ls -la build/jni/*/libnymauth_native.so "$repo"
-echo "Kotlin bindings: build/kotlin/uniffi/nymauth_native/nymauth_native.kt"
+    ls -la build/jni/*/"lib$lib.so" "$repo"
+    echo "Kotlin bindings: $dir/build/kotlin/uniffi/$lib/$lib.kt"
+  )
+}
+
+build . nymauth_native nymauth-native org.siros.nymauthnative true
+if [ "$demo_issuer" = true ]; then
+  build demo-issuer nymauth_demo_issuer nymauth-demo-issuer org.siros.nymauthdemoissuer false
+fi

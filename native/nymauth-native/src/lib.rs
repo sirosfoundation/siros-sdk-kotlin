@@ -3,6 +3,7 @@
 //! | Module | Role |
 //! | --- | --- |
 //! | [`longfellow`] | The nym_auth mdoc circuits on Google's longfellow-zk Rust runtime (community-demo's nym-longfellow): load, prove, verify |
+//! | [`bbs`] | The nym_auth attestation in its `bbs_cd` encoding (community-demo's nym-bbs on bbs-cd-plugins): prove, the device key signing through the host |
 //! | [`error`] | Coarse error kinds that carry no native detail |
 //!
 //! The request a prover takes is exactly the SDK's `NymAuthProveRequest` (the values both sides
@@ -15,6 +16,8 @@ uniffi::setup_scaffolding!();
 #[cfg(feature = "counting-alloc")]
 mod alloc;
 pub mod error;
+#[cfg(feature = "bbs")]
+pub mod bbs;
 #[cfg(feature = "longfellow")]
 pub mod longfellow;
 
@@ -29,6 +32,8 @@ pub fn nymauth_native_version() -> String {
   let mut parts = vec![format!("nymauth-native {}", env!("CARGO_PKG_VERSION"))];
   #[cfg(feature = "longfellow")]
   parts.push(nym_longfellow::circuit::RUNTIME.to_string());
+  #[cfg(feature = "bbs")]
+  parts.push("bbs-cd-plugins 0.1 (ETSI BBS committed disclosures v0.7, BLS12-381-SHA-256)".to_string());
   parts.join("; ")
 }
 
