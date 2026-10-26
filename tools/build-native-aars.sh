@@ -16,17 +16,24 @@ VEGA_VERSION=0.0.8                                         # the crate says 0.0.
 LONGFELLOW_VERSION=0.1.2                                    # the crate says 0.1.1: built under the next version so it cannot be mistaken for the released one
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
-out="$here/build/native-repo"; vega=""; lf=""; vendor=0
+out="$here/build/native-repo"; vega=""; lf=""; vendor=0; abis=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --vega) vega="$2"; shift 2;;
     --longfellow) lf="$2"; shift 2;;
     --out) out="$2"; shift 2;;
     --vendor) vendor=1; shift;;
+    --abis) abis="$2"; shift 2;;
     *) echo "unknown argument $1" >&2; exit 2;;
   esac
 done
 [ -n "$vega$lf" ] || { echo "give --vega and/or --longfellow" >&2; exit 2; }
+# x86_64 (the emulator ABI) cannot be cross-built on Apple Silicon: vega-prover turns on halo2curves' `asm` for an x86_64
+# target, and halo2curves' build script refuses it unless the HOST is x86_64. So on an arm64 Mac only the phone ABIs.
+if [ -z "$abis" ] && [ "$(uname -sm)" = "Darwin arm64" ]; then
+  abis="arm64-v8a armeabi-v7a"
+  echo "Apple Silicon: building $abis only (x86_64 needs an x86_64 host); --abis chooses" >&2
+fi
 
 check_sha() { # dir expected
   local have; have="$(git -C "$1" rev-parse HEAD)"
@@ -34,14 +41,40 @@ check_sha() { # dir expected
   [ -z "$(git -C "$1" status --porcelain --untracked-files=no)" ] || { echo "$1 has local changes" >&2; exit 1; }
 }
 
-build() { # dir artifact version crate sha
-  local dir="$1" artifact="$2" version="$3" crate="$4"
-  ( cd "$dir" && make aar pom VERSION="$version" )
+build() { # dir artifact version crate
+  local dir="$1" artifact="$2" version="$3" crate="$4" lib="lib${4//-/_}.so"
   local dest="$out/org/siros/$artifact/$version"
-  mkdir -p "$dest"
-  cp "$dir/target/${crate//-/_}-$version.aar" "$dest/$artifact-$version.aar"
+  mkdir -p "$dest"; dest="$(cd "$dest" && pwd)"
+  if [ -z "$abis" ]; then
+    ( cd "$dir" && make aar pom VERSION="$version" )
+    cp "$dir/target/${crate//-/_}-$version.aar" "$dest/$artifact-$version.aar"
+  else
+    # Only these ABIs: each built by the Makefile's android-<triple> target, then packaged as its `aar` target packages
+    # them (jni/<abi>/<lib>.so, a manifest, an empty classes.jar).
+    local stage triple; stage="$(mktemp -d)"
+    mkdir -p "$stage/aar" "$stage/classes/META-INF"
+    for abi in $abis; do
+      case "$abi" in
+        arm64-v8a) triple=aarch64-linux-android;;
+        armeabi-v7a) triple=armv7-linux-androideabi;;
+        x86_64) triple=x86_64-linux-android;;
+        *) echo "unknown ABI $abi" >&2; exit 2;;
+      esac
+      ( cd "$dir" && make "android-$triple" )
+      mkdir -p "$stage/aar/jni/$abi"
+      cp "$dir/target/$triple/release/$lib" "$stage/aar/jni/$abi/"
+    done
+    ( cd "$dir" && make pom VERSION="$version" )
+    printf '<?xml version="1.0" encoding="utf-8"?><manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.siros.%s"/>' \
+      "${crate//-/}" > "$stage/aar/AndroidManifest.xml"
+    printf 'Manifest-Version: 1.0\n' > "$stage/classes/META-INF/MANIFEST.MF"
+    ( cd "$stage/classes" && zip -qr ../aar/classes.jar . )
+    rm -f "$dest/$artifact-$version.aar"
+    ( cd "$stage/aar" && zip -qr "$dest/$artifact-$version.aar" . )
+    rm -rf "$stage"
+  fi
   cp "$dir/target/$artifact-$version.pom" "$dest/$artifact-$version.pom"
-  echo "built $dest"
+  echo "built $dest${abis:+ (ABIs: $abis)}"
 }
 
 vendor_bindings() { # dir crate (generated from the Android arm64 library of the same build)
