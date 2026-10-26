@@ -39,6 +39,11 @@ android {
 val zkCredVegaVersion: String = providers.gradleProperty("zkCredVegaVersion").getOrElse("0.0.7")
 val zkCredLongfellowVersion: String = providers.gradleProperty("zkCredLongfellowVersion").getOrElse("0.1.2")
 
+// nymauth-native (native/nymauth-native in this repository): Longfellow on Google's longfellow-zk runtime, the default
+// `longfellow-nymauth` implementation. Until it is published, build it with native/nymauth-native/scripts/build-android.sh,
+// which puts this version in ~/.m2.
+val nymauthNativeVersion: String = providers.gradleProperty("nymauthNativeVersion").getOrElse("0.1.0")
+
 // The matcher at rulebook v0.4 (`zkp_req`): siros-dc-matcher v0.11.0 (merge 09ac62fb). Its Kotlin bindings (vendored below
 // uniffi/) and the vectors in spec/zkp-req-vectors are the ones of that tag.
 val sirosDcMatcherVersion: String = providers.gradleProperty("sirosDcMatcherVersion").getOrElse("0.11.0")
@@ -51,10 +56,11 @@ val sirosDcMatcherVersion: String = providers.gradleProperty("sirosDcMatcherVers
  */
 val checkNativeLibraries = tasks.register("checkNativeLibraries") {
     group = "verification"
-    description = "Checks that zk-cred-vega and zk-cred-longfellow resolve and carry the nymauth entry points."
+    description = "Checks that zk-cred-vega, zk-cred-longfellow and nymauth-native resolve and carry the nymauth entry points."
     val nativeLibs = listOf(
         Triple("zk-cred-vega", zkCredVegaVersion, "libzk_cred_vega.so" to "nymauth_vega_load_keys"),
         Triple("zk-cred-longfellow", zkCredLongfellowVersion, "libzk_cred_longfellow.so" to "nymauth_initialize_prover"),
+        Triple("nymauth-native", nymauthNativeVersion, "libnymauth_native.so" to "uniffi_nymauth_native_fn_constructor_longfellowprover_load"),
     )
     doLast {
         for ((artifact, version, lib) in nativeLibs) {
@@ -62,6 +68,16 @@ val checkNativeLibraries = tasks.register("checkNativeLibraries") {
             val files = try {
                 configurations.detachedConfiguration(dependencies.create("$coordinates@aar")).apply { isTransitive = false }.resolve()
             } catch (e: Exception) {
+                if (artifact == "nymauth-native") {
+                    throw GradleException(
+                        "The native library $coordinates cannot be resolved.\n" +
+                            "It is built in this repository and not published yet. Build it (Rust, cargo-ndk, the NDK; " +
+                            "readdit-demo next to siros-sdk-kotlin) and it lands in ~/.m2:\n" +
+                            "  native/nymauth-native/scripts/build-android.sh\n" +
+                            "See native/nymauth-native/README.md. (-PnymauthNativeVersion selects another version.)\n" +
+                            "Gradle said: ${e.message?.lineSequence()?.firstOrNull().orEmpty()}",
+                    )
+                }
                 throw GradleException(
                     "The native library $coordinates cannot be resolved.\n" +
                         "It carries the nymauth circuit_zk prover and is not published yet (GitHub Packages: " +
@@ -126,6 +142,9 @@ dependencies {
     // bindings are generated from exactly these builds and check their API checksums at load, so the two move
     // together. Override for a local build with -PzkCredLongfellowVersion / -PzkCredVegaVersion (docs/NATIVE_DEV.md).
     implementation("org.siros:zk-cred-longfellow:$zkCredLongfellowVersion")
+    // nymauth-native: the default `longfellow-nymauth` implementation (Google's longfellow-zk); its .so files only, the
+    // UniFFI bindings are vendored under uniffi/nymauth_native (from native/nymauth-native/scripts/build-android.sh).
+    implementation("org.siros:nymauth-native:$nymauthNativeVersion")
 
     // zk-cred-vega UniFFI bindings - real GitHub Packages Maven artifact
     // (resolved via GitHubPackagesZkCredVega in settings.gradle.kts), built

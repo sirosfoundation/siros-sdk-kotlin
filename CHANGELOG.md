@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Longfellow on Google's longfellow-zk runtime, the new default for `longfellow-nymauth`.** `GoogleLongfellowNymAuthBinding`
+  (implementation `google-longfellow-zk`) proves the nym_auth mdoc circuits with nymauth-native (`native/nymauth-native`:
+  community-demo's `nym-longfellow` on Google's longfellow-zk Rust runtime `61a8a73`, the code community-demo's verifier
+  runs). It loads only its approved circuit build, checks the inputs and the holder's data before it proves, and zeroes
+  its copies of the seed; its errors map onto the SDK's `NymAuthNativeException` kinds and refusals. Proofs are about
+  344 kB (zk-cred-longfellow: about 619 kB) and each implementation verifies the other's. `UniffiNymAuthNativeProver()`
+  and `WalletConfig.circuitZkNativeProver = null` now use it; ISRG's zk-cred-longfellow stays available with
+  `UniffiNymAuthNativeProver.withBindings(ZkCredLongfellowNymAuthBinding)`. New dependency of `:sdk:credentials`:
+  `org.siros:nymauth-native:0.1.0` (`-PnymauthNativeVersion`), not published yet: build it with
+  `native/nymauth-native/scripts/build-android.sh` (to ~/.m2); `checkNativeLibraries` checks it. Its UniFFI bindings are
+  vendored under `uniffi/nymauth_native`.
+
 ### Changed
 - **Pluggable nymauth implementations.** `NymAuthBinding` (one native implementation of a nymauth proof system: the
   catalog `system` it serves, load a circuit, prove) is public, with a new `implementation` id (for logs, diagnostics
