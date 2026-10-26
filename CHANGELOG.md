@@ -8,17 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **`AndroidKeystoreSigner`: a `Signer` over the Android Keystore, StrongBox first.** ES256 (P-256) keys made in
-  StrongBox when the phone has it (a Pixel's Titan M2), otherwise in the TEE (`StrongBoxUnavailableException` or a
-  `ProviderException` from StrongBox falls back); `preferStrongBox = false` makes TEE keys only. `sign` returns the raw
-  `r || s` JWS and COSE carry, with `s` in low form; `exportPublicKey` the public JWK. `securityLevel(keyId)` reports
-  `STRONGBOX`, `TRUSTED_ENVIRONMENT`, `SOFTWARE` or `UNKNOWN` (Android 12+ tells StrongBox from the TEE; before, a
-  hardware key reports `TRUSTED_ENVIRONMENT`), and `securityProperties` the matching `keyStorage` (`hardware`,
-  `trusted_execution`, `software`). Keys are device-bound: nothing is exported, `migrateKey` answers
-  `ReEnrollmentRequired`. No user authentication is bound to the keys. `zkWitnessSigner(keyId)` is the device signature
-  for a ZK presentation (`CircuitZkPresenter.present`), ES256 only. Not yet: Android Key Attestation
-  (`attestationChain` is null) and a `WscdPluginCapabilities` entry. Unit tests for the signature and JWK encodings;
-  instrumented tests (`AndroidKeystoreSignerTest`) on a real phone.
+- **`AndroidKeystoreSigner`: a `Signer` over the Android Keystore, with per-key policies for high-assurance and demo
+  keys.** ES256 (P-256) keys made under a `KeyPolicy`:
+  - `hardware` (`HardwareRequirement`): `STRONGBOX` (default; high assurance: StrongBox or refuse,
+    `strongbox_unavailable`), `HARDWARE` (StrongBox, else the TEE, never a software key; lower assurance), `ANY`. The
+    level is confirmed when the key is made (`createKey` returns it in `CreatedKey`); a key below the requirement is
+    deleted and refused.
+  - `userAuthentication`: `None` (demo), or `EveryUse(methods)`: a fresh authentication for every use, bound to that use
+    in the Keystore, with a strong biometric (inherence), the device credential (knowledge, per use from Android 11),
+    or either, chosen per key. The app supplies the prompt (`UserAuthenticator`; `BiometricPromptAuthenticator` is
+    the ready-made one); without one such a key refuses (`user_authentication_required`).
+  - `unlockedDeviceRequired` (default on): no signing while the phone is locked.
+
+  SCA: an `EveryUse` key with an authenticator reaches two categories. `scaAuthenticationCapability` says so without
+  prompting; `beginScaSign` authenticates when the session starts and declares possession (`key_in_local_native_wscd`,
+  to be confirmed against TS12 3.6) plus inherence or knowledge (`other`: Android does not say which biometric or
+  credential), and its one `sign` uses that authentication. `sign` returns raw `r || s` with low `s`; `exportPublicKey`
+  the public JWK; `securityLevel` and `securityProperties` report the storage (`hardware`, `trusted_execution`,
+  `software`) and the per-use methods (`biometric`, `device_credential`). Keys are device-bound: nothing is exported,
+  `migrateKey` answers `ReEnrollmentRequired`. `zkWitnessSigner(keyId)` is the device signature for
+  `CircuitZkPresenter.present`. The DER signature parser is strict (minimal integers, short-form lengths) and fuzzed
+  (`EcdsaSignaturesFuzzTest`). Not yet: Android Key Attestation (`attestationChain` is null). Tests: unit tests for the
+  encodings and policies, instrumented tests on a real phone (`AndroidKeystoreSignerTest`), and prompt tests with a
+  person at the phone (`AndroidKeystoreSignerInteractiveTest`, `interactive=true`). New dependencies of
+  `sdk:keystore`: `androidx.biometric` (api) and `kotlinx-coroutines-android`.
 
 ## [0.21.3] - 2026-10-26
 

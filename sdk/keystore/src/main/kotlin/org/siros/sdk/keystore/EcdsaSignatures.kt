@@ -67,7 +67,7 @@ internal object EcdsaSignatures {
         return byteArrayOf(0x02, bytes.size.toByte()) + bytes
     }
 
-    /** `SEQUENCE { INTEGER r, INTEGER s }`, short-form lengths only (a P-256 signature is at most 72 bytes). */
+    /** `SEQUENCE { INTEGER r, INTEGER s }`, strict DER: short-form lengths (a P-256 signature is at most 72 bytes), minimal integers. */
     private fun parseDer(der: ByteArray): Pair<BigInteger, BigInteger> {
         fun bad(): Nothing = throw KeystoreException("Not a DER P-256 ECDSA signature", errorCode = "invalid_signature")
         if (der.size < 8 || der[0] != 0x30.toByte()) bad()
@@ -80,6 +80,7 @@ internal object EcdsaSignatures {
             if (len == 0 || len > SCALAR_BYTES + 1 || pos + 2 + len > der.size) bad()
             val bytes = der.copyOfRange(pos + 2, pos + 2 + len)
             if (bytes[0].toInt() and 0x80 != 0) bad() // negative
+            if (bytes.size > 1 && bytes[0] == 0.toByte() && bytes[1].toInt() and 0x80 == 0) bad() // not minimal (DER)
             pos += 2 + len
             return BigInteger(1, bytes)
         }
