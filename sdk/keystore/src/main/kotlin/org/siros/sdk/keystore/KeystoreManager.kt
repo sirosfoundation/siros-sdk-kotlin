@@ -19,6 +19,15 @@ interface KeystoreManager {
     val isUnlocked: Boolean
 
     /**
+     * Whether this keystore's WSCD has been ONBOARDED: a token-backed plugin (FIDO2) holds at least
+     * one enrolled key. Callers use it to fail with a clear error BEFORE asking the user for a PIN,
+     * which is meaningless when no token has been onboarded. `false` also means "could not be
+     * determined" (fail closed). The default is `true`: a keystore whose keys need no onboarding
+     * (software keys) has nothing to onboard.
+     */
+    suspend fun isWscdOnboarded(): Boolean = true
+
+    /**
      * Unlock the keystore using PRF-derived key material.
      *
      * @param prfOutput   raw PRF output from the WebAuthn authenticator.
@@ -152,6 +161,26 @@ interface KeystoreManager {
         return generateProof(audience, nonce, freshKey, holderBinding)
     }
 
+    /**
+     * [generateProof] with extra claims of ANY JSON type (the Credential Auxiliary Data v0.1 `auxiliary_data` claim is an array),
+     * signed with the rest. Fail-closed default: claims that are all strings forward to the string form; anything else throws,
+     * because a keystore that cannot place a claim must not return a proof without it.
+     */
+    suspend fun generateProofWithJsonClaims(
+        audience: String,
+        nonce: String,
+        freshKey: Boolean,
+        holderBinding: HolderBinding?,
+        extraJsonClaims: Map<String, kotlinx.serialization.json.JsonElement>,
+    ): String {
+        val strings = extraJsonClaims.mapValues { (_, v) ->
+            (v as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content
+                ?: throw KeystoreException(
+                    "This KeystoreManager cannot place a non-string proof claim - refusing rather than returning a proof without it.",
+                )
+        }
+        return generateProof(audience, nonce, freshKey, holderBinding, strings)
+    }
 
     /**
      * Sign a verifiable presentation for OID4VP.
