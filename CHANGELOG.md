@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`AndroidKeystoreSigner`: a `Signer` over the Android Keystore, StrongBox first.** ES256 (P-256) keys made in
+  StrongBox when the phone has it (a Pixel's Titan M2), otherwise in the TEE (`StrongBoxUnavailableException` or a
+  `ProviderException` from StrongBox falls back); `preferStrongBox = false` makes TEE keys only. `sign` returns the raw
+  `r || s` JWS and COSE carry, with `s` in low form; `exportPublicKey` the public JWK. `securityLevel(keyId)` reports
+  `STRONGBOX`, `TRUSTED_ENVIRONMENT`, `SOFTWARE` or `UNKNOWN` (Android 12+ tells StrongBox from the TEE; before, a
+  hardware key reports `TRUSTED_ENVIRONMENT`), and `securityProperties` the matching `keyStorage` (`hardware`,
+  `trusted_execution`, `software`). Keys are device-bound: nothing is exported, `migrateKey` answers
+  `ReEnrollmentRequired`. No user authentication is bound to the keys. `zkWitnessSigner(keyId)` is the device signature
+  for a ZK presentation (`CircuitZkPresenter.present`), ES256 only. Not yet: Android Key Attestation
+  (`attestationChain` is null) and a `WscdPluginCapabilities` entry. Unit tests for the signature and JWK encodings;
+  instrumented tests (`AndroidKeystoreSignerTest`) on a real phone.
+
 ## [0.21.3] - 2026-10-26
 
 Requires siros-wscd-manager 0.11.0 (CTAP2 setPIN); the Swift SDK takes the same release. Not verified on real hardware. Known follow-ups: https://github.com/sirosfoundation/siros-sdk-kotlin/issues/316; held out: https://github.com/sirosfoundation/siros-sdk-kotlin/pull/312 and https://github.com/sirosfoundation/siros-sdk-kotlin/pull/285.
