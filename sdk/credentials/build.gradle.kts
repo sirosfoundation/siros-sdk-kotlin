@@ -40,9 +40,9 @@ val zkCredVegaVersion: String = providers.gradleProperty("zkCredVegaVersion").ge
 val zkCredLongfellowVersion: String = providers.gradleProperty("zkCredLongfellowVersion").getOrElse("0.1.2")
 
 // nymauth-native (native/nymauth-native in this repository): Longfellow on Google's longfellow-zk runtime, the default
-// `longfellow-nymauth` implementation. Until it is published, build it with native/nymauth-native/scripts/build-android.sh,
+// `longfellow-nymauth` implementation, and BBS (`bbs_cd`) with the device key signing through the SDK. Until it is published, build it with native/nymauth-native/scripts/build-android.sh,
 // which puts this version in ~/.m2.
-val nymauthNativeVersion: String = providers.gradleProperty("nymauthNativeVersion").getOrElse("0.1.0")
+val nymauthNativeVersion: String = providers.gradleProperty("nymauthNativeVersion").getOrElse("0.2.0")
 
 // The matcher at rulebook v0.4 (`zkp_req`): siros-dc-matcher v0.11.0 (merge 09ac62fb). Its Kotlin bindings (vendored below
 // uniffi/) and the vectors in spec/zkp-req-vectors are the ones of that tag.
@@ -60,7 +60,8 @@ val checkNativeLibraries = tasks.register("checkNativeLibraries") {
     val nativeLibs = listOf(
         Triple("zk-cred-vega", zkCredVegaVersion, "libzk_cred_vega.so" to "nymauth_vega_load_keys"),
         Triple("zk-cred-longfellow", zkCredLongfellowVersion, "libzk_cred_longfellow.so" to "nymauth_initialize_prover"),
-        Triple("nymauth-native", nymauthNativeVersion, "libnymauth_native.so" to "uniffi_nymauth_native_fn_constructor_longfellowprover_load"),
+        // 0.2.0 carries BBS (bbs_cd) next to Longfellow: its BBS entry point marks a current build.
+        Triple("nymauth-native", nymauthNativeVersion, "libnymauth_native.so" to "uniffi_nymauth_native_fn_constructor_bbsprover_load"),
     )
     doLast {
         for ((artifact, version, lib) in nativeLibs) {

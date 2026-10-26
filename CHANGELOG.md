@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`bbs_cd` presentations (nym_auth rulebook v0.4), with the device key signing through the SDK.** `BbsCdPresenter`
+  presents one planned `zkp_req` query of `source_format` `bbs_cd`: the rulebook's data-independent rules, the scheme
+  offered by the request (`system_id_values` must name `urn:mms:bbs-cd:nym_auth:v1`; fail closed), the binding's proof,
+  and the SDK's own response checks (`CircuitZkResponseValidator`) on the `vp_token` before it is returned. The binding is
+  pluggable (`BbsCdBinding`, as `NymAuthBinding` is for the circuit systems); the default, `NymAuthNativeBbsCdBinding`,
+  is nymauth-native 0.2.0's `BbsProver` (community-demo's nym-bbs on bbs-cd-plugins 0.1). The device key never reaches
+  native code: the one ecdsa-pop signature is asked of a `ZkWitnessSigner` (ES256; a StrongBox key from
+  `AndroidKeystoreSigner.zkWitnessSigner`), checked against the device key natively, and the signer's own exception (a
+  cancelled prompt) comes back unchanged. An unmet age range is refused before the device is asked. `nymauthNativeVersion`
+  is now 0.2.0 (vendored bindings regenerated). SirosWallet's credential store and engine flow do not present `bbs_cd`.
 - **Longfellow on Google's longfellow-zk runtime, the new default for `longfellow-nymauth`.** `GoogleLongfellowNymAuthBinding`
   (implementation `google-longfellow-zk`) proves the nym_auth mdoc circuits with nymauth-native (`native/nymauth-native`:
   community-demo's `nym-longfellow` on Google's longfellow-zk Rust runtime `61a8a73`, the code community-demo's verifier
