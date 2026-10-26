@@ -38,8 +38,9 @@ import timber.log.Timber
  * Not in this class (yet): Android Key Attestation ([attestationChain] returns null) and an entry
  * in [WscdPluginCapabilities] (it is a signer, not a siros-wscd-manager plugin).
  *
- * @param aliasPrefix Prefix of this signer's Android Keystore aliases; a key's id is the alias
- *   without it. Two signers with different prefixes never see each other's keys.
+ * @param aliasPrefix Prefix of this signer's Android Keystore aliases; a key's id (a UUID) is the
+ *   alias without it. Two signers with different prefixes never see each other's keys, also when
+ *   one prefix extends the other.
  * @param preferStrongBox Try StrongBox first (default). `false` makes TEE keys only.
  */
 class AndroidKeystoreSigner @JvmOverloads constructor(
@@ -152,7 +153,11 @@ class AndroidKeystoreSigner @JvmOverloads constructor(
         synchronized(keyStore) {
             keyStore.aliases().toList()
                 .filter { it.startsWith(aliasPrefix) }
-                .map { SignerKeyInfo(keyId = it.removePrefix(aliasPrefix), algorithm = ES256) }
+                .map { it.removePrefix(aliasPrefix) }
+                // Only ids this signer makes (UUIDs): another signer whose prefix extends this one
+                // ("p." and "p.other.") must not show up here.
+                .filter { KEY_ID.matches(it) }
+                .map { SignerKeyInfo(keyId = it, algorithm = ES256) }
         }
     }
 
@@ -227,6 +232,7 @@ class AndroidKeystoreSigner @JvmOverloads constructor(
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val ES256 = "ES256"
         private const val SHA256_WITH_ECDSA = "SHA256withECDSA"
+        private val KEY_ID = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
         /** [KeyProperties]' `SECURITY_LEVEL_*` as a [SecurityLevel]. */
         internal fun levelOf(level: Int): SecurityLevel = when (level) {
