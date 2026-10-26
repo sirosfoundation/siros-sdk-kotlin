@@ -30,10 +30,11 @@ private fun bytes(circuit: ByteBuffer): ByteArray {
 
 /**
  * The Vega nymauth binding over zk-cred-vega (Microsoft vega-prover): `nymauthVegaLoadKeys(shapes)` runs key setup
- * from the catalog artifact's shapes (the resident, 100+ MB part), `nymauthVegaProveWith(keys, statement, holder, threads)`
- * proves (on one thread or one per core, as [NymAuthProveRequest.parallel] asks). The binding approves only shapes on its own list: others are `UnknownCircuit`, mapped to "not supported
- * by this app version". It zeroes its copy of the seed. Every binding error becomes a [NymAuthNativeException]
- * carrying no message of the binding (not the digest, not a rule).
+ * from the catalog artifact's shapes (the resident, 100+ MB part), and
+ * `nymauthVegaProveWith(keys, statement, holder, threads)` proves, on one thread or one per core as
+ * [NymAuthProveRequest.parallel] asks. The binding approves only shapes on its own list: others are `UnknownCircuit`,
+ * mapped to "not supported by this app version". It zeroes its copy of the seed. Every binding error becomes a
+ * [NymAuthNativeException] carrying no message of the binding (not the digest, not a rule).
  */
 object ZkCredVegaNymAuthBinding : NymAuthBinding {
     override val system: String = NymAuthCircuitZkAdapter.VEGA_SYSTEM
