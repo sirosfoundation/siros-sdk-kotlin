@@ -48,6 +48,24 @@ public final class org/siros/sdk/openid4vp/AuthorizationRequestUri$RequestUriMet
 	public static fun values ()[Lorg/siros/sdk/openid4vp/AuthorizationRequestUri$RequestUriMethod;
 }
 
+public final class org/siros/sdk/openid4vp/BbsCdResponder {
+	public static final field SOURCE_FORMAT Ljava/lang/String;
+	public fun <init> ()V
+	public fun <init> (Lorg/siros/sdk/keystore/BbsCdPresenter;Lorg/siros/sdk/credentials/CircuitZkPlanner;)V
+	public synthetic fun <init> (Lorg/siros/sdk/keystore/BbsCdPresenter;Lorg/siros/sdk/credentials/CircuitZkPlanner;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun plan (Lorg/siros/sdk/openid4vp/AuthorizationRequest;Ljava/lang/String;)Lorg/siros/sdk/credentials/CircuitZkPlan;
+	public final fun present (Lorg/siros/sdk/openid4vp/AuthorizationRequest;Ljava/lang/String;Lorg/siros/sdk/credentials/CircuitZkPlan;Ljava/lang/String;[BLorg/siros/sdk/credentials/ZkWitnessSigner;ZLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun present$default (Lorg/siros/sdk/openid4vp/BbsCdResponder;Lorg/siros/sdk/openid4vp/AuthorizationRequest;Ljava/lang/String;Lorg/siros/sdk/credentials/CircuitZkPlan;Ljava/lang/String;[BLorg/siros/sdk/credentials/ZkWitnessSigner;ZLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class org/siros/sdk/openid4vp/BbsCdResponder$Presentation {
+	public fun <init> (Ljava/lang/String;Lorg/siros/sdk/keystore/BbsCdPresenter$Result;)V
+	public final fun getQueryId ()Ljava/lang/String;
+	public final fun getResult ()Lorg/siros/sdk/keystore/BbsCdPresenter$Result;
+	public final fun getVpToken ()Lkotlinx/serialization/json/JsonObject;
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class org/siros/sdk/openid4vp/CircuitZkResponder {
 	public fun <init> (Lorg/siros/sdk/keystore/CircuitZkPresenter;Lorg/siros/sdk/credentials/CircuitZkPlanner;)V
 	public synthetic fun <init> (Lorg/siros/sdk/keystore/CircuitZkPresenter;Lorg/siros/sdk/credentials/CircuitZkPlanner;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
@@ -155,6 +173,7 @@ public abstract interface class org/siros/sdk/openid4vp/VerifierTrustPolicy {
 
 public final class org/siros/sdk/openid4vp/WalletMetadata {
 	public static final field INSTANCE Lorg/siros/sdk/openid4vp/WalletMetadata;
-	public final fun circuitZk (Ljava/util/Collection;)Lkotlinx/serialization/json/JsonObject;
+	public final fun circuitZk (Ljava/util/Collection;Ljava/util/Collection;)Lkotlinx/serialization/json/JsonObject;
+	public static synthetic fun circuitZk$default (Lorg/siros/sdk/openid4vp/WalletMetadata;Ljava/util/Collection;Ljava/util/Collection;ILjava/lang/Object;)Lkotlinx/serialization/json/JsonObject;
 }
 
