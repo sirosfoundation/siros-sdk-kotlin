@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="siros_dcapi_zk_proof_status">Luodaan nollatietotodistetta…</string>
-    <string name="siros_dcapi_zk_proof_detail">Henkilötietoja ei jaeta - vain kryptografinen todiste siitä, että täytät pyynnön vaatimukset.</string>
+    <string name="siros_dcapi_zk_proof_detail">Todisteesi paljastaa vain sen, minkä vahvistat jakavasi - ei mitään muuta todistuksestasi.</string>
     <string name="siros_dcapi_refused_title">Pyyntöä ei suoritettu loppuun</string>
     <string name="siros_dcapi_refused_ok">OK</string>
     <string name="siros_dcapi_refused_not_trusted">Lompakkosi ei luota tähän sivustoon, joten mitään ei jaettu.</string>

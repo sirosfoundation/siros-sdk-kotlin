@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="siros_dcapi_zk_proof_status">Genererar nollkunskapsbevis…</string>
-    <string name="siros_dcapi_zk_proof_detail">Inga personuppgifter delas - endast ett kryptografiskt bevis på att du uppfyller begäran.</string>
+    <string name="siros_dcapi_zk_proof_detail">Ditt bevis avslöjar bara det du bekräftar att du delar - inget annat om din legitimation.</string>
     <string name="siros_dcapi_refused_title">Begäran slutfördes inte</string>
     <string name="siros_dcapi_refused_ok">OK</string>
     <string name="siros_dcapi_refused_not_trusted">Den här webbplatsen är inte en som din plånbok litar på, så ingenting delades.</string>
