@@ -481,4 +481,34 @@ class WmpPeerTest {
 
         peer.close()
     }
+
+    @Test
+    fun notifyIfChecksAgainOnceThePeerHoldsItsSendLock() = runBlocking {
+        val release = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val holding = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val sent = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val transport = object : org.siros.sdk.transport.Transport {
+            override val state = kotlinx.coroutines.flow.MutableStateFlow(org.siros.sdk.transport.TransportState.CONNECTED)
+            override suspend fun connect() {}
+            override suspend fun send(message: ByteArray) {
+                if (sent.isEmpty()) { holding.complete(Unit); release.await() }
+                sent.add(String(message))
+            }
+            override fun incoming() = kotlinx.coroutines.flow.emptyFlow<ByteArray>()
+            override suspend fun disconnect() {}
+        }
+        val peer = WmpPeer(WmpSession(transport))
+        val first = launch { peer.notify("test.first", null) }
+        withTimeout(TEST_TIMEOUT_MS) { holding.await() }
+
+        val wanted = java.util.concurrent.atomic.AtomicBoolean(true)
+        val queued = async { peer.notifyIf("test.second", null) { wanted.get() } }
+        delay(100) // queued behind the send that holds the lock
+        wanted.set(false)
+        release.complete(Unit)
+        first.join()
+
+        assertFalse("no longer wanted when it got the lock", withTimeout(TEST_TIMEOUT_MS) { queued.await() })
+        assertEquals(1, sent.size)
+    }
 }

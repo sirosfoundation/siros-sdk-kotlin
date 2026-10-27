@@ -1,9 +1,18 @@
 package org.siros.sdk.transport.wmp
 
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonEncoder
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 /** WMP metadata envelope present in every request/response. */
 @Serializable
@@ -200,12 +209,39 @@ data class FlowCompleteParams(
     val result: JsonObject? = null,
 )
 
+/**
+ * The `code` of a `wmp.flow.error`. It is an integer on the wire (go-wmp `FlowErrorParams.Code int`; the engine
+ * sends `-31006` and friends), so a strict decode into a `String` threw and every engine flow error was dropped
+ * before reaching a handler. Either form is read here and kept as its text; a numeric text is written back as a
+ * JSON number, which is what the engine decodes.
+ */
+internal object FlowErrorCodeSerializer : KSerializer<String?> {
+    override val descriptor: SerialDescriptor = JsonElement.serializer().descriptor
+
+    override fun deserialize(decoder: Decoder): String? {
+        val element = (decoder as? JsonDecoder ?: throw SerializationException("flow error codes decode from JSON only"))
+            .decodeJsonElement()
+        return (element as? JsonPrimitive)?.takeIf { it !is JsonNull }?.content
+    }
+
+    override fun serialize(encoder: Encoder, value: String?) {
+        val json = encoder as? JsonEncoder ?: throw SerializationException("flow error codes encode to JSON only")
+        json.encodeJsonElement(
+            when {
+                value == null -> JsonNull
+                value.toIntOrNull() != null -> JsonPrimitive(value.toInt())
+                else -> JsonPrimitive(value)
+            },
+        )
+    }
+}
+
 /** Parameters for wmp.flow.error (notification). */
 @Serializable
 data class FlowErrorParams(
     val wmp: WmpMeta? = null,
     @SerialName("flow_id") val flowId: String,
-    val code: String? = null,
+    @Serializable(with = FlowErrorCodeSerializer::class) val code: String? = null,
     val message: String? = null,
     val data: JsonElement? = null,
 )

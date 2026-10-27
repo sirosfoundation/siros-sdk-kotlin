@@ -1,9 +1,18 @@
 package org.siros.sdk.transport.wmp.openid4x
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -16,6 +25,7 @@ import org.siros.sdk.transport.wmp.FlowCompleteParams
 import org.siros.sdk.transport.wmp.FlowErrorParams
 import org.siros.sdk.transport.wmp.FlowProgressParams
 import org.siros.sdk.transport.wmp.FlowStartParams
+import org.siros.sdk.transport.wmp.FlowStartRefusedException
 import org.siros.sdk.transport.wmp.JsonRpcResponse
 import org.siros.sdk.transport.wmp.WmpCodec
 import org.siros.sdk.transport.wmp.WmpMeta
@@ -50,6 +60,45 @@ class OpenID4xProfileTest {
         put("audience", JsonPrimitive("https://issuer.example.com/token"))
     }
 
+    // The engine starts a sign/match sub-flow with wmp.flow.start (go-wallet-backend feat/wmp-integration at
+    // b4f33e8, internal/engine/wmphandler.go: sign L2355-2399, match L2404-2425) and reads the wallet's answer
+    // from wmp.flow.complete / wmp.flow.error on the SUB-FLOW's id (FlowComplete L2031-2092, FlowError L2095-2142).
+    // The wallet is told the parent flow in `parent_flow_id` (SignSubFlowParams.ParentFlowID, match map key).
+
+    /** A profile whose sub-flow answers run inline, attached to a fake peer. */
+    private fun attached(config: OpenID4xConfig = OpenID4xConfig()): Pair<OpenID4xProfile, FakePeerContext> {
+        val profile = OpenID4xProfile(config)
+        profile.subFlowScope = CoroutineScope(Dispatchers.Unconfined)
+        val ctx = FakePeerContext()
+        profile.init(ctx)
+        return profile to ctx
+    }
+
+    private fun signStart(subFlowId: String = "sub-1", parent: String? = "f1", payload: JsonObject = buildSignPayload()) =
+        FlowStartParams(
+            wmp = WmpMeta(), flowId = subFlowId, flowType = OID4FlowTypes.SIGN,
+            params = JsonObject(payload + (parent?.let { mapOf("parent_flow_id" to JsonPrimitive(it)) } ?: emptyMap())),
+        )
+
+    private fun matchStart(subFlowId: String = "sub-2", parent: String? = "f2") =
+        FlowStartParams(
+            wmp = WmpMeta(), flowId = subFlowId, flowType = OID4FlowTypes.MATCH,
+            params = buildJsonObject {
+                put("dcql_query", buildJsonObject {})
+                parent?.let { put("parent_flow_id", JsonPrimitive(it)) }
+            },
+        )
+
+    private fun FakePeerContext.sent(method: String): List<JsonObject> =
+        notifications.filter { it.first == method }.mapNotNull { it.second }
+
+    /** The single wmp.flow.complete, checked to be addressed to [subFlowId]; returns its `result`. */
+    private fun FakePeerContext.completedResult(subFlowId: String): JsonObject {
+        val complete = sent(WmpMethods.FLOW_COMPLETE).single()
+        assertEquals(JsonPrimitive(subFlowId), complete["flow_id"])
+        return complete["result"]!!.jsonObject
+    }
+
     // ---------------------------------------------------------------------------
     // Tests
     // ---------------------------------------------------------------------------
@@ -66,224 +115,6 @@ class OpenID4xProfileTest {
 
         assertEquals("f1", result.flowId)
         assertEquals(OID4FlowTypes.OID4VCI, result.flowType)
-    }
-
-    @Test
-    fun handleProgressSignRequestInvokesCallbackAndSendsNotification() = runBlocking {
-        var capturedFlowId: String? = null
-        var capturedParams: SignSubFlowParams? = null
-
-        val profile = OpenID4xProfile(
-            OpenID4xConfig(
-                onSignRequest = { flowId, params ->
-                    capturedFlowId = flowId
-                    capturedParams = params
-                    SignSubFlowResult(proofs = listOf(ProofObject(jwt = "jwt-token")))
-                }
-            )
-        )
-        val ctx = FakePeerContext()
-        profile.init(ctx)
-
-        profile.handleProgress(
-            FlowProgressParams(
-                wmp = WmpMeta(),
-                flowId = "f1",
-                step = "sign_request",
-                payload = buildSignPayload(),
-            )
-        )
-
-        assertEquals("f1", capturedFlowId)
-        assertNotNull(capturedParams)
-        assertEquals("abc123", capturedParams!!.nonce)
-
-        // Profile must send wmp.flow.action notification with action=sign_response
-        val notification = ctx.notifications.firstOrNull { it.first == WmpMethods.FLOW_ACTION }
-        assertNotNull("Expected FLOW_ACTION notification", notification)
-        val params = notification!!.second
-        assertNotNull(params)
-        assertEquals(JsonPrimitive("sign_response"), params!!["action"])
-        assertEquals(JsonPrimitive("f1"), params["flow_id"])
-    }
-
-    @Test
-    fun handleProgressGeneratingProofAlsoInvokesSignCallback() = runBlocking {
-        var called = false
-        val profile = OpenID4xProfile(
-            OpenID4xConfig(
-                onSignRequest = { _, _ ->
-                    called = true
-                    SignSubFlowResult()
-                }
-            )
-        )
-        val ctx = FakePeerContext()
-        profile.init(ctx)
-
-        profile.handleProgress(
-            FlowProgressParams(
-                wmp = WmpMeta(),
-                flowId = "f1",
-                step = VCIStep.GENERATING_PROOF,
-                payload = buildSignPayload(),
-            )
-        )
-
-        assertTrue("onSignRequest should be called for GENERATING_PROOF step", called)
-    }
-
-    @Test
-    fun handleProgressMatchRequestInvokesCallbackAndSendsNotification() = runBlocking {
-        var capturedFlowId: String? = null
-
-        val profile = OpenID4xProfile(
-            OpenID4xConfig(
-                onMatchRequest = { flowId, _ ->
-                    capturedFlowId = flowId
-                    MatchResult(matches = listOf(CredentialMatch(credentialId = "cred-1")))
-                }
-            )
-        )
-        val ctx = FakePeerContext()
-        profile.init(ctx)
-
-        profile.handleProgress(
-            FlowProgressParams(
-                wmp = WmpMeta(),
-                flowId = "f2",
-                step = "match_request",
-            )
-        )
-
-        assertEquals("f2", capturedFlowId)
-
-        val notification = ctx.notifications.firstOrNull { it.first == WmpMethods.FLOW_ACTION }
-        assertNotNull("Expected FLOW_ACTION notification for match", notification)
-        val params = notification!!.second
-        assertNotNull(params)
-        assertEquals(JsonPrimitive("match_response"), params!!["action"])
-    }
-
-    @Test
-    fun handleProgressMatchingCredentialsAlsoInvokesMatchCallback() = runBlocking {
-        var called = false
-        val profile = OpenID4xProfile(
-            OpenID4xConfig(
-                onMatchRequest = { _, _ ->
-                    called = true
-                    MatchResult(matches = emptyList())
-                }
-            )
-        )
-        val ctx = FakePeerContext()
-        profile.init(ctx)
-
-        profile.handleProgress(
-            FlowProgressParams(
-                wmp = WmpMeta(),
-                flowId = "f2",
-                step = VPStep.MATCHING_CREDENTIALS,
-            )
-        )
-
-        assertTrue("onMatchRequest should be called for MATCHING_CREDENTIALS step", called)
-    }
-
-    @Test
-    fun emptyMatchSetIsAlsoReportedAsCredentialsMatchedWithItsReason() = runBlocking {
-        val profile = OpenID4xProfile(
-            OpenID4xConfig(
-                onMatchRequest = { _, _ ->
-                    MatchResult(
-                        matches = emptyList(),
-                        noMatchReason = "This wallet holds no credential matching the request",
-                    )
-                }
-            )
-        )
-        val ctx = FakePeerContext()
-        profile.init(ctx)
-
-        profile.handleProgress(
-            FlowProgressParams(wmp = WmpMeta(), flowId = "f-nomatch", step = "match_request")
-        )
-
-        val actions = ctx.notifications.filter { it.first == WmpMethods.FLOW_ACTION }.mapNotNull { it.second }
-        val matchResponse = actions.first { it["action"] == JsonPrimitive("match_response") }
-        assertEquals(
-            JsonPrimitive("This wallet holds no credential matching the request"),
-            matchResponse["no_match_reason"],
-        )
-        // The engine's OID4VP flow never reads a match_response; this is the
-        // action it acts on, and without it the presentation stalls until the
-        // user-interaction timeout.
-        val credentialsMatched = actions.firstOrNull {
-            it["action"] == JsonPrimitive(OID4Action.CREDENTIALS_MATCHED)
-        }
-        assertNotNull("Expected a credentials_matched action for an empty match set", credentialsMatched)
-        assertEquals(
-            JsonPrimitive("This wallet holds no credential matching the request"),
-            credentialsMatched!!["no_match_reason"],
-        )
-        assertEquals(0, credentialsMatched["matches"]!!.jsonArray.size)
-    }
-
-    @Test
-    fun aNonEmptyMatchSetIsNotReportedAsCredentialsMatched() = runBlocking {
-        val profile = OpenID4xProfile(
-            OpenID4xConfig(
-                onMatchRequest = { _, _ ->
-                    MatchResult(matches = listOf(CredentialMatch(credentialId = "cred-1")))
-                }
-            )
-        )
-        val ctx = FakePeerContext()
-        profile.init(ctx)
-
-        profile.handleProgress(
-            FlowProgressParams(wmp = WmpMeta(), flowId = "f-match", step = "match_request")
-        )
-
-        val actions = ctx.notifications.filter { it.first == WmpMethods.FLOW_ACTION }.mapNotNull { it.second }
-        assertTrue(
-            "A wallet with something to offer must not report an empty match set",
-            actions.none { it["action"] == JsonPrimitive(OID4Action.CREDENTIALS_MATCHED) },
-        )
-    }
-
-    @Test
-    fun handleProgressTrustEvaluationInvokesCallbackAndSendsNotification() = runBlocking {
-        var capturedFlowId: String? = null
-
-        val profile = OpenID4xProfile(
-            OpenID4xConfig(
-                onTrustEvaluation = { flowId, _ ->
-                    capturedFlowId = flowId
-                    TrustResult(trusted = true, framework = "EUCS")
-                }
-            )
-        )
-        val ctx = FakePeerContext()
-        profile.init(ctx)
-
-        profile.handleProgress(
-            FlowProgressParams(
-                wmp = WmpMeta(),
-                flowId = "f3",
-                step = "trust_evaluation_required",
-            )
-        )
-
-        assertEquals("f3", capturedFlowId)
-
-        val notification = ctx.notifications.firstOrNull { it.first == WmpMethods.FLOW_ACTION }
-        assertNotNull("Expected FLOW_ACTION notification for trust", notification)
-        val params = notification!!.second
-        assertNotNull(params)
-        assertEquals(JsonPrimitive("trust_result"), params!!["action"])
-        assertEquals(JsonPrimitive(true), params["trusted"])
-        assertEquals(JsonPrimitive("EUCS"), params["framework"])
     }
 
     @Test
@@ -424,43 +255,6 @@ class OpenID4xProfileTest {
     }
 
     @Test
-    fun theSignResponseCarriesTheBlindEncryptionAnswersUnderTheLegacyWireNames() = runBlocking {
-        val jwk = buildJsonObject { put("kty", JsonPrimitive("EC")) }
-        val profile = OpenID4xProfile(
-            OpenID4xConfig(
-                onSignRequest = { _, _ ->
-                    SignSubFlowResult(
-                        credentialResponseEncryptionJwk = jwk,
-                        transactionId = "tx-1",
-                        interval = 5,
-                        responseJwe = "h.k.i.c.t",
-                    )
-                },
-            ),
-        )
-        val ctx = FakePeerContext()
-        profile.init(ctx)
-        profile.handleProgress(FlowProgressParams(wmp = WmpMeta(), flowId = "f9", step = "sign_request", payload = buildSignPayload()))
-
-        val params = ctx.notifications.single().second!!
-        assertEquals(jwk, params["credential_response_encryption_jwk"])
-        assertEquals(JsonPrimitive("tx-1"), params["transaction_id"])
-        assertEquals(JsonPrimitive(5), params["interval"])
-        assertEquals(JsonPrimitive("h.k.i.c.t"), params["response_jwe"])
-    }
-
-    @Test
-    fun aFailedDecryptionAnswersWithAnErrorMemberAlone() = runBlocking {
-        val profile = OpenID4xProfile(OpenID4xConfig(onSignRequest = { _, _ -> SignSubFlowResult(error = "could not be decrypted") }))
-        val ctx = FakePeerContext()
-        profile.init(ctx)
-        profile.handleProgress(FlowProgressParams(wmp = WmpMeta(), flowId = "f9", step = "sign_request", payload = buildSignPayload()))
-        val params = ctx.notifications.single().second!!
-        assertEquals(JsonPrimitive("could not be decrypted"), params["error"])
-        assertNull(params["response_jwe"])
-    }
-
-    @Test
     fun aSignSubFlowDecodesTheVerifiedRequest() {
         val codec = WmpCodec()
         val p = codec.json.decodeFromJsonElement(
@@ -476,20 +270,6 @@ class OpenID4xProfileTest {
     }
 
     @Test
-    fun aDecryptAnswerCarriesExactlyOneOfCountTransactionIdOrError() = runBlocking {
-        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) { SignSubFlowResult(credentialCount = 1, transactionId = "tx") }
-        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) { SignSubFlowResult(credentialCount = 1, error = "x") }
-        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) { SignSubFlowResult(transactionId = "tx", error = "x") }
-        val profile = OpenID4xProfile(OpenID4xConfig(onSignRequest = { _, _ -> SignSubFlowResult(credentialCount = 3) }))
-        val ctx = FakePeerContext()
-        profile.init(ctx)
-        profile.handleProgress(FlowProgressParams(wmp = WmpMeta(), flowId = "f9", step = "sign_request", payload = buildSignPayload()))
-        val params = ctx.notifications.single().second!!
-        assertEquals(JsonPrimitive(3), params["credential_count"])
-        assertNull(params["transaction_id"])
-    }
-
-    @Test
     fun aSignResultNeverCarriesAResponseJweTogetherWithAVpToken() {
         org.junit.Assert.assertThrows(IllegalArgumentException::class.java) { SignSubFlowResult(responseJwe = "a.b.c.d.e", vpToken = "t") }
     }
@@ -497,21 +277,6 @@ class OpenID4xProfileTest {
     @Test
     fun aSignResultWithAnErrorCannotCarryAResponseJwe() {
         org.junit.Assert.assertThrows(IllegalArgumentException::class.java) { SignSubFlowResult(responseJwe = "h.k.i.c.t", error = "nope") }
-    }
-
-    @Test
-    fun aRefusedSignRequestIsAFlowErrorNeverASignResponseCarryingAResponseJwe() = runBlocking {
-        val profile = OpenID4xProfile(
-            OpenID4xConfig(onSignRequest = { _, _ -> throw org.siros.sdk.credentials.WalletException("the user declined") }),
-        )
-        val ctx = FakePeerContext()
-        profile.init(ctx)
-        profile.handleProgress(FlowProgressParams(wmp = WmpMeta(), flowId = "f9", step = "sign_request", payload = buildSignPayload()))
-
-        val sent = ctx.notifications
-        assertTrue(sent.toString(), sent.none { (_, params) -> params?.get("action") == JsonPrimitive("sign_response") })
-        assertTrue(sent.none { (_, params) -> params?.containsKey("response_jwe") == true })
-        assertTrue("the refusal still reaches the engine", sent.isNotEmpty())
     }
 
     @Test
@@ -523,18 +288,6 @@ class OpenID4xProfileTest {
         assertEquals(listOf("f-cancel"), cancelled)
         // No callback configured: still fine.
         OpenID4xProfile().handleCancel(FlowCancelParams(wmp = WmpMeta(), flowId = "f2"))
-    }
-
-    @Test
-    fun anOrdinarySignResponseCarriesNoBlindEncryptionMembers() = runBlocking {
-        val profile = OpenID4xProfile(OpenID4xConfig(onSignRequest = { _, _ -> SignSubFlowResult(proofs = listOf(ProofObject(jwt = "t"))) }))
-        val ctx = FakePeerContext()
-        profile.init(ctx)
-        profile.handleProgress(FlowProgressParams(wmp = WmpMeta(), flowId = "f9", step = "sign_request", payload = buildSignPayload()))
-        val params = ctx.notifications.single().second!!
-        for (member in listOf("credential_response_encryption_jwk", "transaction_id", "interval", "response_jwe", "error")) {
-            assertNull(member, params[member])
-        }
     }
 
     @Test
@@ -583,81 +336,6 @@ class OpenID4xProfileTest {
     }
 
     @Test
-    fun signHandlerExceptionSendsFlowErrorNotification() = runBlocking {
-        val profile = OpenID4xProfile(
-            OpenID4xConfig(
-                onSignRequest = { _, _ -> throw RuntimeException("key unavailable") }
-            )
-        )
-        val ctx = FakePeerContext()
-        profile.init(ctx)
-
-        profile.handleProgress(
-            FlowProgressParams(
-                wmp = WmpMeta(),
-                flowId = "f7",
-                step = "sign_request",
-                payload = buildSignPayload(),
-            )
-        )
-
-        val notification = ctx.notifications.firstOrNull { it.first == WmpMethods.FLOW_ERROR }
-        assertNotNull("Expected FLOW_ERROR notification on sign handler exception", notification)
-        val params = notification!!.second
-        assertNotNull(params)
-        assertEquals(JsonPrimitive("SIGN_ERROR"), params!!["code"])
-        assertEquals(JsonPrimitive("key unavailable"), params["message"])
-    }
-
-    @Test
-    fun trustHandlerExceptionSendsTrustedFalse() = runBlocking {
-        val profile = OpenID4xProfile(
-            OpenID4xConfig(
-                onTrustEvaluation = { _, _ -> throw RuntimeException("trust store unavailable") }
-            )
-        )
-        val ctx = FakePeerContext()
-        profile.init(ctx)
-
-        profile.handleProgress(
-            FlowProgressParams(
-                wmp = WmpMeta(),
-                flowId = "f8",
-                step = "trust_evaluation_required",
-            )
-        )
-
-        val notification = ctx.notifications.firstOrNull { it.first == WmpMethods.FLOW_ACTION }
-        assertNotNull("Expected FLOW_ACTION notification with trusted=false on exception", notification)
-        val params = notification!!.second
-        assertEquals(JsonPrimitive("trust_result"), params!!["action"])
-        assertEquals(JsonPrimitive(false), params["trusted"])
-        assertEquals(JsonPrimitive("trust store unavailable"), params["reason"])
-    }
-
-    @Test
-    fun noNotificationSentWhenPeerNotInitialized() = runBlocking {
-        // Profile never had init() called → all send helpers should be no-ops
-        val profile = OpenID4xProfile(
-            OpenID4xConfig(
-                onSignRequest = { _, _ -> SignSubFlowResult(proofs = listOf(ProofObject(jwt = "t"))) }
-            )
-        )
-        // No init() call — peer is null
-
-        // Should not throw
-        profile.handleProgress(
-            FlowProgressParams(
-                wmp = WmpMeta(),
-                flowId = "f9",
-                step = "sign_request",
-                payload = buildSignPayload(),
-            )
-        )
-        // Passes as long as no NPE is thrown
-    }
-
-    @Test
     fun handleActionAlwaysAccepts() = runBlocking {
         val profile = OpenID4xProfile()
         profile.init(FakePeerContext())
@@ -671,25 +349,432 @@ class OpenID4xProfileTest {
     }
 
     @Test
-    fun noCallbacksConfiguredDoesNotSendAnyNotifications() = runBlocking {
-        val profile = OpenID4xProfile(OpenID4xConfig())
-        val ctx = FakePeerContext()
-        profile.init(ctx)
+    fun aSignSubFlowIsAnsweredWithFlowCompleteOnTheSubFlowId() = runBlocking {
+        var capturedFlowId: String? = null
+        var capturedParams: SignSubFlowParams? = null
+        val (profile, ctx) = attached(
+            OpenID4xConfig(
+                onSignRequest = { flowId, params ->
+                    capturedFlowId = flowId
+                    capturedParams = params
+                    SignSubFlowResult(proofs = listOf(ProofObject(jwt = "jwt-token")))
+                },
+            ),
+        )
+
+        val ack = profile.startFlow(signStart(subFlowId = "sub-1", parent = "f1"))
+
+        assertEquals("sub-1", ack.flowId)
+        assertEquals(OID4FlowTypes.SIGN, ack.flowType)
+        // The wallet's per-flow state is keyed by the PARENT flow it started, not the engine's sub-flow id.
+        assertEquals("f1", capturedFlowId)
+        assertEquals("abc123", capturedParams!!.nonce)
+        val result = ctx.completedResult("sub-1")
+        assertEquals("jwt-token", result["proofs"]!!.jsonArray[0].jsonObject["jwt"]!!.jsonPrimitive.content)
+        // The engine unmarshals `result` into its SignResponseMessage and fills the ids itself.
+        assertNull(result["action"])
+        assertNull(result["flow_id"])
+        assertTrue(
+            "A sign answer is never a flow.action on the parent flow (it needs a message_id the wallet is never given)",
+            ctx.notifications.none { it.first == WmpMethods.FLOW_ACTION },
+        )
+        // The answer is addressable by go-wmp's FlowCompleteParams.
+        ctx.codec.json.decodeFromJsonElement(FlowCompleteParams.serializer(), ctx.sent(WmpMethods.FLOW_COMPLETE).single())
+        Unit
+    }
+
+    @Test
+    fun theSubFlowAcknowledgementDoesNotWaitForTheAnswer() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        val (profile, ctx) = attached(
+            OpenID4xConfig(onSignRequest = { _, _ -> gate.await(); SignSubFlowResult(vpToken = "late") }),
+        )
+
+        // The engine waits 30 s for this acknowledgement, not for the answer: a user prompt must not hold it up.
+        val ack = withTimeout(2_000) { profile.startFlow(signStart()) }
+
+        assertEquals("sub-1", ack.flowId)
+        assertTrue("nothing is answered before the handler finishes", ctx.notifications.isEmpty())
+        gate.complete(Unit)
+        assertEquals(JsonPrimitive("late"), ctx.completedResult("sub-1")["vp_token"])
+    }
+
+    @Test
+    fun closingTheProfileStopsASubFlowAnswerStillRunning() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        val (profile, ctx) = attached(
+            OpenID4xConfig(onSignRequest = { _, _ -> gate.await(); SignSubFlowResult(vpToken = "late") }),
+        )
+        withTimeout(2_000) { profile.startFlow(signStart()) }
+
+        profile.close()
+        gate.complete(Unit)
+
+        assertTrue("a closed session answers nothing", ctx.notifications.isEmpty())
+    }
+
+    @Test
+    fun aGeneratingProofProgressIsPlainProgressNotASignRequest() = runBlocking {
+        var signed = false
+        var progressed: String? = null
+        val (profile, ctx) = attached(
+            OpenID4xConfig(
+                onSignRequest = { _, _ -> signed = true; SignSubFlowResult() },
+                onProgress = { _, step, _ -> progressed = step },
+            ),
+        )
 
         profile.handleProgress(
-            FlowProgressParams(wmp = WmpMeta(), flowId = "f11", step = "sign_request", payload = buildSignPayload())
+            FlowProgressParams(wmp = WmpMeta(), flowId = "f1", step = VCIStep.GENERATING_PROOF, payload = buildSignPayload()),
         )
-        profile.handleProgress(
-            FlowProgressParams(wmp = WmpMeta(), flowId = "f11", step = "match_request")
+
+        assertTrue("the engine asks through a sign sub-flow, not a progress step", !signed)
+        assertEquals(VCIStep.GENERATING_PROOF, progressed)
+        assertTrue(ctx.notifications.isEmpty())
+    }
+
+    @Test
+    fun aMatchSubFlowIsAnsweredWithFlowCompleteOnTheSubFlowId() = runBlocking {
+        var capturedFlowId: String? = null
+        var capturedPayload: JsonObject? = null
+        val (profile, ctx) = attached(
+            OpenID4xConfig(
+                onMatchRequest = { flowId, payload ->
+                    capturedFlowId = flowId
+                    capturedPayload = payload
+                    MatchResult(matches = listOf(CredentialMatch(credentialId = "cred-1", credentialQueryId = "q1")))
+                },
+            ),
         )
+
+        val ack = profile.startFlow(matchStart(subFlowId = "sub-2", parent = "f2"))
+
+        assertEquals(OID4FlowTypes.MATCH, ack.flowType)
+        assertEquals("f2", capturedFlowId)
+        assertNotNull(capturedPayload!!["dcql_query"])
+        val result = ctx.completedResult("sub-2")
+        // The engine's MatchResponseMessage: `matches` with credential_id / credential_query_id.
+        val match = result["matches"]!!.jsonArray.single().jsonObject
+        assertEquals(JsonPrimitive("cred-1"), match["credential_id"])
+        assertEquals(JsonPrimitive("q1"), match["credential_query_id"])
+        assertTrue(ctx.notifications.none { it.first == WmpMethods.FLOW_ACTION })
+    }
+
+    @Test
+    fun emptyMatchSetIsAlsoReportedAsCredentialsMatchedWithItsReason() = runBlocking {
+        val reason = "This wallet holds no credential matching the request"
+        val (profile, ctx) = attached(
+            OpenID4xConfig(onMatchRequest = { _, _ -> MatchResult(matches = emptyList(), noMatchReason = reason) }),
+        )
+
+        profile.startFlow(matchStart(subFlowId = "sub-2", parent = "f-nomatch"))
+
+        assertEquals(JsonPrimitive(reason), ctx.completedResult("sub-2")["no_match_reason"])
+        // credentials_matched is an action on the PARENT flow; go-wmp's FlowActionParams carries its members under
+        // `params` (methods.go:184-189), which is where the engine takes its payload from (wmphandler.go FlowAction).
+        val action = ctx.sent(WmpMethods.FLOW_ACTION).single()
+        assertEquals(JsonPrimitive(OID4Action.CREDENTIALS_MATCHED), action["action"])
+        assertEquals(JsonPrimitive("f-nomatch"), action["flow_id"])
+        val members = action["params"]!!.jsonObject
+        assertEquals(JsonPrimitive(reason), members["no_match_reason"])
+        assertEquals(0, members["matches"]!!.jsonArray.size)
+        assertNull("members are not flat next to `action`", action["no_match_reason"])
+    }
+
+    @Test
+    fun aNonEmptyMatchSetIsNotReportedAsCredentialsMatched() = runBlocking {
+        val (profile, ctx) = attached(
+            OpenID4xConfig(onMatchRequest = { _, _ -> MatchResult(matches = listOf(CredentialMatch(credentialId = "cred-1"))) }),
+        )
+
+        profile.startFlow(matchStart())
+
+        assertTrue(
+            "A wallet with something to offer must not report an empty match set",
+            ctx.sent(WmpMethods.FLOW_ACTION).none { it["action"] == JsonPrimitive(OID4Action.CREDENTIALS_MATCHED) },
+        )
+    }
+
+    @Test
+    fun trustResultCarriesItsMembersUnderParams() = runBlocking {
+        var capturedFlowId: String? = null
+        val (profile, ctx) = attached(
+            OpenID4xConfig(
+                onTrustEvaluation = { flowId, _ ->
+                    capturedFlowId = flowId
+                    TrustResult(trusted = true, framework = "EUCS")
+                },
+            ),
+        )
+
+        // oid4vci.go:1574-1577 (issuer) / oid4vp.go ~1266 (verifier): step + `trust_evaluation_required` + `request`.
         profile.handleProgress(
-            FlowProgressParams(wmp = WmpMeta(), flowId = "f11", step = "trust_evaluation_required")
+            FlowProgressParams(
+                wmp = WmpMeta(), flowId = "f3", step = VCIStep.EVALUATING_TRUST,
+                payload = buildJsonObject {
+                    put("trust_evaluation_required", JsonPrimitive(true))
+                    put("request", buildJsonObject { put("subject_id", JsonPrimitive("https://issuer.example")) })
+                },
+            ),
+        )
+
+        assertEquals("f3", capturedFlowId)
+        val action = ctx.sent(WmpMethods.FLOW_ACTION).single()
+        assertEquals(JsonPrimitive("trust_result"), action["action"])
+        assertEquals(JsonPrimitive("f3"), action["flow_id"])
+        val members = action["params"]!!.jsonObject
+        assertEquals(JsonPrimitive(true), members["trusted"])
+        assertEquals(JsonPrimitive("EUCS"), members["framework"])
+        assertNull("members are not flat next to `action`: the engine would see an empty payload", action["trusted"])
+    }
+
+    @Test
+    fun informationalTrustProgressIsNotAnswered() = runBlocking {
+        var evaluated = false
+        var progressed = false
+        val (profile, ctx) = attached(
+            OpenID4xConfig(
+                onTrustEvaluation = { _, _ -> evaluated = true; TrustResult(trusted = true) },
+                onProgress = { _, _, _ -> progressed = true },
+            ),
+        )
+
+        // oid4vci.go:1443: the same step is also sent as a plain message, which wants no answer.
+        profile.handleProgress(
+            FlowProgressParams(
+                wmp = WmpMeta(), flowId = "f3", step = VCIStep.EVALUATING_TRUST,
+                payload = buildJsonObject { put("message", JsonPrimitive("Evaluating issuer trust")) },
+            ),
+        )
+
+        assertTrue("an unrequested trust_result could satisfy the engine's later wait with a stale answer", !evaluated)
+        assertTrue(progressed)
+        assertTrue(ctx.notifications.isEmpty())
+    }
+
+    @Test
+    fun aVerifierTrustRequestIsAnswered() = runBlocking {
+        val (profile, ctx) = attached(OpenID4xConfig(onTrustEvaluation = { _, _ -> TrustResult(trusted = false, reason = "no") }))
+
+        // oid4vp.go ~1266: the verifier's request is the `evaluating_verifier_trust` step, not `evaluating_trust`.
+        profile.handleProgress(
+            FlowProgressParams(
+                wmp = WmpMeta(), flowId = "f3", step = VPStep.EVALUATING_VERIFIER_TRUST,
+                payload = buildJsonObject {
+                    put("trust_evaluation_required", JsonPrimitive(true))
+                    put("request", buildJsonObject {})
+                },
+            ),
+        )
+
+        assertEquals(JsonPrimitive(false), ctx.sent(WmpMethods.FLOW_ACTION).single()["params"]!!.jsonObject["trusted"])
+    }
+
+    @Test
+    fun theBlindEncryptionAnswersAreMembersOfTheSubFlowResult() = runBlocking {
+        val jwk = buildJsonObject { put("kty", JsonPrimitive("EC")) }
+        val (profile, ctx) = attached(
+            OpenID4xConfig(
+                onSignRequest = { _, _ ->
+                    SignSubFlowResult(credentialResponseEncryptionJwk = jwk, responseJwe = "h.k.i.c.t")
+                },
+            ),
+        )
+        profile.startFlow(signStart())
+        val result = ctx.completedResult("sub-1")
+        assertEquals(jwk, result["credential_response_encryption_jwk"])
+        assertEquals(JsonPrimitive("h.k.i.c.t"), result["response_jwe"])
+        assertNull(result["vp_token"])
+    }
+
+    @Test
+    fun aDecryptAnswerCarriesExactlyOneOfCountTransactionIdOrError() = runBlocking {
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) { SignSubFlowResult(credentialCount = 1, transactionId = "tx") }
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) { SignSubFlowResult(credentialCount = 1, error = "x") }
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) { SignSubFlowResult(transactionId = "tx", error = "x") }
+
+        val (counted, countedCtx) = attached(OpenID4xConfig(onSignRequest = { _, _ -> SignSubFlowResult(credentialCount = 3) }))
+        counted.startFlow(signStart())
+        val count = countedCtx.completedResult("sub-1")
+        assertEquals(JsonPrimitive(3), count["credential_count"])
+        assertNull(count["transaction_id"])
+
+        val (deferred, deferredCtx) = attached(OpenID4xConfig(onSignRequest = { _, _ -> SignSubFlowResult(transactionId = "tx-1", interval = 5) }))
+        deferred.startFlow(signStart())
+        val pending = deferredCtx.completedResult("sub-1")
+        assertEquals(JsonPrimitive("tx-1"), pending["transaction_id"])
+        assertEquals(JsonPrimitive(5), pending["interval"])
+        assertNull(pending["credential_count"])
+    }
+
+    @Test
+    fun aFailedDecryptionAnswersWithAnErrorMemberAlone() = runBlocking {
+        val (profile, ctx) = attached(OpenID4xConfig(onSignRequest = { _, _ -> SignSubFlowResult(error = "could not be decrypted") }))
+        profile.startFlow(signStart())
+        val result = ctx.completedResult("sub-1")
+        assertEquals(JsonPrimitive("could not be decrypted"), result["error"])
+        assertNull(result["response_jwe"])
+    }
+
+    @Test
+    fun aRefusedSignRequestIsAFlowErrorNeverAResultCarryingAResponseJwe() = runBlocking {
+        val (profile, ctx) = attached(
+            OpenID4xConfig(onSignRequest = { _, _ -> throw org.siros.sdk.credentials.WalletException("the user declined") }),
+        )
+
+        profile.startFlow(signStart())
+
+        assertTrue(ctx.sent(WmpMethods.FLOW_COMPLETE).isEmpty())
+        val error = ctx.sent(WmpMethods.FLOW_ERROR).single()
+        assertEquals(JsonPrimitive("sub-1"), error["flow_id"])
+        assertTrue(ctx.notifications.none { (_, params) -> params?.toString()?.contains("response_jwe") == true })
+    }
+
+    @Test
+    fun aSignRefusalIsAFlowErrorWithReasonRejected() = runBlocking {
+        val (profile, ctx) = attached(OpenID4xConfig(onSignRequest = { _, _ -> throw SignRefusedException("jarm audience is empty") }))
+
+        profile.startFlow(signStart())
+
+        // go-wallet-backend#472: wmp.flow.error with data.reason "rejected" on the sub-flow ends RequestSign and
+        // posts access_denied. The wallet-local reason is never put on the wire.
+        assertTrue(ctx.sent(WmpMethods.FLOW_COMPLETE).isEmpty())
+        val error = ctx.sent(WmpMethods.FLOW_ERROR).single()
+        assertEquals(JsonPrimitive("sub-1"), error["flow_id"])
+        assertEquals(JsonPrimitive("rejected"), error["data"]!!.jsonObject["reason"])
+        assertTrue(!error.toString().contains("jarm audience"))
+    }
+
+    @Test
+    fun anOrdinarySignResultCarriesNoBlindEncryptionMembers() = runBlocking {
+        val (profile, ctx) = attached(OpenID4xConfig(onSignRequest = { _, _ -> SignSubFlowResult(proofs = listOf(ProofObject(jwt = "t"))) }))
+        profile.startFlow(signStart())
+        val result = ctx.completedResult("sub-1")
+        for (member in listOf("credential_response_encryption_jwk", "transaction_id", "interval", "response_jwe", "error", "credential_count")) {
+            assertNull(member, result[member])
+        }
+    }
+
+    @Test
+    fun aSignHandlerFailureIsAFlowErrorWithANumericCodeAndNoReasonText() = runBlocking {
+        val (profile, ctx) = attached(OpenID4xConfig(onSignRequest = { _, _ -> throw RuntimeException("key unavailable: secret-key-id-42") }))
+
+        profile.startFlow(signStart())
+
+        val error = ctx.sent(WmpMethods.FLOW_ERROR).single()
+        assertEquals(JsonPrimitive("sub-1"), error["flow_id"])
+        // go-wmp's FlowErrorParams.Code is an int (methods.go:207-213): a string code does not decode there.
+        assertEquals(JsonPrimitive(-31006), error["code"])
+        assertTrue("a sign failure's text can name keys; it stays local", !error.toString().contains("secret-key-id-42"))
+    }
+
+    @Test
+    fun refusedTransactionDataIsAFlowErrorTheEngineReadsAsUnsupportedTransactionData() = runBlocking {
+        val (profile, ctx) = attached(
+            OpenID4xConfig(
+                onSignRequest = { _, _ ->
+                    throw org.siros.sdk.credentials.TransactionDataError(
+                        org.siros.sdk.credentials.TransactionDataReason.DISABLED,
+                        "refused",
+                    )
+                },
+            ),
+        )
+
+        profile.startFlow(signStart(subFlowId = "sub-8"))
+
+        val error = ctx.sent(WmpMethods.FLOW_ERROR).single()
+        assertEquals(JsonPrimitive("sub-8"), error["flow_id"])
+        // wmphandler.go FlowError L2118: code == wmp.ErrCapabilityNotSupported (-31005) => ErrCodeUnsupportedTransactionData.
+        assertEquals(JsonPrimitive(-31005), error["code"])
+        assertEquals(JsonPrimitive("disabled"), error["message"])
+        assertEquals(JsonPrimitive("invalid_transaction_data"), error["data"]!!.jsonObject["verifier_error"])
+    }
+
+    @Test
+    fun aSignSubFlowWithoutAParentFlowIsAFlowError() = runBlocking {
+        var called = false
+        val (profile, ctx) = attached(OpenID4xConfig(onSignRequest = { _, _ -> called = true; SignSubFlowResult() }))
+
+        profile.startFlow(signStart(parent = null))
+
+        assertTrue(!called)
+        assertEquals(JsonPrimitive("sub-1"), ctx.sent(WmpMethods.FLOW_ERROR).single()["flow_id"])
+    }
+
+    @Test
+    fun aMatchSubFlowWithoutAParentFlowIsAFlowError() = runBlocking {
+        var called = false
+        val (profile, ctx) = attached(OpenID4xConfig(onMatchRequest = { _, _ -> called = true; MatchResult(matches = emptyList()) }))
+
+        profile.startFlow(matchStart(parent = null))
+
+        assertTrue(!called)
+        assertEquals(JsonPrimitive("sub-2"), ctx.sent(WmpMethods.FLOW_ERROR).single()["flow_id"])
+    }
+
+    @Test
+    fun aMatchHandlerFailureIsAFlowErrorOnTheSubFlow() = runBlocking {
+        val (profile, ctx) = attached(OpenID4xConfig(onMatchRequest = { _, _ -> throw RuntimeException("store unavailable") }))
+
+        profile.startFlow(matchStart())
+
+        assertTrue(ctx.sent(WmpMethods.FLOW_COMPLETE).isEmpty())
+        val error = ctx.sent(WmpMethods.FLOW_ERROR).single()
+        assertEquals(JsonPrimitive("sub-2"), error["flow_id"])
+        assertEquals(JsonPrimitive(-31006), error["code"])
+    }
+
+    @Test
+    fun trustHandlerExceptionSendsTrustedFalse() = runBlocking {
+        val (profile, ctx) = attached(OpenID4xConfig(onTrustEvaluation = { _, _ -> throw RuntimeException("trust store unavailable") }))
+
+        profile.handleProgress(
+            FlowProgressParams(
+                wmp = WmpMeta(), flowId = "f8", step = VCIStep.EVALUATING_TRUST,
+                payload = buildJsonObject { put("trust_evaluation_required", JsonPrimitive(true)) },
+            ),
+        )
+
+        val action = ctx.sent(WmpMethods.FLOW_ACTION).single()
+        assertEquals(JsonPrimitive("trust_result"), action["action"])
+        val members = action["params"]!!.jsonObject
+        assertEquals(JsonPrimitive(false), members["trusted"])
+        assertEquals(JsonPrimitive("trust store unavailable"), members["reason"])
+    }
+
+    @Test
+    fun noNotificationSentWhenPeerNotInitialized() = runBlocking {
+        // Profile never had init() called -> all send helpers are no-ops.
+        val profile = OpenID4xProfile(OpenID4xConfig(onSignRequest = { _, _ -> SignSubFlowResult(proofs = listOf(ProofObject(jwt = "t"))) }))
+        profile.subFlowScope = CoroutineScope(Dispatchers.Unconfined)
+
+        profile.startFlow(signStart())
+        // Passes as long as nothing throws.
+        Unit
+    }
+
+    @Test
+    fun withoutCallbacksTheEngineIsToldItsSubFlowsAreUnsupported() = runBlocking {
+        val (profile, ctx) = attached(OpenID4xConfig())
+
+        profile.startFlow(signStart(subFlowId = "s"))
+        profile.startFlow(matchStart(subFlowId = "m"))
+        profile.handleProgress(
+            FlowProgressParams(
+                wmp = WmpMeta(), flowId = "f11", step = VCIStep.EVALUATING_TRUST,
+                payload = buildJsonObject { put("trust_evaluation_required", JsonPrimitive(true)) },
+            ),
         )
         profile.handleComplete(FlowCompleteParams(wmp = WmpMeta(), flowId = "f11"))
         profile.handleError(FlowErrorParams(wmp = WmpMeta(), flowId = "f11"))
         profile.handleCancel(FlowCancelParams(wmp = WmpMeta(), flowId = "f11"))
 
-        assertTrue("No notifications should be sent when no callbacks are configured", ctx.notifications.isEmpty())
+        // An unanswered sub-flow would leave the engine waiting out its three-minute sign timeout.
+        val errors = ctx.sent(WmpMethods.FLOW_ERROR)
+        assertEquals(listOf(JsonPrimitive("s"), JsonPrimitive("m")), errors.map { it["flow_id"] })
+        assertTrue(errors.all { it["code"] == JsonPrimitive(-31005) })
+        assertTrue(ctx.notifications.none { it.first != WmpMethods.FLOW_ERROR })
     }
 
     @Test
@@ -700,56 +785,460 @@ class OpenID4xProfileTest {
         assertTrue(profile.capabilities.contains("oid4vp"))
         assertTrue(profile.flowTypes.contains(OID4FlowTypes.OID4VCI))
         assertTrue(profile.flowTypes.contains(OID4FlowTypes.OID4VP))
+        // The engine's sub-flow types (go-wmp FlowTypeSign = "sign", the engine's literal "match").
+        assertTrue(profile.flowTypes.contains("sign"))
+        assertTrue(profile.flowTypes.contains("match"))
     }
 
     @Test
-    fun signResponseIncludesVpToken() = runBlocking {
-        val profile = OpenID4xProfile(
-            OpenID4xConfig(
-                onSignRequest = { _, _ ->
-                    SignSubFlowResult(vpToken = "vp-token-value")
-                }
-            )
+    fun aSignResultIncludesTheVpToken() = runBlocking {
+        val (profile, ctx) = attached(OpenID4xConfig(onSignRequest = { _, _ -> SignSubFlowResult(vpToken = "vp-token-value") }))
+        profile.startFlow(signStart())
+        val result = ctx.completedResult("sub-1")
+        assertEquals(JsonPrimitive("vp-token-value"), result["vp_token"])
+        assertNull(result["proofs"])
+    }
+
+    @Test
+    fun aFlowErrorWithTheEnginesIntegerCodeDecodes() {
+        val codec = WmpCodec()
+        // wmphandler.go SendJSON FlowErrorMessage: Code is mapErrorCode(...), an int (-31006 for most engine errors).
+        val params = codec.json.decodeFromJsonElement(
+            FlowErrorParams.serializer(),
+            kotlinx.serialization.json.Json.parseToJsonElement(
+                """{"wmp":{"version":"0.1"},"flow_id":"f1","code":-31006,"message":"Credential issuance failed"}""",
+            ),
         )
-        val ctx = FakePeerContext()
+        assertEquals("-31006", params.code)
+        assertEquals("Credential issuance failed", params.message)
+        // A string code (what older peers and tests send) still reads.
+        assertEquals(
+            "ERR",
+            codec.json.decodeFromJsonElement(
+                FlowErrorParams.serializer(),
+                kotlinx.serialization.json.Json.parseToJsonElement("""{"flow_id":"f1","code":"ERR"}"""),
+            ).code,
+        )
+    }
+
+    @Test
+    fun aNumericFlowErrorCodeIsWrittenAsAJsonNumber() {
+        val codec = WmpCodec()
+        val written = codec.encodeParams(FlowErrorParams(wmp = WmpMeta(), flowId = "f1", code = "-31005", message = "m"))
+        assertEquals(JsonPrimitive(-31005), written["code"])
+        assertEquals(
+            JsonPrimitive("ERR"),
+            codec.encodeParams(FlowErrorParams(wmp = WmpMeta(), flowId = "f1", code = "ERR"))["code"],
+        )
+    }
+
+    // ---------------------------------------------------------------------------
+    // Review of the sub-flow answers (https://github.com/sirosfoundation/siros-sdk-kotlin/issues/288)
+    // ---------------------------------------------------------------------------
+
+    /** A peer whose every send fails, as a dropped connection does (`WmpHttpSseTransport.send` throws on a failed POST). */
+    private class FailingPeerContext(private val failures: Int = Int.MAX_VALUE) : WmpPeerContext {
+        override val codec = WmpCodec()
+        val sent = java.util.concurrent.CopyOnWriteArrayList<Pair<String, JsonObject?>>()
+        private val attempts = java.util.concurrent.atomic.AtomicInteger()
+        override suspend fun notify(method: String, params: JsonObject?) {
+            if (attempts.incrementAndGet() <= failures) throw java.io.IOException("network down: secret-token-123")
+            sent.add(method to params)
+        }
+        override suspend fun call(method: String, params: JsonObject?): JsonRpcResponse = JsonRpcResponse(id = null)
+    }
+
+    /** Runs [block] and asserts nothing reached the thread's uncaught-exception handler (on Android, the app's crash). */
+    private fun assertNoUncaught(what: String, block: () -> Unit) {
+        val seen = java.util.concurrent.CopyOnWriteArrayList<Throwable>()
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { _, e -> seen += e }
+        try {
+            block()
+        } finally {
+            Thread.setDefaultUncaughtExceptionHandler(previous)
+        }
+        assertTrue("$what: an exception escaped the answer task: $seen", seen.isEmpty())
+    }
+
+    @Test
+    fun aFailedSendNeverEscapesAnAnswerTask() = runBlocking {
+        val variants: List<Pair<String, (OpenID4xProfile) -> FlowStartParams>> = listOf(
+            "a completion" to { _ -> signStart() },
+            "an error reply after a failing callback" to { _ -> signStart() },
+            "an unsupported sign request" to { _ -> signStart() },
+            "an invalid match request" to { _ -> matchStart(parent = null) },
+        )
+        val configs = listOf(
+            OpenID4xConfig(onSignRequest = { _, _ -> SignSubFlowResult(vpToken = "t") }),
+            OpenID4xConfig(onSignRequest = { _, _ -> throw RuntimeException("signing failed: secret-key-id") }),
+            OpenID4xConfig(),
+            OpenID4xConfig(onMatchRequest = { _, _ -> MatchResult(matches = emptyList()) }),
+        )
+        for ((i, variant) in variants.withIndex()) {
+            val profile = OpenID4xProfile(configs[i])
+            profile.subFlowScope = CoroutineScope(Dispatchers.Unconfined)
+            profile.init(FailingPeerContext())
+            assertNoUncaught(variant.first) { runBlocking { profile.startFlow(variant.second(profile)) } }
+        }
+    }
+
+    @Test
+    fun theDefaultSubFlowScopeConsumesWhatEscapesAnAnswerTask() = runBlocking {
+        val profile = OpenID4xProfile()
+        assertNoUncaught("the default scope") {
+            runBlocking {
+                profile.subFlowScope.launch { throw IllegalStateException("boom") }
+                delay(300)
+            }
+        }
+    }
+
+    @Test
+    fun aCallbackThatBlocksPastCloseAnswersNothing() = runBlocking {
+        for (outcome in listOf("returns a result", "throws")) {
+            val entered = java.util.concurrent.CountDownLatch(1)
+            val release = java.util.concurrent.CountDownLatch(1)
+            val profile = OpenID4xProfile(
+                OpenID4xConfig(
+                    onSignRequest = { _, _ ->
+                        entered.countDown()
+                        release.await() // blocking, not cancellable: the callback is mid-signature when the session closes
+                        if (outcome == "throws") throw RuntimeException("late failure")
+                        SignSubFlowResult(vpToken = "late")
+                    },
+                ),
+            )
+            profile.subFlowScope = CoroutineScope(Dispatchers.Default)
+            val ctx = FakePeerContext()
+            profile.init(ctx)
+            profile.startFlow(signStart())
+            assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+
+            profile.close()
+            release.countDown()
+            delay(300)
+
+            assertTrue("a callback that $outcome after close answers nothing: ${ctx.notifications}", ctx.notifications.isEmpty())
+        }
+    }
+
+    @Test
+    fun aRepeatedStartOfTheSameSubFlowRunsTheCallbackOnceAndReplaysTheAnswer() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        var calls = 0
+        val (profile, ctx) = attached(
+            OpenID4xConfig(onSignRequest = { _, _ -> calls++; gate.await(); SignSubFlowResult(vpToken = "t") }),
+        )
+
+        // A resumed session reissues the start under the same child id (wmphandler.go `reissueChildFlow`).
+        val first = profile.startFlow(signStart(subFlowId = "sub-r"))
+        val repeat = profile.startFlow(signStart(subFlowId = "sub-r"))
+
+        assertEquals("both are acknowledged", first, repeat)
+        assertEquals("the pending callback is reused, not run again", 1, calls)
+        gate.complete(Unit)
+        assertEquals(1, ctx.sent(WmpMethods.FLOW_COMPLETE).size)
+
+        // A start that arrives after the answer replays that answer; it never reruns the callback.
+        profile.startFlow(signStart(subFlowId = "sub-r"))
+        val replayed = withTimeout(5_000) { while (ctx.sent(WmpMethods.FLOW_COMPLETE).size < 2) delay(10); ctx.sent(WmpMethods.FLOW_COMPLETE) }
+        assertEquals("the replayed answer is the first one", replayed[0], replayed[1])
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun anAnswerWhoseSendFailedIsReplayedByARepeatedStart() = runBlocking {
+        var calls = 0
+        val profile = OpenID4xProfile(OpenID4xConfig(onSignRequest = { _, _ -> calls++; SignSubFlowResult(vpToken = "t") }))
+        profile.subFlowScope = CoroutineScope(Dispatchers.Unconfined)
+        val ctx = FailingPeerContext(failures = 1)
         profile.init(ctx)
 
-        profile.handleProgress(
-            FlowProgressParams(
-                wmp = WmpMeta(),
-                flowId = "f12",
-                step = "sign_request",
-                payload = buildSignPayload(),
-            )
-        )
+        profile.startFlow(signStart(subFlowId = "sub-f"))
+        assertTrue("the first send failed", ctx.sent.isEmpty())
+        profile.startFlow(signStart(subFlowId = "sub-f"))
+        withTimeout(5_000) { while (ctx.sent.isEmpty()) delay(10) }
 
-        val params = ctx.notifications.first { it.first == WmpMethods.FLOW_ACTION }.second
-        assertNotNull(params)
-        assertEquals(JsonPrimitive("vp-token-value"), params!!["vp_token"])
-        assertNull(params["proofs"])
+        assertEquals(JsonPrimitive("sub-f"), ctx.sent.single().second!!["flow_id"])
+        assertEquals("the callback is not rerun for the replay", 1, calls)
     }
 
     @Test
-    fun refusedTransactionDataIsReportedWithItsVerifierErrorCode() = runBlocking {
-        val profile = OpenID4xProfile(
+    fun aTerminalFrameForTheParentOrTheChildStopsItsPendingSubFlowBeforeItsCallbackRuns() = runBlocking {
+        val terminals: List<Pair<String, suspend (OpenID4xProfile, String) -> Unit>> = listOf(
+            "complete" to { p, id -> p.handleComplete(FlowCompleteParams(wmp = WmpMeta(), flowId = id)) },
+            "error" to { p, id -> p.handleError(FlowErrorParams(wmp = WmpMeta(), flowId = id, code = "-31006", message = "m")) },
+            "cancel" to { p, id -> p.handleCancel(FlowCancelParams(wmp = WmpMeta(), flowId = id)) },
+            "a local cancel" to { p, id -> p.flowEnded(id) },
+        )
+        for ((kind, terminal) in terminals) {
+            for (target in listOf("f1", "sub-1")) { // the parent flow, then the child itself
+                val order = java.util.concurrent.CopyOnWriteArrayList<String>()
+                val gate = CompletableDeferred<Unit>()
+                val (profile, ctx) = attached(
+                    OpenID4xConfig(
+                        onSignRequest = { _, _ ->
+                            try {
+                                gate.await()
+                                SignSubFlowResult(vpToken = "t")
+                            } catch (e: CancellationException) {
+                                order += "stopped"
+                                throw e
+                            }
+                        },
+                        onComplete = { _, _ -> order += "released" },
+                        onError = { _, _, _ -> order += "released" },
+                        onCancel = { order += "released" },
+                    ),
+                )
+                profile.startFlow(signStart(subFlowId = "sub-1", parent = "f1"))
+
+                terminal(profile, target)
+
+                val expected = if (kind == "a local cancel") listOf("stopped") else listOf("stopped", "released")
+                assertEquals("$kind on $target: the pending callback is stopped before the flow's state is released", expected, order.toList())
+                gate.complete(Unit)
+                assertTrue("a stopped sub-flow answers nothing", ctx.notifications.isEmpty())
+            }
+        }
+    }
+
+    @Test
+    fun aDeclinedTransactionIsARejectedRefusalNotUnsupportedTransactionData() = runBlocking {
+        val (profile, ctx) = attached(
             OpenID4xConfig(
                 onSignRequest = { _, _ ->
                     throw org.siros.sdk.credentials.TransactionDataError(
-                        org.siros.sdk.credentials.TransactionDataReason.DISABLED,
+                        org.siros.sdk.credentials.TransactionDataReason.DECLINED,
+                        "the user declined",
+                    )
+                },
+            ),
+        )
+
+        profile.startFlow(signStart(subFlowId = "sub-d"))
+
+        val error = ctx.sent(WmpMethods.FLOW_ERROR).single()
+        assertEquals(JsonPrimitive("sub-d"), error["flow_id"])
+        // The engine reads -31005 as "unsupported transaction data" (wmphandler.go FlowError); a decline is a refusal.
+        assertEquals(JsonPrimitive(-31006), error["code"])
+        assertEquals(JsonPrimitive("rejected"), error["data"]!!.jsonObject["reason"])
+        assertTrue(!error.toString().contains("declined"))
+    }
+
+    @Test
+    fun aValidationFailureOfTheTransactionStaysUnsupportedTransactionData() = runBlocking {
+        val (profile, ctx) = attached(
+            OpenID4xConfig(
+                onSignRequest = { _, _ ->
+                    throw org.siros.sdk.credentials.TransactionDataError(
+                        org.siros.sdk.credentials.TransactionDataReason.INVALID_ENTRY,
                         "refused",
                     )
-                }
+                },
+            ),
+        )
+
+        profile.startFlow(signStart(subFlowId = "sub-v"))
+
+        val error = ctx.sent(WmpMethods.FLOW_ERROR).single()
+        assertEquals(JsonPrimitive(-31005), error["code"])
+        assertEquals(JsonPrimitive("invalidEntry"), error["message"])
+    }
+
+    @Test
+    fun anExceptionOutsideTheCallbackAndTheSendNeverEscapesAnAnswerTask() = runBlocking {
+        // The codec failing while an error reply is built is outside every inner try: the task's own boundary is what holds.
+        val poisoned = object : WmpPeerContext {
+            override val codec: WmpCodec get() = throw IllegalStateException("codec unavailable: secret-detail")
+            override suspend fun notify(method: String, params: JsonObject?) {}
+            override suspend fun call(method: String, params: JsonObject?): JsonRpcResponse = JsonRpcResponse(id = null)
+        }
+        for (start in listOf(signStart(), matchStart(parent = null))) {
+            val profile = OpenID4xProfile(
+                OpenID4xConfig(onSignRequest = { _, _ -> SignSubFlowResult(vpToken = "t") }, onMatchRequest = { _, _ -> MatchResult(matches = emptyList()) }),
             )
-        )
-        val ctx = FakePeerContext()
+            profile.subFlowScope = CoroutineScope(Dispatchers.Unconfined)
+            profile.init(poisoned)
+            assertNoUncaught(start.flowType) { runBlocking { profile.startFlow(start) } }
+        }
+    }
+
+    @Test
+    fun aStopBetweenRegistrationAndJobAssignmentKeepsTheCallbackFromStarting() = runBlocking {
+        var calls = 0
+        val (profile, ctx) = attached(OpenID4xConfig(onSignRequest = { _, _ -> calls++; SignSubFlowResult(vpToken = "t") }))
+        // The flow ends in the gap: its entry is registered but it has no job yet, so the stop finds nothing to cancel.
+        profile.beforeJobAssigned = { profile.flowEnded("f1") }
+
+        profile.startFlow(signStart(subFlowId = "sub-g", parent = "f1"))
+        delay(200)
+
+        assertEquals("the callback of an already-ended flow never starts", 0, calls)
+        assertTrue("and nothing is answered", ctx.notifications.isEmpty())
+    }
+
+    /**
+     * A peer whose sends can be held: [gateOf] names, per frame (by its `flow_id`), the gate it waits on before it checks whether it is
+     * still wanted, as a send queued behind another does at the peer's send lock. [uncancellable] makes that wait ignore cancellation, as
+     * the moment just after the lock was acquired does.
+     */
+    private class GatingPeerContext(
+        private val gateOf: (String?) -> CompletableDeferred<Unit>?,
+        private val uncancellable: Boolean = false,
+    ) : WmpPeerContext {
+        override val codec = WmpCodec()
+        val sent = java.util.concurrent.CopyOnWriteArrayList<Pair<String, JsonObject?>>()
+        val waiting = java.util.concurrent.CopyOnWriteArrayList<String?>()
+        val cancelledWhileWaiting = java.util.concurrent.atomic.AtomicInteger()
+
+        private fun flowOf(params: JsonObject?) = (params?.get("flow_id") as? JsonPrimitive)?.content
+
+        override suspend fun notify(method: String, params: JsonObject?) { sent.add(method to params) }
+
+        override suspend fun notifyIf(method: String, params: JsonObject?, wanted: () -> Boolean): Boolean {
+            val gate = gateOf(flowOf(params))
+            if (gate != null) {
+                waiting.add(flowOf(params))
+                try {
+                    if (uncancellable) kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { gate.await() } else gate.await()
+                } catch (e: CancellationException) {
+                    cancelledWhileWaiting.incrementAndGet()
+                    throw e
+                }
+            }
+            if (!wanted()) return false
+            sent.add(method to params)
+            return true
+        }
+
+        override suspend fun call(method: String, params: JsonObject?): JsonRpcResponse = JsonRpcResponse(id = null)
+    }
+
+    private fun gating(
+        config: OpenID4xConfig,
+        uncancellable: Boolean = false,
+        gateOf: (String?) -> CompletableDeferred<Unit>?,
+    ): Pair<OpenID4xProfile, GatingPeerContext> {
+        val profile = OpenID4xProfile(config)
+        profile.subFlowScope = CoroutineScope(Dispatchers.Unconfined)
+        val ctx = GatingPeerContext(gateOf, uncancellable)
         profile.init(ctx)
+        return profile to ctx
+    }
 
-        profile.handleProgress(
-            FlowProgressParams(wmp = WmpMeta(), flowId = "f8", step = "sign_request", payload = buildSignPayload())
+    @Test
+    fun aReplayWaitingToSendIsCancelledWithItsSubFlow() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        var holdReplay = false
+        val (profile, ctx) = gating(OpenID4xConfig(onSignRequest = { _, _ -> SignSubFlowResult(vpToken = "t") })) { if (holdReplay) gate else null }
+        profile.startFlow(signStart(subFlowId = "sub-q", parent = "f-q"))
+        assertEquals("the first answer is sent", 1, ctx.sent.size)
+
+        holdReplay = true
+        profile.startFlow(signStart(subFlowId = "sub-q", parent = "f-q")) // a replay, held at the send
+        assertEquals(listOf<String?>("sub-q"), ctx.waiting.toList())
+        profile.flowEnded("f-q")
+
+        assertEquals("the replay is cancelled with the sub-flow it answers", 1, ctx.cancelledWhileWaiting.get())
+        gate.complete(Unit)
+        assertEquals("and nothing more is sent", 1, ctx.sent.size)
+    }
+
+    @Test
+    fun aReplayThatHasAlreadyWonTheSendLockStillSendsNothingOnceItsSubFlowIsStopped() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        var holdReplay = false
+        val (profile, ctx) = gating(OpenID4xConfig(onSignRequest = { _, _ -> SignSubFlowResult(vpToken = "t") }), uncancellable = true) { if (holdReplay) gate else null }
+        profile.startFlow(signStart(subFlowId = "sub-q", parent = "f-q"))
+
+        holdReplay = true
+        profile.startFlow(signStart(subFlowId = "sub-q", parent = "f-q"))
+        profile.flowEnded("f-q") // the replay holds the lock and cannot be interrupted: it must find itself unwanted
+        gate.complete(Unit)
+
+        assertEquals("the stale answer is not sent after the flow ended", 1, ctx.sent.size)
+    }
+
+    @Test
+    fun answeredSubFlowsAreEvictedToMakeRoomForANewStart() = runBlocking {
+        val (profile, ctx) = attached(OpenID4xConfig(onSignRequest = { _, _ -> SignSubFlowResult(vpToken = "t") }))
+        profile.maxSubFlows = 3
+        for (i in 1..3) profile.startFlow(signStart(subFlowId = "s$i", parent = "p$i"))
+
+        profile.startFlow(signStart(subFlowId = "s4", parent = "p4"))
+
+        assertEquals("every start is answered, the full table made room", listOf("s1", "s2", "s3", "s4").map { JsonPrimitive(it) }, ctx.sent(WmpMethods.FLOW_COMPLETE).map { it["flow_id"] })
+        assertTrue(ctx.sent(WmpMethods.FLOW_ERROR).isEmpty())
+    }
+
+    @Test
+    fun aFullTableOfPendingSubFlowsRefusesANewStartAsARequestAndEvictsNone() = runBlocking {
+        val gates = (1..3).associate { "s$it" to CompletableDeferred<Unit>() }
+        val (profile, ctx) = attached(
+            OpenID4xConfig(onSignRequest = { flowId, _ -> gates.getValue("s" + flowId.removePrefix("p")).await(); SignSubFlowResult(vpToken = flowId) }),
         )
+        profile.maxSubFlows = 3
+        for (i in 1..3) profile.startFlow(signStart(subFlowId = "s$i", parent = "p$i"))
 
-        val params = ctx.notifications.first { it.first == WmpMethods.FLOW_ERROR }.second!!
-        assertEquals(JsonPrimitive("invalid_transaction_data"), params["code"])
-        assertEquals(JsonPrimitive("disabled"), params["message"])
+        // Refused as a request: the start fails, so the peer answers it with an error response. No flow error is sent for it.
+        val refusal = runCatching { profile.startFlow(signStart(subFlowId = "s4", parent = "p4")) }.exceptionOrNull()
+
+        assertTrue("the start is refused: $refusal", refusal is FlowStartRefusedException)
+        assertEquals("too many pending requests", refusal!!.message)
+        assertTrue("nothing is sent on a sub-flow for it", ctx.notifications.isEmpty())
+        gates.values.forEach { it.complete(Unit) }
+        assertEquals("none of the pending sub-flows was evicted: all three are still answered", 3, ctx.sent(WmpMethods.FLOW_COMPLETE).size)
+        assertTrue(ctx.sent(WmpMethods.FLOW_ERROR).isEmpty())
+    }
+
+    @Test
+    fun aSubFlowWhoseAnswerIsDecidedButNotYetSentIsNeverEvicted() = runBlocking {
+        val sendGate = CompletableDeferred<Unit>()
+        val pending = CompletableDeferred<Unit>()
+        val (profile, ctx) = gating(
+            OpenID4xConfig(onSignRequest = { flowId, _ -> if (flowId == "p3") pending.await(); SignSubFlowResult(vpToken = flowId) }),
+        ) { flowId -> if (flowId == "s1") sendGate else null }
+        profile.maxSubFlows = 3
+        // s1's answer is decided but its send is held; s2 is answered and sent; s3 is still pending.
+        profile.startFlow(signStart(subFlowId = "s1", parent = "p1"))
+        profile.startFlow(signStart(subFlowId = "s2", parent = "p2"))
+        profile.startFlow(signStart(subFlowId = "s3", parent = "p3"))
+
+        profile.startFlow(signStart(subFlowId = "s4", parent = "p4"))
+        // s2 (fully sent) is the one that made room; s1 and s3 are untouched and the new start is served.
+        assertEquals(listOf("s2", "s4").map { JsonPrimitive(it) }, ctx.sent.filter { it.first == WmpMethods.FLOW_COMPLETE }.map { it.second!!["flow_id"] })
+
+        sendGate.complete(Unit)
+        pending.complete(Unit)
+        assertEquals(
+            "s1's held answer is still delivered, and so is s3's",
+            setOf("s1", "s2", "s3", "s4").map { JsonPrimitive(it) }.toSet(),
+            ctx.sent.filter { it.first == WmpMethods.FLOW_COMPLETE }.map { it.second!!["flow_id"] }.toSet(),
+        )
+    }
+
+    @Test
+    fun aReplayHeldAtTheSendLockIsNotEvictedUnderTablePressure() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        val pending = CompletableDeferred<Unit>()
+        var holdS1 = false
+        val (profile, ctx) = gating(
+            OpenID4xConfig(onSignRequest = { flowId, _ -> if (flowId == "p2") pending.await(); SignSubFlowResult(vpToken = flowId) }),
+        ) { flowId -> if (holdS1 && flowId == "s1") gate else null }
+        profile.maxSubFlows = 2
+        profile.startFlow(signStart(subFlowId = "s1", parent = "p1")) // answered and sent
+        profile.startFlow(signStart(subFlowId = "s2", parent = "p2")) // pending: the table is full
+
+        holdS1 = true
+        profile.startFlow(signStart(subFlowId = "s1", parent = "p1")) // a replay of s1, held at the send lock
+        val refusal = runCatching { profile.startFlow(signStart(subFlowId = "s3", parent = "p3")) }.exceptionOrNull()
+
+        assertTrue("the table is full of live work, so the new start is refused: $refusal", refusal is FlowStartRefusedException)
+        gate.complete(Unit)
+        pending.complete(Unit)
+        val s1Frames = ctx.sent.filter { it.first == WmpMethods.FLOW_COMPLETE && it.second!!["flow_id"] == JsonPrimitive("s1") }
+        assertEquals("the held replay was not evicted: s1 is answered twice", 2, s1Frames.size)
     }
 }

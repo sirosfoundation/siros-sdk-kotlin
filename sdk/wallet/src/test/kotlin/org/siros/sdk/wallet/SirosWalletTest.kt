@@ -16016,19 +16016,21 @@ class SirosWalletTest {
                 val ctx = RecordingPeerContext()
                 profile.init(ctx)
 
-                runBlocking { profile.handleProgress(wmpKeyOnlyRequest()) }
+                answerSubFlow(profile, ctx, wmpKeyOnlyRequest())
                 assertTrue("a sign request of the live session is served", blind.holdsKey("flow-late"))
-                assertTrue(ctx.notifications.any { it.second?.containsKey("credential_response_encryption_jwk") == true })
+                assertTrue("and answered on its sub-flow with the response key", ctx.answeredWithTheResponseKey())
 
                 ending(wallet)
                 val after = RecordingPeerContext()
                 profile.init(after)
                 blind.offer("x", null)
-                runBlocking {
-                    profile.handleProgress(wmpKeyOnlyRequest().copy(flowId = "flow-after"))
-                }
+                answerSubFlow(profile, after, wmpKeyOnlyRequest("flow-after"))
                 assertFalse("after logout or destroy the same peer's request is refused", blind.holdsKey("flow-after"))
-                assertTrue(after.notifications.none { it.second?.containsKey("credential_response_encryption_jwk") == true })
+                assertFalse(after.answeredWithTheResponseKey())
+                assertTrue(
+                    "the sub-flow is ended with a flow error, so the engine is not left waiting",
+                    after.notifications.any { it.first == "wmp.flow.error" && it.second?.get("flow_id") == JsonPrimitive("sub-flow-after") },
+                )
             } finally {
                 SirosWallet.createWmpPeer = previous
             }
@@ -16122,18 +16124,39 @@ class SirosWalletTest {
 
     private class RecordingPeerContext : org.siros.sdk.transport.wmp.WmpPeerContext {
         override val codec = org.siros.sdk.transport.wmp.WmpCodec()
-        val notifications = mutableListOf<Pair<String, JsonObject?>>()
+        val notifications = java.util.concurrent.CopyOnWriteArrayList<Pair<String, JsonObject?>>()
         override suspend fun notify(method: String, params: JsonObject?) { notifications += method to params }
         override suspend fun call(method: String, params: JsonObject?) = org.siros.sdk.transport.wmp.JsonRpcResponse(id = null)
     }
 
-    private fun wmpKeyOnlyRequest() = org.siros.sdk.transport.wmp.FlowProgressParams(
-        flowId = "flow-late", step = "sign_request",
-        payload = buildJsonObject {
+    /**
+     * What the engine sends for a key-only sign request: a `wmp.flow.start` of flow type `sign` whose params name the PARENT
+     * flow (go-wallet-backend wmphandler.go `startChildFlow`); the wallet answers on the sub-flow's own id.
+     */
+    private fun wmpKeyOnlyRequest(parent: String = "flow-late") = org.siros.sdk.transport.wmp.FlowStartParams(
+        wmp = org.siros.sdk.transport.wmp.WmpMeta(), flowId = "sub-$parent", flowType = org.siros.sdk.transport.wmp.openid4x.OID4FlowTypes.SIGN,
+        params = buildJsonObject {
             put("action", JsonPrimitive("generate_proof"))
+            put("parent_flow_id", JsonPrimitive(parent))
             put("credential_response_encryption", buildJsonObject { put("alg", JsonPrimitive("ECDH-ES")); put("enc", JsonPrimitive("A256GCM")); put("required", JsonPrimitive(true)) })
         },
     )
+
+    /** Starts the sub-flow and waits for the wallet's answer (its `wmp.flow.complete` or `wmp.flow.error`), which runs on its own coroutine. */
+    private fun answerSubFlow(
+        profile: org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile,
+        ctx: RecordingPeerContext,
+        start: org.siros.sdk.transport.wmp.FlowStartParams,
+    ) = runBlocking {
+        profile.startFlow(start)
+        kotlinx.coroutines.withTimeout(10_000) {
+            while (ctx.notifications.none { it.first == "wmp.flow.complete" || it.first == "wmp.flow.error" }) kotlinx.coroutines.delay(10)
+        }
+    }
+
+    private fun RecordingPeerContext.answeredWithTheResponseKey() = notifications.any {
+        it.first == "wmp.flow.complete" && it.second?.get("result")?.jsonObject?.containsKey("credential_response_encryption_jwk") == true
+    }
 
     private fun endedSessionWallet(blind: BlindIssuance, peer: org.siros.sdk.transport.wmp.WmpPeer? = null): SirosWallet = newWallet(
         "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
@@ -16175,10 +16198,10 @@ class SirosWalletTest {
             val ctx = RecordingPeerContext()
             profile.init(ctx)
             teardown(wallet)
-            runBlocking { profile.handleProgress(wmpKeyOnlyRequest()) }
+            answerSubFlow(profile, ctx, wmpKeyOnlyRequest())
             assertFalse("no key is generated for an ended session", blind.holdsKey("flow-late"))
-            assertTrue("the request is answered with a flow error", ctx.notifications.isNotEmpty())
-            assertTrue(ctx.notifications.none { it.second?.containsKey("credential_response_encryption_jwk") == true })
+            assertTrue("the request is answered with a flow error", ctx.notifications.any { it.first == "wmp.flow.error" })
+            assertFalse(ctx.answeredWithTheResponseKey())
         }
     }
 
@@ -16257,14 +16280,25 @@ class SirosWalletTest {
             val ctx = RecordingPeerContext()
             profile.init(ctx)
             // The callback passes its liveness check and stops just before it claims the flow's state.
-            val running = java.util.concurrent.Executors.newSingleThreadExecutor().submit { runBlocking { profile.handleProgress(wmpKeyOnlyRequest()) } }
+            // The engine's sign sub-flow: the start is acknowledged at once and the answer runs on the profile's own coroutine, which
+            // is what pauses at the hook.
+            val running = java.util.concurrent.Executors.newSingleThreadExecutor().submit { runBlocking { profile.startFlow(wmpKeyOnlyRequest()) } }
             assertTrue(paused.await(5, java.util.concurrent.TimeUnit.SECONDS))
             teardown(wallet)
             release.countDown()
             running.get(5, java.util.concurrent.TimeUnit.SECONDS)
+            runBlocking {
+                kotlinx.coroutines.withTimeout(10_000) {
+                    while (ctx.notifications.none { it.first == "wmp.flow.complete" || it.first == "wmp.flow.error" }) kotlinx.coroutines.delay(10)
+                }
+            }
             assertFalse("the teardown is not undone by the late claim", blind.holdsKey("flow-late"))
             assertEquals(null, blind.take("flow-late"))
-            assertTrue("no key is answered", ctx.notifications.none { it.second?.containsKey("credential_response_encryption_jwk") == true })
+            assertFalse("no key is answered", ctx.answeredWithTheResponseKey())
+            assertTrue(
+                "the refused sub-flow ends with a flow error",
+                ctx.notifications.any { it.first == "wmp.flow.error" && it.second?.get("flow_id") == JsonPrimitive("sub-flow-late") },
+            )
         }
     }
 

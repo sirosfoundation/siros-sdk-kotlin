@@ -48,6 +48,21 @@ class ClientAuthWireShapeTest {
             JsonRpcResponse(id = null)
     }
 
+    /**
+     * The engine opens a sign sub-flow (wmp.flow.start, go-wallet-backend wmphandler.go `startChildFlow`) and reads the
+     * answer from `wmp.flow.complete`'s `result` on the sub-flow's id; this returns that result.
+     */
+    private suspend fun OpenID4xProfile.answerSign(ctx: FakePeerContext, payload: JsonObject): JsonObject {
+        subFlowScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined)
+        startFlow(
+            org.siros.sdk.transport.wmp.FlowStartParams(
+                wmp = WmpMeta(), flowId = "sub-1", flowType = org.siros.sdk.transport.wmp.openid4x.OID4FlowTypes.SIGN,
+                params = JsonObject(payload + ("parent_flow_id" to JsonPrimitive("f1"))),
+            ),
+        )
+        return ctx.notifications.first { it.first == WmpMethods.FLOW_COMPLETE }.second!!["result"]!!.jsonObject
+    }
+
     /** What go-wmp's SignSubFlowParams / the engine's SignRequestParams put on the wire. */
     private fun clientAuthPayload(): JsonObject = buildJsonObject {
         put("action", JsonPrimitive("sign_client_auth"))
@@ -119,13 +134,8 @@ class ClientAuthWireShapeTest {
         )
         val ctx = FakePeerContext()
         profile.init(ctx)
-        profile.handleProgress(
-            FlowProgressParams(wmp = WmpMeta(), flowId = "f1", step = "sign_request", payload = clientAuthPayload())
-        )
+        val wmp = profile.answerSign(ctx, clientAuthPayload())
         assertEquals("k-1", seen?.keyId)
-
-        val wmp = ctx.notifications.first { it.first == WmpMethods.FLOW_ACTION }.second!!
-        assertEquals(JsonPrimitive("sign_response"), wmp["action"])
         for (member in listOf("client_attestation", "client_attestation_pop", "dpop_key_id", "dpop_proof")) {
             assertEquals("member $member must be identical on both transports", legacy[member], wmp[member])
         }
@@ -138,10 +148,7 @@ class ClientAuthWireShapeTest {
         )
         val ctx = FakePeerContext()
         profile.init(ctx)
-        profile.handleProgress(
-            FlowProgressParams(wmp = WmpMeta(), flowId = "f1", step = "sign_request", payload = clientAuthPayload())
-        )
-        val wmp = ctx.notifications.first { it.first == WmpMethods.FLOW_ACTION }.second!!
+        val wmp = profile.answerSign(ctx, clientAuthPayload())
         assertEquals(JsonPrimitive("k-1"), wmp["dpop_key_id"])
         assertNull(wmp["client_attestation"])
         assertNull(wmp["client_attestation_pop"])
