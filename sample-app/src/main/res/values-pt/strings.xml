@@ -35,6 +35,11 @@
     <string name="add_credential_row_action_add">Adicionar</string>
     <string name="add_credential_row_action_close">Fechar</string>
     <string name="nav_back">Voltar</string>
+    <string name="add_credential_option_scan_qr_title">Ler código QR</string>
+    <string name="add_credential_option_scan_qr_subtitle">Leia o código QR de um emissor</string>
+    <string name="add_credential_option_all_title">Todas as credenciais conhecidas</string>
+    <string name="add_credential_option_all_subtitle">Veja todas as credenciais oferecidas pelos seus emissores</string>
+    <string name="add_credential_all_back">Voltar às opções de adicionar credencial</string>
     <string name="credential_capability_online">Pode ser apresentado online</string>
     <string name="credential_capability_proximity">Pode ser apresentado presencialmente ao tocar com o telemóvel</string>
     <string name="credential_capability_zkp">Pode provar a sua identidade sem revelar todos os seus dados</string>

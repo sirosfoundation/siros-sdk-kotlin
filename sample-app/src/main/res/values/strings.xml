@@ -38,6 +38,14 @@
     <string name="add_credential_row_action_add">Add</string>
     <string name="add_credential_row_action_close">Close</string>
     <string name="nav_back">Back</string>
+    <!-- Add credential: top-level 3-way chooser (scan passport / scan QR /
+         all known credentials), requested live during gdc e2e testing to
+         replace the old flat list of every issuer offer. -->
+    <string name="add_credential_option_scan_qr_title">Scan QR code</string>
+    <string name="add_credential_option_scan_qr_subtitle">Scan an issuer\'s QR code</string>
+    <string name="add_credential_option_all_title">All known credentials</string>
+    <string name="add_credential_option_all_subtitle">Browse every credential offered by your issuers</string>
+    <string name="add_credential_all_back">Back to add credential options</string>
     <!-- Capability icon content descriptions on the Add Credential list, to
          tell apart same-named offers (e.g. a PID issued both as mdoc and
          SD-JWT VC) in plain language rather than raw wire-format terms -->
