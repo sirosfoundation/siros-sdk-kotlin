@@ -16991,6 +16991,172 @@ class SirosWalletTest {
     }
 
     @Test
+    fun handleCredentialSelection_fiveOptionCredentialSetWithThreeSatisfiable_exposesOneExclusiveChoiceGroup() = runTest(dispatcher) {
+        // Live gdc/nym_auth bug: one required credential_sets entry, five single-credential
+        // alternatives (mdl, photoid, pid_1_5, pid_1_8, pid_mdoc_id). The wallet holds credentials
+        // for three of them (mdl, pid_1_8, pid_mdoc_id); the other two (photoid, pid_1_5) have no
+        // stored credential at all. #353 claimed to fix this exact shape (see
+        // WalletEventListener.ExclusiveChoiceGroup's doc comment), but its own tests only ever
+        // constructed PresentationRequest.satisfiableOptions by hand
+        // (PresentationRequestStepsTest.exclusiveChoiceGroupsFindsTheAmbiguousCredentialSet) or
+        // mocked the listener without inspecting the PresentationRequest it was actually handed
+        // (the "isRefusedBeforeRecordingPresentation" test above). This test drives the REAL
+        // handleCredentialSelection path end to end with the real raw DCQL JSON and captures the
+        // PresentationRequest the sample app would actually see.
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val requestSlot = slot<PresentationRequest>()
+        coEvery { listener.onCredentialSelectionRequired(capture(requestSlot)) } returns emptyList()
+        val store = FakeCredentialStore(
+            mutableListOf(
+                StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw-mdl",
+                    metadata = CredentialMetadata(name = "mDL", vct = "mdl-vct"), batchId = 1L, instanceId = 0),
+                StoredCredential(id = 2L, format = "dc+sd-jwt", raw = "raw-pid-1-8",
+                    metadata = CredentialMetadata(name = "PID 1.8", vct = "pid-1-8-vct"), batchId = 2L, instanceId = 0),
+                StoredCredential(id = 3L, format = "dc+sd-jwt", raw = "raw-pid-mdoc-id",
+                    metadata = CredentialMetadata(name = "PID mdoc id", vct = "pid-mdoc-id-vct"), batchId = 3L, instanceId = 0),
+            )
+        )
+        val engine = mockEngineConstructor(progressFlow = progressFlow)
+        every { engine.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice", credentials = store.getAll())),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        val query = Json.parseToJsonElement(
+            """{
+              "credentials": [
+                {"id":"mdl","format":"dc+sd-jwt","meta":{"vct_values":["mdl-vct"]}},
+                {"id":"photoid","format":"dc+sd-jwt","meta":{"vct_values":["photoid-vct"]}},
+                {"id":"pid_1_5","format":"dc+sd-jwt","meta":{"vct_values":["pid-1-5-vct"]}},
+                {"id":"pid_1_8","format":"dc+sd-jwt","meta":{"vct_values":["pid-1-8-vct"]}},
+                {"id":"pid_mdoc_id","format":"dc+sd-jwt","meta":{"vct_values":["pid-mdoc-id-vct"]}}
+              ],
+              "credential_sets": [
+                {"required": true, "options": [["mdl"], ["photoid"], ["pid_1_5"], ["pid_1_8"], ["pid_mdoc_id"]]}
+              ]
+            }""",
+        )
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "flow-5opt", step = "credential_selection",
+                payload = buildJsonObject { put("dcql_query", query) },
+            )
+        )
+        advanceUntilIdle()
+
+        assertTrue("listener.onCredentialSelectionRequired was never invoked", requestSlot.isCaptured)
+        val request = requestSlot.captured
+        assertEquals(
+            "exactly mdl/pid_1_8/pid_mdoc_id should have matched candidates",
+            setOf("mdl", "pid_1_8", "pid_mdoc_id"),
+            request.consentMatchResults.map { it.queryId }.toSet(),
+        )
+        val groups = request.exclusiveChoiceGroups
+        assertEquals("the ambiguous credential_sets entry must surface as exactly one ExclusiveChoiceGroup", 1, groups.size)
+        assertEquals(0, groups.single().credentialSetIndex)
+        assertEquals(
+            setOf("mdl", "pid_1_8", "pid_mdoc_id"),
+            groups.single().options.flatMap { it.queryIds }.toSet(),
+        )
+    }
+
+    @Test
+    fun handleCredentialSelection_fiveOptionCredentialSetAsBareStrings_stillExposesOneExclusiveChoiceGroup() = runTest(dispatcher) {
+        // Same live gdc/nym_auth shape as the test above, but with every credential_sets option
+        // relayed as a bare string ("options": ["mdl", "photoid", ...]) instead of the one-element
+        // array OID4VP §6.2 always requires ("options": [["mdl"], ["photoid"], ...]) - the shape
+        // actually seen live. CredentialMatcher.parseCredentialSets used to silently drop every such
+        // option (only JsonArray was accepted), which emptied the whole credential_sets entry and,
+        // with it, satisfiableOptions/exclusiveChoiceGroups - while per-query matching kept working
+        // normally, which is what made the live symptom look like a grouping bug rather than a
+        // parsing one: three alternatives still "matched" with the right candidate, they just never
+        // got treated as mutually exclusive.
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val requestSlot = slot<PresentationRequest>()
+        coEvery { listener.onCredentialSelectionRequired(capture(requestSlot)) } returns emptyList()
+        val store = FakeCredentialStore(
+            mutableListOf(
+                StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw-mdl",
+                    metadata = CredentialMetadata(name = "mDL", vct = "mdl-vct"), batchId = 1L, instanceId = 0),
+                StoredCredential(id = 2L, format = "dc+sd-jwt", raw = "raw-pid-1-8",
+                    metadata = CredentialMetadata(name = "PID 1.8", vct = "pid-1-8-vct"), batchId = 2L, instanceId = 0),
+                StoredCredential(id = 3L, format = "dc+sd-jwt", raw = "raw-pid-mdoc-id",
+                    metadata = CredentialMetadata(name = "PID mdoc id", vct = "pid-mdoc-id-vct"), batchId = 3L, instanceId = 0),
+            )
+        )
+        val engine = mockEngineConstructor(progressFlow = progressFlow)
+        every { engine.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice", credentials = store.getAll())),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        val query = Json.parseToJsonElement(
+            """{
+              "credentials": [
+                {"id":"mdl","format":"dc+sd-jwt","meta":{"vct_values":["mdl-vct"]}},
+                {"id":"photoid","format":"dc+sd-jwt","meta":{"vct_values":["photoid-vct"]}},
+                {"id":"pid_1_5","format":"dc+sd-jwt","meta":{"vct_values":["pid-1-5-vct"]}},
+                {"id":"pid_1_8","format":"dc+sd-jwt","meta":{"vct_values":["pid-1-8-vct"]}},
+                {"id":"pid_mdoc_id","format":"dc+sd-jwt","meta":{"vct_values":["pid-mdoc-id-vct"]}}
+              ],
+              "credential_sets": [
+                {"required": true, "options": ["mdl", "photoid", "pid_1_5", "pid_1_8", "pid_mdoc_id"]}
+              ]
+            }""",
+        )
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "flow-5opt-bare", step = "credential_selection",
+                payload = buildJsonObject { put("dcql_query", query) },
+            )
+        )
+        advanceUntilIdle()
+
+        assertTrue("listener.onCredentialSelectionRequired was never invoked", requestSlot.isCaptured)
+        val request = requestSlot.captured
+        assertEquals(
+            "per-query matching must be unaffected by the bare-string options shape",
+            setOf("mdl", "pid_1_8", "pid_mdoc_id"),
+            request.consentMatchResults.map { it.queryId }.toSet(),
+        )
+        val groups = request.exclusiveChoiceGroups
+        assertEquals("the ambiguous credential_sets entry must still surface as exactly one ExclusiveChoiceGroup", 1, groups.size)
+        assertEquals(0, groups.single().credentialSetIndex)
+        assertEquals(
+            setOf("mdl", "pid_1_8", "pid_mdoc_id"),
+            groups.single().options.flatMap { it.queryIds }.toSet(),
+        )
+    }
+
+    @Test
     fun handleCredentialSelection_sessionReplacedWhileCredentialStoreGetAllSuspends_neverPublishesMatchStateOrAsksTheUser() = runTest(dispatcher) {
         // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345, round 4's finding #3): credentialStore.getAll()
         // is handleCredentialSelection's FIRST suspension point - well before its ticket check, which only runs after the
