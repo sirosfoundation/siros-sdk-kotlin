@@ -257,7 +257,7 @@ private fun StepBar(currentStep: Int, totalSteps: Int) {
 private fun zkSummaryLines(result: CredentialMatcher.MatchResult, verifierName: String): List<String> {
     val context = LocalContext.current
     val items = result.circuitZkPlan?.let { p ->
-        ConsentItems.build(p, verifierId = "unresolved-not-shown", today = java.time.LocalDate.now(), predicates = PredicateFunctions.DEFAULT)
+        ConsentItems.build(p, verifierId = "unresolved-not-shown", today = java.time.LocalDate.now(java.time.ZoneOffset.UTC), predicates = PredicateFunctions.DEFAULT)
     }
     return items?.let { PresentationConsentText.forContext(context).renderItems(it, verifierName) }.orEmpty()
 }
