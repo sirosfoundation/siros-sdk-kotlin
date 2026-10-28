@@ -22,6 +22,12 @@ import java.net.URL
  * layer provides a [BiometricCaptureDelegate] for vendor-specific
  * UI capture (FaceTec, iProov, Regula, etc.).
  *
+ * The three endpoint paths are required, with no defaults: the client
+ * describes a pattern rather than one vendor's URLs, and SIROS's own
+ * backend does not serve this flow. For facetec-api, use
+ * [org.siros.sdk.idv.facetec.FaceTecIDVProvider], which speaks its
+ * single `/v1/process-request` contract.
+ *
  * ## Usage
  *
  * ```kotlin
@@ -29,6 +35,9 @@ import java.net.URL
  *     config = RemoteIDVClient.Config(
  *         serverUrl = "https://idv.example.com",
  *         authToken = "Bearer <token>",
+ *         sessionTokenPath = "/v1/session-token",
+ *         livenessPath = "/v1/liveness",
+ *         idScanPath = "/v1/id-scan",
  *     )
  * )
  * val provider = RemoteIDVProvider(client, faceTecDelegate)
@@ -42,12 +51,15 @@ class RemoteIDVClient(private val config: Config) {
         val serverUrl: String,
         /** Authorization header value (e.g., "Bearer <token>"). */
         val authToken: String,
-        /** Session token endpoint path (default: "/v1/session-token"). */
-        val sessionTokenPath: String = "/v1/session-token",
-        /** Liveness submission endpoint path (default: "/v1/liveness"). */
-        val livenessPath: String = "/v1/liveness",
-        /** ID scan submission endpoint path (default: "/v1/id-scan"). */
-        val idScanPath: String = "/v1/id-scan",
+        /**
+         * Session token endpoint path, e.g. "/v1/session-token".
+         * Required: this client has no backend of its own to default to.
+         */
+        val sessionTokenPath: String,
+        /** Liveness submission endpoint path, e.g. "/v1/liveness". Required. */
+        val livenessPath: String,
+        /** Document submission endpoint path, e.g. "/v1/id-scan". Required. */
+        val idScanPath: String,
         /** Connect timeout in ms (default: 30s). */
         val connectTimeoutMs: Int = 30_000,
         /** Read timeout in ms (default: 60s for large biometric payloads). */
@@ -85,10 +97,10 @@ class RemoteIDVClient(private val config: Config) {
      * Submit document images for identity verification and credential issuance.
      *
      * @param payload JSON object containing document images and the liveness session ID.
-     * The liveness step this refers to is single-use and short-lived (facetec-api's default is two
-     * minutes): the backend consumes it on the first call, whatever the outcome, so a failed
-     * submission cannot be retried with the same `livenessSessionId`. Start over from
-     * [submitBiometric]. Every request must also reach the instance that holds the liveness step.
+     * The liveness step this refers to is single-use and short-lived: a backend following this
+     * pattern consumes it on the first call, whatever the outcome, so a failed submission cannot
+     * be retried with the same `livenessSessionId`. Start over from [submitBiometric]. Every
+     * request must also reach the instance that holds the liveness step.
      *
      * @return [IDVResult] with the credential offer URI for OID4VCI issuance.
      * @throws IDVException.SessionExpired if the liveness step has expired or was already used.
@@ -238,7 +250,12 @@ interface BiometricCaptureDelegate {
  * [BiometricCaptureDelegate] (wrapping their chosen biometric SDK).
  *
  * ```kotlin
- * val client = RemoteIDVClient(RemoteIDVClient.Config(serverUrl = "...", authToken = "..."))
+ * val client = RemoteIDVClient(
+ *     RemoteIDVClient.Config(
+ *         serverUrl = "...", authToken = "...",
+ *         sessionTokenPath = "...", livenessPath = "...", idScanPath = "...",
+ *     )
+ * )
  * val delegate = FaceTecCaptureDelegate(context)  // app provides this
  * val provider = RemoteIDVProvider(client, delegate)
  * wallet.verifyIdentityAndIssue(provider, activity)

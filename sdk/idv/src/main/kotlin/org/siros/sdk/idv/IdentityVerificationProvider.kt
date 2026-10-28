@@ -50,11 +50,10 @@ sealed class IDVException(
      * (sirosfoundation/facetec-api#65). [reason] is the backend's `nfc_*` code and
      * [errorCode] is `idv_<reason>`.
      *
-     * Through [RemoteIDVClient] (facetec-api's `/v1/id-scan`) the reason is always
-     * `nfc_skipped`: that path only learns whether the chip was verified, not why it
-     * was not. facetec-api's `/process-request` flow distinguishes
-     * `nfc_not_requested`, `nfc_device_not_capable`, `nfc_chip_read_failed`
-     * and `nfc_not_authenticated` as well, and any `nfc_*` code a backend sends maps here.
+     * facetec-api's `/process-request` flow, which [org.siros.sdk.idv.facetec.FaceTecIDVProvider]
+     * speaks, distinguishes `nfc_not_requested`, `nfc_device_not_capable`,
+     * `nfc_chip_read_failed`, `nfc_not_authenticated` and `nfc_skipped`. Any `nfc_*` code a
+     * backend reached through [RemoteIDVClient] sends maps here too.
      */
     class DocumentChipNotVerified(val reason: String, message: String) : IDVException(message, errorCode = "idv_$reason")
 
@@ -80,10 +79,10 @@ sealed class IDVException(
      * it expired, or was already used. A liveness step is single-use, so it is never retried;
      * start a new verification from the face scan. [errorCode] is `idv_session_expired`.
      *
-     * Through [RemoteIDVClient] this is the answer to a `/v1/id-scan` for a `livenessSessionId`
-     * that is older than the backend's liveness TTL or was already submitted. facetec-api's
-     * `/process-request` flow does not send it: there an expired or missing liveness proof is
-     * reported as `liveness_failed` ([LivenessFailed]).
+     * Through [RemoteIDVClient] this is the answer to a document submission for a
+     * `livenessSessionId` that is older than the backend's liveness TTL or was already
+     * submitted. facetec-api's `/process-request` flow does not send it: there an expired or
+     * missing liveness proof is reported as `liveness_failed` ([LivenessFailed]).
      */
     class SessionExpired(message: String) : IDVException(message, errorCode = "idv_session_expired")
 

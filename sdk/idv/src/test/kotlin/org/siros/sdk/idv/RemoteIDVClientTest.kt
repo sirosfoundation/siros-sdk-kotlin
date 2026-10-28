@@ -95,7 +95,13 @@ class RemoteIDVClientTest {
     fun startServer() {
         server = MockWebServer().apply { start() }
         client = RemoteIDVClient(
-            RemoteIDVClient.Config(serverUrl = server.url("/").toString(), authToken = "Bearer test"),
+            RemoteIDVClient.Config(
+                serverUrl = server.url("/").toString(),
+                authToken = "Bearer test",
+                sessionTokenPath = "/v1/session-token",
+                livenessPath = "/v1/liveness",
+                idScanPath = "/v1/id-scan",
+            ),
         )
     }
 
