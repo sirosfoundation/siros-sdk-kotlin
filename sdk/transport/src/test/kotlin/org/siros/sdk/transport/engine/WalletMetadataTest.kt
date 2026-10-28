@@ -40,8 +40,11 @@ class WalletMetadataTest {
     fun sdJwtVcAlgValuesAreAdvertisedUnderBothIdentifiers() {
         for (format in listOf("dc+sd-jwt", "vc+sd-jwt")) {
             val entry = WalletMetadata.DEFAULT.jsonObject.getValue("vp_formats_supported").jsonObject.getValue(format).jsonObject
+            // sd-jwt_alg_values is the ISSUER's own signature algorithm, out of this wallet's control: ES256 only.
             assertEquals(listOf(JsonPrimitive("ES256")), entry.getValue("sd-jwt_alg_values").jsonArray.toList())
-            assertEquals(listOf(JsonPrimitive("ES256")), entry.getValue("kb-jwt_alg_values").jsonArray.toList())
+            // kb-jwt_alg_values is this wallet's OWN Key Binding JWT: WscdKeystoreAdapter signs it with whatever the
+            // selected holder key's algorithm is (ES256 or EdDSA), same as the mdoc device signature.
+            assertEquals(listOf(JsonPrimitive("ES256"), JsonPrimitive("EdDSA")), entry.getValue("kb-jwt_alg_values").jsonArray.toList())
         }
     }
 }

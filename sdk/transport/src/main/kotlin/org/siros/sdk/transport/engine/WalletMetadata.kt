@@ -27,34 +27,36 @@ object WalletMetadata {
     /**
      * The formats this SDK can present: SD-JWT VC under both the current
      * (`dc+sd-jwt`) and the legacy (`vc+sd-jwt`) identifier, and ISO mdoc.
-     * ES256 is what the key-binding/holder-binding JWTs above use, but a
-     * holder key is not always ES256 - `WscdKeystoreAdapter.signMdocPresentation`
-     * signs the device signature with whatever `key.algorithm` the selected
-     * key actually is, which can be EdDSA.
+     * A holder key is not always ES256: `WscdKeystoreAdapter` signs both the
+     * SD-JWT VC Key Binding JWT and the mdoc device signature with whatever
+     * `key.algorithm` the selected holder key actually is, which can be
+     * EdDSA, so `kb-jwt_alg_values` and `deviceauth_alg_values` (this SDK's
+     * own holder-key-signed material - see below) list both.
      *
-     * The two formats are spelled as OpenID4VP 1.0 Annex B defines them,
-     * which is not the same shape twice: SD-JWT VC takes `sd-jwt_alg_values`
-     * and `kb-jwt_alg_values` with JOSE names, mdoc takes
+     * The formats are spelled as OpenID4VP 1.0 Annex B defines them, which
+     * is not the same shape across all three: SD-JWT VC takes
+     * `sd-jwt_alg_values` (the ISSUER's signature algorithm on the SD-JWT
+     * itself - out of this wallet's control, kept at ES256) and
+     * `kb-jwt_alg_values` with JOSE names; mdoc takes
      * `issuerauth_alg_values` and `deviceauth_alg_values` with COSE algorithm
      * identifiers. `-7` is ES256, `-8` is EdDSA (`MdocCose.algorithmValue`
      * writes either into the device signature's protected header, whichever
      * the holder key's own algorithm is); `-9` (ES256, fully-specified) is
      * never advertised because `MdocCose` never emits or verifies it.
-     * `deviceauth_alg_values` lists `-7` and `-8` (whatever this SDK's own
-     * holder key produces); `issuerauth_alg_values` stays at `-7` only,
-     * since `MdocCose.verify1` (used for an issuer's own signature) does not
-     * implement EdDSA verification. No `DeviceMac` value is offered because
-     * this SDK only ever produces a `DeviceSignature`.
+     * `issuerauth_alg_values` stays at `-7` only, since `MdocCose.verify1`
+     * (used for an issuer's own signature) does not implement EdDSA
+     * verification. No `DeviceMac` value is offered because this SDK only
+     * ever produces a `DeviceSignature`.
      */
     val DEFAULT: JsonObject = buildJsonObject {
         putJsonObject("vp_formats_supported") {
             putJsonObject("dc+sd-jwt") {
                 putJsonArray("sd-jwt_alg_values") { add("ES256") }
-                putJsonArray("kb-jwt_alg_values") { add("ES256") }
+                putJsonArray("kb-jwt_alg_values") { add("ES256"); add("EdDSA") }
             }
             putJsonObject("vc+sd-jwt") {
                 putJsonArray("sd-jwt_alg_values") { add("ES256") }
-                putJsonArray("kb-jwt_alg_values") { add("ES256") }
+                putJsonArray("kb-jwt_alg_values") { add("ES256"); add("EdDSA") }
             }
             putJsonObject("mso_mdoc") {
                 putJsonArray("issuerauth_alg_values") { add(-7) }
