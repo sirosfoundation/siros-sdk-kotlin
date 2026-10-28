@@ -11320,8 +11320,23 @@ class SirosWallet private constructor(
                 // The verifier's client_metadata (verbatim, when the engine relays it) plans zkp_req queries.
                 val clientMetadata = payload?.get("client_metadata") as? JsonObject
                 val zkPlan: CircuitZkMatchPlan?
+                // Carried out of the `dcqlQuery != null` branch below rather
+                // than read off a locally-scoped `output`: this is the
+                // redirect-flow/haip-vp:// path the comment above already
+                // calls out as the one actually exercised live for
+                // "credential_selection" (matchRequests() never fires here) -
+                // dropping these on the floor, as this did before, meant
+                // PresentationRequest.satisfiableOptions/credentialSets were
+                // always empty/null for every live presentation through this
+                // path, so a consent UI keyed off them (see
+                // PresentationRequest.exclusiveChoiceGroups) never had
+                // anything to act on no matter what it did with them.
+                var credentialSets: List<CredentialMatcher.CredentialSetQuery>? = null
+                var satisfiableOptions: List<CredentialMatcher.SatisfiableOption> = emptyList()
                 val matchResults = if (dcqlQuery != null) {
                     val output = CredentialMatcher.matchDcql(dcqlQuery, allCreds, zkSystemIds, circuitZkSupport, clientMetadata)
+                    credentialSets = output.credentialSets
+                    satisfiableOptions = output.satisfiableOptions
                     zkPlan = planCircuitZkMatches(flowId, output, clientMetadata, verifierInfo?.get("client_id")?.jsonPrimitive?.contentOrNull)
                     zkPlan?.matchResults ?: output.queryResults
                 } else {
@@ -11405,6 +11420,8 @@ class SirosWallet private constructor(
                             trustResult = lastTrustResults[flowId],
                             matchResults = matchResults,
                             candidates = candidates,
+                            credentialSets = credentialSets,
+                            satisfiableOptions = satisfiableOptions,
                         )
                     )
                 } else {

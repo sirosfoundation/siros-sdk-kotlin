@@ -58,9 +58,70 @@ data class PresentationRequest(
      * How many steps a stepped consent UI needs: the overview with the credential choice, then (unless [disclosesNoClaims]) one
      * claim-selection step per [consentMatchResults] entry and a final "confirm what is shared" summary. Share and Decline are on the last step, so
      * a request that discloses nothing is one step.
+     *
+     * Does NOT account for [exclusiveChoiceGroups] - a UI with any of those needs its own extra step(s) and must size itself from
+     * [activeConsentMatchResults] instead of [consentMatchResults] once the user has picked.
      */
     val consentStepCount: Int
         get() = if (disclosesNoClaims) 1 else consentMatchResults.size + 2
+
+    /**
+     * One DCQL `credential_sets` entry (OID4VP 1.0 §6.2) with more than one option the wallet can currently satisfy - e.g.
+     * `options: [["mdl"], ["pid_1_8"], ["pid_mdoc_id"]]` where the wallet holds a matching credential for all three. Per §6.2 these
+     * are alternatives, the wallet's choice: a set with exactly one satisfiable option has nothing to choose between (the single
+     * candidate IS the answer, [consentMatchResults] already includes it and nothing else from that set).
+     *
+     * Found live (gdc e2e, nym_auth): a query with one required set of five single-credential alternatives let the consent screen
+     * show every individually-matching credential as an independent, freely-checkable step - so the user selected claims from three
+     * matching PID variants at once and sent all three in a single presentation, rather than the one the verifier's query actually
+     * asked the wallet to choose. A consent UI must let the user pick exactly one option per entry here before building
+     * [activeConsentMatchResults] / anything it sends.
+     */
+    data class ExclusiveChoiceGroup(
+        /** Index into `credential_sets` (and [credentialSets]) this group is for. */
+        val credentialSetIndex: Int,
+        /** The satisfiable alternatives for this credential set - more than one, by construction. */
+        val options: List<CredentialMatcher.SatisfiableOption>,
+    )
+
+    val exclusiveChoiceGroups: List<ExclusiveChoiceGroup>
+        get() {
+            // Re-checked against consentMatchResults rather than trusted at
+            // face value: a circuit_zk request's candidates are narrowed
+            // further by its plan's own predicate check AFTER
+            // satisfiableOptions was computed (see SirosWallet's
+            // planCircuitZkMatches), so an option reported satisfiable there
+            // can have lost its only candidate by the time this is read. An
+            // option like that is not a real alternative to choose between -
+            // consentMatchResults already has nothing for it.
+            val consentQueryIds = consentMatchResults.map { it.queryId }.toSet()
+            return satisfiableOptions
+                .filter { option -> option.queryIds.all { it in consentQueryIds } }
+                .groupBy { it.credentialSetIndex }
+                .entries
+                .sortedBy { it.key }
+                .map { (setIndex, options) -> ExclusiveChoiceGroup(setIndex, options) }
+                .filter { it.options.size > 1 }
+        }
+
+    /**
+     * [consentMatchResults] restricted to the queries actually part of this presentation: every query untouched by an
+     * [exclusiveChoiceGroups] entry, plus - once chosen - exactly one option's worth of queries per such entry.
+     *
+     * @param chosenOptionIndex credentialSetIndex -> the chosen option's [CredentialMatcher.SatisfiableOption.optionIndex], one entry
+     *   per resolved [ExclusiveChoiceGroup]. A group absent here (not yet chosen) has every one of its options excluded - nothing from
+     *   an unresolved group is ever included, which is what stops the union-of-all-alternatives bug from recurring for a group still
+     *   mid-choice.
+     */
+    fun activeConsentMatchResults(chosenOptionIndex: Map<Int, Int>): List<CredentialMatcher.MatchResult> {
+        val groups = exclusiveChoiceGroups
+        if (groups.isEmpty()) return consentMatchResults
+        val excludedQueryIds = groups.flatMap { group ->
+            val chosen = chosenOptionIndex[group.credentialSetIndex]
+            group.options.filter { it.optionIndex != chosen }.flatMap { it.queryIds }
+        }.toSet()
+        return consentMatchResults.filter { it.queryId !in excludedQueryIds }
+    }
 
     private companion object {
         /** Rulebook functions whose result is a derived value (a pseudonym, a boolean), never a disclosed claim. */
