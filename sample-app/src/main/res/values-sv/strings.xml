@@ -180,6 +180,7 @@
     <string name="error_idv_nfc_not_authenticated">Chipet i din handling kunde inte verifieras, så ingen legitimation utfärdades.</string>
     <string name="error_idv_chip_untrusted">Chipet i din handling kunde inte bekräftas som utfärdat av en erkänd myndighet, så ingen legitimation utfärdades. Försök igen senare eller använd en annan identitetshandling.</string>
     <string name="error_idv_chip_photo_mismatch">Ditt ansikte stämde inte med fotot som är lagrat i handlingens chip, så ingen legitimation utfärdades. Försök igen eller använd en annan identitetshandling.</string>
+    <string name="error_idv_chip_data_unverified">Handlingens chip kunde inte verifieras, så ingen legitimation utfärdades. Endast uppgifter som är signerade av handlingens chip kan användas. Använd ett pass eller ett nationellt identitetskort med läsbart chip.</string>
     <string name="error_idv_document_expired">Den här handlingen har gått ut, så ingen legitimation utfärdades. Använd en giltig identitetshandling.</string>
     <string name="error_idv_session_expired">Verifieringen tog för lång tid eller har redan använts. Börja om från början.</string>
     <string name="error_ctap2_not_available">Transport för säkerhetsnyckel är inte tillgänglig.</string>

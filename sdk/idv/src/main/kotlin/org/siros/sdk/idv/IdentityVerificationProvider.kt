@@ -85,6 +85,22 @@ sealed class IDVException(
     class ChipPhotoMismatch(message: String) : IDVException(message, errorCode = "idv_chip_photo_mismatch")
 
     /**
+     * The backend refused to issue because there was no cryptographically verified chip
+     * identity to issue from (facetec-api's `chip_data_unverified`,
+     * sirosfoundation/facetec-api#85). Only data the document's chip signed, under a signer the
+     * backend trusts, may become a credential claim; data read by OCR from the printed page is
+     * trivially forgeable.
+     *
+     * Distinct from [ChipUntrusted], which means the chip was read and verified but its signer
+     * is not on the trust list, so another document may work. This means there was no verified
+     * chip identity at all -- a chip format the backend does not parse, such as an ISO 18013
+     * driving licence, or a chip whose signed MRZ could not be read -- so the user needs a
+     * document whose chip the backend supports, typically a passport or a national identity
+     * card. [errorCode] is `idv_chip_data_unverified`.
+     */
+    class ChipDataUnverified(message: String) : IDVException(message, errorCode = "idv_chip_data_unverified")
+
+    /**
      * The backend no longer holds the liveness step this request relies on (`session_expired`):
      * it expired, or was already used. A liveness step is single-use, so it is never retried;
      * start a new verification from the face scan. [errorCode] is `idv_session_expired`.

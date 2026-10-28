@@ -1272,6 +1272,7 @@ this version.
   transaction: TransactionBinding)`.
 
 ### Added
+- **`IDVException.ChipDataUnverified` (`chip_data_unverified`, `errorCode` `idv_chip_data_unverified`):** facetec-api now refuses to issue a credential whose identity claims would have come from OCR of the printed page rather than from the document's cryptographically verified, trusted chip (sirosfoundation/facetec-api#85). Distinct from `ChipUntrusted`, which means the chip was verified but its signer is not on the trust list, so another document may work; this means there was no verified chip identity at all — a chip format the backend does not parse, such as an ISO 18013 driving licence, or a chip whose signed MRZ could not be read — so the user needs a passport or a national identity card. Until now the code reached the app as a `ProviderError` (`FaceTecIDVProvider`) or a generic `VerificationFailed` carrying the raw body (`RemoteIDVClient`). Adding a subclass breaks exhaustive `when`s over `IDVException`. The sample app has a message for it in every language it ships.
 - **`IDVException.ChipPhotoMismatch` (`chip_photo_mismatch`, `errorCode`
   `idv_chip_photo_mismatch`):** facetec-api now refuses a scan whose face does
   not match the photo stored on the document's chip

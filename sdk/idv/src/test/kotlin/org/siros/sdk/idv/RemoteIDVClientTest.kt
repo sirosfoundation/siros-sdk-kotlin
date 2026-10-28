@@ -76,6 +76,19 @@ class RemoteIDVClientTest {
     }
 
     @Test
+    fun `chip_data_unverified has a typed exception`() {
+        val e = idvExceptionFor422(
+            "chip_data_unverified",
+            "no verified chip identity",
+            "{}",
+            fallback,
+        )
+        assertTrue(e is IDVException.ChipDataUnverified)
+        assertEquals("idv_chip_data_unverified", e.errorCode)
+        assertEquals("no verified chip identity", e.message)
+    }
+
+    @Test
     fun `codes without a typed exception have no mapping`() {
         for (code in listOf("match_failed", "policy_rejected", "document_unreadable", "liveness_failed", "issuance_failed", "internal_error", "new_code")) {
             assertEquals(code, null, idvExceptionForCode(code, "m"))
@@ -157,6 +170,7 @@ class RemoteIDVClientTest {
             "document_expired" to "idv_document_expired",
             "session_expired" to "idv_session_expired",
             "chip_photo_mismatch" to "idv_chip_photo_mismatch",
+            "chip_data_unverified" to "idv_chip_data_unverified",
         )
         for ((code, errorCode) in cases) {
             val e = thrownBy(422, """{"error":"refused: $code","error_code":"$code"}""") {

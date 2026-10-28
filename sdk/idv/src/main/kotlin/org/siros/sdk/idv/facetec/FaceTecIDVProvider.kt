@@ -69,6 +69,9 @@ import org.siros.sdk.idv.IdentityVerificationProvider
  *   trust-service outage is reported the same way, so offer a retry later too.
  * - [IDVException.ChipPhotoMismatch]: the face did not match the photo on the document's chip
  *   (`chip_photo_mismatch`).
+ * - [IDVException.ChipDataUnverified]: there was no verified chip identity to issue from
+ *   (`chip_data_unverified`), e.g. a chip format facetec-api does not parse. A passport or a
+ *   national identity card is needed; retrying the same document will not help.
  * - [IDVException.DocumentExpired]: the document has expired (`document_expired`).
  * - [IDVException.SessionExpired]: facetec-api reports the liveness step as expired or used
  *   (`session_expired`); start over.

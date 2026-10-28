@@ -85,6 +85,8 @@ class FaceTecSessionTest {
         assertTrue(refusalToException("chip_untrusted", null) is IDVException.ChipUntrusted)
         assertTrue(refusalToException("chip_photo_mismatch", null) is IDVException.ChipPhotoMismatch)
         assertEquals("idv_chip_photo_mismatch", refusalToException("chip_photo_mismatch", null).errorCode)
+        assertTrue(refusalToException("chip_data_unverified", null) is IDVException.ChipDataUnverified)
+        assertEquals("idv_chip_data_unverified", refusalToException("chip_data_unverified", null).errorCode)
         assertTrue(refusalToException("document_expired", null) is IDVException.DocumentExpired)
         assertTrue(refusalToException("session_expired", null) is IDVException.SessionExpired)
         assertEquals("idv_chip_untrusted", refusalToException("chip_untrusted", null).errorCode)
@@ -107,6 +109,8 @@ class FaceTecSessionTest {
             "nfc_chip_read_failed", "nfc_not_authenticated", "document_expired", "issuance_failed", "internal_error",
             // Added by sirosfoundation/facetec-api#78.
             "chip_photo_mismatch",
+            // Added by sirosfoundation/facetec-api#85.
+            "chip_data_unverified",
         )
         for (code in codes) {
             val e = refusalToException(code, "m")
