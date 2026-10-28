@@ -9247,8 +9247,9 @@ class SirosWallet private constructor(
                     // valid single choice (also catches a credential that happens to satisfy two different alternatives
                     // at once, which resolveActiveQueryPerCredential alone cannot tell apart).
                     val activeQueries = matchResults.filter { r -> r.candidates.any { it.id in selectedIds.toSet() } }
+                    val allQueryIds = matchResults.filter { it.candidates.isNotEmpty() }.map { it.queryId }.toSet()
                     val resolvedMatchResultById = if (zkSelection == null) {
-                        if (!credentialSetChoiceIsValid(dcqlOutput.credentialSets, dcqlOutput.satisfiableOptions, activeQueries.map { it.queryId }.toSet())) {
+                        if (!credentialSetChoiceIsValid(dcqlOutput.credentialSets, dcqlOutput.satisfiableOptions, allQueryIds, activeQueries.map { it.queryId }.toSet())) {
                             engine.sendMatchResponse(msg.flowId, emptyList(), org.siros.sdk.transport.engine.NoMatchCodes.NO_SELECTION)
                             engine.sendCredentialsMatched(msg.flowId, emptyList(), org.siros.sdk.transport.engine.NoMatchCodes.NO_SELECTION)
                             return@collect
@@ -11516,8 +11517,9 @@ class SirosWallet private constructor(
                 // valid single credential_sets choice, including a credential that happens to
                 // satisfy two different alternatives at once.
                 val activeQueries = matchResults.filter { r -> r.candidates.any { it.id in selectedIds.toSet() } }
+                val allQueryIds = matchResults.filter { it.candidates.isNotEmpty() }.map { it.queryId }.toSet()
                 val resolvedMatchResultById = if (zkSelection == null) {
-                    if (!credentialSetChoiceIsValid(credentialSets, satisfiableOptions, activeQueries.map { it.queryId }.toSet())) {
+                    if (!credentialSetChoiceIsValid(credentialSets, satisfiableOptions, allQueryIds, activeQueries.map { it.queryId }.toSet())) {
                         engine.sendFlowAction(flowId, "decline", kotlinx.serialization.json.buildJsonObject {
                             put("reason", kotlinx.serialization.json.JsonPrimitive("user_declined"))
                         })

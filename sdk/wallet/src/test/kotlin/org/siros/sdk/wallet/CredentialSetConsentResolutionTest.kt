@@ -31,19 +31,22 @@ class CredentialSetConsentResolutionTest {
         CredentialMatcher.CredentialSetQuery(options = options.toList(), required = required)
 
     // ── credentialSetChoiceIsValid ──
+    // allQueryIds defaults to resolvedQueryIds in most of these - the tests that care about the
+    // DIFFERENCE between the two (an unconstrained query the selection never answered at all) are
+    // their own, separate cases below.
 
     @Test
-    fun noCredentialSetsAlwaysValidates() {
-        assertTrue(credentialSetChoiceIsValid(null, emptyList(), emptySet()))
-        assertTrue(credentialSetChoiceIsValid(emptyList(), emptyList(), setOf("whatever")))
+    fun noCredentialSetsValidatesOnlyWhenEveryQueryIsAnswered() {
+        assertTrue(credentialSetChoiceIsValid(null, emptyList(), emptySet(), emptySet()))
+        assertTrue(credentialSetChoiceIsValid(emptyList(), emptyList(), setOf("whatever"), setOf("whatever")))
     }
 
     @Test
     fun exactlyOneWholeOptionIsValid() {
         val sets = listOf(credentialSet(listOf("a"), listOf("b")))
         val options = listOf(option(0, "a"), option(1, "b"))
-        assertTrue(credentialSetChoiceIsValid(sets, options, setOf("a")))
-        assertTrue(credentialSetChoiceIsValid(sets, options, setOf("b")))
+        assertTrue(credentialSetChoiceIsValid(sets, options, setOf("a"), setOf("a")))
+        assertTrue(credentialSetChoiceIsValid(sets, options, setOf("b"), setOf("b")))
     }
 
     @Test
@@ -52,8 +55,8 @@ class CredentialSetConsentResolutionTest {
         // alternative must be answered whole or not at all.
         val sets = listOf(credentialSet(listOf("a", "b")))
         val options = listOf(option(0, "a", "b"))
-        assertTrue(credentialSetChoiceIsValid(sets, options, setOf("a", "b")))
-        assertTrue("a partial answer must be refused", !credentialSetChoiceIsValid(sets, options, setOf("a")))
+        assertTrue(credentialSetChoiceIsValid(sets, options, setOf("a", "b"), setOf("a", "b")))
+        assertTrue("a partial answer must be refused", !credentialSetChoiceIsValid(sets, options, setOf("a", "b"), setOf("a")))
     }
 
     @Test
@@ -62,15 +65,77 @@ class CredentialSetConsentResolutionTest {
         // server-side: [[a],[b]], answering BOTH a and b at once is never a single valid choice.
         val sets = listOf(credentialSet(listOf("a"), listOf("b")))
         val options = listOf(option(0, "a"), option(1, "b"))
-        assertTrue(!credentialSetChoiceIsValid(sets, options, setOf("a", "b")))
+        assertTrue(!credentialSetChoiceIsValid(sets, options, setOf("a", "b"), setOf("a", "b")))
     }
 
     @Test
     fun aRequiredSetWithNothingAnsweredIsInvalid_optionalIsFine() {
         val required = listOf(credentialSet(listOf("a"), listOf("b"), required = true))
-        assertTrue(!credentialSetChoiceIsValid(required, emptyList(), emptySet()))
+        assertTrue(!credentialSetChoiceIsValid(required, emptyList(), setOf("a", "b"), emptySet()))
         val optional = listOf(credentialSet(listOf("a"), listOf("b"), required = false))
-        assertTrue(credentialSetChoiceIsValid(optional, emptyList(), emptySet()))
+        assertTrue(credentialSetChoiceIsValid(optional, emptyList(), setOf("a", "b"), emptySet()))
+    }
+
+    @Test
+    fun anUnconstrainedQueryMissingFromTheSelectionFailsClosed() {
+        // A fresh Copilot review, round 5, finding 1: without credential_sets (or a query simply
+        // outside any of its entries), every query is mandatory - exactly as it always was before
+        // this mechanism existed. "a" matched credential 1, "b" matched credential 2; answering
+        // only "a" must be refused, not silently accepted as if "b" was never asked for.
+        assertTrue(!credentialSetChoiceIsValid(null, emptyList(), setOf("a", "b"), setOf("a")))
+        assertTrue(credentialSetChoiceIsValid(null, emptyList(), setOf("a", "b"), setOf("a", "b")))
+    }
+
+    @Test
+    fun anUnconstrainedQueryIsRequiredEvenAlongsideAnUnrelatedCredentialSet() {
+        // "c" is outside the one credential_sets entry entirely (not a member of ANY of its
+        // options) - it stays mandatory regardless of how that entry resolves.
+        val sets = listOf(credentialSet(listOf("a"), listOf("b")))
+        val options = listOf(option(0, "a"), option(1, "b"))
+        assertTrue(!credentialSetChoiceIsValid(sets, options, setOf("a", "c"), setOf("a")))
+        assertTrue(credentialSetChoiceIsValid(sets, options, setOf("a", "c"), setOf("a", "c")))
+    }
+
+    @Test
+    fun aQueryIdSharedByTwoIndependentCredentialSetsDoesNotLeakBetweenThem() {
+        // A fresh Copilot review, round 5, finding 2 (a multi-set interaction nym_auth's own single
+        // credential_sets entry never exercises): set 0 is [[a],[b,c]], set 1 is a separate,
+        // independent [[b]] - "b" is a nominal member of BOTH. Credentials match "a" and "b" but
+        // not "c": set 0's only satisfiable option is "a" alone, set 1's only option is "b". The
+        // first version of this check computed, per set, "resolvedQueryIds ∩ this set's own member
+        // ids" - for set 0 that intersection is {a,b} (b leaking in because it's ALSO a member of
+        // set 0's own, unsatisfied [b,c] option), which matches NEITHER of set 0's options even
+        // though "a" alone is the exactly-right answer. Checking "does exactly one of THIS set's
+        // options have every one of ITS OWN query ids present" instead tolerates "b" being present
+        // for set 1's unrelated reasons without it disqualifying set 0's real, correct answer "a".
+        val sets = listOf(
+            credentialSet(listOf("a"), listOf("b", "c")),
+            credentialSet(listOf("b")),
+        )
+        val options = listOf(
+            option(0, "a", credentialSetIndex = 0),
+            // option 1 ([b,c]) of set 0 is not satisfiable (no candidate for "c") - never reported.
+            option(0, "b", credentialSetIndex = 1),
+        )
+        assertTrue(credentialSetChoiceIsValid(sets, options, setOf("a", "b"), setOf("a", "b")))
+    }
+
+    @Test
+    fun aQueryIdSharedByTwoIndependentCredentialSetsStillCatchesAGenuineUnionWithinOneOfThem() {
+        // Same shared-id shape as above, but this time set 0's OWN two alternatives are both fully
+        // present at once ("a" AND "b"+"c") - a real union-of-alternatives for set 0, which must
+        // still be refused: tolerating the cross-set overlap above must never widen into tolerating
+        // an actual union bug within a single set.
+        val sets = listOf(
+            credentialSet(listOf("a"), listOf("b", "c")),
+            credentialSet(listOf("b")),
+        )
+        val options = listOf(
+            option(0, "a", credentialSetIndex = 0),
+            option(1, "b", "c", credentialSetIndex = 0),
+            option(0, "b", credentialSetIndex = 1),
+        )
+        assertTrue(!credentialSetChoiceIsValid(sets, options, setOf("a", "b", "c"), setOf("a", "b", "c")))
     }
 
     // ── resolveActiveQueryPerCredential ──
@@ -166,6 +231,38 @@ class CredentialSetConsentResolutionTest {
         val options = listOf(option(0, "a"), option(1, "b"))
 
         assertNull(circuitZkSelectionByQuery(listOf(qa, qb), listOf(9L), sets, options))
+    }
+
+    @Test
+    fun twoIndependentQueriesWithoutCredentialSetsMustBothBeAnswered() {
+        // A fresh Copilot review, round 5, finding 1, end to end: no credential_sets at all, "a"
+        // matches credential 1, "b" matches credential 2 - both are mandatory, exactly as if this
+        // whole mechanism did not exist. Selecting only credential 1 must refuse (missing "b"), not
+        // succeed with just "a" - circuitZkSelectionByQuery's own `active` used to silently drop
+        // any query selectedIds did not cover, which (for the match-request/consent handlers that
+        // cache its result into pendingMatchResultsByFlow) left the later sign step with no way to
+        // notice "b" was never actually answered.
+        val qa = result("a", emptyList(), 1L)
+        val qb = result("b", emptyList(), 2L)
+        assertNull(circuitZkSelectionByQuery(listOf(qa, qb), listOf(1L)))
+        assertEquals(setOf(qa to 1L, qb to 2L), circuitZkSelectionByQuery(listOf(qa, qb), listOf(1L, 2L))?.toSet())
+    }
+
+    @Test
+    fun aQueryIdSharedAcrossTwoIndependentCredentialSetsResolvesBothCorrectly() {
+        // A fresh Copilot review, round 5, finding 2, end to end (a multi-set interaction nym_auth's
+        // own single credential_sets entry never exercises): set 0 is [[a],[b,c]], set 1 is the
+        // separate, independent [[b]] - "b" is a nominal member of both. Distinct credentials match
+        // "a" and "b", none matches "c": set 0's only satisfiable option is "a" alone, set 1's only
+        // option is "b". Both must resolve correctly together, not have "b" (needed for set 1)
+        // wrongly disqualify set 0's real answer "a".
+        val qa = result("a", emptyList(), 1L)
+        val qb = result("b", emptyList(), 2L)
+        val sets = listOf(credentialSet(listOf("a"), listOf("b", "c")), credentialSet(listOf("b")))
+        val options = listOf(option(0, "a", credentialSetIndex = 0), option(0, "b", credentialSetIndex = 1))
+
+        val selection = circuitZkSelectionByQuery(listOf(qa, qb), listOf(1L, 2L), sets, options)
+        assertEquals(setOf(qa to 1L, qb to 2L), selection?.toSet())
     }
 
     @Test

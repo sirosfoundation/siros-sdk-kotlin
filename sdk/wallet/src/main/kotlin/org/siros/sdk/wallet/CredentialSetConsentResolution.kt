@@ -5,14 +5,29 @@ import org.siros.sdk.credentials.CredentialMatcher
 
 /**
  * Validates that [resolvedQueryIds] - the DCQL queries a credential selection actually answers -
- * forms a complete, non-overlapping answer to every `credential_sets` entry: each entry's
- * answered queries are EXACTLY one of its satisfiable options, never a partial one (missing part
- * of a multi-credential alternative) and never more than one option's queries at once (the
+ * forms a complete, non-overlapping answer to the request: every query in [allQueryIds] that is
+ * NOT a member of any `credential_sets` option is unconstrained - mandatory, exactly as if there
+ * were no `credential_sets` at all - and must be answered; every `credential_sets` entry's
+ * answered queries must be EXACTLY one of its satisfiable options, never a partial one (missing
+ * part of a multi-credential alternative) and never more than one option's queries at once (the
  * union-across-alternatives bug [PresentationRequest.activeConsentMatchResults] exists to close
  * on the consent-UI side - re-checked here as defence in depth, the same "never trust a round
  * trip alone" pattern `ConsentGuard` applies elsewhere in this module: the consent step is
  * trusted to narrow correctly, but is not the only thing enforcing it). A required entry with no
- * answered query at all also fails; an optional one does not.
+ * option fully answered also fails; an optional one does not.
+ *
+ * Each entry is validated independently of every OTHER entry's own resolution, even when a query
+ * id happens to be a nominal member of more than one `credential_sets` entry (legal: nothing in
+ * OID4VP 1.0 §6.2 forbids two entries sharing a query id). Checking "does any entry's required
+ * option id set equal [resolvedQueryIds] intersected with that entry's own member ids" - this
+ * function's first version - breaks for exactly that overlap: answering `b` for set `[[b]]`'s sake
+ * also makes `b` appear in set `[[a],[b,c]]`'s intersection, inflating its apparent answer to
+ * `{a,b}`, which matches neither of ITS OWN options even though `a` alone is a perfectly valid
+ * choice for it. Checking "does EXACTLY ONE of this entry's own options have ALL its query ids
+ * present in resolvedQueryIds" instead tolerates that overlap (extra ids belonging to another
+ * entry's answer never disqualify an option that is itself fully satisfied) while still catching
+ * the union bug (more than one of THIS entry's own options fully present at once) and a partial
+ * multi-credential option (not yet fully present).
  *
  * This also catches the one case id-based attribution genuinely cannot resolve on its own: a
  * single stored credential that happens to be a valid candidate of two DIFFERENT alternatives of
@@ -23,17 +38,25 @@ import org.siros.sdk.credentials.CredentialMatcher
 internal fun credentialSetChoiceIsValid(
     credentialSets: List<CredentialMatcher.CredentialSetQuery>?,
     satisfiableOptions: List<CredentialMatcher.SatisfiableOption>,
+    allQueryIds: Set<String>,
     resolvedQueryIds: Set<String>,
 ): Boolean {
+    val constrainedQueryIds = credentialSets.orEmpty().flatMap { it.options.flatten() }.toSet()
+    // Every query outside any credential_sets option is unconstrained - mandatory. Checked first
+    // and unconditionally (even when credentialSets itself is null/empty, where EVERY query is
+    // unconstrained): silently answering only some of several otherwise-independent, equally
+    // mandatory queries must never look like success just because none of them happens to be
+    // part of a credential_sets entry.
+    if (!allQueryIds.minus(constrainedQueryIds).all { it in resolvedQueryIds }) return false
     if (credentialSets.isNullOrEmpty()) return true
+
     val optionsByIndex = satisfiableOptions.groupBy { it.credentialSetIndex }
     return credentialSets.indices.all { index ->
-        val memberIds = credentialSets[index].options.flatten().toSet()
-        val answered = resolvedQueryIds.intersect(memberIds)
-        if (answered.isEmpty()) {
-            !credentialSets[index].required
-        } else {
-            optionsByIndex[index].orEmpty().any { it.queryIds.toSet() == answered }
+        val fullyCovered = optionsByIndex[index].orEmpty().filter { option -> option.queryIds.all { it in resolvedQueryIds } }
+        when {
+            fullyCovered.size > 1 -> false // more than one of THIS entry's own alternatives answered at once
+            fullyCovered.isEmpty() -> !credentialSets[index].required
+            else -> true
         }
     }
 }
@@ -93,7 +116,8 @@ internal fun circuitZkSelectionByQuery(
     val selected = selectedIds.toSet()
     val active = results.filter { r -> r.candidates.any { it.id in selected } }
     if (active.isEmpty()) return null
-    if (!credentialSetChoiceIsValid(credentialSets, satisfiableOptions, active.map { it.queryId }.toSet())) return null
+    val allQueryIds = results.map { it.queryId }.toSet()
+    if (!credentialSetChoiceIsValid(credentialSets, satisfiableOptions, allQueryIds, active.map { it.queryId }.toSet())) return null
     // In query order, prefer a credential no earlier query already took - "one credential may
     // answer several queries" is the fallback for when there are not enough distinct ones to go
     // around, not the default: with two credentials that both match both of two queries, the two
