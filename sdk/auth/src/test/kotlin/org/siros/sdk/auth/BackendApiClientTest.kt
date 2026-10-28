@@ -4,7 +4,11 @@ import org.siros.sdk.credentials.BackendApiException
 import io.mockk.coEvery
 import io.mockk.mockk
 import io.mockk.verify
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -61,6 +65,29 @@ class BackendApiClientTest {
         val request = server.takeRequest()
         assertEquals("/health", request.path)
         assertEquals(null, request.getHeader("Authorization"))
+    }
+
+    @Test
+    fun cancellingWhileTheResponseBodyIsStillTricklingInStopsTheRequestPromptly() = runBlocking {
+        // Headers arrive promptly, but the body trickles in far slower than the timeout below: if cancellation only
+        // covered the wait for headers (the bug this test guards against), the coroutine's cancellation would not
+        // actually interrupt the OkHttp call, and body.string() would keep blocking the IO thread for the whole
+        // ~6.4 second trickle regardless of the job being cancelled.
+        server.enqueue(
+            MockResponse()
+                .setBody("x".repeat(32 * 1024))
+                .throttleBody(1024, 200, java.util.concurrent.TimeUnit.MILLISECONDS)
+        )
+        val client = newClient()
+        val job = launch(Dispatchers.IO) {
+            client.healthCheck()
+        }
+        delay(300) // long enough for headers, nowhere near enough for the whole trickling body
+        job.cancel()
+        withTimeout(3_000) {
+            job.join() // must return promptly; timing out here means cancellation did not interrupt the body read
+        }
+        assertTrue(job.isCancelled)
     }
 
     @Test

@@ -3518,13 +3518,26 @@ class SirosWallet private constructor(
      * Records which auxiliary-data adapter the issuer's advertisement selects for ([issuerUrl], [configId]) so a response is read
      * with it. Returns false when the advertisement is malformed (the configuration is not offered; an earlier record is dropped,
      * so nothing is read with a stale adapter).
+     *
+     * NEVER overwrites the record for the pair [activeOffer] names: this is also called from catalog derivation (a cache read, a
+     * background refresh - [IssuerCatalog]'s `buildOffers`), which can run for the SAME (issuer, configuration) an issuance is
+     * ACTIVELY in flight for. Its completion handler ([wmpDeliveredMetadataRefusal] and the legacy engine equivalent) looks up this
+     * map live, by the completion's own (issuer, configuration) - a catalog pass landing mid-flight must not swap the selection out
+     * from under that validation (stale/incomplete metadata silently dropping a required-seed check and accepting a response that
+     * should have been refused). The active issuance's own offer resolution already recorded the selection it relies on before
+     * [activeOffer] was set; only a FOLLOW-ON catalog rebuild for that same pair is suppressed here, not the original recording.
      */
     private fun recordAuxiliarySelection(issuerUrl: String, configId: String, config: org.siros.sdk.credentials.CredentialConfiguration): Boolean {
-        return when (val selection = org.siros.sdk.credentials.AuxiliaryDataShapes.select(config)) {
-            org.siros.sdk.credentials.AuxiliarySelection.Malformed -> { secretSeedAdvertised?.remove(issuerUrl to configId); false }
-            is org.siros.sdk.credentials.AuxiliarySelection.Selected -> { secretSeedAdvertised?.put(issuerUrl to configId, selection); true }
-            org.siros.sdk.credentials.AuxiliarySelection.None -> { secretSeedAdvertised?.remove(issuerUrl to configId); true }
+        val selection = org.siros.sdk.credentials.AuxiliaryDataShapes.select(config)
+        val activeForThisPair = activeOffer?.credentialIssuerIdentifier == issuerUrl && activeOffer?.credentialConfigurationId == configId
+        if (!activeForThisPair) {
+            when (selection) {
+                org.siros.sdk.credentials.AuxiliarySelection.Malformed -> secretSeedAdvertised?.remove(issuerUrl to configId)
+                is org.siros.sdk.credentials.AuxiliarySelection.Selected -> secretSeedAdvertised?.put(issuerUrl to configId, selection)
+                org.siros.sdk.credentials.AuxiliarySelection.None -> secretSeedAdvertised?.remove(issuerUrl to configId)
+            }
         }
+        return selection != org.siros.sdk.credentials.AuxiliarySelection.Malformed
     }
 
     private fun buildCredentialOfferFromMetadata(issuerUrl: String, configId: String, metadata: IssuerMetadata): CredentialOffer? =

@@ -6060,6 +6060,74 @@ class SirosWalletTest {
         second.await()
     }
 
+    /**
+     * [IssuerCatalog]'s `buildOffers` calls [SirosWallet.recordAuxiliarySelection] for EVERY offer on every catalog
+     * assembly (a cache read, a background refresh), including for the configuration an issuance is actively in
+     * flight for. Its completion handlers (`wmpDeliveredMetadataRefusal` and the legacy equivalent) look up the
+     * selection live, by (issuer, configuration): a catalog pass landing mid-flight must never swap out the selection
+     * the request was built with, or a response missing a required seed could be silently accepted. Found via review
+     * of #298's background refresh.
+     */
+    @Test
+    fun catalogDerivationNeverOverwritesTheActiveIssuancesAuxiliarySelection() = runTest(dispatcher) {
+        val issuer = "https://issuer.example"
+        fun metadataWith(advert: kotlinx.serialization.json.JsonElement?) = buildJsonObject {
+            put("credential_issuer", JsonPrimitive(issuer))
+            putJsonObject("credential_configurations_supported") {
+                putJsonObject("pid") {
+                    put("format", JsonPrimitive("dc+sd-jwt"))
+                    if (advert != null) put("auxiliary_data_supported", advert)
+                }
+            }
+        }
+        val valid = metadataWith(Json.parseToJsonElement("""{"to_wallet":[{"type":"hash_commitment","alg":"sha-256","path":["ssc"],"encoding":"base64url"}]}"""))
+        val withoutAdvertisement = metadataWith(null) // no auxiliary_data_supported at all -> AuxiliarySelection.None
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery { apiClient.resolveIssuer(any(), any()) } returns buildJsonObject { putJsonObject("context") { put("trust_metadata", valid) } }
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val selections = java.util.concurrent.ConcurrentHashMap<Pair<String, String>, org.siros.sdk.credentials.AuxiliarySelection.Selected>()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "A")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "engineSession" to engine,
+            "apiClient" to apiClient,
+            "secretSeedAdvertised" to selections,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+            "json" to Json { ignoreUnknownKeys = true },
+            "httpClient" to OkHttpClient(),
+        )
+        val offer = org.siros.sdk.credentials.CredentialOffer("pid", issuer, "PID", issuerName = "I")
+        wallet.startIssuanceByOffer(offer)
+        advanceUntilIdle()
+        assertEquals(
+            "the issuance's own resolution recorded the selection",
+            org.siros.sdk.credentials.AuxiliaryDataV01.id, selections[issuer to "pid"]?.shape?.id,
+        )
+        assertEquals(offer.credentialConfigurationId, "pid")
+        assertEquals("pid", (getField(wallet, "activeOffer") as org.siros.sdk.credentials.CredentialOffer).credentialConfigurationId)
+
+        // A concurrent catalog derivation (IssuerCatalog.buildOffers, e.g. a background refresh) for the SAME
+        // (issuer, "pid") the issuance above is still active for, with metadata that now advertises nothing.
+        val staleConfig = Json { ignoreUnknownKeys = true }
+            .decodeFromJsonElement(org.siros.sdk.credentials.IssuerMetadata.serializer(), withoutAdvertisement)
+            .credentialConfigurationsSupported.getValue("pid")
+        val record = SirosWallet::class.java.getDeclaredMethod(
+            "recordAuxiliarySelection", String::class.java, String::class.java, org.siros.sdk.credentials.CredentialConfiguration::class.java,
+        )
+        record.isAccessible = true
+        record.invoke(wallet, issuer, "pid", staleConfig)
+
+        assertEquals(
+            "a catalog pass for the actively-issuing pair must not overwrite the recorded selection",
+            org.siros.sdk.credentials.AuxiliaryDataV01.id, selections[issuer to "pid"]?.shape?.id,
+        )
+
+        // Once the issuance is no longer active (the attempt ended), the SAME catalog derivation is free to update it.
+        setField(wallet, "activeOffer", null)
+        record.invoke(wallet, issuer, "pid", staleConfig)
+        assertNull("no longer protected once the issuance ended", selections[issuer to "pid"])
+    }
+
     @Test
     fun aCancelledRawOfferStartsLateDisplayLookup_neverOverwritesTheRetrysAdapterSelection() = runTest(dispatcher) {
         val issuer = "https://issuer.example"

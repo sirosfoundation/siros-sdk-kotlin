@@ -167,7 +167,7 @@ internal class IssuerCatalog(
      */
     suspend fun get(scopeKey: String): List<CredentialOffer> {
         val myEpoch = enterScope(scopeKey)
-        val cached = cachedFor(scopeKey)
+        val cached = cachedFor(scopeKey, myEpoch)
         if (cached != null) {
             return synchronized(lock) {
                 abortIfInvalidatedLocked(scopeKey, myEpoch)
@@ -175,7 +175,10 @@ internal class IssuerCatalog(
                 offersOf(cached)
             }
         }
-        refresh(scopeKey)
+        // Validated together with registering the job (not the plain refresh(scopeKey) below, which always registers
+        // against whatever is CURRENT): an invalidation of myEpoch between enterScope and here must never let this
+        // call's refresh be silently adopted into a later generation's, under a scope it no longer belongs to.
+        refreshValidated(scopeKey, myEpoch)
         return synchronized(lock) {
             abortIfInvalidatedLocked(scopeKey, myEpoch)
             val after = snapshot?.takeIf { it.scopeKey == scopeKey }
@@ -218,10 +221,23 @@ internal class IssuerCatalog(
         job.await()
     }
 
-    private fun registerRefresh(scopeKey: String): Deferred<Unit> = synchronized(lock) {
+    /** Like [refresh], but for a caller that already has its own [myEpoch] (from [enterScope]) to validate atomically
+     * with registering the job - see [get]'s doc comment at its call site. */
+    private suspend fun refreshValidated(scopeKey: String, myEpoch: Int) {
+        val job = synchronized(lock) {
+            abortIfInvalidatedLocked(scopeKey, myEpoch)
+            registerRefreshLocked(scopeKey)
+        }
+        job.start()
+        job.await()
+    }
+
+    private fun registerRefresh(scopeKey: String): Deferred<Unit> = synchronized(lock) { registerRefreshLocked(scopeKey) }
+
+    private fun registerRefreshLocked(scopeKey: String): Deferred<Unit> {
         resetIfOtherScopeLocked(scopeKey)
         val running = inFlight?.takeIf { !it.isCompleted }
-        if (running != null && inFlightKey == scopeKey) running
+        return if (running != null && inFlightKey == scopeKey) running
         else scope.async(start = kotlinx.coroutines.CoroutineStart.LAZY) { runRefresh(scopeKey) }.also { inFlight = it; inFlightKey = scopeKey }
     }
 
@@ -270,10 +286,12 @@ internal class IssuerCatalog(
 
     /**
      * The in-memory snapshot of [scopeKey], loading the persisted one on first use, publishing it. Throws [CancellationException] when
-     * the catalog was invalidated (logout, another scope) while the persisted copy was being read: that call must not publish or refresh.
+     * [myEpoch] is already stale when this call starts, OR when the catalog is invalidated (logout, another scope) while the persisted
+     * copy was being read: either way, this call must not publish, refresh or return data under a generation it no longer belongs to.
      */
-    private suspend fun cachedFor(scopeKey: String): Snapshot? {
+    private suspend fun cachedFor(scopeKey: String, myEpoch: Int): Snapshot? {
         val startEpoch = synchronized(lock) {
+            abortIfInvalidatedLocked(scopeKey, myEpoch)
             val have = snapshot
             if (have != null) return have.takeIf { it.scopeKey == scopeKey }
             if (loadedFromStore) return null
@@ -320,7 +338,9 @@ internal class IssuerCatalog(
     private suspend fun runRefresh(scopeKey: String) {
         val myEpoch = synchronized(lock) { epoch }
         // Load the persisted copy first so a refresh after a cold start also keeps the stale entries of issuers that now fail.
-        cachedFor(scopeKey)
+        // A job that was queued (registered) before a scope switch, but whose epoch is already stale by the time it actually
+        // runs, aborts right here instead of fetching/publishing under a generation it no longer belongs to.
+        cachedFor(scopeKey, myEpoch)
         val previous = synchronized(lock) { snapshot?.takeIf { it.scopeKey == scopeKey } }
         markState(myEpoch, refreshing = true)
         try {
@@ -350,8 +370,14 @@ internal class IssuerCatalog(
     }
 
     /**
-     * Every issuer's entry: fresh, VALIDATED metadata, else the previous entry (stale beats nothing, and beats metadata that
-     * [buildOffers] cannot use), else none. Jobs die with the refresh.
+     * Every issuer's entry: fresh, VALIDATED metadata, else the previous entry for the SAME issuer (stale beats nothing,
+     * and beats metadata that [buildOffers] cannot use), else none. Jobs die with the refresh.
+     *
+     * "The same issuer" means the registry row id AND its `credentialIssuerIdentifier` both match the previous entry: a
+     * row can keep its id while its URL changes (a migration, say), and metadata fetched under the OLD URL (issuer-
+     * specific configuration ids, display, auxiliary-data advertisement) must never be reused under the NEW one. A row
+     * whose URL changed and whose fresh fetch then fails is treated as having no cached entry at all, not as this row's
+     * entry becoming unavailable.
      */
     private suspend fun fetchAll(issuers: List<IssuerEntry>, previous: Snapshot?): List<Entry> = coroutineScope {
         val gate = Semaphore(maxParallel)
@@ -360,7 +386,9 @@ internal class IssuerCatalog(
                 gate.withPermit {
                     val meta = withTimeoutOrNull(issuerTimeoutMillis) { fetchMetadataOrNull(issuer) }
                     val entry = meta?.let { validatedEntry(issuer, it) }
-                    entry ?: previous?.entries?.firstOrNull { it.issuer.id == issuer.id }?.let { Entry(issuer, it.metadata) }
+                    entry ?: previous?.entries?.firstOrNull {
+                        it.issuer.id == issuer.id && it.issuer.credentialIssuerIdentifier == issuer.credentialIssuerIdentifier
+                    }?.let { Entry(issuer, it.metadata) }
                 }
             }
         }.awaitAll().filterNotNull()

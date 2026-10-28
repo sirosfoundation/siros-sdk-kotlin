@@ -46,6 +46,8 @@ class IssuerCatalogTest {
         val hangMetadata = mutableSetOf<Long>()
         /** A successful fetch whose metadata [buildOffers] cannot use (no "name" field), as opposed to [failMetadata]'s HTTP failure. */
         val invalidMetadata = mutableSetOf<Long>()
+        /** A registry row's URL, when it differs from the default "https://issuer-<id>.example.com". */
+        val urlOverrides = mutableMapOf<Long, String>()
     }
 
     private class Harness(val scope: CoroutineScope, val backend: Backend, val store: IssuerCatalogStore, val clock: LongArray, ttl: Long = 1_000L) {
@@ -57,7 +59,7 @@ class IssuerCatalogTest {
                 backend.issuerCalls++
                 backend.holdIssuers?.await()
                 if (backend.failIssuers) throw java.io.IOException("issuers down")
-                backend.issuers.map { IssuerEntry(id = it, credentialIssuerIdentifier = "https://issuer-$it.example.com") }
+                backend.issuers.map { IssuerEntry(id = it, credentialIssuerIdentifier = backend.urlOverrides[it] ?: "https://issuer-$it.example.com") }
             },
             fetchMetadata = { i ->
                 backend.metadataCalls[i.id] = (backend.metadataCalls[i.id] ?: 0) + 1
@@ -179,6 +181,28 @@ class IssuerCatalogTest {
         h.backend.issuers = listOf(2L, 3L)
         h.catalog.refresh("k")
         assertEquals(listOf("two", "three"), h.names())
+    }
+
+    @Test
+    fun aRowWhoseUrlChangedIsNeverServedUnderTheOldUrlsMetadataWhenTheFreshFetchFails() = runTest {
+        val h = harness()
+        h.catalog.get("k")
+        assertTrue(h.catalog.state.value.offers.any { it.credentialIssuerIdentifier == "https://issuer-1.example.com" })
+
+        // The SAME registry row (id 1) now reports a DIFFERENT URL, and its metadata fetch fails - the fallback must not
+        // attach issuer 1's OLD (issuer-1.example.com) metadata to the NEW URL; it must drop the row instead.
+        h.backend.urlOverrides[1L] = "https://issuer-1-moved.example.com"
+        h.backend.failMetadata += 1L
+        h.catalog.refresh("k")
+
+        assertTrue(
+            "no offer was served under the new URL with the old URL's metadata",
+            h.catalog.state.value.offers.none { it.credentialIssuerIdentifier == "https://issuer-1-moved.example.com" },
+        )
+        assertTrue(
+            "and none under the old URL either - the row is gone, not stuck on the stale URL",
+            h.catalog.state.value.offers.none { it.credentialIssuerIdentifier == "https://issuer-1.example.com" },
+        )
     }
 
     @Test
