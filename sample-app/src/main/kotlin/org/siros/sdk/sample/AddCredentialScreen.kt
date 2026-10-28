@@ -234,7 +234,17 @@ private fun AddCredentialChooser(
     onShowAllCredentials: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier.fillMaxSize()) {
+    // A plain Column, not a LazyColumn, since it's always exactly 3 rows -
+    // but still wrapped in verticalScroll rather than left to clip: at large
+    // accessibility font scales, or in a short landscape/split-screen
+    // viewport, 3 rows (each with a title + subtitle) can exceed the space
+    // below the TopAppBar even though 3 fixed items would never need
+    // lazy/windowed layout otherwise.
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
+    ) {
         if (onStartIDV != null) {
             ScanPhysicalIDCard(onClick = onStartIDV)
             HorizontalDivider()

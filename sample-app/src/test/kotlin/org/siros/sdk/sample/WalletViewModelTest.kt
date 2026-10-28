@@ -163,6 +163,34 @@ class WalletViewModelTest {
         coVerify(exactly = 0) { wallet.startPresentation(any()) }
     }
 
+    /**
+     * "Scan QR code" is reachable from the Add Credential chooser now (see
+     * AddCredentialScreen's onScanQr → WalletViewModel.openActivate), not
+     * just from Home - so `_showAddCredential` can legitimately be true when
+     * a QR is actually scanned and a flow starts. Before this fix,
+     * handleQrResult only called closeActivate(), leaving
+     * `_showAddCredential` true for the rest of the flow: MainActivity's
+     * top-level `when` checks `showAddCredential` before it ever reaches the
+     * `WalletState.FlowActive` branch that renders FlowActiveView, so the
+     * chooser screen was drawn forever over a flow silently progressing
+     * underneath it (PR #362, Copilot finding on MainActivity.kt:624).
+     */
+    @Test
+    @Ignore("Requires native WSCD library — run as instrumented test on device")
+    fun handleQrResult_closes_add_credential_so_flow_active_can_show() = runTest(dispatcher) {
+        val wallet = mockWallet(state = MutableStateFlow(WalletState.Ready(userId = "u1", displayName = "Alice", credentials = emptyList())))
+        every { SirosWallet.create(any(), any()) } returns wallet
+        val viewModel = WalletViewModel(mockk<Activity>(relaxed = true))
+        // Simulate having opened Add Credential and then tapped its "Scan QR
+        // code" option (openActivate()) before this QR result comes in.
+        setField(viewModel, "_showAddCredential", MutableStateFlow(true))
+
+        viewModel.handleQrResult("openid-credential-offer://offer?credential_offer=test")
+        advanceUntilIdle()
+
+        assertFalse(viewModel.showAddCredential.value)
+    }
+
     @Test
     @Ignore("Requires native WSCD library — run as instrumented test on device")
     fun handleQrResult_routes_non_offer_uri_to_presentation() = runTest(dispatcher) {

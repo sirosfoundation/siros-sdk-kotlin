@@ -2,6 +2,7 @@
 package org.siros.sdk.sample
 
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -147,9 +148,13 @@ class AddCredentialScreenTest {
         // The chooser's own options are no longer on screen while drilled in.
         composeRule.onNodeWithText("Digital ID (scanned passport)").assertDoesNotExist()
 
+        // The back control is an IconButton whose Icon carries this string as
+        // its contentDescription, not a Text node - onNodeWithText here would
+        // never match, so the earlier version of this test failed before it
+        // could verify navigation back to the chooser at all.
         val backLabel = InstrumentationRegistry.getInstrumentation().targetContext
             .getString(R.string.add_credential_all_back)
-        composeRule.onNodeWithText(backLabel).performClick()
+        composeRule.onNodeWithContentDescription(backLabel).performClick()
 
         composeRule.onNodeWithText("Digital ID (scanned passport)").assertExists()
         composeRule.onNodeWithText("Student ID").assertDoesNotExist()
