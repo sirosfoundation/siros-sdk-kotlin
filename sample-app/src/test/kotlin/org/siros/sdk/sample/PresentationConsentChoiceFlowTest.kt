@@ -3,7 +3,6 @@ package org.siros.sdk.sample
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.siros.sdk.credentials.CredentialMatcher
@@ -20,8 +19,9 @@ import org.siros.sdk.wallet.PresentationRequest
  * step per ambiguous entry, [allExclusiveGroupsChosen] gates Next/Share across any number of
  * independent entries (not just the first/only one), [formatDisplayLabel] gives two identically-named
  * options (nym_auth's live "PID"/"PID" collision) something that actually tells them apart, and
- * [credentialDisplayFallback] (added on Copilot review of #359) keeps a choice option identifiable
- * even when it has no displayable credential card. The surrounding Compose rendering itself is
+ * [credentialDisplayMode] (added, then corrected, across two rounds of Copilot review of #359) keeps
+ * a choice option identifiable when it has no displayable credential card, while keeping a genuinely
+ * unmatched query invisible, exactly as before. The surrounding Compose rendering itself is
  * exercised on-device, not here.
  */
 class PresentationConsentChoiceFlowTest {
@@ -164,10 +164,13 @@ class PresentationConsentChoiceFlowTest {
     private fun matchResult(queryId: String, candidates: List<StoredCredential>) =
         CredentialMatcher.MatchResult(queryId = queryId, format = "mso_mdoc", candidates = candidates, requestedClaims = emptyList())
 
+    private fun mode(mr: CredentialMatcher.MatchResult) =
+        credentialDisplayMode(mr, presentationHistory = emptyList(), availableKeyIds = emptySet())
+
     @Test
-    fun `a normal batch with its instance-zero member needs no fallback`() {
+    fun `a normal batch with its instance-zero member shows the normal card`() {
         val mr = matchResult("mdl", listOf(cred(1, batchId = 10, instanceId = 0)))
-        assertNull(credentialDisplayFallback(mr, presentationHistory = emptyList(), availableKeyIds = emptySet()))
+        assertEquals(CredentialDisplayMode.CARD, mode(mr))
     }
 
     /**
@@ -181,12 +184,20 @@ class PresentationConsentChoiceFlowTest {
     @Test
     fun `a batch that lost its instance-zero member falls back to the query id, not nothing`() {
         val mr = matchResult("pid_mdoc_id", listOf(cred(2, batchId = 20, instanceId = 1)))
-        assertEquals("pid_mdoc_id", credentialDisplayFallback(mr, presentationHistory = emptyList(), availableKeyIds = emptySet()))
+        assertEquals(CredentialDisplayMode.FALLBACK_LABEL, mode(mr))
     }
 
+    /**
+     * A second Copilot review on #359 caught the first fix conflating this with the case above: with
+     * five alternatives (mdl, photoid, pid_1_5, pid_1_8, pid_mdoc_id) but only three actual matches,
+     * the two unmatched queries have empty `candidates` and are still in `request.matchResults` (only
+     * `consentMatchResults` filters them out) - before credentialDisplayMode existed they were
+     * silently invisible in the plain overview, and must stay that way, never surfaced as a bare
+     * query id next to the choice section.
+     */
     @Test
-    fun `a query with no candidates at all also falls back rather than rendering nothing`() {
-        val mr = matchResult("mdl", emptyList())
-        assertEquals("mdl", credentialDisplayFallback(mr, presentationHistory = emptyList(), availableKeyIds = emptySet()))
+    fun `a query with no candidates at all stays hidden, not falls back`() {
+        val mr = matchResult("photoid", emptyList())
+        assertEquals(CredentialDisplayMode.HIDDEN, mode(mr))
     }
 }

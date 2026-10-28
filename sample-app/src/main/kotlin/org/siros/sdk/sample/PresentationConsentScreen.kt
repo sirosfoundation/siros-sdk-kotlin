@@ -516,29 +516,56 @@ private fun PreviewStep(
     }
 }
 
+/** What [CredentialMatchSummary] should render for a single matched query - see [credentialDisplayMode]'s doc comment. */
+internal enum class CredentialDisplayMode {
+    /** The normal credential card, claim count/zk summary, etc. */
+    CARD,
+
+    /**
+     * No displayable candidate, but the query DID match something - show the bare query id instead
+     * of nothing (see [credentialDisplayMode]'s doc comment).
+     */
+    FALLBACK_LABEL,
+
+    /** The query matched nothing at all - render nothing, exactly as before this mechanism existed. */
+    HIDDEN,
+}
+
 /**
- * The bare query id to show in place of a credential card for [matchResult], when
- * [CredentialUtils.groupForDisplay] has nothing displayable for its candidates even though the query
- * itself matched - e.g. a batch whose instanceId-0 member was deleted (`SirosWallet.deleteCredential`)
- * while other copies of the same batch remain ([CredentialUtils.groupForDisplay] drops a whole batch
- * group when none of its members is the instanceId-0 "visible" one, per its own doc comment).
+ * What [CredentialMatchSummary] should show for [matchResult]: the normal card, a bare-query-id
+ * fallback, or nothing.
  *
- * Found via Copilot review on #359: [ExclusiveChoiceSection] renders one [CredentialMatchSummary] per
- * option, and that option's `RadioButton` is still shown even when its summary has nothing to display
- * - before this, that left an enabled, unlabeled radio option with no way to tell what it was. The
- * original (pre-#359) `ChooseCredentialOptionStep` already fell back to the bare query id here; this
- * restores that fallback for every [CredentialMatchSummary] call site, not just the choice one - the
- * same gap existed, just less visibly (a silently-blank row rather than an unlabeled selectable one),
- * in the plain unconstrained overview too.
+ * [CredentialDisplayMode.FALLBACK_LABEL] - candidates matched but [CredentialUtils.groupForDisplay]
+ * has nothing displayable for them - e.g. a batch whose instanceId-0 member was deleted
+ * (`SirosWallet.deleteCredential`) while other copies of the same batch remain
+ * ([CredentialUtils.groupForDisplay] drops a whole batch group when none of its members is the
+ * instanceId-0 "visible" one, per its own doc comment). Found via Copilot review on #359:
+ * [ExclusiveChoiceSection] renders one [CredentialMatchSummary] per option, and that option's
+ * `RadioButton` is still shown even when its summary has nothing to display - this left an enabled,
+ * unlabeled radio option with no way to tell what it was. The original (pre-#359)
+ * `ChooseCredentialOptionStep` already fell back to the bare query id here; this restores that
+ * fallback for every [CredentialMatchSummary] call site, not just the choice one - the same gap
+ * existed, just less visibly (a silently-blank row rather than an unlabeled selectable one), in the
+ * plain unconstrained overview too.
  *
- * Null when there IS a displayable candidate: the caller renders the normal card instead.
+ * [CredentialDisplayMode.HIDDEN] - [matchResult] has NO candidates at all: a genuinely unmatched
+ * query, never a real answer to show or choose. A second Copilot review on #359 caught an initial
+ * version of this fix collapsing this case into [CredentialDisplayMode.FALLBACK_LABEL] too (both are
+ * "nothing displayable"): with five alternatives and only three actual matches, the two unmatched
+ * ones have empty [CredentialMatcher.MatchResult.candidates] and are still in [PresentationRequest]'s
+ * `matchResults` (only [PresentationRequest.consentMatchResults] filters them out) - showing their
+ * bare query ids in the plain overview would have reintroduced visible noise for queries that were
+ * silently (and correctly) invisible before this whole mechanism existed. Only a query that matched
+ * SOMETHING but has nothing displayABLE earns the fallback label.
  */
-internal fun credentialDisplayFallback(
+internal fun credentialDisplayMode(
     matchResult: CredentialMatcher.MatchResult,
     presentationHistory: List<PresentationRecord>,
     availableKeyIds: Set<String>,
-): String? = matchResult.queryId.takeIf {
-    CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory, availableKeyIds).isEmpty()
+): CredentialDisplayMode = when {
+    matchResult.candidates.isEmpty() -> CredentialDisplayMode.HIDDEN
+    CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory, availableKeyIds).isEmpty() -> CredentialDisplayMode.FALLBACK_LABEL
+    else -> CredentialDisplayMode.CARD
 }
 
 /**
@@ -564,14 +591,17 @@ private fun CredentialMatchSummary(
     isExhausted: Boolean = false,
     showFormatLabel: Boolean = false,
 ) {
-    val fallbackLabel = credentialDisplayFallback(matchResult, presentationHistory, availableKeyIds)
-    if (fallbackLabel != null) {
-        Text(
-            text = fallbackLabel,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.padding(vertical = 4.dp),
-        )
-        return
+    when (credentialDisplayMode(matchResult, presentationHistory, availableKeyIds)) {
+        CredentialDisplayMode.HIDDEN -> return
+        CredentialDisplayMode.FALLBACK_LABEL -> {
+            Text(
+                text = matchResult.queryId,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(vertical = 4.dp),
+            )
+            return
+        }
+        CredentialDisplayMode.CARD -> {}
     }
     val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory, availableKeyIds).first()
     CredentialCard(
