@@ -145,6 +145,29 @@ class InstanceKeyEvidenceFlowTest {
         assertEquals("old-key", r.stored())
     }
 
+    /**
+     * Review of #312: a keystore sharing one key pool between the instance key and ordinary credential keys only
+     * remembers which key is the instance key in memory (WscdKeystoreAdapter.attestedKeyIds) - a RESTORED instance
+     * key id (read back from SessionStore after a process restart, never freshly generated this run) must still be
+     * marked, or the exclusion from credential-proof auto-selection silently stops working after every restart.
+     */
+    @Test
+    fun aRestoredExistingInstanceKey_isStillMarkedSoCredentialProofsNeverAutoSelectIt() {
+        val r = rig(existingKey = "old-key")
+        coEvery { r.api.generateWIA(pop = any(), challenge = "C-1", clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = null) } returns jwt()
+        assertNotNull(obtain(r.wallet))
+        coVerify(exactly = 1) { r.keystore.markInstanceKey("old-key") }
+    }
+
+    @Test
+    fun aFreshlyGeneratedInstanceKey_isMarkedSoCredentialProofsNeverAutoSelectIt() {
+        val r = rig()
+        val evidence = slot<JsonObject>()
+        coEvery { r.api.generateWIA(pop = any(), challenge = "C-1", clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = capture(evidence)) } returns jwt()
+        assertNotNull(obtain(r.wallet))
+        coVerify(exactly = 1) { r.keystore.markInstanceKey("attested-1") }
+    }
+
     @Test
     fun refusedEvidence_isRetriedOnceWithANewKeyAndANewChallenge_andTheOldKeyIsDeleted() {
         val r = rig()

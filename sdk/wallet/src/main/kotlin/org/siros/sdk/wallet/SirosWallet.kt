@@ -3066,7 +3066,13 @@ class SirosWallet private constructor(
         // key, by any cause, is self-healed the same way, here, rather than
         // needing its own special case.
         sessionStore.instanceKeyId?.let { existing ->
-            if (keystore.listKeys().any { it.keyId == existing }) return existing
+            if (keystore.listKeys().any { it.keyId == existing }) {
+                // Re-mark on every restore, not only on generation: a keystore sharing one key pool with ordinary
+                // credential proofs (see KeystoreManager.markInstanceKey) remembers this only in memory, so a process
+                // restart must re-establish it before any credential issuance can run.
+                keystore.markInstanceKey(existing)
+                return existing
+            }
             Timber.w("Instance key $existing is recorded but missing from the keystore; regenerating")
         }
         // First use has to be serialised. Two callers arriving together - an
@@ -3087,6 +3093,7 @@ class SirosWallet private constructor(
             // confirmed live) one, or healed a stale one away.
             val current = sessionStore.instanceKeyId
             if (current != null && keystore.listKeys().any { it.keyId == current }) {
+                keystore.markInstanceKey(current)
                 current
             } else {
                 val keyId = generateInstanceKey()
@@ -3200,6 +3207,7 @@ class SirosWallet private constructor(
                 if (c != null) {
                     val keyId = keystore.generateAttestedKey("ES256", InstanceKeyEvidence.challengeHash(c))
                     pendingInstanceKeyEvidence = PendingInstanceKeyEvidence(keyId, c, instanceKeyClock())
+                    keystore.markInstanceKey(keyId)
                     return keyId
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -3208,7 +3216,7 @@ class SirosWallet private constructor(
                 Timber.w(e, "Attested instance key generation failed, using a plain key")
             }
         }
-        return keystore.generateKey("ES256")
+        return keystore.generateKey("ES256").also { keystore.markInstanceKey(it) }
     }
 
     /**

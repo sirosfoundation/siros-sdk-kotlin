@@ -843,6 +843,54 @@ class WscdKeystoreAdapterTest {
         coVerify(exactly = 0) { signer.sign(any(), any()) }
     }
 
+    /**
+     * Review of #312: a signer whose key pool mixes the wallet's own instance key with ordinary credential keys
+     * (one shared Android Keystore, no separate "instance" vs "credential" namespace) must never let
+     * generateProofWithJsonClaims's freshKey=false auto-selection pick up the instance key - it can be
+     * rotated/replaced by the wallet's own retry logic at any time without knowing a credential came to depend on it.
+     */
+    @Test
+    fun generateProofWithJsonClaimsNeverAutoSelectsAKeyMarkedAsTheInstanceKey() = runTest {
+        val signer = mockk<Signer>(relaxed = true)
+        coEvery { signer.listKeys() } returns listOf(
+            SignerKeyInfo("instance-key-1", "ES256"),
+            SignerKeyInfo("credential-key-1", "ES256"),
+        )
+        val jwk = com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256).generate().toPublicJWK().toJSONString()
+        coEvery { signer.exportPublicKey(any()) } returns jwk.toByteArray()
+        coEvery { signer.sign(any(), any()) } returns ByteArray(64) { it.toByte() }
+        val adapter = WscdKeystoreAdapter(signer).also { it.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0)) }
+        adapter.markInstanceKey("instance-key-1")
+
+        adapter.generateProofWithJsonClaims("aud-1", "n-1", false, null, emptyMap())
+
+        val signedKeyId = slot<String>()
+        coVerify { signer.sign(capture(signedKeyId), any()) }
+        assertEquals("the instance key was skipped in favour of the ordinary credential key", "credential-key-1", signedKeyId.captured)
+    }
+
+    @Test
+    fun generateProofWithJsonClaimsGeneratesAFreshKeyWhenOnlyTheInstanceKeyExists() = runTest {
+        val signer = mockk<Signer>(relaxed = true)
+        coEvery { signer.listKeys() } returnsMany listOf(
+            listOf(SignerKeyInfo("instance-key-1", "ES256")),
+            listOf(SignerKeyInfo("instance-key-1", "ES256"), SignerKeyInfo("fresh-key-1", "ES256")),
+        )
+        coEvery { signer.generateKey(any()) } returns "fresh-key-1"
+        val jwk = com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256).generate().toPublicJWK().toJSONString()
+        coEvery { signer.exportPublicKey(any()) } returns jwk.toByteArray()
+        coEvery { signer.sign(any(), any()) } returns ByteArray(64) { it.toByte() }
+        val adapter = WscdKeystoreAdapter(signer).also { it.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0)) }
+        adapter.markInstanceKey("instance-key-1")
+
+        adapter.generateProofWithJsonClaims("aud-1", "n-1", false, null, emptyMap())
+
+        coVerify(exactly = 1) { signer.generateKey("ES256") }
+        val signedKeyId = slot<String>()
+        coVerify { signer.sign(capture(signedKeyId), any()) }
+        assertEquals("fresh-key-1", signedKeyId.captured)
+    }
+
     @Test
     fun generateProofCarriesTheSignedExtraClaims() = runTest {
         val signer = createMockSigner()
