@@ -505,14 +505,9 @@ fun WalletScreen(viewModel: WalletViewModel) {
             showDevices -> DevicesScreen(
                 instances = viewModel.walletInstances.collectAsState().value,
                 loading = viewModel.devicesLoading.collectAsState().value,
-                busyInstanceId = viewModel.devicesBusyInstanceId.collectAsState().value,
-                deactivating = viewModel.deactivating.collectAsState().value,
-                deactivationOutcome = viewModel.deactivationOutcome.collectAsState().value,
                 errorMessage = viewModel.devicesError.collectAsState().value,
                 onBack = viewModel::closeDevices,
                 onRefresh = viewModel::refreshDevices,
-                onSetStatus = viewModel::setWalletInstanceStatus,
-                onDeactivateWallet = viewModel::deactivateWallet,
             )
 
             // Consolidated WSCD settings sub-screen (one tab per plugin -
@@ -698,6 +693,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             zkCircuitUrls = viewModel.zkCircuitUrls.collectAsState().value,
                             presentationCount = presentationHistory.size,
                             onDisconnect = viewModel::disconnect,
+                            deletingAccount = viewModel.deletingAccount.collectAsState().value,
                             onDeleteAccount = viewModel::deleteAccount,
                             onShowHistory = viewModel::openHistory,
                             onShowWscdSettings = viewModel::openWscaDeveloper,
@@ -1400,7 +1396,8 @@ fun SettingsTab(
     zkCircuitUrls: List<String> = listOf(org.siros.sdk.credentials.ZkCircuitClient.DEFAULT_ZK_CIRCUIT_URL),
     presentationCount: Int,
     onDisconnect: () -> Unit,
-    onDeleteAccount: () -> Unit,
+    deletingAccount: Boolean = false,
+    onDeleteAccount: (confirmation: String) -> Unit,
     onShowHistory: () -> Unit,
     onShowWscdSettings: () -> Unit,
     onShowDevices: () -> Unit = {},
@@ -1928,30 +1925,47 @@ fun SettingsTab(
         // Delete account
         Spacer(modifier = Modifier.height(8.dp))
         var showDeleteConfirm by remember { mutableStateOf(false) }
+        var typedConfirmation by remember { mutableStateOf("") }
         OutlinedButton(
-            onClick = { showDeleteConfirm = true },
+            onClick = { typedConfirmation = ""; showDeleteConfirm = true },
+            enabled = !deletingAccount,
             modifier = Modifier.fillMaxWidth().height(48.dp),
             shape = RoundedCornerShape(12.dp),
             colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
         ) {
-            Text("Delete Account")
+            Text(stringResource(R.string.delete_account_button))
         }
         if (showDeleteConfirm) {
             androidx.compose.material3.AlertDialog(
                 onDismissRequest = { showDeleteConfirm = false },
-                title = { Text("Delete Account?") },
-                text = { Text("This will remove all local data, credentials, and passkeys. This cannot be undone.") },
+                title = { Text(stringResource(R.string.delete_account_title)) },
+                text = {
+                    Column {
+                        Text(stringResource(R.string.delete_account_message))
+                        Spacer(modifier = Modifier.height(12.dp))
+                        androidx.compose.material3.OutlinedTextField(
+                            value = typedConfirmation,
+                            onValueChange = { typedConfirmation = it },
+                            singleLine = true,
+                            label = { Text("DELETE") },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                },
                 confirmButton = {
-                    TextButton(onClick = {
-                        showDeleteConfirm = false
-                        onDeleteAccount()
-                    }) {
-                        Text("Delete", color = MaterialTheme.colorScheme.error)
+                    TextButton(
+                        enabled = typedConfirmation == "DELETE",
+                        onClick = {
+                            showDeleteConfirm = false
+                            onDeleteAccount(typedConfirmation)
+                        },
+                    ) {
+                        Text(stringResource(R.string.delete_account_confirm), color = MaterialTheme.colorScheme.error)
                     }
                 },
                 dismissButton = {
                     TextButton(onClick = { showDeleteConfirm = false }) {
-                        Text("Cancel")
+                        Text(stringResource(R.string.delete_account_cancel))
                     }
                 },
             )

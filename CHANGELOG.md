@@ -227,6 +227,14 @@ The entries below are the detailed changes that make up this release.
 - **The credential catalog is the BASELINE key-storage tier at issuance (`WalletConfig.credentialTierCatalog`).** Until now the tier came only from the issuer's own type metadata, and when it declared none (likely for the ARF 1.8 PID) no filter applied, so the default soft keystore made the key and the FIDO2 token was never asked for. With a `CredentialTierCatalog` configured (`Ts11CredentialTierCatalog` reads the TS11 registry, cached with a TTL and a hard stale limit) the required tier is the catalog's for the credential type, RAISED (never lowered) by the issuer's `attestation_los`. It fails closed: a type the catalog does not list, a catalog that cannot be consulted, or a tier that is not a known ISO 18045 tier refuses issuance with `KeyStorageTierUndeterminedException` (no fallback to a weaker keystore); a tier no registered, onboarded plugin meets is the existing `NoEligibleWscdPluginException` / `NoOnboardedWscdException`. A user override can only choose among plugins that meet the resulting tier. A catalog needs `availableKeystores`. The resumed-authorization path (after the browser) no longer skips the decision: it restores the offer context of the flow it resumes, and with a catalog an issuance with no active offer is refused rather than served by the default keystore. The catalog reads EVERY declaration the registry publishes (duplicates are merged fail-closed: the highest tier wins in either order, an unknown tier or a missing one is kept so the wallet refuses it), indexes every identity an entry states (its `vct` and its `doctype`), and treats an INCOMPLETE read (a page, a source or a schema document that failed) as no new answer: the previous snapshot is kept with its original stale deadline, and without one the answer is `Unavailable`. The resumed-authorization context is resolved locally and published only if the attempt is still current (no cancel, new issuance or session change), a malformed auxiliary-data advertisement is recorded and refused before any fallback, and the offer's advertised `vct`/`doctype` is the catalog key when the type-metadata lookup fails. A callback for a cancelled or superseded attempt resumes nothing (each saved authorization is bound to its issuance attempt, and an offer context is reused only if it belongs to that authorization); the resume holds the issuance guards until it completes or fails, so a competing start is refused; its type-metadata lookup passes the offer's `vct`; and with a catalog, metadata that names another type than the offer advertised is refused before the catalog is asked. A registry.json answer with fewer entries than it declares, and a page that carries neither `data` nor `schemas` (`{}`, an error object), are incomplete reads; the resume publishes the raw VCTM document together with the parsed VCTM, and a resumed start whose connection is lost before the engine's first reply releases the issuance guard. Null (the default) keeps the previous behaviour. Not yet: presentation-time checks, trust-list binding (`trustedAuthorities`), sample wiring.
 
 ### Changed
+- **Pluggable nymauth implementations.** `NymAuthBinding` (one native implementation of a nymauth proof system: the
+  catalog `system` it serves, load a circuit, prove) is public, with a new `implementation` id (for logs, diagnostics
+  and benchmark records; never sent to verifiers). `UniffiNymAuthNativeProver(bindings)` is public and takes exactly one
+  binding per system; `UniffiNymAuthNativeProver.withBindings(...)` swaps one system's implementation and keeps the
+  defaults for the others; `systems` and `implementationFor(system)` say which implementation serves what. The SDK's
+  bindings are public as `ZkCredVegaNymAuthBinding` (`zk-cred-vega`) and `ZkCredLongfellowNymAuthBinding`
+  (`zk-cred-longfellow`), formerly the internal `VegaNymAuthBinding` and `LongfellowNymAuthBinding`. No default
+  changes: `UniffiNymAuthNativeProver()` and `WalletConfig.circuitZkNativeProver = null` prove as before.
 - **The engine/WMP presentation transport's consent screen names what a `zkp_req` (circuit_zk) proof actually shares, instead of a blanket "no data fields are shared".** A pseudonym is a persistent per-verifier handle, not an attribute, and is the thing most worth telling the user about; an `age_check` result in a proof is always `true` (a failed predicate never produces a proof). The one-step consent for a `disclosesNoClaims` match now shows the SDK's own approved sentences (the same wording the DC API consent dialog already used) - "A pseudonym for X is shared..." with its per-verifier scoping, or "You are at least N years old..." - built from the plan via `PresentationConsentText.renderItems` (new: the same per-item wording as `render`, for a host that has `ConsentItem`s but not yet a full `PresentationConsentRequest`). The confirm step was never actually skippable for `zkp_req` (Share/Decline always show); this only fixes what the single collapsed step said. Reworded the DC API loading-spinner detail text (`siros_dcapi_zk_proof_detail`) for the same reason: it is shown both before and after consent and unconditionally said "no personal data is shared", which is false once a pseudonym has been approved.
 - Takes `org.siros:siros-wscd-manager:0.12.0` (bindings from the release `bindings.zip`).
 - **BREAKING: the engine learns nothing about the wallet's credentials from the matching step.** `credentials_matched` and `match_response` (legacy engine transport and the WMP profile) carried, per match, the local credential id, the format, the credential type (`vct`) and the claim NAMES the credential holds (WMP: `disclosed_claims`), and `no_match_reason` was free text naming the requested types and how many credentials are stored. The engine reads only the number of matches and the reason. Now each match is only its `credential_query_id` (`MatchRef`; `MatchResponseMessage.matches` is `List<MatchRef>`), and `no_match_reason` is one of the fixed codes `no_matching_credential`, `credentials_exhausted`, `request_not_answerable`, `no_selection` (`NoMatchCodes`); anything not code-shaped (`^[a-z0-9_]{1,64}$`) is sent as `unspecified`. The wallet's own consent step and its local log keep the descriptive text. No compatibility shim: both sides change together.
@@ -1481,6 +1489,20 @@ this version.
   is step 1 of the EC TS12 rollout; the handling itself follows.
 
 ### Removed
+- **BREAKING:** `SirosWallet.deactivateWallet()`, `SirosWallet.setWalletInstanceStatus()`
+  (both overloads), `BackendApiClient.revokeAllWalletInstances()`,
+  `BackendApiClient.setWalletInstanceStatus()` (both overloads),
+  `DeactivationOutcome` and `ERROR_ERASURE_INCOMPLETE`. They called
+  `POST /user/session/instances/revoke-all` and
+  `PUT /user/session/instances/{id}/status`, which the backend no longer
+  serves. `listWalletInstances()` stays. The sample app's Devices screen is
+  now a read-only list.
+- **BREAKING:** the zero-argument, local-only `SirosWallet.deleteAccount()`. The
+  name now belongs to the server-side deletion below; to forget a cached
+  account without deleting it use `forgetAccount(accountId)` (unchanged, and
+  the same name as in the Swift SDK and the web wallet's `forgetCachedUser`).
+  A `DeprecationLevel.ERROR` stub of `deleteAccount()` stays for one release so
+  existing callers get a compile error that says what to call instead.
 - **BREAKING:** `WscdKeystoreAdapter.signVpToken(..., transactionData:
   List<TransactionDataItem>, ...)` and `TransactionDataItem`. The overload was
   never called and hashed a re-serialisation of the entry instead of the
@@ -1488,6 +1510,32 @@ this version.
   transaction: TransactionBinding)`.
 
 ### Added
+- **Account deletion (SID-AUTH-06, go-wallet-backend#352).**
+  `SirosWallet.deleteAccount(confirmation, stepUp)` authorises the deletion
+  with a fresh passkey assertion (`BackendApiClient.deleteAccountBegin()` then
+  `deleteAccount(challengeId, credential, confirm)`) and the typed
+  confirmation `DELETE`. It returns a `DeleteAccountResult` instead of
+  throwing for backend outcomes: `Deleted`, `CleanupPending`,
+  `OperatorRequired`, `RetryNeeded`, and typed refusals (`StepUpFailed`,
+  `StepUpExpired`, `ConfirmationRequired`, `NoPasskey`, ...). Only the first
+  three wipe the device (keystore and credentials, presentation records,
+  session, account registry, transaction log, caches, WSCD choices, local
+  passkeys, DC API registry, every `WalletConfig.availableKeystores` manager
+  and the AS session cookie, not only the default keystore and token cache);
+  a failing store does not stop the rest and is reported in
+  `LocalWipeReport`. `StepUpAuthenticator` lets an app supply the assertion;
+  by default the wallet's own passkey provider is used. Needs a backend with
+  go-wallet-backend#453.
+- `KeystoreManager.resetLocalKeys()` / `Signer.resetLocalKeys()`: erase a
+  signer's own in-process private key material (e.g. `UniFFISigner`'s
+  softkey plugin), used by account deletion's device wipe above. Never a
+  remote or hardware operation - a FIDO2 security key or an R2PS remote-HSM
+  key is untouched. Default: no-op.
+- `AuthServerClient.clearCookies()`: drop every stored session cookie
+  (including the persisted `siros_auth_cookies` copy) locally, with no
+  network call - `clearTokenCache()` alone never touched the cookie itself.
+- Sample app: a settings action for account deletion (typed `DELETE`, passkey
+  step-up, a message per outcome).
 - **`IDVException.ChipDataUnverified` (`chip_data_unverified`, `errorCode` `idv_chip_data_unverified`):** facetec-api now refuses to issue a credential whose identity claims would have come from OCR of the printed page rather than from the document's cryptographically verified, trusted chip (sirosfoundation/facetec-api#85). Distinct from `ChipUntrusted`, which means the chip was verified but its signer is not on the trust list, so another document may work; this means there was no verified chip identity at all — a chip format the backend does not parse, such as an ISO 18013 driving licence, or a chip whose signed MRZ could not be read — so the user needs a passport or a national identity card. Until now the code reached the app as a `ProviderError` (`FaceTecIDVProvider`) or a generic `VerificationFailed` carrying the raw body (`RemoteIDVClient`). Adding a subclass breaks exhaustive `when`s over `IDVException`. The sample app has a message for it in every language it ships.
 - **`IDVException.ChipPhotoMismatch` (`chip_photo_mismatch`, `errorCode`
   `idv_chip_photo_mismatch`):** facetec-api now refuses a scan whose face does

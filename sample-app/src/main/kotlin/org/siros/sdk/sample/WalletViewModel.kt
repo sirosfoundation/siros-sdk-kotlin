@@ -54,6 +54,7 @@ import org.siros.sdk.keystore.UniFFISigner
 import org.siros.sdk.keystore.UsbCtap2Transport
 import org.siros.sdk.keystore.WscdKeystoreAdapter
 import org.siros.sdk.keystore.WscdManager
+import org.siros.sdk.wallet.DeleteAccountResult
 import org.siros.sdk.wallet.RememberScope
 import org.siros.sdk.wallet.RequestWscdChoice
 import org.siros.sdk.wallet.SirosWallet
@@ -1353,9 +1354,73 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         _showIDVPreparation.value = false
     }
 
-    /** Delete the current account - also removes it from the cached "Welcome back" list. */
-    fun deleteAccount() {
-        wallet.deleteAccount()
+    private val _deletingAccount = MutableStateFlow(false)
+    val deletingAccount: StateFlow<Boolean> = _deletingAccount
+
+    /**
+     * Delete the account on the server and wipe this device. The SDK asks for
+     * the passkey assertion through the wallet's own provider and wipes only
+     * when the account is gone; this just reports each outcome.
+     */
+    fun deleteAccount(confirmation: String) {
+        viewModelScope.launch {
+            _deletingAccount.value = true
+            try {
+                when (val result = wallet.deleteAccount(confirmation)) {
+                    is DeleteAccountResult.Deleted -> {
+                        resetAccountScreens()
+                        _infoMessage.value = if (result.localWipe.complete) {
+                            activity.getString(R.string.delete_account_done)
+                        } else {
+                            activity.getString(R.string.delete_account_wipe_incomplete)
+                        }
+                    }
+                    is DeleteAccountResult.CleanupPending -> {
+                        resetAccountScreens()
+                        _infoMessage.value = if (result.localWipe.complete) {
+                            activity.getString(R.string.delete_account_cleanup_pending)
+                        } else {
+                            activity.getString(R.string.delete_account_wipe_incomplete)
+                        }
+                    }
+                    is DeleteAccountResult.OperatorRequired -> {
+                        resetAccountScreens()
+                        _errorMessage.value = if (result.localWipe.complete) {
+                            activity.getString(R.string.delete_account_operator_required)
+                        } else {
+                            activity.getString(R.string.delete_account_wipe_incomplete)
+                        }
+                    }
+                    is DeleteAccountResult.RetryNeeded ->
+                        _errorMessage.value = activity.getString(R.string.delete_account_retry)
+                    is DeleteAccountResult.ConfirmationRequired ->
+                        _errorMessage.value = activity.getString(R.string.delete_account_confirmation_required)
+                    is DeleteAccountResult.StepUpUnavailable ->
+                        _errorMessage.value = activity.getString(R.string.delete_account_step_up_unavailable)
+                    is DeleteAccountResult.StepUpRequired,
+                    is DeleteAccountResult.StepUpFailed ->
+                        _errorMessage.value = activity.getString(R.string.delete_account_step_up_failed)
+                    is DeleteAccountResult.StepUpExpired ->
+                        _errorMessage.value = activity.getString(R.string.delete_account_step_up_expired)
+                    is DeleteAccountResult.SessionRevoked ->
+                        _errorMessage.value = activity.getString(R.string.delete_account_session_revoked)
+                    is DeleteAccountResult.NoPasskey ->
+                        _errorMessage.value = activity.getString(R.string.delete_account_no_passkey)
+                    is DeleteAccountResult.InsufficientScope ->
+                        _errorMessage.value = activity.getString(R.string.delete_account_insufficient_scope)
+                    is DeleteAccountResult.NotFound ->
+                        _errorMessage.value = activity.getString(R.string.delete_account_not_found)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "deleteAccount failed", e)
+                _errorMessage.value = localizedErrorMessage(e)
+            } finally {
+                _deletingAccount.value = false
+            }
+        }
+    }
+
+    private fun resetAccountScreens() {
         _showAddCredential.value = false
         _availableCredentials.value = emptyList()
         _showDevices.value = false
@@ -2024,28 +2089,11 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
     private val _devicesLoading = MutableStateFlow(false)
     val devicesLoading: StateFlow<Boolean> = _devicesLoading
 
-    /** The instance whose status write is in flight, so its row can show a spinner. */
-    private val _devicesBusyInstanceId = MutableStateFlow<String?>(null)
-    val devicesBusyInstanceId: StateFlow<String?> = _devicesBusyInstanceId
-
     private val _devicesError = MutableStateFlow<String?>(null)
     val devicesError: StateFlow<String?> = _devicesError
 
-    private val _deactivating = MutableStateFlow(false)
-    val deactivating: StateFlow<Boolean> = _deactivating
-
-    /**
-     * What the last `deactivateWallet` call reported. Kept so the screen can
-     * say whether the backend confirmed the erasure - an incomplete one still
-     * deactivated the wallet, but leaves residual server-side data for an
-     * administrator, and the user should be told which of the two happened.
-     */
-    private val _deactivationOutcome = MutableStateFlow<org.siros.sdk.auth.DeactivationOutcome?>(null)
-    val deactivationOutcome: StateFlow<org.siros.sdk.auth.DeactivationOutcome?> = _deactivationOutcome
-
     fun openDevices() {
         _showDevices.value = true
-        _deactivationOutcome.value = null
         refreshDevices()
     }
 
@@ -2058,14 +2106,6 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         viewModelScope.launch { loadDevices() }
     }
 
-    /**
-     * The listing itself. Suspending rather than launching, so a caller that
-     * must not re-enable its buttons until the list is current (see
-     * [setWalletInstanceStatus]) can await it in the same coroutine - a
-     * fire-and-forget refresh would let a second status write start against a
-     * list still showing the pre-write state, and the two refreshes could then
-     * land out of order.
-     */
     private suspend fun loadDevices() {
         _devicesLoading.value = true
         _devicesError.value = null
@@ -2076,72 +2116,6 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
             _devicesError.value = localizedErrorMessage(e)
         } finally {
             _devicesLoading.value = false
-        }
-    }
-
-    /**
-     * Suspend, reactivate or revoke one instance. The SDK re-logs in after the
-     * write (the change cuts this session's tokens off), so when the target is
-     * this device the wallet may land in [WalletState.LifecycleBlocked] and
-     * this screen disappears behind the blocked login screen - which is the
-     * truthful outcome, not an error to report here.
-     */
-    fun setWalletInstanceStatus(
-        instanceId: String,
-        status: org.siros.sdk.auth.WalletInstanceStatus,
-        reason: String? = null,
-    ) {
-        viewModelScope.launch {
-            _devicesBusyInstanceId.value = instanceId
-            _devicesError.value = null
-            try {
-                wallet.setWalletInstanceStatus(instanceId, status, reason)
-                loadDevices()
-            } catch (e: Exception) {
-                Log.w(TAG, "setWalletInstanceStatus failed", e)
-                _devicesError.value = localizedErrorMessage(e)
-            } finally {
-                _devicesBusyInstanceId.value = null
-            }
-        }
-    }
-
-    /**
-     * Deactivate the wallet. The SDK forgets the local account in both
-     * outcomes (the revocations stand even when the erasure cascade did not
-     * finish), so this screen closes either way and the result is kept only to
-     * be shown once before it does.
-     */
-    fun deactivateWallet(reason: String? = null) {
-        viewModelScope.launch {
-            _deactivating.value = true
-            _devicesError.value = null
-            try {
-                val outcome = wallet.deactivateWallet(reason)
-                _deactivationOutcome.value = outcome
-                _walletInstances.value = emptyList()
-                _showAddCredential.value = false
-                _availableCredentials.value = emptyList()
-                _showDevices.value = false
-                // deactivateWallet also forgets the account and logs out, so
-                // this screen is gone by the next recomposition. Report the
-                // outcome through the app-wide banner instead, which the login
-                // screen renders too - otherwise a user who deactivated with
-                // an unfinished erasure would never learn that their provider
-                // still has cleanup to do.
-                if (outcome.complete) {
-                    _infoMessage.value =
-                        activity.getString(R.string.devices_deactivate_complete, outcome.revoked)
-                } else {
-                    _errorMessage.value =
-                        activity.getString(R.string.devices_deactivate_incomplete, outcome.revoked)
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "deactivateWallet failed", e)
-                _devicesError.value = localizedErrorMessage(e)
-            } finally {
-                _deactivating.value = false
-            }
         }
     }
 

@@ -313,6 +313,20 @@ class UniFFISigner(
     }
 
     /**
+     * Erases this instance's own internal softkey plugin (every instance
+     * registers one in [init] regardless of [defaultPluginId] - see
+     * [exportPrivateKeypairs]'s doc comment) by replacing its container with
+     * an empty one, the same shape [importPrivateKeypairs] already uses to
+     * populate it. A fido2 or r2ps plugin's keys are never touched here -
+     * they live on external hardware or a remote server, outside anything a
+     * software wipe can (or should) reach.
+     */
+    override suspend fun resetLocalKeys(): Unit = withContext(Dispatchers.IO) {
+        ffi.importSoftkeyContainer("[]".toByteArray(Charsets.UTF_8))
+        publicKeyCache.clear()
+    }
+
+    /**
      * List keys with plugin and creation metadata.
      * Intended for developer/diagnostic UIs — not part of the [Signer] interface.
      */
