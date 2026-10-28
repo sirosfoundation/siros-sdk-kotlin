@@ -685,8 +685,11 @@ class SirosWallet private constructor(
             // this, clearing and locking the default keystore left those
             // keys behind while the report claimed a complete wipe. Never
             // touches a fido2/r2ps-backed key; see resetLocalKeys()'s doc
-            // comment.
-            LocalWipeStep("keystore.localKeys") { if (keystore.isUnlocked) keystore.resetLocalKeys() },
+            // comment. Unconditional, NOT guarded by isUnlocked: that flag
+            // reflects only credentialsKeystore's own lock state (see
+            // WscdKeystoreAdapter.isUnlocked/lock()), so an already-locked
+            // keystore's signer can still hold live keys this must reach.
+            LocalWipeStep("keystore.localKeys") { keystore.resetLocalKeys() },
             LocalWipeStep("credentialStore") { credentialStore.clear() },
             // Drops the engine, tokens and the in-memory key material (keys, WSCD state, PRF-derived main key).
             LocalWipeStep("session") { endSessionLocallyAwaited() },
@@ -715,7 +718,10 @@ class SirosWallet private constructor(
                             failures += "$id.presentationRecords" to e
                         }
                         try {
-                            if (manager.isUnlocked) manager.resetLocalKeys()
+                            // Unconditional, NOT guarded by isUnlocked - see
+                            // the default keystore's own "keystore.localKeys"
+                            // step's doc comment for why.
+                            manager.resetLocalKeys()
                         } catch (e: Exception) {
                             failures += "$id.localKeys" to e
                         }

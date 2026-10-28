@@ -12959,6 +12959,59 @@ class SirosWalletTest {
     }
 
     @Test
+    fun deleteAccount_resets_local_keys_even_on_a_keystore_that_is_already_locked() = runTest(dispatcher) {
+        // isUnlocked reflects only a WscdKeystoreAdapter's own
+        // credentialsKeystore, not its Signer - lock() never touches the
+        // Signer either (WscdKeystoreAdapter.lock() only calls
+        // credentialsKeystore.lock()). Gating resetLocalKeys() on isUnlocked
+        // (as an earlier version of the wipe did) skipped it entirely for a
+        // keystore that happened to already be locked when deletion ran,
+        // even though its Signer could still hold live private keys.
+        val f = DeleteFixture()
+        f.respond(DeleteAccountOutcome.Deleted)
+        every { f.keystore.isUnlocked } returns false
+        val lockedExtra = mockk<KeystoreManager>(relaxed = true)
+        every { lockedExtra.isUnlocked } returns false
+        val wallet = newWallet(
+            "_state" to f.stateFlow,
+            "activity" to mockk<android.app.Activity>(relaxed = true).also {
+                every { it.applicationContext } returns it
+                every { it.noBackupFilesDir } returns java.nio.file.Files.createTempDirectory("siros-wipe").toFile()
+            },
+            "apiClient" to f.apiClient,
+            "authProvider" to f.authProvider,
+            "keystore" to f.keystore,
+            "credentialStore" to f.credentialStore,
+            "sessionStore" to f.sessionStore,
+            "accountRegistry" to f.accountRegistry,
+            "customTransactionLogStore" to f.transactionLog,
+            "trustDecisionCache" to TrustDecisionCache(java.time.Duration.ZERO),
+            "wscdSelectionPolicy" to f.wscdPolicy,
+            "displayMetadataCache" to f.metadataCache,
+            "authServerClient" to f.authServerClient,
+            "authTokens" to f.authTokens,
+            "_presentationHistory" to mutableListOf<org.siros.sdk.credentials.PresentationRecord>(),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                availableKeystores = mapOf("fido2" to lockedExtra),
+            ),
+        )
+
+        withRegistryMocked {
+            wallet.deleteAccount("DELETE")
+            advanceUntilIdle()
+
+            coVerify(exactly = 1) { f.keystore.resetLocalKeys() }
+            coVerify(exactly = 1) { lockedExtra.resetLocalKeys() }
+            // The credential-record operations stay guarded by isUnlocked -
+            // only resetLocalKeys() must not be.
+            coVerify(exactly = 0) { f.keystore.clearCredentials() }
+            coVerify(exactly = 0) { lockedExtra.clearCredentials() }
+        }
+    }
+
+    @Test
     fun deleteAccount_still_wipes_the_device_when_cancelled_right_after_the_server_accepts_the_delete() = runTest(dispatcher) {
         // BackendApiClient.deleteAccount() runs OkHttp's blocking execute()
         // inside withContext(Dispatchers.IO): the server can fully delete the
