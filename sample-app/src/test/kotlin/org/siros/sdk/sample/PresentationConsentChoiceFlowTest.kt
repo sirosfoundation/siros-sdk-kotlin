@@ -3,9 +3,11 @@ package org.siros.sdk.sample
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.siros.sdk.credentials.CredentialMatcher
+import org.siros.sdk.credentials.StoredCredential
 import org.siros.sdk.wallet.PresentationRequest
 
 /**
@@ -14,11 +16,13 @@ import org.siros.sdk.wallet.PresentationRequest
  * step the user had to click through to even discover the choice existed (live gdc e2e feedback,
  * leifj - see [PreviewStep]'s doc comment for the full bug report).
  *
- * These test the three pure pieces of that redesign directly: [presentationTotalSteps] no longer
- * reserves a step per ambiguous entry, [allExclusiveGroupsChosen] gates Next/Share across any number
- * of independent entries (not just the first/only one), and [formatDisplayLabel] gives two
- * identically-named options (nym_auth's live "PID"/"PID" collision) something that actually tells
- * them apart. The surrounding Compose rendering itself is exercised on-device, not here.
+ * These test the pure pieces of that redesign directly: [presentationTotalSteps] no longer reserves a
+ * step per ambiguous entry, [allExclusiveGroupsChosen] gates Next/Share across any number of
+ * independent entries (not just the first/only one), [formatDisplayLabel] gives two identically-named
+ * options (nym_auth's live "PID"/"PID" collision) something that actually tells them apart, and
+ * [credentialDisplayFallback] (added on Copilot review of #359) keeps a choice option identifiable
+ * even when it has no displayable credential card. The surrounding Compose rendering itself is
+ * exercised on-device, not here.
  */
 class PresentationConsentChoiceFlowTest {
 
@@ -150,5 +154,39 @@ class PresentationConsentChoiceFlowTest {
     @Test
     fun `an unrecognized format falls back to itself rather than a misleading label`() {
         assertEquals("some-future-format", formatDisplayLabel("some-future-format"))
+    }
+
+    // ── credentialDisplayFallback: an option must stay identifiable even with no card to show ──
+
+    private fun cred(id: Long, batchId: Long, instanceId: Int) =
+        StoredCredential(id = id, format = "mso_mdoc", raw = "r", batchId = batchId, instanceId = instanceId)
+
+    private fun matchResult(queryId: String, candidates: List<StoredCredential>) =
+        CredentialMatcher.MatchResult(queryId = queryId, format = "mso_mdoc", candidates = candidates, requestedClaims = emptyList())
+
+    @Test
+    fun `a normal batch with its instance-zero member needs no fallback`() {
+        val mr = matchResult("mdl", listOf(cred(1, batchId = 10, instanceId = 0)))
+        assertNull(credentialDisplayFallback(mr, presentationHistory = emptyList(), availableKeyIds = emptySet()))
+    }
+
+    /**
+     * Copilot review on #359: `CredentialUtils.groupForDisplay` drops a whole batch group when none
+     * of its members is the instanceId-0 "visible" one - e.g. after `SirosWallet.deleteCredential`
+     * removed just that copy while sibling copies (instanceId 1+) are still live, still matched this
+     * query, and are still in [matchResult.candidates]. `ExclusiveChoiceSection` renders one radio
+     * option per query id regardless, so without this fallback that option would be enabled with
+     * nothing identifying it.
+     */
+    @Test
+    fun `a batch that lost its instance-zero member falls back to the query id, not nothing`() {
+        val mr = matchResult("pid_mdoc_id", listOf(cred(2, batchId = 20, instanceId = 1)))
+        assertEquals("pid_mdoc_id", credentialDisplayFallback(mr, presentationHistory = emptyList(), availableKeyIds = emptySet()))
+    }
+
+    @Test
+    fun `a query with no candidates at all also falls back rather than rendering nothing`() {
+        val mr = matchResult("mdl", emptyList())
+        assertEquals("mdl", credentialDisplayFallback(mr, presentationHistory = emptyList(), availableKeyIds = emptySet()))
     }
 }

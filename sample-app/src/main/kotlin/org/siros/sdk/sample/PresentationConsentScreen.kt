@@ -517,6 +517,31 @@ private fun PreviewStep(
 }
 
 /**
+ * The bare query id to show in place of a credential card for [matchResult], when
+ * [CredentialUtils.groupForDisplay] has nothing displayable for its candidates even though the query
+ * itself matched - e.g. a batch whose instanceId-0 member was deleted (`SirosWallet.deleteCredential`)
+ * while other copies of the same batch remain ([CredentialUtils.groupForDisplay] drops a whole batch
+ * group when none of its members is the instanceId-0 "visible" one, per its own doc comment).
+ *
+ * Found via Copilot review on #359: [ExclusiveChoiceSection] renders one [CredentialMatchSummary] per
+ * option, and that option's `RadioButton` is still shown even when its summary has nothing to display
+ * - before this, that left an enabled, unlabeled radio option with no way to tell what it was. The
+ * original (pre-#359) `ChooseCredentialOptionStep` already fell back to the bare query id here; this
+ * restores that fallback for every [CredentialMatchSummary] call site, not just the choice one - the
+ * same gap existed, just less visibly (a silently-blank row rather than an unlabeled selectable one),
+ * in the plain unconstrained overview too.
+ *
+ * Null when there IS a displayable candidate: the caller renders the normal card instead.
+ */
+internal fun credentialDisplayFallback(
+    matchResult: CredentialMatcher.MatchResult,
+    presentationHistory: List<PresentationRecord>,
+    availableKeyIds: Set<String>,
+): String? = matchResult.queryId.takeIf {
+    CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory, availableKeyIds).isEmpty()
+}
+
+/**
  * One matched credential's preview content: its card, then either the circuit_zk summary lines or a
  * plain claim count, then an exhausted warning if any. Shared by [PreviewStep]'s unambiguous overview
  * and [ExclusiveChoiceSection]'s per-option rendering so the two never drift (a Copilot review on
@@ -539,8 +564,16 @@ private fun CredentialMatchSummary(
     isExhausted: Boolean = false,
     showFormatLabel: Boolean = false,
 ) {
-    val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory, availableKeyIds).firstOrNull()
-        ?: return
+    val fallbackLabel = credentialDisplayFallback(matchResult, presentationHistory, availableKeyIds)
+    if (fallbackLabel != null) {
+        Text(
+            text = fallbackLabel,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(vertical = 4.dp),
+        )
+        return
+    }
+    val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory, availableKeyIds).first()
     CredentialCard(
         credential = grouped.credential,
         instances = grouped.instances,
