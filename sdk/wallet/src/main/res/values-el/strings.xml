@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="siros_dcapi_zk_proof_status">Δημιουργία απόδειξης μηδενικής γνώσης…</string>
-    <string name="siros_dcapi_zk_proof_detail">Δεν κοινοποιούνται προσωπικά δεδομένα - μόνο μια κρυπτογραφική απόδειξη ότι πληροίτε το αίτημα.</string>
+    <string name="siros_dcapi_zk_proof_detail">Η απόδειξή σας αποκαλύπτει μόνο ό,τι επιβεβαιώνετε ότι κοινοποιείτε - τίποτα άλλο σχετικά με το διαπιστευτήριό σας.</string>
     <string name="siros_dcapi_refused_title">Το αίτημα δεν ολοκληρώθηκε</string>
     <string name="siros_dcapi_refused_ok">OK</string>
     <string name="siros_dcapi_refused_not_trusted">Αυτός ο ιστότοπος δεν είναι αξιόπιστος για το πορτοφόλι σας, γι\' αυτό δεν κοινοποιήθηκε τίποτα.</string>

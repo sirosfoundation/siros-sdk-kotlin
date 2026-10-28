@@ -481,6 +481,7 @@ public final class org/siros/sdk/wallet/PresentationConsentText {
 	public fun <init> (Lorg/siros/sdk/wallet/ConsentStrings;Ljava/util/Locale;Ljava/util/Map;)V
 	public synthetic fun <init> (Lorg/siros/sdk/wallet/ConsentStrings;Ljava/util/Locale;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun render (Lorg/siros/sdk/credentials/PresentationConsentRequest;)Lorg/siros/sdk/wallet/ConsentScreen;
+	public final fun renderItems (Ljava/util/List;Ljava/lang/String;)Ljava/util/List;
 }
 
 public final class org/siros/sdk/wallet/PresentationConsentText$Companion {

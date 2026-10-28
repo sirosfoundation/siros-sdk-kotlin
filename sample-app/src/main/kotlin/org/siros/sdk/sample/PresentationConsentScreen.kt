@@ -50,10 +50,14 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.siros.sdk.credentials.ClaimMeta
+import androidx.compose.ui.platform.LocalContext
+import org.siros.sdk.credentials.ConsentItems
 import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialMatcher
 import org.siros.sdk.credentials.CredentialUtils
+import org.siros.sdk.credentials.PredicateFunctions
 import org.siros.sdk.credentials.PresentationRecord
+import org.siros.sdk.wallet.PresentationConsentText
 import org.siros.sdk.wallet.PresentationRequest
 
 /**
@@ -309,6 +313,24 @@ private fun StepBar(currentStep: Int, totalSteps: Int) {
 
 // ── Step 1: Preview ─────────────────────────────────────────────────
 
+/**
+ * What a `disclosesNoClaims` (circuit_zk / zkp_req) match actually shares, in the SDK's own approved wording - the same
+ * sentences the DC API consent dialog shows ([PresentationConsentText]), built from the plan alone: this transport resolves
+ * a credential before circuit_zk's verifier-id machinery runs, so [ConsentItems.build] is given a placeholder id (unused for
+ * display - only [verifierName] appears in the pseudonym sentence) rather than a real one. Every function of a
+ * `disclosesNoClaims` plan is a pseudonym or an age_check (see [PresentationRequest.disclosesNoClaims]'s doc comment), both
+ * of which [ConsentItems] models; a plan it cannot describe (an unmodelled pseudonym config) yields no line rather than a
+ * guessed or blanket one.
+ */
+@Composable
+private fun zkSummaryLines(result: CredentialMatcher.MatchResult, verifierName: String): List<String> {
+    val context = LocalContext.current
+    val items = result.circuitZkPlan?.let { p ->
+        ConsentItems.build(p, verifierId = "unresolved-not-shown", today = java.time.LocalDate.now(java.time.ZoneOffset.UTC), predicates = PredicateFunctions.DEFAULT)
+    }
+    return items?.let { PresentationConsentText.forContext(context).renderItems(it, verifierName) }.orEmpty()
+}
+
 @Composable
 private fun PreviewStep(
     request: PresentationRequest,
@@ -403,13 +425,27 @@ private fun PreviewStep(
                     instances = grouped.instances,
                     modifier = Modifier.padding(vertical = 4.dp),
                 )
-                val claimCount = matchResult.requestedClaims.flatten().distinct().size
-                Text(
-                    text = if (request.disclosesNoClaims) "No data fields are shared (zero-knowledge proof)" else "$claimCount data fields requested",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
-                )
+                if (request.disclosesNoClaims) {
+                    // What a circuit_zk / zkp_req proof actually shares: the SDK's own wording (pseudonym scoping, the age_check
+                    // predicate and its answer), never a blanket "nothing is shared" - a pseudonym is a persistent per-verifier
+                    // handle, the thing most worth telling the user about.
+                    zkSummaryLines(matchResult, request.verifierName ?: "This verifier").forEach { line ->
+                        Text(
+                            text = line,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
+                        )
+                    }
+                } else {
+                    val claimCount = matchResult.requestedClaims.flatten().distinct().size
+                    Text(
+                        text = "$claimCount data fields requested",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
+                    )
+                }
                 if (isExhausted) {
                     Text(
                         text = "No eligible copies remain - renew this credential in Settings",
