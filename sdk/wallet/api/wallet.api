@@ -69,6 +69,8 @@ public final class org/siros/sdk/wallet/AuxiliaryDataRefusedException$Reason : j
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Lorg/siros/sdk/wallet/AuxiliaryDataRefusedException$Reason;
 	public static fun values ()[Lorg/siros/sdk/wallet/AuxiliaryDataRefusedException$Reason;
+}
+
 public final class org/siros/sdk/wallet/AvailableCredentials {
 	public fun <init> ()V
 	public fun <init> (Ljava/util/List;ZJZ)V
@@ -457,15 +459,17 @@ public final class org/siros/sdk/wallet/IssuanceStartKt {
 	public static final fun resolveIssuanceStart (Ljava/lang/String;)Lorg/siros/sdk/wallet/IssuanceStart;
 }
 
+public abstract interface class org/siros/sdk/wallet/IssuerCatalogStore {
+	public abstract fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun load (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun save (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
 public final class org/siros/sdk/wallet/KeyStorageTierUndeterminedException : org/siros/sdk/wallet/WscdSelectionException {
 	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
 	public final fun getCredentialType ()Ljava/lang/String;
 	public final fun getIssuer ()Ljava/lang/String;
 	public final fun getReason ()Ljava/lang/String;
-public abstract interface class org/siros/sdk/wallet/IssuerCatalogStore {
-	public abstract fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun load (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun save (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class org/siros/sdk/wallet/MdocIssuerIdentity {

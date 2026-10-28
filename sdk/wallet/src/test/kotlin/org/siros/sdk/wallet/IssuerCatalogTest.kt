@@ -44,6 +44,8 @@ class IssuerCatalogTest {
         var failIssuers = false
         val failMetadata = mutableSetOf<Long>()
         val hangMetadata = mutableSetOf<Long>()
+        /** A successful fetch whose metadata [buildOffers] cannot use (no "name" field), as opposed to [failMetadata]'s HTTP failure. */
+        val invalidMetadata = mutableSetOf<Long>()
     }
 
     private class Harness(val scope: CoroutineScope, val backend: Backend, val store: IssuerCatalogStore, val clock: LongArray, ttl: Long = 1_000L) {
@@ -61,7 +63,8 @@ class IssuerCatalogTest {
                 backend.metadataCalls[i.id] = (backend.metadataCalls[i.id] ?: 0) + 1
                 if (i.id in backend.hangMetadata) awaitCancellation()
                 if (i.id in backend.failMetadata) throw java.io.IOException("metadata down")
-                buildJsonObject { put("name", JsonPrimitive(backend.names.getValue(i.id))) }
+                if (i.id in backend.invalidMetadata) buildJsonObject { put("bogus", JsonPrimitive(1)) }
+                else buildJsonObject { put("name", JsonPrimitive(backend.names.getValue(i.id))) }
             },
             buildOffers = { i, m ->
                 built += i.id
@@ -146,6 +149,27 @@ class IssuerCatalogTest {
         refresh.await()
         assertEquals("a hanging issuer keeps its stale entry", listOf("one-v3", "two-v2"), h.names())
         assertTrue("the hang was cut at the per-issuer timeout, not left to run", testScheduler.currentTime < 10_000)
+    }
+
+    @Test
+    fun metadataThatBuildOffersCannotUseIsRejectedAndThePreviousEntryIsKeptAndPersisted() = runTest {
+        val store = InMemoryIssuerCatalogStore()
+        val h = harness(store = store)
+        h.catalog.get("k")
+        assertEquals(listOf("one", "two"), h.names())
+        // A successful HTTP fetch, but metadata buildOffers cannot turn into offers - unlike failMetadata/hangMetadata, this is not
+        // a transport failure at all.
+        h.backend.invalidMetadata += 1L
+        h.backend.names[1L] = "one-but-broken"
+        h.catalog.refresh("k")
+        assertEquals(
+            "invalid metadata is treated like a failed fetch: the previous (valid, decodable) entry is kept, not replaced",
+            listOf("one", "two"),
+            h.names(),
+        )
+        // And the persisted snapshot was not corrupted with the unusable entry either: a cold read of it builds the same offers.
+        val cold = harness(backend = Backend(), store = store)
+        assertEquals(listOf("one", "two"), cold.catalog.get("k").map { it.credentialName })
     }
 
     @Test
@@ -279,5 +303,17 @@ class IssuerCatalogTest {
         runCurrent()
         refresh.await()
         assertEquals("nothing is still running or queued after the cancellation", 0, h.scope.coroutineContext[kotlinx.coroutines.Job]!!.children.count { it.isActive })
+    }
+
+    @Test
+    fun aBackgroundRefreshQueuedBeforeALogoutNeverFetchesOrPublishes() = runTest {
+        val h = harness()
+        h.catalog.refreshInBackground("user-a") // queued: the dispatcher has not run it yet
+        h.catalog.clearMemory() // logout before it runs
+        runCurrent()
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals("no fetch was made for the logged-out user", 0, h.backend.issuerCalls)
+        assertTrue(h.catalog.state.value.offers.isEmpty())
     }
 }
