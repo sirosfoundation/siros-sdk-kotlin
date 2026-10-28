@@ -294,12 +294,13 @@
     <string name="transaction_entity_aisp">Account information service</string>
     <string name="delete_account_button">Delete Account</string>
     <string name="delete_account_title">Delete account?</string>
-    <string name="delete_account_message">This permanently erases your account, credentials and passkeys on the server and on this device, and cannot be undone. You will be asked to confirm with a passkey. Type DELETE to continue.</string>
+    <string name="delete_account_message">This permanently erases your account and credentials on the server and cannot be undone. On this device, the wallet erases its own data, including any passkey it created itself; passkeys stored elsewhere, such as your phone\'s built-in passkey manager or a security key, are not removed and should be deleted there separately. You will be asked to confirm with a passkey. Type DELETE to continue.</string>
     <string name="delete_account_confirm">Delete</string>
     <string name="delete_account_cancel">Cancel</string>
     <string name="delete_account_done">Your account was deleted and this device was cleared.</string>
     <string name="delete_account_cleanup_pending">Your account was deleted and this device was cleared. The server is finishing the last cleanup.</string>
     <string name="delete_account_operator_required">Your account was deleted and this device was cleared, but an operator must finish erasing the remaining server data.</string>
+    <string name="delete_account_wipe_incomplete">Your account was deleted on the server, but some data could not be fully cleared from this device. Clear the app\'s storage or reinstall it to finish removing it.</string>
     <string name="delete_account_retry">The server could not finish deleting your account and kept it. Nothing was removed from this device. Try again.</string>
     <string name="delete_account_confirmation_required">Type DELETE to confirm.</string>
     <string name="delete_account_step_up_unavailable">The passkey confirmation was cancelled or is unavailable. Nothing was deleted.</string>

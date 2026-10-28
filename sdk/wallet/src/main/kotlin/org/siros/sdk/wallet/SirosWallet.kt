@@ -665,7 +665,7 @@ class SirosWallet private constructor(
             LocalWipeStep("keystore.presentationRecords") { if (keystore.isUnlocked) keystore.clearPresentationRecords() },
             LocalWipeStep("credentialStore") { credentialStore.clear() },
             // Drops the engine, tokens and the in-memory key material (keys, WSCD state, PRF-derived main key).
-            LocalWipeStep("session") { endSessionLocally() },
+            LocalWipeStep("session") { endSessionLocallyAwaited() },
             LocalWipeStep("authServerTokenCache") { authServerClient.clearTokenCache() },
             LocalWipeStep("keystore") { keystore.lock() },
             LocalWipeStep("sessionStore") { sessionStore.clearAll() },
@@ -1896,6 +1896,39 @@ class SirosWallet private constructor(
      * refused this installation.
      */
     private fun endSessionLocally() {
+        val peer = endSessionLocallyCommon()
+        closeWmpPeer(peer)
+        scope.launch {
+            try {
+                authTokens.clear()
+            } catch (e: Exception) {
+                Timber.w(e, "Clearing cached tokens failed (non-fatal)")
+            }
+        }
+    }
+
+    /**
+     * [endSessionLocally] for [wipeLocalState]: the WMP peer close and the
+     * token-cache clear are awaited here instead of being fired on [scope],
+     * and neither exception is swallowed, so [runLocalWipe] can report the
+     * "session" step as failed rather than returning while that cleanup is
+     * still in flight - or silently dropped - after a wipe claims it is
+     * complete. Not used by [logout] or the lifecycle-blocked path, which
+     * document why fire-and-forget is correct for them.
+     */
+    private suspend fun endSessionLocallyAwaited() {
+        val peer = endSessionLocallyCommon()
+        peer?.close()
+        authTokens.clear()
+    }
+
+    /**
+     * The teardown [endSessionLocally] and [endSessionLocallyAwaited] share.
+     * Returns the WMP peer captured BEFORE the field is nulled (the old
+     * asynchronous `wmpPeer?.close()` read it AFTER and so never closed it),
+     * leaving how it is closed - and awaited or not - to the caller.
+     */
+    private fun endSessionLocallyCommon(): org.siros.sdk.transport.wmp.WmpPeer? {
         // Presentations still waiting for an answer belong to the session that ends here.
         presentationLinks?.releaseInFlight()
         // A zkp_req signing still waiting on the user belongs to the session that ends here: nothing of it may act on a later one.
@@ -1908,7 +1941,7 @@ class SirosWallet private constructor(
         engineStateJob = null
         engineSession?.disconnect()
         engineSession = null
-        closeWmpPeer(wmpPeer)
+        val peer = wmpPeer
         wmpPeer = null
         credentialNotifier = null
         // The response keys and everything opened with them are session material: gone with the session, synchronously,
@@ -1931,13 +1964,7 @@ class SirosWallet private constructor(
         // re-login suspended in the old session's teardown must abandon
         // rather than resurrect what the user just ended.
         bumpSessionGeneration()
-        scope.launch {
-            try {
-                authTokens.clear()
-            } catch (e: Exception) {
-                Timber.w(e, "Clearing cached tokens failed (non-fatal)")
-            }
-        }
+        return peer
     }
 
     /**

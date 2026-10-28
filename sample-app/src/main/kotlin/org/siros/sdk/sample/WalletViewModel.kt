@@ -1364,15 +1364,27 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 when (val result = wallet.deleteAccount(confirmation)) {
                     is DeleteAccountResult.Deleted -> {
                         resetAccountScreens()
-                        _infoMessage.value = activity.getString(R.string.delete_account_done)
+                        _infoMessage.value = if (result.localWipe.complete) {
+                            activity.getString(R.string.delete_account_done)
+                        } else {
+                            activity.getString(R.string.delete_account_wipe_incomplete)
+                        }
                     }
                     is DeleteAccountResult.CleanupPending -> {
                         resetAccountScreens()
-                        _infoMessage.value = activity.getString(R.string.delete_account_cleanup_pending)
+                        _infoMessage.value = if (result.localWipe.complete) {
+                            activity.getString(R.string.delete_account_cleanup_pending)
+                        } else {
+                            activity.getString(R.string.delete_account_wipe_incomplete)
+                        }
                     }
                     is DeleteAccountResult.OperatorRequired -> {
                         resetAccountScreens()
-                        _errorMessage.value = activity.getString(R.string.delete_account_operator_required)
+                        _errorMessage.value = if (result.localWipe.complete) {
+                            activity.getString(R.string.delete_account_operator_required)
+                        } else {
+                            activity.getString(R.string.delete_account_wipe_incomplete)
+                        }
                     }
                     is DeleteAccountResult.RetryNeeded ->
                         _errorMessage.value = activity.getString(R.string.delete_account_retry)

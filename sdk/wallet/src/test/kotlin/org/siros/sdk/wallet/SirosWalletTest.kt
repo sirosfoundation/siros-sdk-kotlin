@@ -12734,6 +12734,7 @@ class SirosWalletTest {
         val metadataCache = mockk<FileFetchCache>(relaxed = true)
         val authServerClient = mockk<AuthServerClient>(relaxed = true)
         val authProvider = mockk<org.siros.sdk.auth.AuthProvider>(relaxed = true)
+        val authTokens = mockk<AuthTokens>(relaxed = true)
         val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
         val assertion = AuthenticateResult(
             credentialId = byteArrayOf(1), authenticatorData = byteArrayOf(2),
@@ -12786,7 +12787,7 @@ class SirosWalletTest {
             "wscdSelectionPolicy" to f.wscdPolicy,
             "displayMetadataCache" to f.metadataCache,
             "authServerClient" to f.authServerClient,
-            "authTokens" to mockk<AuthTokens>(relaxed = true),
+            "authTokens" to f.authTokens,
             "_presentationHistory" to mutableListOf<org.siros.sdk.credentials.PresentationRecord>(),
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
         )
@@ -12877,6 +12878,33 @@ class SirosWalletTest {
             )
             assertFalse(result.localWipe.complete)
             // Everything after the failures still ran.
+            verify(exactly = 1) { f.accountRegistry.clear() }
+            coVerify(exactly = 1) { f.transactionLog.clear() }
+            verify(exactly = 1) { f.wscdPolicy.clearAll() }
+            coVerify(exactly = 1) { f.metadataCache.clear() }
+            coVerify(exactly = 1) { org.siros.sdk.wallet.dcapi.SirosCredentialRegistry.clear(any()) }
+        }
+    }
+
+    @Test
+    fun deleteAccount_reports_a_failed_token_clear_as_the_session_step_and_still_runs_later_steps() = runTest(dispatcher) {
+        // endSessionLocallyAwaited() must await and propagate authTokens.clear()'s
+        // failure as the "session" wipe step, not swallow it on a fire-and-forget
+        // scope.launch the way the ordinary endSessionLocally() correctly does for
+        // logout(). A regression back to the fire-and-forget path would make this
+        // result.localWipe.complete (wrongly) true.
+        val f = DeleteFixture()
+        f.respond(DeleteAccountOutcome.Deleted)
+        coEvery { f.authTokens.clear() } throws IllegalStateException("token store locked")
+        val wallet = deleteWallet(f)
+        withRegistryMocked {
+            val result = wallet.deleteAccount("DELETE") as DeleteAccountResult.Deleted
+            advanceUntilIdle()
+
+            assertEquals(listOf("session"), result.localWipe.failures.map { it.store })
+            assertFalse(result.localWipe.complete)
+            // Everything after the failed session step still ran.
+            verify(atLeast = 1) { f.keystore.lock() }
             verify(exactly = 1) { f.accountRegistry.clear() }
             coVerify(exactly = 1) { f.transactionLog.clear() }
             verify(exactly = 1) { f.wscdPolicy.clearAll() }

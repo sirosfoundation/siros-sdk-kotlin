@@ -276,12 +276,13 @@
     <string name="transaction_entity_aisp">Serviço de informação sobre contas</string>
     <string name="delete_account_button">Eliminar conta</string>
     <string name="delete_account_title">Eliminar a conta?</string>
-    <string name="delete_account_message">Isto elimina permanentemente a sua conta, credenciais e chaves de acesso no servidor e neste dispositivo, e não pode ser anulado. Ser-lhe-á pedido que confirme com uma chave de acesso. Escreva DELETE para continuar.</string>
+    <string name="delete_account_message">Isto elimina permanentemente a sua conta e credenciais no servidor, e não pode ser anulado. Neste dispositivo, a carteira elimina os seus próprios dados, incluindo qualquer chave de acesso que tenha criado diretamente; chaves de acesso guardadas noutro local, como o gestor de chaves de acesso do seu telemóvel ou uma chave de segurança, não são removidas e devem ser eliminadas separadamente aí. Ser-lhe-á pedido que confirme com uma chave de acesso. Escreva DELETE para continuar.</string>
     <string name="delete_account_confirm">Eliminar</string>
     <string name="delete_account_cancel">Cancelar</string>
     <string name="delete_account_done">A sua conta foi eliminada e este dispositivo foi limpo.</string>
     <string name="delete_account_cleanup_pending">A sua conta foi eliminada e este dispositivo foi limpo. O servidor está a concluir a limpeza final.</string>
     <string name="delete_account_operator_required">A sua conta foi eliminada e este dispositivo foi limpo, mas um operador tem de concluir a eliminação dos restantes dados no servidor.</string>
+    <string name="delete_account_wipe_incomplete">A sua conta foi eliminada no servidor, mas alguns dados não puderam ser totalmente limpos deste dispositivo. Limpe o armazenamento da aplicação ou reinstale-a para concluir a remoção.</string>
     <string name="delete_account_retry">O servidor não conseguiu concluir a eliminação da sua conta e manteve-a. Nada foi removido deste dispositivo. Tente novamente.</string>
     <string name="delete_account_confirmation_required">Escreva DELETE para confirmar.</string>
     <string name="delete_account_step_up_unavailable">A confirmação com chave de acesso foi cancelada ou não está disponível. Nada foi eliminado.</string>

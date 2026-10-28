@@ -276,12 +276,13 @@
     <string name="transaction_entity_aisp">Kontoinformationstjänst</string>
     <string name="delete_account_button">Radera konto</string>
     <string name="delete_account_title">Radera kontot?</string>
-    <string name="delete_account_message">Detta raderar permanent ditt konto, dina uppgifter och dina passnycklar på servern och på den här enheten, och kan inte ångras. Du får bekräfta med en passnyckel. Skriv DELETE för att fortsätta.</string>
+    <string name="delete_account_message">Detta raderar permanent ditt konto och dina uppgifter på servern, och kan inte ångras. På den här enheten raderar plånboken sina egna data, inklusive en passnyckel den själv skapat; passnycklar som sparats någon annanstans, till exempel telefonens inbyggda passnyckelhantering eller en säkerhetsnyckel, tas inte bort och måste raderas separat där. Du får bekräfta med en passnyckel. Skriv DELETE för att fortsätta.</string>
     <string name="delete_account_confirm">Radera</string>
     <string name="delete_account_cancel">Avbryt</string>
     <string name="delete_account_done">Ditt konto har raderats och den här enheten har rensats.</string>
     <string name="delete_account_cleanup_pending">Ditt konto har raderats och den här enheten har rensats. Servern slutför den sista städningen.</string>
     <string name="delete_account_operator_required">Ditt konto har raderats och den här enheten har rensats, men en operatör måste slutföra raderingen av återstående serverdata.</string>
+    <string name="delete_account_wipe_incomplete">Ditt konto har raderats på servern, men viss data kunde inte rensas helt från den här enheten. Rensa appens lagring eller installera om den för att slutföra borttagningen.</string>
     <string name="delete_account_retry">Servern kunde inte slutföra raderingen av ditt konto och behöll det. Ingenting har tagits bort från den här enheten. Försök igen.</string>
     <string name="delete_account_confirmation_required">Skriv DELETE för att bekräfta.</string>
     <string name="delete_account_step_up_unavailable">Passnyckelbekräftelsen avbröts eller är inte tillgänglig. Ingenting har raderats.</string>

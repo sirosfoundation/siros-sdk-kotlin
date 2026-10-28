@@ -276,12 +276,13 @@
     <string name="transaction_entity_aisp">Tilitietopalvelu</string>
     <string name="delete_account_button">Poista tili</string>
     <string name="delete_account_title">Poistetaanko tili?</string>
-    <string name="delete_account_message">Tämä poistaa pysyvästi tilisi, tunnistetietosi ja avainkoodisi palvelimelta ja tältä laitteelta, eikä sitä voi perua. Sinua pyydetään vahvistamaan avainkoodilla. Jatka kirjoittamalla DELETE.</string>
+    <string name="delete_account_message">Tämä poistaa pysyvästi tilisi ja tunnistetietosi palvelimelta, eikä sitä voi perua. Tällä laitteella lompakko poistaa omat tietonsa, mukaan lukien sen itse luoman avainkoodin; muualle tallennettuja avainkoodeja, kuten puhelimen omaan avainkoodien hallintaan tai turvavarmenteeseen tallennettuja, ei poisteta, ja ne pitää poistaa erikseen niiden omasta paikasta. Sinua pyydetään vahvistamaan avainkoodilla. Jatka kirjoittamalla DELETE.</string>
     <string name="delete_account_confirm">Poista</string>
     <string name="delete_account_cancel">Peruuta</string>
     <string name="delete_account_done">Tilisi poistettiin ja tämä laite tyhjennettiin.</string>
     <string name="delete_account_cleanup_pending">Tilisi poistettiin ja tämä laite tyhjennettiin. Palvelin viimeistelee lopuksi siivouksen.</string>
     <string name="delete_account_operator_required">Tilisi poistettiin ja tämä laite tyhjennettiin, mutta ylläpitäjän on vielä poistettava jäljellä olevat palvelintiedot.</string>
+    <string name="delete_account_wipe_incomplete">Tilisi poistettiin palvelimelta, mutta kaikkia tietoja ei voitu poistaa tältä laitteelta. Tyhjennä sovelluksen tallennustila tai asenna sovellus uudelleen poistaaksesi loputkin.</string>
     <string name="delete_account_retry">Palvelin ei pystynyt poistamaan tiliäsi loppuun ja säilytti sen. Mitään ei poistettu tältä laitteelta. Yritä uudelleen.</string>
     <string name="delete_account_confirmation_required">Vahvista kirjoittamalla DELETE.</string>
     <string name="delete_account_step_up_unavailable">Avainkoodivahvistus peruttiin tai se ei ole käytettävissä. Mitään ei poistettu.</string>
