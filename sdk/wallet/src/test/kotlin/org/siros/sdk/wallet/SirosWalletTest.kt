@@ -14168,8 +14168,14 @@ class SirosWalletTest {
     ): org.siros.sdk.transport.wmp.openid4x.MatchResult {
         val method = wallet::class.declaredMemberFunctions.first { it.name == "handleWmpMatchRequest" }
         method.isAccessible = true
+        // handleWmpMatchRequest's 3rd parameter (a ConsentTicket, private to SirosWallet) defaults to issueConsentTicket(flowId)
+        // in production, but reflection's callSuspend does not apply default values for a plain positional call - a fresh
+        // ticket is fetched the same way and passed explicitly instead.
+        val issueTicket = wallet::class.declaredMemberFunctions.first { it.name == "issueConsentTicket" }
+        issueTicket.isAccessible = true
+        val ticket = issueTicket.call(wallet, flowId)
         return kotlinx.coroutines.runBlocking {
-            method.callSuspend(wallet, flowId, payload)
+            method.callSuspend(wallet, flowId, payload, ticket)
         } as org.siros.sdk.transport.wmp.openid4x.MatchResult
     }
 
@@ -15310,7 +15316,10 @@ class SirosWalletTest {
         )
         val method = wallet::class.declaredMemberFunctions.first { it.name == "onWmpFlowError" }
         method.isAccessible = true
-        runBlocking { method.callSuspend(wallet, "flow-a", "CREDENTIAL_ERROR", "boom") }
+        // isLive=true: this test is about the existing release/report behavior, not about a replaced peer (see
+        // wmpTerminalCallbacks_boundToTheirOwnPeersLifetime_doNotClearAReplacementPeersConsent for that).
+        val alwaysLive: () -> Boolean = { true }
+        runBlocking { method.callSuspend(wallet, "flow-a", "CREDENTIAL_ERROR", "boom", alwaysLive) }
         assertFalse(blind.holdsKey("flow-a"))
         assertEquals(null, blind.take("flow-a"))
         assertTrue("another flow's key is not touched", blind.holdsKey("flow-b"))
@@ -15331,7 +15340,9 @@ class SirosWalletTest {
         val method = wallet::class.declaredMemberFunctions.first { it.name == "onWmpFlowComplete" }
         method.isAccessible = true
         val malformed = Json.parseToJsonElement("""{"credentials":[{"format":"dc+sd-jwt"}]}""").jsonObject
-        runBlocking { method.callSuspend(wallet, null, "flow-m", malformed) }
+        // isLive=true: this test is about the existing malformed-completion rejection, not about a replaced peer.
+        val alwaysLive: () -> Boolean = { true }
+        runBlocking { method.callSuspend(wallet, null, "flow-m", malformed, alwaysLive) }
         verify(exactly = 0) { listener.onFlowComplete(any(), any()) }
         verify(exactly = 1) { listener.onFlowError("flow-m", any(), any()) }
     }
@@ -15438,7 +15449,9 @@ class SirosWalletTest {
         assertFalse(blind.holdsKey("flow-b"))
         val method = wallet::class.declaredMemberFunctions.first { it.name == "onWmpFlowComplete" }
         method.isAccessible = true
-        runBlocking { method.callSuspend(wallet, null, "flow-b", Json.parseToJsonElement("""{"credentials":[{"format":"dc+sd-jwt","credential":"x"}]}""").jsonObject) }
+        // isLive=true: this test is about the existing downgrade-refusal behavior, not about a replaced peer.
+        val alwaysLive: () -> Boolean = { true }
+        runBlocking { method.callSuspend(wallet, null, "flow-b", Json.parseToJsonElement("""{"credentials":[{"format":"dc+sd-jwt","credential":"x"}]}""").jsonObject, alwaysLive) }
         verify(exactly = 0) { listener.onFlowComplete("flow-b", any()) }
         verify(exactly = 1) { listener.onFlowError("flow-b", match { it.contains("answered in clear") }, any()) }
         assertFalse(blind.wasOffered("flow-b"))
@@ -15458,16 +15471,19 @@ class SirosWalletTest {
         )
         val method = wallet::class.declaredMemberFunctions.first { it.name == "onWmpFlowComplete" }
         method.isAccessible = true
+        // isLive=true for both calls below: this test is about the existing key-release/completion behavior, not about a
+        // replaced peer.
+        val alwaysLive: () -> Boolean = { true }
         // flow-b: the issuer answered in clear although a key was offered.
         val plain = Json.parseToJsonElement("""{"credentials":[{"format":"dc+sd-jwt","credential":"x"}]}""").jsonObject
-        runBlocking { method.callSuspend(wallet, null, "flow-b", plain) }
+        runBlocking { method.callSuspend(wallet, null, "flow-b", plain, alwaysLive) }
         assertFalse("a plain completion releases the key", blind.holdsKey("flow-b"))
         // ... and is an error, not a success: a key was offered.
         verify(exactly = 0) { listener.onFlowComplete("flow-b", any()) }
         verify(exactly = 1) { listener.onFlowError("flow-b", match { it.contains("answered in clear") }, any()) }
         // flow-a: an encrypted completion is processed against the opened response, and only then released.
         val encrypted = Json.parseToJsonElement("""{"credentials":[{"format":"dc+sd-jwt"}],"credential_response_encrypted":true}""").jsonObject
-        runBlocking { method.callSuspend(wallet, null, "flow-a", encrypted) }
+        runBlocking { method.callSuspend(wallet, null, "flow-a", encrypted, alwaysLive) }
         verify(exactly = 1) { listener.onFlowComplete("flow-a", any()) }
         verify(exactly = 0) { listener.onFlowError("flow-a", any(), any()) }
         assertFalse(blind.holdsKey("flow-a"))
@@ -16112,11 +16128,12 @@ class SirosWalletTest {
         )
         val method = wallet::class.declaredMemberFunctions.first { it.name == "onWmpFlowCancel" }
         method.isAccessible = true
+        // isLive=true for both calls: this test is about the existing key/response release behavior, not about a replaced peer.
         // flow-b holds only a key (cancelled after key generation); flow-a also an opened response (after decryption).
-        method.call(wallet, "flow-b")
+        method.call(wallet, "flow-b", true)
         assertFalse(blind.holdsKey("flow-b"))
         assertTrue("another flow is untouched", blind.holdsKey("flow-a"))
-        method.call(wallet, "flow-a")
+        method.call(wallet, "flow-a", true)
         assertFalse(blind.holdsKey("flow-a"))
         assertEquals(null, blind.take("flow-a"))
     }
