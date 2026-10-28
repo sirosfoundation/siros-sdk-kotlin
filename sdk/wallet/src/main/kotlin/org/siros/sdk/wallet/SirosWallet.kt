@@ -6878,6 +6878,9 @@ class SirosWallet private constructor(
         wmpLifetime++
         wmpPeer?.close()
         blindIssuance.clear()
+        // Same reason as connectEngine's identical call: a flow id of the replaced WMP peer reused by the new one must not
+        // inherit its consent - see clearPerFlowAuthorizationState's doc comment.
+        clearPerFlowAuthorizationState()
 
         // Resolve engine URL: explicit config > discovery > same as backend
         val engineBaseUrl = (config.engineUrl
@@ -7603,6 +7606,9 @@ class SirosWallet private constructor(
             }
         } finally {
             blindIssuance.drop(flowId)
+            // Unlike the legacy transport's flowComplete collector, which already does this: drops what this flow's match
+            // step left (including any recorded consent - see ConsentGuard's doc comment) now that it is done.
+            clearFlowMatchState(flowId)
         }
     }
 
@@ -7616,10 +7622,21 @@ class SirosWallet private constructor(
     private val selectionJobsByFlow = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
 
     /**
-     * Whether [flowId] can no longer complete: it was ended as lost, or it lives on an engine connection that has been replaced
-     * (the engine answers an action for it with nothing: "action for unknown flow").
+     * Whether [flowId] can no longer complete: it was ended as lost, it lives on an engine connection that has been replaced
+     * (the engine answers an action for it with nothing: "action for unknown flow"), or [engine] itself is no longer this
+     * wallet's current session.
+     *
+     * The identity check matters on top of the generation check: [engine]'s own `connectionGeneration` only advances when
+     * THAT SAME session object's socket is replaced (a reconnect) - a coroutine suspended on a user prompt (credential
+     * selection) that captured an OLDER engine object at its start sees that object's generation never move, even after a
+     * whole SESSION teardown (`endSessionLocally`, a cut-off re-login, `connectEngine`/`connectViaWmp` replacing it with a
+     * brand new session) replaces [engineSession] wholesale with a different object. Without this check, such a coroutine
+     * resuming after the user finally answers a long-stale prompt would see its flow as still live and could act on it -
+     * including writing a [ConsentRecord] for a flow id the current session (which already cleared its own) knows nothing
+     * about.
      */
     private fun isFlowLost(engine: WalletEngineSession, flowId: String): Boolean {
+        if (isDestroyed || engineSession !== engine) return true
         if (flowId in lostFlowIds || flowId in terminatedFlowIds) return true
         val born = flowConnectionGeneration[flowId] ?: return false
         return born != engine.connectionGeneration
@@ -7767,7 +7784,13 @@ class SirosWallet private constructor(
                     signDispatchHook?.invoke()
                     handleWmpSignRequestAt(flowId, params, epoch)
                 },
-                onMatchRequest = { flowId, payload -> handleWmpMatchRequest(flowId, payload) },
+                onMatchRequest = { flowId, payload ->
+                    // Same liveness gate as onSignRequest, and for the same reason: handleWmpMatchRequest now records
+                    // consent (see ConsentGuard's doc comment) - an old peer's buffered/in-flight callback must not be able
+                    // to recreate a consent record for a flow id after teardown has already cleared it.
+                    requireLive()
+                    handleWmpMatchRequest(flowId, payload)
+                },
                 onTrustEvaluation = { flowId, payload -> handleWmpTrustEvaluation(flowId, payload) },
                 onComplete = { flowId, result -> onWmpFlowComplete(peer, flowId, result) },
                 onError = { flowId, code, message -> onWmpFlowError(flowId, code, message) },
@@ -7776,15 +7799,17 @@ class SirosWallet private constructor(
         )
     }
 
-    /** The orchestrator cancelled a WMP flow: its response key and opened response are released. */
+    /** The orchestrator cancelled a WMP flow: its response key, opened response and match/consent state are released. */
     private fun onWmpFlowCancel(flowId: String) {
         blindIssuance.drop(flowId)
+        clearFlowMatchState(flowId)
     }
 
-    /** A WMP flow failed: the listener is told, and the flow's response key and opened response are released. */
+    /** A WMP flow failed: the listener is told, and the flow's response key, opened response and match/consent state are released. */
     private suspend fun onWmpFlowError(flowId: String, code: String?, message: String?) {
         Timber.e("WMP flow $flowId error: $code — $message")
         blindIssuance.drop(flowId)
+        clearFlowMatchState(flowId)
         if (!reportPseudonymCommitmentConflict(flowId, code, message)) {
             eventListener?.onFlowError(flowId, "$code: $message")
         }
@@ -10931,13 +10956,13 @@ class SirosWallet private constructor(
 
     /**
      * Drops EVERY flow's recorded consent, not just one - called wherever this wallet instance tears down or replaces its
-     * engine session (logout, a cut-off-driven re-login, reconnecting with a new session) while staying alive for reuse.
-     * Without this, a flow id from the ended session that happens to be reused by a later one (the backend's flow id
-     * namespace is not guaranteed session-scoped) would find a stale [ConsentRecord] still sitting in
-     * [consentRecordsByFlow] and let [ConsentGuard] pass a credential/query pair the CURRENT session's user never actually
-     * consented to. The per-flow connection-generation checks elsewhere guard against a stale MESSAGE arriving late on a
-     * replaced socket; they do not guard against this, since a message legitimately tagged with the NEW generation is not
-     * stale by that check even if it reuses an old flow id.
+     * engine session OR its WMP peer (logout, a cut-off-driven re-login, `connectEngine`/`connectViaWmp` reconnecting with a
+     * new session) while staying alive for reuse. Without this, a flow id from the ended session that happens to be reused
+     * by a later one (the backend's flow id namespace is not guaranteed session-scoped) would find a stale [ConsentRecord]
+     * still sitting in [consentRecordsByFlow] and let [ConsentGuard] pass a credential/query pair the CURRENT session's user
+     * never actually consented to. The per-flow connection-generation checks elsewhere guard against a stale MESSAGE
+     * arriving late on a replaced socket; they do not guard against this, since a message legitimately tagged with the NEW
+     * generation is not stale by that check even if it reuses an old flow id.
      */
     private fun clearPerFlowAuthorizationState() {
         consentRecordsByFlow.clear()
