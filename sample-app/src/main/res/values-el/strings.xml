@@ -35,6 +35,11 @@
     <string name="add_credential_row_action_add">Προσθήκη</string>
     <string name="add_credential_row_action_close">Κλείσιμο</string>
     <string name="nav_back">Πίσω</string>
+    <string name="add_credential_option_scan_qr_title">Σάρωση κωδικού QR</string>
+    <string name="add_credential_option_scan_qr_subtitle">Σαρώστε τον κωδικό QR ενός εκδότη</string>
+    <string name="add_credential_option_all_title">Όλα τα γνωστά πιστοποιητικά</string>
+    <string name="add_credential_option_all_subtitle">Περιηγηθείτε σε όλα τα πιστοποιητικά που προσφέρουν οι εκδότες σας</string>
+    <string name="add_credential_all_back">Επιστροφή στις επιλογές προσθήκης πιστοποιητικού</string>
     <string name="credential_capability_online">Μπορεί να παρουσιαστεί διαδικτυακά</string>
     <string name="credential_capability_proximity">Μπορεί να παρουσιαστεί αυτοπροσώπως αγγίζοντας το τηλέφωνό σας</string>
     <string name="credential_capability_zkp">Μπορεί να αποδείξει την ταυτότητά σας χωρίς να αποκαλύψει όλα τα στοιχεία σας</string>
