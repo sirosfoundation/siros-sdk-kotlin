@@ -7016,6 +7016,131 @@ class SirosWalletTest {
         assertEquals(null, record["_default", "2"])
     }
 
+    @Test
+    fun aBufferedMatchRequestOnAReplacedEngine_isStillRefusedAfterTheSecondConnectEngine_evenWithoutSuspending() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345, round 4's engine-side analog of
+        // finding #1): the matchRequests() collector builds its ticket from engineEpoch (captured once, when THIS
+        // engine's own collector was installed), not a fresh issueConsentTicket read - a fresh read taken AFTER a
+        // replacement has already bumped consentEpoch would wrongly adopt the NEW epoch as if it belonged to this
+        // (old) engine's message.
+        //
+        // With connectEngine now cancelling the replaced connection's own connectionScope outright (round 4's
+        // structural fix), the OLD "emit on the prior engine's Flow after a second connectEngine already ran" shape no
+        // longer even reaches a live collector - that message is simply never processed, which would make a test built
+        // that way pass vacuously regardless of the ticket fix (this test used to be built that way; verified vacuous
+        // by temporarily disabling the ticket fix and observing it still pass). Exercised here instead via a
+        // narrowly-scoped, null-in-production test hook (engineMatchTicketIssueHook, the engine-side analog of
+        // wmpMatchTicketIssueHook) landing the replacement exactly between message entry and ticket construction - a
+        // true race there is not reliably reproducible by timing alone (same reasoning as
+        // Fido2EnrolmentSession.testHookBeforeInstall).
+        //
+        // Cancellation is cooperative: it only aborts this collector's coroutine at a REAL suspension point it
+        // actually reaches. With no eventListener set, the whole path from the hook to the final write - getAll(),
+        // eligibleInstances(), recordPresentation() with an already-locked keystore - never truly suspends, so a
+        // cancelled connectionScope does NOT by itself stop this message's processing ("evenWithoutSuspending"); only
+        // the ticket's own epoch mismatch does. That is exactly the residual gap connectionScope cancellation alone
+        // cannot close, which the ticket check exists for.
+        val matchFlowA = MutableSharedFlow<MatchRequestMessage>()
+        val cred = StoredCredential(
+            id = 2L, format = "dc+sd-jwt", raw = "raw-2",
+            metadata = CredentialMetadata(name = "Credential Two", vct = "urn:example:vct"),
+            batchId = 2L, instanceId = 0,
+        )
+        val engineA = mockEngineConstructor(matchRequests = matchFlowA)
+        every { engineA.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to FakeCredentialStore(mutableListOf(cred)),
+            "keystore" to keystore,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        // Land the race exactly where this finding describes it: AFTER the message has already passed the
+        // lostFlowIds/connectionGeneration early-exit (it IS still live at that instant), but BEFORE the ticket is
+        // built - a replacement (here, a second connectEngine, the same real event a reconnect or re-login would
+        // trigger) happens in between.
+        mockEngineConstructor()
+        setField(wallet, "engineMatchTicketIssueHook", { invokeConnectEngine(wallet, "app-token"); Unit })
+
+        matchFlowA.emit(MatchRequestMessage(flowId = "flow-raced", dcqlQuery = null))
+        advanceUntilIdle()
+
+        @Suppress("UNCHECKED_CAST")
+        val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+        assertFalse(
+            "a ticket built from a fresh epoch read (not this engine's own captured lifetime) must not let a raced " +
+                "replacement's write through",
+            records.containsKey("flow-raced"),
+        )
+    }
+
+    @Test
+    fun legacyFlowCompleteOnAReplacedEngine_doesNotClearAReplacementSessionsConsentForAReusedFlowId() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345, round 4 finding #2): the legacy
+        // transport's flowComplete()/flowErrors() collectors are bound to connectionScope and so are normally
+        // cancelled outright on replacement (round 4's structural fix) - but a message already dequeued (and not yet
+        // at a suspension point) when that cancellation lands could still reach the unconditional clear that used to
+        // sit here, letting the OLD engine's own, surviving collector delete a REPLACEMENT session's legitimate
+        // consent for a flow id the backend happens to have reused. clearFlowMatchStateIfLive(flowId, engineEpoch) is
+        // the fix: conditional on THIS engine still being current, not unconditional.
+        //
+        // Everything from collector entry to the clear is synchronous (fillEncryptedCompletion/isAbandonedFlowEvent
+        // are plain, non-suspend functions, and nothing here is blind-issuance-encrypted or zk-signing), so - same as
+        // the matchRequests ticket-race test above - cancellation being cooperative does not by itself stop this
+        // processing; only the conditional clear does. Exercised via legacyCollectorClearHook (null in production,
+        // the engine-side analog of wmpMatchTicketIssueHook), landing the replacement exactly where this finding
+        // describes it - a true race there is not reliably reproducible by timing alone (same reasoning as
+        // Fido2EnrolmentSession.testHookBeforeInstall).
+        val completeFlowA = MutableSharedFlow<FlowCompleteMessage>()
+        val engineA = mockEngineConstructor(flowComplete = completeFlowA)
+        every { engineA.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns false
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "keystore" to keystore,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        // The REPLACEMENT session's own, legitimate consent for a flow id the backend happens to have reused - seeded
+        // from inside the hook, right after the replacement connectEngine (the same real event a reconnect or
+        // re-login would trigger), mirroring wmpTerminalCallbacks_boundToTheirOwnPeersLifetime_doNotClearAReplacementPeersConsent.
+        val replacementRecord = ConsentRecord(listOf(ConsentedSelection("q", "1", null)))
+        mockEngineConstructor()
+        setField(wallet, "legacyCollectorClearHook", {
+            invokeConnectEngine(wallet, "app-token")
+            @Suppress("UNCHECKED_CAST")
+            (getField(wallet, "consentRecordsByFlow") as MutableMap<String, ConsentRecord>)["shared-flow"] = replacementRecord
+            Unit
+        })
+
+        // A late completion for engineA (the one that was REPLACED) arrives for the same flow id.
+        completeFlowA.emit(FlowCompleteMessage(flowId = "shared-flow"))
+        advanceUntilIdle()
+
+        @Suppress("UNCHECKED_CAST")
+        val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+        assertSame(
+            "a replaced engine's late flowComplete must not clear a REPLACEMENT session's own consent for a reused flow id",
+            replacementRecord, records["shared-flow"],
+        )
+    }
+
     /**
      * Regression: an engine-relayed `mso_mdoc_zk` query must offer the plain
      * mdoc it can be proven from. An earlier version dropped ZK queries'
@@ -13184,6 +13309,12 @@ class SirosWalletTest {
         if ("circuitZkClientMetadataByFlow" !in values) {
             values["circuitZkClientMetadataByFlow"] = mutableMapOf<String, JsonObject>()
         }
+        if ("consentLock" !in values) {
+            // allocateInstance skips consentLock's own `= Any()` initializer, same as every other field here - without a
+            // default, the first synchronized(consentLock) call (clearPerFlowAuthorizationState, recordIfCurrent,
+            // clearFlowMatchState/clearFlowMatchStateIfLive) throws a NullPointerException.
+            values["consentLock"] = Any()
+        }
         if ("consentRecordsByFlow" !in values) {
             // A test not about ConsentGuard itself should not have to know every flow id it touches needs a seeded record:
             // this map answers every lookup with ConsentRecord.unrestrictedForTests() (still a real, non-null record, so the
@@ -13283,15 +13414,19 @@ class SirosWalletTest {
         engine: WalletEngineSession,
         flowId: String,
         payload: JsonObject,
+        // Defaulted to a fresh scope: production always passes connectEngine's own connectionScope (see its doc comment),
+        // but a direct-invocation test of this function alone need not know about it.
+        connectionScope: CoroutineScope = CoroutineScope(dispatcher + SupervisorJob()),
     ) {
         val method = wallet.javaClass.getDeclaredMethod(
             "handleTrustEvaluation",
             WalletEngineSession::class.java,
             String::class.java,
             JsonObject::class.java,
+            CoroutineScope::class.java,
         )
         method.isAccessible = true
-        method.invoke(wallet, engine, flowId, payload)
+        method.invoke(wallet, engine, flowId, payload, connectionScope)
     }
 
     private fun invokeHandleWmpTrustEvaluation(
@@ -14168,8 +14303,14 @@ class SirosWalletTest {
     ): org.siros.sdk.transport.wmp.openid4x.MatchResult {
         val method = wallet::class.declaredMemberFunctions.first { it.name == "handleWmpMatchRequest" }
         method.isAccessible = true
+        // handleWmpMatchRequest's 3rd parameter (a ConsentTicket, private to SirosWallet) defaults to issueConsentTicket(flowId)
+        // in production, but reflection's callSuspend does not apply default values for a plain positional call - a fresh
+        // ticket is fetched the same way and passed explicitly instead.
+        val issueTicket = wallet::class.declaredMemberFunctions.first { it.name == "issueConsentTicket" }
+        issueTicket.isAccessible = true
+        val ticket = issueTicket.call(wallet, flowId)
         return kotlinx.coroutines.runBlocking {
-            method.callSuspend(wallet, flowId, payload)
+            method.callSuspend(wallet, flowId, payload, ticket)
         } as org.siros.sdk.transport.wmp.openid4x.MatchResult
     }
 
@@ -15310,7 +15451,10 @@ class SirosWalletTest {
         )
         val method = wallet::class.declaredMemberFunctions.first { it.name == "onWmpFlowError" }
         method.isAccessible = true
-        runBlocking { method.callSuspend(wallet, "flow-a", "CREDENTIAL_ERROR", "boom") }
+        // lifetime=0: these freshly allocated test wallets never run clearPerFlowAuthorizationState, so consentEpoch is
+        // still its zero default - this test is about the existing release/report behavior, not about a replaced peer (see
+        // wmpTerminalCallbacks_boundToTheirOwnPeersLifetime_doNotClearAReplacementPeersConsent for that).
+        runBlocking { method.callSuspend(wallet, "flow-a", "CREDENTIAL_ERROR", "boom", 0) }
         assertFalse(blind.holdsKey("flow-a"))
         assertEquals(null, blind.take("flow-a"))
         assertTrue("another flow's key is not touched", blind.holdsKey("flow-b"))
@@ -15331,7 +15475,8 @@ class SirosWalletTest {
         val method = wallet::class.declaredMemberFunctions.first { it.name == "onWmpFlowComplete" }
         method.isAccessible = true
         val malformed = Json.parseToJsonElement("""{"credentials":[{"format":"dc+sd-jwt"}]}""").jsonObject
-        runBlocking { method.callSuspend(wallet, null, "flow-m", malformed) }
+        // lifetime=0: this test is about the existing malformed-completion rejection, not about a replaced peer.
+        runBlocking { method.callSuspend(wallet, null, "flow-m", malformed, 0) }
         verify(exactly = 0) { listener.onFlowComplete(any(), any()) }
         verify(exactly = 1) { listener.onFlowError("flow-m", any(), any()) }
     }
@@ -15438,7 +15583,8 @@ class SirosWalletTest {
         assertFalse(blind.holdsKey("flow-b"))
         val method = wallet::class.declaredMemberFunctions.first { it.name == "onWmpFlowComplete" }
         method.isAccessible = true
-        runBlocking { method.callSuspend(wallet, null, "flow-b", Json.parseToJsonElement("""{"credentials":[{"format":"dc+sd-jwt","credential":"x"}]}""").jsonObject) }
+        // lifetime=0: this test is about the existing downgrade-refusal behavior, not about a replaced peer.
+        runBlocking { method.callSuspend(wallet, null, "flow-b", Json.parseToJsonElement("""{"credentials":[{"format":"dc+sd-jwt","credential":"x"}]}""").jsonObject, 0) }
         verify(exactly = 0) { listener.onFlowComplete("flow-b", any()) }
         verify(exactly = 1) { listener.onFlowError("flow-b", match { it.contains("answered in clear") }, any()) }
         assertFalse(blind.wasOffered("flow-b"))
@@ -15458,16 +15604,18 @@ class SirosWalletTest {
         )
         val method = wallet::class.declaredMemberFunctions.first { it.name == "onWmpFlowComplete" }
         method.isAccessible = true
+        // lifetime=0 for both calls below: this test is about the existing key-release/completion behavior, not about a
+        // replaced peer.
         // flow-b: the issuer answered in clear although a key was offered.
         val plain = Json.parseToJsonElement("""{"credentials":[{"format":"dc+sd-jwt","credential":"x"}]}""").jsonObject
-        runBlocking { method.callSuspend(wallet, null, "flow-b", plain) }
+        runBlocking { method.callSuspend(wallet, null, "flow-b", plain, 0) }
         assertFalse("a plain completion releases the key", blind.holdsKey("flow-b"))
         // ... and is an error, not a success: a key was offered.
         verify(exactly = 0) { listener.onFlowComplete("flow-b", any()) }
         verify(exactly = 1) { listener.onFlowError("flow-b", match { it.contains("answered in clear") }, any()) }
         // flow-a: an encrypted completion is processed against the opened response, and only then released.
         val encrypted = Json.parseToJsonElement("""{"credentials":[{"format":"dc+sd-jwt"}],"credential_response_encrypted":true}""").jsonObject
-        runBlocking { method.callSuspend(wallet, null, "flow-a", encrypted) }
+        runBlocking { method.callSuspend(wallet, null, "flow-a", encrypted, 0) }
         verify(exactly = 1) { listener.onFlowComplete("flow-a", any()) }
         verify(exactly = 0) { listener.onFlowError("flow-a", any(), any()) }
         assertFalse(blind.holdsKey("flow-a"))
@@ -16112,11 +16260,12 @@ class SirosWalletTest {
         )
         val method = wallet::class.declaredMemberFunctions.first { it.name == "onWmpFlowCancel" }
         method.isAccessible = true
+        // isLive=true for both calls: this test is about the existing key/response release behavior, not about a replaced peer.
         // flow-b holds only a key (cancelled after key generation); flow-a also an opened response (after decryption).
-        method.call(wallet, "flow-b")
+        method.call(wallet, "flow-b", 0)
         assertFalse(blind.holdsKey("flow-b"))
         assertTrue("another flow is untouched", blind.holdsKey("flow-a"))
-        method.call(wallet, "flow-a")
+        method.call(wallet, "flow-a", 0)
         assertFalse(blind.holdsKey("flow-a"))
         assertEquals(null, blind.take("flow-a"))
     }
@@ -16130,7 +16279,7 @@ class SirosWalletTest {
         )
         val method = wallet::class.declaredMemberFunctions.first { it.name == "wmpProfile" }
         method.isAccessible = true
-        val profile = method.call(wallet, null) as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
+        val profile = method.call(wallet, null, getField(wallet, "consentEpoch") as Int, CoroutineScope(dispatcher + SupervisorJob())) as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
         runBlocking {
             profile.handleCancel(org.siros.sdk.transport.wmp.FlowCancelParams(flowId = "flow-a", reason = "user"))
         }
@@ -16214,6 +16363,694 @@ class SirosWalletTest {
         generations.value = engineGeneration.get()
         dispatcher.scheduler.runCurrent()
         assertFalse("the replacement is noticed without another state change", blind.holdsKey("flow-a"))
+    }
+
+    @Test
+    fun aWmpMatchRequest_isRefusedAfterLogout_anOldPeersBufferedCallbackCannotRecreateConsent() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502, PR #344 follow-up, issue #345): onMatchRequest now records consent (see
+        // ConsentGuard's doc comment), same as onSignRequest already needed a liveness gate for its own reasons. Without
+        // requireLive() here, a peer's buffered/in-flight match callback firing AFTER logout/teardown could recreate a
+        // consent record for a flow id the (now cleared) consentRecordsByFlow knows nothing about.
+        val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        val profileSlot = slot<org.siros.sdk.transport.wmp.WmpProfile>()
+        every { peer.use(capture(profileSlot)) } just runs
+        val previous = SirosWallet.createWmpPeer
+        SirosWallet.createWmpPeer = { peer }
+        val cred = StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw-1", batchId = 1L, instanceId = 0)
+        try {
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+                "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                "supervisorJob" to SupervisorJob(),
+                "keystore" to mockk<KeystoreManager>(relaxed = true),
+                "sessionStore" to mockk<SessionStore>(relaxed = true),
+                "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+                "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> { error("not initialised") },
+                "legacyAppToken" to "app-token",
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com", engineUrl = "https://engine.example.com", useWmpProtocol = true),
+                "credentialStore" to FakeCredentialStore(mutableListOf(cred)),
+            )
+            val connect = wallet::class.declaredMemberFunctions.first { it.name == "connectEngineForNewSession" }
+            connect.isAccessible = true
+            runBlocking { connect.callSuspend(wallet) }
+            val profile = profileSlot.captured as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
+            profile.init(RecordingPeerContext())
+
+            wallet.logout()
+
+            // The SAME, now-stale profile object delivers one more match request, as a buffered/in-flight callback of the
+            // closed peer would.
+            runBlocking {
+                profile.handleProgress(
+                    org.siros.sdk.transport.wmp.FlowProgressParams(flowId = "flow-after-logout", step = "match_request", payload = buildJsonObject {})
+                )
+            }
+
+            @Suppress("UNCHECKED_CAST")
+            val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+            assertFalse(
+                "a stale WMP peer's match callback must not record consent after logout",
+                records.containsKey("flow-after-logout"),
+            )
+        } finally {
+            SirosWallet.createWmpPeer = previous
+        }
+    }
+
+    @Test
+    fun wmpMatchRequest_epochBumpedBetweenRequireLiveAndTicketConstruction_stillBuildsFromThePeersOwnLifetime() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345's finding #1): a true race window -
+        // requireLive() passes, then (before the ticket is built) a replacement bumps consentEpoch - must not let the
+        // ticket silently adopt the NEW epoch via a fresh issueConsentTicket read; it must stay tied to THIS peer's own
+        // captured lifetime. A true multi-thread race between two adjacent volatile reads is not reliably reproducible by
+        // timing alone (same reasoning as Fido2EnrolmentSession.testHookBeforeInstall), so this is exercised via a
+        // narrowly-scoped, null-in-production test hook (wmpMatchTicketIssueHook) landing exactly in that window.
+        val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        val profileSlot = slot<org.siros.sdk.transport.wmp.WmpProfile>()
+        every { peer.use(capture(profileSlot)) } just runs
+        val previous = SirosWallet.createWmpPeer
+        SirosWallet.createWmpPeer = { peer }
+        val cred = StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw-1", batchId = 1L, instanceId = 0)
+        try {
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+                "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                "supervisorJob" to SupervisorJob(),
+                "keystore" to mockk<KeystoreManager>(relaxed = true),
+                "sessionStore" to mockk<SessionStore>(relaxed = true),
+                "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+                "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> { error("not initialised") },
+                "legacyAppToken" to "app-token",
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com", engineUrl = "https://engine.example.com", useWmpProtocol = true),
+                "credentialStore" to FakeCredentialStore(mutableListOf(cred)),
+            )
+            val connect = wallet::class.declaredMemberFunctions.first { it.name == "connectEngineForNewSession" }
+            connect.isAccessible = true
+            runBlocking { connect.callSuspend(wallet) }
+            val profile = profileSlot.captured as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
+            profile.init(RecordingPeerContext())
+
+            // Land the race exactly where Copilot's finding #1 describes it: AFTER requireLive() has already passed
+            // (this peer IS still live at that instant), but BEFORE the ticket is built - a replacement (here, a second
+            // connectEngineForNewSession, the same real event a reconnect or re-login would trigger) happens in between.
+            setField(wallet, "wmpMatchTicketIssueHook", { runBlocking { connect.callSuspend(wallet) }; Unit })
+
+            profile.handleProgress(
+                org.siros.sdk.transport.wmp.FlowProgressParams(flowId = "flow-raced", step = "match_request", payload = buildJsonObject {})
+            )
+            advanceUntilIdle()
+
+            @Suppress("UNCHECKED_CAST")
+            val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+            assertFalse(
+                "a ticket built from a fresh epoch read (not this peer's own captured lifetime) must not let a raced " +
+                    "replacement's write through",
+                records.containsKey("flow-raced"),
+            )
+        } finally {
+            SirosWallet.createWmpPeer = previous
+        }
+    }
+
+    @Test
+    fun wmpMatchRequest_peerReplacedWhileCredentialStoreGetAllSuspends_doesNotRecordConsent() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345's finding #2): requireLive() only proves
+        // liveness at the instant onMatchRequest is entered - handleWmpMatchRequest's own first line, credentialStore.getAll(),
+        // is a LATER suspension point a replacement peer can land in between. The ticket issued before that call (not
+        // requireLive's earlier, already-past check) is what the final write re-validates against.
+        val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        val profileSlot = slot<org.siros.sdk.transport.wmp.WmpProfile>()
+        every { peer.use(capture(profileSlot)) } just runs
+        val previous = SirosWallet.createWmpPeer
+        SirosWallet.createWmpPeer = { peer }
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val cred = StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw-1", batchId = 1L, instanceId = 0)
+        val store = mockk<org.siros.sdk.credentials.CredentialStore>()
+        coEvery { store.getAll() } coAnswers { gate.await(); listOf(cred) }
+        try {
+            val testScope = CoroutineScope(dispatcher + SupervisorJob())
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+                "scope" to testScope,
+                "supervisorJob" to SupervisorJob(),
+                "keystore" to mockk<KeystoreManager>(relaxed = true),
+                "sessionStore" to mockk<SessionStore>(relaxed = true),
+                "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+                "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> { error("not initialised") },
+                "legacyAppToken" to "app-token",
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com", engineUrl = "https://engine.example.com", useWmpProtocol = true),
+                "credentialStore" to store,
+            )
+            val connect = wallet::class.declaredMemberFunctions.first { it.name == "connectEngineForNewSession" }
+            connect.isAccessible = true
+            runBlocking { connect.callSuspend(wallet) }
+            val profile = profileSlot.captured as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
+            profile.init(RecordingPeerContext())
+
+            testScope.launch {
+                profile.handleProgress(
+                    org.siros.sdk.transport.wmp.FlowProgressParams(flowId = "flow-getall", step = "match_request", payload = buildJsonObject {})
+                )
+            }
+            advanceUntilIdle()
+            // Parked inside credentialStore.getAll().
+            assertEquals(emptySet<String>(), (getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>).keys)
+
+            // The WMP peer is replaced wholesale (a fresh connectEngineForNewSession, same as a real re-login would do),
+            // bumping consentEpoch, while the match request above is still parked inside credentialStore.getAll().
+            runBlocking { connect.callSuspend(wallet) }
+
+            gate.complete(Unit)
+            advanceUntilIdle()
+
+            @Suppress("UNCHECKED_CAST")
+            val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+            assertFalse(
+                "a peer replaced while credentialStore.getAll() was suspended must not let the write that follows it through",
+                records.containsKey("flow-getall"),
+            )
+        } finally {
+            SirosWallet.createWmpPeer = previous
+        }
+    }
+
+    @Test
+    fun handleCredentialSelection_resumedAfterTheEngineSessionIsReplaced_doesNotRecordConsent() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502, PR #344/#346 follow-up, issue #345): a credential-selection coroutine
+        // suspended on the listener, resumed only after the wallet's engine session has been wholesale replaced (logout,
+        // a cut-off re-login, a fresh connectEngine), must not act as if its CAPTURED (now stale) ConsentTicket were still
+        // current. isFlowLost's generation check alone does not catch this: the captured engine object's OWN
+        // connectionGeneration never advances just because a REPLACEMENT session was connected - only consentEpoch (bumped
+        // by clearPerFlowAuthorizationState, which every real replacement path calls) does.
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        coEvery { listener.onCredentialSelectionRequired(any()) } coAnswers { gate.await(); listOf(1L) }
+        val store = FakeCredentialStore(
+            mutableListOf(
+                StoredCredential(
+                    id = 1L, format = "dc+sd-jwt", raw = "raw-pid",
+                    metadata = CredentialMetadata(name = "PID", vct = "urn:eu.europa.ec.eudi:pid:1"),
+                    batchId = 1L, instanceId = 0,
+                ),
+            )
+        )
+        val engineA = mockEngineConstructor(progressFlow = progressFlow)
+        every { engineA.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice", credentials = store.getAll())),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "flow-replaced", step = "credential_selection",
+                payload = vctQueryPayload("urn:eu.europa.ec.eudi:pid:1"),
+            )
+        )
+        advanceUntilIdle()
+        // Still parked on the listener (gate not yet completed).
+        assertEquals(emptySet<String>(), (getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>).keys)
+
+        // The session is replaced wholesale with a DIFFERENT engine object - exactly what a real connectEngine call does
+        // (logout and a cut-off re-login go through the same clearPerFlowAuthorizationState/consentEpoch bump) - while the
+        // coroutine above is still suspended on the (slow) consent dialog.
+        mockEngineConstructor()
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        @Suppress("UNCHECKED_CAST")
+        val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+        assertFalse(
+            "a selection resumed after the session was replaced must not record consent for the stale engine's flow",
+            records.containsKey("flow-replaced"),
+        )
+    }
+
+    @Test
+    fun handleCredentialSelection_resumedAfterSessionReplacement_doesNotTearDownAReusedFlowIdsNewState() = runTest(dispatcher) {
+        // Regression (go-wallet-backend#502/PR #346 follow-up, issue #345's finding #4): an EARLIER fix for the test above
+        // made isFlowLost itself check engine-session identity, conflating "my whole session moved on" with "this flow is
+        // dead" - a stale coroutine would then call endFlowLost(flowId) on a flow id a REPLACEMENT session may have ALREADY
+        // reused with its own, legitimate, NEW consent - tearing that down instead of just abandoning its own stale work.
+        // The ConsentTicket fix checks staleness FIRST and, if stale, touches NOTHING - no endFlowLost, no write - proven
+        // here by seeding what a replacement session's own legitimate consent for the SAME flow id would look like and
+        // confirming it survives, untouched, byte for byte, and no "flow lost" side effect fires for it either.
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        coEvery { listener.onCredentialSelectionRequired(any()) } coAnswers { gate.await(); listOf(1L) }
+        val store = FakeCredentialStore(
+            mutableListOf(
+                StoredCredential(
+                    id = 1L, format = "dc+sd-jwt", raw = "raw-pid",
+                    metadata = CredentialMetadata(name = "PID", vct = "urn:eu.europa.ec.eudi:pid:1"),
+                    batchId = 1L, instanceId = 0,
+                ),
+            )
+        )
+        val engineA = mockEngineConstructor(progressFlow = progressFlow)
+        every { engineA.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice", credentials = store.getAll())),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "shared-flow", step = "credential_selection",
+                payload = vctQueryPayload("urn:eu.europa.ec.eudi:pid:1"),
+            )
+        )
+        advanceUntilIdle()
+
+        // The session is replaced wholesale (a fresh connectEngine), bumping consentEpoch.
+        mockEngineConstructor()
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        // A REPLACEMENT session's own, legitimate consent for a flow id the backend happens to have reused.
+        val replacementRecord = ConsentRecord(listOf(ConsentedSelection("pid", "1", null)))
+        setField(wallet, "consentRecordsByFlow", mutableMapOf("shared-flow" to replacementRecord))
+
+        // The stale coroutine from BEFORE the replacement now resumes.
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        @Suppress("UNCHECKED_CAST")
+        val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+        assertSame(
+            "a stale resume must not touch a flow id a replacement session has already recorded its own consent for",
+            replacementRecord, records["shared-flow"],
+        )
+        @Suppress("UNCHECKED_CAST")
+        val lostFlowIds = getField(wallet, "lostFlowIds") as Set<String>
+        assertFalse("a stale resume must not call endFlowLost on a flow id a replacement session is using", "shared-flow" in lostFlowIds)
+        verify(exactly = 0) { listener.onFlowError("shared-flow", any(), any()) }
+    }
+
+    @Test
+    fun handleCredentialSelection_sessionReplacedWhileRecordPresentationSuspends_doesNotRecordConsent() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345's finding #1): the listener await is not the
+        // only suspension point between the ticket's issue and the consent write - recordPresentation (here, via
+        // keystore.savePresentationRecord) is another one. A check taken only once, right after the FIRST await, would miss
+        // a replacement that happens during this LATER one.
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf(1L)
+        val store = FakeCredentialStore(
+            mutableListOf(
+                StoredCredential(
+                    id = 1L, format = "dc+sd-jwt", raw = "raw-pid",
+                    metadata = CredentialMetadata(name = "PID", vct = "urn:eu.europa.ec.eudi:pid:1"),
+                    batchId = 1L, instanceId = 0,
+                ),
+            )
+        )
+        val engineA = mockEngineConstructor(progressFlow = progressFlow)
+        every { engineA.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns true
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        coEvery { keystore.savePresentationRecord(any(), any()) } coAnswers { gate.await() }
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice", credentials = store.getAll())),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "flow-recordpresentation", step = "credential_selection",
+                payload = vctQueryPayload("urn:eu.europa.ec.eudi:pid:1"),
+            )
+        )
+        advanceUntilIdle()
+        // Parked inside recordPresentation (past the listener, which answered immediately this time).
+        assertEquals(emptySet<String>(), (getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>).keys)
+
+        mockEngineConstructor()
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        @Suppress("UNCHECKED_CAST")
+        val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+        assertFalse(
+            "a session replaced while recordPresentation was suspended must not let the write that follows it through",
+            records.containsKey("flow-recordpresentation"),
+        )
+    }
+
+    @Test
+    fun handleCredentialSelection_sessionReplacedWhileCredentialStoreGetAllSuspends_neverPublishesMatchStateOrAsksTheUser() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345, round 4's finding #3): credentialStore.getAll()
+        // is handleCredentialSelection's FIRST suspension point - well before its ticket check, which only runs after the
+        // LISTENER await. A ticket-only fix would let a resumption write pendingMatchResultsByFlow and show the user a
+        // consent dialog for an already-dead flow before ever reaching that check. The structural fix (this coroutine now
+        // launches into connectEngine's own connectionScope, cancelled outright on replacement) stops it from resuming
+        // PAST the suspension at all - proven here by asserting NEITHER of those side effects ever happens, not just that
+        // the eventual consent write is skipped.
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf(1L)
+        val cred = StoredCredential(
+            id = 1L, format = "dc+sd-jwt", raw = "raw-pid",
+            metadata = CredentialMetadata(name = "PID", vct = "urn:eu.europa.ec.eudi:pid:1"),
+            batchId = 1L, instanceId = 0,
+        )
+        val store = mockk<org.siros.sdk.credentials.CredentialStore>()
+        coEvery { store.getAll() } coAnswers { gate.await(); listOf(cred) }
+        val engineA = mockEngineConstructor(progressFlow = progressFlow)
+        every { engineA.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "flow-getall", step = "credential_selection",
+                payload = vctQueryPayload("urn:eu.europa.ec.eudi:pid:1"),
+            )
+        )
+        advanceUntilIdle()
+        // Parked inside credentialStore.getAll() - before even the listener is asked.
+        coVerify(exactly = 0) { listener.onCredentialSelectionRequired(any()) }
+
+        // The session is replaced wholesale (a fresh connectEngine), cancelling this coroutine's own connectionScope.
+        mockEngineConstructor()
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) {
+            listener.onCredentialSelectionRequired(any())
+        }
+        @Suppress("UNCHECKED_CAST")
+        val pending = getField(wallet, "pendingMatchResultsByFlow") as Map<String, List<CredentialMatcher.MatchResult>>
+        assertFalse(
+            "a session replaced while credentialStore.getAll() was suspended must not publish match state either",
+            pending.containsKey("flow-getall"),
+        )
+        @Suppress("UNCHECKED_CAST")
+        val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+        assertFalse(records.containsKey("flow-getall"))
+    }
+
+    @Test
+    fun matchRequests_merelyReconnectedWhileRecordPresentationSuspends_isCaughtByIsFlowLostNotJustTheTicket() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345's finding #4): a MERE socket reconnect on
+        // the SAME engine (connectionGeneration bumped, no clearPerFlowAuthorizationState call - this is a reconnect
+        // within the same logical session, not a replacement) does not change consentEpoch, so the ticket alone stays
+        // "current" across it. The reconnect ends and clears THIS flow specifically (flowConnectionGeneration ties it to
+        // the OLD generation), including cancelling its selectionJobsByFlow entry - but THIS collector's own registration
+        // of that entry is scoped only to the listener await (removed right after it, in a finally block, same as
+        // production), so by the time recordPresentation suspends there is nothing left for endFlowLost's cancellation to
+        // reach: only re-checking isFlowLost AFTER the await (not just the ticket) catches this (unlike
+        // handleCredentialSelection, whose OWN selectionJobsByFlow registration spans its whole lifetime and so is also
+        // backstopped by cancellation - this collector has no such backstop).
+        val matchFlow = MutableSharedFlow<MatchRequestMessage>()
+        val generationsFlow = MutableStateFlow(0)
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf(1L)
+        val store = FakeCredentialStore(
+            mutableListOf(
+                StoredCredential(
+                    id = 1L, format = "dc+sd-jwt", raw = "raw-pid",
+                    metadata = CredentialMetadata(name = "PID", vct = "urn:eu.europa.ec.eudi:pid:1"),
+                    batchId = 1L, instanceId = 0,
+                ),
+            )
+        )
+        val engineA = mockEngineConstructor(matchRequests = matchFlow, generations = generationsFlow)
+        every { engineA.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns true
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        coEvery { keystore.savePresentationRecord(any(), any()) } coAnswers { gate.await() }
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice", credentials = store.getAll())),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        matchFlow.emit(MatchRequestMessage(flowId = "flow-reconnect", dcqlQuery = null))
+        advanceUntilIdle()
+        // Parked inside recordPresentation (past the listener, which answered immediately this time).
+        assertEquals(emptySet<String>(), (getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>).keys)
+
+        // A mere reconnect on the SAME engine object: connectionGeneration advances, consentEpoch does not.
+        engineGeneration.incrementAndGet()
+        generationsFlow.value = engineGeneration.get()
+        advanceUntilIdle()
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        @Suppress("UNCHECKED_CAST")
+        val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+        assertFalse(
+            "a flow ended by a mere reconnect while recordPresentation was suspended must not record consent",
+            records.containsKey("flow-reconnect"),
+        )
+    }
+
+    @Test
+    fun connectingANewWmpPeer_clearsStalePerFlowConsentFromAReplacedPeer() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502, PR #344 follow-up, issue #345): connectEngine already clears stale
+        // per-flow consent on replacing a prior connection (see clearPerFlowAuthorizationState's doc comment);
+        // connectViaWmp - the WMP equivalent of the same "replace a prior live session" moment - did not.
+        val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        every { peer.use(any()) } just runs
+        val previous = SirosWallet.createWmpPeer
+        SirosWallet.createWmpPeer = { peer }
+        try {
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+                "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                "supervisorJob" to SupervisorJob(),
+                "keystore" to mockk<KeystoreManager>(relaxed = true),
+                "sessionStore" to mockk<SessionStore>(relaxed = true),
+                "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+                "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> { error("not initialised") },
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com", engineUrl = "https://engine.example.com", useWmpProtocol = true),
+            )
+            setField(
+                wallet, "consentRecordsByFlow",
+                mutableMapOf("stale-flow" to ConsentRecord(listOf(ConsentedSelection("q", "1", null)))),
+            )
+            val connectViaWmp = wallet::class.declaredMemberFunctions.first { it.name == "connectViaWmp" }
+            connectViaWmp.isAccessible = true
+            runBlocking { connectViaWmp.callSuspend(wallet, "app-token") }
+
+            @Suppress("UNCHECKED_CAST")
+            val remaining = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+            assertTrue("a stale flow's consent must not survive connecting a new/replaced WMP peer", remaining.isEmpty())
+        } finally {
+            SirosWallet.createWmpPeer = previous
+        }
+    }
+
+    @Test
+    fun wmpTerminalCallbacks_clearTheFlowsRecordedConsent_completeErrorAndCancel() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502, PR #344 follow-up, issue #345): unlike the legacy transport's
+        // flowComplete/flowErrors collectors (which already call clearFlowMatchState), the WMP terminal callbacks never did -
+        // so a flow's recorded consent outlived the flow itself, retrievable by a later flow id collision.
+        for (terminal in listOf<suspend (org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile, String) -> Unit>(
+            { profile, flowId -> profile.handleComplete(org.siros.sdk.transport.wmp.FlowCompleteParams(flowId = flowId)) },
+            { profile, flowId -> profile.handleError(org.siros.sdk.transport.wmp.FlowErrorParams(flowId = flowId, code = "E", message = "m")) },
+            { profile, flowId -> profile.handleCancel(org.siros.sdk.transport.wmp.FlowCancelParams(flowId = flowId)) },
+        )) {
+            val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+            val profileSlot = slot<org.siros.sdk.transport.wmp.WmpProfile>()
+            every { peer.use(capture(profileSlot)) } just runs
+            val previous = SirosWallet.createWmpPeer
+            SirosWallet.createWmpPeer = { peer }
+            try {
+                val wallet = newWallet(
+                    "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+                    "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                    "supervisorJob" to SupervisorJob(),
+                    "keystore" to mockk<KeystoreManager>(relaxed = true),
+                    "sessionStore" to mockk<SessionStore>(relaxed = true),
+                    "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+                    "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> { error("not initialised") },
+                    "legacyAppToken" to "app-token",
+                    "config" to WalletConfig(backendUrl = "https://wallet.example.com", engineUrl = "https://engine.example.com", useWmpProtocol = true),
+                )
+                val connect = wallet::class.declaredMemberFunctions.first { it.name == "connectEngineForNewSession" }
+                connect.isAccessible = true
+                runBlocking { connect.callSuspend(wallet) }
+                val profile = profileSlot.captured as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
+                profile.init(RecordingPeerContext())
+
+                setField(wallet, "consentRecordsByFlow", mutableMapOf("flow-done" to ConsentRecord(listOf(ConsentedSelection("q", "1", null)))))
+                runBlocking { terminal(profile, "flow-done") }
+
+                @Suppress("UNCHECKED_CAST")
+                val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+                assertFalse("a terminated WMP flow's recorded consent must not outlive it", records.containsKey("flow-done"))
+            } finally {
+                SirosWallet.createWmpPeer = previous
+            }
+        }
+    }
+
+    @Test
+    fun wmpTerminalCallbacks_boundToTheirOwnPeersLifetime_doNotClearAReplacementPeersConsent() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345's finding #3): a terminal callback belongs
+        // to the peer whose wmpProfile(peer) built it, not to "whichever peer is current when it happens to run" - a late
+        // completion/error/cancel from an ALREADY-REPLACED peer must not delete a REPLACEMENT peer's legitimate consent for
+        // a flow id the backend happens to have reused.
+        for (terminal in listOf<suspend (org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile, String) -> Unit>(
+            { profile, flowId -> profile.handleComplete(org.siros.sdk.transport.wmp.FlowCompleteParams(flowId = flowId)) },
+            { profile, flowId -> profile.handleError(org.siros.sdk.transport.wmp.FlowErrorParams(flowId = flowId, code = "E", message = "m")) },
+            { profile, flowId -> profile.handleCancel(org.siros.sdk.transport.wmp.FlowCancelParams(flowId = flowId)) },
+        )) {
+            val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+            val profileSlot = slot<org.siros.sdk.transport.wmp.WmpProfile>()
+            every { peer.use(capture(profileSlot)) } just runs
+            val previous = SirosWallet.createWmpPeer
+            SirosWallet.createWmpPeer = { peer }
+            try {
+                val wallet = newWallet(
+                    "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+                    "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                    "supervisorJob" to SupervisorJob(),
+                    "keystore" to mockk<KeystoreManager>(relaxed = true),
+                    "sessionStore" to mockk<SessionStore>(relaxed = true),
+                    "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+                    "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> { error("not initialised") },
+                    "legacyAppToken" to "app-token",
+                    "config" to WalletConfig(backendUrl = "https://wallet.example.com", engineUrl = "https://engine.example.com", useWmpProtocol = true),
+                )
+                val connect = wallet::class.declaredMemberFunctions.first { it.name == "connectEngineForNewSession" }
+                connect.isAccessible = true
+                runBlocking { connect.callSuspend(wallet) }
+                // peerA's profile - captured BEFORE the replacement below.
+                val staleProfile = profileSlot.captured as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
+                staleProfile.init(RecordingPeerContext())
+
+                // The peer is replaced wholesale (a fresh connectEngineForNewSession, as a real re-login would do).
+                runBlocking { connect.callSuspend(wallet) }
+                profileSlot.captured.init(RecordingPeerContext())
+
+                // The REPLACEMENT peer's own, legitimate consent for a flow id the backend happens to have reused.
+                val replacementRecord = ConsentRecord(listOf(ConsentedSelection("q", "1", null)))
+                setField(wallet, "consentRecordsByFlow", mutableMapOf("shared-flow" to replacementRecord))
+
+                // A late terminal message for peerA (the one that was REPLACED) arrives for the same flow id.
+                runBlocking { terminal(staleProfile, "shared-flow") }
+
+                @Suppress("UNCHECKED_CAST")
+                val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+                assertSame(
+                    "a replaced peer's late terminal callback must not clear a REPLACEMENT peer's own consent for a reused flow id",
+                    replacementRecord, records["shared-flow"],
+                )
+            } finally {
+                SirosWallet.createWmpPeer = previous
+            }
+        }
+    }
+
+    @Test
+    fun consentLock_isActuallySharedByEveryConsentMutation_blockingOneBlocksTheOthers() {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345's finding #5): @Volatile alone makes each
+        // individual read/write of consentEpoch visible across threads, but does not make a check-then-act sequence
+        // atomic - clearPerFlowAuthorizationState, recordIfCurrent and clearFlowMatchStateIfLive must all synchronize on
+        // the SAME lock, or a stale write/clear can still land in the gap between another thread's check and its own act.
+        // A true concurrent race is not reliably reproducible by timing alone (same reasoning as every other hook-based
+        // test in this class) - this instead proves the underlying STRUCTURAL guarantee directly: while this thread holds
+        // consentLock, clearPerFlowAuthorizationState (and, in turn, every other consent mutation sharing the same lock)
+        // must block until it is released. A deterministic, non-flaky way to verify mutual exclusion is actually in
+        // effect, rather than two functions that merely happen to both use the word "synchronized".
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+        )
+        val lockField = wallet.javaClass.getDeclaredField("consentLock")
+        lockField.isAccessible = true
+        val lock = lockField.get(wallet)
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "clearPerFlowAuthorizationState" }
+        method.isAccessible = true
+
+        val started = java.util.concurrent.CountDownLatch(1)
+        val finished = java.util.concurrent.CountDownLatch(1)
+        synchronized(lock) {
+            val thread = Thread {
+                started.countDown()
+                method.call(wallet)
+                finished.countDown()
+            }
+            thread.isDaemon = true
+            thread.start()
+            assertTrue("the background thread must actually start", started.await(2, java.util.concurrent.TimeUnit.SECONDS))
+            assertFalse(
+                "clearPerFlowAuthorizationState must block while consentLock is held elsewhere - if it used a different " +
+                    "lock (or none), it would complete almost immediately instead",
+                finished.await(300, java.util.concurrent.TimeUnit.MILLISECONDS),
+            )
+        }
+        assertTrue(
+            "once consentLock is released, clearPerFlowAuthorizationState proceeds",
+            finished.await(2, java.util.concurrent.TimeUnit.SECONDS),
+        )
     }
 
     @Test
@@ -16401,7 +17238,7 @@ class SirosWalletTest {
             val method = wallet::class.declaredMemberFunctions.first { it.name == "wmpProfile" }
             method.isAccessible = true
             // The profile (and so the callbacks the peer would still deliver to) was built while the session was live.
-            val profile = method.call(wallet, null) as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
+            val profile = method.call(wallet, null, getField(wallet, "consentEpoch") as Int, CoroutineScope(dispatcher + SupervisorJob())) as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
             val ctx = RecordingPeerContext()
             profile.init(ctx)
             teardown(wallet)
@@ -16483,7 +17320,7 @@ class SirosWalletTest {
             wallet.signDispatchHook = { paused.countDown(); release.await() }
             val method = wallet::class.declaredMemberFunctions.first { it.name == "wmpProfile" }
             method.isAccessible = true
-            val profile = method.call(wallet, null) as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
+            val profile = method.call(wallet, null, getField(wallet, "consentEpoch") as Int, CoroutineScope(dispatcher + SupervisorJob())) as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
             val ctx = RecordingPeerContext()
             profile.init(ctx)
             // The callback passes its liveness check and stops just before it claims the flow's state.
