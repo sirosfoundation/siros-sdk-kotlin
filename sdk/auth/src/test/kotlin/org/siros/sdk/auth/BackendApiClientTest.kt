@@ -717,6 +717,157 @@ class BackendApiClientTest {
         }
     }
 
+    // ---- Adding a passkey (go-wallet-backend#453) ----
+
+    private val created = RegisterResult(
+        credentialId = byteArrayOf(5, 6),
+        attestationObject = byteArrayOf(7),
+        clientDataJSON = byteArrayOf(8),
+    )
+
+    private fun beginBody(authorization: String = "") = """{"username":"alice","challengeId":"enr-1","createOptions":{"publicKey":{
+        "rp":{"id":"example.com","name":"Example"},"user":{"id":{"${'$'}b64u":"${b64(1)}"},"name":"alice","displayName":"Alice"},
+        "challenge":{"${'$'}b64u":"${b64(2, 3)}"},"authenticatorSelection":{"residentKey":"required","userVerification":"preferred"}}}$authorization}"""
+
+    private suspend fun finishWith(response: MockResponse, authorization: AuthenticateResult? = assertion): AddPasskeyOutcome {
+        server.enqueue(response)
+        val client = newClient().apply { setAppToken("tok") }
+        return client.passkeyRegisterFinish("enr-1", created, "Phone", byteArrayOf(1, 2), authorization, ifMatch = null)
+    }
+
+    @Test
+    fun passkey_begin_decodes_create_and_authorization_options() = runBlocking {
+        val authorization = ""","authorization":{"publicKey":{"rpId":"example.com","challenge":{"${'$'}b64u":"${b64(9)}"},
+            "allowCredentials":[{"type":"public-key","id":{"${'$'}b64u":"${b64(4)}"}}],"userVerification":"required"}}"""
+        server.enqueue(MockResponse().setBody(beginBody(authorization)))
+        val client = newClient().apply { setAppToken("tok") }
+
+        val challenge = (client.passkeyRegisterBegin() as AddPasskeyBegin.Ready).challenge
+
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals("/user/session/webauthn/register-begin", request.path)
+        assertEquals("enr-1", challenge.challengeId)
+        assertEquals("example.com", challenge.createOptions.rpId)
+        assertEquals("Alice", challenge.createOptions.userDisplayName)
+        assertEquals(listOf<Byte>(2, 3), challenge.createOptions.challenge.toList())
+        assertEquals(listOf<Byte>(1), challenge.createOptions.userId.toList())
+        val auth = challenge.authorization!!
+        assertEquals(listOf<Byte>(9), auth.challenge.toList())
+        assertEquals(listOf<Byte>(4), auth.allowCredentials!!.single().id.toList())
+        assertEquals("required", auth.userVerification)
+    }
+
+    @Test
+    fun passkey_begin_has_no_authorization_for_an_account_without_a_passkey() = runBlocking {
+        server.enqueue(MockResponse().setBody(beginBody()))
+        val client = newClient().apply { setAppToken("tok") }
+        assertEquals(null, (client.passkeyRegisterBegin() as AddPasskeyBegin.Ready).challenge.authorization)
+    }
+
+    @Test
+    fun passkey_begin_maps_refusals() = runBlocking {
+        server.enqueue(body(403, """{"message":"no scope"}"""))
+        server.enqueue(body(401, """{"message":"gone"}"""))
+        val client = newClient().apply { setAppToken("tok") }
+        assertEquals(AddPasskeyBegin.Forbidden("no scope"), client.passkeyRegisterBegin())
+        assertEquals(AddPasskeyBegin.SessionRevoked("gone"), client.passkeyRegisterBegin())
+    }
+
+    @Test
+    fun passkey_finish_sends_credential_authorization_private_data_and_if_match() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"credentialId":"cred-9"}""").setHeader("X-Private-Data-ETag", "\"new\""))
+        val client = newClient().apply { setAppToken("tok") }
+
+        val outcome = client.passkeyRegisterFinish("enr-1", created, "Phone", byteArrayOf(1, 2), assertion, ifMatch = "\"old\"")
+
+        assertEquals(AddPasskeyOutcome.Added("cred-9"), outcome)
+        assertEquals("\"new\"", client.privateDataEtag)
+        val request = server.takeRequest()
+        assertEquals("/user/session/webauthn/register-finish", request.path)
+        assertEquals("\"old\"", request.getHeader("X-Private-Data-If-Match"))
+        val sent = Json.parseToJsonElement(request.body.readUtf8()).jsonObject
+        assertEquals("enr-1", sent["challengeId"]!!.jsonPrimitive.content)
+        assertEquals("Phone", sent["nickname"]!!.jsonPrimitive.content)
+        assertEquals(b64(5, 6), sent["credential"]!!.jsonObject["id"]!!.jsonPrimitive.content)
+        assertEquals(b64(7), sent["credential"]!!.jsonObject["response"]!!.jsonObject["attestationObject"]!!.jsonPrimitive.content)
+        assertEquals(b64(1, 2), sent["privateData"]!!.jsonObject["${'$'}b64u"]!!.jsonPrimitive.content)
+        assertEquals(b64(7, 8), sent["authorization"]!!.jsonObject["response"]!!.jsonObject["signature"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun passkey_finish_omits_authorization_when_there_is_none() = runBlocking {
+        finishWith(MockResponse().setBody("{}"), authorization = null)
+        val sent = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        assertTrue("authorization" !in sent)
+    }
+
+    @Test
+    fun passkey_finish_defaults_if_match_to_the_last_seen_etag() = runBlocking {
+        server.enqueue(MockResponse().setBody("{}").setHeader("X-Private-Data-ETag", "\"seen\""))
+        server.enqueue(MockResponse().setBody("{}"))
+        val client = newClient().apply { setAppToken("tok") }
+        client.getPrivateData()
+        client.passkeyRegisterFinish("enr-1", created, "Phone", null, null)
+        server.takeRequest()
+        assertEquals("\"seen\"", server.takeRequest().getHeader("X-Private-Data-If-Match"))
+    }
+
+    @Test
+    fun passkey_finish_maps_every_defined_outcome() = runBlocking {
+        assertEquals(
+            AddPasskeyOutcome.AuthorizationRequired("m"),
+            finishWith(body(401, """{"error":"ENROLLMENT_AUTHORIZATION_REQUIRED","message":"m"}""")),
+        )
+        assertEquals(
+            AddPasskeyOutcome.AuthorizationFailed("m"),
+            finishWith(body(401, """{"error":"ENROLLMENT_AUTHORIZATION_FAILED","message":"m"}""")),
+        )
+        assertEquals(AddPasskeyOutcome.SessionRevoked(null), finishWith(body(401)))
+        assertEquals(AddPasskeyOutcome.RetryNeeded(null), finishWith(body(404)))
+        assertEquals(
+            AddPasskeyOutcome.PrivateDataConflict("\"cur\""),
+            finishWith(MockResponse().setResponseCode(412).setHeader("X-Private-Data-ETag", "\"cur\"")),
+        )
+        assertEquals(
+            AddPasskeyOutcome.RegistrationRejected(400, "Registration response could not be verified"),
+            finishWith(body(400, """{"error":"Registration response could not be verified"}""")),
+        )
+        assertEquals(AddPasskeyOutcome.RegistrationRejected(403, "Authenticator not allowed"), finishWith(body(403, """{"error":"Authenticator not allowed"}""")))
+    }
+
+    @Test
+    fun passkey_finish_412_does_not_adopt_the_remote_etag() = runBlocking {
+        // This device's cache is at "mine"; another device has since written
+        // "newer", which the 412 response reports back.
+        server.enqueue(MockResponse().setBody("{}").setHeader("X-Private-Data-ETag", "\"mine\""))
+        server.enqueue(MockResponse().setResponseCode(412).setHeader("X-Private-Data-ETag", "\"newer-from-another-device\""))
+        val client = newClient().apply { setAppToken("tok") }
+        client.getPrivateData()
+        assertEquals("\"mine\"", client.privateDataEtag)
+
+        val outcome = client.passkeyRegisterFinish("enr-1", created, "Phone", byteArrayOf(1, 2), assertion, ifMatch = "\"mine\"")
+
+        assertEquals(AddPasskeyOutcome.PrivateDataConflict("\"newer-from-another-device\""), outcome)
+        // The cached ETag must NOT move to the server's newer value: this
+        // device's cached container was never updated to match it, so a
+        // later retry using the adopted ETag as If-Match would submit stale
+        // data tagged as current, silently overwriting the other device's
+        // write. The remote value is only ever surfaced via the conflict
+        // result above, for the caller to fetch-and-reconcile explicitly.
+        assertEquals("\"mine\"", client.privateDataEtag)
+    }
+
+    @Test
+    fun passkey_finish_throws_on_an_unexpected_status() = runBlocking {
+        try {
+            finishWith(body(500))
+            fail("a 500 is not a defined outcome")
+        } catch (e: BackendApiException) {
+            assertEquals(500, e.code)
+        }
+    }
+
     private fun newClient(httpClient: okhttp3.OkHttpClient = okhttp3.OkHttpClient()): BackendApiClient {
         val baseUrl = server.url("/").toString().trimEnd('/')
         return BackendApiClient(baseUrl = baseUrl, tenantId = "default", httpClient = httpClient)

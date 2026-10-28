@@ -543,4 +543,52 @@ class JweKeystoreTest {
 
         assertFalse(c.isPossible)
     }
+
+    // -- adding a passkey (preparePrfKey / commitPrfKey) --
+
+    private val secondPrf = ByteArray(32) { (it + 0x40).toByte() }
+    private val secondHkdfSalt = ByteArray(32) { (it + 0x70).toByte() }
+    private val secondCredential = byteArrayOf(7, 7, 7)
+
+    @Test
+    fun preparedContainerUnlocksWithTheNewPasskeyAndStillWithTheOld() = runTest {
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        keystore.setCredentialId(byteArrayOf(1))
+        val keyId = keystore.generateKey()
+
+        val prepared = keystore.preparePrfKey(secondCredential, secondPrf, ByteArray(32) { 9 }, secondHkdfSalt, hkdfInfo)
+
+        assertEquals(2, EncryptedContainer.parse(prepared.container).prfKeys.size)
+        val viaNew = JweKeystore()
+        viaNew.unlock(secondPrf, prepared.container, secondHkdfSalt, hkdfInfo)
+        assertEquals(listOf(keyId), viaNew.listKeys().map { it.keyId })
+        val viaOld = JweKeystore()
+        viaOld.unlock(fakePrfOutput, prepared.container, hkdfSalt, hkdfInfo)
+        assertEquals(listOf(keyId), viaOld.listKeys().map { it.keyId })
+    }
+
+    @Test
+    fun preparingAPasskeyDoesNotChangeTheKeystoreUntilCommitted() = runTest {
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        keystore.setCredentialId(byteArrayOf(1))
+
+        val prepared = keystore.preparePrfKey(secondCredential, secondPrf, ByteArray(32), secondHkdfSalt, hkdfInfo)
+        assertEquals(1, EncryptedContainer.parse(keystore.exportEncryptedContainer()).prfKeys.size)
+
+        keystore.commitPrfKey(prepared)
+        assertEquals(2, EncryptedContainer.parse(keystore.exportEncryptedContainer()).prfKeys.size)
+        keystore.commitPrfKey(prepared)
+        assertEquals("committing twice must not duplicate the entry", 2, EncryptedContainer.parse(keystore.exportEncryptedContainer()).prfKeys.size)
+    }
+
+    @Test
+    fun preparingAPasskeyNeedsAnUnlockedKeystore() = runTest {
+        try {
+            JweKeystore().preparePrfKey(secondCredential, secondPrf, ByteArray(32), secondHkdfSalt, hkdfInfo)
+            fail("a locked keystore has no main key to wrap")
+        } catch (_: KeystoreException) {
+        }
+    }
 }

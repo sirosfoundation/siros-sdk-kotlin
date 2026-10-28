@@ -701,6 +701,8 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onForgetAccount = viewModel::forgetAccount,
                             passkeys = viewModel.listPasskeys(),
                             onRenamePasskey = viewModel::renamePasskey,
+                            addingPasskey = viewModel.addingPasskey.collectAsState().value,
+                            onAddPasskey = viewModel::addPasskey,
                             showCredentialDetails = showCredentialDetails,
                             onUpdateShowCredentialDetails = viewModel::updateShowCredentialDetails,
                             showDiagnosticMessages = viewModel.showDiagnosticMessages.collectAsState().value,
@@ -1404,6 +1406,8 @@ fun SettingsTab(
     onForgetAccount: ((String) -> Unit)? = null,
     passkeys: List<org.siros.sdk.wallet.CachedPasskey> = emptyList(),
     onRenamePasskey: ((String, String) -> Unit)? = null,
+    addingPasskey: Boolean = false,
+    onAddPasskey: ((String) -> Unit)? = null,
     onUpdateUseWmpProtocol: ((Boolean) -> Unit)? = null,
     showCredentialDetails: Boolean = false,
     onUpdateShowCredentialDetails: ((Boolean) -> Unit)? = null,
@@ -1858,6 +1862,43 @@ fun SettingsTab(
                                 }
                             }
                         }
+                    }
+                }
+                if (onAddPasskey != null) {
+                    var showAdd by remember { mutableStateOf(false) }
+                    var newNickname by remember { mutableStateOf("") }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { newNickname = ""; showAdd = true },
+                        enabled = !addingPasskey,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text(stringResource(R.string.add_passkey_button))
+                    }
+                    if (showAdd) {
+                        androidx.compose.material3.AlertDialog(
+                            onDismissRequest = { showAdd = false },
+                            title = { Text(stringResource(R.string.add_passkey_button)) },
+                            text = {
+                                OutlinedTextField(
+                                    value = newNickname,
+                                    onValueChange = { newNickname = it },
+                                    singleLine = true,
+                                    label = { Text(stringResource(R.string.add_passkey_nickname)) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(
+                                    enabled = newNickname.isNotBlank(),
+                                    onClick = { showAdd = false; onAddPasskey(newNickname.trim()) },
+                                ) { Text(stringResource(R.string.add_passkey_confirm)) }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { showAdd = false }) { Text(stringResource(R.string.add_passkey_cancel)) }
+                            },
+                        )
                     }
                 }
             }
