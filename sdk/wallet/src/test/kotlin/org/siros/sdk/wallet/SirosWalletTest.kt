@@ -8,6 +8,7 @@ import io.mockk.mockk
 import io.mockk.runs
 import io.mockk.slot
 import io.mockk.verify
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -7338,6 +7339,165 @@ class SirosWalletTest {
 
         coVerify(exactly = 0) { client.passkeyRegisterFinish(any(), any(), any(), any(), any(), any()) }
         verify(exactly = 1) { authProvider.forgetCredential(match { it.contentEquals(created.credentialId) }) }
+    }
+
+    @Test
+    fun addPasskey_discards_the_unknown_etag_refetch_after_a_cross_account_session_switch() = runTest(dispatcher) {
+        // The unknown-ETag branch's fetchPrivateData() call suspends on a
+        // network round-trip before this generation guard was added: if a
+        // logout + login to a different account completed while it was in
+        // flight, its response used to be written unconditionally into
+        // whatever sessionStore is scoped to by the time it returns - the
+        // NEW session's, not the one this call started for.
+        val f = AddPasskeyFixture()
+        every { f.apiClient.privateDataEtag } returns null
+        val bump = SirosWallet::class.declaredMemberFunctions.first { it.name == "bumpSessionGeneration" }
+        bump.isAccessible = true
+        val wallet = addPasskeyWallet(f)
+        coEvery { f.apiClient.getPrivateData() } coAnswers {
+            // Simulate a logout + login to a different account completing
+            // while this fetch was suspended waiting on the backend.
+            bump.call(wallet)
+            kotlinx.serialization.json.buildJsonObject {
+                put(
+                    "privateData",
+                    kotlinx.serialization.json.buildJsonObject {
+                        put(
+                            "\$b64u",
+                            kotlinx.serialization.json.JsonPrimitive(
+                                java.util.Base64.getUrlEncoder().withoutPadding()
+                                    .encodeToString("stale-container".toByteArray()),
+                            ),
+                        )
+                    },
+                )
+            }
+        }
+
+        val result = wallet.addPasskey("Phone", f.authorizer)
+
+        assertTrue(result is AddPasskeyResult.RetryNeeded)
+        verify(exactly = 0) { f.sessionStore.privateDataJwe = any() }
+        verify(exactly = 0) { f.sessionStore.privateDataETag = any() }
+    }
+
+    @Test
+    fun addPasskey_serializes_concurrent_enrollments_so_the_second_prepares_after_the_firsts_commit() = runTest(dispatcher) {
+        // Preparing outside privateDataWriteMutex let two concurrent
+        // addPasskey calls each snapshot the keystore before either
+        // committed, so the second call's otherwise-valid If-Match (the
+        // backend's latest ETag, only advanced by the first call's own
+        // finish()) carried a container snapshot taken BEFORE the first
+        // call's entry existed, silently dropping it on commit. Preparing
+        // UNDER the lock means the second call's own preparePrfKey() cannot
+        // run until the first call's entire locked operation - including its
+        // commit - has returned.
+        val f = AddPasskeyFixture()
+        val created2 = org.siros.sdk.auth.RegisterResult(
+            credentialId = byteArrayOf(9, 9), attestationObject = byteArrayOf(6), clientDataJSON = byteArrayOf(7),
+            prfOutput = org.siros.sdk.auth.PrfOutput(ByteArray(32) { 4 }),
+        )
+        val prepared2 = org.siros.sdk.keystore.PreparedPrfKey("container-2".toByteArray(), mockk(relaxed = true))
+        coEvery { f.authProvider.register(any()) } returnsMany listOf(f.created, created2)
+        val order = mutableListOf<String>()
+        coEvery { f.keystore.preparePrfKey(any(), any(), any(), any(), any()) } coAnswers {
+            val credId = firstArg<ByteArray>()
+            if (credId.contentEquals(f.created.credentialId)) {
+                order += "prepare1"
+                f.prepared
+            } else {
+                order += "prepare2"
+                prepared2
+            }
+        }
+        coEvery { f.keystore.commitPrfKey(any()) } coAnswers {
+            order += if (firstArg<org.siros.sdk.keystore.PreparedPrfKey>() === f.prepared) "commit1" else "commit2"
+        }
+        // The first call's finish() is held open until the test has checked
+        // that the second call could not have prepared in the meantime.
+        val releaseFirstFinish = CompletableDeferred<Unit>()
+        coEvery { f.apiClient.passkeyRegisterFinish(any(), any(), any(), any(), any(), any()) } coAnswers {
+            val credId = (arg<org.siros.sdk.auth.RegisterResult>(1)).credentialId
+            if (credId.contentEquals(f.created.credentialId)) {
+                releaseFirstFinish.await()
+                org.siros.sdk.auth.AddPasskeyOutcome.Added("cred-1")
+            } else {
+                org.siros.sdk.auth.AddPasskeyOutcome.Added("cred-2")
+            }
+        }
+        val wallet = addPasskeyWallet(f)
+
+        val job1 = launch { wallet.addPasskey("Phone 1", f.authorizer) }
+        advanceUntilIdle() // job1 now holds privateDataWriteMutex, suspended inside finish()
+        assertEquals(listOf("prepare1"), order)
+
+        val job2 = launch { wallet.addPasskey("Phone 2", f.authorizer) }
+        advanceUntilIdle() // job2 can only suspend waiting for the mutex job1 still holds
+        assertEquals("job2 must not have prepared before job1 released the lock", listOf("prepare1"), order)
+
+        releaseFirstFinish.complete(Unit)
+        advanceUntilIdle()
+        job1.join()
+        job2.join()
+
+        assertEquals(listOf("prepare1", "commit1", "prepare2", "commit2"), order)
+    }
+
+    @Test
+    fun addPasskey_does_not_roll_back_an_accepted_enrollment_cancelled_at_the_response_handoff() = runTest(dispatcher) {
+        // sendRawWithEtag() runs OkHttp's blocking execute() inside
+        // withContext(Dispatchers.IO): that blocking call completes
+        // regardless of this coroutine's cancellation state, so the backend
+        // can fully accept register-finish before this code resumes. If this
+        // coroutine's Job is cancelled in that window, resuming from an
+        // ordinary (cancellable) suspension point would discard the real
+        // Added result as a plain CancellationException, indistinguishable
+        // from "never sent" - which used to make the catch block roll back a
+        // credential the backend had, in fact, already accepted.
+        val client = mockk<BackendApiClient>(relaxed = true)
+        every { client.privateDataEtag } returns "\"etag\""
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns true
+        val prepared = org.siros.sdk.keystore.PreparedPrfKey("container".toByteArray(), mockk(relaxed = true))
+        coEvery { keystore.preparePrfKey(any(), any(), any(), any(), any()) } returns prepared
+        val authProvider = mockk<org.siros.sdk.auth.LocalAuthProvider>(relaxed = true)
+        val created = org.siros.sdk.auth.RegisterResult(
+            credentialId = byteArrayOf(5, 5), attestationObject = byteArrayOf(6), clientDataJSON = byteArrayOf(7),
+            prfOutput = org.siros.sdk.auth.PrfOutput(ByteArray(32) { 3 }),
+        )
+        coEvery { authProvider.register(any()) } returns created
+        val enrollment = org.siros.sdk.auth.PasskeyEnrollmentChallenge(
+            "enr-1", "alice",
+            org.siros.sdk.auth.RegisterOptions("rp.example", "RP", byteArrayOf(1), "alice", "Alice", byteArrayOf(2)),
+            null,
+        )
+        coEvery { client.passkeyRegisterBegin() } returns org.siros.sdk.auth.AddPasskeyBegin.Ready(enrollment)
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        // The response "arrives" only once the test explicitly completes
+        // this - simulating it landing after the caller's job is cancelled.
+        val responseArrives = CompletableDeferred<Unit>()
+        coEvery { client.passkeyRegisterFinish(any(), any(), any(), any(), any(), any()) } coAnswers {
+            responseArrives.await()
+            org.siros.sdk.auth.AddPasskeyOutcome.Added("cred-1")
+        }
+        val wallet = newWallet(
+            "apiClient" to client, "authProvider" to authProvider, "keystore" to keystore,
+            "sessionStore" to sessionStore, "accountRegistry" to mockk<AccountRegistry>(relaxed = true),
+        )
+
+        val job = launch { wallet.addPasskey("Phone") }
+        advanceUntilIdle() // job is suspended inside the NonCancellable finish() call, awaiting the "response"
+        job.cancel() // the caller's job is cancelled BEFORE the response is seen to arrive
+        responseArrives.complete(Unit) // the backend's acceptance now lands
+        advanceUntilIdle()
+        job.join()
+
+        // The accepted enrollment must not have been rolled back, and the
+        // local commit must have run despite the cancellation.
+        verify(exactly = 0) { authProvider.forgetCredential(any()) }
+        verify(exactly = 0) { authProvider.rollbackLastRegistration() }
+        coVerify(exactly = 1) { keystore.commitPrfKey(prepared) }
+        verify(exactly = 1) { sessionStore.privateDataJwe = "container" }
     }
 
     @Test

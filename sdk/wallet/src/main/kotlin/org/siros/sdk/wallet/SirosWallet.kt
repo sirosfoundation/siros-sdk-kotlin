@@ -568,6 +568,22 @@ class SirosWallet private constructor(
         require(nickname.isNotBlank() && nickname.length <= 256) { "nickname must be 1-256 characters" }
         val client = apiClient ?: throw AuthException(NOT_LOGGED_IN)
         if (!keystore.isUnlocked) return AddPasskeyResult.WalletLocked(null)
+        // Captured before ANY of the suspending ceremony steps below,
+        // including the unknown-ETag refresh immediately below - not just
+        // before the finish() network call: [keystore] and [authProvider]
+        // are long-lived fields reused across sessions (a logout/login does
+        // not replace them, only lock/unlock or mutate their "last" state),
+        // so a session switch landing during authorization, creation or that
+        // refresh would otherwise either keep going against the NEW
+        // session's live keystore/authProvider state, or (for the refresh)
+        // write the OLD session's fetched container into a sessionStore that
+        // by then belongs to the new one. [sessionChanged] is re-checked
+        // after every one of them; see [sessionGeneration]'s doc comment for
+        // why this counter identifies "which session" the same way it does
+        // for the self-driven re-login.
+        val initiatingGeneration = sessionGeneration
+        fun sessionChanged() = sessionGeneration != initiatingGeneration || isDestroyed
+
         if (client.privateDataEtag == null) {
             // This account's cached session may predate persisted ETags
             // entirely (SessionStore.privateDataETag and the restore into a
@@ -578,27 +594,17 @@ class SirosWallet private constructor(
             // prevent, so refuse rather than guess: fetch private data to
             // populate a known-current ETag (and refresh the local cache)
             // for the retry this asks for, instead of silently enrolling
-            // with no concurrency protection at all.
+            // with no concurrency protection at all. [initiatingGeneration]
+            // guards the write: a logout/login racing this suspending fetch
+            // must not let its response land in the session now scoped
+            // there instead of the one this call started for.
             return try {
-                fetchPrivateData()
+                fetchPrivateData(initiatingGeneration)
                 AddPasskeyResult.RetryNeeded("Refreshed the private data version - please retry")
             } catch (e: WalletException) {
                 AddPasskeyResult.RetryNeeded(e.message)
             }
         }
-        // Captured before ANY of the suspending ceremony steps below, not
-        // just before the finish() network call: [keystore] and
-        // [authProvider] are long-lived fields reused across sessions (a
-        // logout/login does not replace them, only lock/unlock or mutate
-        // their "last" state), so a session switch landing during
-        // authorization or creation - not only during finish() - would
-        // otherwise let this call keep going against the NEW session's live
-        // keystore/authProvider state. [sessionChanged] is re-checked after
-        // every one of them; see [sessionGeneration]'s doc comment for why
-        // this counter identifies "which session" the same way it does for
-        // the self-driven re-login.
-        val initiatingGeneration = sessionGeneration
-        fun sessionChanged() = sessionGeneration != initiatingGeneration || isDestroyed
 
         val challenge = when (val begin = client.passkeyRegisterBegin()) {
             is AddPasskeyBegin.Ready -> begin.challenge
@@ -665,47 +671,86 @@ class SirosWallet private constructor(
             return AddPasskeyResult.PrfUnsupported("PRF not supported by authenticator - cannot encrypt wallet data")
         }
 
-        val prepared = try {
-            keystore.preparePrfKey(created.credentialId, prfOutput.first, prfSalt, hkdfSalt, hkdfInfo)
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            // preparePrfKey suspends on the keystore's own internal mutex and
-            // can be cancelled while waiting for it (or simply throw, for a
-            // KeystoreManager implementation that doesn't support this at
-            // all) - either way the credential this ceremony already created
-            // must not be left as an orphan with no rollback.
-            rollbackLocalCredential(created.credentialId)
-            throw e
-        } catch (e: Exception) {
-            rollbackLocalCredential(created.credentialId)
-            throw e
-        }
-        if (sessionChanged()) {
-            rollbackLocalCredential(created.credentialId)
-            return AddPasskeyResult.SessionRevoked("Session changed before the passkey could be committed")
-        }
-        // finish(), the session re-check and the commit all run as ONE
+        // preparePrfKey(), finish() and the local commit all run as ONE
         // privateDataWriteMutex-held operation (not just the commit): an
-        // earlier version acquired the lock only after finish() returned,
-        // which left two gaps - (1) a concurrent sync could run between
-        // finish() succeeding and the lock being acquired here, uploading an
-        // older snapshot that the backend would then (wrongly) keep over the
-        // one finish() just wrote, and (2) a cancellation arriving exactly in
-        // that window would skip the local commit despite the backend having
-        // already accepted the enrollment. Holding the lock across finish()
-        // itself closes (1); wrapping the actual local writes in
-        // NonCancellable below closes (2), since by the time they run the
-        // backend has unconditionally committed to this passkey and the
-        // local state must catch up regardless of what cancelled the caller.
+        // earlier version prepared and acquired the lock only after
+        // finish() returned, which left three gaps - (1) a second
+        // addPasskey() could prepare its own container snapshot before
+        // either call's finish() committed, so whichever finished SECOND
+        // would carry an If-Match that is valid (the backend's latest ETag,
+        // only advanced by the first call's own finish()) but a container
+        // snapshot taken BEFORE the first call's entry existed, silently
+        // dropping it; (2) a concurrent sync could run between finish()
+        // succeeding and the lock being acquired here, uploading an older
+        // snapshot that the backend would then (wrongly) keep over the one
+        // finish() just wrote; (3) a cancellation arriving in that window
+        // would skip the local commit despite the backend having already
+        // accepted the enrollment. Preparing under the lock closes (1): the
+        // snapshot can then only be taken after any earlier holder's own
+        // commit has updated the keystore's live state. Holding the lock
+        // across finish() itself closes (2); wrapping the actual local
+        // writes in NonCancellable closes (3), since by the time they run
+        // the backend has unconditionally committed to this passkey and the
+        // local state must catch up regardless of what cancelled the
+        // caller.
         return try {
             privateDataWriteMutex.withLock {
+                // Read explicitly, rather than through finish()'s own
+                // ifMatch default parameter (which would read the client's
+                // CURRENT etag at ITS call time, several suspending steps
+                // below): both are equivalent here, since nothing else can
+                // touch it while this coroutine holds the lock, but reading
+                // it up front keeps that invariant visible at the call site.
+                val ifMatch = client.privateDataEtag
+                val prepared = try {
+                    keystore.preparePrfKey(created.credentialId, prfOutput.first, prfSalt, hkdfSalt, hkdfInfo)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // preparePrfKey suspends on the keystore's own internal
+                    // mutex and can be cancelled while waiting for it (or
+                    // simply throw, for a KeystoreManager implementation
+                    // that doesn't support this at all) - either way the
+                    // credential this ceremony already created must not be
+                    // left as an orphan with no rollback.
+                    rollbackLocalCredential(created.credentialId)
+                    throw e
+                } catch (e: Exception) {
+                    rollbackLocalCredential(created.credentialId)
+                    throw e
+                }
+                if (sessionChanged()) {
+                    rollbackLocalCredential(created.credentialId)
+                    return@withLock AddPasskeyResult.SessionRevoked("Session changed before the passkey could be committed")
+                }
+                // Sent - and its outcome read - under NonCancellable.
+                // sendRawWithEtag() runs OkHttp's blocking execute() inside
+                // withContext(Dispatchers.IO): that call already completes
+                // regardless of this coroutine's cancellation state (plain
+                // blocking code does not observe it), so the backend either
+                // never receives the request or has already fully processed
+                // it by the time execute() returns - only the HANDOFF of
+                // that result back to this (possibly meanwhile cancelled)
+                // suspended call is itself cancellable, and would otherwise
+                // surface as a plain CancellationException indistinguishable
+                // from "never sent". That previously made the catch below
+                // delete a credential the backend had in fact just accepted.
+                // Wrapping the call so its real outcome is always what is
+                // observed here does not change when the request is sent or
+                // how long it can run; it only stops a result that already
+                // exists from being thrown away. Rollback below now only
+                // ever runs for an outcome that genuinely was not an
+                // acceptance (a rejection, conflict, or a real network
+                // failure, meaning the backend was never reached at all).
                 val outcome = try {
-                    client.passkeyRegisterFinish(
-                        challengeId = challenge.challengeId,
-                        credential = created,
-                        nickname = nickname,
-                        privateData = prepared.container,
-                        authorization = authorization,
-                    )
+                    withContext(kotlinx.coroutines.NonCancellable) {
+                        client.passkeyRegisterFinish(
+                            challengeId = challenge.challengeId,
+                            credential = created,
+                            nickname = nickname,
+                            privateData = prepared.container,
+                            authorization = authorization,
+                            ifMatch = ifMatch,
+                        )
+                    }
                 } catch (e: Exception) {
                     rollbackLocalCredential(created.credentialId)
                     throw e
@@ -735,13 +780,12 @@ class SirosWallet private constructor(
                 }
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
-            // A cancellation arriving while still SUSPENDED WAITING for
-            // privateDataWriteMutex (before the block above - and so none of
-            // its own rollback paths - ever runs) would otherwise leave the
-            // credential authProvider.register() already created as an
-            // orphan with nothing to roll it back: finish() was never even
-            // sent, so there is no "accepted enrollment" to preserve here,
-            // unlike the NonCancellable section above.
+            // Reaches here only for a cancellation while still SUSPENDED
+            // WAITING for privateDataWriteMutex itself (before the block
+            // above runs at all, so none of its own rollback paths do
+            // either): finish() was never even sent, so there is no
+            // accepted enrollment to preserve, unlike the NonCancellable
+            // call inside the lock above.
             rollbackLocalCredential(created.credentialId)
             throw e
         }
@@ -5636,8 +5680,18 @@ class SirosWallet private constructor(
      * Confirmed as a real gap via code review, not yet an observed
      * incident. Network/API errors are re-thrown instead so login fails
      * loudly and the user can retry once the backend is reachable again.
+     *
+     * @param expectedGeneration when given, the fetched container and ETag
+     *   are written into [sessionStore] only if [sessionGeneration] still
+     *   equals it once the (suspending, network-bound) fetch returns. A
+     *   caller that started this fetch for one session must not let a
+     *   logout/login racing the response land that session's container in
+     *   the DIFFERENT session now scoped there - see [addPasskey]'s unknown-
+     *   ETag branch, the first caller that needed this. Null (the default)
+     *   preserves the original unconditional-write behaviour for callers
+     *   that run before any session is scoped yet (login/recovery).
      */
-    private suspend fun fetchPrivateData(): ByteArray {
+    private suspend fun fetchPrivateData(expectedGeneration: Int? = null): ByteArray {
         val client = apiClient ?: throw WalletException("Not authenticated")
         try {
             val response = client.getPrivateData()
@@ -5660,7 +5714,9 @@ class SirosWallet private constructor(
                     }
                     else -> ByteArray(0)
                 }
-                if (containerBytes.isNotEmpty()) {
+                if (containerBytes.isNotEmpty() &&
+                    (expectedGeneration == null || sessionGeneration == expectedGeneration)
+                ) {
                     sessionStore.privateDataJwe = String(containerBytes, Charsets.UTF_8)
                     persistPrivateDataEtag()
                 }
