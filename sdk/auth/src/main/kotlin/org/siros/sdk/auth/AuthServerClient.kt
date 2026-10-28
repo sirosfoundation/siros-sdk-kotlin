@@ -267,6 +267,21 @@ class AuthServerClient(
         }
     }
 
+    /**
+     * Clear every stored session cookie - including the persisted copy in
+     * `siros_auth_cookies` if this client uses [PersistentCookieJar] - with
+     * no network call. [clearTokenCache] alone leaves the AS session cookie
+     * itself untouched: a device wipe that only cleared the token cache
+     * could report complete while that cookie, in memory and on disk, still
+     * re-authenticates this installation to the AS.
+     */
+    fun clearCookies() {
+        when (val jar = httpClient.cookieJar) {
+            is PersistentCookieJar -> jar.clear()
+            is InMemoryCookieJar -> jar.clear()
+        }
+    }
+
     suspend fun logout(): Unit = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url("$baseUrl/auth/session")

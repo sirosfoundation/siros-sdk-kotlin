@@ -455,6 +455,13 @@ class WscdSelectionPolicy(
      */
     fun clearTofuMapping(issuer: String, credentialType: String) = tofuStore.remove(issuer, credentialType)
 
+    /** Forget every persisted choice: TOFU mappings, per-pair overrides and the global override. */
+    fun clearAll() {
+        tofuStore.clearAll()
+        userOverrideStore.clearAll()
+        userOverrideStore.clearGlobal()
+    }
+
     /** Forget every persisted TOFU choice. */
     fun clearAllTofuMappings() = tofuStore.clearAll()
 

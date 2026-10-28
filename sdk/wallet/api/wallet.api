@@ -380,6 +380,156 @@ public final class org/siros/sdk/wallet/DeepLinkType$Unknown : org/siros/sdk/wal
 	public static final field INSTANCE Lorg/siros/sdk/wallet/DeepLinkType$Unknown;
 }
 
+public abstract interface class org/siros/sdk/wallet/DeleteAccountResult {
+}
+
+public abstract interface class org/siros/sdk/wallet/DeleteAccountResult$AccountGone : org/siros/sdk/wallet/DeleteAccountResult {
+	public abstract fun getLocalWipe ()Lorg/siros/sdk/wallet/LocalWipeReport;
+}
+
+public final class org/siros/sdk/wallet/DeleteAccountResult$CleanupPending : org/siros/sdk/wallet/DeleteAccountResult$AccountGone {
+	public fun <init> (Lorg/siros/sdk/wallet/LocalWipeReport;)V
+	public final fun component1 ()Lorg/siros/sdk/wallet/LocalWipeReport;
+	public final fun copy (Lorg/siros/sdk/wallet/LocalWipeReport;)Lorg/siros/sdk/wallet/DeleteAccountResult$CleanupPending;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/DeleteAccountResult$CleanupPending;Lorg/siros/sdk/wallet/LocalWipeReport;ILjava/lang/Object;)Lorg/siros/sdk/wallet/DeleteAccountResult$CleanupPending;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getLocalWipe ()Lorg/siros/sdk/wallet/LocalWipeReport;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/wallet/DeleteAccountResult$ConfirmationRequired : org/siros/sdk/wallet/DeleteAccountResult {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/wallet/DeleteAccountResult$ConfirmationRequired;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/DeleteAccountResult$ConfirmationRequired;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/wallet/DeleteAccountResult$ConfirmationRequired;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/wallet/DeleteAccountResult$Deleted : org/siros/sdk/wallet/DeleteAccountResult$AccountGone {
+	public fun <init> (Lorg/siros/sdk/wallet/LocalWipeReport;)V
+	public final fun component1 ()Lorg/siros/sdk/wallet/LocalWipeReport;
+	public final fun copy (Lorg/siros/sdk/wallet/LocalWipeReport;)Lorg/siros/sdk/wallet/DeleteAccountResult$Deleted;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/DeleteAccountResult$Deleted;Lorg/siros/sdk/wallet/LocalWipeReport;ILjava/lang/Object;)Lorg/siros/sdk/wallet/DeleteAccountResult$Deleted;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getLocalWipe ()Lorg/siros/sdk/wallet/LocalWipeReport;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/wallet/DeleteAccountResult$InsufficientScope : org/siros/sdk/wallet/DeleteAccountResult {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/wallet/DeleteAccountResult$InsufficientScope;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/DeleteAccountResult$InsufficientScope;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/wallet/DeleteAccountResult$InsufficientScope;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/wallet/DeleteAccountResult$NoPasskey : org/siros/sdk/wallet/DeleteAccountResult {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/wallet/DeleteAccountResult$NoPasskey;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/DeleteAccountResult$NoPasskey;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/wallet/DeleteAccountResult$NoPasskey;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/wallet/DeleteAccountResult$NotFound : org/siros/sdk/wallet/DeleteAccountResult {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/wallet/DeleteAccountResult$NotFound;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/DeleteAccountResult$NotFound;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/wallet/DeleteAccountResult$NotFound;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/wallet/DeleteAccountResult$OperatorRequired : org/siros/sdk/wallet/DeleteAccountResult$AccountGone {
+	public fun <init> (Lorg/siros/sdk/wallet/LocalWipeReport;)V
+	public final fun component1 ()Lorg/siros/sdk/wallet/LocalWipeReport;
+	public final fun copy (Lorg/siros/sdk/wallet/LocalWipeReport;)Lorg/siros/sdk/wallet/DeleteAccountResult$OperatorRequired;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/DeleteAccountResult$OperatorRequired;Lorg/siros/sdk/wallet/LocalWipeReport;ILjava/lang/Object;)Lorg/siros/sdk/wallet/DeleteAccountResult$OperatorRequired;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun getLocalWipe ()Lorg/siros/sdk/wallet/LocalWipeReport;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/wallet/DeleteAccountResult$RetryNeeded : org/siros/sdk/wallet/DeleteAccountResult {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/wallet/DeleteAccountResult$RetryNeeded;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/DeleteAccountResult$RetryNeeded;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/wallet/DeleteAccountResult$RetryNeeded;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getReason ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/wallet/DeleteAccountResult$SessionRevoked : org/siros/sdk/wallet/DeleteAccountResult {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/wallet/DeleteAccountResult$SessionRevoked;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/DeleteAccountResult$SessionRevoked;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/wallet/DeleteAccountResult$SessionRevoked;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/wallet/DeleteAccountResult$StepUpExpired : org/siros/sdk/wallet/DeleteAccountResult {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/wallet/DeleteAccountResult$StepUpExpired;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/DeleteAccountResult$StepUpExpired;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/wallet/DeleteAccountResult$StepUpExpired;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/wallet/DeleteAccountResult$StepUpFailed : org/siros/sdk/wallet/DeleteAccountResult {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/wallet/DeleteAccountResult$StepUpFailed;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/DeleteAccountResult$StepUpFailed;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/wallet/DeleteAccountResult$StepUpFailed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/wallet/DeleteAccountResult$StepUpRequired : org/siros/sdk/wallet/DeleteAccountResult {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/wallet/DeleteAccountResult$StepUpRequired;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/DeleteAccountResult$StepUpRequired;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/wallet/DeleteAccountResult$StepUpRequired;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/wallet/DeleteAccountResult$StepUpUnavailable : org/siros/sdk/wallet/DeleteAccountResult {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lorg/siros/sdk/wallet/DeleteAccountResult$StepUpUnavailable;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/DeleteAccountResult$StepUpUnavailable;Ljava/lang/String;ILjava/lang/Object;)Lorg/siros/sdk/wallet/DeleteAccountResult$StepUpUnavailable;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getMessage ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class org/siros/sdk/wallet/FileFetchCache : org/siros/sdk/credentials/FetchCache {
 	public static final field Companion Lorg/siros/sdk/wallet/FileFetchCache$Companion;
 	public static final field DEFAULT_FILE_NAME Ljava/lang/String;
@@ -430,6 +580,31 @@ public final class org/siros/sdk/wallet/KeyStorageTierUndeterminedException : or
 	public final fun getCredentialType ()Ljava/lang/String;
 	public final fun getIssuer ()Ljava/lang/String;
 	public final fun getReason ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/wallet/LocalWipeFailure {
+	public fun <init> (Ljava/lang/String;Ljava/lang/Throwable;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/Throwable;
+	public final fun copy (Ljava/lang/String;Ljava/lang/Throwable;)Lorg/siros/sdk/wallet/LocalWipeFailure;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/LocalWipeFailure;Ljava/lang/String;Ljava/lang/Throwable;ILjava/lang/Object;)Lorg/siros/sdk/wallet/LocalWipeFailure;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCause ()Ljava/lang/Throwable;
+	public final fun getStore ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class org/siros/sdk/wallet/LocalWipeReport {
+	public fun <init> (Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;)Lorg/siros/sdk/wallet/LocalWipeReport;
+	public static synthetic fun copy$default (Lorg/siros/sdk/wallet/LocalWipeReport;Ljava/util/List;ILjava/lang/Object;)Lorg/siros/sdk/wallet/LocalWipeReport;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getComplete ()Z
+	public final fun getFailures ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
 }
 
 public final class org/siros/sdk/wallet/MdocIssuerIdentity {
@@ -599,9 +774,9 @@ public final class org/siros/sdk/wallet/SirosWallet {
 	public final fun credentialStatus (Lorg/siros/sdk/credentials/StoredCredential;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun currentGlobalUserOverride ()Ljava/lang/String;
 	public final fun currentUserOverrides ()Ljava/util/Map;
-	public final fun deactivateWallet (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun deactivateWallet$default (Lorg/siros/sdk/wallet/SirosWallet;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-	public final fun deleteAccount ()V
+	public final fun deleteAccount ()Ljava/lang/Void;
+	public final fun deleteAccount (Ljava/lang/String;Lorg/siros/sdk/auth/StepUpAuthenticator;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun deleteAccount$default (Lorg/siros/sdk/wallet/SirosWallet;Ljava/lang/String;Lorg/siros/sdk/auth/StepUpAuthenticator;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun deleteCredential (JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun destroy ()V
 	public final fun eligibleInstances (Ljava/util/List;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -668,10 +843,6 @@ public final class org/siros/sdk/wallet/SirosWallet {
 	public final fun setTransactionDataEnabled (Z)V
 	public final fun setTransactionLogStore (Lorg/siros/sdk/wallet/TransactionLogStore;)V
 	public final fun setUserOverride (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
-	public final fun setWalletInstanceStatus (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public final fun setWalletInstanceStatus (Ljava/lang/String;Lorg/siros/sdk/auth/WalletInstanceStatus;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun setWalletInstanceStatus$default (Lorg/siros/sdk/wallet/SirosWallet;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-	public static synthetic fun setWalletInstanceStatus$default (Lorg/siros/sdk/wallet/SirosWallet;Ljava/lang/String;Lorg/siros/sdk/auth/WalletInstanceStatus;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun signMdocPresentationForProximity (JLjava/util/List;[BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun startIssuance (Ljava/lang/String;Lorg/siros/sdk/wallet/ZkIssuanceInput;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun startIssuance$default (Lorg/siros/sdk/wallet/SirosWallet;Ljava/lang/String;Lorg/siros/sdk/wallet/ZkIssuanceInput;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
@@ -1286,6 +1457,7 @@ public final class org/siros/sdk/wallet/WscdSelectionPolicy {
 	public static final field WILDCARD_ISSUER Ljava/lang/String;
 	public fun <init> (Lorg/siros/sdk/wallet/WscdTofuStore;Ljava/util/Map;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/wallet/WscdUserOverrideStore;)V
 	public synthetic fun <init> (Lorg/siros/sdk/wallet/WscdTofuStore;Ljava/util/Map;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/wallet/WscdUserOverrideStore;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun clearAll ()V
 	public final fun clearAllTofuMappings ()V
 	public final fun clearGlobalUserOverride ()V
 	public final fun clearTofuMapping (Ljava/lang/String;Ljava/lang/String;)V

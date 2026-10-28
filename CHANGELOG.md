@@ -1277,6 +1277,20 @@ this version.
   is step 1 of the EC TS12 rollout; the handling itself follows.
 
 ### Removed
+- **BREAKING:** `SirosWallet.deactivateWallet()`, `SirosWallet.setWalletInstanceStatus()`
+  (both overloads), `BackendApiClient.revokeAllWalletInstances()`,
+  `BackendApiClient.setWalletInstanceStatus()` (both overloads),
+  `DeactivationOutcome` and `ERROR_ERASURE_INCOMPLETE`. They called
+  `POST /user/session/instances/revoke-all` and
+  `PUT /user/session/instances/{id}/status`, which the backend no longer
+  serves. `listWalletInstances()` stays. The sample app's Devices screen is
+  now a read-only list.
+- **BREAKING:** the zero-argument, local-only `SirosWallet.deleteAccount()`. The
+  name now belongs to the server-side deletion below; to forget a cached
+  account without deleting it use `forgetAccount(accountId)` (unchanged, and
+  the same name as in the Swift SDK and the web wallet's `forgetCachedUser`).
+  A `DeprecationLevel.ERROR` stub of `deleteAccount()` stays for one release so
+  existing callers get a compile error that says what to call instead.
 - **BREAKING:** `WscdKeystoreAdapter.signVpToken(..., transactionData:
   List<TransactionDataItem>, ...)` and `TransactionDataItem`. The overload was
   never called and hashed a re-serialisation of the entry instead of the
@@ -1284,6 +1298,32 @@ this version.
   transaction: TransactionBinding)`.
 
 ### Added
+- **Account deletion (SID-AUTH-06, go-wallet-backend#352).**
+  `SirosWallet.deleteAccount(confirmation, stepUp)` authorises the deletion
+  with a fresh passkey assertion (`BackendApiClient.deleteAccountBegin()` then
+  `deleteAccount(challengeId, credential, confirm)`) and the typed
+  confirmation `DELETE`. It returns a `DeleteAccountResult` instead of
+  throwing for backend outcomes: `Deleted`, `CleanupPending`,
+  `OperatorRequired`, `RetryNeeded`, and typed refusals (`StepUpFailed`,
+  `StepUpExpired`, `ConfirmationRequired`, `NoPasskey`, ...). Only the first
+  three wipe the device (keystore and credentials, presentation records,
+  session, account registry, transaction log, caches, WSCD choices, local
+  passkeys, DC API registry, every `WalletConfig.availableKeystores` manager
+  and the AS session cookie, not only the default keystore and token cache);
+  a failing store does not stop the rest and is reported in
+  `LocalWipeReport`. `StepUpAuthenticator` lets an app supply the assertion;
+  by default the wallet's own passkey provider is used. Needs a backend with
+  go-wallet-backend#453.
+- `KeystoreManager.resetLocalKeys()` / `Signer.resetLocalKeys()`: erase a
+  signer's own in-process private key material (e.g. `UniFFISigner`'s
+  softkey plugin), used by account deletion's device wipe above. Never a
+  remote or hardware operation - a FIDO2 security key or an R2PS remote-HSM
+  key is untouched. Default: no-op.
+- `AuthServerClient.clearCookies()`: drop every stored session cookie
+  (including the persisted `siros_auth_cookies` copy) locally, with no
+  network call - `clearTokenCache()` alone never touched the cookie itself.
+- Sample app: a settings action for account deletion (typed `DELETE`, passkey
+  step-up, a message per outcome).
 - **`IDVException.ChipDataUnverified` (`chip_data_unverified`, `errorCode` `idv_chip_data_unverified`):** facetec-api now refuses to issue a credential whose identity claims would have come from OCR of the printed page rather than from the document's cryptographically verified, trusted chip (sirosfoundation/facetec-api#85). Distinct from `ChipUntrusted`, which means the chip was verified but its signer is not on the trust list, so another document may work; this means there was no verified chip identity at all — a chip format the backend does not parse, such as an ISO 18013 driving licence, or a chip whose signed MRZ could not be read — so the user needs a passport or a national identity card. Until now the code reached the app as a `ProviderError` (`FaceTecIDVProvider`) or a generic `VerificationFailed` carrying the raw body (`RemoteIDVClient`). Adding a subclass breaks exhaustive `when`s over `IDVException`. The sample app has a message for it in every language it ships.
 - **`IDVException.ChipPhotoMismatch` (`chip_photo_mismatch`, `errorCode`
   `idv_chip_photo_mismatch`):** facetec-api now refuses a scan whose face does

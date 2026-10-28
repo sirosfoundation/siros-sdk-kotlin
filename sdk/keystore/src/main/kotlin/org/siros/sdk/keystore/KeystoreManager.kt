@@ -366,6 +366,21 @@ interface KeystoreManager {
     /** Remove all stored credentials. */
     suspend fun clearCredentials()
 
+    /**
+     * Erase this keystore's own LOCAL private key material (not the stored
+     * credential records [clearCredentials] removes), for when the account
+     * that owns it is deleted. Never a remote or hardware operation: a key
+     * held by an external authenticator (FIDO2 security key) or a remote
+     * HSM (R2PS) cannot be, and is not, erased by this - only in-process
+     * software key material is, and only for a keystore backed by it.
+     *
+     * Default: no-op. [JweKeystore]'s own keys live inside the encrypted
+     * container [clearCredentials]/the keystore lock already handle; only
+     * [WscdKeystoreAdapter] (whose [Signer] can hold key material of its
+     * own, outside that container) overrides this.
+     */
+    suspend fun resetLocalKeys() {}
+
     // ── Presentation-history storage (PRF-encrypted alongside keys) ─
 
     /**
