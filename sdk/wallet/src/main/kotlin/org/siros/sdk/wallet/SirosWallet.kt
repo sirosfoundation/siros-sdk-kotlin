@@ -3590,8 +3590,8 @@ class SirosWallet private constructor(
             resolvedForStart?.metadata?.credentialConfigurationsSupported?.get(offer.credentialConfigurationId)?.let { cfg ->
                 if (!recordAuxiliarySelection(offer.credentialIssuerIdentifier, offer.credentialConfigurationId, cfg)) {
                     throw WalletException(
-                        "The issuer's auxiliary data advertisement for this credential is malformed; issuance is refused",
-                        errorCode = "auxiliary_data_advertisement_malformed",
+                        AUX_DATA_ADVERTISEMENT_MALFORMED_MESSAGE,
+                        errorCode = AUX_DATA_ADVERTISEMENT_MALFORMED_CODE,
                     )
                 }
             }
@@ -3789,8 +3789,8 @@ class SirosWallet private constructor(
             if (resolvedDisplay != null && !resolvedDisplay.record()) {
                 // The advertisement is malformed NOW: any earlier selection was cleared above, and the issuance is refused.
                 throw WalletException(
-                    "The issuer's auxiliary data advertisement for this credential is malformed; issuance is refused",
-                    errorCode = "auxiliary_data_advertisement_malformed",
+                    AUX_DATA_ADVERTISEMENT_MALFORMED_MESSAGE,
+                    errorCode = AUX_DATA_ADVERTISEMENT_MALFORMED_CODE,
                 )
             }
             if (displayOffer != null) {
@@ -7369,8 +7369,8 @@ class SirosWallet private constructor(
         // Recorded (and a malformed advertisement refused) BEFORE any context is published or the resume is sent.
         if (resolved != null && !resolved.record()) {
             throw WalletException(
-                "The issuer's auxiliary data advertisement for this credential is malformed; issuance is refused",
-                errorCode = "auxiliary_data_advertisement_malformed",
+                AUX_DATA_ADVERTISEMENT_MALFORMED_MESSAGE,
+                errorCode = AUX_DATA_ADVERTISEMENT_MALFORMED_CODE,
             )
         }
         if (offer == null) {
@@ -8379,6 +8379,12 @@ class SirosWallet private constructor(
             } else {
                 engine.sendSignResponse(msg.flowId, vpToken = presented.joinToString("\n") { it.second }, messageId = msg.messageId)
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Same reasoning as handleCircuitZkEngineSignPresentation's own CancellationException catch: a
+            // replacement/teardown cancelling THIS connection's connectionScope mid-signing is not a sign failure,
+            // and must not run reportSignFailure's unconditional cleanup against a possibly-replaced session
+            // (go-wallet-backend#502 follow-up, issue #345, round 4).
+            throw e
         } catch (e: TransactionDataError) {
             // Only the reason code is logged or shown: the message may hold URLs, credential ids or payload text.
             Timber.w("Refused transaction_data (${e.reason.code}) for flow ${msg.flowId}")
@@ -9036,6 +9042,14 @@ class SirosWallet private constructor(
                             engine.sendSignResponse(flowId = msg.flowId, messageId = msg.messageId)
                         }
                     }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // A replacement/teardown cancelling THIS connection's own connectionScope mid-signing is not a
+                    // sign failure - CancellationException is an Exception subclass, so it would otherwise be caught
+                    // by the generic catch below and run reportSignFailure's unconditional cleanup (clearFlowMatchState,
+                    // resetIssuanceGuards, a wallet-wide WalletState.Ready reset), potentially stomping a REPLACEMENT
+                    // session that has since claimed this same flow id (go-wallet-backend#502 follow-up, issue #345,
+                    // round 4). Caught first and rethrown so normal coroutine cancellation semantics apply instead.
+                    throw e
                 } catch (e: TransactionDataError) {
                     // The legacy protocol has no sign-refusal message: the
                     // engine learns of this when its sign request times out.
@@ -9154,7 +9168,13 @@ class SirosWallet private constructor(
                         val trustResultForFlow = lastTrustResults[msg.flowId]
                         // The wait is registered like the progress route's, so a lost connection stops THIS wait (and only it: the
                         // shared match collector keeps serving new flows) and the answer is not sent to a session that does not know it.
-                        val selection = scope.async {
+                        // Launched into THIS connection's own connectionScope (not the wallet-wide scope): a `scope.async` here
+                        // would not be a structural child of the collector coroutine that cancelling connectionScope cancels, so
+                        // cancelling the COLLECTOR (via connectionScope's teardown) would make its own `.await()` below throw but
+                        // leave this listener invocation itself still running, untracked (the finally block below removes its
+                        // registry entry without ever cancelling it) - an orphaned, never-dismissed consent prompt
+                        // (go-wallet-backend#502 follow-up, issue #345, round 4).
+                        val selection = thisConnectionScope.async {
                             listener.onCredentialSelectionRequired(
                                 PresentationRequest(
                                     verifierName = trustResultForFlow?.entityName,
@@ -11711,6 +11731,11 @@ class SirosWallet private constructor(
 
         /** Shown when a sign request fails without a message. */
         private const val SIGNING_FAILED_MESSAGE = "Signing failed"
+
+        /** Thrown (with [AUX_DATA_ADVERTISEMENT_MALFORMED_CODE]) wherever a malformed auxiliary-data advertisement refuses issuance. */
+        private const val AUX_DATA_ADVERTISEMENT_MALFORMED_MESSAGE =
+            "The issuer's auxiliary data advertisement for this credential is malformed; issuance is refused"
+        private const val AUX_DATA_ADVERTISEMENT_MALFORMED_CODE = "auxiliary_data_advertisement_malformed"
 
         /** Largest registry answer accepted on the `transaction_data` path. */
         private const val TRANSACTION_METADATA_MAX_BYTES = 256L * 1024
