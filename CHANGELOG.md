@@ -1299,10 +1299,20 @@ this version.
   `StepUpExpired`, `ConfirmationRequired`, `NoPasskey`, ...). Only the first
   three wipe the device (keystore and credentials, presentation records,
   session, account registry, transaction log, caches, WSCD choices, local
-  passkeys, DC API registry); a failing store does not stop the rest and is
-  reported in `LocalWipeReport`. `StepUpAuthenticator` lets an app supply the
-  assertion; by default the wallet's own passkey provider is used. Needs a
-  backend with go-wallet-backend#453.
+  passkeys, DC API registry, every `WalletConfig.availableKeystores` manager
+  and the AS session cookie, not only the default keystore and token cache);
+  a failing store does not stop the rest and is reported in
+  `LocalWipeReport`. `StepUpAuthenticator` lets an app supply the assertion;
+  by default the wallet's own passkey provider is used. Needs a backend with
+  go-wallet-backend#453.
+- `KeystoreManager.resetLocalKeys()` / `Signer.resetLocalKeys()`: erase a
+  signer's own in-process private key material (e.g. `UniFFISigner`'s
+  softkey plugin), used by account deletion's device wipe above. Never a
+  remote or hardware operation - a FIDO2 security key or an R2PS remote-HSM
+  key is untouched. Default: no-op.
+- `AuthServerClient.clearCookies()`: drop every stored session cookie
+  (including the persisted `siros_auth_cookies` copy) locally, with no
+  network call - `clearTokenCache()` alone never touched the cookie itself.
 - Sample app: a settings action for account deletion (typed `DELETE`, passkey
   step-up, a message per outcome).
 - **`IDVException.ChipDataUnverified` (`chip_data_unverified`, `errorCode` `idv_chip_data_unverified`):** facetec-api now refuses to issue a credential whose identity claims would have come from OCR of the printed page rather than from the document's cryptographically verified, trusted chip (sirosfoundation/facetec-api#85). Distinct from `ChipUntrusted`, which means the chip was verified but its signer is not on the trust list, so another document may work; this means there was no verified chip identity at all — a chip format the backend does not parse, such as an ISO 18013 driving licence, or a chip whose signed MRZ could not be read — so the user needs a passport or a national identity card. Until now the code reached the app as a `ProviderError` (`FaceTecIDVProvider`) or a generic `VerificationFailed` carrying the raw body (`RemoteIDVClient`). Adding a subclass breaks exhaustive `when`s over `IDVException`. The sample app has a message for it in every language it ships.

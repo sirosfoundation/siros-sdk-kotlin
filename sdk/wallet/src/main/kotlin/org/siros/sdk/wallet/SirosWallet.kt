@@ -377,6 +377,7 @@ class SirosWallet private constructor(
                 prefs.edit().apply { if (value == null) remove(TRANSACTION_LOG_KEY) else putString(TRANSACTION_LOG_KEY, value) }.commit()
             },
             keepCorrupt = { prefs.edit().putString(TRANSACTION_LOG_KEY + "_corrupt", it).commit() },
+            clearCorrupt = { prefs.edit().remove(TRANSACTION_LOG_KEY + "_corrupt").commit() },
         )
     }
 
@@ -663,11 +664,61 @@ class SirosWallet private constructor(
             // Contents first, while the keystore is still unlocked.
             LocalWipeStep("keystore.credentials") { if (keystore.isUnlocked) keystore.clearCredentials() },
             LocalWipeStep("keystore.presentationRecords") { if (keystore.isUnlocked) keystore.clearPresentationRecords() },
+            // A WscdKeystoreAdapter's Signer can hold private key material
+            // of its own (e.g. the softkey plugin, in Rust-process memory)
+            // outside anything clearCredentials()/lock() touches - without
+            // this, clearing and locking the default keystore left those
+            // keys behind while the report claimed a complete wipe. Never
+            // touches a fido2/r2ps-backed key; see resetLocalKeys()'s doc
+            // comment.
+            LocalWipeStep("keystore.localKeys") { if (keystore.isUnlocked) keystore.resetLocalKeys() },
             LocalWipeStep("credentialStore") { credentialStore.clear() },
             // Drops the engine, tokens and the in-memory key material (keys, WSCD state, PRF-derived main key).
             LocalWipeStep("session") { endSessionLocallyAwaited() },
             LocalWipeStep("authServerTokenCache") { authServerClient.clearTokenCache() },
+            LocalWipeStep("authServerCookies") { authServerClient.clearCookies() },
             LocalWipeStep("keystore") { keystore.lock() },
+            // Every OTHER configured manager: unlockAvailableKeystores()
+            // unlocks all of config.availableKeystores, so they can hold
+            // decrypted credentials and PRF-derived keys just like the
+            // default [keystore] - wiping only the default left them behind
+            // while the report claimed a complete wipe. Every manager is
+            // still attempted even if an earlier one fails.
+            LocalWipeStep("availableKeystores") {
+                val seen = mutableSetOf(keystore)
+                val failures = mutableListOf<Pair<String, Exception>>()
+                config.availableKeystores?.forEach { (id, manager) ->
+                    if (seen.add(manager)) {
+                        try {
+                            if (manager.isUnlocked) manager.clearCredentials()
+                        } catch (e: Exception) {
+                            failures += "$id.credentials" to e
+                        }
+                        try {
+                            if (manager.isUnlocked) manager.clearPresentationRecords()
+                        } catch (e: Exception) {
+                            failures += "$id.presentationRecords" to e
+                        }
+                        try {
+                            if (manager.isUnlocked) manager.resetLocalKeys()
+                        } catch (e: Exception) {
+                            failures += "$id.localKeys" to e
+                        }
+                        try {
+                            manager.lock()
+                        } catch (e: Exception) {
+                            failures += "$id.lock" to e
+                        }
+                    }
+                }
+                if (failures.isNotEmpty()) {
+                    throw IllegalStateException(
+                        "Failed to wipe ${failures.size} availableKeystores operation(s): " +
+                            failures.joinToString { it.first },
+                        failures.first().second,
+                    )
+                }
+            },
             LocalWipeStep("sessionStore") { sessionStore.clearAll() },
             LocalWipeStep("accountRegistry") {
                 accountRegistry.clear()
@@ -683,7 +734,12 @@ class SirosWallet private constructor(
             LocalWipeStep("presentationHistory") { _presentationHistory.clear() },
         )
         val report = runLocalWipe(steps)
-        _state.value = disconnectedState()
+        // Not disconnectedState(): that re-reads accountRegistry, which this
+        // wipe just cleared (and may have failed to, above) - an unreadable
+        // store there would throw OUTSIDE runLocalWipe's own per-step
+        // handling, losing the whole AccountGone result (and this report)
+        // for a store that is, deliberately, now empty either way.
+        _state.value = WalletState.Disconnected()
         Timber.i("Account deleted; local state wiped (${report.failures.size} failure(s))")
         report
     }

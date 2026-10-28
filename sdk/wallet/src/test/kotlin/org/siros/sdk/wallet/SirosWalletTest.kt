@@ -12790,6 +12790,11 @@ class SirosWalletTest {
             "authTokens" to f.authTokens,
             "_presentationHistory" to mutableListOf<org.siros.sdk.credentials.PresentationRecord>(),
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            // allocateInstance bypasses the constructor, so a wipe step that
+            // reads config.availableKeystores (there is none here) would
+            // otherwise NPE on a null config - config was never read by any
+            // wipe step before that one.
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
         )
     }
 
@@ -12822,6 +12827,10 @@ class SirosWalletTest {
                 assertTrue((result as DeleteAccountResult.AccountGone).localWipe.complete)
                 coVerify(exactly = 1) { f.keystore.clearCredentials() }
                 coVerify(exactly = 1) { f.keystore.clearPresentationRecords() }
+                // The default keystore's own Signer (e.g. a WscdKeystoreAdapter's
+                // softkey plugin) can hold private key material clearCredentials()
+                // and lock() alone never touch - see resetLocalKeys()'s doc comment.
+                coVerify(exactly = 1) { f.keystore.resetLocalKeys() }
                 coVerify(exactly = 1) { f.credentialStore.clear() }
                 verify(atLeast = 1) { f.keystore.lock() }
                 verify(exactly = 1) { f.sessionStore.clearAll() }
@@ -12830,6 +12839,9 @@ class SirosWalletTest {
                 verify(exactly = 1) { f.wscdPolicy.clearAll() }
                 coVerify(exactly = 1) { f.metadataCache.clear() }
                 coVerify(exactly = 1) { org.siros.sdk.wallet.dcapi.SirosCredentialRegistry.clear(any()) }
+                // clearTokenCache() alone leaves the AS session cookie itself
+                // live, in memory and on disk - see clearCookies()'s doc comment.
+                verify(exactly = 1) { f.authServerClient.clearCookies() }
                 assertEquals(WalletState.Disconnected(), f.stateFlow.value)
             }
         }
@@ -12883,6 +12895,65 @@ class SirosWalletTest {
             verify(exactly = 1) { f.wscdPolicy.clearAll() }
             coVerify(exactly = 1) { f.metadataCache.clear() }
             coVerify(exactly = 1) { org.siros.sdk.wallet.dcapi.SirosCredentialRegistry.clear(any()) }
+        }
+    }
+
+    @Test
+    fun deleteAccount_wipes_every_configured_keystore_not_only_the_default() = runTest(dispatcher) {
+        // unlockAvailableKeystores() unlocks every manager in
+        // config.availableKeystores, not just the default keystore - a wipe
+        // that only cleared/locked/reset the default left any OTHER
+        // configured manager's decrypted credentials and keys behind. One
+        // manager's failure must not stop the other, or the default, from
+        // still being attempted.
+        val f = DeleteFixture()
+        f.respond(DeleteAccountOutcome.Deleted)
+        val fido2 = mockk<KeystoreManager>(relaxed = true)
+        every { fido2.isUnlocked } returns true
+        coEvery { fido2.clearPresentationRecords() } throws IllegalStateException("fido2 locked out")
+        val r2ps = mockk<KeystoreManager>(relaxed = true)
+        every { r2ps.isUnlocked } returns true
+        val wallet = newWallet(
+            "_state" to f.stateFlow,
+            "activity" to mockk<android.app.Activity>(relaxed = true).also {
+                every { it.applicationContext } returns it
+                every { it.noBackupFilesDir } returns java.nio.file.Files.createTempDirectory("siros-wipe").toFile()
+            },
+            "apiClient" to f.apiClient,
+            "authProvider" to f.authProvider,
+            "keystore" to f.keystore,
+            "credentialStore" to f.credentialStore,
+            "sessionStore" to f.sessionStore,
+            "accountRegistry" to f.accountRegistry,
+            "customTransactionLogStore" to f.transactionLog,
+            "trustDecisionCache" to TrustDecisionCache(java.time.Duration.ZERO),
+            "wscdSelectionPolicy" to f.wscdPolicy,
+            "displayMetadataCache" to f.metadataCache,
+            "authServerClient" to f.authServerClient,
+            "authTokens" to f.authTokens,
+            "_presentationHistory" to mutableListOf<org.siros.sdk.credentials.PresentationRecord>(),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                availableKeystores = mapOf("fido2" to fido2, "r2ps" to r2ps),
+            ),
+        )
+
+        withRegistryMocked {
+            val result = wallet.deleteAccount("DELETE") as DeleteAccountResult.Deleted
+            advanceUntilIdle()
+
+            assertEquals(listOf("availableKeystores"), result.localWipe.failures.map { it.store })
+            assertFalse(result.localWipe.complete)
+            coVerify(exactly = 1) { fido2.clearCredentials() }
+            coVerify(exactly = 1) { fido2.clearPresentationRecords() }
+            coVerify(exactly = 1) { fido2.resetLocalKeys() }
+            verify(exactly = 1) { fido2.lock() }
+            // r2ps is still fully wiped despite fido2's failure.
+            coVerify(exactly = 1) { r2ps.clearCredentials() }
+            coVerify(exactly = 1) { r2ps.clearPresentationRecords() }
+            coVerify(exactly = 1) { r2ps.resetLocalKeys() }
+            verify(exactly = 1) { r2ps.lock() }
         }
     }
 
