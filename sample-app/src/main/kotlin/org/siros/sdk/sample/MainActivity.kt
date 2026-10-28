@@ -152,6 +152,9 @@ class MainActivity : ComponentActivity() {
                     viewModel = viewModel(factory = vmFactory)
                     LaunchedEffect(Unit) {
                         dispatchIncomingUri(intent?.data)
+                        // The launching intent is handled once: an activity re-created later (a configuration change, a return from the
+                        // browser) would otherwise deliver the same deep link again from getIntent().
+                        setIntent(android.content.Intent(intent).apply { data = null })
                         pendingWscaIntent?.let {
                             dispatchWscaTestAction(it)
                             pendingWscaIntent = null
@@ -244,6 +247,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
     val pendingPinEntry by viewModel.pendingPinEntry.collectAsState()
     val pendingTransportChoice by viewModel.pendingTransportChoice.collectAsState()
     val fido2AwaitingPresentation by viewModel.fido2AwaitingPresentation.collectAsState()
+    val fido2EnrolmentDiscovering by viewModel.fido2EnrolmentDiscovering.collectAsState()
     val fido2TransportMode by viewModel.fido2TransportMode.collectAsState()
     val pendingAutoEnrollOffer by viewModel.pendingAutoEnrollOffer.collectAsState()
     val presentationHistory by viewModel.presentationHistory.collectAsState()
@@ -333,6 +337,16 @@ fun WalletScreen(viewModel: WalletViewModel) {
     if (fido2AwaitingPresentation) {
         Fido2PresentKeyGuide(
             mode = fido2TransportMode,
+            onCancel = viewModel::cancelWscdLifecycleOp,
+        )
+    }
+
+    // Enrolment's first tap: the SDK is describing the key, before any PIN dialog (or, for a key without a PIN, before the
+    // ceremony itself) takes over - see WalletViewModel.fido2EnrolmentDiscovering's doc comment.
+    if (fido2EnrolmentDiscovering) {
+        Fido2PresentKeyGuide(
+            mode = fido2TransportMode,
+            discovering = true,
             onCancel = viewModel::cancelWscdLifecycleOp,
         )
     }

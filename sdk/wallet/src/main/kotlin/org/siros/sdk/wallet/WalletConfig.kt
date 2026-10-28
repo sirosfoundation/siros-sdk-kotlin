@@ -425,14 +425,6 @@ data class WalletConfig(
     /** The circuits the wallet can prove with, from the circuit catalog. */
     val circuitZkCircuits: CircuitZkCircuitSource? = null,
     /**
-     * The namespace whose delivered seed the credential type designates: in the response-level
-     * `credential_metadata` member `org.siros.secret_seed` ([org.siros.sdk.credentials.SecretSeedDelivery.MEMBER]) the
-     * issuer maps namespaces to seeds, and the seed of this one must be 16 bytes of lowercase hex that open the
-     * credential's `ssc`, in an encrypted response; otherwise the issuance fails. Seeds of other namespaces are stored
-     * as received. Must not be blank.
-     */
-    val secretSeedNamespace: String = org.siros.sdk.credentials.SecretSeedDelivery.DEFAULT_NAMESPACE,
-    /**
      * How long a successful remote trust decision (`POST /v1/evaluate`, allow
      * or deny) is reused for the identical request: same action, subject,
      * certificate chain / key material and context. Errors, timeouts and
@@ -457,14 +449,37 @@ data class WalletConfig(
      * `[a-z0-9_-]`; anything else is refused when the configuration is built. Empty (the default) sends nothing.
      */
     val wscdPluginClaims: Map<String, String> = emptyMap(),
+    /**
+     * Which zero-knowledge proof system answers a `circuit_zk` request that OFFERS several (the verifier's `system_id_values` and
+     * `proof_system_values`): an ordered ALLOW-list of circuit ids / aliases (`urn:circuits:vega:nym_auth:v1`,
+     * `urn:circuits:longfellow:nym_auth:v1`) or proof systems (`vega-v1`, `longfellow-libzk-v1`). Empty (the default) is no preference:
+     * the first offered circuit in catalog order, as before. A non-empty list narrows the choice to the systems it names, tried in its
+     * order: a system that is not listed is never chosen, and when the verifier offered none of the listed ones the request is
+     * refused like any request nothing offered can answer. It never reaches outside what the verifier offered. Blank, repeated or
+     * unknown entries are refused when the configuration is built.
+     */
+    val zkProofSystemPreference: List<String> = emptyList(),
+    /**
+     * The credential catalog (TS11 registry) as the BASELINE for the key-storage tier a credential type requires at issuance. With
+     * one set, the tier is the catalog's for the type, raised (never lowered) by the issuer's own `attestation_los`, and issuance is
+     * refused when the tier cannot be determined (type not listed, catalog unavailable, unknown tier): there is no fallback to a weaker
+     * keystore, and no onboarded plugin that meets the tier is the same refusal as before ([NoOnboardedWscdException],
+     * [NoEligibleWscdPluginException]). A user override can only choose among plugins that meet the resulting tier. Null (the default)
+     * keeps the previous behaviour: only the issuer's own metadata gives a tier. Needs [availableKeystores]: the tier is met by one of
+     * the registered keystores or not at all.
+     */
+    val credentialTierCatalog: org.siros.sdk.credentials.CredentialTierCatalog? = null,
 ) {
     init {
         wscdPluginClaims.forEach { (keystoreId, claim) ->
             require(availableKeystores?.containsKey(keystoreId) == true) { "wscdPluginClaims names a keystore that is not registered in availableKeystores" }
             require(Regex("[a-z0-9_-]{1,64}").matches(claim)) { "a wscdPluginClaims value must be 1-64 characters of [a-z0-9_-]" }
         }
-        require(secretSeedNamespace.isNotBlank()) { "secretSeedNamespace must not be blank" }
         VerifierIdTypeOrder.require(circuitZkVerifierIdTypes)
+        org.siros.sdk.credentials.ZkProofSystemPreference.require(zkProofSystemPreference)
+        require(credentialTierCatalog == null || !availableKeystores.isNullOrEmpty()) {
+            "credentialTierCatalog needs availableKeystores: the tier is met by one of the registered keystores"
+        }
     }
 
     /**

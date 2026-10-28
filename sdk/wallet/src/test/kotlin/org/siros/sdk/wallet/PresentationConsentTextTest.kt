@@ -259,4 +259,24 @@ class PresentationConsentTextTest {
             }
         }
     }
+
+    @Test
+    fun renderItems_producesTheSameLinesAsRender_withoutAFullRequest() {
+        // This is what the engine/WMP presentation transport's own consent screen calls - it has the plan's ConsentItems
+        // (from ConsentItems.build) but not circuit_zk's verifier-id machinery, so it never builds a full PresentationConsentRequest.
+        for (dir in locales.keys) {
+            val t = textFor(dir)
+            val items = listOf(ssc, age(AgeForm.AtLeast(21), "le" to "2005-01-01"))
+            val viaRequest = t.render(request(*items.toTypedArray())).entries.single().lines
+            val viaRenderItems = t.renderItems(items, "Example RP")
+            assertEquals(dir, viaRequest, viaRenderItems)
+            assertTrue("$dir: still names the pseudonym, not a blanket \"nothing shared\"", viaRenderItems.any { it.contains("Example RP") || it.isNotBlank() })
+        }
+        // A single legacy pseudonym item too.
+        val legacy = listOf(ConsentItem.LegacyPseudonym(null))
+        assertEquals(
+            textFor("values").render(request(*legacy.toTypedArray())).entries.single().lines,
+            textFor("values").renderItems(legacy, "Example RP"),
+        )
+    }
 }

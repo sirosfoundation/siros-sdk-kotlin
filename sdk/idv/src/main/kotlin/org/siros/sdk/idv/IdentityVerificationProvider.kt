@@ -50,11 +50,10 @@ sealed class IDVException(
      * (sirosfoundation/facetec-api#65). [reason] is the backend's `nfc_*` code and
      * [errorCode] is `idv_<reason>`.
      *
-     * Through [RemoteIDVClient] (facetec-api's `/v1/id-scan`) the reason is always
-     * `nfc_skipped`: that path only learns whether the chip was verified, not why it
-     * was not. facetec-api's `/process-request` flow distinguishes
-     * `nfc_not_requested`, `nfc_device_not_capable`, `nfc_chip_read_failed`
-     * and `nfc_not_authenticated` as well, and any `nfc_*` code a backend sends maps here.
+     * facetec-api's `/process-request` flow, which [org.siros.sdk.idv.facetec.FaceTecIDVProvider]
+     * speaks, distinguishes `nfc_not_requested`, `nfc_device_not_capable`,
+     * `nfc_chip_read_failed`, `nfc_not_authenticated` and `nfc_skipped`. Any `nfc_*` code a
+     * backend reached through [RemoteIDVClient] sends maps here too.
      */
     class DocumentChipNotVerified(val reason: String, message: String) : IDVException(message, errorCode = "idv_$reason")
 
@@ -76,14 +75,39 @@ sealed class IDVException(
     class DocumentExpired(message: String) : IDVException(message, errorCode = "idv_document_expired")
 
     /**
+     * The backend refused because the face did not match the photo stored on the document's chip
+     * (facetec-api's `chip_photo_mismatch`, from FaceTec's `matchLevelNFCToFaceMap`), or could
+     * not be compared with it. Matching the photo printed on the document is not enough: only the
+     * chip photo ties the chip, and so the identity, to the person scanned. [errorCode] is
+     * `idv_chip_photo_mismatch`.
+     */
+    class ChipPhotoMismatch(message: String) : IDVException(message, errorCode = "idv_chip_photo_mismatch")
+
+    /**
+     * The backend refused to issue because there was no cryptographically verified chip
+     * identity to issue from (facetec-api's `chip_data_unverified`,
+     * sirosfoundation/facetec-api#85). Only data the document's chip signed, under a signer the
+     * backend trusts, may become a credential claim; data read by OCR from the printed page is
+     * trivially forgeable.
+     *
+     * Distinct from [ChipUntrusted], which means the chip was read and verified but its signer
+     * is not on the trust list, so another document may work. This means there was no verified
+     * chip identity at all -- a chip format the backend does not parse, such as an ISO 18013
+     * driving licence, or a chip whose signed MRZ could not be read -- so the user needs a
+     * document whose chip the backend supports, typically a passport or a national identity
+     * card. [errorCode] is `idv_chip_data_unverified`.
+     */
+    class ChipDataUnverified(message: String) : IDVException(message, errorCode = "idv_chip_data_unverified")
+
+    /**
      * The backend no longer holds the liveness step this request relies on (`session_expired`):
      * it expired, or was already used. A liveness step is single-use, so it is never retried;
      * start a new verification from the face scan. [errorCode] is `idv_session_expired`.
      *
-     * Through [RemoteIDVClient] this is the answer to a `/v1/id-scan` for a `livenessSessionId`
-     * that is older than the backend's liveness TTL or was already submitted. facetec-api's
-     * `/process-request` flow does not send it: there an expired or missing liveness proof is
-     * reported as `liveness_failed` ([LivenessFailed]).
+     * Through [RemoteIDVClient] this is the answer to a document submission for a
+     * `livenessSessionId` that is older than the backend's liveness TTL or was already
+     * submitted. facetec-api's `/process-request` flow does not send it: there an expired or
+     * missing liveness proof is reported as `liveness_failed` ([LivenessFailed]).
      */
     class SessionExpired(message: String) : IDVException(message, errorCode = "idv_session_expired")
 

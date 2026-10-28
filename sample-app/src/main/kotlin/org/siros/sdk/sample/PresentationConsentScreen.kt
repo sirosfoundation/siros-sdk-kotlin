@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -29,6 +31,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -43,13 +46,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.siros.sdk.credentials.ClaimMeta
+import androidx.compose.ui.platform.LocalContext
+import org.siros.sdk.credentials.ConsentItems
 import org.siros.sdk.credentials.CredentialConsumptionPolicy
 import org.siros.sdk.credentials.CredentialMatcher
 import org.siros.sdk.credentials.CredentialUtils
+import org.siros.sdk.credentials.PredicateFunctions
 import org.siros.sdk.credentials.PresentationRecord
+import org.siros.sdk.wallet.PresentationConsentText
 import org.siros.sdk.wallet.PresentationRequest
 
 /**
@@ -79,21 +87,68 @@ fun PresentationConsentScreen(
     availableKeyIds: Set<String> = emptySet(),
     modifier: Modifier = Modifier,
 ) {
+    // credential_sets options within the same required set are alternatives
+    // (OID4VP 1.0 §6.2's "your choice" semantics), never an implicit union -
+    // a set with more than one individually-satisfiable option needs the
+    // user to pick exactly one before anything from it is shown or sent.
+    // See PresentationRequest.exclusiveChoiceGroups's doc comment for the
+    // live bug (gdc e2e, nym_auth) this closes: a 5-option single-credential
+    // alternative set let the user select claims from 3 matching PID
+    // variants at once and send all three in one presentation.
+    val exclusiveGroups = remember(request.satisfiableOptions) { request.exclusiveChoiceGroups }
+    // credentialSetIndex -> the chosen option's optionIndex. Deliberately
+    // not pre-populated: PresentationRequest.activeConsentMatchResults
+    // excludes every option of a group absent here, so nothing from an
+    // ambiguous group counts until the user actually resolves it.
+    val chosenOptionIndex = remember { mutableStateMapOf<Int, Int>() }
+    // Not wrapped in `remember`: it must reflect every chosenOptionIndex
+    // write immediately, and a `remember` keyed on anything but the
+    // (mutable, unkeyable) map itself would risk serving a stale,
+    // pre-choice value - silently reopening the union bug this exists to
+    // close.
+    val activeResults = request.activeConsentMatchResults(chosenOptionIndex)
+    val activeQueryIds = activeResults.map { it.queryId }.toSet()
+
     // A query is unsatisfiable if every candidate that matched it has
     // already been used up under the active consumption policy, or has no
     // usable signing key left (see CredentialUtils.eligibleInstances) - the
     // SDK itself refuses to sign with an exhausted/keyless instance
     // regardless (defense in depth), but the user shouldn't be let all the
-    // way to "Share" only to have it silently fail.
+    // way to "Share" only to have it silently fail. Scoped to the active
+    // (chosen) queries: an alternative the user didn't pick exhausting its
+    // own copies must not block Share for the credential actually offered.
     val eligibleByQuery = remember(request, presentationHistory, consumptionPolicy, availableKeyIds) {
         CredentialUtils.eligibleInstancesByQuery(request.matchResults, consumptionPolicy, presentationHistory, availableKeyIds)
     }
-    val exhaustedQueryIds = remember(eligibleByQuery) {
-        eligibleByQuery.filter { (mr, eligible) -> mr.candidates.isNotEmpty() && eligible.isEmpty() }.map { it.first.queryId }.toSet()
-    }
-    // preview + per-credential + summary; a request that discloses nothing (zkp_req: a proof, no claims) is the preview alone
-    val totalSteps = request.consentStepCount
+    // Unscoped: PreviewStep is a plain overview of everything matched, shown
+    // before any exclusive-choice-group is resolved, so it must not hide an
+    // exhausted alternative just because nothing has excluded it yet.
+    val previewExhaustedQueryIds = eligibleByQuery.filter { (mr, eligible) ->
+        mr.candidates.isNotEmpty() && eligible.isEmpty()
+    }.map { it.first.queryId }.toSet()
+    // Scoped to the active (chosen) queries: gates Next/Share, so an
+    // alternative the user didn't pick exhausting its own copies must not
+    // block sharing the credential actually offered.
+    val exhaustedQueryIds = previewExhaustedQueryIds.filter { it in activeQueryIds }.toSet()
+
+    // preview + one "choose one" step per ambiguous credential_sets entry +
+    // (unless disclosesNoClaims) one claim-selection step per active query
+    // and a final summary. Degenerates to request.consentStepCount when
+    // there's no ambiguity (exclusiveGroups empty => activeResults ==
+    // consentMatchResults).
+    val totalSteps = 1 + exclusiveGroups.size +
+        if (request.disclosesNoClaims) 0 else activeResults.size + 1
     var currentStep by remember { mutableStateOf(0) }
+    // Whether currentStep is one of the "choose one" steps, and whether
+    // that step's group has been resolved - gates the Next/Share button so
+    // the user can never advance (or share) past an ambiguous credential_sets
+    // entry without picking an option. Since navigation is forward-only and
+    // every choice step blocks on this, activeResults is stable - every
+    // group resolved - by the time a claim-selection or summary step renders.
+    val choiceStepIndex = currentStep - 1
+    val onChoiceStep = choiceStepIndex in exclusiveGroups.indices
+    val currentGroupChosen = !onChoiceStep ||
+        chosenOptionIndex[exclusiveGroups[choiceStepIndex].credentialSetIndex] != null
 
     // Track per-credential claim disclosure selections
     // Key: "queryId:claimPath", Value: disclosed (true/false)
@@ -146,9 +201,20 @@ fun PresentationConsentScreen(
             // Content area
             Box(modifier = Modifier.weight(1f)) {
                 when {
-                    currentStep == 0 -> PreviewStep(request, exhaustedQueryIds, presentationHistory, availableKeyIds)
-                    currentStep <= request.matchResults.size -> {
-                        val matchResult = request.matchResults[currentStep - 1]
+                    currentStep == 0 -> PreviewStep(request, previewExhaustedQueryIds, presentationHistory, availableKeyIds)
+                    onChoiceStep -> {
+                        val group = exclusiveGroups[choiceStepIndex]
+                        ChooseCredentialOptionStep(
+                            group = group,
+                            matchResultsById = request.matchResults.associateBy { it.queryId },
+                            chosen = chosenOptionIndex[group.credentialSetIndex],
+                            onChoose = { optionIndex -> chosenOptionIndex[group.credentialSetIndex] = optionIndex },
+                            presentationHistory = presentationHistory,
+                            availableKeyIds = availableKeyIds,
+                        )
+                    }
+                    !request.disclosesNoClaims && currentStep <= exclusiveGroups.size + activeResults.size -> {
+                        val matchResult = activeResults[currentStep - 1 - exclusiveGroups.size]
                         ClaimSelectionStep(
                             matchResult = matchResult,
                             claimSelections = claimSelections,
@@ -156,7 +222,7 @@ fun PresentationConsentScreen(
                             availableKeyIds = availableKeyIds,
                         )
                     }
-                    else -> SummaryStep(request, claimSelections, presentationHistory, availableKeyIds)
+                    else -> SummaryStep(activeResults, request, claimSelections, presentationHistory, availableKeyIds)
                 }
             }
 
@@ -190,6 +256,7 @@ fun PresentationConsentScreen(
                 if (currentStep < totalSteps - 1) {
                     Button(
                         onClick = { currentStep++ },
+                        enabled = currentGroupChosen,
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(12.dp),
                     ) {
@@ -198,9 +265,15 @@ fun PresentationConsentScreen(
                 } else {
                     Button(
                         onClick = {
-                            onAccept(eligibleByQuery.flatMap { it.second }.map { it.id }.distinct())
+                            onAccept(
+                                eligibleByQuery
+                                    .filter { (mr, _) -> mr.queryId in activeQueryIds }
+                                    .flatMap { it.second }
+                                    .map { it.id }
+                                    .distinct(),
+                            )
                         },
-                        enabled = exhaustedQueryIds.isEmpty(),
+                        enabled = exhaustedQueryIds.isEmpty() && currentGroupChosen,
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(12.dp),
                     ) {
@@ -239,6 +312,24 @@ private fun StepBar(currentStep: Int, totalSteps: Int) {
 }
 
 // ── Step 1: Preview ─────────────────────────────────────────────────
+
+/**
+ * What a `disclosesNoClaims` (circuit_zk / zkp_req) match actually shares, in the SDK's own approved wording - the same
+ * sentences the DC API consent dialog shows ([PresentationConsentText]), built from the plan alone: this transport resolves
+ * a credential before circuit_zk's verifier-id machinery runs, so [ConsentItems.build] is given a placeholder id (unused for
+ * display - only [verifierName] appears in the pseudonym sentence) rather than a real one. Every function of a
+ * `disclosesNoClaims` plan is a pseudonym or an age_check (see [PresentationRequest.disclosesNoClaims]'s doc comment), both
+ * of which [ConsentItems] models; a plan it cannot describe (an unmodelled pseudonym config) yields no line rather than a
+ * guessed or blanket one.
+ */
+@Composable
+private fun zkSummaryLines(result: CredentialMatcher.MatchResult, verifierName: String): List<String> {
+    val context = LocalContext.current
+    val items = result.circuitZkPlan?.let { p ->
+        ConsentItems.build(p, verifierId = "unresolved-not-shown", today = java.time.LocalDate.now(java.time.ZoneOffset.UTC), predicates = PredicateFunctions.DEFAULT)
+    }
+    return items?.let { PresentationConsentText.forContext(context).renderItems(it, verifierName) }.orEmpty()
+}
 
 @Composable
 private fun PreviewStep(
@@ -334,13 +425,27 @@ private fun PreviewStep(
                     instances = grouped.instances,
                     modifier = Modifier.padding(vertical = 4.dp),
                 )
-                val claimCount = matchResult.requestedClaims.flatten().distinct().size
-                Text(
-                    text = if (request.disclosesNoClaims) "No data fields are shared (zero-knowledge proof)" else "$claimCount data fields requested",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
-                )
+                if (request.disclosesNoClaims) {
+                    // What a circuit_zk / zkp_req proof actually shares: the SDK's own wording (pseudonym scoping, the age_check
+                    // predicate and its answer), never a blanket "nothing is shared" - a pseudonym is a persistent per-verifier
+                    // handle, the thing most worth telling the user about.
+                    zkSummaryLines(matchResult, request.verifierName ?: "This verifier").forEach { line ->
+                        Text(
+                            text = line,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
+                        )
+                    }
+                } else {
+                    val claimCount = matchResult.requestedClaims.flatten().distinct().size
+                    Text(
+                        text = "$claimCount data fields requested",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
+                    )
+                }
                 if (isExhausted) {
                     Text(
                         text = "No eligible copies remain - renew this credential in Settings",
@@ -447,10 +552,76 @@ private fun ClaimSelectionStep(
     }
 }
 
+// ── Step 2b: Choose one of several alternative credentials ──────────
+
+/**
+ * One `credential_sets` entry with more than one satisfiable option -
+ * OID4VP 1.0 §6.2's "pick one of these alternatives" case (see
+ * [PresentationRequest.exclusiveChoiceGroups]'s doc comment). Renders a
+ * radio-button list, one row per option, matching [WscdChoiceDialog]'s
+ * shape: this is a genuine "the user picks one" choice, never a
+ * check-everything-you-want list like [ClaimSelectionStep] - picking any
+ * other option here must visibly deselect whichever one was picked before.
+ */
+@Composable
+private fun ChooseCredentialOptionStep(
+    group: PresentationRequest.ExclusiveChoiceGroup,
+    matchResultsById: Map<String, CredentialMatcher.MatchResult>,
+    chosen: Int?,
+    onChoose: (Int) -> Unit,
+    presentationHistory: List<PresentationRecord> = emptyList(),
+    availableKeyIds: Set<String> = emptySet(),
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
+    ) {
+        Text(
+            text = "Choose which credential to share:",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "The verifier accepts any one of the following - only the one you pick will be shared.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Column(Modifier.selectableGroup()) {
+            group.options.forEach { option ->
+                val label = option.queryIds.joinToString(" + ") { queryId ->
+                    val candidates = matchResultsById[queryId]?.candidates.orEmpty()
+                    CredentialUtils.groupForDisplay(candidates, presentationHistory, availableKeyIds)
+                        .firstOrNull()?.credential?.metadata?.name ?: queryId
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .selectable(
+                            selected = option.optionIndex == chosen,
+                            onClick = { onChoose(option.optionIndex) },
+                            role = Role.RadioButton,
+                        )
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(selected = option.optionIndex == chosen, onClick = { onChoose(option.optionIndex) })
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(label, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+    }
+}
+
 // ── Step 3: Summary ─────────────────────────────────────────────────
 
 @Composable
 private fun SummaryStep(
+    activeResults: List<CredentialMatcher.MatchResult>,
     request: PresentationRequest,
     claimSelections: Map<String, Boolean>,
     presentationHistory: List<PresentationRecord> = emptyList(),
@@ -485,7 +656,7 @@ private fun SummaryStep(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        request.matchResults.forEach { matchResult ->
+        activeResults.forEach { matchResult ->
             val grouped = CredentialUtils.groupForDisplay(matchResult.candidates, presentationHistory, availableKeyIds).firstOrNull()
                 ?: return@forEach
             val cred = grouped.credential
