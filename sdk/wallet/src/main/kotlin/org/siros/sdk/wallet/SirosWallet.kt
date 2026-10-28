@@ -3590,8 +3590,8 @@ class SirosWallet private constructor(
             resolvedForStart?.metadata?.credentialConfigurationsSupported?.get(offer.credentialConfigurationId)?.let { cfg ->
                 if (!recordAuxiliarySelection(offer.credentialIssuerIdentifier, offer.credentialConfigurationId, cfg)) {
                     throw WalletException(
-                        "The issuer's auxiliary data advertisement for this credential is malformed; issuance is refused",
-                        errorCode = "auxiliary_data_advertisement_malformed",
+                        AUX_DATA_ADVERTISEMENT_MALFORMED_MESSAGE,
+                        errorCode = AUX_DATA_ADVERTISEMENT_MALFORMED_CODE,
                     )
                 }
             }
@@ -3789,8 +3789,8 @@ class SirosWallet private constructor(
             if (resolvedDisplay != null && !resolvedDisplay.record()) {
                 // The advertisement is malformed NOW: any earlier selection was cleared above, and the issuance is refused.
                 throw WalletException(
-                    "The issuer's auxiliary data advertisement for this credential is malformed; issuance is refused",
-                    errorCode = "auxiliary_data_advertisement_malformed",
+                    AUX_DATA_ADVERTISEMENT_MALFORMED_MESSAGE,
+                    errorCode = AUX_DATA_ADVERTISEMENT_MALFORMED_CODE,
                 )
             }
             if (displayOffer != null) {
@@ -7369,8 +7369,8 @@ class SirosWallet private constructor(
         // Recorded (and a malformed advertisement refused) BEFORE any context is published or the resume is sent.
         if (resolved != null && !resolved.record()) {
             throw WalletException(
-                "The issuer's auxiliary data advertisement for this credential is malformed; issuance is refused",
-                errorCode = "auxiliary_data_advertisement_malformed",
+                AUX_DATA_ADVERTISEMENT_MALFORMED_MESSAGE,
+                errorCode = AUX_DATA_ADVERTISEMENT_MALFORMED_CODE,
             )
         }
         if (offer == null) {
@@ -11731,6 +11731,11 @@ class SirosWallet private constructor(
 
         /** Shown when a sign request fails without a message. */
         private const val SIGNING_FAILED_MESSAGE = "Signing failed"
+
+        /** Thrown (with [AUX_DATA_ADVERTISEMENT_MALFORMED_CODE]) wherever a malformed auxiliary-data advertisement refuses issuance. */
+        private const val AUX_DATA_ADVERTISEMENT_MALFORMED_MESSAGE =
+            "The issuer's auxiliary data advertisement for this credential is malformed; issuance is refused"
+        private const val AUX_DATA_ADVERTISEMENT_MALFORMED_CODE = "auxiliary_data_advertisement_malformed"
 
         /** Largest registry answer accepted on the `transaction_data` path. */
         private const val TRANSACTION_METADATA_MAX_BYTES = 256L * 1024
