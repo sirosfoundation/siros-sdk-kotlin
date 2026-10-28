@@ -69,6 +69,38 @@ class LocalAuthProvider(
         Timber.i("LocalAuthProvider: rolled back last registration")
     }
 
+    /**
+     * Delete every passkey this provider holds: its Keystore keys and the
+     * metadata that maps to them. Used when the account they belong to is
+     * deleted, since nothing can use them afterwards.
+     *
+     * Every alias is attempted even if one fails. An entry whose Keystore
+     * deletion fails keeps its metadata so a later call can retry it, rather
+     * than being wiped from the store with its key still present; the
+     * aggregated failure is thrown so the caller's wipe step is reported as
+     * incomplete instead of falsely complete.
+     */
+    fun deleteAllCredentials() {
+        val failures = mutableListOf<Pair<String, Exception>>()
+        credStore.getAll().forEach { entry ->
+            try {
+                keyStore.deleteEntry(entry.keyAlias)
+                credStore.delete(entry.credentialId)
+            } catch (e: Exception) {
+                failures += entry.keyAlias to e
+            }
+        }
+        lastCredentialId = null
+        lastPrfOutput = null
+        if (failures.isNotEmpty()) {
+            throw IllegalStateException(
+                "Failed to delete ${failures.size} local passkey Keystore alias(es): " +
+                    failures.joinToString { it.first },
+                failures.first().second,
+            )
+        }
+    }
+
     override suspend fun register(options: RegisterOptions): RegisterResult {
         // Generate a random credential ID
         val credentialId = ByteArray(32).also { SecureRandom().nextBytes(it) }

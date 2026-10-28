@@ -710,6 +710,10 @@ class WscdKeystoreAdapter private constructor(
         credentialsKeystore.clearCredentials()
     }
 
+    override suspend fun resetLocalKeys() {
+        signer.resetLocalKeys()
+    }
+
     // ── Presentation-history storage (delegated to credentialsKeystore) ─
 
     override suspend fun savePresentationRecord(id: Long, json: String) {
