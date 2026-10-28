@@ -7018,38 +7018,45 @@ class SirosWalletTest {
 
     @Test
     fun aBufferedMatchRequestOnAReplacedEngine_isStillRefusedAfterTheSecondConnectEngine_evenWithoutSuspending() = runTest(dispatcher) {
-        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345's finding #3): connectEngine never
-        // explicitly cancels the PRIOR connection's matchRequests()/flowProgress()/signRequests() collectors - only
-        // engineStateJob. disconnect() closes the old engine's channels but does not discard what its Flow had already
-        // buffered, so the OLD collector coroutine can still process a message after a SECOND connectEngine call has
-        // already installed a new engine and bumped consentEpoch. Building the ticket from engineEpoch (captured once,
-        // when THIS engine's own collector was installed) rather than a fresh issueConsentTicket read is what catches
-        // this - a fresh read at message-processing time would see the NEW epoch and wrongly treat the OLD engine's
-        // message as current.
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345, round 4's engine-side analog of
+        // finding #1): the matchRequests() collector builds its ticket from engineEpoch (captured once, when THIS
+        // engine's own collector was installed), not a fresh issueConsentTicket read - a fresh read taken AFTER a
+        // replacement has already bumped consentEpoch would wrongly adopt the NEW epoch as if it belonged to this
+        // (old) engine's message.
+        //
+        // With connectEngine now cancelling the replaced connection's own connectionScope outright (round 4's
+        // structural fix), the OLD "emit on the prior engine's Flow after a second connectEngine already ran" shape no
+        // longer even reaches a live collector - that message is simply never processed, which would make a test built
+        // that way pass vacuously regardless of the ticket fix (this test used to be built that way; verified vacuous
+        // by temporarily disabling the ticket fix and observing it still pass). Exercised here instead via a
+        // narrowly-scoped, null-in-production test hook (engineMatchTicketIssueHook, the engine-side analog of
+        // wmpMatchTicketIssueHook) landing the replacement exactly between message entry and ticket construction - a
+        // true race there is not reliably reproducible by timing alone (same reasoning as
+        // Fido2EnrolmentSession.testHookBeforeInstall).
+        //
+        // Cancellation is cooperative: it only aborts this collector's coroutine at a REAL suspension point it
+        // actually reaches. With no eventListener set, the whole path from the hook to the final write - getAll(),
+        // eligibleInstances(), recordPresentation() with an already-locked keystore - never truly suspends, so a
+        // cancelled connectionScope does NOT by itself stop this message's processing ("evenWithoutSuspending"); only
+        // the ticket's own epoch mismatch does. That is exactly the residual gap connectionScope cancellation alone
+        // cannot close, which the ticket check exists for.
         val matchFlowA = MutableSharedFlow<MatchRequestMessage>()
-        val listener = mockk<WalletEventListener>()
-        val store = FakeCredentialStore(
-            mutableListOf(
-                StoredCredential(
-                    id = 2L, format = "dc+sd-jwt", raw = "raw-2",
-                    metadata = CredentialMetadata(name = "Credential Two", vct = "urn:example:vct"),
-                    batchId = 2L, instanceId = 0,
-                ),
-            )
+        val cred = StoredCredential(
+            id = 2L, format = "dc+sd-jwt", raw = "raw-2",
+            metadata = CredentialMetadata(name = "Credential Two", vct = "urn:example:vct"),
+            batchId = 2L, instanceId = 0,
         )
-        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf(2L)
         val engineA = mockEngineConstructor(matchRequests = matchFlowA)
         every { engineA.disconnect() } just runs
-        val keystore = mockk<KeystoreManager>()
+        val keystore = mockk<KeystoreManager>(relaxed = true)
         every { keystore.isUnlocked } returns false
         every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
         val wallet = newWallet(
-            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice", credentials = store.getAll())),
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
-            "credentialStore" to store,
+            "credentialStore" to FakeCredentialStore(mutableListOf(cred)),
             "keystore" to keystore,
-            "eventListener" to listener,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
             "_presentationHistory" to mutableListOf<PresentationRecord>(),
         )
@@ -7057,22 +7064,80 @@ class SirosWalletTest {
         invokeConnectEngine(wallet, "app-token")
         advanceUntilIdle()
 
-        // The engine is replaced wholesale (a fresh connectEngine), bumping consentEpoch - but engineA's own
-        // matchRequests() collector, installed above, was never explicitly cancelled.
+        // Land the race exactly where this finding describes it: AFTER the message has already passed the
+        // lostFlowIds/connectionGeneration early-exit (it IS still live at that instant), but BEFORE the ticket is
+        // built - a replacement (here, a second connectEngine, the same real event a reconnect or re-login would
+        // trigger) happens in between.
         mockEngineConstructor()
-        invokeConnectEngine(wallet, "app-token")
-        advanceUntilIdle()
+        setField(wallet, "engineMatchTicketIssueHook", { invokeConnectEngine(wallet, "app-token"); Unit })
 
-        // engineA's channel is closed (disconnect()), but its Flow still had this message buffered - the collector
-        // reading it is still running in the wallet's scope.
-        matchFlowA.emit(MatchRequestMessage(flowId = "flow-buffered", dcqlQuery = null))
+        matchFlowA.emit(MatchRequestMessage(flowId = "flow-raced", dcqlQuery = null))
         advanceUntilIdle()
 
         @Suppress("UNCHECKED_CAST")
         val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
         assertFalse(
-            "a buffered match request from an already-replaced engine must not record consent",
-            records.containsKey("flow-buffered"),
+            "a ticket built from a fresh epoch read (not this engine's own captured lifetime) must not let a raced " +
+                "replacement's write through",
+            records.containsKey("flow-raced"),
+        )
+    }
+
+    @Test
+    fun legacyFlowCompleteOnAReplacedEngine_doesNotClearAReplacementSessionsConsentForAReusedFlowId() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345, round 4 finding #2): the legacy
+        // transport's flowComplete()/flowErrors() collectors are bound to connectionScope and so are normally
+        // cancelled outright on replacement (round 4's structural fix) - but a message already dequeued (and not yet
+        // at a suspension point) when that cancellation lands could still reach the unconditional clear that used to
+        // sit here, letting the OLD engine's own, surviving collector delete a REPLACEMENT session's legitimate
+        // consent for a flow id the backend happens to have reused. clearFlowMatchStateIfLive(flowId, engineEpoch) is
+        // the fix: conditional on THIS engine still being current, not unconditional.
+        //
+        // Everything from collector entry to the clear is synchronous (fillEncryptedCompletion/isAbandonedFlowEvent
+        // are plain, non-suspend functions, and nothing here is blind-issuance-encrypted or zk-signing), so - same as
+        // the matchRequests ticket-race test above - cancellation being cooperative does not by itself stop this
+        // processing; only the conditional clear does. Exercised via legacyCollectorClearHook (null in production,
+        // the engine-side analog of wmpMatchTicketIssueHook), landing the replacement exactly where this finding
+        // describes it - a true race there is not reliably reproducible by timing alone (same reasoning as
+        // Fido2EnrolmentSession.testHookBeforeInstall).
+        val completeFlowA = MutableSharedFlow<FlowCompleteMessage>()
+        val engineA = mockEngineConstructor(flowComplete = completeFlowA)
+        every { engineA.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns false
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "keystore" to keystore,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        // The REPLACEMENT session's own, legitimate consent for a flow id the backend happens to have reused - seeded
+        // from inside the hook, right after the replacement connectEngine (the same real event a reconnect or
+        // re-login would trigger), mirroring wmpTerminalCallbacks_boundToTheirOwnPeersLifetime_doNotClearAReplacementPeersConsent.
+        val replacementRecord = ConsentRecord(listOf(ConsentedSelection("q", "1", null)))
+        mockEngineConstructor()
+        setField(wallet, "legacyCollectorClearHook", {
+            invokeConnectEngine(wallet, "app-token")
+            @Suppress("UNCHECKED_CAST")
+            (getField(wallet, "consentRecordsByFlow") as MutableMap<String, ConsentRecord>)["shared-flow"] = replacementRecord
+            Unit
+        })
+
+        // A late completion for engineA (the one that was REPLACED) arrives for the same flow id.
+        completeFlowA.emit(FlowCompleteMessage(flowId = "shared-flow"))
+        advanceUntilIdle()
+
+        @Suppress("UNCHECKED_CAST")
+        val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+        assertSame(
+            "a replaced engine's late flowComplete must not clear a REPLACEMENT session's own consent for a reused flow id",
+            replacementRecord, records["shared-flow"],
         )
     }
 
@@ -13349,15 +13414,19 @@ class SirosWalletTest {
         engine: WalletEngineSession,
         flowId: String,
         payload: JsonObject,
+        // Defaulted to a fresh scope: production always passes connectEngine's own connectionScope (see its doc comment),
+        // but a direct-invocation test of this function alone need not know about it.
+        connectionScope: CoroutineScope = CoroutineScope(dispatcher + SupervisorJob()),
     ) {
         val method = wallet.javaClass.getDeclaredMethod(
             "handleTrustEvaluation",
             WalletEngineSession::class.java,
             String::class.java,
             JsonObject::class.java,
+            CoroutineScope::class.java,
         )
         method.isAccessible = true
-        method.invoke(wallet, engine, flowId, payload)
+        method.invoke(wallet, engine, flowId, payload, connectionScope)
     }
 
     private fun invokeHandleWmpTrustEvaluation(
@@ -16210,7 +16279,7 @@ class SirosWalletTest {
         )
         val method = wallet::class.declaredMemberFunctions.first { it.name == "wmpProfile" }
         method.isAccessible = true
-        val profile = method.call(wallet, null) as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
+        val profile = method.call(wallet, null, getField(wallet, "consentEpoch") as Int, CoroutineScope(dispatcher + SupervisorJob())) as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
         runBlocking {
             profile.handleCancel(org.siros.sdk.transport.wmp.FlowCancelParams(flowId = "flow-a", reason = "user"))
         }
@@ -16667,6 +16736,76 @@ class SirosWalletTest {
     }
 
     @Test
+    fun handleCredentialSelection_sessionReplacedWhileCredentialStoreGetAllSuspends_neverPublishesMatchStateOrAsksTheUser() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345, round 4's finding #3): credentialStore.getAll()
+        // is handleCredentialSelection's FIRST suspension point - well before its ticket check, which only runs after the
+        // LISTENER await. A ticket-only fix would let a resumption write pendingMatchResultsByFlow and show the user a
+        // consent dialog for an already-dead flow before ever reaching that check. The structural fix (this coroutine now
+        // launches into connectEngine's own connectionScope, cancelled outright on replacement) stops it from resuming
+        // PAST the suspension at all - proven here by asserting NEITHER of those side effects ever happens, not just that
+        // the eventual consent write is skipped.
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf(1L)
+        val cred = StoredCredential(
+            id = 1L, format = "dc+sd-jwt", raw = "raw-pid",
+            metadata = CredentialMetadata(name = "PID", vct = "urn:eu.europa.ec.eudi:pid:1"),
+            batchId = 1L, instanceId = 0,
+        )
+        val store = mockk<org.siros.sdk.credentials.CredentialStore>()
+        coEvery { store.getAll() } coAnswers { gate.await(); listOf(cred) }
+        val engineA = mockEngineConstructor(progressFlow = progressFlow)
+        every { engineA.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "flow-getall", step = "credential_selection",
+                payload = vctQueryPayload("urn:eu.europa.ec.eudi:pid:1"),
+            )
+        )
+        advanceUntilIdle()
+        // Parked inside credentialStore.getAll() - before even the listener is asked.
+        coVerify(exactly = 0) { listener.onCredentialSelectionRequired(any()) }
+
+        // The session is replaced wholesale (a fresh connectEngine), cancelling this coroutine's own connectionScope.
+        mockEngineConstructor()
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) {
+            listener.onCredentialSelectionRequired(any())
+        }
+        @Suppress("UNCHECKED_CAST")
+        val pending = getField(wallet, "pendingMatchResultsByFlow") as Map<String, List<CredentialMatcher.MatchResult>>
+        assertFalse(
+            "a session replaced while credentialStore.getAll() was suspended must not publish match state either",
+            pending.containsKey("flow-getall"),
+        )
+        @Suppress("UNCHECKED_CAST")
+        val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+        assertFalse(records.containsKey("flow-getall"))
+    }
+
+    @Test
     fun matchRequests_merelyReconnectedWhileRecordPresentationSuspends_isCaughtByIsFlowLostNotJustTheTicket() = runTest(dispatcher) {
         // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345's finding #4): a MERE socket reconnect on
         // the SAME engine (connectionGeneration bumped, no clearPerFlowAuthorizationState call - this is a reconnect
@@ -17099,7 +17238,7 @@ class SirosWalletTest {
             val method = wallet::class.declaredMemberFunctions.first { it.name == "wmpProfile" }
             method.isAccessible = true
             // The profile (and so the callbacks the peer would still deliver to) was built while the session was live.
-            val profile = method.call(wallet, null) as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
+            val profile = method.call(wallet, null, getField(wallet, "consentEpoch") as Int, CoroutineScope(dispatcher + SupervisorJob())) as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
             val ctx = RecordingPeerContext()
             profile.init(ctx)
             teardown(wallet)
@@ -17181,7 +17320,7 @@ class SirosWalletTest {
             wallet.signDispatchHook = { paused.countDown(); release.await() }
             val method = wallet::class.declaredMemberFunctions.first { it.name == "wmpProfile" }
             method.isAccessible = true
-            val profile = method.call(wallet, null) as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
+            val profile = method.call(wallet, null, getField(wallet, "consentEpoch") as Int, CoroutineScope(dispatcher + SupervisorJob())) as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
             val ctx = RecordingPeerContext()
             profile.init(ctx)
             // The callback passes its liveness check and stops just before it claims the flow's state.
