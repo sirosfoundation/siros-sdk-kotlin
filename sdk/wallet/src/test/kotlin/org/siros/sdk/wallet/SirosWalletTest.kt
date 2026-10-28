@@ -9,6 +9,7 @@ import io.mockk.mockk
 import io.mockk.runs
 import io.mockk.slot
 import io.mockk.verify
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -12954,6 +12955,41 @@ class SirosWalletTest {
             coVerify(exactly = 1) { r2ps.clearPresentationRecords() }
             coVerify(exactly = 1) { r2ps.resetLocalKeys() }
             verify(exactly = 1) { r2ps.lock() }
+        }
+    }
+
+    @Test
+    fun deleteAccount_still_wipes_the_device_when_cancelled_right_after_the_server_accepts_the_delete() = runTest(dispatcher) {
+        // BackendApiClient.deleteAccount() runs OkHttp's blocking execute()
+        // inside withContext(Dispatchers.IO): the server can fully delete the
+        // account before this code resumes, but if the caller's job was
+        // cancelled in that window, resuming from an ordinary (cancellable)
+        // suspension point would discard the real Deleted outcome as a bare
+        // CancellationException - skipping wipeLocalState() entirely and
+        // leaving the account gone server-side with this device never wiped
+        // (and no way to retry, since the account no longer exists to
+        // authenticate against).
+        val f = DeleteFixture()
+        val responseArrives = CompletableDeferred<Unit>()
+        coEvery { f.apiClient.deleteAccount("ch-1", f.assertion, "DELETE") } coAnswers {
+            responseArrives.await()
+            DeleteAccountOutcome.Deleted
+        }
+        val wallet = deleteWallet(f)
+
+        withRegistryMocked {
+            val job = launch { wallet.deleteAccount("DELETE") }
+            advanceUntilIdle() // job is suspended inside the NonCancellable delete() call, awaiting the "response"
+            job.cancel() // the caller's job is cancelled BEFORE the response is seen to arrive
+            responseArrives.complete(Unit) // the server's deletion now lands
+            advanceUntilIdle()
+            job.join()
+
+            // The device was wiped despite the cancellation.
+            coVerify(exactly = 1) { f.keystore.clearCredentials() }
+            coVerify(exactly = 1) { f.credentialStore.clear() }
+            verify(exactly = 1) { f.accountRegistry.clear() }
+            coVerify(exactly = 1) { org.siros.sdk.wallet.dcapi.SirosCredentialRegistry.clear(any()) }
         }
     }
 

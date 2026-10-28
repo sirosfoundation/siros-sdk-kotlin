@@ -633,17 +633,32 @@ class SirosWallet private constructor(
             Timber.w(e, "Account deletion: step-up assertion unavailable")
             return DeleteAccountResult.StepUpUnavailable(e.message)
         }
-        return when (val outcome = client.deleteAccount(challenge.challengeId, assertion, confirmation)) {
-            DeleteAccountOutcome.Deleted -> DeleteAccountResult.Deleted(wipeLocalState())
-            DeleteAccountOutcome.CleanupPending -> DeleteAccountResult.CleanupPending(wipeLocalState())
-            DeleteAccountOutcome.OperatorRequired -> DeleteAccountResult.OperatorRequired(wipeLocalState())
-            is DeleteAccountOutcome.RetryNeeded -> DeleteAccountResult.RetryNeeded(outcome.message)
-            is DeleteAccountOutcome.StepUpRequired -> DeleteAccountResult.StepUpRequired(outcome.message)
-            is DeleteAccountOutcome.StepUpFailed -> DeleteAccountResult.StepUpFailed(outcome.message)
-            is DeleteAccountOutcome.StepUpExpired -> DeleteAccountResult.StepUpExpired(outcome.message)
-            is DeleteAccountOutcome.ConfirmationRequired -> DeleteAccountResult.ConfirmationRequired(outcome.message)
-            is DeleteAccountOutcome.SessionRevoked -> DeleteAccountResult.SessionRevoked(outcome.message)
-            is DeleteAccountOutcome.NotFound -> DeleteAccountResult.NotFound(outcome.message)
+        // Sent - and its outcome dispatched to wipeLocalState() - under
+        // NonCancellable. BackendApiClient.deleteAccount() runs OkHttp's
+        // blocking execute() inside withContext(Dispatchers.IO), which
+        // already completes regardless of this coroutine's cancellation
+        // state: the server can fully delete the account before this code
+        // resumes. Only the handoff of that result back to a meanwhile-
+        // cancelled caller was itself cancellable, which would otherwise
+        // discard an already-Deleted/CleanupPending/OperatorRequired outcome
+        // as a bare CancellationException - leaving the account gone
+        // server-side with this device never wiped, and no way to retry
+        // (the account no longer exists to authenticate against). Keeping
+        // begin/step-up cancellable above is fine: nothing irreversible has
+        // happened there yet.
+        return withContext(kotlinx.coroutines.NonCancellable) {
+            when (val outcome = client.deleteAccount(challenge.challengeId, assertion, confirmation)) {
+                DeleteAccountOutcome.Deleted -> DeleteAccountResult.Deleted(wipeLocalState())
+                DeleteAccountOutcome.CleanupPending -> DeleteAccountResult.CleanupPending(wipeLocalState())
+                DeleteAccountOutcome.OperatorRequired -> DeleteAccountResult.OperatorRequired(wipeLocalState())
+                is DeleteAccountOutcome.RetryNeeded -> DeleteAccountResult.RetryNeeded(outcome.message)
+                is DeleteAccountOutcome.StepUpRequired -> DeleteAccountResult.StepUpRequired(outcome.message)
+                is DeleteAccountOutcome.StepUpFailed -> DeleteAccountResult.StepUpFailed(outcome.message)
+                is DeleteAccountOutcome.StepUpExpired -> DeleteAccountResult.StepUpExpired(outcome.message)
+                is DeleteAccountOutcome.ConfirmationRequired -> DeleteAccountResult.ConfirmationRequired(outcome.message)
+                is DeleteAccountOutcome.SessionRevoked -> DeleteAccountResult.SessionRevoked(outcome.message)
+                is DeleteAccountOutcome.NotFound -> DeleteAccountResult.NotFound(outcome.message)
+            }
         }
     }
 
