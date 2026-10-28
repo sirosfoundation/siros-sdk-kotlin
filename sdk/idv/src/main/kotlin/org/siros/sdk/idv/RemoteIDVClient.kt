@@ -94,6 +94,8 @@ class RemoteIDVClient(private val config: Config) {
      * @throws IDVException.SessionExpired if the liveness step has expired or was already used.
      * @throws IDVException.DocumentChipNotVerified if the document's chip was not authenticated.
      * @throws IDVException.ChipUntrusted if the chip data is not trusted.
+     * @throws IDVException.ChipPhotoMismatch if the face does not match the chip photo.
+     * @throws IDVException.ChipDataUnverified if no verified chip identity was available.
      * @throws IDVException.DocumentExpired if the document has expired.
      * @throws IDVException.VerificationFailed for any other refusal (HTTP 422).
      */
@@ -176,6 +178,8 @@ internal fun idvExceptionFor422(
  *
  * - `nfc_*`: the chip was not read and authenticated ([IDVException.DocumentChipNotVerified]).
  * - `chip_untrusted`: [IDVException.ChipUntrusted].
+ * - `chip_photo_mismatch`: [IDVException.ChipPhotoMismatch].
+ * - `chip_data_unverified`: [IDVException.ChipDataUnverified].
  * - `document_expired`: [IDVException.DocumentExpired].
  * - `session_expired`: [IDVException.SessionExpired].
  */
@@ -183,6 +187,8 @@ internal fun idvExceptionForCode(code: String, message: String): IDVException? =
     when {
         code.startsWith("nfc_") -> IDVException.DocumentChipNotVerified(code, message)
         code == "chip_untrusted" -> IDVException.ChipUntrusted(message)
+        code == "chip_photo_mismatch" -> IDVException.ChipPhotoMismatch(message)
+        code == "chip_data_unverified" -> IDVException.ChipDataUnverified(message)
         code == "document_expired" -> IDVException.DocumentExpired(message)
         code == "session_expired" -> IDVException.SessionExpired(message)
         else -> null
