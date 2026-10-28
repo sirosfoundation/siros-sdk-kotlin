@@ -94,8 +94,17 @@ internal fun circuitZkSelectionByQuery(
     val active = results.filter { r -> r.candidates.any { it.id in selected } }
     if (active.isEmpty()) return null
     if (!credentialSetChoiceIsValid(credentialSets, satisfiableOptions, active.map { it.queryId }.toSet())) return null
+    // In query order, prefer a credential no earlier query already took - "one credential may
+    // answer several queries" is the fallback for when there are not enough distinct ones to go
+    // around, not the default: with two credentials that both match both of two queries, the two
+    // queries get answered by two DIFFERENT credentials (not query 1 silently exhausting every
+    // query's answer with the same single credential, leaving the second one never actually used).
+    val used = HashSet<Long>()
     return active.map { r ->
-        val id = selectedIds.firstOrNull { id -> r.candidates.any { it.id == id } } ?: return null
+        val id = selectedIds.firstOrNull { id -> id !in used && r.candidates.any { it.id == id } }
+            ?: selectedIds.firstOrNull { id -> r.candidates.any { it.id == id } }
+            ?: return null
+        used += id
         r to id
     }
 }

@@ -130,6 +130,20 @@ class CredentialSetConsentResolutionTest {
     }
 
     @Test
+    fun twoCredentialsThatBothMatchBothQueriesAreDistributedOneEach() {
+        // CI catch (circuitZkRedirect_theConsentSelectsOneCredentialPerQuery_andItsOwnReferencesAreAnswered /
+        // circuitZkRedirect_theMatchRequestAnswerHasOneEntryPerQuery in SirosWalletTest): two queries, two
+        // credentials, EACH credential individually a valid candidate of EACH query. "One credential may answer
+        // several queries" is the fallback for when there is no other way to answer every query, not the rule -
+        // reusing credential 1 for both queries here (what a plain "first candidate" scan does) would leave
+        // credential 2 never actually used even though a perfectly good one-credential-per-query answer exists.
+        val qa = result("a", emptyList(), 1L, 2L)
+        val qb = result("b", emptyList(), 1L, 2L)
+        val selection = circuitZkSelectionByQuery(listOf(qa, qb), listOf(1L, 2L))
+        assertEquals(listOf(qa to 1L, qb to 2L), selection)
+    }
+
+    @Test
     fun oneCredentialAnsweringTwoQueriesAtOnceIsReportedForBoth() {
         // "a credential may answer several queries": a single id valid for two co-active
         // (non-alternative) circuit_zk queries proves both off the one credential.
