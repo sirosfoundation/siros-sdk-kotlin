@@ -54,6 +54,7 @@ import org.siros.sdk.keystore.UniFFISigner
 import org.siros.sdk.keystore.UsbCtap2Transport
 import org.siros.sdk.keystore.WscdKeystoreAdapter
 import org.siros.sdk.keystore.WscdManager
+import org.siros.sdk.wallet.AddPasskeyResult
 import org.siros.sdk.wallet.DeleteAccountResult
 import org.siros.sdk.wallet.RememberScope
 import org.siros.sdk.wallet.RequestWscdChoice
@@ -1411,6 +1412,51 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
                 _errorMessage.value = localizedErrorMessage(e)
             } finally {
                 _deletingAccount.value = false
+            }
+        }
+    }
+
+    private val _addingPasskey = MutableStateFlow(false)
+    val addingPasskey: StateFlow<Boolean> = _addingPasskey
+
+    /**
+     * Add a passkey to this account. The SDK asks an existing passkey to
+     * authorise it, creates the new one and syncs its PRF entry; this only
+     * reports the outcome.
+     */
+    fun addPasskey(nickname: String) {
+        viewModelScope.launch {
+            _addingPasskey.value = true
+            try {
+                when (val result = wallet.addPasskey(nickname)) {
+                    is AddPasskeyResult.Added -> _infoMessage.value = activity.getString(R.string.add_passkey_done)
+                    is AddPasskeyResult.AuthorizerUnavailable ->
+                        _errorMessage.value = activity.getString(R.string.add_passkey_authorizer_unavailable)
+                    is AddPasskeyResult.PasskeyCreationUnavailable ->
+                        _errorMessage.value = activity.getString(R.string.add_passkey_creation_unavailable)
+                    is AddPasskeyResult.AuthorizationRequired,
+                    is AddPasskeyResult.AuthorizationFailed ->
+                        _errorMessage.value = activity.getString(R.string.add_passkey_authorization_failed)
+                    is AddPasskeyResult.PrfUnsupported ->
+                        _errorMessage.value = activity.getString(R.string.add_passkey_prf_unsupported)
+                    is AddPasskeyResult.RetryNeeded ->
+                        _errorMessage.value = activity.getString(R.string.add_passkey_retry)
+                    is AddPasskeyResult.PrivateDataConflict ->
+                        _errorMessage.value = activity.getString(R.string.add_passkey_conflict)
+                    is AddPasskeyResult.RegistrationRejected ->
+                        _errorMessage.value = activity.getString(R.string.add_passkey_rejected)
+                    is AddPasskeyResult.WalletLocked ->
+                        _errorMessage.value = activity.getString(R.string.add_passkey_locked)
+                    is AddPasskeyResult.InsufficientScope ->
+                        _errorMessage.value = activity.getString(R.string.add_passkey_insufficient_scope)
+                    is AddPasskeyResult.SessionRevoked ->
+                        _errorMessage.value = activity.getString(R.string.add_passkey_session_revoked)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "addPasskey failed", e)
+                _errorMessage.value = localizedErrorMessage(e)
+            } finally {
+                _addingPasskey.value = false
             }
         }
     }
