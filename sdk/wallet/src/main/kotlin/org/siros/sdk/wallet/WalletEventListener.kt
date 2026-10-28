@@ -105,22 +105,51 @@ data class PresentationRequest(
         }
 
     /**
-     * [consentMatchResults] restricted to the queries actually part of this presentation: every query untouched by an
-     * [exclusiveChoiceGroups] entry, plus - once chosen - exactly one option's worth of queries per such entry.
+     * [consentMatchResults] restricted to the queries actually part of this presentation.
+     *
+     * Built as a union of what is "in", never by excluding what is "out" of [consentMatchResults]
+     * - an earlier version did the latter (exclude every option of a group the choice did not
+     * pick) and got it wrong two ways a Copilot review on #353 caught: with alternatives
+     * `[[a,b],[a,c]]`, choosing `[a,b]` excluded `a` anyway because it also appears in the
+     * NON-chosen option `[a,c]`, leaving an incomplete presentation; and with `[[a],[b,c]]` where
+     * only `a` and `b` (not `c`) matched, there was no [ExclusiveChoiceGroup] at all to exclude
+     * anything (only one OPTION - `[a]` - is satisfiable), so `b` leaked straight through
+     * unfiltered even though its only option (`[b,c]`) can never be satisfied. A union avoids
+     * both: every credential_sets member query id starts OUT, and is let back in only as a whole
+     * satisfiable option - the sole one when a set isn't ambiguous, or the chosen one when it is.
      *
      * @param chosenOptionIndex credentialSetIndex -> the chosen option's [CredentialMatcher.SatisfiableOption.optionIndex], one entry
-     *   per resolved [ExclusiveChoiceGroup]. A group absent here (not yet chosen) has every one of its options excluded - nothing from
-     *   an unresolved group is ever included, which is what stops the union-of-all-alternatives bug from recurring for a group still
-     *   mid-choice.
+     *   per resolved [ExclusiveChoiceGroup]. A group absent here (not yet chosen) contributes nothing - nothing from
+     *   an unresolved group is ever included, which is what stops the union-of-all-alternatives bug this mechanism exists
+     *   to close from recurring for a group still mid-choice.
      */
     fun activeConsentMatchResults(chosenOptionIndex: Map<Int, Int>): List<CredentialMatcher.MatchResult> {
-        val groups = exclusiveChoiceGroups
-        if (groups.isEmpty()) return consentMatchResults
-        val excludedQueryIds = groups.flatMap { group ->
-            val chosen = chosenOptionIndex[group.credentialSetIndex]
-            group.options.filter { it.optionIndex != chosen }.flatMap { it.queryIds }
+        val sets = credentialSets
+        if (sets.isNullOrEmpty()) return consentMatchResults
+
+        // Every query id that is a member of ANY option of ANY credential_sets entry -
+        // "constrained" by the structure, whether or not that particular option turned out to be
+        // satisfiable. A query outside this set is unconstrained and always stays active,
+        // whatever is chosen elsewhere.
+        val constrainedQueryIds = sets.flatMap { it.options.flatten() }.toSet()
+
+        // Per credential-set index, the one option that is actually "in": the user's choice when
+        // this set has more than one satisfiable option (an ExclusiveChoiceGroup - nothing from
+        // it counts until chosen), or the sole satisfiable option when there's exactly one
+        // (nothing to choose: that option IS the answer, multi-element or not). A set with zero
+        // satisfiable options contributes nothing - neither its members' free pass (they ARE
+        // constrained) nor an option to include.
+        val activeFromSets = satisfiableOptions.groupBy { it.credentialSetIndex }.values.flatMap { options ->
+            val active = if (options.size > 1) {
+                options.firstOrNull { it.optionIndex == chosenOptionIndex[options.first().credentialSetIndex] }
+            } else {
+                options.single()
+            }
+            active?.queryIds.orEmpty()
         }.toSet()
-        return consentMatchResults.filter { it.queryId !in excludedQueryIds }
+
+        val activeQueryIds = activeFromSets + consentMatchResults.map { it.queryId }.filterNot { it in constrainedQueryIds }
+        return consentMatchResults.filter { it.queryId in activeQueryIds }
     }
 
     private companion object {

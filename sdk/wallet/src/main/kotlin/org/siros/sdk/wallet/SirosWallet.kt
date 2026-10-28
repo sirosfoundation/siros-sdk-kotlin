@@ -9253,7 +9253,7 @@ class SirosWallet private constructor(
 
                     // zkp_req: one entry per query (a credential may answer several), never the first-match-only view.
                     val zkSelection = if (zkPlan != null) {
-                        circuitZkSelectionByQuery(matchResults, selectedIds) ?: run {
+                        circuitZkSelectionByQuery(matchResults, selectedIds, dcqlOutput.credentialSets, dcqlOutput.satisfiableOptions) ?: run {
                             engine.sendMatchResponse(msg.flowId, emptyList(), org.siros.sdk.transport.engine.NoMatchCodes.NO_SELECTION)
                             engine.sendCredentialsMatched(msg.flowId, emptyList(), org.siros.sdk.transport.engine.NoMatchCodes.NO_SELECTION)
                             return@collect
@@ -9273,6 +9273,27 @@ class SirosWallet private constructor(
                         })
                         return@collect
                     }
+                    // Which query each SELECTED credential actually answers - never
+                    // matchResultByCredentialId's first-match-in-list-order view, which can
+                    // attribute a different alternative's claims than the one the consent screen
+                    // (PresentationConsentScreen.kt) actually showed for it; see
+                    // resolveActiveQueryPerCredential's doc comment. Validated as a whole first:
+                    // the answered queries must be exactly one option per credential_sets entry,
+                    // defence in depth against a selection that, however it was built, is not a
+                    // valid single choice (also catches a credential that happens to satisfy two
+                    // different alternatives at once, which resolveActiveQueryPerCredential alone
+                    // cannot tell apart).
+                    val activeQueries = matchResults.filter { r -> r.candidates.any { it.id in selectedIds.toSet() } }
+                    if (!credentialSetChoiceIsValid(dcqlOutput.credentialSets, dcqlOutput.satisfiableOptions, activeQueries.map { it.queryId }.toSet())) {
+                        engine.sendMatchResponse(msg.flowId, emptyList(), org.siros.sdk.transport.engine.NoMatchCodes.NO_SELECTION)
+                        engine.sendCredentialsMatched(msg.flowId, emptyList(), org.siros.sdk.transport.engine.NoMatchCodes.NO_SELECTION)
+                        return@collect
+                    }
+                    val resolvedMatchResultById = resolveActiveQueryPerCredential(activeQueries, selectedIds) ?: run {
+                        engine.sendMatchResponse(msg.flowId, emptyList(), org.siros.sdk.transport.engine.NoMatchCodes.NO_SELECTION)
+                        engine.sendCredentialsMatched(msg.flowId, emptyList(), org.siros.sdk.transport.engine.NoMatchCodes.NO_SELECTION)
+                        return@collect
+                    }
                     // Recorded in parallel, same as handleCredentialSelection: this IS the real interactive consent for this
                     // (legacy match_request/match_response) transport - see ConsentGuard's doc comment. Empty/absent
                     // requestedClaims means the whole credential was consented (no DCQL claims array) - recorded as null, not
@@ -9280,15 +9301,15 @@ class SirosWallet private constructor(
                     consentTicket.recordIfCurrent(ConsentRecord(selectedIds.mapNotNull { id ->
                         allCreds.find { it.id == id }?.let { cred ->
                             ConsentedSelection(
-                                matchResultByCredentialId[id]?.queryId,
+                                resolvedMatchResultById[id]?.queryId,
                                 cred.id.toString(),
-                                matchResultByCredentialId[id]?.requestedClaims?.mapNotNull { it.lastOrNull() }?.distinct()?.toSet()?.ifEmpty { null },
+                                resolvedMatchResultById[id]?.requestedClaims?.mapNotNull { it.lastOrNull() }?.distinct()?.toSet()?.ifEmpty { null },
                             )
                         }
                     }))
                     val matches = selectedIds.mapNotNull { id ->
                         allCreds.find { it.id == id }?.let { cred ->
-                            val queryId = matchResultByCredentialId[id]?.queryId
+                            val queryId = resolvedMatchResultById[id]?.queryId
                             CredentialMatch(
                                 credentialQueryId = queryId,
                                 // The WMP engine's own wire protocol keeps
@@ -9299,7 +9320,7 @@ class SirosWallet private constructor(
                                 format = cred.format,
                                 vct = CredentialUtils.vctOf(cred),
                                 // A zkp_req query discloses no claims (the engine's consent check would refuse any): offer none.
-                                availableClaims = if (matchResultByCredentialId[id]?.format?.let { CredentialUtils.isCircuitZkFormat(it) } == true) null else extractAvailableClaims(cred),
+                                availableClaims = if (resolvedMatchResultById[id]?.format?.let { CredentialUtils.isCircuitZkFormat(it) } == true) null else extractAvailableClaims(cred),
                             )
                         }
                     }
@@ -11097,21 +11118,6 @@ class SirosWallet private constructor(
         )
     }
 
-    /**
-     * The credential for EACH query of a zkp_req request, from the credentials the user picked (the picker reports plain ids): a pick that
-     * is a candidate of the query answers it, preferring the pick at the query's own position, and one credential may answer several
-     * queries. Null when some query has no pick: the request is then not answerable and no selection is sent.
-     */
-    private fun circuitZkSelectionByQuery(results: List<CredentialMatcher.MatchResult>, selectedIds: List<Long>): List<Pair<CredentialMatcher.MatchResult, Long>>? {
-        val out = ArrayList<Pair<CredentialMatcher.MatchResult, Long>>()
-        for ((i, r) in results.withIndex()) {
-            val own = selectedIds.filter { id -> r.candidates.any { it.id == id } }
-            val id = (if (selectedIds.size == results.size && selectedIds[i] in own) selectedIds[i] else own.firstOrNull()) ?: return null
-            out += r to id
-        }
-        return out
-    }
-
     /** Drops what a flow's match step left for its sign step; called wherever a flow ends. */
     private fun clearFlowMatchState(flowId: String) {
         pendingMatchResultsByFlow.remove(flowId)
@@ -11493,13 +11499,40 @@ class SirosWallet private constructor(
 
                 // zkp_req: the credential for EACH query, or the request is declined (a query without a pick cannot be answered).
                 val zkSelection = if (zkPlan != null) {
-                    circuitZkSelectionByQuery(matchResults, selectedIds) ?: run {
+                    circuitZkSelectionByQuery(matchResults, selectedIds, credentialSets, satisfiableOptions) ?: run {
                         engine.sendFlowAction(flowId, "decline", kotlinx.serialization.json.buildJsonObject {
                             put("reason", kotlinx.serialization.json.JsonPrimitive("user_declined"))
                         })
                         return@launch
                     }
                 } else null
+
+                // Which query each SELECTED credential actually answers (non-ZK path only - the
+                // ZK path's own per-query zkSelection above already carries this) - never
+                // matchResults.firstOrNull's first-match-in-list-order view, which can attribute a
+                // different alternative's claims than the one the consent screen
+                // (PresentationConsentScreen.kt) actually showed for it; see
+                // resolveActiveQueryPerCredential's doc comment. Validated as a whole first via
+                // credentialSetChoiceIsValid: defence in depth against a selection that is not a
+                // valid single credential_sets choice, including a credential that happens to
+                // satisfy two different alternatives at once.
+                val resolvedMatchResultById = if (zkSelection == null) {
+                    val activeQueries = matchResults.filter { r -> r.candidates.any { it.id in selectedIds.toSet() } }
+                    if (!credentialSetChoiceIsValid(credentialSets, satisfiableOptions, activeQueries.map { it.queryId }.toSet())) {
+                        engine.sendFlowAction(flowId, "decline", kotlinx.serialization.json.buildJsonObject {
+                            put("reason", kotlinx.serialization.json.JsonPrimitive("user_declined"))
+                        })
+                        return@launch
+                    }
+                    resolveActiveQueryPerCredential(activeQueries, selectedIds) ?: run {
+                        engine.sendFlowAction(flowId, "decline", kotlinx.serialization.json.buildJsonObject {
+                            put("reason", kotlinx.serialization.json.JsonPrimitive("user_declined"))
+                        })
+                        return@launch
+                    }
+                } else {
+                    emptyMap()
+                }
 
                 // Build consent payload with selected credentials
                 // Must match backend ConsentSelection: credential_query_id, credential_id, disclosed_claims
@@ -11523,9 +11556,7 @@ class SirosWallet private constructor(
                         }
                         for (id in selectedIds) {
                             allCreds.find { it.id == id } ?: continue
-                            val matchResult = matchResults.firstOrNull { r ->
-                                r.candidates.any { it.id == id }
-                            }
+                            val matchResult = resolvedMatchResultById[id]
                             add(kotlinx.serialization.json.buildJsonObject {
                                 matchResult?.queryId?.let {
                                     put("credential_query_id", kotlinx.serialization.json.JsonPrimitive(it))

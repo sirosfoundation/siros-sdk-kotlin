@@ -28,11 +28,13 @@ class PresentationRequestStepsTest {
     private fun request(
         vararg results: CredentialMatcher.MatchResult,
         satisfiableOptions: List<CredentialMatcher.SatisfiableOption> = emptyList(),
+        credentialSets: List<CredentialMatcher.CredentialSetQuery>? = null,
     ) = PresentationRequest(
         verifierName = "v",
         matchResults = results.toList(),
         candidates = listOf(cred),
         satisfiableOptions = satisfiableOptions,
+        credentialSets = credentialSets,
     )
 
     @Test
@@ -156,12 +158,19 @@ class PresentationRequestStepsTest {
         assertEquals(setOf("pid_1_8", "pid_mdoc", "pid_mdoc_id"), groups[0].options.flatMap { it.queryIds }.toSet())
     }
 
+    private fun credentialSet(vararg options: List<String>, required: Boolean = true) =
+        CredentialMatcher.CredentialSetQuery(options = options.toList(), required = required)
+
     @Test
     fun activeConsentMatchResultsExcludesEveryAlternativeUntilOneIsChosen() {
         val a = result("pid_1_8", "mso_mdoc", listOf(listOf("ns", "given_name")))
         val b = result("pid_mdoc", "mso_mdoc", listOf(listOf("ns", "given_name")))
         val c = result("pid_mdoc_id", "mso_mdoc", listOf(listOf("ns", "given_name")))
-        val r = request(a, b, c, satisfiableOptions = listOf(option(3, "pid_1_8"), option(4, "pid_mdoc"), option(5, "pid_mdoc_id")))
+        val r = request(
+            a, b, c,
+            satisfiableOptions = listOf(option(3, "pid_1_8"), option(4, "pid_mdoc"), option(5, "pid_mdoc_id")),
+            credentialSets = listOf(credentialSet(listOf("pid_1_8"), listOf("pid_mdoc"), listOf("pid_mdoc_id"))),
+        )
 
         // Nothing chosen yet: the bug this closes is exactly "every alternative is
         // active at once" - the fix must make that none, not all three.
@@ -180,9 +189,60 @@ class PresentationRequestStepsTest {
         val a = result("pid_1_8", "mso_mdoc", listOf(listOf("ns", "given_name")))
         val b = result("pid_mdoc", "mso_mdoc", listOf(listOf("ns", "given_name")))
         val unrelated = result("other", "dc+sd-jwt", listOf(listOf("x")))
-        val r = request(a, b, unrelated, satisfiableOptions = listOf(option(0, "pid_1_8"), option(1, "pid_mdoc")))
+        val r = request(
+            a, b, unrelated,
+            satisfiableOptions = listOf(option(0, "pid_1_8"), option(1, "pid_mdoc")),
+            credentialSets = listOf(credentialSet(listOf("pid_1_8"), listOf("pid_mdoc"))),
+        )
 
         assertEquals(setOf("other"), r.activeConsentMatchResults(emptyMap()).map { it.queryId }.toSet())
         assertEquals(setOf("pid_1_8", "other"), r.activeConsentMatchResults(mapOf(0 to 0)).map { it.queryId }.toSet())
+    }
+
+    // ── Regression tests for a Copilot review on #353: two multi-element-option edge cases ──
+    // not hit by nym_auth's own single-element-option query, but real gaps in the general
+    // mechanism the first version of activeConsentMatchResults (above) got wrong.
+
+    @Test
+    fun activeConsentMatchResultsKeepsASharedQueryAcrossMultiElementAlternatives() {
+        // credential_sets options [[a,b],[a,c]]: "a" is a member of BOTH alternatives. The
+        // earlier (buggy) implementation excluded every query id appearing in any NON-chosen
+        // option - so choosing [a,b] still excluded "a" too, because "a" also appears in the
+        // other, non-chosen option [a,c], leaving an incomplete presentation (just "b").
+        val a = result("a", "mso_mdoc", listOf(listOf("ns", "x")))
+        val b = result("b", "mso_mdoc", listOf(listOf("ns", "y")))
+        val c = result("c", "mso_mdoc", listOf(listOf("ns", "z")))
+        val r = request(
+            a, b, c,
+            satisfiableOptions = listOf(option(0, "a", "b"), option(1, "a", "c")),
+            credentialSets = listOf(credentialSet(listOf("a", "b"), listOf("a", "c"))),
+        )
+
+        assertEquals(1, r.exclusiveChoiceGroups.size)
+        // Choosing [a,b] (option 0): both a and b are active, "a" is NOT dropped.
+        assertEquals(setOf("a", "b"), r.activeConsentMatchResults(mapOf(0 to 0)).map { it.queryId }.toSet())
+        // Choosing [a,c] (option 1): both a and c are active, "b" plays no part.
+        assertEquals(setOf("a", "c"), r.activeConsentMatchResults(mapOf(0 to 1)).map { it.queryId }.toSet())
+    }
+
+    @Test
+    fun activeConsentMatchResultsNeverIncludesAQueryFromAnUnsatisfiableOption() {
+        // credential_sets options [[a],[b,c]], but only "a" and "b" matched (not "c"): option
+        // [b,c] can never be satisfied (findSatisfiableOptions requires every member to have a
+        // candidate), so only [a] is satisfiable - not ambiguous, nothing to choose. The earlier
+        // (buggy) implementation's early return (`if (groups.isEmpty()) return consentMatchResults`)
+        // skipped filtering entirely whenever nothing in the WHOLE request was ambiguous, so "b" -
+        // which does have its own candidate and so is in consentMatchResults - leaked straight
+        // through even though its only credential_sets option is unsatisfiable.
+        val a = result("a", "mso_mdoc", listOf(listOf("ns", "x")))
+        val b = result("b", "mso_mdoc", listOf(listOf("ns", "y")))
+        val r = request(
+            a, b, unmatched("c"),
+            satisfiableOptions = listOf(option(0, "a")),
+            credentialSets = listOf(credentialSet(listOf("a"), listOf("b", "c"))),
+        )
+
+        assertTrue("only one option is satisfiable - nothing to choose", r.exclusiveChoiceGroups.isEmpty())
+        assertEquals(listOf("a"), r.activeConsentMatchResults(emptyMap()).map { it.queryId })
     }
 }
