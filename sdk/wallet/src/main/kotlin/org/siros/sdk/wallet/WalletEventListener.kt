@@ -2,7 +2,9 @@
 package org.siros.sdk.wallet
 
 import org.siros.sdk.credentials.CredentialAttributeDiff
+import org.siros.sdk.credentials.CircuitZkRuleSet
 import org.siros.sdk.credentials.CredentialMatcher
+import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.StoredCredential
 
 /**
@@ -24,7 +26,145 @@ data class PresentationRequest(
     val credentialSets: List<CredentialMatcher.CredentialSetQuery>? = null,
     /** Which credential set options are satisfiable with available credentials. */
     val satisfiableOptions: List<CredentialMatcher.SatisfiableOption> = emptyList(),
-)
+) {
+    /**
+     * True when answering this request discloses NO credential data: every matched query is a circuit_zk / `zkp_req` query whose
+     * PLAN consists only of the rulebook functions that return a derived value and never a claim (`pseudonym`, `age_check`). A consent
+     * UI then has nothing to let the user select or confirm beyond choosing the credential and sharing or declining, so it can skip its
+     * claim-selection and "confirm what is shared" steps.
+     *
+     * Derived from the plan, not from [CredentialMatcher.MatchResult.requestedClaims], which is empty for EVERY circuit_zk query: the
+     * legacy `zk-claim-disclosure-v1` function (claims, `mso_mdoc_zk`-style age-over-18) discloses claims that live in the plan's functions.
+     * Fail closed: any other function, an unknown one, an empty plan or a query without a plan keeps every step, as does any query in
+     * another format (which may ask for the whole credential) and an empty request.
+     */
+    val disclosesNoClaims: Boolean
+        get() = consentMatchResults.isNotEmpty() && consentMatchResults.all { r ->
+            val plan = r.circuitZkPlan
+            CredentialUtils.isCircuitZkFormat(r.format) && r.requestedClaims.flatten().isEmpty() && plan != null &&
+                plan.functions.isNotEmpty() && plan.functions.all { it.id in NON_DISCLOSING_FUNCTIONS }
+        }
+
+    /**
+     * The queries a consent UI shows: only those the wallet matched at least one credential for. A DCQL query without a candidate (one
+     * alternative of a `credential_sets` option list the wallet cannot answer, with several alternatives each asking for the same
+     * claims) has nothing to select or confirm, so it gets no claim-selection step and no card; an optional set with no match is skipped,
+     * not an empty step. [matchResults] still lists every query (the matcher's full answer).
+     */
+    val consentMatchResults: List<CredentialMatcher.MatchResult>
+        get() = matchResults.filter { it.candidates.isNotEmpty() }
+
+    /**
+     * How many steps a stepped consent UI needs: the overview with the credential choice, then (unless [disclosesNoClaims]) one
+     * claim-selection step per [consentMatchResults] entry and a final "confirm what is shared" summary. Share and Decline are on the last step, so
+     * a request that discloses nothing is one step.
+     *
+     * Does NOT account for [exclusiveChoiceGroups] - a UI with any of those needs its own extra step(s) and must size itself from
+     * [activeConsentMatchResults] instead of [consentMatchResults] once the user has picked.
+     */
+    val consentStepCount: Int
+        get() = if (disclosesNoClaims) 1 else consentMatchResults.size + 2
+
+    /**
+     * One DCQL `credential_sets` entry (OID4VP 1.0 §6.2) with more than one option the wallet can currently satisfy - e.g.
+     * `options: [["mdl"], ["pid_1_8"], ["pid_mdoc_id"]]` where the wallet holds a matching credential for all three. Per §6.2 these
+     * are alternatives, the wallet's choice: a set with exactly one satisfiable option has nothing to choose between (the single
+     * candidate IS the answer, [consentMatchResults] already includes it and nothing else from that set).
+     *
+     * Found live (gdc e2e, nym_auth): a query with one required set of five single-credential alternatives let the consent screen
+     * show every individually-matching credential as an independent, freely-checkable step - so the user selected claims from three
+     * matching PID variants at once and sent all three in a single presentation, rather than the one the verifier's query actually
+     * asked the wallet to choose. A consent UI must let the user pick exactly one option per entry here before building
+     * [activeConsentMatchResults] / anything it sends.
+     */
+    data class ExclusiveChoiceGroup(
+        /** Index into `credential_sets` (and [credentialSets]) this group is for. */
+        val credentialSetIndex: Int,
+        /** The satisfiable alternatives for this credential set - more than one, by construction. */
+        val options: List<CredentialMatcher.SatisfiableOption>,
+    )
+
+    /**
+     * [satisfiableOptions] grouped by `credentialSetIndex`, re-checked against [consentMatchResults]
+     * rather than trusted at face value: a circuit_zk request's candidates are narrowed further by
+     * its plan's own predicate check AFTER [satisfiableOptions] was computed (see SirosWallet's
+     * `planCircuitZkMatches`), so an option reported satisfiable there can have lost its only
+     * candidate by the time this is read. An option like that is not a real alternative any more -
+     * [consentMatchResults] already has nothing for it - so it is dropped here before grouping,
+     * not after: [exclusiveChoiceGroups] and [activeConsentMatchResults] share this SAME recheck
+     * (a Copilot review on #353's follow-up caught them disagreeing - `exclusiveChoiceGroups` saw
+     * the recheck and correctly reported `[[a],[b]]` as no-longer-ambiguous once `a` lost its
+     * candidates, but [activeConsentMatchResults] still grouped the stale, pre-recheck options and
+     * so still required a choice nothing would ever render, silently excluding the surviving `b`
+     * instead of activating it automatically).
+     */
+    private val validSatisfiableOptionsByCredentialSetIndex: Map<Int, List<CredentialMatcher.SatisfiableOption>>
+        get() {
+            val consentQueryIds = consentMatchResults.map { it.queryId }.toSet()
+            return satisfiableOptions
+                .filter { option -> option.queryIds.all { it in consentQueryIds } }
+                .groupBy { it.credentialSetIndex }
+        }
+
+    val exclusiveChoiceGroups: List<ExclusiveChoiceGroup>
+        get() = validSatisfiableOptionsByCredentialSetIndex.entries
+            .sortedBy { it.key }
+            .map { (setIndex, options) -> ExclusiveChoiceGroup(setIndex, options) }
+            .filter { it.options.size > 1 }
+
+    /**
+     * [consentMatchResults] restricted to the queries actually part of this presentation.
+     *
+     * Built as a union of what is "in", never by excluding what is "out" of [consentMatchResults]
+     * - an earlier version did the latter (exclude every option of a group the choice did not
+     * pick) and got it wrong two ways a Copilot review on #353 caught: with alternatives
+     * `[[a,b],[a,c]]`, choosing `[a,b]` excluded `a` anyway because it also appears in the
+     * NON-chosen option `[a,c]`, leaving an incomplete presentation; and with `[[a],[b,c]]` where
+     * only `a` and `b` (not `c`) matched, there was no [ExclusiveChoiceGroup] at all to exclude
+     * anything (only one OPTION - `[a]` - is satisfiable), so `b` leaked straight through
+     * unfiltered even though its only option (`[b,c]`) can never be satisfied. A union avoids
+     * both: every credential_sets member query id starts OUT, and is let back in only as a whole
+     * satisfiable option - the sole one when a set isn't ambiguous, or the chosen one when it is.
+     *
+     * @param chosenOptionIndex credentialSetIndex -> the chosen option's [CredentialMatcher.SatisfiableOption.optionIndex], one entry
+     *   per resolved [ExclusiveChoiceGroup]. A group absent here (not yet chosen) contributes nothing - nothing from
+     *   an unresolved group is ever included, which is what stops the union-of-all-alternatives bug this mechanism exists
+     *   to close from recurring for a group still mid-choice.
+     */
+    fun activeConsentMatchResults(chosenOptionIndex: Map<Int, Int>): List<CredentialMatcher.MatchResult> {
+        val sets = credentialSets
+        if (sets.isNullOrEmpty()) return consentMatchResults
+
+        // Every query id that is a member of ANY option of ANY credential_sets entry -
+        // "constrained" by the structure, whether or not that particular option turned out to be
+        // satisfiable. A query outside this set is unconstrained and always stays active,
+        // whatever is chosen elsewhere.
+        val constrainedQueryIds = sets.flatMap { it.options.flatten() }.toSet()
+
+        // Per credential-set index, the one option that is actually "in": the user's choice when
+        // this set has more than one satisfiable option (an ExclusiveChoiceGroup - nothing from
+        // it counts until chosen), or the sole satisfiable option when there's exactly one
+        // (nothing to choose: that option IS the answer, multi-element or not). A set with zero
+        // satisfiable options contributes nothing - neither its members' free pass (they ARE
+        // constrained) nor an option to include.
+        val activeFromSets = validSatisfiableOptionsByCredentialSetIndex.values.flatMap { options ->
+            val active = if (options.size > 1) {
+                options.firstOrNull { it.optionIndex == chosenOptionIndex[options.first().credentialSetIndex] }
+            } else {
+                options.single()
+            }
+            active?.queryIds.orEmpty()
+        }.toSet()
+
+        val activeQueryIds = activeFromSets + consentMatchResults.map { it.queryId }.filterNot { it in constrainedQueryIds }
+        return consentMatchResults.filter { it.queryId in activeQueryIds }
+    }
+
+    private companion object {
+        /** Rulebook functions whose result is a derived value (a pseudonym, a boolean), never a disclosed claim. */
+        val NON_DISCLOSING_FUNCTIONS = setOf(CircuitZkRuleSet.PSEUDONYM, CircuitZkRuleSet.AGE_CHECK)
+    }
+}
 
 /**
  * Callback interface for wallet events that require user interaction.
@@ -105,6 +245,34 @@ interface WalletEventListener {
      *   the verifier provided one.
      */
     fun onFlowError(flowId: String, errorMessage: String, redirectUri: String? = null) {}
+
+    /**
+     * The issuer refused the auxiliary data the wallet sent because it holds a conflicting one (`AUXILIARY_DATA_CONFLICT`). Terminal
+     * and NOT retryable ([AuxiliaryDataConflictException.retryable] is false): show [AuxiliaryDataConflictException.userMessageRes]
+     * without a retry button. The default forwards the issuer's text to [onFlowError].
+     */
+    fun onAuxiliaryDataConflict(flowId: String, error: AuxiliaryDataConflictException) {
+        onFlowError(flowId, error.issuerMessage)
+    }
+
+    /**
+     * The issuer refused the auxiliary data of the key proofs (`invalid_proof`, `auxiliary_data: ...`). Terminal and NOT retryable
+     * ([AuxiliaryDataRefusedException.retryable] is false); only the fixed [AuxiliaryDataRefusedException.reason] is carried, never the
+     * issuer's text. The default calls [onFlowError] with a short fixed message.
+     */
+    fun onAuxiliaryDataRefused(flowId: String, error: AuxiliaryDataRefusedException) {
+        onFlowError(flowId, "The issuer refused the wallet's auxiliary data (${error.reason.code}). Trying again will not help.")
+    }
+
+    /**
+     * An issuance was refused because the issuer's trust could not be
+     * established (remote evaluation negative or rejected, backend unreachable
+     * with no positive local validation, or an unverifiable mdoc `issuerAuth`).
+     * Nothing was stored. Called in addition to [onFlowError], which carries the
+     * default English wording; apps wording it themselves use the string
+     * resource `siros_issuer_not_trusted`. [reason] is for logs, not users.
+     */
+    fun onIssuerNotTrusted(flowId: String, issuer: String?, reason: String) {}
 
     /**
      * A presentation request carrying OpenID4VP `transaction_data` (EC TS12)

@@ -139,6 +139,91 @@ class JweKeystoreTest {
     }
 
     @Test
+    fun generateProofSignsExtraClaimsIntoThePayload() = runTest {
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        keystore.generateKey()
+
+        val proof = keystore.generateProof(
+            "https://issuer.example.com", "n-1", false, null, mapOf("org.siros.psc" to "abc"),
+        )
+        val signed = com.nimbusds.jwt.SignedJWT.parse(proof)
+        assertEquals("abc", signed.jwtClaimsSet.getStringClaim("org.siros.psc"))
+        assertEquals("n-1", signed.jwtClaimsSet.getStringClaim("nonce"))
+        // The claim is inside the signed bytes: the signature verifies over it.
+        val jwk = signed.header.jwk.toECKey()
+        assertTrue(signed.verify(com.nimbusds.jose.crypto.ECDSAVerifier(jwk)))
+    }
+
+    @Test
+    fun generateProofWithJsonClaimsSignsAnArrayClaimIntoThePayload() = runTest {
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        keystore.generateKey()
+        val claim = kotlinx.serialization.json.buildJsonArray {
+            add(kotlinx.serialization.json.buildJsonObject {
+                put("type", kotlinx.serialization.json.JsonPrimitive("hash_commitment"))
+                put("path", kotlinx.serialization.json.buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive("psc")) })
+            })
+        }
+        val proof = keystore.generateProofWithJsonClaims("https://issuer.example.com", "n-1", false, null, mapOf("auxiliary_data" to claim))
+        val signed = com.nimbusds.jwt.SignedJWT.parse(proof)
+        @Suppress("UNCHECKED_CAST")
+        val got = signed.jwtClaimsSet.getClaim("auxiliary_data") as List<Map<String, Any?>>
+        assertEquals("hash_commitment", got.single()["type"])
+        assertEquals(listOf("psc"), got.single()["path"])
+        assertTrue(signed.verify(com.nimbusds.jose.crypto.ECDSAVerifier(signed.header.jwk.toECKey())))
+    }
+
+    @Test
+    fun aRejectedJsonClaimRegistersNoKey_whetherTheKeystoreIsEmptyOrAFreshKeyIsAsked() = runTest {
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        val bad = mapOf("x" to kotlinx.serialization.json.JsonNull)
+        repeat(3) {
+            try {
+                keystore.generateProofWithJsonClaims("https://issuer.example.com", "n-1", true, null, bad)
+                org.junit.Assert.fail("signed a claim it cannot carry")
+            } catch (_: org.siros.sdk.credentials.KeystoreException) {
+            }
+        }
+        assertEquals("rejected requests left no key behind (empty keystore, fresh key)", 0, keystore.listKeys().size)
+        keystore.generateKey()
+        repeat(2) {
+            try {
+                keystore.generateProofWithJsonClaims("https://issuer.example.com", "n-1", true, null, bad)
+                org.junit.Assert.fail("signed a claim it cannot carry")
+            } catch (_: org.siros.sdk.credentials.KeystoreException) {
+            }
+        }
+        assertEquals(1, keystore.listKeys().size)
+    }
+
+    @Test
+    fun generateProofWithJsonClaimsRefusesNumbersItCannotCarryExactly() = runTest {
+        // The shared ProofClaims keeps only exact integers: a number outside Long (or a fraction) is refused, never rounded.
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        keystore.generateKey()
+        for (n in listOf("9223372036854775809", "0.1234567890123456789012345")) {
+            try {
+                keystore.generateProofWithJsonClaims("https://issuer.example.com", "n-1", false, null, mapOf("big" to kotlinx.serialization.json.Json.parseToJsonElement("[$n]")))
+                org.junit.Assert.fail("signed $n")
+            } catch (_: org.siros.sdk.credentials.KeystoreException) {
+            }
+        }
+    }
+
+    @Test
+    fun generateProofWithoutExtraClaimsCarriesNoCommitmentClaim() = runTest {
+        val keystore = JweKeystore()
+        keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+        keystore.generateKey()
+        val proof = keystore.generateProof("https://issuer.example.com", "n-1")
+        assertEquals(null, com.nimbusds.jwt.SignedJWT.parse(proof).jwtClaimsSet.getClaim("org.siros.psc"))
+    }
+
+    @Test
     fun generateKeyProofBuildsValidPopJwt() = runTest {
         val keystore = JweKeystore()
         keystore.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
@@ -425,10 +510,6 @@ class JweKeystoreTest {
         hashes = listOf("aGFzaDE", "aGFzaDI"),
         hashAlg = "sha-256",
         responseMode = "direct_post",
-        authenticationFactors = listOf(
-            AuthenticationFactor(AuthenticationCategory.KNOWLEDGE, "other"),
-            AuthenticationFactor(AuthenticationCategory.POSSESSION, "key_in_local_native_wscd"),
-        ),
     )
 
     @Test
@@ -442,41 +523,24 @@ class JweKeystoreTest {
     }
 
     @Test
-    fun signVpToken_withTransaction_carriesTheTs12Claims_andVerifies() = runTest {
+    fun signVpToken_withTransaction_isRefused_becauseTheSoftwareKeystoreEstablishesNoFactor() = runTest {
         val keystore = unlockedWithKey()
 
-        val vp = keystore.signVpToken(scaCredential, null, "n", "https://v.example", null, binding())
+        val e = runCatching {
+            keystore.signVpToken(scaCredential, null, "n", "https://v.example", null, binding())
+        }.exceptionOrNull()
 
-        val kb = com.nimbusds.jwt.SignedJWT.parse(vp.split("~").last())
-        assertTrue("KB-JWT signature must verify against the jwk in its own header",
-            kb.verify(com.nimbusds.jose.crypto.ECDSAVerifier(kb.header.jwk.toECKey())))
-        val claims = kb.jwtClaimsSet.claims
+        assertTrue(e.toString(), e is org.siros.sdk.credentials.TransactionDataError)
         assertEquals(
-            setOf("aud", "iat", "nonce", "sd_hash", "transaction_data_hashes", "transaction_data_hashes_alg", "jti", "response_mode", "amr"),
-            claims.keys,
+            org.siros.sdk.credentials.TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS,
+            (e as org.siros.sdk.credentials.TransactionDataError).reason,
         )
-        assertEquals(listOf("aGFzaDE", "aGFzaDI"), claims["transaction_data_hashes"])
-        assertEquals("sha-256", claims["transaction_data_hashes_alg"])
-        assertEquals("direct_post", claims["response_mode"])
-        assertEquals(
-            listOf(mapOf("knowledge" to "other"), mapOf("possession" to "key_in_local_native_wscd")),
-            claims["amr"],
-        )
-        // sd_hash still covers the presentation exactly as before
-        val presentation = vp.substringBeforeLast("~") + "~"
-        val expected = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(
-            java.security.MessageDigest.getInstance("SHA-256").digest(presentation.toByteArray(Charsets.US_ASCII)),
-        )
-        assertEquals(expected, claims["sd_hash"])
     }
 
     @Test
-    fun signVpToken_withTransaction_hasAFreshJtiEachTime() = runTest {
-        val keystore = unlockedWithKey()
+    fun scaAuthenticationCapability_defaultsToCannot() = runTest {
+        val c = unlockedWithKey().scaAuthenticationCapability(scaCredential, null)
 
-        val a = kbClaims(keystore.signVpToken(scaCredential, null, "n", "a", null, binding()))["jti"]
-        val b = kbClaims(keystore.signVpToken(scaCredential, null, "n", "a", null, binding()))["jti"]
-
-        assertNotEquals(a, b)
+        assertFalse(c.isPossible)
     }
 }

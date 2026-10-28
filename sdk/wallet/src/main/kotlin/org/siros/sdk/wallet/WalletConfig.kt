@@ -1,6 +1,11 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.wallet
 
+import org.siros.sdk.credentials.CircuitZkCircuitSource
+import org.siros.sdk.credentials.CircuitZkPlanner
+import org.siros.sdk.credentials.CircuitZkRequestValidator
+import org.siros.sdk.wallet.dcapi.DCAPIRequestRules
+import org.siros.sdk.wallet.dcapi.ExpectedOriginsMode
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -326,7 +331,155 @@ data class WalletConfig(
      * toggle; flip this and rebuild the wallet to change it.
      */
     val vegaProfilingEnabled: Boolean = false,
+    /**
+     * How strictly a signed DC API request's `expected_origins` is enforced
+     * for the formats other than `circuit_zk`: [ExpectedOriginsMode.OFF]
+     * (default, ignore it, as always), `IF_PRESENT` or `REQUIRED`.
+     * `circuit_zk` always requires a signed request whose `expected_origins`
+     * lists the calling origin, whatever this says.
+     */
+    val dcApiExpectedOrigins: ExpectedOriginsMode = ExpectedOriginsMode.OFF,
+    /**
+     * Which DC API requests must be signed and name the calling origin, given
+     * the request's DCQL query. The default is any query with a credential of
+     * `format: "zkp_req"`.
+     */
+    val dcApiRequiresSignedRequest: (kotlinx.serialization.json.JsonObject?) -> Boolean =
+        DCAPIRequestRules.DEFAULT_REQUIRES_SIGNED_REQUEST,
+    /**
+     * Turns on `circuit_zk` matching. `false` (default): a `circuit_zk` query
+     * matches nothing, exactly as before. With `true` it is matched through
+     * [circuitZkPlanner], [circuitZkValidator] and [circuitZkCircuits]; without
+     * a circuit source it still matches nothing (fail closed).
+     * `handleDCAPIRequest` presents a matched `circuit_zk` request with [circuitZkProver],
+     * by default the catalog prover, which answers access-denied until a native prover is supplied.
+     * A circuit that declares `capabilities` or a `credential_type` is selected
+     * only when the shared matcher serves it (never assumed unrestricted).
+     */
+    val circuitZk: Boolean = false,
+    /**
+     * Turns a `circuit_zk` credential query into a plan; see [circuitZk]. `null`
+     * (default) means the shared matcher's planner,
+     * [org.siros.sdk.credentials.SharedCircuitZkPlanner].
+     */
+    val circuitZkPlanner: CircuitZkPlanner? = null,
+    /**
+     * The wallet's satisfiability rules for a plan. `null` (default) means the
+     * rulebook rules ([org.siros.sdk.credentials.RulebookCircuitZkValidator]),
+     * accepting any `verifier_id_type` the request names (the wallet picks the
+     * type itself, see [circuitZkVerifierIdTypes]).
+     */
+    val circuitZkValidator: CircuitZkRequestValidator? = null,
+    /**
+     * The prover behind `circuit_zk` presentations. `null` (default) means the real one,
+     * [org.siros.sdk.keystore.CatalogCircuitZkProver] over the wallet's circuit catalog client and
+     * [circuitZkNativeProver]; it refuses every request while that is absent. Only a host that opts in
+     * explicitly (see [WalletPolicyOptions.fakeProver]) gets a prover that makes no real proof.
+     */
+    val circuitZkProver: org.siros.sdk.keystore.CircuitZkProver? = null,
+    /**
+     * The native half of the default `circuit_zk` prover: builds the `nymauth-*` circuit witnesses and
+     * runs the proof system (see [org.siros.sdk.keystore.NymAuthNativeProver]). Ignored when
+     * [circuitZkProver] is set. `null` (default): the UniFFI bindings of `zk-cred-vega` and
+     * `zk-cred-longfellow` ([org.siros.sdk.keystore.UniffiNymAuthNativeProver]); a build whose native libraries lack
+     * the nymauth entry points refuses every nymauth request instead of crashing.
+     */
+    val circuitZkNativeProver: org.siros.sdk.keystore.NymAuthNativeProver? = null,
+    /**
+     * The wallet's ORDERED supported `verifier_id_type`s (default
+     * `["semantic", "x509_san_dns"]`, see [VerifierIdTypeOrder]). The type is agreed in the
+     * trust framework, so for a pseudonym the wallet walks this list in order and uses the first
+     * type for which an identifier is available; the `verifier_id_type` a request names is
+     * IGNORED for selection (and a request naming another type is not refused for that).
+     * Entries must be non-blank, trimmed, comma-free and unique (checked at construction).
+     * An EMPTY list means no type is supported: a request needing a pseudonym is refused.
+     *
+     * The strings must equal what the policy decision point returns in `context.verifier_ids`. The policy decision point
+     * ([AuthZENSource]) yields a verifier id only for `semantic` (the value, which carries `semantic_id:`) and `x509_san_dns`
+     * (`x509_san_dns:` + the bare SAN it returns): the rulebook v0.4 forms. Any other type is never taken from it.
+     */
+    val circuitZkVerifierIdTypes: List<String> = VerifierIdTypeOrder.DEFAULT,
+    /**
+     * Additional (optional) sources of `verifier_id`, for hosts that want their own. The
+     * policy decision point ([AuthZENSource]) is the default source for every supported type and
+     * is always tried first; these are tried after it, for the types they produce. Empty by default.
+     */
+    val circuitZkVerifierIdSources: List<VerifierIdSource> = emptyList(),
+    /**
+     * The predicate functions the wallet can describe to the user, pre-check locally and merge-check across
+     * queries (see [org.siros.sdk.credentials.PredicateFunctions]). The set of `circuit_zk` functions is
+     * open-ended: a function that is not declared here (and is not a pseudonym or the legacy disclosure) is
+     * refused before consent, because the wallet cannot say what it discloses. Declaring one here is not
+     * enough to answer it: its validator rules and its prover must exist too. Default: `age_check`.
+     */
+    val circuitZkPredicateFunctions: org.siros.sdk.credentials.PredicateFunctions = org.siros.sdk.credentials.PredicateFunctions.DEFAULT,
+    /**
+     * The claims the wallet never matches on, registers, presents or displays,
+     * by credential type. The default protects the nym_auth `ssc` and `psc`;
+     * [NonDisclosurePolicy.NONE] turns it off. A type without an entry is
+     * unaffected. Installed process-wide when the wallet is built.
+     */
+    val nonDisclosurePolicy: org.siros.sdk.credentials.NonDisclosurePolicy = org.siros.sdk.credentials.NonDisclosurePolicy.DEFAULT,
+    /** The circuits the wallet can prove with, from the circuit catalog. */
+    val circuitZkCircuits: CircuitZkCircuitSource? = null,
+    /**
+     * How long a successful remote trust decision (`POST /v1/evaluate`, allow
+     * or deny) is reused for the identical request: same action, subject,
+     * certificate chain / key material and context. Errors, timeouts and
+     * unreachable-backend outcomes are never cached, and an expired entry is
+     * never used, not even while the backend is unreachable. In memory only,
+     * cleared on logout and when the backend connection changes.
+     *
+     * Trade-off: a trust revocation can take up to this long to take effect
+     * for requests already answered within the window. [java.time.Duration.ZERO]
+     * disables the cache. Default 5 minutes.
+     */
+    val trustDecisionCacheTtl: java.time.Duration = java.time.Duration.ofMinutes(5),
+    /**
+     * Optional claimed plugin type PER KEYSTORE: the id of a keystore as registered in [availableKeystores] to the name of its
+     * plugin type (for example `"softkey" to "soft"`, `"fido2" to "fido2"`). When a key attestation is requested, `security_properties.plugin`
+     * is sent ONLY for the keystore that generated (and will hold) those keys, i.e. the keystore the issuance resolved; a keystore with no
+     * entry sends nothing, and never another keystore's claim. A keystore that is not registered in [availableKeystores] (the wallet's
+     * plain default one) cannot be named here and sends no claim.
+     *
+     * It is a CLAIM: the wallet provider backend records it as unverified evidence and alone decides what assurance, if any, it earns; the
+     * wallet never overrides or asserts a tier because of it. Every key must be a registered keystore id and every value 1-64 characters of
+     * `[a-z0-9_-]`; anything else is refused when the configuration is built. Empty (the default) sends nothing.
+     */
+    val wscdPluginClaims: Map<String, String> = emptyMap(),
+    /**
+     * Which zero-knowledge proof system answers a `circuit_zk` request that OFFERS several (the verifier's `system_id_values` and
+     * `proof_system_values`): an ordered ALLOW-list of circuit ids / aliases (`urn:circuits:vega:nym_auth:v1`,
+     * `urn:circuits:longfellow:nym_auth:v1`) or proof systems (`vega-v1`, `longfellow-libzk-v1`). Empty (the default) is no preference:
+     * the first offered circuit in catalog order, as before. A non-empty list narrows the choice to the systems it names, tried in its
+     * order: a system that is not listed is never chosen, and when the verifier offered none of the listed ones the request is
+     * refused like any request nothing offered can answer. It never reaches outside what the verifier offered. Blank, repeated or
+     * unknown entries are refused when the configuration is built.
+     */
+    val zkProofSystemPreference: List<String> = emptyList(),
+    /**
+     * The credential catalog (TS11 registry) as the BASELINE for the key-storage tier a credential type requires at issuance. With
+     * one set, the tier is the catalog's for the type, raised (never lowered) by the issuer's own `attestation_los`, and issuance is
+     * refused when the tier cannot be determined (type not listed, catalog unavailable, unknown tier): there is no fallback to a weaker
+     * keystore, and no onboarded plugin that meets the tier is the same refusal as before ([NoOnboardedWscdException],
+     * [NoEligibleWscdPluginException]). A user override can only choose among plugins that meet the resulting tier. Null (the default)
+     * keeps the previous behaviour: only the issuer's own metadata gives a tier. Needs [availableKeystores]: the tier is met by one of
+     * the registered keystores or not at all.
+     */
+    val credentialTierCatalog: org.siros.sdk.credentials.CredentialTierCatalog? = null,
 ) {
+    init {
+        wscdPluginClaims.forEach { (keystoreId, claim) ->
+            require(availableKeystores?.containsKey(keystoreId) == true) { "wscdPluginClaims names a keystore that is not registered in availableKeystores" }
+            require(Regex("[a-z0-9_-]{1,64}").matches(claim)) { "a wscdPluginClaims value must be 1-64 characters of [a-z0-9_-]" }
+        }
+        VerifierIdTypeOrder.require(circuitZkVerifierIdTypes)
+        org.siros.sdk.credentials.ZkProofSystemPreference.require(zkProofSystemPreference)
+        require(credentialTierCatalog == null || !availableKeystores.isNullOrEmpty()) {
+            "credentialTierCatalog needs availableKeystores: the tier is met by one of the registered keystores"
+        }
+    }
+
     /**
      * The reader-trust mode actually in force: [readerTrustEvaluationMode] if
      * one was chosen, otherwise whatever the deprecated

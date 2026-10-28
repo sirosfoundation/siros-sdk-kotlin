@@ -142,11 +142,59 @@ data class CredentialDisplay(
 @Serializable
 data class CredentialResult(
     val format: String,
-    val credential: String,
+    /** Empty when [FlowCompleteResult.credentialResponseEncrypted]: the engine never held it, the wallet fills it in. */
+    val credential: String = "",
     val vct: String? = null,
     @SerialName("c_nonce") val cNonce: String? = null,
     @SerialName("notification_id") val notificationId: String? = null,
-)
+) {
+    // The credential itself is never printed.
+    override fun toString() = "CredentialResult(format=$format, credential=<redacted>, notificationId=$notificationId)"
+}
+
+/**
+ * The typed view of a `wmp.flow.complete` `result`, which is the whole
+ * engine `FlowCompleteMessage` object. [FlowCompleteParams.result] arrives as
+ * a raw [JsonObject]; [decode] is the one place it is read into typed
+ * [CredentialResult]s.
+ */
+@Serializable
+data class FlowCompleteResult(
+    val credentials: List<CredentialResult>? = null,
+    @SerialName("credential_issuer") val credentialIssuer: String? = null,
+    @SerialName("redirect_uri") val redirectUri: String? = null,
+    /** See [org.siros.sdk.transport.engine.FlowCompleteMessage.credentialResponseEncrypted]. */
+    @SerialName("credential_response_encrypted")
+    @Serializable(with = org.siros.sdk.transport.EncryptedResponseFlagSerializer::class)
+    val credentialResponseEncrypted: Boolean = false,
+    /** See [org.siros.sdk.transport.engine.FlowCompleteMessage.credentialMetadata]: display-only members of a plain response. */
+    @SerialName("credential_metadata")
+    @Serializable(with = org.siros.sdk.transport.DisplayOnlyCredentialMetadataSerializer::class)
+    val credentialMetadata: org.siros.sdk.transport.ResponseCredentialMetadata? = null,
+    /** `redacted_members`: what a replayed completion withheld (the renewal material); see [org.siros.sdk.transport.engine.FlowCompleteMessage.redactedMembers]. */
+    @SerialName("redacted_members")
+    @Serializable(with = org.siros.sdk.transport.RedactedMembersSerializer::class)
+    val redactedMembers: Set<String> = emptySet(),
+) {
+    init {
+        // Only an encrypted completion has placeholders; a plain one carries a value for every credential.
+        require(credentialResponseEncrypted || credentials.orEmpty().all { it.credential.isNotEmpty() }) {
+            "A completion that is not encrypted carries a value for every credential"
+        }
+    }
+
+    /** Whether the renewal material (`refresh_token`, `dpop_jwk`, `dpop_key_id`) was withheld, wholly or in part. */
+    val renewalMaterialRedacted: Boolean
+        get() = redactedMembers.any { it == "refresh_token" || it == "dpop_jwk" || it == "dpop_key_id" }
+
+    companion object {
+        private val lenient = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
+        /** Decode [result]; null when absent. Throws on a malformed member (fail closed). */
+        fun decode(result: JsonObject?): FlowCompleteResult? =
+            result?.let { lenient.decodeFromJsonElement(serializer(), it) }
+    }
+}
 
 @Serializable
 data class VPTokenResult(
@@ -227,6 +275,19 @@ data class SignSubFlowParams(
     @SerialName("dpop_nonce") val dpopNonce: String? = null,
     val ath: String? = null,
     @SerialName("key_id") val keyId: String? = null,
+    @SerialName("credential_type") val credentialType: String? = null,
+    @SerialName("credential_issuer") val credentialIssuer: String? = null,
+    /** Same members, same meaning as the legacy transport's [org.siros.sdk.transport.engine.SignRequestParams]. */
+    @SerialName("credential_response_encryption")
+    val credentialResponseEncryption: org.siros.sdk.transport.CredentialResponseEncryptionRequest? = null,
+    val jwe: String? = null,
+    val deferred: Boolean? = null,
+    @SerialName("response_encryption") val responseEncryption: org.siros.sdk.transport.ResponseEncryptionRequest? = null,
+    val state: String? = null,
+    /** See [org.siros.sdk.transport.engine.SignRequestParams.verifiedRequest]. */
+    @SerialName("verified_request") val verifiedRequest: org.siros.sdk.transport.VerifiedRequest? = null,
+    /** Credential Auxiliary Data v0.1: the advertised `to_issuer` entries verbatim (same meaning as the legacy transport's). Appended last. */
+    @SerialName("auxiliary_data_to_issuer") val auxiliaryDataToIssuer: List<kotlinx.serialization.json.JsonObject>? = null,
 )
 
 // ---------------------------------------------------------------------------
@@ -277,6 +338,9 @@ data class OpenID4xConfig(
     val onComplete: (suspend (String, JsonObject?) -> Unit)? = null,
     val onError: (suspend (String, String?, String?) -> Unit)? = null,
     val attestationProvider: ClientAttestationProvider? = null,
+    // Appended last: a data class's property order is part of its binary API.
+    /** Called with the flow id when the orchestrator cancels a flow (`wmp.flow.cancel`). */
+    val onCancel: (suspend (String) -> Unit)? = null,
 )
 
 /** Result of a sign sub-flow request. */
@@ -305,7 +369,28 @@ data class SignSubFlowResult(
     val clientAttestationPoP: String? = null,
     val dpopKeyId: String? = null,
     val dpopProof: String? = null,
-)
+    /**
+     * The engine-blind encryption answers, under the legacy transport's names (see
+     * [org.siros.sdk.transport.engine.SignResponseMessage]): the public JWK of the key generated for the credential
+     * response, the control fields of a decrypted response, the encrypted authorization response, and an error.
+     */
+    val credentialResponseEncryptionJwk: JsonObject? = null,
+    val transactionId: String? = null,
+    val interval: Int? = null,
+    val responseJwe: String? = null,
+    val error: String? = null,
+    /** `decrypt_credential_response` for ISSUED credentials: how many the decrypted response carries (1..256). */
+    val credentialCount: Int? = null,
+) {
+    init {
+        require(responseJwe == null || vpToken == null) { "A sign result carries response_jwe or vp_token, never both" }
+        require(listOfNotNull(credentialCount, transactionId, error).size <= 1) {
+            "A decrypt_credential_response answer carries exactly one of credential_count, transaction_id or error"
+        }
+        // A refusal on this transport is a flow error, never a result; an error here carries no response either.
+        require(responseJwe == null || error == null) { "A sign result that carries an error carries no response_jwe" }
+    }
+}
 
 @Serializable
 data class ProofObject(
@@ -415,6 +500,7 @@ class OpenID4xProfile(
 
     override suspend fun handleCancel(params: FlowCancelParams) {
         Timber.d("OpenID4x flow cancelled: ${params.flowId} reason=${params.reason}")
+        config.onCancel?.invoke(params.flowId)
     }
 
     // ---- Sub-flow handlers ----
@@ -502,6 +588,12 @@ class OpenID4xProfile(
             result.clientAttestationPoP?.let { put("client_attestation_pop", JsonPrimitive(it)) }
             result.dpopKeyId?.let { put("dpop_key_id", JsonPrimitive(it)) }
             result.dpopProof?.let { put("dpop_proof", JsonPrimitive(it)) }
+            result.credentialResponseEncryptionJwk?.let { put("credential_response_encryption_jwk", it) }
+            result.transactionId?.let { put("transaction_id", JsonPrimitive(it)) }
+            result.interval?.let { put("interval", JsonPrimitive(it)) }
+            result.credentialCount?.let { put("credential_count", JsonPrimitive(it)) }
+            result.responseJwe?.let { put("response_jwe", JsonPrimitive(it)) }
+            result.error?.let { put("error", JsonPrimitive(it)) }
         }
         ctx.notify(WmpMethods.FLOW_ACTION, params)
     }
@@ -512,14 +604,12 @@ class OpenID4xProfile(
             put("wmp", ctx.codec.json.encodeToJsonElement(WmpMeta.serializer(), WmpMeta()))
             put("flow_id", JsonPrimitive(flowId))
             put("action", JsonPrimitive("match_response"))
+            // Only the query ids, and a reason CODE: the engine learns nothing about the wallet's credentials.
             put("matches", ctx.codec.json.encodeToJsonElement(
-                ListSerializer(CredentialMatch.serializer()),
-                result.matches,
+                ListSerializer(org.siros.sdk.transport.engine.MatchRef.serializer()),
+                result.matches.map { org.siros.sdk.transport.engine.MatchRef(it.credentialQueryId) },
             ))
-            // Carried on the wire under the same name the legacy transport's
-            // MatchResponseMessage uses. It was dropped here, so a wallet
-            // that knew why it had nothing to offer could not say so.
-            result.noMatchReason?.let { put("no_match_reason", JsonPrimitive(it)) }
+            org.siros.sdk.transport.engine.NoMatchCodes.wire(result.noMatchReason)?.let { put("no_match_reason", JsonPrimitive(it)) }
         }
         ctx.notify(WmpMethods.FLOW_ACTION, params)
     }
@@ -531,10 +621,10 @@ class OpenID4xProfile(
             put("flow_id", JsonPrimitive(flowId))
             put("action", JsonPrimitive(OID4Action.CREDENTIALS_MATCHED))
             put("matches", ctx.codec.json.encodeToJsonElement(
-                ListSerializer(CredentialMatch.serializer()),
-                result.matches,
+                ListSerializer(org.siros.sdk.transport.engine.MatchRef.serializer()),
+                result.matches.map { org.siros.sdk.transport.engine.MatchRef(it.credentialQueryId) },
             ))
-            result.noMatchReason?.let { put("no_match_reason", JsonPrimitive(it)) }
+            org.siros.sdk.transport.engine.NoMatchCodes.wire(result.noMatchReason)?.let { put("no_match_reason", JsonPrimitive(it)) }
         }
         ctx.notify(WmpMethods.FLOW_ACTION, params)
     }

@@ -2,6 +2,7 @@ package org.siros.sdk.wallet
 
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.coVerifyOrder
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
@@ -16,6 +17,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -26,6 +28,7 @@ import kotlin.reflect.full.declaredMemberFunctions
 import kotlin.reflect.jvm.isAccessible
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import okhttp3.OkHttpClient
@@ -47,8 +50,10 @@ import kotlinx.serialization.json.putJsonObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -95,6 +100,7 @@ import com.nimbusds.jwt.JWTClaimsSet
 import com.nimbusds.jwt.SignedJWT
 import org.siros.sdk.transport.engine.CredentialNotificationEvent
 import org.siros.sdk.transport.engine.CredentialResult
+import org.siros.sdk.transport.engine.IssuerTrustReport
 import org.siros.sdk.transport.engine.CredentialMatch
 import org.siros.sdk.transport.engine.FlowCompleteMessage
 import org.siros.sdk.transport.engine.FlowError
@@ -120,6 +126,11 @@ class SirosWalletTest {
     fun tearDown() {
         Dispatchers.resetMain()
         SirosWallet.createEngineSession = { baseUrl, tenantId -> WalletEngineSession(baseUrl, tenantId) }
+        // Every czkSetup wallet's scope records what escapes a launch (its scope has no other handler, like the real one): an
+        // unexpected failure of a signing coroutine fails the test that caused it, not only the two that inspect the recorder.
+        val escaped = czkUncaught.toList()
+        czkUncaught.clear()
+        assertTrue("an exception escaped a wallet coroutine: $escaped", escaped.isEmpty())
     }
 
     @Test
@@ -335,6 +346,36 @@ class SirosWalletTest {
     }
 
     @Test
+    fun deleteCredential_unsupportedSchemaVersion_persistsAndUploadsNothingAndIsReported() = runBlocking {
+        val store = FakeCredentialStore(mutableListOf())
+        val keystore = mockk<KeystoreManager>()
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val existing = """{"prfKeys":[],"jwe":"existing"}"""
+        every { keystore.isUnlocked } returns true
+        every { sessionStore.privateDataJwe } returns existing
+        coEvery { keystore.exportEncryptedContainer() } throws
+            org.siros.sdk.credentials.UnsupportedSchemaVersionException(
+                "S.schemaVersion 5", org.siros.sdk.credentials.UnsupportedSchemaVersionException.Kind.STATE_VERSION, 5,
+            )
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to sessionStore,
+            "apiClient" to apiClient,
+            "eventListener" to listener,
+        )
+
+        wallet.deleteCredential(999L)
+
+        verify(exactly = 0) { sessionStore.privateDataJwe = any() }
+        coVerify(exactly = 0) { apiClient.updatePrivateData(any()) }
+        verify(exactly = 1) { listener.onFlowError("sync", match { it.contains("does not support") }, null) }
+    }
+
+    @Test
     fun handleTrustEvaluation_rejects_missing_subject_id_without_backend_call() = runTest(dispatcher) {
         val engine = mockk<WalletEngineSession>(relaxed = true)
         val apiClient = mockk<BackendApiClient>()
@@ -372,7 +413,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -414,6 +454,41 @@ class SirosWalletTest {
     }
 
     @Test
+    fun handleTrustEvaluation_resourceIdEqualsSubjectId_forEveryVerifierIdentityShape() = runTest(dispatcher) {
+        // go-trust refuses a full evaluation whose resource.id differs from subject.id (a 502 from the backend proxy), so the
+        // verifier-trust request the zkp_req redirect route depends on must carry the SAME id in both, prefixed or not.
+        for (subject in listOf("x509_san_dns:rp.example", "decentralized_identifier:did:web:rp.example", "https://rp.example/verifier", "verifier-123")) {
+            val engine = mockk<WalletEngineSession>(relaxed = true)
+            val apiClient = mockk<BackendApiClient>()
+            val request = slot<JsonObject>()
+            coEvery { apiClient.evaluateTrust(capture(request)) } returns buildJsonObject { put("decision", true) }
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+                "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                "apiClient" to apiClient,
+                "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            )
+            invokeHandleTrustEvaluation(
+                wallet, engine, "flow-id",
+                buildJsonObject {
+                    putJsonObject("request") {
+                        put("subject_id", subject)
+                        put("subject_type", "credential_verifier")
+                        putJsonObject("key_material") {
+                            put("type", "x5c")
+                            putJsonArray("x5c") { add(JsonPrimitive("cert-1")) }
+                        }
+                    }
+                },
+            )
+            advanceUntilIdle()
+            val sid = request.captured["subject"]!!.jsonObject["id"]?.jsonPrimitive?.content
+            assertEquals(subject, sid)
+            assertEquals(subject, sid?.let { request.captured["resource"]!!.jsonObject["id"]?.jsonPrimitive?.content })
+        }
+    }
+
+    @Test
     fun handleTrustEvaluation_returns_failure_reason_when_backend_throws() = runTest(dispatcher) {
         val engine = mockk<WalletEngineSession>(relaxed = true)
         val apiClient = mockk<BackendApiClient>()
@@ -423,7 +498,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -446,6 +520,28 @@ class SirosWalletTest {
         advanceUntilIdle()
 
         verify(exactly = 1) { engine.sendTrustResult("flow-3", false, "trust backend offline") }
+    }
+
+    @Test
+    fun handleTrustEvaluation_whenTheSocketRefusesTheFailureReply_nothingEscapesTheLaunch() = runTest(dispatcher) {
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        every { engine.sendTrustResult(any(), any(), any()) } throws IllegalStateException("Not connected")
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws IllegalStateException("trust backend offline")
+        val escaped = mutableListOf<Throwable>()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob() + kotlinx.coroutines.CoroutineExceptionHandler { _, e -> escaped += e }),
+            "apiClient" to apiClient,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+        )
+        invokeHandleTrustEvaluation(
+            wallet, engine, "flow-refused",
+            buildJsonObject { putJsonObject("request") { put("subject_id", "x"); put("subject_type", "credential_issuer"); putJsonObject("key_material") { put("type", "x5c"); putJsonArray("x5c") { add(JsonPrimitive("c")) } } } },
+        )
+        advanceUntilIdle()
+        verify(exactly = 1) { engine.sendTrustResult("flow-refused", false, "trust backend offline") }
+        assertEquals(emptyList<Throwable>(), escaped)
     }
 
     /**
@@ -489,7 +585,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -554,7 +649,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -615,7 +709,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -683,7 +776,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -743,7 +835,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         val result = invokeHandleWmpTrustEvaluation(
@@ -811,7 +902,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         val result = invokeHandleWmpTrustEvaluation(
@@ -845,7 +935,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         val result = invokeHandleWmpTrustEvaluation(
@@ -895,7 +984,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         val result = invokeHandleWmpTrustEvaluation(
@@ -955,7 +1043,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -1021,7 +1108,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -1087,7 +1173,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -1157,7 +1242,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -1207,7 +1291,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -1276,7 +1359,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -1314,7 +1396,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -1360,7 +1441,6 @@ class SirosWalletTest {
             "scope" to CoroutineScope(dispatcher + SupervisorJob()),
             "apiClient" to apiClient,
             "lastTrustResults" to mutableMapOf<String, TrustResult>(),
-            "trustCache" to TrustCache(),
         )
 
         invokeHandleTrustEvaluation(
@@ -1557,6 +1637,294 @@ class SirosWalletTest {
             )
         }
         verify(exactly = 0) { engine.sendFlowAction("flow-auth", "authorization_complete", any()) }
+    }
+
+    @Test
+    fun startPresentation_aRedeliveredIdenticalLinkStartsNoSecondFlow_butARetryAfterAFailedStartDoes() = runTest(dispatcher) {
+        val flowErrors = MutableSharedFlow<FlowErrorMessage>()
+        val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
+        val engine = mockEngineConstructor(flowErrors = flowErrors, flowComplete = completeFlow)
+        every { engine.startPresentation(any(), any(), any()) } just runs
+        coEvery { engine.awaitConnected(any()) } just runs
+        every { engine.sendCredentialNotification(any(), any(), any(), any()) } just runs
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", tenantId = "tenant-1", redirectUri = "siros://callback"),
+            "presentationLinks" to PresentationLinkLedger(),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        val link = "openid4vp://?client_id=issuer.example.com&request_uri=https%3A%2F%2Fissuer.example.com%2Fr%2F1&response_code=DMEpnhz"
+
+        assertTrue(wallet.startPresentation(link))
+        assertFalse("the issuer's page re-fires it on the way back: ignored, and the caller is told", wallet.startPresentation(link))
+        verify(exactly = 1) { engine.startPresentation(any(), any(), any()) }
+
+        assertTrue("a different request is a different flow", wallet.startPresentation("$link&x=other"))
+        verify(exactly = 2) { engine.startPresentation(any(), any(), any()) }
+
+        // a start that failed is not remembered: the retry goes through
+        var calls = 0
+        every { engine.startPresentation(any(), any(), any()) } answers { if (calls++ == 0) throw IllegalStateException("socket down") }
+        val retry = "$link&y=retry"
+        runCatching { wallet.startPresentation(retry) }
+        assertTrue(wallet.startPresentation(retry))
+    }
+
+    @Test
+    fun startPresentation_aFlowErrorBeforeTheAnswerReleasesTheLink() = runTest(dispatcher) {
+        val flowErrors = MutableSharedFlow<FlowErrorMessage>()
+        val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
+        val engine = mockEngineConstructor(flowErrors = flowErrors, flowComplete = completeFlow)
+        every { engine.startPresentation(any(), any(), any()) } just runs
+        coEvery { engine.awaitConnected(any()) } just runs
+        every { engine.sendCredentialNotification(any(), any(), any(), any()) } just runs
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", tenantId = "tenant-1", redirectUri = "siros://callback"),
+            "presentationLinks" to PresentationLinkLedger(),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to mockk<WalletEventListener>(relaxed = true),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        val failed = "openid4vp://?client_id=v.example.com&request_uri=https%3A%2F%2Fv.example.com%2Fr%2F1"
+
+        assertTrue(wallet.startPresentation(failed))
+        // the engine reports an error for it (a connection loss, a refused request) before any answer was sent
+        flowErrors.emit(FlowErrorMessage(flowId = "f1", error = FlowError(code = "internal", message = "boom")))
+        advanceUntilIdle()
+        assertTrue("the Retry action resubmits the same link: it must go through", wallet.startPresentation(failed))
+        verify(exactly = 2) { engine.startPresentation(any(), any(), any()) }
+    }
+
+    @Test
+    fun resumingAfterTheBrowser_theSocketItReplacesDoesNotReportTheOriginalFlowAsLost() = runTest(dispatcher) {
+        // Pixel e2e on gdc: "Resuming authorization of flow X ... reconnecting" and 20 ms later "Flow X lost with its engine connection;
+        // ending it locally" plus a failure in the UI, although the resumed flow completed under a new id. The resumption's own forced
+        // reconnect replaces the socket the original flow was first seen on; that must not be reported as a failure of that flow.
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val generations = MutableStateFlow(0)
+        val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
+        val continuations = java.util.concurrent.ConcurrentHashMap<String, String>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val keystore = org.siros.sdk.keystore.JweKeystore()
+        keystore.unlock(ByteArray(32) { it.toByte() }, ByteArray(0), ByteArray(32) { 5 }, "info".toByteArray())
+        val store = KeystoreMirroringStore(keystore, mirror = true)
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        every { sessionStore.privateDataJwe } returns null
+        coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+        val engine = mockEngineConstructor(progressFlow = progressFlow, flowComplete = completeFlow, generations = generations)
+        every { engine.sendCredentialNotification(any(), any(), any(), any()) } just runs
+        every { engine.resumeIssuance(any(), any(), any(), any(), any()) } just runs
+        coEvery { engine.awaitConnected(any()) } just runs
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", tenantId = "tenant-1", redirectUri = "siros://callback"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to sessionStore,
+            "apiClient" to apiClient,
+            "eventListener" to listener,
+            "pendingAuthorizations" to mutableMapOf<String, Any?>(),
+            "resumingFlowIds" to java.util.concurrent.ConcurrentLinkedQueue<String>(),
+            "flowContinuations" to continuations,
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "flow-auth",
+                step = "authorization_required",
+                payload = buildJsonObject {
+                    put("authorization_url", "https://issuer.example.com/auth?state=s")
+                    put("expected_redirect_uri", "siros://callback")
+                    put("state", "s")
+                    put("code_verifier", "v")
+                    putJsonObject("credential_offer") { put("credential_issuer", "https://issuer.example.com") }
+                },
+            )
+        )
+        advanceUntilIdle()
+
+        wallet.completeAuthorization(flowId = "flow-auth", code = "code", state = "s")
+        advanceUntilIdle()
+        // the forced reconnect opened a new connection generation: the sweep for flows of the older one runs
+        generations.value = 1
+        advanceUntilIdle()
+
+        verify(exactly = 1) { engine.resumeIssuance(any(), any(), any(), any(), any()) }
+        verify(exactly = 0) { listener.onFlowError("flow-auth", any(), any()) }
+
+        // the resumed flow (a new id) completes, which pairs it with the original; a LATER reconnect must not sweep the original either
+        completeFlow.emit(
+            FlowCompleteMessage(
+                flowId = "flow-new",
+                credentials = listOf(CredentialResult(format = "dc+sd-jwt", credential = NymTestCredentials.sdJwt(sscValues = emptyList()), notificationId = "n-1")),
+            ),
+        )
+        advanceUntilIdle()
+        assertEquals("the resumed flow is paired with the original", mapOf("flow-new" to "flow-auth"), continuations.toMap())
+        generations.value = 2
+        advanceUntilIdle()
+        verify(exactly = 0) { listener.onFlowError("flow-auth", any(), any()) }
+    }
+
+    @Test
+    fun startPresentation_aConnectionReplacedBeforeTheFirstFlowEventReleasesTheLink() = runTest(dispatcher) {
+        val generations = MutableStateFlow(0)
+        val engine = mockEngineConstructor(generations = generations)
+        every { engine.startPresentation(any(), any(), any()) } just runs
+        coEvery { engine.awaitConnected(any()) } just runs
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", tenantId = "tenant-1", redirectUri = "siros://callback"),
+            "presentationLinks" to PresentationLinkLedger(),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        val link = "openid4vp://?client_id=v.example.com&request_uri=https%3A%2F%2Fv.example.com%2Fr%2F9"
+        assertTrue(wallet.startPresentation(link))
+        // the socket dies after the start but before any flow event: no flow id exists for the sweeps, yet the link must not stay blocked
+        generations.value = engine.connectionGeneration + 1
+        advanceUntilIdle()
+        assertTrue(wallet.startPresentation(link))
+        verify(exactly = 2) { engine.startPresentation(any(), any(), any()) }
+    }
+
+    /**
+     * The whole resumption after the browser: the authorization step hands off, the app comes back with a code, the engine
+     * WebSocket is reconnected, ONE stateless flow_start is sent, and the engine completes the issuance under a NEW flow id.
+     * The credential is stored and the completion is reported for the new id; the log names the reconnect and pairs the new
+     * flow id with the one it resumed (and shows nothing secret).
+     */
+    @Test
+    fun resumptionAfterTheBrowser_completesUnderANewFlowId_storesTheCredential_andLogsTheContinuation() = runTest(dispatcher) {
+        val logs = mutableListOf<String>()
+        val tree = object : timber.log.Timber.Tree() {
+            override fun log(priority: Int, tag: String?, message: String, t: Throwable?) { logs += message }
+        }
+        timber.log.Timber.plant(tree)
+        try {
+            val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+            val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
+            val listener = mockk<WalletEventListener>(relaxed = true)
+            val keystore = org.siros.sdk.keystore.JweKeystore()
+            keystore.unlock(ByteArray(32) { it.toByte() }, ByteArray(0), ByteArray(32) { 5 }, "info".toByteArray())
+            val store = KeystoreMirroringStore(keystore, mirror = true)
+            val sessionStore = mockk<SessionStore>(relaxed = true)
+            val apiClient = mockk<BackendApiClient>(relaxed = true)
+            every { sessionStore.privateDataJwe } returns null
+            coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+            val engine = mockEngineConstructor(progressFlow = progressFlow, flowComplete = completeFlow)
+            every { engine.resumeIssuance(any(), any(), any(), any(), any()) } just runs
+            every { engine.sendCredentialNotification(any(), any(), any(), any()) } just runs
+            val resuming = java.util.concurrent.ConcurrentLinkedQueue<String>()
+            val continuations = java.util.concurrent.ConcurrentHashMap<String, String>()
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+                "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com", tenantId = "tenant-1", redirectUri = "siros://callback"),
+                "credentialStore" to store,
+                "keystore" to keystore,
+                "sessionStore" to sessionStore,
+                "apiClient" to apiClient,
+                "eventListener" to listener,
+                "pendingAuthorizations" to mutableMapOf<String, Any?>(),
+                "resumingFlowIds" to resuming,
+                "flowContinuations" to continuations,
+                "json" to Json { ignoreUnknownKeys = true },
+            )
+            invokeConnectEngine(wallet, "app-token")
+            advanceUntilIdle()
+            progressFlow.emit(
+                FlowProgressMessage(
+                    flowId = "flow-old",
+                    step = "authorization_required",
+                    payload = buildJsonObject {
+                        put("authorization_url", "https://issuer.example.com/auth?state=st-1")
+                        put("expected_redirect_uri", "siros://callback")
+                        put("state", "st-1")
+                        put("code_verifier", "verifier-SECRET")
+                        putJsonObject("credential_offer") { put("credential_issuer", "https://issuer.example.com") }
+                    },
+                ),
+            )
+            advanceUntilIdle()
+
+            wallet.completeAuthorization(flowId = "flow-old", code = "auth-code-SECRET", state = "st-1")
+            advanceUntilIdle()
+            coVerify(exactly = 1) { engine.forceReconnect() }
+            verify(exactly = 1) { engine.resumeIssuance(any(), any(), "siros://callback", "auth-code-SECRET", "verifier-SECRET") }
+            assertEquals(listOf("flow-old"), resuming.toList())
+
+            // The engine answers the stateless flow_start under a NEW flow id.
+            completeFlow.emit(
+                FlowCompleteMessage(
+                    flowId = "flow-new",
+                    credentials = listOf(CredentialResult(format = "dc+sd-jwt", credential = NymTestCredentials.sdJwt(sscValues = emptyList()), notificationId = "n-1")),
+                ),
+            )
+            advanceUntilIdle()
+
+            assertEquals(1, store.getAll().size)
+            verify(exactly = 1) { listener.onFlowComplete("flow-new", any()) }
+            verify(exactly = 0) { listener.onFlowError(any(), any(), any()) }
+            assertEquals(mapOf("flow-new" to "flow-old"), continuations.toMap())
+            assertTrue(resuming.isEmpty())
+            assertTrue(logs.toString(), logs.any { it.contains("reconnecting the engine WebSocket") })
+            assertTrue(logs.toString(), logs.any { it.contains("Engine WebSocket reconnected") })
+            assertTrue(logs.toString(), logs.any { it.contains("Flow flow-old") && it.contains("NEW flow flow-new") })
+            assertTrue(logs.toString(), logs.any { it.contains("Flow flow-new complete") && it.contains("resumption of flow flow-old") })
+            // Neither the authorization code nor the code verifier is logged.
+            logs.forEach { assertFalse(it, it.contains("SECRET")) }
+        } finally {
+            timber.log.Timber.uproot(tree)
+        }
+    }
+
+    /** A failed reconnect leaves no continuation behind. */
+    @Test
+    fun resumptionAfterTheBrowser_aFailedReconnect_isReportedAndLeavesNoPendingContinuation() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val engine = mockEngineConstructor(progressFlow = progressFlow)
+        coEvery { engine.forceReconnect() } throws IllegalStateException("socket gone")
+        val resuming = java.util.concurrent.ConcurrentLinkedQueue<String>()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", tenantId = "tenant-1", redirectUri = "siros://callback"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to listener,
+            "pendingAuthorizations" to mutableMapOf<String, Any?>(),
+            "resumingFlowIds" to resuming,
+            "flowContinuations" to java.util.concurrent.ConcurrentHashMap<String, String>(),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "flow-old", step = "authorization_required",
+                payload = buildJsonObject {
+                    put("authorization_url", "https://issuer.example.com/auth?state=st-1")
+                    put("expected_redirect_uri", "siros://callback")
+                    put("state", "st-1")
+                },
+            ),
+        )
+        advanceUntilIdle()
+        wallet.completeAuthorization(flowId = "flow-old", code = "c", state = "st-1")
+        advanceUntilIdle()
+        verify(exactly = 1) { listener.onFlowError("flow-old", "socket gone", any()) }
+        assertTrue(resuming.isEmpty())
     }
 
     /**
@@ -1868,6 +2236,7 @@ class SirosWalletTest {
     @Test
     fun resolveEffectiveKeystoreForIssuance_passesRegistryUrl_toMddlSchemaFetcher() = runTest(dispatcher) {
         val defaultKeystore = mockk<KeystoreManager>(relaxed = true)
+        coEvery { defaultKeystore.isWscdOnboarded() } returns true
         // Not relaxed: a relaxed mock would auto-generate a non-null
         // MddlSchema with a mocked (non-blank) requiredKeyStorage/doctype,
         // which would then send resolveEffectiveKeystoreForIssuance down the
@@ -2520,6 +2889,142 @@ class SirosWalletTest {
         }
     }
 
+    // ---- sign_client_auth: a proof that was asked for and could not be made is never answered with a bare key id ----
+
+    private val ca = StringBuilder()
+    private val caTree = object : timber.log.Timber.Tree() {
+        override fun log(priority: Int, tag: String?, message: String, t: Throwable?) {
+            if (priority >= android.util.Log.WARN) ca.append(message).append('\n')
+        }
+    }
+
+    /** Runs one DPoP-only sign_client_auth against [keystore] and returns the (dpopKeyId, dpopProof) of the reply. */
+    private suspend fun kotlinx.coroutines.test.TestScope.signClientAuthReply(
+        keystore: KeystoreManager,
+        keyIdHint: String? = null,
+        config: WalletConfig = WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+        htm: String? = "POST",
+        htu: String? = "https://as.example.com/token",
+    ): Pair<String?, String?> {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val replies = mutableListOf<Pair<String?, String?>>()
+        every {
+            engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any())
+        } answers {
+            replies += (args[8] as String?) to (args[9] as String?)
+        }
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        every { sessionStore.instanceKeyId } returns "instance-key-1"
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "sessionStore" to sessionStore,
+            "keystore" to keystore,
+            "apiClient" to mockk<BackendApiClient>(relaxed = true),
+            "config" to config,
+            "json" to Json { ignoreUnknownKeys = true },
+            "httpClient" to OkHttpClient(),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-x", messageId = "msg-x", action = "sign_client_auth",
+                params = SignRequestParams(htm = htm, htu = htu, keyId = keyIdHint),
+            ),
+        )
+        repeat(10) {
+            runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(100) }
+            advanceUntilIdle()
+        }
+        assertEquals("exactly one sign_response", 1, replies.size)
+        return replies.single()
+    }
+
+    private fun caKeystore(unlocked: Boolean = true, proof: () -> String): KeystoreManager {
+        val ks = mockk<KeystoreManager>(relaxed = true)
+        every { ks.isUnlocked } returns unlocked
+        every { ks.listKeys() } returns listOf(KeyInfo("instance-key-1", "ES256", 0L))
+        coEvery { ks.generateDPoPProof(keyId = any(), htm = any(), htu = any(), nonce = any(), accessTokenHash = any()) } answers { proof() }
+        return ks
+    }
+
+    @Test
+    fun signClientAuth_success_namesTheKeyAndCarriesTheProof() = runTest(dispatcher) {
+        val (keyId, proof) = signClientAuthReply(caKeystore { "dpop-jwt" })
+        assertEquals("instance-key-1", keyId)
+        assertEquals("dpop-jwt", proof)
+    }
+
+    @Test
+    fun signClientAuth_aLockedKeystore_isAnsweredWithoutAKeyId_andLogsTheReason() = runTest(dispatcher) {
+        timber.log.Timber.plant(caTree)
+        try {
+            val ks = caKeystore(unlocked = false) { throw org.siros.sdk.credentials.KeystoreException("Keystore is locked") }
+            val (keyId, proof) = signClientAuthReply(ks, keyIdHint = "old-key")
+            assertNull("a key id without a proof is the misleading 'no DPoP proof' error", keyId)
+            assertNull(proof)
+            assertTrue(ca.toString(), ca.contains("sign_client_auth for flow flow-x") && ca.contains("keystore_locked"))
+            assertTrue(ca.toString(), ca.contains("answering WITHOUT a key id"))
+        } finally {
+            timber.log.Timber.uproot(caTree)
+        }
+    }
+
+    @Test
+    fun signClientAuth_aKeyThatIsNotThere_isAnsweredWithoutAKeyId_andNamesTheException() = runTest(dispatcher) {
+        timber.log.Timber.plant(caTree)
+        try {
+            val ks = caKeystore { throw org.siros.sdk.credentials.KeystoreException("Key not found: old-key") }
+            val (keyId, proof) = signClientAuthReply(ks, keyIdHint = "old-key")
+            assertNull(keyId)
+            assertNull(proof)
+            assertTrue(ca.toString(), ca.contains("KeystoreException: Key not found: old-key"))
+        } finally {
+            timber.log.Timber.uproot(caTree)
+        }
+    }
+
+    @Test
+    fun signClientAuth_aKeystoreWithoutDpopSupport_isAnsweredWithoutAKeyId() = runTest(dispatcher) {
+        timber.log.Timber.plant(caTree)
+        try {
+            val ks = caKeystore { throw UnsupportedOperationException("generateDPoPProof not supported by this keystore") }
+            val (keyId, proof) = signClientAuthReply(ks)
+            assertNull(keyId)
+            assertNull(proof)
+            assertTrue(ca.toString(), ca.contains("UnsupportedOperationException"))
+        } finally {
+            timber.log.Timber.uproot(caTree)
+        }
+    }
+
+    @Test
+    fun signClientAuth_theDpopKeyComesFromTheDefaultKeystore_notTheOneIssuanceResolves() = runTest(dispatcher) {
+        // availableKeystores holds another keystore (what resolveEffectiveKeystoreForIssuance may pick): it is never asked.
+        val other = mockk<KeystoreManager>(relaxed = true)
+        coEvery { other.generateDPoPProof(any(), any(), any(), any(), any()) } throws IllegalStateException("must not be used")
+        val default = caKeystore { "dpop-jwt" }
+        val (keyId, proof) = signClientAuthReply(
+            default,
+            config = WalletConfig(
+                backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback",
+                availableKeystores = mapOf("other" to other, "default" to default),
+            ),
+        )
+        assertEquals("instance-key-1", keyId)
+        assertEquals("dpop-jwt", proof)
+        coVerify(exactly = 0) { other.generateDPoPProof(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun signClientAuth_whenNoProofWasAsked_aKeyIdWithoutAProofIsStillTheAnswer() = runTest(dispatcher) {
+        val (keyId, proof) = signClientAuthReply(caKeystore { "unused" }, htm = null, htu = null)
+        assertEquals("instance-key-1", keyId)
+        assertNull(proof)
+    }
+
     /**
      * When requesting a backend Key Attestation, each freshly generated
      * credential-issuance key's own FIDO2/CTAP2 attestation (not the wallet's
@@ -2532,6 +3037,7 @@ class SirosWalletTest {
     fun requestBackendKeyAttestation_registersFido2Attestation_perHardwareBackedKey() = runTest(dispatcher) {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.isWscdOnboarded() } returns true
         val keypairs = listOf(
             KeypairInfo(keyId = "key-1", publicKeyJWK = buildJsonObject { put("kty", "EC") }),
             KeypairInfo(keyId = "key-2", publicKeyJWK = buildJsonObject { put("kty", "EC") }),
@@ -2595,6 +3101,54 @@ class SirosWalletTest {
         }
     }
 
+    @Test
+    fun requestBackendKeyAttestation_sendsTheClaimOfTheKeystoreThatHoldsTheKeysOnly() = runTest(dispatcher) {
+        // (resolved keystore, claims) -> the plugin that must be sent. "Resolved" is the keystore the issuance uses: here the
+        // wallet's default one, which is registered under its id in availableKeystores.
+        data class Case(val resolved: String, val claims: Map<String, String>, val expected: String?)
+        val cases = listOf(
+            Case("fido2", mapOf("softkey" to "soft"), null), // claim only for the software one, issuance resolves FIDO2: nothing
+            Case("softkey", mapOf("softkey" to "soft"), "soft"), // and the reverse
+            Case("softkey", mapOf("fido2" to "fido2"), null), // never another keystore's claim
+            Case("fido2", mapOf("softkey" to "soft", "fido2" to "fido2"), "fido2"), // each keystore its own
+            Case("softkey", emptyMap(), null), // no claim configured
+        )
+        for (c in cases) {
+            val signFlow = MutableSharedFlow<SignRequestMessage>()
+            fun ks(): KeystoreManager = mockk<KeystoreManager>().also {
+                coEvery { it.isWscdOnboarded() } returns true
+                coEvery { it.generateKeypairs(1) } returns listOf(KeypairInfo(keyId = "key-1", publicKeyJWK = buildJsonObject { put("kty", "EC") }))
+                coEvery { it.attestationChain("key-1") } returns null
+                coEvery { it.securityProperties("key-1") } returns null
+            }
+            val keystores = mapOf("softkey" to ks(), "fido2" to ks())
+            val apiClient = mockk<BackendApiClient>(relaxed = true)
+            val sentPlugin = slot<String?>()
+            coEvery { apiClient.requestKeyAttestation(any(), any(), any(), any(), any(), captureNullable(sentPlugin)) } returns "jwt"
+            mockEngineConstructor(signRequests = signFlow)
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+                "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com", availableKeystores = keystores, wscdPluginClaims = c.claims),
+                "keystore" to keystores.getValue(c.resolved),
+            )
+            invokeConnectEngine(wallet, "app-token")
+            setField(wallet, "apiClient", apiClient)
+            setField(wallet, "cachedWia", fakeWiaJwt(System.currentTimeMillis() / 1000 + 3600, jkt = "test-jkt", attestationSource = "ios_app_attest"))
+            setField(wallet, "cachedWiaExpiresAt", System.currentTimeMillis() / 1000 + 3600)
+            advanceUntilIdle()
+            signFlow.emit(
+                SignRequestMessage(
+                    flowId = "flow-plugin", action = "generate_proof",
+                    params = SignRequestParams(audience = "aud-1", nonce = "nonce-1", count = 1, proofTypesSupported = buildJsonObject { putJsonObject("attestation") {} }),
+                ),
+            )
+            advanceUntilIdle()
+            coVerify(exactly = 1) { apiClient.requestKeyAttestation(any(), any(), any(), any(), any(), any()) }
+            assertEquals("resolved=${c.resolved} claims=${c.claims}", c.expected, sentPlugin.captured)
+        }
+    }
+
     /**
      * A key generated by a non-hardware-backed (e.g. softkey) plugin has no
      * attestation chain - registration for that key must be skipped, not
@@ -2604,6 +3158,7 @@ class SirosWalletTest {
     fun requestBackendKeyAttestation_skipsFido2Registration_forSoftwareBackedKeys() = runTest(dispatcher) {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.isWscdOnboarded() } returns true
         val keypairs = listOf(KeypairInfo(keyId = "key-1", publicKeyJWK = buildJsonObject { put("kty", "EC") }))
         coEvery { keystore.generateKeypairs(1) } returns keypairs
         coEvery { keystore.attestationChain("key-1") } returns null
@@ -2660,6 +3215,7 @@ class SirosWalletTest {
     fun requestBackendKeyAttestation_skipsFido2Registration_whenNoCachedWia() = runTest(dispatcher) {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.isWscdOnboarded() } returns true
         val keypairs = listOf(KeypairInfo(keyId = "key-1", publicKeyJWK = buildJsonObject { put("kty", "EC") }))
         coEvery { keystore.generateKeypairs(1) } returns keypairs
         coEvery { keystore.securityProperties("key-1") } returns null
@@ -2729,6 +3285,7 @@ class SirosWalletTest {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val defaultKeystore = mockk<KeystoreManager>()
         val fido2Keystore = mockk<KeystoreManager>()
+        coEvery { fido2Keystore.isWscdOnboarded() } returns true
         val keypairs = listOf(KeypairInfo(keyId = "fido2-key-1", publicKeyJWK = buildJsonObject { put("kty", "EC") }))
         coEvery { fido2Keystore.generateKeypairs(1) } returns keypairs
         coEvery { fido2Keystore.attestationChain(any()) } returns null
@@ -2792,6 +3349,524 @@ class SirosWalletTest {
         coVerify(exactly = 0) { defaultKeystore.generateKeypairs(any()) }
     }
 
+    @Test
+    fun requestBackendKeyAttestation_sendsTheClaimOfThePolicySelectedKeystore_notTheDefaultsClaim() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        // A SOFTWARE default keystore; the policy selects FIDO2 for a credential type that requires the high tier.
+        val defaultKeystore = mockk<KeystoreManager>()
+        val fido2Keystore = mockk<KeystoreManager>()
+        coEvery { fido2Keystore.isWscdOnboarded() } returns true
+        val keypairs = listOf(KeypairInfo(keyId = "fido2-key-1", publicKeyJWK = buildJsonObject { put("kty", "EC") }))
+        coEvery { fido2Keystore.generateKeypairs(1) } returns keypairs
+        coEvery { fido2Keystore.attestationChain(any()) } returns null
+        coEvery { fido2Keystore.securityProperties("fido2-key-1") } returns null
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        val sentPlugin = slot<String?>()
+        coEvery { apiClient.requestKeyAttestation(any(), any(), any(), any(), any(), captureNullable(sentPlugin)) } returns "jwt"
+        mockEngineConstructor(signRequests = signFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            // DISTINCT claims: the default's is "soft", the selected one's is "fido2".
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                availableKeystores = mapOf("softkey" to defaultKeystore, "fido2" to fido2Keystore),
+                wscdPluginClaims = mapOf("softkey" to "soft", "fido2" to "fido2"),
+            ),
+            "keystore" to defaultKeystore,
+            "wscdSelectionPolicy" to WscdSelectionPolicy(tofuStore = InMemoryWscdTofuStore()),
+        )
+        setField(wallet, "activeOffer", org.siros.sdk.credentials.CredentialOffer(
+            credentialConfigurationId = "pid", credentialIssuerIdentifier = "https://issuer.example.com", credentialName = "PID", issuerName = "Issuer",
+        ))
+        setField(wallet, "activeVctm", org.siros.sdk.credentials.Vctm(vct = "urn:eu.europa.ec.eudi:pid:1", requiredKeyStorage = "iso_18045_high"))
+        invokeConnectEngine(wallet, "app-token")
+        setField(wallet, "apiClient", apiClient)
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sign", action = "generate_proof",
+                params = SignRequestParams(audience = "https://issuer.example.com", nonce = "nonce-1", count = 1, proofTypesSupported = buildJsonObject { putJsonObject("attestation") {} }),
+            ),
+        )
+        advanceUntilIdle()
+        coVerify(exactly = 1) { fido2Keystore.generateKeypairs(1) }
+        assertEquals("the claim of the keystore that generated the keys (FIDO2), not the default's", "fido2", sentPlugin.captured)
+    }
+
+    // -------- the credential catalog as the baseline key-storage tier --------
+
+    private class CatalogFixture(val wallet: SirosWallet, val soft: KeystoreManager, val fido2: KeystoreManager)
+
+    /** A wallet whose default keystore is the SOFT one and which also has an (onboarded unless said otherwise) FIDO2 keystore. */
+    private fun catalogFixture(
+        catalog: org.siros.sdk.credentials.CredentialTierCatalog?,
+        issuerTier: String?,
+        fido2Onboarded: Boolean = true,
+        withOffer: Boolean = true,
+        policy: WscdSelectionPolicy = WscdSelectionPolicy(tofuStore = InMemoryWscdTofuStore()),
+    ): CatalogFixture {
+        val soft = mockk<KeystoreManager>(relaxed = true)
+        coEvery { soft.isWscdOnboarded() } returns true
+        val fido2 = mockk<KeystoreManager>(relaxed = true)
+        coEvery { fido2.isWscdOnboarded() } returns fido2Onboarded
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                availableKeystores = mapOf("softkey" to soft, "fido2" to fido2),
+                credentialTierCatalog = catalog,
+            ),
+            "keystore" to soft,
+            "wscdSelectionPolicy" to policy,
+        )
+        if (withOffer) {
+            setField(wallet, "activeOffer", org.siros.sdk.credentials.CredentialOffer(
+                credentialConfigurationId = "pid", credentialIssuerIdentifier = "https://issuer.example.com", credentialName = "PID", issuerName = "Issuer",
+            ))
+            setField(wallet, "activeVctm", org.siros.sdk.credentials.Vctm(vct = "urn:eu.europa.ec.eudi:pid:1", requiredKeyStorage = issuerTier))
+        }
+        return CatalogFixture(wallet, soft, fido2)
+    }
+
+    private fun catalogOf(answer: org.siros.sdk.credentials.CatalogTier) = org.siros.sdk.credentials.CredentialTierCatalog { answer }
+    private fun known(tier: String) = catalogOf(org.siros.sdk.credentials.CatalogTier.Known(tier))
+
+    /** The keystore [SirosWallet] resolves for the active issuance, or the exception that refused it. */
+    private fun resolveKeystore(wallet: SirosWallet): Result<KeystoreManager> = runCatching {
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "resolveEffectiveKeystoreForIssuance" }
+        method.isAccessible = true
+        try {
+            kotlinx.coroutines.runBlocking { method.callSuspend(wallet) as KeystoreManager }
+        } catch (e: java.lang.reflect.InvocationTargetException) {
+            throw e.targetException
+        }
+    }
+
+    @Test
+    fun catalogTier_isTheBaseline_whenTheIssuerDeclaresNone_theGdcPidGap() {
+        // The issuer's metadata says nothing: before, the SOFT default was used. The catalog says high: FIDO2 is.
+        val f = catalogFixture(known("iso_18045_high"), issuerTier = null)
+        assertSame(f.fido2, resolveKeystore(f.wallet).getOrThrow())
+    }
+
+    @Test
+    fun theIssuerMayRaiseTheCatalogTier_butNeverLowerIt() {
+        // catalog basic + issuer high: high (the soft keystore would not do)
+        val raised = catalogFixture(known("iso_18045_basic"), issuerTier = "iso_18045_high")
+        assertSame(raised.fido2, resolveKeystore(raised.wallet).getOrThrow())
+        // catalog high + issuer basic: still high
+        val notLowered = catalogFixture(known("iso_18045_high"), issuerTier = "iso_18045_basic")
+        assertSame(notLowered.fido2, resolveKeystore(notLowered.wallet).getOrThrow())
+    }
+
+    @Test
+    fun withoutACatalog_onlyTheIssuersTierCounts_asBefore() {
+        val f = catalogFixture(null, issuerTier = null)
+        assertSame("no tier at all: the default keystore, as before", f.soft, resolveKeystore(f.wallet).getOrThrow())
+    }
+
+    @Test
+    fun aTierTheCatalogCannotGive_refusesAndNeverFallsBackToTheSoftKeystore() {
+        for (catalog in listOf(
+            catalogOf(org.siros.sdk.credentials.CatalogTier.NotListed),
+            catalogOf(org.siros.sdk.credentials.CatalogTier.Unavailable),
+            org.siros.sdk.credentials.CredentialTierCatalog { throw IllegalStateException("catalog crashed") },
+            known("iso_18045_ultra"), // not a known tier
+        )) {
+            val f = catalogFixture(catalog, issuerTier = null)
+            val e = resolveKeystore(f.wallet).exceptionOrNull()
+            assertTrue("expected a refusal, got $e", e is KeyStorageTierUndeterminedException)
+        }
+        // an issuer tier alone does not stand in for a catalog that cannot answer
+        val f = catalogFixture(catalogOf(org.siros.sdk.credentials.CatalogTier.Unavailable), issuerTier = "iso_18045_basic")
+        assertTrue(resolveKeystore(f.wallet).exceptionOrNull() is KeyStorageTierUndeterminedException)
+    }
+
+    @Test
+    fun aCatalogTierNoOnboardedPluginMeets_refuses_notTheSoftKeystore() {
+        val f = catalogFixture(known("iso_18045_high"), issuerTier = null, fido2Onboarded = false)
+        val e = resolveKeystore(f.wallet).exceptionOrNull()
+        assertTrue("expected NoOnboardedWscdException, got $e", e is NoOnboardedWscdException)
+    }
+
+    @Test
+    fun aUserOverrideCannotGoBelowTheCatalogTier() {
+        val policy = WscdSelectionPolicy(
+            tofuStore = InMemoryWscdTofuStore(),
+            userOverrideStore = object : WscdUserOverrideStore {
+                override fun get(issuer: String, credentialType: String): String? = null
+                override fun put(issuer: String, credentialType: String, pluginId: String) {}
+                override fun getGlobal(): String? = "softkey"
+                override fun setGlobal(pluginId: String) {}
+            },
+        )
+        val f = catalogFixture(known("iso_18045_high"), issuerTier = null, policy = policy)
+        assertSame("the soft override does not meet the catalog tier", f.fido2, resolveKeystore(f.wallet).getOrThrow())
+    }
+
+    @Test
+    fun theResumedAuthorizationPath_hasNoActiveOffer_andWithACatalogIsRefused_notServedBySoft() {
+        val f = catalogFixture(known("iso_18045_high"), issuerTier = null, withOffer = false)
+        assertTrue(resolveKeystore(f.wallet).exceptionOrNull() is KeyStorageTierUndeterminedException)
+    }
+
+    private class ResumeCtx(val wallet: SirosWallet, val engine: WalletEngineSession, val listener: WalletEventListener, val progress: MutableSharedFlow<FlowProgressMessage>)
+
+    private suspend fun kotlinx.coroutines.test.TestScope.resumeCtx(
+        hookOffer: org.siros.sdk.credentials.CredentialOffer? = org.siros.sdk.credentials.CredentialOffer("pid", "https://issuer.example.com", "PID", issuerName = "Issuer"),
+    ): ResumeCtx {
+        val progress = MutableSharedFlow<FlowProgressMessage>()
+        val engine = mockEngineConstructor(progressFlow = progress)
+        every { engine.resumeIssuance(any(), any(), any(), any(), any()) } just runs
+        coEvery { engine.awaitConnected(any()) } just runs
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", tenantId = "tenant-1", redirectUri = "siros://callback"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to listener,
+            "pendingAuthorizations" to mutableMapOf<String, Any?>(),
+            "resumingFlowIds" to java.util.concurrent.ConcurrentLinkedQueue<String>(),
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+        wallet.offerResolveHook = { _ -> Pair(hookOffer) { true } }
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        parkAuthorization(wallet, progress)
+        return ResumeCtx(wallet, engine, listener, progress)
+    }
+
+    private suspend fun kotlinx.coroutines.test.TestScope.parkAuthorization(wallet: SirosWallet, progress: MutableSharedFlow<FlowProgressMessage>) {
+        progress.emit(
+            FlowProgressMessage(
+                flowId = "flow-auth",
+                step = "authorization_required",
+                payload = buildJsonObject {
+                    put("authorization_url", "https://issuer.example.com/auth?state=s")
+                    put("expected_redirect_uri", "siros://callback")
+                    put("state", "s")
+                    put("code_verifier", "v")
+                    putJsonObject("credential_offer") {
+                        put("credential_issuer", "https://issuer.example.com")
+                        putJsonArray("credential_configuration_ids") { add(kotlinx.serialization.json.JsonPrimitive("pid")) }
+                    }
+                },
+            )
+        )
+        advanceUntilIdle()
+    }
+
+    @Test
+    fun resumingAfterTheBrowser_aCancelWhileTheContextIsResolved_sendsNoResumeAndPublishesNothing() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val engine = mockEngineConstructor(progressFlow = progressFlow)
+        every { engine.resumeIssuance(any(), any(), any(), any(), any()) } just runs
+        var wallet: SirosWallet? = null
+        coEvery { engine.awaitConnected(any()) } coAnswers { wallet?.cancelCurrentFlow() }
+        wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", tenantId = "tenant-1", redirectUri = "siros://callback"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to mockk<WalletEventListener>(relaxed = true),
+            "pendingAuthorizations" to mutableMapOf<String, Any?>(),
+            "resumingFlowIds" to java.util.concurrent.ConcurrentLinkedQueue<String>(),
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+        wallet.offerResolveHook = { _ -> Pair(org.siros.sdk.credentials.CredentialOffer("pid", "https://issuer.example.com", "PID", issuerName = "Issuer")) { true } }
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        parkAuthorization(wallet, progressFlow)
+
+        wallet.completeAuthorization(flowId = "flow-auth", code = "code", state = "s")
+        advanceUntilIdle()
+
+        verify(exactly = 0) { engine.resumeIssuance(any(), any(), any(), any(), any()) }
+        assertNull("the cancelled attempt published no offer context", getField(wallet, "activeOffer"))
+    }
+
+    @Test
+    fun resumingAfterTheBrowser_aMalformedAdvertisementIsRecordedAndRefused_beforeAnyFallbackOrResume() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val engine = mockEngineConstructor(progressFlow = progressFlow)
+        every { engine.resumeIssuance(any(), any(), any(), any(), any()) } just runs
+        coEvery { engine.awaitConnected(any()) } just runs
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", tenantId = "tenant-1", redirectUri = "siros://callback"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to listener,
+            "pendingAuthorizations" to mutableMapOf<String, Any?>(),
+            "resumingFlowIds" to java.util.concurrent.ConcurrentLinkedQueue<String>(),
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+        var recorded = 0
+        // a resolution WITHOUT an offer is a malformed advertisement (not a failed display lookup); record() says it is unusable
+        wallet.offerResolveHook = { _ -> Pair(null as org.siros.sdk.credentials.CredentialOffer?) { recorded++; false } }
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        parkAuthorization(wallet, progressFlow)
+
+        wallet.completeAuthorization(flowId = "flow-auth", code = "code", state = "s")
+        advanceUntilIdle()
+
+        assertEquals("the selection was recorded (cleared) once", 1, recorded)
+        verify(exactly = 0) { engine.resumeIssuance(any(), any(), any(), any(), any()) }
+        verify(exactly = 1) { listener.onFlowError("flow-auth", any(), any()) }
+        assertNull("no minimal-offer fallback was built from the saved offer", getField(wallet, "activeOffer"))
+    }
+
+    @Test
+    fun theCatalogGetsTheOffersAdvertisedType_whenTheTypeMetadataLookupFails() {
+        val seen = mutableListOf<String>()
+        val catalog = org.siros.sdk.credentials.CredentialTierCatalog { type -> seen += type; org.siros.sdk.credentials.CatalogTier.Known("iso_18045_high") }
+        val f = catalogFixture(catalog, issuerTier = null, withOffer = false)
+        // the offer carries the type the issuer advertised; the VCTM / MDDL lookup returned nothing (no activeVctm, unreachable issuer)
+        setField(f.wallet, "activeOffer", org.siros.sdk.credentials.CredentialOffer(
+            credentialConfigurationId = "pid-config", credentialIssuerIdentifier = "https://issuer.invalid", credentialName = "PID", issuerName = "Issuer",
+            vct = "urn:eudi:pid:1",
+        ))
+        resolveKeystore(f.wallet).getOrThrow()
+        assertEquals(listOf("urn:eudi:pid:1"), seen)
+    }
+
+    @Test
+    fun resumingAfterTheBrowser_aCallbackForACancelledAttemptResumesNothing() = runTest(dispatcher) {
+        val c = resumeCtx()
+        c.wallet.cancelCurrentFlow() // attempt A is cancelled while its browser step is still open
+        c.wallet.completeAuthorization(flowId = "flow-auth", code = "code", state = "s") // the delayed callback of A
+        advanceUntilIdle()
+        coVerify(exactly = 0) { c.engine.forceReconnect() }
+        verify(exactly = 0) { c.engine.resumeIssuance(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun resumingAfterTheBrowser_anOfferContextOfAnotherAttemptIsNeverReused() = runTest(dispatcher) {
+        val c = resumeCtx()
+        // another attempt's offer context is active (its issuance is what the wallet is doing now)
+        setField(c.wallet, "activeOffer", org.siros.sdk.credentials.CredentialOffer("other-config", "https://other.example.com", "Other", issuerName = "Other"))
+        c.wallet.completeAuthorization(flowId = "flow-auth", code = "code", state = "s")
+        advanceUntilIdle()
+        verify(exactly = 0) { c.engine.resumeIssuance(any(), any(), any(), any(), any()) }
+        assertEquals("the other attempt's context is untouched", "other-config", (getField(c.wallet, "activeOffer") as org.siros.sdk.credentials.CredentialOffer).credentialConfigurationId)
+    }
+
+    @Test
+    fun resumingAfterTheBrowser_theTypeMetadataLookupGetsTheOffersVct_andBothTheDocumentAndTheVctmArePublished() = runTest(dispatcher) {
+        val c = resumeCtx(org.siros.sdk.credentials.CredentialOffer("pid", "https://issuer.example.com", "PID", issuerName = "Issuer", vct = "urn:eudi:pid:1"))
+        val fetcher = mockk<org.siros.sdk.credentials.VctmFetcher>()
+        val doc = org.siros.sdk.credentials.VctmDocument(raw = """{"vct":"urn:eudi:pid:1"}""", vctm = org.siros.sdk.credentials.Vctm(vct = "urn:eudi:pid:1"))
+        coEvery { fetcher.fetchDocument(any(), any(), any(), any(), any()) } returns doc
+        setField(c.wallet, "vctmFetcher", fetcher)
+        c.wallet.completeAuthorization(flowId = "flow-auth", code = "code", state = "s")
+        advanceUntilIdle()
+        coVerify { fetcher.fetchDocument(any(), "pid", "urn:eudi:pid:1", any(), any()) }
+        assertEquals("the raw document is published too (verifyVctIntegrity needs it)", doc, getField(c.wallet, "activeVctmDocument"))
+        assertEquals(doc.vctm, getField(c.wallet, "activeVctm"))
+    }
+
+    @Test
+    fun resumingAfterTheBrowser_aConnectionLostBeforeTheFirstReplyReleasesTheIssuanceGuard() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val generations = MutableStateFlow(0)
+        val engine = mockEngineConstructor(progressFlow = progressFlow, generations = generations)
+        every { engine.resumeIssuance(any(), any(), any(), any(), any()) } just runs
+        coEvery { engine.awaitConnected(any()) } just runs
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", tenantId = "tenant-1", redirectUri = "siros://callback"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to listener,
+            "pendingAuthorizations" to mutableMapOf<String, Any?>(),
+            "resumingFlowIds" to java.util.concurrent.ConcurrentLinkedQueue<String>(),
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+        wallet.offerResolveHook = { _ -> Pair(org.siros.sdk.credentials.CredentialOffer("pid", "https://issuer.example.com", "PID", issuerName = "Issuer")) { true } }
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        parkAuthorization(wallet, progressFlow)
+        wallet.completeAuthorization(flowId = "flow-auth", code = "code", state = "s")
+        advanceUntilIdle()
+        verify(exactly = 1) { engine.resumeIssuance(any(), any(), any(), any(), any()) }
+        assertEquals("the resume owns the issuance while it is pending", true, getField(wallet, "issuanceInFlight"))
+
+        // the socket the resume was sent on is replaced before the engine replied: nothing can ever answer it
+        generations.value = engine.connectionGeneration + 1
+        advanceUntilIdle()
+
+        assertEquals("the guard is released", false, getField(wallet, "issuanceInFlight"))
+        verify(exactly = 1) { listener.onFlowError("flow-auth", any(), any()) }
+    }
+
+    @Test
+    fun resumingAfterTheBrowser_theResumeOwnsTheIssuance_soACompetingStartIsRefused() = runTest(dispatcher) {
+        val c = resumeCtx()
+        setField(c.wallet, "issuanceInFlight", false) // the original flow's guards were reset when it was ended locally
+        c.wallet.completeAuthorization(flowId = "flow-auth", code = "code", state = "s")
+        advanceUntilIdle()
+        verify(exactly = 1) { c.engine.resumeIssuance(any(), any(), any(), any(), any()) }
+        val competing = runCatching { c.wallet.startIssuance("openid-credential-offer://?credential_offer=%7B%7D") }.exceptionOrNull()
+        assertTrue("a second issuance must not start while the resumed one is pending: $competing", competing is WalletException)
+        assertTrue(competing!!.message!!.contains("already in progress"))
+    }
+
+    @Test
+    fun metadataThatNamesAnotherTypeThanTheOfferAdvertised_isRefusedBeforeTheCatalogIsAsked() {
+        val seen = mutableListOf<String>()
+        val catalog = org.siros.sdk.credentials.CredentialTierCatalog { type -> seen += type; org.siros.sdk.credentials.CatalogTier.Known("iso_18045_basic") }
+        val f = catalogFixture(catalog, issuerTier = null, withOffer = false)
+        setField(f.wallet, "activeOffer", org.siros.sdk.credentials.CredentialOffer(
+            credentialConfigurationId = "pid", credentialIssuerIdentifier = "https://issuer.example.com", credentialName = "PID", issuerName = "Issuer",
+            vct = "urn:type:A", // advertised: catalog high
+        ))
+        setField(f.wallet, "activeVctm", org.siros.sdk.credentials.Vctm(vct = "urn:type:B")) // delivered metadata of another (basic) type
+        val e = resolveKeystore(f.wallet).exceptionOrNull()
+        assertTrue("expected a refusal, got $e", e is KeyStorageTierUndeterminedException)
+        assertEquals("the catalog was never asked", emptyList<String>(), seen)
+    }
+
+    @Test
+    fun resumingAfterTheBrowser_restoresTheOfferContext_soTheCatalogTierApplies() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val engine = mockEngineConstructor(progressFlow = progressFlow)
+        every { engine.resumeIssuance(any(), any(), any(), any(), any()) } just runs
+        coEvery { engine.awaitConnected(any()) } just runs
+        val soft = mockk<KeystoreManager>(relaxed = true)
+        coEvery { soft.isWscdOnboarded() } returns true
+        val fido2 = mockk<KeystoreManager>(relaxed = true)
+        coEvery { fido2.isWscdOnboarded() } returns true
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com", tenantId = "tenant-1", redirectUri = "siros://callback",
+                availableKeystores = mapOf("softkey" to soft, "fido2" to fido2),
+                credentialTierCatalog = known("iso_18045_high"),
+            ),
+            "keystore" to soft,
+            "wscdSelectionPolicy" to WscdSelectionPolicy(tofuStore = InMemoryWscdTofuStore()),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to mockk<WalletEventListener>(relaxed = true),
+            "pendingAuthorizations" to mutableMapOf<String, Any?>(),
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "flow-auth",
+                step = "authorization_required",
+                payload = buildJsonObject {
+                    put("authorization_url", "https://issuer.example.com/auth?state=s")
+                    put("expected_redirect_uri", "siros://callback")
+                    put("state", "s")
+                    put("code_verifier", "v")
+                    putJsonObject("credential_offer") {
+                        put("credential_issuer", "https://issuer.example.com")
+                        putJsonArray("credential_configuration_ids") { add(kotlinx.serialization.json.JsonPrimitive("eu.europa.ec.eudi.pid_mdoc")) }
+                    }
+                },
+            )
+        )
+        advanceUntilIdle()
+        // the original flow was ended locally in the meantime: no offer context
+        setField(wallet, "activeOffer", null)
+        assertNull(getField(wallet, "activeOffer"))
+
+        wallet.completeAuthorization(flowId = "flow-auth", code = "code", state = "s")
+        advanceUntilIdle()
+        // the display lookup does real IO off the test scheduler: wait (in real time) for the offer context to be restored
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            repeat(100) { if (getField(wallet, "activeOffer") == null) kotlinx.coroutines.delay(50) }
+        }
+
+        val offer = getField(wallet, "activeOffer") as org.siros.sdk.credentials.CredentialOffer
+        assertEquals("eu.europa.ec.eudi.pid_mdoc", offer.credentialConfigurationId)
+        assertEquals("https://issuer.example.com", offer.credentialIssuerIdentifier)
+        // and the catalog tier now decides: FIDO2, not the soft default
+        assertSame(fido2, resolveKeystore(wallet).getOrThrow())
+    }
+
+    /** Both fido2 and r2ps are eligible for the tier but only r2ps is onboarded: it is used, fido2 never touched. */
+    @Test
+    fun requestBackendKeyAttestation_fallsOverToOnboardedPlugin_whenOtherEligiblePluginNotOnboarded() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val defaultKeystore = mockk<KeystoreManager>()
+        val fido2Keystore = mockk<KeystoreManager>()
+        coEvery { fido2Keystore.isWscdOnboarded() } returns false
+        val r2psKeystore = mockk<KeystoreManager>()
+        coEvery { r2psKeystore.isWscdOnboarded() } returns true
+        val keypairs = listOf(KeypairInfo(keyId = "r2ps-key-1", publicKeyJWK = buildJsonObject { put("kty", "EC") }))
+        coEvery { r2psKeystore.generateKeypairs(1) } returns keypairs
+        coEvery { r2psKeystore.attestationChain(any()) } returns null
+        coEvery { r2psKeystore.securityProperties("r2ps-key-1") } returns null
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery {
+            apiClient.requestKeyAttestation(
+                jwks = keypairs.map { it.publicKeyJWK },
+                nonce = "nonce-1",
+                securityProperties = null,
+                credentialIssuer = "https://issuer.example.com",
+                walletInstanceId = null,
+            )
+        } returns "backend-signed-attestation-jwt"
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val config = WalletConfig(
+            backendUrl = "https://wallet.example.com",
+            availableKeystores = mapOf("softkey" to defaultKeystore, "fido2" to fido2Keystore, "r2ps" to r2psKeystore),
+        )
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to config,
+            "keystore" to defaultKeystore,
+            "wscdSelectionPolicy" to WscdSelectionPolicy(tofuStore = InMemoryWscdTofuStore()),
+        )
+        setField(
+            wallet,
+            "activeOffer",
+            org.siros.sdk.credentials.CredentialOffer(
+                credentialConfigurationId = "pid",
+                credentialIssuerIdentifier = "https://issuer.example.com",
+                credentialName = "PID",
+                issuerName = "Issuer",
+            ),
+        )
+        setField(
+            wallet,
+            "activeVctm",
+            org.siros.sdk.credentials.Vctm(vct = "urn:eu.europa.ec.eudi:pid:1", requiredKeyStorage = "iso_18045_high"),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        setField(wallet, "apiClient", apiClient)
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sign",
+                action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "https://issuer.example.com",
+                    nonce = "nonce-1",
+                    count = 1,
+                    proofTypesSupported = buildJsonObject { putJsonObject("attestation") {} },
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { r2psKeystore.generateKeypairs(1) }
+        coVerify(exactly = 0) { defaultKeystore.generateKeypairs(any()) }
+        coVerify(exactly = 0) { fido2Keystore.generateKeypairs(any()) }
+    }
+
     /**
      * Reproduces a real bug found via live testing: the `jwt` proof branch
      * (preferred over `attestation` whenever an issuer supports it - the
@@ -2809,6 +3884,7 @@ class SirosWalletTest {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val defaultKeystore = mockk<KeystoreManager>(relaxed = true)
         val fido2Keystore = mockk<KeystoreManager>()
+        coEvery { fido2Keystore.isWscdOnboarded() } returns true
         coEvery { fido2Keystore.generateProof(audience = any(), nonce = any(), freshKey = any(), holderBinding = any()) } returns "fido2-signed-proof-jwt"
         val engine = mockEngineConstructor(signRequests = signFlow)
         val config = WalletConfig(
@@ -2929,6 +4005,204 @@ class SirosWalletTest {
     }
 
     /**
+     * fido2 is tier-sufficient but no WSCD token has been onboarded: issuance must fail with
+     * [NoOnboardedWscdException] before any key is generated (and so before any PIN is requested),
+     * with no fallback to the default keystore and no sign response.
+     */
+    @Test
+    fun requestBackendKeyAttestation_refusesBeforeAnyKeyOrPin_whenNoEligibleWscdOnboarded() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val defaultKeystore = mockk<KeystoreManager>(relaxed = true)
+        val fido2Keystore = mockk<KeystoreManager>()
+        coEvery { fido2Keystore.isWscdOnboarded() } returns false
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val config = WalletConfig(
+            backendUrl = "https://wallet.example.com",
+            availableKeystores = mapOf("softkey" to defaultKeystore, "fido2" to fido2Keystore),
+        )
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to config,
+            "keystore" to defaultKeystore,
+            "wscdSelectionPolicy" to WscdSelectionPolicy(tofuStore = InMemoryWscdTofuStore()),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+        )
+        setField(
+            wallet,
+            "activeOffer",
+            org.siros.sdk.credentials.CredentialOffer(
+                credentialConfigurationId = "pid",
+                credentialIssuerIdentifier = "https://issuer.example.com",
+                credentialName = "PID",
+                issuerName = "Issuer",
+            ),
+        )
+        setField(
+            wallet,
+            "activeVctm",
+            org.siros.sdk.credentials.Vctm(vct = "urn:eu.europa.ec.eudi:pid:1", requiredKeyStorage = "iso_18045_high"),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        setField(wallet, "apiClient", apiClient)
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sign",
+                action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "https://issuer.example.com",
+                    nonce = "nonce-1",
+                    count = 1,
+                    proofTypesSupported = buildJsonObject { putJsonObject("attestation") {} },
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { fido2Keystore.isWscdOnboarded() }
+        coVerify(exactly = 0) { fido2Keystore.generateKeypairs(any()) }
+        coVerify(exactly = 0) { fido2Keystore.generateKeyAttestation(any(), any()) }
+        coVerify(exactly = 0) { defaultKeystore.generateKeypairs(any()) }
+        coVerify(exactly = 0) { engine.sendSignResponse(any(), any(), any(), any()) }
+    }
+
+    /**
+     * The wallet's own default keystore (no availableKeystores) has no onboarded WSCD: issuance must fail with
+     * [WscdAuthenticatorNotPresentException] before any key is generated (and so before any PIN is
+     * requested), with no fallback to the default keystore and no sign response.
+     */
+    @Test
+    fun requestBackendKeyAttestation_refusesBeforeAnyKeyOrPin_whenDefaultKeystoreNotOnboarded() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val defaultKeystore = mockk<KeystoreManager>(relaxed = true)
+        coEvery { defaultKeystore.isWscdOnboarded() } returns false
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val config = WalletConfig(
+            backendUrl = "https://wallet.example.com",
+        )
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to config,
+            "keystore" to defaultKeystore,
+            "wscdSelectionPolicy" to WscdSelectionPolicy(tofuStore = InMemoryWscdTofuStore()),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+        )
+        setField(
+            wallet,
+            "activeOffer",
+            org.siros.sdk.credentials.CredentialOffer(
+                credentialConfigurationId = "pid",
+                credentialIssuerIdentifier = "https://issuer.example.com",
+                credentialName = "PID",
+                issuerName = "Issuer",
+            ),
+        )
+        setField(
+            wallet,
+            "activeVctm",
+            org.siros.sdk.credentials.Vctm(vct = "urn:eu.europa.ec.eudi:pid:1", requiredKeyStorage = "iso_18045_high"),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        setField(wallet, "apiClient", apiClient)
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sign",
+                action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "https://issuer.example.com",
+                    nonce = "nonce-1",
+                    count = 1,
+                    proofTypesSupported = buildJsonObject { putJsonObject("attestation") {} },
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { defaultKeystore.isWscdOnboarded() }
+        coVerify(exactly = 0) { defaultKeystore.generateKeypairs(any()) }
+        coVerify(exactly = 0) { engine.sendSignResponse(any(), any(), any(), any()) }
+    }
+
+    /**
+     * The credential declares NO tier, but a global user override names fido2, which is not onboarded:
+     * the policy returns the override, and the gate must still refuse before any key generation / PIN.
+     */
+    @Test
+    fun requestBackendKeyAttestation_refusesBeforeAnyKeyOrPin_whenOverrideNamesNonOnboardedPlugin_evenWithNoRequiredTier() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val defaultKeystore = mockk<KeystoreManager>(relaxed = true)
+        val fido2Keystore = mockk<KeystoreManager>()
+        coEvery { fido2Keystore.isWscdOnboarded() } returns false
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        val config = WalletConfig(
+            backendUrl = "https://wallet.example.com",
+            availableKeystores = mapOf("softkey" to defaultKeystore, "fido2" to fido2Keystore),
+        )
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to config,
+            "keystore" to defaultKeystore,
+            "wscdSelectionPolicy" to WscdSelectionPolicy(
+                tofuStore = InMemoryWscdTofuStore(),
+                userOverrideStore = object : WscdUserOverrideStore {
+                    override fun get(issuer: String, credentialType: String): String? = null
+                    override fun put(issuer: String, credentialType: String, pluginId: String) {}
+                    override fun getGlobal(): String? = "fido2"
+                    override fun setGlobal(pluginId: String) {}
+                },
+            ),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+        )
+        setField(
+            wallet,
+            "activeOffer",
+            org.siros.sdk.credentials.CredentialOffer(
+                credentialConfigurationId = "pid",
+                credentialIssuerIdentifier = "https://issuer.example.com",
+                credentialName = "PID",
+                issuerName = "Issuer",
+            ),
+        )
+        setField(
+            wallet,
+            "activeVctm",
+            org.siros.sdk.credentials.Vctm(vct = "urn:eu.europa.ec.eudi:pid:1", requiredKeyStorage = null),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        setField(wallet, "apiClient", apiClient)
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sign",
+                action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "https://issuer.example.com",
+                    nonce = "nonce-1",
+                    count = 1,
+                    proofTypesSupported = buildJsonObject { putJsonObject("attestation") {} },
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { fido2Keystore.isWscdOnboarded() }
+        coVerify(exactly = 0) { fido2Keystore.generateKeypairs(any()) }
+        coVerify(exactly = 0) { fido2Keystore.generateKeyAttestation(any(), any()) }
+        coVerify(exactly = 0) { defaultKeystore.generateKeypairs(any()) }
+        coVerify(exactly = 0) { engine.sendSignResponse(any(), any(), any(), any()) }
+    }
+
+    /**
      * Regression (PR #85 review, bug 1): `resolveEffectiveKeystoreForIssuance`
      * must key [WscdSelectionPolicy] lookups (TOFU/defaultMapping) by the
      * credential type's real `vct`/`doctype` identifier, NOT
@@ -2946,6 +4220,7 @@ class SirosWalletTest {
     fun resolveEffectiveKeystoreForIssuance_keysWscdLookupByVct_notCredentialConfigurationId() = runTest(dispatcher) {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val fido2Keystore = mockk<KeystoreManager>()
+        coEvery { fido2Keystore.isWscdOnboarded() } returns true
         val r2psKeystore = mockk<KeystoreManager>(relaxed = true)
         val keypairs = listOf(KeypairInfo(keyId = "fido2-key-1", publicKeyJWK = buildJsonObject { put("kty", "EC") }))
         coEvery { fido2Keystore.generateKeypairs(1) } returns keypairs
@@ -3029,6 +4304,7 @@ class SirosWalletTest {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val defaultKeystore = mockk<KeystoreManager>(relaxed = true)
         val fido2Keystore = mockk<KeystoreManager>()
+        coEvery { fido2Keystore.isWscdOnboarded() } returns true
         val keypairs = listOf(KeypairInfo(keyId = "fido2-key-1", publicKeyJWK = buildJsonObject { put("kty", "EC") }))
         coEvery { fido2Keystore.generateKeypairs(1) } returns keypairs
         coEvery { fido2Keystore.attestationChain(any()) } returns null
@@ -3867,6 +5143,475 @@ class SirosWalletTest {
         assertEquals("notif-xyz", store.let { runBlocking { it.getAll() }.single().notificationId })
     }
 
+    // ── Issuance trust gate: an untrusted issuer's credential is never stored ──
+
+    private fun mdocResult(notificationId: String? = null) = CredentialResult(
+        format = "mso_mdoc",
+        credential = "bm90LWFuLW1kb2M",
+        notificationId = notificationId,
+    )
+
+    /** Runs the issuance policy with the REAL evaluateIssuerTrust behind the mdoc check. */
+    private suspend fun gateFor(wallet: SirosWallet, cert: java.security.cert.X509Certificate): String? =
+        issuanceTrustRefusal(listOf(mdocResult()), engineTrust = null) {
+            wallet.evaluateIssuerTrust(listOf(cert.encoded), docType = null)
+        }
+
+    @Test
+    fun issuanceGate_remoteDecisionTrue_isAccepted() = runTest(dispatcher) {
+        val cert = issuerNamingFixtureCert()
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", JsonPrimitive(true)) }
+        assertNull(gateFor(issuerWalletWithLocalRoot(apiClient, cert), cert))
+    }
+
+    @Test
+    fun issuanceGate_remoteDecisionFalse_isRefused_evenWithLocalRootThatWouldAccept() = runTest(dispatcher) {
+        val cert = issuerNamingFixtureCert()
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", JsonPrimitive(false)) }
+        assertNotNull(gateFor(issuerWalletWithLocalRoot(apiClient, cert), cert))
+    }
+
+    @Test
+    fun issuanceGate_unreachableWithNoLocalRoots_isRefused() = runTest(dispatcher) {
+        val cert = issuerNamingFixtureCert()
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws NetworkException("offline")
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+        assertNotNull(gateFor(wallet, cert))
+    }
+
+    @Test
+    fun issuanceGate_unreachableWithPositiveLocalValidation_isAccepted() = runTest(dispatcher) {
+        val cert = issuerNamingFixtureCert()
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws NetworkException("offline")
+        assertNull(gateFor(issuerWalletWithLocalRoot(apiClient, cert), cert))
+    }
+
+    @Test
+    fun issuanceGate_unreachableWithLocalValidationNegative_isRefused() = runTest(dispatcher) {
+        val cert = issuerNamingFixtureCert()
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws NetworkException("offline")
+        // Root configured, but it is not this certificate's issuer.
+        val otherRoot = java.security.cert.CertificateFactory.getInstance("X.509").generateCertificate(
+            checkNotNull(javaClass.getResourceAsStream("/mdoc-issuer-identity/http_uri.pem")),
+        ) as java.security.cert.X509Certificate
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", issuerTrustRootCertificatesPem = listOf("unused")),
+            "issuerTrustRootCertificates\$delegate" to lazy { listOf(otherRoot) },
+        )
+        assertNotNull(gateFor(wallet, cert))
+    }
+
+    @Test
+    fun issuanceGate_backend4xx_isRefused() = runTest(dispatcher) {
+        val cert = issuerNamingFixtureCert()
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws BackendApiException(403, "API request failed: 403", "")
+        assertNotNull(gateFor(issuerWalletWithLocalRoot(apiClient, cert), cert))
+    }
+
+    @Test
+    fun issuanceGate_missingOrUnverifiableIssuerAuth_isRefused() = runTest(dispatcher) {
+        val refusal = issuanceTrustRefusal(listOf(mdocResult()), engineTrust = null) { null }
+        assertNotNull(refusal)
+        assertTrue(refusal!!.contains("issuerAuth"))
+    }
+
+    @Test
+    fun issuanceGate_engineReportedUntrusted_isRefusedEvenForNonMdoc() = runTest(dispatcher) {
+        val sdJwt = CredentialResult(format = "dc+sd-jwt", credential = "x")
+        val untrusted = TrustResult(trusted = false, reason = "not in registry")
+        val trusted = TrustResult(trusted = true)
+        assertNotNull(issuanceTrustRefusal(listOf(sdJwt), untrusted) { null })
+        assertNull(issuanceTrustRefusal(listOf(sdJwt), trusted) { null })
+        assertNull(issuanceTrustRefusal(listOf(sdJwt), null) { null })
+    }
+
+    /** Wires a wallet to a mock engine, runs [emit], and returns what was observably touched. */
+    private class RefusalHarness(
+        val store: FakeCredentialStore,
+        val listener: WalletEventListener,
+        val apiClient: BackendApiClient,
+        val engine: WalletEngineSession,
+        val state: MutableStateFlow<WalletState>,
+        val wallet: SirosWallet,
+    )
+
+    private fun TestScope.refusalHarness(
+        progress: MutableSharedFlow<FlowProgressMessage>,
+        complete: MutableSharedFlow<FlowCompleteMessage>,
+        existing: List<StoredCredential> = emptyList(),
+        configure: (SirosWallet) -> Unit = {},
+    ): RefusalHarness {
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val store = FakeCredentialStore(existing.toMutableList())
+        val keystore = mockk<KeystoreManager>()
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        every { keystore.isUnlocked } returns true
+        coEvery { keystore.exportEncryptedContainer() } returns """{"prfKeys":[],"jwe":"x"}""".toByteArray()
+        coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+        val engine = mockEngineConstructor(progressFlow = progress, flowComplete = complete)
+        every { engine.sendCredentialNotification(any(), any(), any(), any()) } just runs
+        val state = MutableStateFlow<WalletState>(
+            WalletState.FlowActive(
+                userId = "u", displayName = "A", flowId = "f1", flowType = "issuance",
+                status = "in_progress", credentials = emptyList(),
+            ),
+        )
+        val wallet = newWallet(
+            "_state" to state,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to sessionStore,
+            "apiClient" to apiClient,
+            "eventListener" to listener,
+        )
+        configure(wallet)
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        return RefusalHarness(store, listener, apiClient, engine, state, wallet)
+    }
+
+    @Test
+    fun flowComplete_unverifiableMdoc_isRefused_nothingStoredCapturedOrSynced() = runTest(dispatcher) {
+        val progress = MutableSharedFlow<FlowProgressMessage>()
+        val complete = MutableSharedFlow<FlowCompleteMessage>()
+        val h = refusalHarness(progress, complete)
+
+        complete.emit(
+            FlowCompleteMessage(
+                flowId = "f1",
+                credentials = listOf(mdocResult(notificationId = "notif-1")),
+                refreshToken = "secret-refresh-token",
+            ),
+        )
+        advanceUntilIdle()
+
+        assertTrue(runBlocking { h.store.getAll() }.isEmpty())
+        coVerify(exactly = 0) { h.apiClient.updatePrivateData(any()) }
+        verify(exactly = 1) {
+            h.engine.sendCredentialNotification(
+                flowId = "f1",
+                notificationId = "notif-1",
+                event = CredentialNotificationEvent.FAILURE,
+                eventDescription = "issuer_not_trusted",
+            )
+        }
+        verify(exactly = 0) {
+            h.engine.sendCredentialNotification(any(), any(), CredentialNotificationEvent.ACCEPTED, any())
+        }
+        verify(exactly = 1) { h.listener.onIssuerNotTrusted("f1", any(), any()) }
+        verify(exactly = 1) { h.listener.onFlowError("f1", ISSUER_NOT_TRUSTED_MESSAGE, any()) }
+        verify(exactly = 0) { h.listener.onFlowComplete(any(), any()) }
+        verify(exactly = 0) { h.listener.onCredentialReceived(any()) }
+        assertTrue(h.state.value is WalletState.Ready)
+    }
+
+    // ── End-to-end with a genuinely signed mdoc (no hook): decode, parse,
+    // verify the issuerAuth signature, evaluate, then store or refuse.
+
+    private fun fixtureText(name: String) =
+        String(checkNotNull(javaClass.getResourceAsStream("/mdoc-issuance/$name")).readBytes())
+
+    private fun fixtureIssuerCert(): java.security.cert.X509Certificate =
+        java.security.cert.CertificateFactory.getInstance("X.509")
+            .generateCertificate(fixtureText("issuer-cert.pem").byteInputStream()) as java.security.cert.X509Certificate
+
+    private fun fixtureIssuerKey(): java.security.PrivateKey {
+        val b64 = fixtureText("issuer-key.pem").lines().filter { !it.startsWith("-----") }.joinToString("")
+        return java.security.KeyFactory.getInstance("EC")
+            .generatePrivate(java.security.spec.PKCS8EncodedKeySpec(java.util.Base64.getDecoder().decode(b64)))
+    }
+
+    private fun derToRaw(der: ByteArray): ByteArray {
+        var i = 3
+        val rLen = der[i].toInt(); i++
+        val r = der.copyOfRange(i, i + rLen); i += rLen + 1
+        val sLen = der[i].toInt(); i++
+        val s = der.copyOfRange(i, i + sLen)
+        fun fix(b: ByteArray) = ByteArray(32).also { out ->
+            val t = b.dropWhile { it == 0.toByte() }.toByteArray()
+            System.arraycopy(t, 0, out, 32 - t.size, t.size)
+        }
+        return fix(r) + fix(s)
+    }
+
+    /** A bare IssuerSigned mdoc, base64url, signed with the fixture key (optionally tampered / without x5chain). */
+    private fun signedMdoc(tamper: Boolean = false, withChain: Boolean = true, untaggedMso: Boolean = false): String {
+        val docType = "org.iso.18013.5.1.mDL"
+        val mso = com.upokecenter.cbor.CBORObject.NewMap()
+        mso[com.upokecenter.cbor.CBORObject.FromObject("docType")] = com.upokecenter.cbor.CBORObject.FromObject(docType)
+        val payload = if (untaggedMso) {
+            com.upokecenter.cbor.CBORObject.FromObject(mso.EncodeToBytes()).EncodeToBytes()
+        } else {
+            com.upokecenter.cbor.CBORObject.FromObjectAndTag(mso.EncodeToBytes(), 24).EncodeToBytes()
+        }
+        val protectedBytes = com.upokecenter.cbor.CBORObject.NewMap()
+            .also { it[com.upokecenter.cbor.CBORObject.FromObject(1)] = com.upokecenter.cbor.CBORObject.FromObject(-7) }
+            .EncodeToBytes()
+        val sigStructure = com.upokecenter.cbor.CBORObject.NewArray().also {
+            it.Add(com.upokecenter.cbor.CBORObject.FromObject("Signature1"))
+            it.Add(com.upokecenter.cbor.CBORObject.FromObject(protectedBytes))
+            it.Add(com.upokecenter.cbor.CBORObject.FromObject(ByteArray(0)))
+            it.Add(com.upokecenter.cbor.CBORObject.FromObject(payload))
+        }.EncodeToBytes()
+        val signature = java.security.Signature.getInstance("SHA256withECDSA").run {
+            initSign(fixtureIssuerKey()); update(sigStructure); derToRaw(sign())
+        }
+        if (tamper) signature[0] = (signature[0].toInt() xor 0x01).toByte()
+        val unprotected = com.upokecenter.cbor.CBORObject.NewMap()
+        if (withChain) {
+            unprotected[com.upokecenter.cbor.CBORObject.FromObject(33)] =
+                com.upokecenter.cbor.CBORObject.FromObject(fixtureIssuerCert().encoded)
+        }
+        val issuerAuth = com.upokecenter.cbor.CBORObject.NewArray().also {
+            it.Add(com.upokecenter.cbor.CBORObject.FromObject(protectedBytes))
+            it.Add(unprotected)
+            it.Add(com.upokecenter.cbor.CBORObject.FromObject(payload))
+            it.Add(com.upokecenter.cbor.CBORObject.FromObject(signature))
+        }
+        val item = com.upokecenter.cbor.CBORObject.NewMap().also {
+            it[com.upokecenter.cbor.CBORObject.FromObject("digestID")] = com.upokecenter.cbor.CBORObject.FromObject(0)
+            it[com.upokecenter.cbor.CBORObject.FromObject("random")] = com.upokecenter.cbor.CBORObject.FromObject(ByteArray(16))
+            it[com.upokecenter.cbor.CBORObject.FromObject("elementIdentifier")] = com.upokecenter.cbor.CBORObject.FromObject("family_name")
+            it[com.upokecenter.cbor.CBORObject.FromObject("elementValue")] = com.upokecenter.cbor.CBORObject.FromObject("Doe")
+        }
+        val tagged = com.upokecenter.cbor.CBORObject.FromObjectAndTag(item.EncodeToBytes(), 24)
+        val ns = com.upokecenter.cbor.CBORObject.NewMap().also {
+            it[com.upokecenter.cbor.CBORObject.FromObject("org.iso.18013.5.1")] =
+                com.upokecenter.cbor.CBORObject.NewArray().also { a -> a.Add(tagged) }
+        }
+        val bare = com.upokecenter.cbor.CBORObject.NewMap().also {
+            it[com.upokecenter.cbor.CBORObject.FromObject("nameSpaces")] = ns
+            it[com.upokecenter.cbor.CBORObject.FromObject("issuerAuth")] = issuerAuth
+        }
+        return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bare.EncodeToBytes())
+    }
+
+    private fun TestScope.signedMdocHarness(
+        complete: MutableSharedFlow<FlowCompleteMessage>,
+        evaluate: suspend () -> JsonObject,
+    ): RefusalHarness {
+        val h = refusalHarness(MutableSharedFlow(), complete) { wallet ->
+            val api = mockk<BackendApiClient>()
+            coEvery { api.evaluateTrust(any()) } coAnswers { evaluate() }
+            setField(wallet, "apiClient", api)
+            setField(wallet, "config", WalletConfig(backendUrl = "https://wallet.example.com"))
+        }
+        return h
+    }
+
+    @Test
+    fun flowComplete_signedMdocWithPositiveBackendDecision_isStoredAndAccepted() = runTest(dispatcher) {
+        val complete = MutableSharedFlow<FlowCompleteMessage>()
+        val h = signedMdocHarness(complete) { buildJsonObject { put("decision", JsonPrimitive(true)) } }
+
+        complete.emit(FlowCompleteMessage(flowId = "f1", credentials = listOf(
+            CredentialResult(format = "mso_mdoc", credential = signedMdoc(), notificationId = "n"),
+        )))
+        advanceUntilIdle()
+
+        assertEquals(1, runBlocking { h.store.getAll() }.size)
+        verify(exactly = 1) { h.engine.sendCredentialNotification("f1", "n", CredentialNotificationEvent.ACCEPTED, any()) }
+        verify(exactly = 0) { h.listener.onIssuerNotTrusted(any(), any(), any()) }
+    }
+
+    @Test
+    fun flowComplete_signedMdocWithUntaggedByteStringMso_isStillAccepted() = runTest(dispatcher) {
+        val complete = MutableSharedFlow<FlowCompleteMessage>()
+        val h = signedMdocHarness(complete) { buildJsonObject { put("decision", JsonPrimitive(true)) } }
+
+        complete.emit(FlowCompleteMessage(flowId = "f1", credentials = listOf(
+            CredentialResult(format = "mso_mdoc", credential = signedMdoc(untaggedMso = true)),
+        )))
+        advanceUntilIdle()
+
+        assertEquals(1, runBlocking { h.store.getAll() }.size)
+    }
+
+    @Test
+    fun flowComplete_signedMdocWithNegativeBackendDecision_isRefused() = runTest(dispatcher) {
+        val complete = MutableSharedFlow<FlowCompleteMessage>()
+        val h = signedMdocHarness(complete) { buildJsonObject { put("decision", JsonPrimitive(false)) } }
+
+        complete.emit(FlowCompleteMessage(flowId = "f1", credentials = listOf(
+            CredentialResult(format = "mso_mdoc", credential = signedMdoc(), notificationId = "n"),
+        )))
+        advanceUntilIdle()
+
+        assertTrue(runBlocking { h.store.getAll() }.isEmpty())
+        verify(exactly = 1) { h.listener.onIssuerNotTrusted("f1", any(), any()) }
+    }
+
+    @Test
+    fun flowComplete_signedMdocWithTamperedSignature_isRefusedWithoutAskingTheBackend() = runTest(dispatcher) {
+        val complete = MutableSharedFlow<FlowCompleteMessage>()
+        var asked = 0
+        val h = signedMdocHarness(complete) { asked++; buildJsonObject { put("decision", JsonPrimitive(true)) } }
+
+        complete.emit(FlowCompleteMessage(flowId = "f1", credentials = listOf(
+            CredentialResult(format = "mso_mdoc", credential = signedMdoc(tamper = true)),
+        )))
+        advanceUntilIdle()
+
+        assertTrue(runBlocking { h.store.getAll() }.isEmpty())
+        assertEquals(0, asked)
+        verify(exactly = 1) { h.listener.onIssuerNotTrusted("f1", any(), any()) }
+    }
+
+    @Test
+    fun flowComplete_signedMdocWithoutCertificateChain_isRefused() = runTest(dispatcher) {
+        val complete = MutableSharedFlow<FlowCompleteMessage>()
+        val h = signedMdocHarness(complete) { buildJsonObject { put("decision", JsonPrimitive(true)) } }
+
+        complete.emit(FlowCompleteMessage(flowId = "f1", credentials = listOf(
+            CredentialResult(format = "mso_mdoc", credential = signedMdoc(withChain = false)),
+        )))
+        advanceUntilIdle()
+
+        assertTrue(runBlocking { h.store.getAll() }.isEmpty())
+        verify(exactly = 1) { h.listener.onIssuerNotTrusted("f1", any(), any()) }
+    }
+
+    @Test
+    fun flowComplete_envelopeDocTypeDifferentFromSignedMso_isRefusedWithoutAskingTheBackend() = runTest(dispatcher) {
+        val complete = MutableSharedFlow<FlowCompleteMessage>()
+        var asked = 0
+        val h = signedMdocHarness(complete) { asked++; buildJsonObject { put("decision", JsonPrimitive(true)) } }
+        // Wrap the validly signed (mDL) IssuerSigned in a DeviceResponse-style
+        // envelope that claims another docType.
+        val bare = com.upokecenter.cbor.CBORObject.DecodeFromBytes(java.util.Base64.getUrlDecoder().decode(signedMdoc()))
+        val document = com.upokecenter.cbor.CBORObject.NewMap().also {
+            it[com.upokecenter.cbor.CBORObject.FromObject("docType")] = com.upokecenter.cbor.CBORObject.FromObject("eu.europa.ec.eudi.pid.1")
+            it[com.upokecenter.cbor.CBORObject.FromObject("issuerSigned")] = bare
+        }
+        val envelope = com.upokecenter.cbor.CBORObject.NewMap().also {
+            it[com.upokecenter.cbor.CBORObject.FromObject("documents")] =
+                com.upokecenter.cbor.CBORObject.NewArray().also { a -> a.Add(document) }
+        }
+        val wrapped = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(envelope.EncodeToBytes())
+
+        complete.emit(FlowCompleteMessage(flowId = "f1", credentials = listOf(
+            CredentialResult(format = "mso_mdoc", credential = wrapped),
+        )))
+        advanceUntilIdle()
+
+        assertTrue(runBlocking { h.store.getAll() }.isEmpty())
+        assertEquals(0, asked)
+        verify(exactly = 1) { h.listener.onIssuerNotTrusted("f1", any(), any()) }
+    }
+
+    /** Logout ends the session generation: a completion pending on trust must neither store nor refuse. */
+    @Test
+    fun flowComplete_sessionEndedWhileTrustCheckPending_touchesNothing() = runTest(dispatcher) {
+        val complete = MutableSharedFlow<FlowCompleteMessage>()
+        val gate = kotlinx.coroutines.CompletableDeferred<TrustResult?>()
+        val h = refusalHarness(MutableSharedFlow(), complete) { wallet ->
+            wallet.mdocIssuanceTrustHook = { gate.await() }
+        }
+        complete.emit(FlowCompleteMessage(flowId = "f1", credentials = listOf(mdocResult(notificationId = "n"))))
+        advanceUntilIdle()
+        val bump = SirosWallet::class.java.getDeclaredMethod("bumpSessionGeneration")
+        bump.isAccessible = true
+        bump.invoke(h.wallet)
+        gate.complete(TrustResult(trusted = false, reason = "late denial"))
+        advanceUntilIdle()
+
+        assertTrue(runBlocking { h.store.getAll() }.isEmpty())
+        verify(exactly = 0) { h.listener.onIssuerNotTrusted(any(), any(), any()) }
+        verify(exactly = 0) { h.engine.sendCredentialNotification(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun flowComplete_engineReportedUntrustedIssuer_isRefusedForSdJwt() = runTest(dispatcher) {
+        val testCredential = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9."
+        val progress = MutableSharedFlow<FlowProgressMessage>()
+        val complete = MutableSharedFlow<FlowCompleteMessage>()
+        val h = refusalHarness(progress, complete)
+
+        complete.emit(
+            FlowCompleteMessage(
+                flowId = "f1",
+                credentials = listOf(CredentialResult(format = "dc+sd-jwt", credential = testCredential, notificationId = "n")),
+                issuerTrust = IssuerTrustReport("https://issuer.example", trusted = false, framework = null, reason = "no"),
+            ),
+        )
+        advanceUntilIdle()
+
+        assertTrue(runBlocking { h.store.getAll() }.isEmpty())
+        coVerify(exactly = 0) { h.apiClient.updatePrivateData(any()) }
+        verify(exactly = 1) { h.listener.onIssuerNotTrusted("f1", "https://issuer.example", any()) }
+        verify(exactly = 1) {
+            h.engine.sendCredentialNotification("f1", "n", CredentialNotificationEvent.FAILURE, any())
+        }
+    }
+
+    @Test
+    fun flowComplete_engineReportedTrustedIssuer_storesSdJwt() = runTest(dispatcher) {
+        val testCredential = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9."
+        val progress = MutableSharedFlow<FlowProgressMessage>()
+        val complete = MutableSharedFlow<FlowCompleteMessage>()
+        val h = refusalHarness(progress, complete)
+
+        complete.emit(
+            FlowCompleteMessage(
+                flowId = "f1",
+                credentials = listOf(CredentialResult(format = "dc+sd-jwt", credential = testCredential)),
+                issuerTrust = IssuerTrustReport("https://issuer.example", trusted = true, framework = "x", reason = null),
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals(1, runBlocking { h.store.getAll() }.size)
+        verify(exactly = 0) { h.listener.onIssuerNotTrusted(any(), any(), any()) }
+    }
+
+    /**
+     * Review finding: the trust check suspends on the network. If the flow is
+     * cancelled meanwhile (issuance state reset, a new flow may own it), the
+     * stale completion must neither store nor reset anything.
+     */
+    @Test
+    fun flowComplete_cancelledWhileTrustCheckPending_touchesNothing() = runTest(dispatcher) {
+        val progress = MutableSharedFlow<FlowProgressMessage>()
+        val complete = MutableSharedFlow<FlowCompleteMessage>()
+        val gate = kotlinx.coroutines.CompletableDeferred<TrustResult?>()
+        val h = refusalHarness(progress, complete) { wallet ->
+            wallet.mdocIssuanceTrustHook = { gate.await() }
+        }
+
+        complete.emit(
+            FlowCompleteMessage(
+                flowId = "f1",
+                credentials = listOf(mdocResult(notificationId = "n")),
+                refreshToken = "rt",
+            ),
+        )
+        advanceUntilIdle()
+        // cancelCurrentFlow()-equivalent while the check is pending.
+        val reset = SirosWallet::class.java.getDeclaredMethod("resetIssuanceGuards")
+        reset.isAccessible = true
+        reset.invoke(h.wallet)
+        gate.complete(TrustResult(trusted = false, reason = "late"))
+        advanceUntilIdle()
+
+        assertTrue(runBlocking { h.store.getAll() }.isEmpty())
+        verify(exactly = 0) { h.listener.onIssuerNotTrusted(any(), any(), any()) }
+        verify(exactly = 0) { h.listener.onFlowError(any(), any(), any()) }
+        verify(exactly = 0) { h.engine.sendCredentialNotification(any(), any(), any(), any()) }
+    }
+
     @Test
     fun connectEngine_flowComplete_omits_credential_notification_without_notification_id() = runTest(dispatcher) {
         val testCredential = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9."
@@ -4045,6 +5790,7 @@ class SirosWalletTest {
     fun connectEngine_signRequest_generates_proof_and_sends_response() = runTest(dispatcher) {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.isWscdOnboarded() } returns true
         coEvery { keystore.generateProof(audience = "aud-1", nonce = "nonce-1", freshKey = any(), holderBinding = any()) } returns "proof-jwt"
         val engine = mockEngineConstructor(signRequests = signFlow)
         val wallet = newWallet(
@@ -4073,6 +5819,598 @@ class SirosWalletTest {
                 messageId = null,
             )
         }
+    }
+
+    // ---- holder commitments (org.siros.psc) in the proof JWT; https://github.com/SUNET/vc/issues/823 ----
+
+    /** A keystore that is also a [org.siros.sdk.keystore.HolderWitnessSource]; records what it was asked. */
+    private fun pscKeystore(asked: MutableList<Pair<String, String>>): KeystoreManager {
+        val ks = mockk<KeystoreManager>(moreInterfaces = arrayOf(org.siros.sdk.keystore.HolderWitnessSource::class))
+        coEvery { ks.isWscdOnboarded() } returns true
+        val src = ks as org.siros.sdk.keystore.HolderWitnessSource
+        every { src.privateSeedCommitment(any(), any()) } answers {
+            val t = firstArg<String>(); val i = secondArg<String>()
+            asked += t to i
+            java.security.MessageDigest.getInstance("SHA-256").digest("$t|$i".toByteArray(Charsets.UTF_8))
+        }
+        return ks
+    }
+
+    private fun pscClaimFor(type: String, issuer: String): String = java.util.Base64.getUrlEncoder().withoutPadding()
+        .encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest("$type|$issuer".toByteArray(Charsets.UTF_8)))
+
+    private suspend fun kotlinx.coroutines.test.TestScope.generateProofWithCommitments(
+        keystore: KeystoreManager,
+        params: SignRequestParams,
+        listener: WalletEventListener? = null,
+        config: WalletConfig = WalletConfig(backendUrl = "https://wallet.example.com"),
+        extraFields: Array<Pair<String, Any?>> = emptyArray(),
+    ): SirosWallet {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        mockEngineConstructor(signRequests = signFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to config,
+            "keystore" to keystore,
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to listener,
+            *extraFields,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        signFlow.emit(SignRequestMessage(flowId = "flow-psc", action = "generate_proof", params = params))
+        advanceUntilIdle()
+        return wallet
+    }
+
+    private fun auxEntry(path: String = """["psc"]""", required: Boolean = true, type: String = "hash_commitment", alg: String = "sha-256") =
+        Json.parseToJsonElement("""{"type":"$type","alg":"$alg","path":$path,"required":$required,"extra":"kept-verbatim"}""").jsonObject
+
+    @Test
+    fun generateProof_withAuxiliaryDataToIssuer_signsOneAuxiliaryDataClaimIdenticalInEveryProof() = runTest(dispatcher) {
+        val asked = mutableListOf<Pair<String, String>>()
+        val keystore = pscKeystore(asked)
+        val captured = mutableListOf<Map<String, kotlinx.serialization.json.JsonElement>>()
+        coEvery { keystore.generateProofWithJsonClaims(any(), any(), any(), any(), capture(captured)) } returns "proof-jwt"
+        generateProofWithCommitments(
+            keystore,
+            SignRequestParams(
+                audience = "aud-1", nonce = "n-1", count = 3, credentialType = "urn:t", credentialIssuer = "https://issuer.example/",
+                auxiliaryDataToIssuer = listOf(auxEntry()),
+            ),
+        )
+        assertEquals(3, captured.size)
+        assertEquals("one value for every proof", 1, captured.toSet().size)
+        assertEquals(setOf("auxiliary_data"), captured.first().keys)
+        val e = (captured.first().getValue("auxiliary_data") as JsonArray).single().jsonObject
+        assertEquals(listOf("psc"), e["path"]!!.jsonArray.map { it.jsonPrimitive.content })
+        assertEquals(pscClaimFor("urn:t", "https://issuer.example/"), e["commitment"]!!.jsonPrimitive.content)
+        assertEquals("derived once, for the exact issuer string", listOf("urn:t" to "https://issuer.example/"), asked)
+    }
+
+    private val offerWithVct = org.siros.sdk.credentials.CredentialOffer(
+        credentialConfigurationId = "cfg-id", credentialIssuerIdentifier = "https://offer-issuer.example", credentialName = "n",
+        issuerName = "i", vct = "urn:real:vct",
+    )
+
+    @Test
+    fun startIssuanceByOffer_resolvesTheAuxiliarySelectionAtStart_forAnOfferBuiltIndependently() = runTest(dispatcher) {
+        val issuer = "https://issuer.example"
+        val metadata = buildJsonObject {
+            put("credential_issuer", JsonPrimitive(issuer))
+            putJsonObject("credential_configurations_supported") {
+                putJsonObject("pid") {
+                    put("format", JsonPrimitive("dc+sd-jwt"))
+                    put("auxiliary_data_supported", Json.parseToJsonElement("""{"to_wallet":[{"type":"hash_commitment","alg":"sha-256","path":["ssc"],"encoding":"base64url"}]}"""))
+                }
+            }
+        }
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery { apiClient.resolveIssuer(any(), any()) } returns buildJsonObject {
+            putJsonObject("context") { put("trust_metadata", metadata) }
+        }
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val selections = java.util.concurrent.ConcurrentHashMap<Pair<String, String>, org.siros.sdk.credentials.AuxiliarySelection.Selected>()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "A")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "engineSession" to engine,
+            "apiClient" to apiClient,
+            "secretSeedAdvertised" to selections, // a FRESH wallet: no listing or display lookup happened before
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+            "json" to Json { ignoreUnknownKeys = true },
+            "httpClient" to OkHttpClient(),
+        )
+        // An offer the sample's full-reissuance fallback builds on its own, not through any resolve call.
+        val offer = org.siros.sdk.credentials.CredentialOffer("pid", issuer, "PID", issuerName = "I")
+        wallet.startIssuanceByOffer(offer)
+        advanceUntilIdle()
+        val selected = selections[issuer to "pid"]
+        assertNotNull("the selection was recorded at issuance start", selected)
+        assertEquals(org.siros.sdk.credentials.AuxiliaryDataV01.id, selected!!.shape.id)
+    }
+
+    @Test
+    fun startIssuanceByOffer_abortsWhenTheCurrentAdvertisementIsMalformed_evenForAnOfferListedBefore() = runTest(dispatcher) {
+        val issuer = "https://issuer.example"
+        val metadata = buildJsonObject {
+            put("credential_issuer", JsonPrimitive(issuer))
+            putJsonObject("credential_configurations_supported") {
+                putJsonObject("pid") {
+                    put("format", JsonPrimitive("dc+sd-jwt"))
+                    // An empty advertisement object: malformed (the offer was valid when it was listed, the CURRENT metadata is not).
+                    put("auxiliary_data_supported", buildJsonObject {})
+                }
+            }
+        }
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery { apiClient.resolveIssuer(any(), any()) } returns buildJsonObject { putJsonObject("context") { put("trust_metadata", metadata) } }
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val selections = java.util.concurrent.ConcurrentHashMap<Pair<String, String>, org.siros.sdk.credentials.AuxiliarySelection.Selected>()
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "A"))
+        val wallet = newWallet(
+            "_state" to stateFlow,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "engineSession" to engine,
+            "apiClient" to apiClient,
+            "secretSeedAdvertised" to selections,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+            "json" to Json { ignoreUnknownKeys = true },
+            "httpClient" to OkHttpClient(),
+        )
+        val offer = org.siros.sdk.credentials.CredentialOffer("pid", issuer, "PID", issuerName = "I")
+        try {
+            wallet.startIssuanceByOffer(offer)
+            org.junit.Assert.fail("issuance started although the advertisement is malformed")
+        } catch (e: WalletException) {
+            assertEquals("auxiliary_data_advertisement_malformed", e.errorCode)
+        }
+        advanceUntilIdle()
+        verify(exactly = 0) { engine.startIssuance(any(), any(), any(), any(), any(), any()) }
+        assertEquals("a new issuance can start afterwards", false, getField(wallet, "issuanceInFlight"))
+    }
+
+    @Test
+    fun aCancelledIssuanceStartsLateMetadataLookup_neverOverwritesTheRetrysAdapterSelection() = runTest(dispatcher) {
+        val issuer = "https://issuer.example"
+        fun metadataWith(advert: kotlinx.serialization.json.JsonElement) = buildJsonObject {
+            put("credential_issuer", JsonPrimitive(issuer))
+            putJsonObject("credential_configurations_supported") {
+                putJsonObject("pid") {
+                    put("format", JsonPrimitive("dc+sd-jwt"))
+                    put("auxiliary_data_supported", advert)
+                }
+            }
+        }
+        val valid = metadataWith(Json.parseToJsonElement("""{"to_wallet":[{"type":"hash_commitment","alg":"sha-256","path":["ssc"],"encoding":"base64url"}]}"""))
+        val malformed = metadataWith(buildJsonObject {})
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var call = 0
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery { apiClient.resolveIssuer(any(), any()) } coAnswers {
+            val n = ++call
+            // The FIRST attempt's lookup hangs; it is released after the user cancelled and restarted, with a different answer.
+            if (n == 1) gate.await()
+            buildJsonObject { putJsonObject("context") { put("trust_metadata", if (n == 1) malformed else valid) } }
+        }
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val selections = java.util.concurrent.ConcurrentHashMap<Pair<String, String>, org.siros.sdk.credentials.AuxiliarySelection.Selected>()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "A")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "engineSession" to engine,
+            "apiClient" to apiClient,
+            "secretSeedAdvertised" to selections,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+            "json" to Json { ignoreUnknownKeys = true },
+            "httpClient" to OkHttpClient(),
+        )
+        val offer = org.siros.sdk.credentials.CredentialOffer("pid", issuer, "PID", issuerName = "I")
+        // Real time (the start does real IO work on its own dispatcher): wait until the lookup number [n] has been made.
+        suspend fun untilLookup(n: Int) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            kotlinx.coroutines.withTimeout(10_000) { while (call < n) kotlinx.coroutines.delay(10) }
+        }
+        val first = async { runCatching { wallet.startIssuanceByOffer(offer) } }
+        untilLookup(1)
+        wallet.cancelCurrentFlow()
+        val second = async { runCatching { wallet.startIssuanceByOffer(offer) } }
+        untilLookup(2)
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { kotlinx.coroutines.delay(200) }
+        assertEquals(org.siros.sdk.credentials.AuxiliaryDataV01.id, selections[issuer to "pid"]!!.shape.id)
+        gate.complete(Unit) // the cancelled attempt's lookup finally answers, with a MALFORMED advertisement
+        advanceUntilIdle()
+        val firstFailure = first.await().exceptionOrNull()
+        assertTrue("the cancelled attempt unwinds as a cancellation, not a refusal: $firstFailure", firstFailure is kotlinx.coroutines.CancellationException)
+        assertEquals(
+            "the retry's selection survived the late answer of the cancelled attempt",
+            org.siros.sdk.credentials.AuxiliaryDataV01.id, selections[issuer to "pid"]?.shape?.id,
+        )
+        second.await()
+    }
+
+    @Test
+    fun aCancelledRawOfferStartsLateDisplayLookup_neverOverwritesTheRetrysAdapterSelection() = runTest(dispatcher) {
+        val issuer = "https://issuer.example"
+        fun metadataWith(advert: kotlinx.serialization.json.JsonElement) = buildJsonObject {
+            put("credential_issuer", JsonPrimitive(issuer))
+            putJsonObject("credential_configurations_supported") {
+                putJsonObject("pid") {
+                    put("format", JsonPrimitive("dc+sd-jwt"))
+                    put("auxiliary_data_supported", advert)
+                }
+            }
+        }
+        val valid = metadataWith(Json.parseToJsonElement("""{"to_wallet":[{"type":"hash_commitment","alg":"sha-256","path":["ssc"],"encoding":"base64url"}]}"""))
+        val differentValid = metadataWith(Json.parseToJsonElement("""{"to_issuer":[{"type":"hash_commitment","alg":"sha-256","path":["psc"],"encoding":"base64url"}]}"""))
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var call = 0
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery { apiClient.resolveIssuer(any(), any()) } coAnswers {
+            val n = ++call
+            if (n == 1) gate.await() // the FIRST attempt's display lookup hangs and is released after the retry recorded its own
+            buildJsonObject { putJsonObject("context") { put("trust_metadata", if (n == 1) differentValid else valid) } }
+        }
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val selections = java.util.concurrent.ConcurrentHashMap<Pair<String, String>, org.siros.sdk.credentials.AuxiliarySelection.Selected>()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "A")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "engineSession" to engine,
+            "apiClient" to apiClient,
+            "secretSeedAdvertised" to selections,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+            "json" to Json { ignoreUnknownKeys = true },
+            "httpClient" to OkHttpClient(),
+        )
+        val offerJson = """{"credential_issuer":"$issuer","credential_configuration_ids":["pid"]}"""
+        suspend fun untilLookup(n: Int) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            kotlinx.coroutines.withTimeout(10_000) { while (call < n) kotlinx.coroutines.delay(10) }
+        }
+        val first = async { runCatching { wallet.startIssuance(offerJson) } }
+        untilLookup(1)
+        wallet.cancelCurrentFlow()
+        val second = async { runCatching { wallet.startIssuance(offerJson) } }
+        untilLookup(2)
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { kotlinx.coroutines.delay(200) }
+        val retrys = selections[issuer to "pid"]
+        assertEquals("the retry recorded its own selection", listOf(listOf("ssc")), retrys!!.advertisement.toWallet.map { it.path })
+        gate.complete(Unit) // the cancelled attempt's lookup answers late, with a DIFFERENT valid advertisement
+        advanceUntilIdle()
+        first.await()
+        assertEquals(
+            "the late display lookup of the cancelled start did not overwrite the retry's selection",
+            listOf(listOf("ssc")), selections[issuer to "pid"]!!.advertisement.toWallet.map { it.path },
+        )
+        second.await()
+    }
+
+    @Test
+    fun aRawOfferWhoseCurrentAdvertisementIsMalformed_isRefusedAfterTheEpochCheck_andLeavesNoStaleSelection() = runTest(dispatcher) {
+        val issuer = "https://issuer.example"
+        val metadata = buildJsonObject {
+            put("credential_issuer", JsonPrimitive(issuer))
+            putJsonObject("credential_configurations_supported") {
+                putJsonObject("pid") {
+                    put("format", JsonPrimitive("dc+sd-jwt"))
+                    put("auxiliary_data_supported", buildJsonObject {}) // malformed NOW
+                }
+            }
+        }
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery { apiClient.resolveIssuer(any(), any()) } returns buildJsonObject { putJsonObject("context") { put("trust_metadata", metadata) } }
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val selections = java.util.concurrent.ConcurrentHashMap<Pair<String, String>, org.siros.sdk.credentials.AuxiliarySelection.Selected>()
+        // An earlier, now stale, valid selection for the same issuer/configuration.
+        selections[issuer to "pid"] = org.siros.sdk.credentials.AuxiliarySelection.Selected(
+            org.siros.sdk.credentials.AuxiliaryDataV01,
+            org.siros.sdk.credentials.AuxiliaryAdvertisement(listOf(org.siros.sdk.credentials.AuxiliaryAdvertisement.Slot(listOf("ssc"), "sha-256", false, "base64url")), emptyList()),
+        )
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "A")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "engineSession" to engine,
+            "apiClient" to apiClient,
+            "secretSeedAdvertised" to selections,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+            "json" to Json { ignoreUnknownKeys = true },
+            "httpClient" to OkHttpClient(),
+        )
+        try {
+            wallet.startIssuance("""{"credential_issuer":"$issuer","credential_configuration_ids":["pid"]}""")
+            org.junit.Assert.fail("issuance started although the advertisement is malformed")
+        } catch (e: WalletException) {
+            assertEquals("auxiliary_data_advertisement_malformed", e.errorCode)
+        }
+        advanceUntilIdle()
+        verify(exactly = 0) { engine.startIssuance(any(), any(), any(), any(), any(), any()) }
+        assertEquals("the stale selection was cleared", null, selections[issuer to "pid"])
+        assertEquals(false, getField(wallet, "issuanceInFlight"))
+    }
+
+    @Test
+    fun generateProof_auxiliaryData_derivesFromTheOffersVctAndIssuerWhenTheRequestOmitsThem_andRecordsThatIssuer() = runTest(dispatcher) {
+        val asked = mutableListOf<Pair<String, String>>()
+        val keystore = pscKeystore(asked)
+        coEvery { keystore.generateProofWithJsonClaims(any(), any(), any(), any(), any()) } returns "proof-jwt"
+        val wallet = generateProofWithCommitments(
+            keystore,
+            // An EMPTY issuer counts as absent for the derivation, and the flow must record the string that was used.
+            SignRequestParams(audience = "aud", nonce = "n", credentialType = null, credentialIssuer = "", auxiliaryDataToIssuer = listOf(auxEntry())),
+            extraFields = arrayOf("activeOffer" to offerWithVct),
+        )
+        assertEquals(listOf("urn:real:vct" to "https://offer-issuer.example"), asked)
+        @Suppress("UNCHECKED_CAST")
+        assertEquals(mapOf("flow-psc" to "https://offer-issuer.example"), getField(wallet, "pscIssuerByFlow") as Map<String, String>)
+    }
+
+    @Test
+    fun generateProof_auxiliaryData_rememberTheCommitmentsSoTheCompletionCanBeCheckedAgainstThem() = runTest(dispatcher) {
+        val keystore = pscKeystore(mutableListOf())
+        coEvery { keystore.generateProofWithJsonClaims(any(), any(), any(), any(), any()) } returns "proof-jwt"
+        val wallet = generateProofWithCommitments(
+            keystore,
+            SignRequestParams(audience = "aud", nonce = "n", credentialType = "urn:t", credentialIssuer = "https://i.example", auxiliaryDataToIssuer = listOf(auxEntry())),
+        )
+        @Suppress("UNCHECKED_CAST")
+        val kept = (getField(wallet, "holderCommitmentsByFlow") as Map<String, List<org.siros.sdk.credentials.HolderCommitment>>)["flow-psc"]!!
+        assertEquals(listOf(listOf("psc")), kept.map { it.path })
+        assertEquals(pscClaimFor("urn:t", "https://i.example"), java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(kept.single().commitment))
+    }
+
+    @Test
+    fun wmpCompletion_ofAV01IssuanceIsCheckedWithTheOffersConfigurationId_notAsUnadvertised() = runTest(dispatcher) {
+        val flowId = "flow-wmp-v01"
+        val opening = "8f3b2c9e41d07a65b1e2f4c3d9a08176".chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        val b64 = { x: String -> java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(x.toByteArray()) }
+        val disclosure = b64("""["salt","ssc","JhQM6yeuK84BoGVVSxbLL9HjjeiBERnWHEZSIIMqwd0"]""")
+        val digest = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest(disclosure.toByteArray(Charsets.US_ASCII)))
+        val credential = b64("""{"alg":"none"}""") + "." + b64("""{"_sd_alg":"sha-256","_sd":["$digest"]}""") + ".sig~$disclosure~"
+        val blind = BlindIssuance()
+        val jwk = blind.offer(flowId, org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A128GCM", false))!!
+        val body = buildJsonObject {
+            put("credentials", kotlinx.serialization.json.JsonArray(listOf(buildJsonObject { put("credential", JsonPrimitive(credential)) })))
+            put("notification_id", JsonPrimitive("n9"))
+            put("credential_metadata", Json.parseToJsonElement("""{"auxiliary_data":[{"type":"hash_commitment","alg":"sha-256","path":["ssc"],"opening":"${java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(opening)}"}]}"""))
+        }
+        blind.open(flowId, issuerEncrypt(jwk, "ECDH-ES", "A128GCM", body.toString()), deferred = false)
+        val selections = java.util.concurrent.ConcurrentHashMap<Pair<String, String>, org.siros.sdk.credentials.AuxiliarySelection.Selected>()
+        selections["https://issuer.example" to "pid"] = org.siros.sdk.credentials.AuxiliarySelection.Selected(
+            org.siros.sdk.credentials.AuxiliaryDataV01,
+            org.siros.sdk.credentials.AuxiliaryAdvertisement(listOf(org.siros.sdk.credentials.AuxiliaryAdvertisement.Slot(listOf("ssc"), "sha-256")), emptyList()),
+        )
+        val wallet = newWallet(
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to org.siros.sdk.keystore.JweKeystore(),
+            "blindIssuance" to blind,
+            "secretSeedAdvertised" to selections,
+            "activeOffer" to org.siros.sdk.credentials.CredentialOffer("pid", "https://issuer.example", "n", issuerName = "i"),
+        )
+        val result = Json.parseToJsonElement(
+            """{"credentials":[{"format":"dc+sd-jwt"}],"credential_response_encrypted":true,"credential_issuer":"https://issuer.example"}""",
+        ).jsonObject
+        assertEquals(null, wallet.wmpDeliveredMetadataRefusal(flowId, result))
+    }
+
+    @Test
+    fun generateProof_withARequiredAuxiliaryEntryItCannotAnswer_isRefusedAndNoProofIsMade() = runTest(dispatcher) {
+        val keystore = pscKeystore(mutableListOf())
+        // A keystore that WOULD make a proof (without the claim): the refusal must come from the wallet, not from a missing stub.
+        coEvery { keystore.generateProof(audience = any(), nonce = any(), freshKey = any(), holderBinding = any()) } returns "proof-jwt"
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        generateProofWithCommitments(
+            keystore,
+            SignRequestParams(
+                audience = "aud-1", nonce = "n-1", credentialType = "urn:t", credentialIssuer = "https://issuer.example/",
+                auxiliaryDataToIssuer = listOf(auxEntry(alg = "sha-512")),
+            ),
+            listener,
+        )
+        verify(exactly = 1) { listener.onFlowError("flow-psc", any(), any()) }
+        coVerify(exactly = 0) { keystore.generateProof(audience = any(), nonce = any(), freshKey = any(), holderBinding = any()) }
+        coVerify(exactly = 0) { keystore.generateProofWithJsonClaims(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun anInvalidProofWithAnAuxiliaryDataDetail_isTypedNonRetryableAndLeaksNoFreeText() = runTest(dispatcher) {
+        val errorFlow = MutableSharedFlow<FlowErrorMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        mockEngineConstructor(flowErrors = errorFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "A")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to listener,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        val cases = mapOf(
+            "auxiliary_data: the key proofs carry different auxiliary_data" to AuxiliaryDataRefusedException.Reason.PROOFS_DIFFER,
+            "auxiliary_data: the entry for [psc] is required" to AuxiliaryDataRefusedException.Reason.ENTRY_REQUIRED,
+            "auxiliary_data: to_issuer lists no entry for [x]" to AuxiliaryDataRefusedException.Reason.NO_SUCH_ENTRY,
+            "auxiliary_data: alg must be sha-256" to AuxiliaryDataRefusedException.Reason.ALG,
+            "auxiliary_data: the entry for [psc] carries only type, alg, path and commitment" to AuxiliaryDataRefusedException.Reason.ENTRY_MEMBERS,
+            "auxiliary_data: the commitment must be a base64url sha-256 hash" to AuxiliaryDataRefusedException.Reason.COMMITMENT_FORMAT,
+            "auxiliary_data: something new SECRET-FREE-TEXT" to AuxiliaryDataRefusedException.Reason.OTHER,
+        )
+        var n = 0
+        for ((text, reason) in cases) {
+            val flow = "flow-aux-${n++}"
+            errorFlow.emit(FlowErrorMessage(flowId = flow, error = org.siros.sdk.transport.engine.FlowError(code = "INVALID_PROOF", message = "invalid_proof: $text")))
+            advanceUntilIdle()
+            val err = slot<AuxiliaryDataRefusedException>()
+            verify(exactly = 1) { listener.onAuxiliaryDataRefused(flow, capture(err)) }
+            assertEquals(reason, err.captured.reason)
+            assertFalse(err.captured.retryable)
+            assertFalse("no issuer free text in the exception", err.captured.message!!.contains("SECRET-FREE-TEXT"))
+            verify(exactly = 0) { listener.onFlowError(flow, any(), any()) }
+        }
+        // An invalid_proof WITHOUT the auxiliary_data prefix is an ordinary flow error.
+        errorFlow.emit(FlowErrorMessage(flowId = "flow-plain", error = org.siros.sdk.transport.engine.FlowError(code = "INVALID_PROOF", message = "invalid_proof: nonce mismatch")))
+        advanceUntilIdle()
+        verify(exactly = 1) { listener.onFlowError("flow-plain", any(), any()) }
+    }
+
+    @Test
+    fun auxiliaryDataConflict_isTypedNonRetryableAndNotAlsoAGenericError() = runTest(dispatcher) {
+        val errorFlow = MutableSharedFlow<FlowErrorMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        mockEngineConstructor(flowErrors = errorFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "A")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to listener,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        errorFlow.emit(
+            FlowErrorMessage(
+                flowId = "flow-c",
+                error = org.siros.sdk.transport.engine.FlowError(
+                    code = "AUXILIARY_DATA_CONFLICT", message = "conflict",
+                    details = buildJsonObject { put("error", JsonPrimitive("auxiliary_data_conflict")) },
+                ),
+            )
+        )
+        advanceUntilIdle()
+        val err = slot<AuxiliaryDataConflictException>()
+        verify(exactly = 1) { listener.onAuxiliaryDataConflict("flow-c", capture(err)) }
+        assertFalse(err.captured.retryable)
+        verify(exactly = 0) { listener.onFlowError("flow-c", any(), any()) }
+    }
+
+    @Test
+    fun freshRegistration_unlocksTheOtherKeystoresFromTheContainerItExported() = runTest(dispatcher) {
+        val container = "exported-container".toByteArray()
+        val default = mockk<KeystoreManager>(relaxed = true)
+        coEvery { default.isWscdOnboarded() } returns true
+        coEvery { default.exportEncryptedContainer() } returns container
+        val other = mockk<KeystoreManager>(relaxed = true)
+        val wallet = newWallet(
+            "keystore" to default,
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                availableKeystores = mapOf("default" to default, "other" to other),
+            ),
+        )
+        val method = SirosWallet::class.declaredMemberFunctions.first { it.name == "initialiseKeystoresForNewAccount" }
+        method.isAccessible = true
+        val returned = method.callSuspend(wallet, ByteArray(32), ByteArray(8), ByteArray(32), ByteArray(32), ByteArray(32)) as ByteArray?
+        assertTrue(returned.contentEquals(container))
+        // Not the empty container: that is a different, never-saved root.
+        coVerify(exactly = 1) { other.unlock(any(), container, any(), any(), any()) }
+        coVerify(exactly = 0) { other.unlock(any(), match { it.isEmpty() }, any(), any(), any()) }
+        // The default keystore was exported after setCredentialId, before the others unlocked.
+        coVerifyOrder {
+            default.unlock(any(), match { it.isEmpty() }, any(), any(), any())
+            default.exportEncryptedContainer()
+            other.unlock(any(), container, any(), any(), any())
+        }
+    }
+
+    @Test
+    fun issuedCredential_isStoredUnderTheIssuerStringTheCommitmentWasDerivedFor_evenWithoutAnOffer() = runTest(dispatcher) {
+        val testCredential = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0IiwiaWF0IjoxNzAwMDAwMDAwLCJleHAiOjk5OTk5OTk5OTl9."
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
+        val store = FakeCredentialStore(mutableListOf())
+        val keystore = pscKeystore(mutableListOf())
+        every { keystore.isUnlocked } returns true
+        coEvery { keystore.generateProofWithJsonClaims(any(), any(), any(), any(), any()) } returns "proof-jwt"
+        coEvery { keystore.exportEncryptedContainer() } returns """{"prfKeys":[],"jwe":"x"}""".toByteArray()
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+        mockEngineConstructor(signRequests = signFlow, flowComplete = completeFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "A")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to mockk<SessionStore>(relaxed = true),
+            "apiClient" to apiClient,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        // activeOffer is null (the issuer metadata could not be fetched): the only record of the issuer is the sign request.
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-i", action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "https://issuer.example/", nonce = "n", auxiliaryDataToIssuer = listOf(auxEntry(required = false)),
+                    credentialType = "urn:t", credentialIssuer = "https://issuer.example/",
+                ),
+            )
+        )
+        advanceUntilIdle()
+        completeFlow.emit(
+            FlowCompleteMessage(flowId = "flow-i", credentials = listOf(CredentialResult(format = "dc+sd-jwt", credential = testCredential)))
+        )
+        advanceUntilIdle()
+        assertEquals("https://issuer.example/", store.getAll().single().credentialIssuerIdentifier)
+    }
+
+    @Test
+    fun generateProof_withoutHolderCommitments_usesTheFourArgumentForm() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.isWscdOnboarded() } returns true
+        coEvery { keystore.generateProof(audience = "aud-1", nonce = "n-1", freshKey = any(), holderBinding = any()) } returns "proof-jwt"
+        generateProofWithCommitments(keystore, SignRequestParams(audience = "aud-1", nonce = "n-1"))
+        coVerify(exactly = 1) { keystore.generateProof(audience = "aud-1", nonce = "n-1", freshKey = false, holderBinding = any()) }
+        coVerify(exactly = 0) { keystore.generateProof(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun generateProof_withHolderCommitments_refusesWhenTheKeystoreCannotDeriveOne() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.isWscdOnboarded() } returns true
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        var ended = 0
+        generateProofWithCommitments(
+            keystore,
+            SignRequestParams(
+                audience = "aud-1", nonce = "n-1", auxiliaryDataToIssuer = listOf(auxEntry()),
+                credentialType = "t", credentialIssuer = "https://issuer.example",
+            ),
+            listener,
+            WalletConfig(backendUrl = "https://wallet.example.com", onWscdOperationEnd = { ended++ }),
+        )
+        // The hardware-operation cleanup still ran on the refusal path.
+        assertEquals(1, ended)
+        // The flow is failed, visibly, rather than answered with a proof lacking the claim.
+        verify(exactly = 1) { listener.onFlowError("flow-psc", any(), any()) }
+        // Not even the plain form: the proof is not made without the claim the issuer asked for.
+        coVerify(exactly = 0) { keystore.generateProof(any(), any(), any(), any()) }
+        coVerify(exactly = 0) { keystore.generateProof(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun pscConflict_isNoLongerSpecial_onlyTheAuxiliaryDataConflictIsTyped() = runTest(dispatcher) {
+        val errorFlow = MutableSharedFlow<FlowErrorMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        mockEngineConstructor(flowErrors = errorFlow)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "A")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to listener,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        errorFlow.emit(FlowErrorMessage(flowId = "flow-c", error = FlowError(code = "PSC_CONFLICT", message = "org.siros.psc_conflict: x")))
+        advanceUntilIdle()
+        // The superseded code is a generic flow error now.
+        verify(exactly = 1) { listener.onFlowError("flow-c", "org.siros.psc_conflict: x", null) }
+        verify(exactly = 0) { listener.onAuxiliaryDataConflict(any(), any()) }
+
+        errorFlow.emit(FlowErrorMessage(flowId = "flow-a", error = FlowError(code = "AUXILIARY_DATA_CONFLICT", message = "conflict")))
+        advanceUntilIdle()
+        verify(exactly = 1) { listener.onAuxiliaryDataConflict("flow-a", any()) }
+        verify(exactly = 0) { listener.onFlowError("flow-a", any(), any()) }
     }
 
     /** A `jwt`-proof-type proof-of-possession JWT with the given `kid` embedded in its `jwk` header, matching what [KeystoreManager.generateProof] actually produces. */
@@ -4139,6 +6477,7 @@ class SirosWalletTest {
     fun connectEngine_signRequest_recordsAttestedKeyIdFromDiipKidHeader() = runTest(dispatcher) {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.isWscdOnboarded() } returns true
         val kid = "did:jwk:eyJrdHkiOiJFQyJ9#0"
         coEvery {
             keystore.generateProof(audience = "aud-1", nonce = "nonce-1", freshKey = any(), holderBinding = any())
@@ -4177,6 +6516,7 @@ class SirosWalletTest {
     fun connectEngine_signRequest_singleProof_recordsAttestedKeyIdFromJwtHeader() = runTest(dispatcher) {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.isWscdOnboarded() } returns true
         coEvery { keystore.generateProof(audience = "aud-1", nonce = "nonce-1", freshKey = any(), holderBinding = any()) } returns fakeProofJwt("sw-0")
         val engine = mockEngineConstructor(signRequests = signFlow)
         val wallet = newWallet(
@@ -4210,6 +6550,7 @@ class SirosWalletTest {
     fun connectEngine_signRequest_batchProofs_recordsAllAttestedKeyIdsInOrder() = runTest(dispatcher) {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.isWscdOnboarded() } returns true
         coEvery {
             keystore.generateProof(audience = "aud-1", nonce = "nonce-1", freshKey = true, holderBinding = any())
         } returnsMany listOf(fakeProofJwt("sw-0"), fakeProofJwt("sw-1"), fakeProofJwt("sw-2"))
@@ -4239,6 +6580,7 @@ class SirosWalletTest {
     fun connectEngine_signRequest_generates_attestation_proof_when_jwt_not_supported() = runTest(dispatcher) {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.isWscdOnboarded() } returns true
         coEvery { keystore.generateKeyAttestation(nonce = "nonce-1", count = 5) } returns "attestation-jwt"
         val engine = mockEngineConstructor(signRequests = signFlow)
         val wallet = newWallet(
@@ -4284,6 +6626,7 @@ class SirosWalletTest {
     fun connectEngine_signRequest_usesBackendKeyAttestation_whenAvailable() = runTest(dispatcher) {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.isWscdOnboarded() } returns true
         val keypairs = listOf(
             KeypairInfo(keyId = "key-1", publicKeyJWK = buildJsonObject { put("kty", "EC") }),
             KeypairInfo(keyId = "key-2", publicKeyJWK = buildJsonObject { put("kty", "EC") }),
@@ -4393,6 +6736,7 @@ class SirosWalletTest {
     fun requestBackendKeyAttestation_includesWalletInstanceId_whenWiaIsNativeAttested() = runTest(dispatcher) {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.isWscdOnboarded() } returns true
         val keypairs = listOf(KeypairInfo(keyId = "key-1", publicKeyJWK = buildJsonObject { put("kty", "EC") }))
         coEvery { keystore.generateKeypairs(1) } returns keypairs
         val securityProps = SignerSecurityProperties(keyStorage = listOf("iso_18045_high"))
@@ -4447,6 +6791,7 @@ class SirosWalletTest {
     fun connectEngine_signRequest_fallsBackToSelfSignedAttestation_whenBackendCallFails() = runTest(dispatcher) {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.isWscdOnboarded() } returns true
         coEvery { keystore.generateKeypairs(any()) } throws IllegalStateException("backend session expired")
         coEvery { keystore.generateKeyAttestation(nonce = "nonce-1", count = 3) } returns "self-signed-attestation-jwt"
         val engine = mockEngineConstructor(signRequests = signFlow)
@@ -4489,6 +6834,7 @@ class SirosWalletTest {
     fun connectEngine_signRequest_prefers_jwt_when_both_proof_types_supported() = runTest(dispatcher) {
         val signFlow = MutableSharedFlow<SignRequestMessage>()
         val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.isWscdOnboarded() } returns true
         coEvery { keystore.generateProof(audience = "aud-1", nonce = "nonce-1", freshKey = any(), holderBinding = any()) } returns "proof-jwt"
         val engine = mockEngineConstructor(signRequests = signFlow)
         val wallet = newWallet(
@@ -4592,6 +6938,299 @@ class SirosWalletTest {
         assertEquals(1, wallet.presentationHistory.size)
         assertEquals(listOf(2L), wallet.presentationHistory.single().credentialIds)
         assertEquals(listOf("Credential Two"), wallet.presentationHistory.single().credentialNames)
+    }
+
+    @Test
+    fun connectEngine_matchRequest_recordsConsentForTheLegacyMatchResponsePath() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502): the legacy match_request/match_response round trip (this test) is a
+        // SEPARATE, genuinely interactive consent mechanism from handleCredentialSelection's "consent" flow action - it
+        // must record consent too, or a sign_presentation later answered through this same transport would find no
+        // record for the flow (refused, per ConsentGuard.verify's NoRecord) despite the user having just consented here.
+        val matchFlow = MutableSharedFlow<MatchRequestMessage>()
+        val listener = mockk<WalletEventListener>()
+        val store = FakeCredentialStore(
+            mutableListOf(
+                StoredCredential(
+                    id = 2L, format = "dc+sd-jwt", raw = "raw-2",
+                    metadata = CredentialMetadata(name = "Credential Two", vct = "urn:example:vct"),
+                    batchId = 2L, instanceId = 0,
+                ),
+            )
+        )
+        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf(2L)
+        val engine = mockEngineConstructor(matchRequests = matchFlow)
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice", credentials = store.getAll())),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        matchFlow.emit(MatchRequestMessage(flowId = "flow-match", dcqlQuery = null))
+        advanceUntilIdle()
+
+        @Suppress("UNCHECKED_CAST")
+        val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+        // containsKey, not records["flow-match"] != null: newWallet's default consentRecordsByFlow answers ANY key with a
+        // permissive record (so ~160 unrelated tests don't need to know about this guard) - its get() never returns null,
+        // so only containsKey on the raw map actually distinguishes "nothing was recorded" from "recorded, unrestricted".
+        assertTrue("the legacy match_request/match_response path must record consent too", records.containsKey("flow-match"))
+        val record = records.getValue("flow-match")
+        // A non-DCQL ("_default") match consents to the whole credential - recorded as null, not an empty claim set.
+        assertTrue(record.contains("_default", "2"))
+        assertEquals(null, record["_default", "2"])
+    }
+
+    @Test
+    fun aBufferedMatchRequestOnAReplacedEngine_isStillRefusedAfterTheSecondConnectEngine_evenWithoutSuspending() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345, round 4's engine-side analog of
+        // finding #1): the matchRequests() collector builds its ticket from engineEpoch (captured once, when THIS
+        // engine's own collector was installed), not a fresh issueConsentTicket read - a fresh read taken AFTER a
+        // replacement has already bumped consentEpoch would wrongly adopt the NEW epoch as if it belonged to this
+        // (old) engine's message.
+        //
+        // With connectEngine now cancelling the replaced connection's own connectionScope outright (round 4's
+        // structural fix), the OLD "emit on the prior engine's Flow after a second connectEngine already ran" shape no
+        // longer even reaches a live collector - that message is simply never processed, which would make a test built
+        // that way pass vacuously regardless of the ticket fix (this test used to be built that way; verified vacuous
+        // by temporarily disabling the ticket fix and observing it still pass). Exercised here instead via a
+        // narrowly-scoped, null-in-production test hook (engineMatchTicketIssueHook, the engine-side analog of
+        // wmpMatchTicketIssueHook) landing the replacement exactly between message entry and ticket construction - a
+        // true race there is not reliably reproducible by timing alone (same reasoning as
+        // Fido2EnrolmentSession.testHookBeforeInstall).
+        //
+        // Cancellation is cooperative: it only aborts this collector's coroutine at a REAL suspension point it
+        // actually reaches. With no eventListener set, the whole path from the hook to the final write - getAll(),
+        // eligibleInstances(), recordPresentation() with an already-locked keystore - never truly suspends, so a
+        // cancelled connectionScope does NOT by itself stop this message's processing ("evenWithoutSuspending"); only
+        // the ticket's own epoch mismatch does. That is exactly the residual gap connectionScope cancellation alone
+        // cannot close, which the ticket check exists for.
+        val matchFlowA = MutableSharedFlow<MatchRequestMessage>()
+        val cred = StoredCredential(
+            id = 2L, format = "dc+sd-jwt", raw = "raw-2",
+            metadata = CredentialMetadata(name = "Credential Two", vct = "urn:example:vct"),
+            batchId = 2L, instanceId = 0,
+        )
+        val engineA = mockEngineConstructor(matchRequests = matchFlowA)
+        every { engineA.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to FakeCredentialStore(mutableListOf(cred)),
+            "keystore" to keystore,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        // Land the race exactly where this finding describes it: AFTER the message has already passed the
+        // lostFlowIds/connectionGeneration early-exit (it IS still live at that instant), but BEFORE the ticket is
+        // built - a replacement (here, a second connectEngine, the same real event a reconnect or re-login would
+        // trigger) happens in between.
+        mockEngineConstructor()
+        setField(wallet, "engineMatchTicketIssueHook", { invokeConnectEngine(wallet, "app-token"); Unit })
+
+        matchFlowA.emit(MatchRequestMessage(flowId = "flow-raced", dcqlQuery = null))
+        advanceUntilIdle()
+
+        @Suppress("UNCHECKED_CAST")
+        val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+        assertFalse(
+            "a ticket built from a fresh epoch read (not this engine's own captured lifetime) must not let a raced " +
+                "replacement's write through",
+            records.containsKey("flow-raced"),
+        )
+    }
+
+    @Test
+    fun legacyFlowCompleteOnAReplacedEngine_doesNotClearAReplacementSessionsConsentForAReusedFlowId() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345, round 4 finding #2): the legacy
+        // transport's flowComplete()/flowErrors() collectors are bound to connectionScope and so are normally
+        // cancelled outright on replacement (round 4's structural fix) - but a message already dequeued (and not yet
+        // at a suspension point) when that cancellation lands could still reach the unconditional clear that used to
+        // sit here, letting the OLD engine's own, surviving collector delete a REPLACEMENT session's legitimate
+        // consent for a flow id the backend happens to have reused. clearFlowMatchStateIfLive(flowId, engineEpoch) is
+        // the fix: conditional on THIS engine still being current, not unconditional.
+        //
+        // Everything from collector entry to the clear is synchronous (fillEncryptedCompletion/isAbandonedFlowEvent
+        // are plain, non-suspend functions, and nothing here is blind-issuance-encrypted or zk-signing), so - same as
+        // the matchRequests ticket-race test above - cancellation being cooperative does not by itself stop this
+        // processing; only the conditional clear does. Exercised via legacyCollectorClearHook (null in production,
+        // the engine-side analog of wmpMatchTicketIssueHook), landing the replacement exactly where this finding
+        // describes it - a true race there is not reliably reproducible by timing alone (same reasoning as
+        // Fido2EnrolmentSession.testHookBeforeInstall).
+        val completeFlowA = MutableSharedFlow<FlowCompleteMessage>()
+        val engineA = mockEngineConstructor(flowComplete = completeFlowA)
+        every { engineA.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns false
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "keystore" to keystore,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        // The REPLACEMENT session's own, legitimate consent for a flow id the backend happens to have reused - seeded
+        // from inside the hook, right after the replacement connectEngine (the same real event a reconnect or
+        // re-login would trigger), mirroring wmpTerminalCallbacks_boundToTheirOwnPeersLifetime_doNotClearAReplacementPeersConsent.
+        val replacementRecord = ConsentRecord(listOf(ConsentedSelection("q", "1", null)))
+        mockEngineConstructor()
+        setField(wallet, "legacyCollectorClearHook", {
+            invokeConnectEngine(wallet, "app-token")
+            @Suppress("UNCHECKED_CAST")
+            (getField(wallet, "consentRecordsByFlow") as MutableMap<String, ConsentRecord>)["shared-flow"] = replacementRecord
+            Unit
+        })
+
+        // A late completion for engineA (the one that was REPLACED) arrives for the same flow id.
+        completeFlowA.emit(FlowCompleteMessage(flowId = "shared-flow"))
+        advanceUntilIdle()
+
+        @Suppress("UNCHECKED_CAST")
+        val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+        assertSame(
+            "a replaced engine's late flowComplete must not clear a REPLACEMENT session's own consent for a reused flow id",
+            replacementRecord, records["shared-flow"],
+        )
+    }
+
+    @Test
+    fun aCancelledSignHandler_rethrowsRatherThanRunningReportSignFailuresUnconditionalCleanup() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345, round 4 - found by Copilot on this
+        // round's OWN connectionScope-cancellation commit): handleScaEngineSignPresentation's (and, identically,
+        // handleCircuitZkEngineSignPresentation's) generic `catch (e: Exception)` would otherwise also catch a
+        // CancellationException - it IS an Exception subclass - and run reportSignFailure's UNCONDITIONAL cleanup
+        // (clearFlowMatchState, resetIssuanceGuards, a wallet-wide WalletState.Ready reset), potentially stomping a
+        // REPLACEMENT session that has since claimed this flow id. Since this handler is now launched into
+        // connectEngine's own connectionScope, a replacement's connectionScope?.cancel() can land here mid-signing;
+        // the fix catches CancellationException FIRST and rethrows it so normal coroutine cancellation semantics
+        // apply instead of a false "sign failure" report. Exercised without needing a real coroutine-scope
+        // cancellation: credentialStore.getAll() (signScaPresentation's own first suspension point) throws a
+        // CancellationException directly, which is exactly what a cancelled connectionScope would otherwise surface
+        // on this handler's own next suspension point.
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val store = mockk<org.siros.sdk.credentials.CredentialStore>()
+        coEvery { store.getAll() } throws kotlinx.coroutines.CancellationException("simulated connectionScope cancellation")
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "credentialStore" to store,
+            "eventListener" to listener,
+        )
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val msg = SignRequestMessage(
+            flowId = "flow-cancelled-sign",
+            action = "sign_presentation",
+            params = SignRequestParams(
+                audience = "https://verifier.example.com",
+                nonce = "nonce-1",
+                credentialsToInclude = listOf(org.siros.sdk.transport.engine.CredentialRef(credentialQueryId = "q1", credentialId = "1")),
+            ),
+        )
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "handleScaEngineSignPresentation" }
+        method.isAccessible = true
+
+        var thrown: Throwable? = null
+        try {
+            kotlinx.coroutines.runBlocking { method.callSuspend(wallet, engine, msg) }
+        } catch (e: Throwable) {
+            // kotlin-reflect's callSuspend drives the suspend fun via raw Java reflection under the hood, which wraps
+            // whatever it throws in InvocationTargetException - unwrap to see the real exception.
+            thrown = (e as? java.lang.reflect.InvocationTargetException)?.cause ?: e
+        }
+
+        assertTrue(
+            "a CancellationException from a cancelled connection must propagate, not be swallowed as a sign failure, " +
+                "got: $thrown",
+            thrown is kotlinx.coroutines.CancellationException,
+        )
+        coVerify(exactly = 0) { listener.onFlowError(any(), any()) }
+    }
+
+    @Test
+    fun matchRequests_consentListenerDeferred_isCancelledWithTheCollectorNotOrphaned() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345, round 4 - found by Copilot on this
+        // round's OWN connectionScope-cancellation commit): the consent listener invocation used to be launched via
+        // `scope.async` (the wallet-wide scope), not `thisConnectionScope.async` - not a structural child of the
+        // matchRequests collector coroutine that connectionScope cancellation cancels. Cancelling the collector (a
+        // replacement engine) would then make its own `.await()` throw and give up, but leave the listener invocation
+        // itself still running, untracked - selectionJobsByFlow's entry is removed in the collector's own `finally`
+        // without ever calling `.cancel()` on it - an orphaned, never-dismissed consent prompt. Fixed by launching it
+        // into thisConnectionScope instead, so connectionScope's cancellation cancels it directly. Exercised with a
+        // gate: the listener is parked mid-call when the engine is replaced, and the deferred itself must report
+        // cancelled afterward (not merely abandoned-but-still-running).
+        val matchFlow = MutableSharedFlow<MatchRequestMessage>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val listener = mockk<WalletEventListener>()
+        var capturedSelectionDeferred: kotlinx.coroutines.Deferred<List<Long>>? = null
+        coEvery { listener.onCredentialSelectionRequired(any()) } coAnswers {
+            capturedSelectionDeferred = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job] as? kotlinx.coroutines.Deferred<List<Long>>
+            gate.await()
+            emptyList()
+        }
+        val cred = StoredCredential(
+            id = 2L, format = "dc+sd-jwt", raw = "raw-2",
+            metadata = CredentialMetadata(name = "Credential Two", vct = "urn:example:vct"),
+            batchId = 2L, instanceId = 0,
+        )
+        val engineA = mockEngineConstructor(matchRequests = matchFlow)
+        every { engineA.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to FakeCredentialStore(mutableListOf(cred)),
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        matchFlow.emit(MatchRequestMessage(flowId = "flow-parked", dcqlQuery = null))
+        advanceUntilIdle()
+
+        // The listener is parked; the collector is waiting on selection.await().
+        @Suppress("UNCHECKED_CAST")
+        val jobsByFlow = getField(wallet, "selectionJobsByFlow") as Map<String, kotlinx.coroutines.Job>
+        assertTrue("the selection must be registered while parked", jobsByFlow.containsKey("flow-parked"))
+
+        // The engine is replaced wholesale, cancelling connectionScope - and with it, this listener invocation itself.
+        mockEngineConstructor()
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        val captured = capturedSelectionDeferred
+        assertTrue("the listener's own Deferred must have been captured", captured != null)
+        assertTrue(
+            "the consent listener invocation must be cancelled along with its collector, not merely abandoned-but-running",
+            captured!!.isCancelled,
+        )
+        gate.complete(Unit)
     }
 
     /**
@@ -4798,12 +7437,58 @@ class SirosWalletTest {
             engine.sendCredentialsMatched(
                 "flow-nomatch",
                 emptyList(),
-                match<String> { it.contains("urn:eu.europa.ec.eudi:pid:1") },
+                match<String> { it == "no_matching_credential" },
             )
         }
         verify(exactly = 0) { engine.sendFlowAction("flow-nomatch", "decline", any()) }
         // The user is never asked to consent to a request nothing can answer.
         coVerify(exactly = 0) { listener.onCredentialSelectionRequired(any()) }
+    }
+
+    @Test
+    fun credentialSelection_whenTheSocketRefusesEveryFrame_theFallbackDeclineIsBestEffort_andNothingEscapes() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val store = FakeCredentialStore(mutableListOf())
+        val engine = mockEngineConstructor(progressFlow = progressFlow)
+        every { engine.sendCredentialsMatched(any(), any(), any()) } throws IllegalStateException("Not connected")
+        every { engine.sendFlowAction(any(), any(), any()) } throws IllegalStateException("Not connected")
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        val escaped = mutableListOf<Throwable>()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice", credentials = store.getAll())),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob() + kotlinx.coroutines.CoroutineExceptionHandler { _, e -> escaped += e }),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "lastTrustResults" to mutableMapOf<String, Any?>(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "flow-refused",
+                step = "credential_selection",
+                payload = buildJsonObject {
+                    putJsonObject("dcql_query") {
+                        putJsonArray("credentials") {
+                            add(buildJsonObject {
+                                put("id", "q-pid"); put("format", "dc+sd-jwt")
+                                putJsonObject("meta") { putJsonArray("vct_values") { add(JsonPrimitive("urn:x")) } }
+                            })
+                        }
+                    }
+                },
+            )
+        )
+        advanceUntilIdle()
+        // The no-match answer was refused by the socket, the fallback decline was tried, and its failure was logged, not thrown.
+        verify(atLeast = 1) { engine.sendFlowAction("flow-refused", "decline", any()) }
+        assertEquals(emptyList<Throwable>(), escaped)
     }
 
     @Test
@@ -4856,7 +7541,7 @@ class SirosWalletTest {
             engine.sendMatchResponse(
                 "flow-nm",
                 emptyList(),
-                match<String> { it.contains("urn:eu.europa.ec.eudi:pid:1") },
+                match<String> { it == "no_matching_credential" },
             )
         }
         verify(exactly = 1) {
@@ -4905,10 +7590,61 @@ class SirosWalletTest {
 
         val missingResult = invokeWmpMatchRequest(wallet, "flow-wmp", vctQueryPayload("urn:example:absent"))
         assertTrue(missingResult.matches.isEmpty())
-        assertTrue(
-            "The reason must name what was asked for: ${missingResult.noMatchReason}",
-            missingResult.noMatchReason!!.contains("urn:example:absent"),
+        // only a CODE reaches the engine: nothing of what was asked for, nothing of what is stored
+        assertEquals("no_matching_credential", missingResult.noMatchReason)
+    }
+
+    @Test
+    fun wmpMatchRequest_recordsConsent_theWmpProfileHasNoSeparateInteractiveSelectionStep() = runBlocking {
+        // Defence in depth (go-wallet-backend#502): the WMP profile has no onCredentialSelectionRequired call of its own -
+        // whatever handleWmpMatchRequest offers IS the consent for this flow (there is no later, separate "ask the user"
+        // moment before a sign_presentation can arrive). Without this, every fresh WMP presentation with a non-empty
+        // credentials_to_include would be wrongly refused with NoRecord.
+        val store = FakeCredentialStore(
+            mutableListOf(
+                StoredCredential(
+                    id = 1L, format = "dc+sd-jwt", raw = "raw-pid",
+                    metadata = CredentialMetadata(name = "PID", vct = "urn:eu.europa.ec.eudi:pid:1"),
+                    batchId = 1L, instanceId = 0,
+                ),
+            )
         )
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+        )
+
+        invokeWmpMatchRequest(wallet, "flow-wmp", vctQueryPayload("urn:eu.europa.ec.eudi:pid:1"))
+
+        @Suppress("UNCHECKED_CAST")
+        val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+        // containsKey, not records["flow-wmp"] != null: newWallet's default consentRecordsByFlow answers ANY key with a
+        // permissive record, so only containsKey on the raw map distinguishes "nothing was recorded" from "recorded".
+        assertTrue("WMP's own match_request handler must record consent too", records.containsKey("flow-wmp"))
+        val record = records.getValue("flow-wmp")
+        assertTrue(record.contains("q-vct", "1"))
+    }
+
+    @Test
+    fun wmpMatchRequest_withNoDcqlQuery_recordsConsentForEveryCredentialUnrestricted() = runBlocking {
+        val store = FakeCredentialStore(mutableListOf(StoredCredential(id = 3L, format = "dc+sd-jwt", raw = "raw", batchId = 3L, instanceId = 0)))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+        )
+
+        invokeWmpMatchRequest(wallet, "flow-wmp-noquery", buildJsonObject {})
+
+        @Suppress("UNCHECKED_CAST")
+        val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+        assertTrue(records.containsKey("flow-wmp-noquery"))
+        val record = records.getValue("flow-wmp-noquery")
+        assertTrue(record.contains(null, "3"))
+        assertEquals(null, record[null, "3"])
     }
 
     /**
@@ -4986,7 +7722,6 @@ class SirosWalletTest {
             "apiClient" to apiClient,
             "keystore" to keystore,
             "credentialStore" to store,
-            "trustCache" to TrustCache(),
             "_presentationHistory" to mutableListOf<PresentationRecord>(),
         )
 
@@ -5028,6 +7763,2974 @@ class SirosWalletTest {
     }
 
     @Test
+    fun handleDCAPIRequest_circuitZkUnsignedRequest_isRefusedBeforeTrustEvaluation() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "apiClient" to apiClient,
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+        val requestJson = wrapDCAPIRequest("openid4vp-v1-unsigned", buildJsonObject {
+            put("nonce", "n")
+            putJsonObject("dcql_query") {
+                putJsonArray("credentials") { add(buildJsonObject { put("id", "q"); put("format", "zkp_req") }) }
+            }
+        })
+
+        val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+            kotlinx.coroutines.runBlocking { wallet.handleDCAPIRequest(requestJson, origin = "https://relying-party.example") }
+        }
+
+        assertEquals("openid4vp-v1-unsigned", e.protocol)
+        coVerify(exactly = 0) { apiClient.evaluateTrust(any()) }
+    }
+
+    @Test
+    fun handleDCAPIRequest_requiredMode_refusesSignedRequestWithoutExpectedOriginsBeforeTrust() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "apiClient" to apiClient,
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+            "dcApiExpectedOriginsMode" to org.siros.sdk.wallet.dcapi.ExpectedOriginsMode.REQUIRED,
+        )
+        val ecKey = com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256).generate()
+        val jwt = com.nimbusds.jwt.SignedJWT(
+            com.nimbusds.jose.JWSHeader.Builder(com.nimbusds.jose.JWSAlgorithm.ES256).jwk(ecKey.toPublicJWK()).build(),
+            com.nimbusds.jwt.JWTClaimsSet.Builder().claim("nonce", "n").build(),
+        ).also { it.sign(com.nimbusds.jose.crypto.ECDSASigner(ecKey)) }
+        val requestJson = wrapDCAPIRequest("openid4vp-v1-signed", buildJsonObject { put("request", jwt.serialize()) })
+
+        org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+            kotlinx.coroutines.runBlocking { wallet.handleDCAPIRequest(requestJson, origin = "https://relying-party.example") }
+        }
+        coVerify(exactly = 0) { apiClient.evaluateTrust(any()) }
+    }
+
+    private fun signedCircuitZkRequest(origin: String, extraQueries: String = "", circuitQueryId: String? = "q"): String {
+        val ecKey = com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256).generate()
+        val claims = com.nimbusds.jwt.JWTClaimsSet.parse(
+            """{"client_id":"x509_san_dns:rp.example","nonce":"n","expected_origins":["$origin"],""" +
+                """"dcql_query":{"credentials":[{${circuitQueryId?.let { "\"id\":\"$it\"," } ?: ""}"format":"zkp_req","meta":{"source_format":"mso_mdoc","doctype_value":"test.doctype.1"}}$extraQueries]}}"""
+        )
+        val jwt = com.nimbusds.jwt.SignedJWT(
+            com.nimbusds.jose.JWSHeader.Builder(com.nimbusds.jose.JWSAlgorithm.ES256).jwk(ecKey.toPublicJWK()).build(), claims,
+        ).also { it.sign(com.nimbusds.jose.crypto.ECDSASigner(ecKey)) }
+        return wrapDCAPIRequest("openid4vp-v1-signed", buildJsonObject { put("request", jwt.serialize()) })
+    }
+
+    /** What the wallet builds when the host configures no prover: the catalog prover with no native half, over an empty catalog. */
+    private fun defaultCatalogProverHolder(): Lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> = lazy {
+        org.siros.sdk.keystore.CatalogCircuitZkProver(org.siros.sdk.credentials.ZkCircuitClient(sources = emptyList()), null)
+    }
+
+    private fun circuitZkWallet(support: org.siros.sdk.credentials.CircuitZkSupport?, keystore: KeystoreManager): SirosWallet {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
+        val store = FakeCredentialStore(mutableListOf(
+            StoredCredential(
+                id = 1L, format = "mso_mdoc", raw = "raw",
+                metadata = CredentialMetadata(doctype = "test.doctype.1"), batchId = 1L, instanceId = 0,
+            ),
+        ))
+        return newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "apiClient" to apiClient,
+            "keystore" to keystore,
+            "credentialStore" to store,
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+            "circuitZkSupport" to support,
+            "defaultCircuitZkProverHolder" to defaultCatalogProverHolder(),
+        )
+    }
+
+    private fun fittingSupport() = org.siros.sdk.credentials.CircuitZkSupport(
+        planner = { _, _ -> org.siros.sdk.credentials.CircuitZkPlanResult.Plan(org.siros.sdk.credentials.CircuitZkPlan(emptyList())) },
+        circuits = {
+            listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf("test.doctype.1"), functions = emptySet()))
+        },
+    )
+
+    @Test
+    fun handleDCAPIRequest_matchedCircuitZk_isAnsweredWithAccessDeniedAndNeverSigns() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        val wallet = circuitZkWallet(fittingSupport(), keystore)
+
+        org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+            kotlinx.coroutines.runBlocking {
+                wallet.handleDCAPIRequest(signedCircuitZkRequest("https://rp.example"), origin = "https://rp.example")
+            }
+        }
+        coVerify(exactly = 0) { keystore.signVpToken(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun handleDCAPIRequest_circuitZkWithTheFlagOff_matchesNothing() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        val wallet = circuitZkWallet(null, keystore)
+
+        // Nothing matches, and the answer is the silent access-denied, never the
+        // "no credential matches" text that would reach the verifier.
+        val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+            kotlinx.coroutines.runBlocking {
+                wallet.handleDCAPIRequest(signedCircuitZkRequest("https://rp.example"), origin = "https://rp.example")
+            }
+        }
+        assertEquals("DC API request refused (protocol=openid4vp-v1-signed)", e.message)
+        coVerify(exactly = 0) { keystore.signVpToken(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun handleDCAPIRequest_mixedCircuitZkAndOrdinaryQuery_withTheFlagOff_isRefusedNotPartlyAnswered() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        val wallet = circuitZkWallet(null, keystore)
+
+        val mixed = signedCircuitZkRequest(
+            "https://rp.example",
+            extraQueries = """,{"id":"p","format":"mso_mdoc","meta":{"source_format":"mso_mdoc","doctype_value":"test.doctype.1"}}""",
+        )
+        val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+            kotlinx.coroutines.runBlocking { wallet.handleDCAPIRequest(mixed, origin = "https://rp.example") }
+        }
+        assertEquals("DC API request refused (protocol=openid4vp-v1-signed)", e.message)
+        coVerify(exactly = 0) { keystore.signVpToken(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun handleDCAPIRequest_circuitZkQueryWithoutAnId_withTheFlagOff_isRefusedNotPartlyAnswered() = runTest(dispatcher) {
+        // The matcher drops a query with no string id, so no circuit_zk result is left to look at; the request
+        // still contains the query and must not be answered by its ordinary sibling alone.
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        val wallet = circuitZkWallet(null, keystore)
+
+        val request = signedCircuitZkRequest(
+            "https://rp.example",
+            extraQueries = """,{"id":"p","format":"mso_mdoc","meta":{"source_format":"mso_mdoc","doctype_value":"test.doctype.1"}}""",
+            circuitQueryId = null,
+        )
+        val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+            kotlinx.coroutines.runBlocking { wallet.handleDCAPIRequest(request, origin = "https://rp.example") }
+        }
+        assertEquals("DC API request refused (protocol=openid4vp-v1-signed)", e.message)
+        coVerify(exactly = 0) { keystore.signVpToken(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun handleDCAPIRequest_circuitZkValidatorRefusal_neverLeaksTheRuleId() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        val base = fittingSupport()
+        val wallet = circuitZkWallet(
+            org.siros.sdk.credentials.CircuitZkSupport(
+                base.planner,
+                { org.siros.sdk.credentials.CircuitZkVerdict.AccessDenied("secret-rule-id-123") },
+                base.circuits,
+            ),
+            keystore,
+        )
+        val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+            kotlinx.coroutines.runBlocking {
+                wallet.handleDCAPIRequest(signedCircuitZkRequest("https://rp.example"), origin = "https://rp.example")
+            }
+        }
+        assertFalse(e.message!!.contains("secret-rule-id-123"))
+        assertFalse(e.toString().contains("secret-rule-id-123"))
+        coVerify(exactly = 0) { keystore.signVpToken(any(), any(), any(), any()) }
+    }
+
+    // ── circuit_zk over the DC API (fake trust, planner, prover and signer; test CA) ──
+
+    private object CzkFixtures {
+        const val DOCTYPE = "eu.europa.ec.eudi.nym_auth.1"
+        const val OTHER_DOCTYPE = "org.example.other.1"
+        const val ORIGIN = "https://rp.example"
+        val root = ByteArray(32) { (it * 5 + 1).toByte() }
+        fun resource(name: String) = checkNotNull(CzkFixtures::class.java.getResourceAsStream("/circuitzk/$name")) { name }.readBytes().decodeToString()
+        private fun pemDer(pem: String) = java.util.Base64.getMimeDecoder().decode(pem.lines().filter { !it.startsWith("-----") }.joinToString(""))
+        val leafDer: ByteArray by lazy { pemDer(resource("leaf.pem")) }
+        val caDer: ByteArray by lazy { pemDer(resource("ca.pem")) }
+        val leafKey: java.security.interfaces.ECPrivateKey by lazy {
+            java.security.KeyFactory.getInstance("EC").generatePrivate(java.security.spec.PKCS8EncodedKeySpec(pemDer(resource("leaf-key.pem")))) as java.security.interfaces.ECPrivateKey
+        }
+        fun hkdf(info: ByteArray, length: Int): ByteArray {
+            fun mac(k: ByteArray, d: ByteArray) = javax.crypto.Mac.getInstance("HmacSHA256").apply { init(javax.crypto.spec.SecretKeySpec(k, "HmacSHA256")) }.doFinal(d)
+            return mac(mac(ByteArray(32), root), info + byteArrayOf(1)).copyOf(length)
+        }
+        /**
+         * The Credential Issuer Identifier the fixtures store with their credentials, WITH a trailing slash on purpose:
+         * the device seed (and so psc) is derived from the string exactly as stored, so a normalised form would not match.
+         */
+        const val ISSUER = "https://issuer.example/"
+
+        /** An independent `lp(x)` of privatedata-spec 5.4.1: 2-byte big-endian length, then the UTF-8 bytes. */
+        private fun lp(x: String) = x.toByteArray().let { byteArrayOf((it.size shr 8).toByte(), it.size.toByte()) + it }
+
+        fun seedFor(docType: String, issuer: String) = hkdf("org.siros.private_seed/v2".toByteArray() + lp(docType) + lp(issuer), 16)
+        val seed get() = seedFor(DOCTYPE, ISSUER)
+        val psc get() = pscFor(DOCTYPE)
+        fun pscFor(docType: String, issuer: String = ISSUER) = java.security.MessageDigest.getInstance("SHA-256").digest(seedFor(docType, issuer))
+
+        fun mdoc(
+            psc: ByteArray = this.psc, birth: String = "2000-06-15", docType: String = DOCTYPE, ssc: ByteArray = ByteArray(32) { 9 },
+            /** Further elements of the doctype namespace (a claim a predicate can be about). */
+            extra: List<Pair<String, com.upokecenter.cbor.CBORObject>> = emptyList(),
+        ): String {
+            fun c(o: Any) = com.upokecenter.cbor.CBORObject.FromObject(o)
+            fun item(id: Long, name: String, v: com.upokecenter.cbor.CBORObject): com.upokecenter.cbor.CBORObject {
+                val m = com.upokecenter.cbor.CBORObject.NewMap()
+                m[c("digestID")] = c(id); m[c("random")] = c(ByteArray(16)); m[c("elementIdentifier")] = c(name); m[c("elementValue")] = v
+                return com.upokecenter.cbor.CBORObject.FromObjectAndTag(m.EncodeToBytes(), 24)
+            }
+            val items = com.upokecenter.cbor.CBORObject.NewArray()
+            items.Add(item(0, "birth_date", com.upokecenter.cbor.CBORObject.FromObjectAndTag(birth, 1004)))
+            items.Add(item(1, "ssc", c(ssc)))
+            items.Add(item(2, "psc", c(psc)))
+            extra.forEachIndexed { i, (name, v) -> items.Add(item(3L + i, name, v)) }
+            val ns = com.upokecenter.cbor.CBORObject.NewMap(); ns[c(docType)] = items
+            val mso = com.upokecenter.cbor.CBORObject.NewMap(); mso[c("docType")] = c(docType)
+            val unprotected = com.upokecenter.cbor.CBORObject.NewMap(); unprotected[c(33)] = c(leafDer)
+            val auth = com.upokecenter.cbor.CBORObject.NewArray()
+            auth.Add(c(ByteArray(0))); auth.Add(unprotected)
+            auth.Add(c(com.upokecenter.cbor.CBORObject.FromObjectAndTag(mso.EncodeToBytes(), 24).EncodeToBytes())); auth.Add(c(ByteArray(64)))
+            val signed = com.upokecenter.cbor.CBORObject.NewMap(); signed[c("nameSpaces")] = ns; signed[c("issuerAuth")] = auth
+            return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(signed.EncodeToBytes())
+        }
+    }
+
+    /** A request signed with the test leaf key and carrying the test chain in `x5c`. */
+    private fun czkRequest(
+        clientId: String = "x509_san_dns:rp.example",
+        origins: String? = """["${CzkFixtures.ORIGIN}"]""",
+        protocol: String = "openid4vp-v1-signed",
+        signed: Boolean = true,
+        nonce: String = "czk-nonce-1",
+        queryIds: List<String> = listOf("q"),
+        /** The `doctype_value` of each query, in order; the nym_auth doctype for all when null. */
+        queryDoctypes: List<String>? = null,
+        /** A raw `transaction_data` JSON array to carry, or none. */
+        transactionData: String? = null,
+        /** Raw credential-query JSON objects appended after the circuit_zk queries, each led by a comma. */
+        extraQueries: String = "",
+    ): String {
+        val query = """{"credentials":[""" + queryIds.withIndex().joinToString(",") { (i, id) ->
+            """{"id":"$id","format":"zkp_req","meta":{"source_format":"mso_mdoc","doctype_value":"${queryDoctypes?.get(i) ?: CzkFixtures.DOCTYPE}"}}"""
+        } + "$extraQueries]}"
+        val claims = com.nimbusds.jwt.JWTClaimsSet.parse(
+            """{"client_id":"$clientId","nonce":"$nonce","response_mode":"dc_api","dcql_query":$query""" +
+                (origins?.let { ""","expected_origins":$it""" } ?: "") +
+                (transactionData?.let { ""","transaction_data":$it""" } ?: "") + "}"
+        )
+        if (!signed) {
+            return wrapDCAPIRequest("openid4vp-v1-unsigned", Json.parseToJsonElement(claims.toString()).jsonObject)
+        }
+        val header = com.nimbusds.jose.JWSHeader.Builder(com.nimbusds.jose.JWSAlgorithm.ES256)
+            .x509CertChain(listOf(com.nimbusds.jose.util.Base64.encode(CzkFixtures.leafDer), com.nimbusds.jose.util.Base64.encode(CzkFixtures.caDer)))
+            .build()
+        val jwt = com.nimbusds.jwt.SignedJWT(header, claims).also { it.sign(com.nimbusds.jose.crypto.ECDSASigner(CzkFixtures.leafKey)) }
+        return wrapDCAPIRequest(protocol, buildJsonObject { put("request", jwt.serialize()) })
+    }
+
+    private class CzkSetup(
+        val wallet: SirosWallet,
+        val apiClient: BackendApiClient,
+        val history: MutableList<PresentationRecord>,
+        val prover: CountingCzkProver,
+        val trustRequests: MutableList<JsonObject> = mutableListOf(),
+        /** Every consent request the wallet asked, in order. */
+        val consents: MutableList<org.siros.sdk.credentials.PresentationConsentRequest> = mutableListOf(),
+        /** The order of the steps that touch a secret or the user: `consent`, `seed`, `sign`, `prove`. */
+        val events: MutableList<String> = mutableListOf(),
+    )
+
+    private class CountingCzkProver(val inner: org.siros.sdk.keystore.CircuitZkProver) : org.siros.sdk.keystore.CircuitZkProver {
+        var calls = 0
+        var events: MutableList<String>? = null
+        /** When set, the prover asks the signer for a signature first, like a real one. */
+        var signs = false
+        /** The last input the prover was given (its session transcript, for one). */
+        var lastInput: org.siros.sdk.keystore.CircuitZkProveInput? = null
+        val inputs = mutableListOf<org.siros.sdk.keystore.CircuitZkProveInput>()
+        override val isFake get() = inner.isFake
+        override suspend fun prove(input: org.siros.sdk.keystore.CircuitZkProveInput): org.siros.sdk.keystore.CircuitZkProveOutput {
+            calls++
+            lastInput = input
+            inputs += input
+            events?.add("prove")
+            if (signs) input.signer.sign(-7, byteArrayOf(1, 2, 3))
+            return inner.prove(input)
+        }
+    }
+
+    /** What escaped a signing launch of a czkSetup wallet (its scope has no other handler, like the real one). */
+    private val czkUncaught = mutableListOf<Throwable>()
+
+    private fun czkSetup(
+        functions: List<org.siros.sdk.credentials.CircuitZkFunction> = listOf(
+            org.siros.sdk.credentials.CircuitZkFunction(
+                "pseudonym", "n",
+                Json.parseToJsonElement("""{"config":"known-offender-matching-psc","ver":1,"prf":"sha-256"}""").jsonObject,
+            ),
+        ),
+        /** Default: the PDP supplies the x509_san_dns identifier (the bare DNS name, as go-trust derives it). */
+        trust: suspend () -> JsonObject = czkIds("x509_san_dns" to "rp.example"),
+        /** The wallet's ORDERED supported verifier-id types. */
+        types: List<String> = VerifierIdTypeOrder.DEFAULT,
+        /** Optional host-registered sources; the PDP's AuthZEN source is always tried first per type. */
+        sources: List<VerifierIdSource> = emptyList(),
+        psc: ByteArray = CzkFixtures.psc,
+        birth: String = "2000-06-15",
+        flagOn: Boolean = true,
+        localOnlyTrust: Boolean = false,
+        /** Replaces the default single credential (id 1). */
+        credentials: List<StoredCredential>? = null,
+        /** Further doctypes the (single) circuit serves. */
+        extraDocTypes: Set<String> = emptySet(),
+        /** The circuit declares these `capabilities`, so only the matcher ([serving]) can select it. */
+        capabilities: String? = null,
+        serving: org.siros.sdk.credentials.CircuitZkServing? = null,
+        /** Replaces the wallet's seed source (the allocated test wallet has none). */
+        secretSeedSource: CredentialSecretSeedSource? = null,
+        /** No prover is configured, so the wallet uses its default (the catalog prover without a native half). */
+        defaultProver: Boolean = false,
+        /** The user's answer to the presentation consent; the default consents. */
+        consent: suspend (org.siros.sdk.credentials.PresentationConsentRequest) -> Boolean = { true },
+        /** No presentation consent handler is registered at all. */
+        noConsentHandler: Boolean = false,
+        /** The prover asks the signer for a signature, like a real one. */
+        proverSigns: Boolean = false,
+        /** The request offers the test circuit (`system_id_values` / `proof_system_values`); false: it states no list. */
+        offersCircuit: Boolean = true,
+        /** Replaces the fake prover (which knows only the rulebook functions). */
+        innerProver: org.siros.sdk.keystore.CircuitZkProver? = null,
+        /** Plans each query differently: the functions of the query at this index (overrides [functions]). */
+        functionsPerQuery: ((Int) -> List<org.siros.sdk.credentials.CircuitZkFunction>)? = null,
+        /** The predicate functions the wallet can describe; null is the wallet's default (age_check only). */
+        predicates: org.siros.sdk.credentials.PredicateFunctions? = null,
+        /** Functions (id) the circuit and the validator accept besides the rulebook ones: their rules are empty. */
+        extraFunctions: Set<String> = emptySet(),
+        /** Called with the client_metadata the planner is given for each query. */
+        onPlan: (JsonObject?) -> Unit = {},
+    ): CzkSetup {
+        var plannedQueries = 0
+        val consents = mutableListOf<org.siros.sdk.credentials.PresentationConsentRequest>()
+        val events = mutableListOf<String>()
+        val apiClient = mockk<BackendApiClient>()
+        val trustRequests = mutableListOf<JsonObject>()
+        coEvery { apiClient.evaluateTrust(any()) } coAnswers { trustRequests += firstArg<JsonObject>(); trust() }
+        val keystore = mockk<KeystoreManager>(moreInterfaces = arrayOf(org.siros.sdk.keystore.HolderWitnessSource::class))
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("kid", "ES256", 0L))
+        coEvery { keystore.sign(any(), any(), any()) } coAnswers { events += "sign"; ByteArray(64) }
+        val seedSource = org.siros.sdk.keystore.FixedRootHolderWitnessSource(CzkFixtures.root)
+        every { (keystore as org.siros.sdk.keystore.HolderWitnessSource).circuitZkPresenter(any(), any(), any(), any(), any(), any(), any()) } answers {
+            seedSource.circuitZkPresenter(arg(0), arg(1), arg(2), arg(3), arg(4), arg(5), arg(6))
+        }
+        val store = FakeCredentialStore((credentials ?: listOf(
+            StoredCredential(id = 1L, format = "mso_mdoc", raw = CzkFixtures.mdoc(psc, birth), credentialIssuerIdentifier = CzkFixtures.ISSUER,
+                metadata = CredentialMetadata(name = "Nym"), batchId = 1L, instanceId = 0),
+        )).toMutableList())
+        val registry = VerifierIdRegistry(types, sources)
+        val circuits = org.siros.sdk.credentials.CircuitZkCircuitSource {
+            listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf(CzkFixtures.DOCTYPE) + extraDocTypes, functions = setOf("pseudonym", "age_check") + extraFunctions, capabilities = capabilities))
+        }
+        val support = org.siros.sdk.credentials.CircuitZkSupport(
+            // The plan's raw query is the query itself (its doctype_value is what the presenter checks the credential against).
+            // The request offers the test circuit (a response states an offered circuit_id and proof_system).
+            planner = { query, cm ->
+                onPlan(cm)
+                val fs = functionsPerQuery?.invoke(plannedQueries++) ?: functions
+                org.siros.sdk.credentials.CircuitZkPlanResult.Plan(
+                    org.siros.sdk.credentials.CircuitZkPlan(
+                        fs,
+                        if (offersCircuit) org.siros.sdk.credentials.CircuitZkCircuitFilter(listOf("sys"), listOf("c1")) else null,
+                        raw = query,
+                    ),
+                )
+            },
+            validator = if (extraFunctions.isEmpty()) defaultCircuitZkValidator(circuits) else org.siros.sdk.credentials.RulebookCircuitZkValidator(
+                rules = extraFunctions.fold(org.siros.sdk.credentials.CircuitZkRuleSet.rulebookV04()) { r, id ->
+                    r.withFunction(id, org.siros.sdk.credentials.CircuitZkFunctionRules(null, "$id-count", emptyList()))
+                },
+                circuits = circuits,
+            ),
+            circuits = circuits,
+            serving = serving,
+        )
+        val history = mutableListOf<PresentationRecord>()
+        val prover = CountingCzkProver(innerProver ?: org.siros.sdk.keystore.FakeCircuitZkProver.optIn()).also { it.events = events; it.signs = proverSigns }
+        val trackedSeeds = secretSeedSource?.let { inner -> CredentialSecretSeedSource { id -> events += "seed"; inner.secretSeed(id) } }
+        val consentHandler = PresentationConsentHandler { r -> events += "consent"; consents += r; consent(r) }
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob() + kotlinx.coroutines.CoroutineExceptionHandler { _, t -> czkUncaught += t }),
+            "apiClient" to apiClient,
+            "keystore" to keystore,
+            "credentialStore" to store,
+            "_presentationHistory" to history,
+            "config" to WalletConfig(
+                backendUrl = "https://backend.example",
+                readerTrustEvaluationMode = if (localOnlyTrust) MdocTrustEvaluationMode.LOCAL_ONLY else null,
+                circuitZkPredicateFunctions = predicates ?: org.siros.sdk.credentials.PredicateFunctions.DEFAULT,
+            ),
+            "circuitZkSupport" to (if (flagOn) support else null),
+            *(if (defaultProver) arrayOf("defaultCircuitZkProverHolder" to defaultCatalogProverHolder()) else arrayOf("circuitZkProver" to prover)),
+            "verifierIdRegistry" to registry,
+            *(if (trackedSeeds != null) arrayOf("credentialSecretSeedSource" to trackedSeeds) else emptyArray()),
+            "presentationConsentHandler" to (if (noConsentHandler) null else consentHandler),
+        )
+        return CzkSetup(wallet, apiClient, history, prover, trustRequests, consents, events)
+    }
+
+    /** [ids] is what the picker reported; nothing is chosen for the user, so a call without one is refused. */
+    private fun czkRun(s: CzkSetup, raw: String, origin: String = CzkFixtures.ORIGIN, ids: List<Long> = listOf(1L)) =
+        kotlinx.coroutines.runBlocking { s.wallet.handleDCAPIRequest(raw, origin, ids) }
+
+    private fun czkRefused(
+        s: CzkSetup,
+        raw: String,
+        origin: String = CzkFixtures.ORIGIN,
+        reason: org.siros.sdk.wallet.dcapi.DCAPIRefusalReason? = null,
+        ids: List<Long> = listOf(1L),
+    ) {
+        val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) { czkRun(s, raw, origin, ids) }
+        // The message (and so anything that reaches a log or the verifier) is the same for every reason.
+        assertEquals("DC API request refused (protocol=${e.protocol})", e.message)
+        if (reason != null) assertEquals(reason, e.reason)
+        assertTrue(s.history.isEmpty())
+    }
+
+    private val czkLogs = mutableListOf<String>()
+    private val czkTree = object : timber.log.Timber.Tree() {
+        override fun log(priority: Int, tag: String?, message: String, t: Throwable?) { czkLogs += message + (t?.toString() ?: "") }
+    }
+
+    private fun czkExpectedPseudonym(verifierId: String) = org.siros.sdk.credentials.NymPseudonym.derive(
+        "known-offender-matching-psc", CzkFixtures.seed, verifierId = verifierId,
+    )
+
+    private fun czkSetupWithIssuer(issuer: String?) = czkSetup(
+        credentials = listOf(
+            StoredCredential(
+                id = 1L, format = "mso_mdoc", raw = CzkFixtures.mdoc(CzkFixtures.psc, "2000-06-15"),
+                credentialIssuerIdentifier = issuer, metadata = CredentialMetadata(name = "Nym"), batchId = 1L, instanceId = 0,
+            ),
+        ),
+    )
+
+    @Test
+    fun circuitZkDcApi_theDevicePscFollowsTheIssuerExactlyAsStored_atPresentationToo() = runTest(dispatcher) {
+        // The fixture credential committed to the seed of "https://issuer.example/" (trailing slash), the stored string.
+        val ok = czkRun(czkSetupWithIssuer(CzkFixtures.ISSUER), czkRequest())
+        assertEquals(setOf("n"), czkDecoded(ok.responseJson).results.keys)
+        // The same issuer without the slash is another string, another seed, another psc: refused, never normalised.
+        czkRefused(czkSetupWithIssuer("https://issuer.example"), czkRequest())
+        // A credential stored without its issuer cannot derive the device seed at all.
+        czkRefused(czkSetupWithIssuer(null), czkRequest())
+    }
+
+    @Test
+    fun circuitZkDcApi_success_presentationDecodesAndPseudonymMatchesIndependentRecompute() = runTest(dispatcher) {
+        timber.log.Timber.plant(czkTree)
+        try {
+            val s = czkSetup()
+            val result = czkRun(s, czkRequest())
+
+            assertEquals(listOf(1L), result.credentialIds)
+            val envelope = Json.parseToJsonElement(result.responseJson).jsonObject
+            assertEquals("openid4vp-v1-signed", envelope["protocol"]?.jsonPrimitive?.content)
+            val decoded = czkDecoded(result.responseJson)
+            assertEquals(
+                org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("x509_san_dns:rp.example")),
+                decoded.results["n"],
+            )
+            assertEquals(setOf("n"), decoded.results.keys)
+            // The response shape (rulebook v0.4 ZkpPresentation): exactly these members, the offered system id, the issuer key set, proof_time.
+            assertEquals(setOf("system_id", "proof", "issuer_key_set", "proof_time", "results"), decoded.members)
+            assertEquals("c1", decoded.cbor["system_id"].AsString())
+            assertTrue(decoded.cbor["issuer_key_set"].size() > 0)
+            assertTrue(decoded.cbor["proof_time"].HasMostOuterTag(0))
+            assertEquals(20, decoded.cbor["proof_time"].AsString().length)
+            assertEquals(1, s.prover.calls)
+            // History: a ZK proof, no claim names, no pseudonym.
+            val record = s.history.single()
+            assertTrue(record.zkProof)
+            assertTrue(record.requestedClaims.isEmpty())
+            coVerify(exactly = 1) { s.apiClient.evaluateTrust(any()) }
+            // No log carries request contents or the verifier id.
+            for (line in czkLogs) {
+                assertFalse(line, line.contains("rp.example"))
+                assertFalse(line, line.contains("czk-nonce-1"))
+            }
+        } finally {
+            timber.log.Timber.uproot(czkTree)
+        }
+    }
+
+    @Test
+    fun circuitZkDcApi_aResponseThatFailsTheWalletsOwnCheck_isNeverSent() = runTest(dispatcher) {
+        // The legacy claim-disclosure function has no result shape in the circuit_zk response spec, so a verifier must
+        // refuse its response (result_function_unknown). The presenter builds it happily (this prover "proves" it): the
+        // wallet's own CircuitZkResponseValidator check is what stops it leaving the device.
+        val legacy = org.siros.sdk.credentials.CircuitZkFunction(
+            org.siros.sdk.credentials.CircuitZkLegacyDisclosure.FUNCTION_ID, "d",
+            Json.parseToJsonElement("""{"claims":["birth_date"],"systems":[{"id":"c","system":"sys"}]}""").jsonObject,
+        )
+        val everythingTrue = object : org.siros.sdk.keystore.CircuitZkProver {
+            override suspend fun prove(input: org.siros.sdk.keystore.CircuitZkProveInput) = org.siros.sdk.keystore.CircuitZkProveOutput(
+                proof = byteArrayOf(1, 2, 3),
+                results = input.plan.functions.associate { it.handle to org.siros.sdk.credentials.ResultValue.Predicate },
+            )
+        }
+        val s = czkSetup(
+            functions = listOf(legacy),
+            innerProver = everythingTrue,
+            extraFunctions = setOf(org.siros.sdk.credentials.CircuitZkLegacyDisclosure.FUNCTION_ID),
+        )
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.PROOF_FAILED)
+        // The proof was made (the request got as far as the prover) and the response was still not sent.
+        assertEquals(1, s.prover.calls)
+    }
+
+    // ── zkp_req over the engine (QR / same-device redirect, direct_post.jwt) ──
+
+    private val redirectThumbprint = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32) { (it + 1).toByte() })
+    private val redirectClientId = "x509_san_dns:rp.example"
+
+    private class EngineCzk(
+        val s: CzkSetup,
+        val engine: WalletEngineSession,
+        val match: MutableSharedFlow<MatchRequestMessage>,
+        val sign: MutableSharedFlow<SignRequestMessage>,
+        val progress: MutableSharedFlow<FlowProgressMessage>,
+        val complete: MutableSharedFlow<FlowCompleteMessage>,
+        val errors: MutableSharedFlow<FlowErrorMessage>,
+        val state: MutableStateFlow<WalletEngineSession.State>,
+        val metadataSeen: MutableList<JsonObject?>,
+        val generations: MutableStateFlow<Int> = MutableStateFlow(0),
+    )
+
+    private fun TestScope.engineCzk(
+        trusted: Boolean = true,
+        consent: suspend (org.siros.sdk.credentials.PresentationConsentRequest) -> Boolean = { true },
+        flagOn: Boolean = true,
+        offersCircuit: Boolean = true,
+        credentials: List<StoredCredential>? = null,
+        /** False: nothing is put into the wallet's private state; the engine's own trust progress has to do it. */
+        seedTrust: Boolean = true,
+        clientId: String = redirectClientId,
+        flows: List<String> = listOf("f1"),
+        /** Further doctypes the (single) circuit serves - see czkSetup's own param of the same name. */
+        extraDocTypes: Set<String> = emptySet(),
+    ): EngineCzk {
+        val match = MutableSharedFlow<MatchRequestMessage>()
+        val sign = MutableSharedFlow<SignRequestMessage>()
+        val progress = MutableSharedFlow<FlowProgressMessage>()
+        val complete = MutableSharedFlow<FlowCompleteMessage>()
+        val errors = MutableSharedFlow<FlowErrorMessage>()
+        val generations = MutableStateFlow(0)
+        val engine = mockEngineConstructor(signRequests = sign, matchRequests = match, progressFlow = progress, flowComplete = complete, flowErrors = errors, generations = generations)
+        val engineState = MutableStateFlow(WalletEngineSession.State.CONNECTED)
+        every { engine.state } returns engineState
+        every { engine.cancelFlow(any()) } just runs
+        every { engine.sendSignRefusal(any(), any(), any()) } just runs
+        every { engine.sendSignResponse(any(), vpToken = any(), messageId = any()) } just runs
+        every { engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) } just runs
+        every { engine.sendMatchResponse(any(), any(), any()) } just runs
+        val seen = mutableListOf<JsonObject?>()
+        val s = czkSetup(trust = czkIds("x509_san_dns" to redirectClientId.removePrefix("x509_san_dns:")), consent = consent, flagOn = flagOn, offersCircuit = offersCircuit, credentials = credentials, extraDocTypes = extraDocTypes, onPlan = { seen += it })
+        invokeConnectEngine(s.wallet, "app-token")
+        advanceUntilIdle()
+        // What the engine's trust step left for this flow.
+        if (seedTrust) {
+            @Suppress("UNCHECKED_CAST")
+            for (flow in flows) (getField(s.wallet, "lastTrustResults") as MutableMap<String, TrustResult>)[flow] = TrustResult(
+                trusted = trusted, identifier = clientId, entityName = "Example RP",
+                context = buildJsonObject { putJsonArray("verifier_ids") { add(buildJsonObject { put("verifier_id_type", "x509_san_dns"); put("verifier_id", redirectClientId.removePrefix("x509_san_dns:")) }) } },
+            )
+        }
+        return EngineCzk(s, engine, match, sign, progress, complete, errors, engineState, seen, generations)
+    }
+
+    private val redirectQuery = Json.parseToJsonElement(
+        """{"credentials":[{"id":"q","format":"zkp_req","meta":{"source_format":"mso_mdoc","doctype_value":"${CzkFixtures.DOCTYPE}"},"_req":[{"fn_id":"pseudonym","return":"n","params":{"config":"known-offender-matching-psc","ver":1,"prf":"sha-256"}}]}]}""",
+    )
+    private val redirectMetadata = Json.parseToJsonElement(
+        """{"vp_formats_supported":{"zkp_req":{"system_id_values":["c1"],"proof_system_values":["sys"]}},"authorization_encrypted_response_alg":"ECDH-ES"}""",
+    )
+
+    /** What the legacy redirect flow really sends: a flow_progress step with the request, the verifier and its client_metadata. */
+    private suspend fun EngineCzk.matchOnce(query: kotlinx.serialization.json.JsonElement = redirectQuery, flow: String = "f1") {
+        progress.emit(FlowProgressMessage(
+            flowId = flow, step = "credential_selection",
+            payload = buildJsonObject {
+                put("dcql_query", query)
+                putJsonObject("verifier") { put("client_id", redirectClientId); put("name", "Example RP") }
+                put("client_metadata", redirectMetadata)
+            },
+        ).also { it.connectionGeneration = engineGeneration.get() }) // stamped by the session on receipt, as in production
+    }
+
+    /** The verifier's response-encryption key of the default [redirectSign]: a zkp_req request is only answered signed and encrypted. */
+    private val redirectKey by lazy { verifierKey() }
+    private val redirectKeyThumbprint by lazy { redirectKey.computeThumbprint().toString() }
+
+    private fun redirectSign(thumbprint: String? = null, audience: String = redirectClientId, responseUri: String? = "https://rp.example/response", creds: List<String> = listOf("1"), flow: String = "f1", messageId: String = "m1") =
+        SignRequestMessage(
+            flowId = flow, messageId = messageId, action = "sign_presentation",
+            params = SignRequestParams(
+                audience = audience, nonce = "n-redirect", responseUri = responseUri, verifierJwkThumbprint = thumbprint ?: redirectKeyThumbprint,
+                credentialsToInclude = creds.map { org.siros.sdk.transport.engine.CredentialRef(credentialQueryId = "q", credentialId = it) },
+                responseEncryption = org.siros.sdk.transport.ResponseEncryptionRequest(
+                    jwk = Json.parseToJsonElement(redirectKey.toPublicJWK().toJSONString()).jsonObject, alg = "ECDH-ES", enc = "A128GCM",
+                ),
+                state = "st-1",
+                verifiedRequest = org.siros.sdk.transport.VerifiedRequest(clientId = redirectClientId, responseMode = "direct_post.jwt", signed = true, signatureVerification = "verified"),
+            ),
+        )
+
+    /** The `vp_token` of the JARM response a zkp_req answer carries (the engine only relays the ciphertext). */
+    private fun jarmVpToken(jwe: String): JsonObject {
+        val parsed = com.nimbusds.jose.JWEObject.parse(jwe).also { it.decrypt(com.nimbusds.jose.crypto.ECDHDecrypter(redirectKey)) }
+        return Json.parseToJsonElement(parsed.payload.toString()).jsonObject["vp_token"]!!.jsonObject
+    }
+
+    @Test
+    fun circuitZkRedirect_aZkpReqRequestRelayedByTheEngine_isMatchedProvedAndAnsweredWithTheCborPresentation() = runTest(dispatcher) {
+        val e = engineCzk()
+        e.matchOnce()
+        advanceUntilIdle()
+        // The verifier's client_metadata reached the planner, and the credential was offered.
+        assertEquals(listOf<kotlinx.serialization.json.JsonElement?>(redirectMetadata), e.metadataSeen)
+        val consent = slot<JsonObject>()
+        verify(exactly = 1) { e.engine.sendFlowAction("f1", "consent", capture(consent)) }
+        val selected = consent.captured["selected_credentials"]!!.jsonArray.single().jsonObject
+        assertEquals("q", selected["credential_query_id"]?.jsonPrimitive?.content)
+        assertEquals("1", selected["credential_id"]?.jsonPrimitive?.content)
+        // A zkp_req query discloses no claims: the engine's consent check would refuse any.
+        assertEquals(0, selected["disclosed_claims"]!!.jsonArray.size)
+        // Nothing is recorded as presented before anything is proved.
+        assertTrue(e.s.history.isEmpty())
+
+        e.sign.emit(redirectSign())
+        advanceUntilIdle()
+
+        val vp = slot<String>()
+        verify(exactly = 1) { e.engine.sendSignResponse("f1", responseJwe = capture(vp), messageId = "m1") }
+        val token = jarmVpToken(vp.captured)
+        assertEquals(setOf("q"), token.keys)
+        val decoded = CzkDecoded(token["q"]!!.jsonArray.single().jsonPrimitive.content)
+        assertEquals(
+            org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym(redirectClientId)),
+            decoded.results["n"],
+        )
+        // The proof is bound to the redirect OpenID4VPHandover over [client id, nonce, thumbprint, response_uri].
+        org.junit.Assert.assertArrayEquals(
+            org.siros.sdk.keystore.MdocDeviceResponseBuilder.buildCircuitZkRedirectSessionTranscript(redirectClientId, "n-redirect", "https://rp.example/response", redirectKeyThumbprint),
+            e.s.prover.lastInput!!.sessionTranscript,
+        )
+        // One consent, naming the verifier; the history records a ZK proof; the flow is not cancelled.
+        assertEquals(1, e.s.consents.size)
+        assertEquals("Example RP", e.s.consents.single().verifier.label)
+        assertTrue(e.s.history.single().zkProof) // written once, when answered
+        verify(exactly = 0) { e.engine.cancelFlow(any()) }
+        verify(exactly = 0) { e.engine.sendSignRefusal(any(), any(), any()) }
+    }
+
+    /** A verifier response-encryption key as the engine sends it in `response_encryption`: public JWK with a kid. */
+    private fun verifierKey() = com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256).keyID("verifier-enc-1").generate()
+
+    private fun redirectSignEncrypted(
+        key: com.nimbusds.jose.jwk.ECKey,
+        verifiedClientId: String? = "x509_san_dns:rp.example",
+        state: String? = "st-1",
+        alg: String = "ECDH-ES",
+        enc: String = "A128GCM",
+    ) = redirectSign().let { m ->
+        m.copy(
+            params = m.params.copy(
+                responseEncryption = org.siros.sdk.transport.ResponseEncryptionRequest(
+                    jwk = Json.parseToJsonElement(key.toPublicJWK().toJSONString()).jsonObject, alg = alg, enc = enc,
+                ),
+                // The engine's own thumbprint of the same key (they agree; a mismatch is refused, see below).
+                verifierJwkThumbprint = key.computeThumbprint().toString(),
+                state = state,
+                verifiedRequest = org.siros.sdk.transport.VerifiedRequest(clientId = verifiedClientId, responseMode = "direct_post.jwt", signed = true, signatureVerification = "verified"),
+            ),
+        )
+    }
+
+    @Test
+    fun circuitZkRedirect_withResponseEncryption_answersOnlyWithAResponseJweTheVerifierCanOpen() = runTest(dispatcher) {
+        val e = engineCzk()
+        e.matchOnce()
+        advanceUntilIdle()
+        val key = verifierKey()
+        e.sign.emit(redirectSignEncrypted(key, verifiedClientId = "x509_san_dns:rp.example"))
+        advanceUntilIdle()
+
+        val jwe = slot<String>()
+        verify(exactly = 1) { e.engine.sendSignResponse("f1", responseJwe = capture(jwe), messageId = "m1") }
+        // NOTHING but the JWE: no vp_token alongside, no refusal.
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+        verify(exactly = 0) { e.engine.sendSignRefusal(any(), any(), any()) }
+        // Five non-empty segments (direct ECDH-ES has an empty encrypted-key segment only), header as the engine validates it.
+        val segments = jwe.captured.split(".")
+        assertEquals(5, segments.size)
+        // Only the encrypted-key segment may be empty, and only for direct ECDH-ES (this request's alg).
+        segments.forEachIndexed { i, seg -> if (i != 1) assertTrue("segment $i is empty", seg.isNotEmpty()) }
+        val parsed = com.nimbusds.jose.JWEObject.parse(jwe.captured)
+        val protectedHeader = Json.parseToJsonElement(String(java.util.Base64.getUrlDecoder().decode(segments[0]))).jsonObject
+        assertEquals("ECDH-ES", protectedHeader["alg"]!!.jsonPrimitive.content)
+        assertEquals("A128GCM", protectedHeader["enc"]!!.jsonPrimitive.content)
+        assertEquals("verifier-enc-1", protectedHeader["kid"]!!.jsonPrimitive.content)
+        assertEquals("ECDH-ES", parsed.header.algorithm.name)
+        assertEquals("A128GCM", parsed.header.encryptionMethod.name)
+        assertEquals("verifier-enc-1", parsed.header.keyID)
+        parsed.decrypt(com.nimbusds.jose.crypto.ECDHDecrypter(key))
+        val claims = Json.parseToJsonElement(parsed.payload.toString()).jsonObject
+        assertEquals("st-1", claims["state"]!!.jsonPrimitive.content)
+        assertEquals("x509_san_dns:rp.example", claims["aud"]!!.jsonPrimitive.content)
+        val token = claims["vp_token"]!!.jsonObject
+        assertEquals(setOf("q"), token.keys)
+        val decoded = CzkDecoded(token["q"]!!.jsonArray.single().jsonPrimitive.content)
+        assertEquals(org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym(redirectClientId)), decoded.results["n"])
+    }
+
+    @Test
+    fun circuitZkRedirect_theJarmAudienceIsTheEnginesVerifiedClientId_notTheSignRequestAudience() = runTest(dispatcher) {
+        val e = engineCzk()
+        e.matchOnce()
+        advanceUntilIdle()
+        val key = verifierKey()
+        e.sign.emit(redirectSignEncrypted(key, verifiedClientId = "x509_san_dns:verified.example"))
+        advanceUntilIdle()
+        val jwe = slot<String>()
+        verify(exactly = 1) { e.engine.sendSignResponse("f1", responseJwe = capture(jwe), messageId = "m1") }
+        val parsed = com.nimbusds.jose.JWEObject.parse(jwe.captured).also { it.decrypt(com.nimbusds.jose.crypto.ECDHDecrypter(key)) }
+        assertEquals("x509_san_dns:verified.example", Json.parseToJsonElement(parsed.payload.toString()).jsonObject["aud"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun circuitZkRedirect_withResponseEncryptionButNoVerifiedClientId_isRefusedAndNothingIsSent() = runTest(dispatcher) {
+        val e = engineCzk()
+        e.matchOnce()
+        advanceUntilIdle()
+        e.sign.emit(redirectSignEncrypted(verifierKey(), verifiedClientId = null))
+        advanceUntilIdle()
+        verify(exactly = 1) { e.engine.sendSignRefusal("f1", "m1", "jarm-audience") }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+    }
+
+    @Test
+    fun circuitZkRedirect_anEngineThumbprintThatIsNotTheEncryptionKeys_isRefusedAndNothingIsSent() = runTest(dispatcher) {
+        val e = engineCzk()
+        e.matchOnce()
+        advanceUntilIdle()
+        // The transcript's thumbprint and the key the JWE goes to must be the same key's: one source, a mismatch is refused.
+        val m = redirectSignEncrypted(verifierKey())
+        e.sign.emit(m.copy(params = m.params.copy(verifierJwkThumbprint = redirectThumbprint)))
+        advanceUntilIdle()
+        verify(exactly = 1) { e.engine.sendSignRefusal("f1", "m1", "handover-thumbprint") }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+    }
+
+    private suspend fun TestScope.assertCircuitZkRefused(msg: SignRequestMessage, step: String) {
+        val e = engineCzk()
+        e.matchOnce()
+        advanceUntilIdle()
+        e.sign.emit(msg)
+        advanceUntilIdle()
+        verify(exactly = 1) { e.engine.sendSignRefusal("f1", "m1", step) }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+        // Refused before anything is proved or asked of the user.
+        assertTrue(e.s.consents.isEmpty())
+        assertTrue(e.s.history.isEmpty())
+    }
+
+    @Test
+    fun circuitZkRedirect_anUnsignedRequest_isRefusedBeforeAnythingIsProved() = runTest(dispatcher) {
+        val m = redirectSignEncrypted(verifierKey())
+        assertCircuitZkRefused(
+            m.copy(params = m.params.copy(verifiedRequest = org.siros.sdk.transport.VerifiedRequest(clientId = "x509_san_dns:rp.example", responseMode = "direct_post.jwt", signed = false, signatureVerification = "none"))),
+            "unsigned-request",
+        )
+    }
+
+    @Test
+    fun circuitZkRedirect_aSignedFlagWithoutAVerifiedSignature_isRefused() = runTest(dispatcher) {
+        val m = redirectSignEncrypted(verifierKey())
+        assertCircuitZkRefused(
+            m.copy(params = m.params.copy(verifiedRequest = org.siros.sdk.transport.VerifiedRequest(clientId = "x509_san_dns:rp.example", responseMode = "direct_post.jwt", signed = true, signatureVerification = "deferred"))),
+            "unsigned-request",
+        )
+    }
+
+    @Test
+    fun circuitZkRedirect_aMissingVerifiedRequest_countsAsUnsigned_failClosed() = runTest(dispatcher) {
+        val m = redirectSignEncrypted(verifierKey())
+        assertCircuitZkRefused(m.copy(params = m.params.copy(verifiedRequest = null)), "unsigned-request")
+    }
+
+    @Test
+    fun circuitZkRedirect_aSignedRequestWithAPlainResponse_isRefused() = runTest(dispatcher) {
+        val m = redirectSign()
+        assertCircuitZkRefused(
+            m.copy(params = m.params.copy(responseEncryption = null, verifiedRequest = org.siros.sdk.transport.VerifiedRequest(clientId = "x509_san_dns:rp.example", responseMode = "direct_post", signed = true, signatureVerification = "verified"))),
+            "response-not-encrypted",
+        )
+    }
+
+    @Test
+    fun theSessionTranscriptThumbprintOfADirectPostJwtRequestComesFromTheEncryptionKey_aMismatchIsRefused() {
+        val wallet = newWallet()
+        val key = verifierKey()
+        val own = key.computeThumbprint().toString()
+        val encryption = org.siros.sdk.transport.ResponseEncryptionRequest(Json.parseToJsonElement(key.toPublicJWK().toJSONString()).jsonObject, "ECDH-ES", "A128GCM")
+        // No engine value, or the same one: the key's own thumbprint.
+        assertEquals(own, wallet.transcriptThumbprint(SignRequestParams(responseEncryption = encryption)))
+        assertEquals(own, wallet.transcriptThumbprint(SignRequestParams(responseEncryption = encryption, verifierJwkThumbprint = own)))
+        // A different engine value: refused, never preferred.
+        org.junit.Assert.assertThrows(WalletException::class.java) {
+            wallet.transcriptThumbprint(SignRequestParams(responseEncryption = encryption, verifierJwkThumbprint = redirectThumbprint))
+        }
+        // An unusable key: refused.
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            wallet.transcriptThumbprint(SignRequestParams(responseEncryption = org.siros.sdk.transport.ResponseEncryptionRequest(buildJsonObject { put("kty", JsonPrimitive("EC")) }, "ECDH-ES", "A128GCM")))
+        }
+        // A plain mode (no response encryption) keeps the engine's value.
+        assertEquals(redirectThumbprint, wallet.transcriptThumbprint(SignRequestParams(verifierJwkThumbprint = redirectThumbprint)))
+        assertEquals(null, wallet.transcriptThumbprint(SignRequestParams()))
+    }
+
+    @Test
+    fun legacySignPresentation_overDirectPostJwt_anEngineThumbprintThatIsNotTheEncryptionKeys_isAnsweredWithAnErrorBeforeAnythingIsSigned() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "keystore" to keystore,
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-t", messageId = "m-t", action = "sign_presentation",
+                params = SignRequestParams(
+                    audience = "admin", nonce = "n", responseEncryption = blindResponseEncryption(), verifierJwkThumbprint = redirectThumbprint,
+                    verifiedRequest = org.siros.sdk.transport.VerifiedRequest(clientId = "client-id-1", responseMode = "direct_post.jwt"),
+                ),
+            )
+        )
+        repeat(5) {
+            runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(50) }
+            advanceUntilIdle()
+        }
+        verify(exactly = 1) { engine.sendSignResponse(flowId = "flow-t", messageId = "m-t", error = any()) }
+        coVerify(exactly = 0) { keystore.signMdocPresentation(any(), any(), any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { keystore.signVpToken(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun circuitZkRedirect_anUnusableVerifierKey_isRefusedAndNothingIsSent() = runTest(dispatcher) {
+        val e = engineCzk()
+        e.matchOnce()
+        advanceUntilIdle()
+        // An algorithm pair the key cannot be used with: the response cannot be built, so the wallet refuses rather than send a plain vp_token.
+        e.sign.emit(redirectSignEncrypted(verifierKey(), alg = "RSA-OAEP-256"))
+        advanceUntilIdle()
+        verify(exactly = 1) { e.engine.sendSignRefusal("f1", "m1", "response-encryption") }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+    }
+
+    @Test
+    fun circuitZkRedirect_aSelectedCredentialDeletedBeforeSigning_isRefusedNotSilentlyDropped() = runTest(dispatcher) {
+        val e = engineCzk()
+        e.matchOnce()
+        advanceUntilIdle()
+        // The credential the user picked disappears between the match and the sign request.
+        (getField(e.s.wallet, "credentialStore") as org.siros.sdk.credentials.CredentialStore).delete(1L)
+        e.sign.emit(redirectSignEncrypted(verifierKey()))
+        advanceUntilIdle()
+        // Correlated refusal (message_id echoed), nothing proved, nothing sent in the clear or encrypted.
+        verify(exactly = 1) { e.engine.sendSignRefusal("f1", "m1", any()) }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+        assertEquals(0, e.s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkRedirect_anOversizedResponse_isRefusedWithTheMessageIdNotLeftToTheEnginesTimeout() = runTest(dispatcher) {
+        val e = engineCzk()
+        e.matchOnce()
+        advanceUntilIdle()
+        // `state` is echoed into the encrypted claims: 5 MiB of it makes the JWE exceed the engine's 4 MiB limit.
+        e.sign.emit(redirectSignEncrypted(verifierKey(), state = "s".repeat(5 * 1024 * 1024)))
+        advanceUntilIdle()
+        verify(exactly = 1) { e.engine.sendSignRefusal("f1", "m1", "response-encryption") }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+    }
+
+    @Test
+    fun circuitZkRedirect_aSocketThatRejectsTheAnswerAndTheRefusal_letsNoExceptionEscape() = runTest(dispatcher) {
+        val e = engineCzk()
+        e.matchOnce()
+        advanceUntilIdle()
+        every { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) } throws IllegalStateException("socket refused the frame")
+        every { e.engine.sendSignRefusal(any(), any(), any()) } throws IllegalStateException("socket refused the frame")
+        e.sign.emit(redirectSignEncrypted(verifierKey()))
+        advanceUntilIdle() // an exception escaping the signing launch would fail the test here
+        verify(exactly = 1) { e.engine.sendSignResponse("f1", responseJwe = any(), messageId = "m1") }
+        verify(exactly = 1) { e.engine.sendSignRefusal("f1", "m1", "error") }
+        assertTrue("nothing escaped the launch: $czkUncaught", czkUncaught.isEmpty())
+    }
+
+    @Test
+    fun circuitZkRedirect_aRefusalSurvivesARejectingSocket() = runTest(dispatcher) {
+        val e = engineCzk(consent = { false })
+        e.matchOnce()
+        advanceUntilIdle()
+        every { e.engine.sendSignRefusal(any(), any(), any()) } throws IllegalStateException("socket refused the frame")
+        e.sign.emit(redirectSignEncrypted(verifierKey()))
+        advanceUntilIdle()
+        verify(exactly = 1) { e.engine.sendSignRefusal("f1", "m1", "consent-declined") }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+        assertTrue("nothing escaped the launch: $czkUncaught", czkUncaught.isEmpty())
+    }
+
+    /** A listener whose selection callback waits for [answer]; it reports what it saw. */
+    private class WaitingSelectionListener(
+        val answer: kotlinx.coroutines.CompletableDeferred<List<Long>>,
+        val ignoreCancellation: Boolean = false,
+        val failAfterAnswer: Boolean = false,
+    ) : WalletEventListener {
+        var cancelled = false
+        var asked = 0
+        val errors = mutableListOf<Pair<String, String>>()
+        override suspend fun onCredentialSelectionRequired(request: PresentationRequest): List<Long> = try {
+            asked++
+            val r = if (ignoreCancellation) kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { answer.await() } else answer.await()
+            if (failAfterAnswer) throw IllegalStateException("the app failed after the flow was lost")
+            r
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            cancelled = true
+            throw e
+        }
+        override fun onFlowError(flowId: String, errorMessage: String, redirectUri: String?) { errors += flowId to errorMessage }
+    }
+
+    private fun EngineCzk.currentWalletState() = getField(s.wallet, "_state").let { (it as MutableStateFlow<*>).value }
+
+    @Test
+    fun flowLost_theConnectionIsLostWhileTheConsentScreenIsUp_endsTheFlowAndDismissesTheWait() = runTest(dispatcher) {
+        val e = engineCzk(seedTrust = true)
+        val answer = kotlinx.coroutines.CompletableDeferred<List<Long>>()
+        val listener = WaitingSelectionListener(answer)
+        e.s.wallet.setEventListener(listener)
+        e.matchOnce()
+        runCurrent()
+        // Selection is on screen and the wallet is mid-flow.
+        assertTrue(e.currentWalletState() is WalletState.FlowActive)
+        // The engine closed the socket: the session (and with it the flow) is gone.
+        e.state.value = WalletEngineSession.State.RECONNECTING
+        runCurrent()
+        assertTrue("the pending selection was cancelled so the UI can dismiss it", listener.cancelled)
+        assertEquals(listOf("f1" to SirosWallet.FLOW_LOST_MESSAGE), listener.errors)
+        assertTrue("no spinner: back to Ready", e.currentWalletState() is WalletState.Ready)
+        // Nothing was sent into the void.
+        verify(exactly = 0) { e.engine.sendFlowAction("f1", "decline", any()) }
+        verify(exactly = 0) { e.engine.sendFlowAction("f1", "consent", any()) }
+    }
+
+    @Test
+    fun flowLost_aReplacedSocketEndsTheFlowEvenWithoutAStateChange() = runTest(dispatcher) {
+        val e = engineCzk()
+        val answer = kotlinx.coroutines.CompletableDeferred<List<Long>>()
+        val listener = WaitingSelectionListener(answer)
+        e.s.wallet.setEventListener(listener)
+        e.matchOnce()
+        runCurrent()
+        assertTrue(e.currentWalletState() is WalletState.FlowActive)
+        // The session got a new socket (generation 1) with no RECONNECTING seen (it was conflated away).
+        engineGeneration.incrementAndGet()
+        e.generations.value = engineGeneration.get()
+        runCurrent()
+        assertTrue(listener.cancelled)
+        assertEquals(1, listener.errors.size)
+        assertTrue(e.currentWalletState() is WalletState.Ready)
+    }
+
+    @Test
+    fun flowLost_anAppThatAnswersAfterwards_causesNothingToBeSentToTheNewSession() = runTest(dispatcher) {
+        val e = engineCzk()
+        val answer = kotlinx.coroutines.CompletableDeferred<List<Long>>()
+        // The app does not honour cancellation (like a continuation nobody cancels): the user taps Decline two minutes later.
+        e.s.wallet.setEventListener(WaitingSelectionListener(answer, ignoreCancellation = true))
+        e.matchOnce()
+        runCurrent()
+        engineGeneration.incrementAndGet()
+        e.generations.value = engineGeneration.get()
+        e.state.value = WalletEngineSession.State.RECONNECTING
+        runCurrent()
+        answer.complete(emptyList()) // Decline
+        runCurrent()
+        verify(exactly = 0) { e.engine.sendFlowAction(any(), "decline", any()) }
+        verify(exactly = 0) { e.engine.sendFlowAction(any(), "consent", any()) }
+        assertTrue(e.currentWalletState() is WalletState.Ready)
+    }
+
+    private fun unknownFlow(flow: String, gen: Int = 0) = FlowErrorMessage(
+        flowId = flow, step = "",
+        error = org.siros.sdk.transport.engine.FlowError(code = "UNKNOWN_FLOW", message = "Flow not found or already completed"),
+    ).also { it.connectionGeneration = gen }
+
+    @Test
+    fun flowLost_anUnknownFlowFrameForALiveFlowEndsItLikeALostConnection() = runTest(dispatcher) {
+        val e = engineCzk()
+        val answer = kotlinx.coroutines.CompletableDeferred<List<Long>>()
+        val listener = WaitingSelectionListener(answer)
+        e.s.wallet.setEventListener(listener)
+        e.matchOnce()
+        runCurrent()
+        assertTrue(e.currentWalletState() is WalletState.FlowActive)
+        // The user's action reached a session that does not know the flow; the engine says so.
+        e.errors.emit(unknownFlow("f1"))
+        runCurrent()
+        assertTrue("the pending selection was cancelled", listener.cancelled)
+        assertEquals(listOf("f1" to SirosWallet.FLOW_LOST_MESSAGE), listener.errors)
+        assertTrue(e.currentWalletState() is WalletState.Ready)
+    }
+
+    @Test
+    fun flowLost_anUnknownFlowFrameForAnEndedOrUnknownFlowIsIgnored() = runTest(dispatcher) {
+        val e = engineCzk(flows = listOf("f1", "f2"))
+        val listener = WaitingSelectionListener(kotlinx.coroutines.CompletableDeferred())
+        e.s.wallet.setEventListener(listener)
+        // A different, newer flow is active; a late UNKNOWN_FLOW for a dead one must not touch it or tell the app.
+        e.matchOnce(flow = "f2")
+        runCurrent()
+        e.errors.emit(unknownFlow("f1-dead"))
+        runCurrent()
+        assertEquals("f2", (e.currentWalletState() as WalletState.FlowActive).flowId)
+        assertTrue(listener.errors.isEmpty())
+        // After the live flow ended once, a second frame for it is ignored too (the app is told once).
+        e.errors.emit(unknownFlow("f2"))
+        runCurrent()
+        e.errors.emit(unknownFlow("f2"))
+        runCurrent()
+        assertEquals(1, listener.errors.size)
+    }
+
+    @Test
+    fun flowLost_aFlowErrorWithAnUnrecognisedCodeStillDecodesAndEndsTheFlow() = runTest(dispatcher) {
+        val wire = """{"type":"flow_error","flow_id":"f1","step":"","error":{"code":"SOME_FUTURE_CODE","message":"m","details":{"x":1}},"extra":true}"""
+        val msg = Json { ignoreUnknownKeys = true }.decodeFromString(FlowErrorMessage.serializer(), wire)
+        assertEquals("SOME_FUTURE_CODE", msg.error.code)
+        val e = engineCzk()
+        val listener = WaitingSelectionListener(kotlinx.coroutines.CompletableDeferred())
+        e.s.wallet.setEventListener(listener)
+        e.matchOnce()
+        runCurrent()
+        e.errors.emit(msg)
+        runCurrent()
+        assertTrue("the pending selection was cancelled", listener.cancelled)
+        assertEquals(1, listener.errors.size)
+        assertTrue(e.currentWalletState() is WalletState.Ready)
+    }
+
+    @Test
+    fun flowLost_aFlowStartedOnTheNewConnectionIsNotEnded() = runTest(dispatcher) {
+        val e = engineCzk(flows = listOf("f1", "f2"))
+        e.s.wallet.setEventListener(WaitingSelectionListener(kotlinx.coroutines.CompletableDeferred()))
+        engineGeneration.incrementAndGet()
+        e.generations.value = engineGeneration.get()
+        runCurrent()
+        // A flow that begins after the socket was replaced lives on the new connection.
+        e.matchOnce(flow = "f2")
+        runCurrent()
+        assertTrue(e.currentWalletState() is WalletState.FlowActive)
+        assertEquals("f2", (e.currentWalletState() as WalletState.FlowActive).flowId)
+    }
+
+    @Test
+    fun flowLost_aMatchRequestQueuedOnTheOldConnectionIsNeitherAskedNorAnswered() = runTest(dispatcher) {
+        val (e, listener) = lostFlowSetup()
+        e.replaceSocket()
+        runCurrent()
+        // Stamped by the session with the connection that delivered it (0), consumed after the replacement (1).
+        e.match.emit(MatchRequestMessage(flowId = "f1", dcqlQuery = redirectQuery, clientMetadata = redirectMetadata))
+        runCurrent()
+        assertFalse(listener.cancelled)
+        assertTrue(listener.errors.isEmpty())
+        verify(exactly = 0) { e.engine.sendMatchResponse(any(), any(), any()) }
+        assertTrue(e.currentWalletState() is WalletState.Ready)
+    }
+
+    private fun TestScope.lostFlowSetup(ignoreCancellation: Boolean = false): Pair<EngineCzk, WaitingSelectionListener> {
+        val e = engineCzk(flows = listOf("f1", "f9"))
+        val listener = WaitingSelectionListener(kotlinx.coroutines.CompletableDeferred(), ignoreCancellation)
+        e.s.wallet.setEventListener(listener)
+        return e to listener
+    }
+
+    private fun EngineCzk.replaceSocket() {
+        engineGeneration.incrementAndGet()
+        generations.value = engineGeneration.get()
+    }
+
+    private fun staleProgress(flow: String, step: String = "credential_selection") =
+        FlowProgressMessage(flowId = flow, step = step, payload = buildJsonObject {
+            put("dcql_query", redirectQuery)
+            putJsonObject("verifier") { put("client_id", redirectClientId); put("name", "Example RP") }
+            put("client_metadata", redirectMetadata)
+        }).also { it.connectionGeneration = 0 }
+
+    @Test
+    fun flowLost_progressBufferedOnTheOldSocketAfterTheLossNeverReopensConsent() = runTest(dispatcher) {
+        val (e, listener) = lostFlowSetup()
+        e.matchOnce()
+        runCurrent()
+        e.replaceSocket()
+        runCurrent()
+        assertEquals(1, listener.errors.size)
+        // A second selection frame of the dead flow, and the very first frame of another flow, both stamped with the old connection.
+        listener.cancelled = false
+        e.progress.emit(staleProgress("f1"))
+        e.progress.emit(staleProgress("f9"))
+        runCurrent()
+        assertFalse("no consent wait was opened for either", listener.cancelled)
+        assertTrue(e.currentWalletState() is WalletState.Ready)
+        assertEquals("the app was told once", 1, listener.errors.size)
+        verify(exactly = 0) { e.engine.sendFlowAction(any(), "consent", any()) }
+    }
+
+    @Test
+    fun flowLost_anOrdinaryErrorBufferedBeforeTheLossIsNotReportedASecondTime() = runTest(dispatcher) {
+        val (e, listener) = lostFlowSetup()
+        e.matchOnce()
+        runCurrent()
+        e.replaceSocket()
+        runCurrent()
+        e.errors.emit(FlowErrorMessage(flowId = "f1", error = org.siros.sdk.transport.engine.FlowError(code = "x", message = "boom")))
+        runCurrent()
+        assertEquals(1, listener.errors.size)
+    }
+
+    @Test
+    fun flowLost_aLateAnswerAfterAnOrdinaryEngineErrorSendsNothing() = runTest(dispatcher) {
+        val (e, listener) = lostFlowSetup(ignoreCancellation = true)
+        val answer = kotlinx.coroutines.CompletableDeferred<List<Long>>()
+        e.s.wallet.setEventListener(WaitingSelectionListener(answer, ignoreCancellation = true))
+        e.matchOnce()
+        runCurrent()
+        e.errors.emit(FlowErrorMessage(flowId = "f1", error = org.siros.sdk.transport.engine.FlowError(code = "x", message = "boom")))
+        runCurrent()
+        answer.complete(listOf(1L))
+        runCurrent()
+        verify(exactly = 0) { e.engine.sendFlowAction("f1", "consent", any()) }
+        verify(exactly = 0) { e.engine.sendFlowAction("f1", "decline", any()) }
+        assertNotNull(listener)
+    }
+
+    @Test
+    fun flowLost_theMatchRequestRouteIsStoppedByTheLossToo_andAnswersNothing() = runTest(dispatcher) {
+        val (e, listener) = lostFlowSetup()
+        e.match.emit(MatchRequestMessage(flowId = "f1", dcqlQuery = redirectQuery, clientMetadata = redirectMetadata))
+        runCurrent()
+        e.replaceSocket()
+        runCurrent()
+        assertTrue("the wait of the match route was cancelled", listener.cancelled)
+        assertEquals(1, listener.errors.size)
+        verify(exactly = 0) { e.engine.sendMatchResponse(any(), any(), any()) }
+        // The shared collector is alive: a new flow on the new connection is served.
+        listener.cancelled = false
+        val askedBefore = listener.asked
+        // Stamped with the current connection, as the session stamps a frame it receives on the new socket.
+        e.match.emit(MatchRequestMessage(flowId = "f9", dcqlQuery = redirectQuery, clientMetadata = redirectMetadata).also { it.connectionGeneration = engineGeneration.get() })
+        runCurrent()
+        assertEquals("the new flow's selection wait was registered and the app was asked", askedBefore + 1, listener.asked)
+        assertFalse("and it is still waiting, not cancelled", listener.cancelled)
+        assertEquals(1, listener.errors.size)
+    }
+
+    @Test
+    fun flowLost_aBufferedSignPresentationOfALostZkpReqFlowIsNeverSignedOrAnswered() = runTest(dispatcher) {
+        val (e, listener) = lostFlowSetup()
+        e.matchOnce()
+        runCurrent()
+        e.replaceSocket()
+        runCurrent()
+        assertEquals(1, listener.errors.size)
+        // Buffered on the old connection (stamped 0), consumed after the loss swept the flow's match state.
+        var dispatched = 0
+        e.s.wallet.signDispatchHook = { dispatched++ } // reached only by a request that passed the admission guards
+        e.sign.emit(redirectSign())
+        advanceUntilIdle()
+        assertEquals("the request was rejected before dispatch", 0, dispatched)
+        // Every answer shape, whatever its arguments: nothing was signed and nothing was sent for the dead flow.
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) }
+        verify(exactly = 0) { e.engine.sendSignRefusal(any(), any(), any()) }
+    }
+
+    @Test
+    fun flowLost_aSelectionCallbackThatFailsAfterTheLossSendsNoDecline() = runTest(dispatcher) {
+        val e = engineCzk()
+        val answer = kotlinx.coroutines.CompletableDeferred<List<Long>>()
+        e.s.wallet.setEventListener(WaitingSelectionListener(answer, ignoreCancellation = true, failAfterAnswer = true))
+        e.matchOnce()
+        runCurrent()
+        e.replaceSocket()
+        runCurrent()
+        answer.complete(emptyList()) // the app answers (and then fails) well after the flow was lost
+        runCurrent()
+        verify(exactly = 0) { e.engine.sendFlowAction(any(), "decline", any()) }
+        verify(exactly = 0) { e.engine.sendFlowAction(any(), "consent", any()) }
+    }
+
+    @Test
+    fun flowLost_anAbandonedFlowAndABrowserAuthorizationInProgressAreNotEndedAsLost() = runTest(dispatcher) {
+        val (e, listener) = lostFlowSetup()
+        e.matchOnce()
+        runCurrent()
+        @Suppress("UNCHECKED_CAST")
+        (getField(e.s.wallet, "abandonedFlowIds") as MutableSet<String>).add("f1")
+        e.replaceSocket()
+        runCurrent()
+        assertTrue("an abandoned flow's cancellation is not reported again", listener.errors.isEmpty())
+        @Suppress("UNCHECKED_CAST")
+        (getField(e.s.wallet, "flowConnectionGeneration") as MutableMap<String, Int>)["auth"] = 0
+        @Suppress("UNCHECKED_CAST")
+        (getField(e.s.wallet, "pendingAuthorizations") as MutableMap<String, Any>)["auth"] = Any()
+        e.replaceSocket()
+        runCurrent()
+        assertTrue("a browser authorization in progress is resumable, not lost", listener.errors.isEmpty())
+    }
+
+    @Test
+    fun flowLost_aLostPresentationDoesNotEraseTheStateAnIssuanceJustClaimed() = runTest(dispatcher) {
+        val (e, listener) = lostFlowSetup()
+        e.matchOnce()
+        runCurrent()
+        // A new issuance claimed the shared guards before reconnecting.
+        setField(e.s.wallet, "issuanceInFlight", true)
+        e.replaceSocket()
+        runCurrent()
+        assertEquals(1, listener.errors.size)
+        assertEquals("the presentation does not own the issuance guards", true, getField(e.s.wallet, "issuanceInFlight"))
+    }
+
+    private fun czkTwoCredentials() = listOf(
+        StoredCredential(id = 1L, format = "mso_mdoc", raw = CzkFixtures.mdoc(CzkFixtures.psc, "2000-06-15"), credentialIssuerIdentifier = CzkFixtures.ISSUER,
+            metadata = CredentialMetadata(name = "Nym A"), batchId = 1L, instanceId = 0),
+        StoredCredential(id = 2L, format = "mso_mdoc", raw = CzkFixtures.mdoc(CzkFixtures.psc, "1990-01-01"), credentialIssuerIdentifier = CzkFixtures.ISSUER,
+            metadata = CredentialMetadata(name = "Nym B"), batchId = 2L, instanceId = 0),
+    )
+
+    private fun TestScope.engineCzkWith(
+        credentials: List<StoredCredential>?,
+        policy: CredentialConsumptionPolicy? = null,
+        extraDocTypes: Set<String> = emptySet(),
+    ): EngineCzk {
+        val e = engineCzk(credentials = credentials, extraDocTypes = extraDocTypes)
+        policy?.let { e.s.wallet.credentialConsumptionPolicy = it }
+        return e
+    }
+
+    @Test
+    fun circuitZkRedirect_eachQueryIsAnsweredWithTheCredentialItsReferenceNames_whateverTheOrder() = runTest(dispatcher) {
+        val e = engineCzkWith(czkTwoCredentials())
+        val query = Json.parseToJsonElement(
+            """{"credentials":[
+              {"id":"q1","format":"zkp_req","meta":{"source_format":"mso_mdoc","doctype_value":"${CzkFixtures.DOCTYPE}"},"_req":[{"fn_id":"pseudonym","return":"n1","params":{"config":"known-offender-matching-psc","ver":1,"prf":"sha-256"}}]},
+              {"id":"q2","format":"zkp_req","meta":{"source_format":"mso_mdoc","doctype_value":"${CzkFixtures.DOCTYPE}"},"_req":[{"fn_id":"pseudonym","return":"n2","params":{"config":"known-offender-matching-psc","ver":1,"prf":"sha-256"}}]}]}""",
+        )
+        e.matchOnce(query)
+        advanceUntilIdle()
+        // The references come in the reverse order of the queries: q2 is answered by credential 1, q1 by credential 2.
+        e.sign.emit(redirectSign().let { r ->
+            r.copy(params = r.params.copy(credentialsToInclude = listOf(
+                org.siros.sdk.transport.engine.CredentialRef(credentialQueryId = "q2", credentialId = "1"),
+                org.siros.sdk.transport.engine.CredentialRef(credentialQueryId = "q1", credentialId = "2"),
+            )))
+        })
+        advanceUntilIdle()
+        val vp = slot<String>()
+        verify(exactly = 1) { e.engine.sendSignResponse("f1", responseJwe = capture(vp), messageId = "m1") }
+        assertEquals(setOf("q1", "q2"), jarmVpToken(vp.captured).keys)
+        // The prover got credential 2 for q1 and credential 1 for q2: tell them apart by the birth dates they hold.
+        fun holds(input: org.siros.sdk.keystore.CircuitZkProveInput, birth: String) = String(input.credentialBytes, Charsets.ISO_8859_1).contains(birth)
+        assertEquals(2, e.s.prover.inputs.size)
+        // Proved in query order: q1 with credential 2, q2 with credential 1.
+        assertTrue(holds(e.s.prover.inputs[0], "1990-01-01") && !holds(e.s.prover.inputs[0], "2000-06-15"))
+        assertTrue(holds(e.s.prover.inputs[1], "2000-06-15") && !holds(e.s.prover.inputs[1], "1990-01-01"))
+    }
+
+    private fun redirectQueries(n: Int) = Json.parseToJsonElement(
+        """{"credentials":[""" + (1..n).joinToString(",") { i ->
+            """{"id":"q$i","format":"zkp_req","meta":{"source_format":"mso_mdoc","doctype_value":"${CzkFixtures.DOCTYPE}"},"_req":[{"fn_id":"pseudonym","return":"n$i","params":{"config":"known-offender-matching-psc","ver":1,"prf":"sha-256"}}]}"""
+        } + "]}",
+    )
+
+    private fun refs(vararg pairs: Pair<String, String>) = pairs.map { (q, id) -> org.siros.sdk.transport.engine.CredentialRef(credentialQueryId = q, credentialId = id) }
+
+    private fun SignRequestMessage.withRefs(r: List<org.siros.sdk.transport.engine.CredentialRef>) = copy(params = params.copy(credentialsToInclude = r))
+
+    private fun holds(input: org.siros.sdk.keystore.CircuitZkProveInput, birth: String) = String(input.credentialBytes, Charsets.ISO_8859_1).contains(birth)
+
+    @Test
+    fun circuitZkRedirect_aCredentialReusedAcrossQueries_keepsEveryQueriesOwnChoice() = runTest(dispatcher) {
+        val e = engineCzkWith(czkTwoCredentials())
+        e.matchOnce(redirectQueries(3))
+        advanceUntilIdle()
+        // q1 and q2 are answered by credential 1, q3 by credential 2: three queries, two distinct credentials.
+        e.sign.emit(redirectSign().withRefs(refs("q1" to "1", "q2" to "1", "q3" to "2")))
+        advanceUntilIdle()
+        verify(exactly = 1) { e.engine.sendSignResponse("f1", responseJwe = any(), messageId = "m1") }
+        assertEquals(3, e.s.prover.inputs.size)
+        assertTrue(holds(e.s.prover.inputs[0], "2000-06-15"))
+        assertTrue(holds(e.s.prover.inputs[1], "2000-06-15"))
+        assertTrue(holds(e.s.prover.inputs[2], "1990-01-01") && !holds(e.s.prover.inputs[2], "2000-06-15"))
+    }
+
+    @Test
+    fun circuitZkRedirect_aQueryWithoutItsOwnReference_isRefused_evenIfAnotherQueryChoseTheSameCredential() = runTest(dispatcher) {
+        val e = engineCzkWith(czkTwoCredentials())
+        e.matchOnce(redirectQueries(2))
+        advanceUntilIdle()
+        e.sign.emit(redirectSign().withRefs(refs("q1" to "1")))
+        advanceUntilIdle()
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+        assertEquals(0, e.s.prover.calls)
+        // Exactly one SIGN_REFUSED answering the sign_request (message_id echoed); no decline action, no vp_token.
+        verify(exactly = 1) { e.engine.sendSignRefusal("f1", "m1", any()) }
+        verify(exactly = 0) { e.engine.cancelFlow(any()) }
+    }
+
+    @Test
+    fun circuitZkRedirect_theConsentSelectsOneCredentialPerQuery_andItsOwnReferencesAreAnswered() = runTest(dispatcher) {
+        for ((name, creds, expected) in listOf(
+            Triple("two credentials, both match both queries", czkTwoCredentials(), listOf("q1" to "1", "q2" to "2")),
+            Triple("one credential answers both queries", null, listOf("q1" to "1", "q2" to "1")),
+        )) {
+            val e = engineCzkWith(creds)
+            e.matchOnce(redirectQueries(2))
+            advanceUntilIdle()
+            val consent = slot<JsonObject>()
+            verify(exactly = 1) { e.engine.sendFlowAction("f1", "consent", capture(consent)) }
+            val entries = consent.captured["selected_credentials"]!!.jsonArray.map { it.jsonObject }
+            assertEquals(name, expected, entries.map { it["credential_query_id"]!!.jsonPrimitive.content to it["credential_id"]!!.jsonPrimitive.content })
+            assertTrue(name, entries.all { it["disclosed_claims"]!!.jsonArray.isEmpty() })
+            // The sign references are the ones the consent emitted, not fabricated ones.
+            e.sign.emit(redirectSign().withRefs(refs(*expected.toTypedArray())))
+            advanceUntilIdle()
+            verify(exactly = 1) { e.engine.sendSignResponse("f1", responseJwe = any(), messageId = "m1") }
+            assertEquals(name, 2, e.s.prover.calls)
+        }
+    }
+
+    @Test
+    fun circuitZkRedirect_theMatchRequestAnswerHasOneEntryPerQuery() = runTest(dispatcher) {
+        val e = engineCzkWith(czkTwoCredentials())
+        e.match.emit(MatchRequestMessage(flowId = "f1", dcqlQuery = redirectQueries(2), clientMetadata = redirectMetadata))
+        advanceUntilIdle()
+        val matches = slot<List<CredentialMatch>>()
+        verify(exactly = 1) { e.engine.sendMatchResponse("f1", capture(matches), any()) }
+        assertEquals(listOf("q1" to "1", "q2" to "2"), matches.captured.map { it.credentialQueryId to it.credentialId })
+    }
+
+    /** Like [redirectQueries], but each query asks for its own [doctypes] entry and the whole set is one required
+     *  credential_sets entry of single-credential alternatives - the gdc/nym_auth shape, generalised to let each
+     *  alternative be backed by its OWN distinct credential (a different doctype) rather than all sharing one. */
+    private fun redirectQueriesWithDoctypes(vararg doctypes: String) = Json.parseToJsonElement(
+        """{"credentials":[""" + doctypes.withIndex().joinToString(",") { (i, dt) ->
+            val id = "q${i + 1}"
+            """{"id":"$id","format":"zkp_req","meta":{"source_format":"mso_mdoc","doctype_value":"$dt"},"_req":[{"fn_id":"pseudonym","return":"n$id","params":{"config":"known-offender-matching-psc","ver":1,"prf":"sha-256"}}]}"""
+        } + """],"credential_sets":[{"options":[${doctypes.indices.joinToString(",") { "[\"q${it + 1}\"]" }}],"required":true}]}""",
+    )
+
+    @Test
+    fun circuitZkRedirect_choosingOneAlternative_signingSucceedsWithoutAPickForTheUnchosenOne() = runTest(dispatcher) {
+        // Copilot #353 follow-up, finding 1: credential_sets [[q1],[q2]], DISTINCT credentials (q1's
+        // doctype, q2's OTHER doctype) so choosing q2 only is unambiguous. Signing used to still
+        // fail: the unchosen q1 was still cached in pendingMatchResultsByFlow (the full, unfiltered
+        // matchResults, not the resolved ACTIVE subset), and answerCircuitZkQueries's "every query
+        // needs a pick" check refused the whole presentation for a query that was never meant to be
+        // answered - the consent step had already (correctly) resolved and sent only q2.
+        val credA = StoredCredential(
+            id = 1L, format = "mso_mdoc", raw = CzkFixtures.mdoc(docType = CzkFixtures.DOCTYPE, birth = "2000-06-15"),
+            credentialIssuerIdentifier = CzkFixtures.ISSUER, metadata = CredentialMetadata(name = "A"), batchId = 1L, instanceId = 0,
+        )
+        val credB = StoredCredential(
+            id = 2L, format = "mso_mdoc",
+            raw = CzkFixtures.mdoc(psc = CzkFixtures.pscFor(CzkFixtures.OTHER_DOCTYPE), docType = CzkFixtures.OTHER_DOCTYPE, birth = "1990-01-01"),
+            credentialIssuerIdentifier = CzkFixtures.ISSUER, metadata = CredentialMetadata(name = "B"), batchId = 2L, instanceId = 0,
+        )
+        val e = engineCzkWith(listOf(credA, credB), extraDocTypes = setOf(CzkFixtures.OTHER_DOCTYPE))
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf(2L) // choose q2's credential only
+        e.s.wallet.setEventListener(listener)
+
+        e.matchOnce(redirectQueriesWithDoctypes(CzkFixtures.DOCTYPE, CzkFixtures.OTHER_DOCTYPE))
+        advanceUntilIdle()
+
+        val consent = slot<JsonObject>()
+        verify(exactly = 1) { e.engine.sendFlowAction("f1", "consent", capture(consent)) }
+        val entries = consent.captured["selected_credentials"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(
+            listOf("q2" to "2"),
+            entries.map { it["credential_query_id"]!!.jsonPrimitive.content to it["credential_id"]!!.jsonPrimitive.content },
+        )
+
+        e.sign.emit(SignRequestMessage(
+            flowId = "f1", messageId = "m1", action = "sign_presentation",
+            params = SignRequestParams(
+                audience = redirectClientId, nonce = "n-redirect", responseUri = "https://rp.example/response",
+                verifierJwkThumbprint = redirectKeyThumbprint,
+                credentialsToInclude = listOf(org.siros.sdk.transport.engine.CredentialRef(credentialQueryId = "q2", credentialId = "2")),
+                responseEncryption = org.siros.sdk.transport.ResponseEncryptionRequest(
+                    jwk = Json.parseToJsonElement(redirectKey.toPublicJWK().toJSONString()).jsonObject, alg = "ECDH-ES", enc = "A128GCM",
+                ),
+                state = "st-1",
+                verifiedRequest = org.siros.sdk.transport.VerifiedRequest(clientId = redirectClientId, responseMode = "direct_post.jwt", signed = true, signatureVerification = "verified"),
+            ),
+        ))
+        advanceUntilIdle()
+
+        // Succeeds - never refused for q1 (the alternative the user did not choose) having no pick.
+        verify(exactly = 1) { e.engine.sendSignResponse("f1", responseJwe = any(), messageId = "m1") }
+        verify(exactly = 0) { e.engine.sendSignRefusal(any(), any(), any()) }
+        assertEquals(1, e.s.prover.calls)
+    }
+
+    private fun serverTrust(trusted: Boolean, withContext: Boolean = true) = FlowProgressMessage(
+        flowId = "f1", step = "trust_evaluated",
+        payload = buildJsonObject {
+            put("verifier_trust_evaluated", true)
+            put("verifier", redirectClientId)
+            put("trusted", trusted)
+            put("framework", "etsi-tl")
+            if (withContext) putJsonObject("context") {
+                putJsonArray("verifier_ids") { add(buildJsonObject { put("verifier_id_type", "x509_san_dns"); put("verifier_id", redirectClientId.removePrefix("x509_san_dns:")) }) }
+            }
+        },
+    )
+
+    @Test
+    fun circuitZkRedirect_aTrustDecisionTheEngineMadeItself_isIngestedAndAnswered_withoutSeedingPrivateState() = runTest(dispatcher) {
+        val e = engineCzk(seedTrust = false)
+        e.progress.emit(serverTrust(trusted = true))
+        advanceUntilIdle()
+        e.matchOnce()
+        advanceUntilIdle()
+        e.sign.emit(redirectSign())
+        advanceUntilIdle()
+        verify(exactly = 1) { e.engine.sendSignResponse("f1", responseJwe = any(), messageId = "m1") }
+        assertEquals(1, e.s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkRedirect_theSameVerifierIdEntryGivesTheSamePseudonym_onTheEnginePathAndTheDcApiPath() = runTest(dispatcher) {
+        // One mapping for every trust path (the PDP's bare A-label becomes x509_san_dns:<dns>), whichever path delivered it.
+        val e = engineCzk(seedTrust = false)
+        e.progress.emit(serverTrust(trusted = true))
+        advanceUntilIdle()
+        e.matchOnce()
+        advanceUntilIdle()
+        e.sign.emit(redirectSign())
+        advanceUntilIdle()
+        val vp = slot<String>()
+        verify(exactly = 1) { e.engine.sendSignResponse("f1", responseJwe = capture(vp), messageId = "m1") }
+        val viaEngine = CzkDecoded(jarmVpToken(vp.captured)["q"]!!.jsonArray.single().jsonPrimitive.content).results["n"]
+        val viaDcApi = czkDecoded(czkRun(czkSetup(trust = czkIds("x509_san_dns" to "rp.example")), czkRequest()).responseJson).results["n"]
+        assertEquals(org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("x509_san_dns:rp.example")), viaDcApi)
+        assertEquals(viaDcApi, viaEngine)
+    }
+
+    @Test
+    fun circuitZkRedirect_aReconnectWhileConsentIsPending_provesAndSendsNothing() = runTest(dispatcher) {
+        val gate = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        val e = engineCzk(consent = { gate.await() })
+        e.matchOnce()
+        advanceUntilIdle()
+        e.sign.emit(redirectSign())
+        runCurrent()
+        assertEquals(1, e.s.consents.size)
+        engineGeneration.incrementAndGet() // the socket was replaced
+        gate.complete(true)
+        runCurrent()
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+        assertEquals(0, e.s.prover.calls)
+        assertTrue(e.s.history.isEmpty())
+    }
+
+    @Test
+    fun circuitZkRedirect_aConsentApprovedWhileTheEngineIsReconnecting_provesNothing_evenWithoutANewGeneration() = runTest(dispatcher) {
+        val gate = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        val e = engineCzk(consent = { gate.await() })
+        e.matchOnce()
+        advanceUntilIdle()
+        e.sign.emit(redirectSign())
+        runCurrent()
+        assertEquals(1, e.s.consents.size)
+        e.state.value = WalletEngineSession.State.RECONNECTING // the backoff: the generation has not changed yet
+        gate.complete(true)
+        runCurrent()
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+        assertEquals(0, e.s.prover.calls)
+        assertTrue(e.s.history.isEmpty())
+    }
+
+    @Test
+    fun circuitZkRedirect_aConnectionLostWhileTheHistoryIsBeingRecorded_sendsNothing() = runTest(dispatcher) {
+        val e = engineCzk()
+        e.matchOnce()
+        advanceUntilIdle()
+        // Recording the presentation reads the store (the renew check) AFTER the proof: the socket drops exactly there.
+        val inner = getField(e.s.wallet, "credentialStore") as CredentialStore
+        setField(e.s.wallet, "credentialStore", object : CredentialStore by inner {
+            override suspend fun getAll(): List<StoredCredential> {
+                if (e.s.prover.calls > 0) e.state.value = WalletEngineSession.State.RECONNECTING
+                return inner.getAll()
+            }
+        })
+        e.sign.emit(redirectSign())
+        advanceUntilIdle()
+        assertEquals(1, e.s.prover.calls)
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+    }
+
+    @Test
+    fun circuitZkRedirect_aConnectionThatEndsDuringConsent_doesNotHoldUpAnUnrelatedDcApiRequest() = runTest(dispatcher) {
+        var asked = 0
+        val gate = kotlinx.coroutines.CompletableDeferred<Boolean>() // the old dialog is never answered
+        val e = engineCzk(consent = { if (asked++ == 0) gate.await() else true })
+        e.matchOnce()
+        advanceUntilIdle()
+        e.sign.emit(redirectSign())
+        runCurrent()
+        assertEquals(1, e.s.consents.size)
+        e.state.value = WalletEngineSession.State.RECONNECTING
+        runCurrent()
+        val dcApi = async(dispatcher) { e.s.wallet.handleDCAPIRequest(czkRequest(), CzkFixtures.ORIGIN, listOf(1L)) }
+        runCurrent()
+        assertTrue("the DC API request must not wait for the stale dialog", dcApi.isCompleted)
+        assertEquals(1, e.s.prover.calls)
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+    }
+
+    @Test
+    fun circuitZkRedirect_anOverlappingDcApiRequestNeverPresentsTheSameSingleCopyCredentialTwice_underConsumeAll() = runTest(dispatcher) {
+        val gate = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        val e = engineCzk(consent = { gate.await() })
+        e.s.wallet.credentialConsumptionPolicy = CredentialConsumptionPolicy.CONSUME_ALL
+        e.matchOnce()
+        advanceUntilIdle()
+        e.sign.emit(redirectSign())
+        runCurrent() // the redirect holds the credential and waits on the user
+        val dcApi = async(dispatcher) {
+            runCatching { e.s.wallet.handleDCAPIRequest(czkRequest(), CzkFixtures.ORIGIN, listOf(1L)) }
+        }
+        runCurrent()
+        gate.complete(true)
+        runCurrent()
+        verify(exactly = 1) { e.engine.sendSignResponse("f1", responseJwe = any(), messageId = "m1") }
+        // The DC API request found the single copy spent.
+        assertTrue(dcApi.await().exceptionOrNull() is org.siros.sdk.wallet.dcapi.DCAPIRequestRefused)
+        assertEquals(1, e.s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkRedirect_twoOverlappingRequestsNeverPresentTheSameSingleCopyCredentialTwice_underConsumeAll() = runTest(dispatcher) {
+        val gate = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        val e = engineCzk(consent = { gate.await() }, flows = listOf("f1", "f2"))
+        e.s.wallet.credentialConsumptionPolicy = CredentialConsumptionPolicy.CONSUME_ALL
+        e.matchOnce(flow = "f1")
+        e.matchOnce(flow = "f2")
+        advanceUntilIdle()
+        e.sign.emit(redirectSign(flow = "f1", messageId = "m1"))
+        e.sign.emit(redirectSign(flow = "f2", messageId = "m2"))
+        runCurrent()
+        gate.complete(true)
+        runCurrent()
+        // Exactly one of them presented the credential; the other found it spent.
+        assertEquals(1, e.s.prover.calls)
+        verify(exactly = 1) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+        verify(exactly = 1) { e.engine.sendSignRefusal(any(), any(), any()) }
+        assertEquals(1, e.s.history.size)
+    }
+
+    @Test
+    fun circuitZkRedirect_anEngineDecisionThatDistrustsTheVerifier_orCarriesNoVerifierIds_isNeverProved() = runTest(dispatcher) {
+        for ((name, msg) in listOf("untrusted" to serverTrust(trusted = false), "no verifier ids" to serverTrust(trusted = true, withContext = false))) {
+            val e = engineCzk(seedTrust = false)
+            e.progress.emit(msg)
+            advanceUntilIdle()
+            e.matchOnce()
+            advanceUntilIdle()
+            e.sign.emit(redirectSign())
+            advanceUntilIdle()
+            verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+            verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+            verify(exactly = 1) { e.engine.sendSignRefusal("f1", "m1", any()) }
+            assertEquals(name, 0, e.s.prover.calls)
+        }
+    }
+
+    @Test
+    fun circuitZkRedirect_aTrustedIdentityOfAnUnsignedScheme_isRefused() = runTest(dispatcher) {
+        val client = "redirect_uri:https://rp.example/"
+        val e = engineCzk(clientId = client)
+        e.matchOnce()
+        advanceUntilIdle()
+        e.sign.emit(redirectSign(audience = client))
+        advanceUntilIdle()
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+        verify(exactly = 1) { e.engine.sendSignRefusal("f1", "m1", any()) }
+        assertEquals(0, e.s.prover.calls)
+        assertTrue(e.s.consents.isEmpty())
+    }
+
+    @Test
+    fun circuitZkRedirect_aCredentialDeletedBetweenMatchAndSign_isNeverProved() = runTest(dispatcher) {
+        val e = engineCzkWith(czkTwoCredentials())
+        e.matchOnce()
+        advanceUntilIdle()
+        val store = getField(e.s.wallet, "credentialStore") as CredentialStore
+        store.delete(1L)
+        store.delete(2L)
+        e.sign.emit(redirectSign())
+        advanceUntilIdle()
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+        verify(exactly = 1) { e.engine.sendSignRefusal("f1", "m1", any()) }
+        assertEquals(0, e.s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkRedirect_aFlowThatEndsWhileConsentIsPending_provesNothingAndSendsNothing() = runTest(dispatcher) {
+        for (ending in listOf("error", "complete")) {
+            val gate = kotlinx.coroutines.CompletableDeferred<Boolean>()
+            val e = engineCzk(consent = { gate.await() })
+            e.matchOnce()
+            advanceUntilIdle()
+            e.sign.emit(redirectSign())
+            runCurrent() // not advanceUntilIdle: virtual time would run out the consent time limit
+            assertEquals(1, e.s.consents.size)   // the user is being asked
+            if (ending == "error") e.errors.emit(FlowErrorMessage(flowId = "f1", error = FlowError(code = "FLOW_TIMEOUT", message = "timeout")))
+            else e.complete.emit(FlowCompleteMessage(flowId = "f1"))
+            runCurrent() // not advanceUntilIdle: virtual time would run out the consent time limit
+            gate.complete(true)   // a late approval
+            runCurrent() // not advanceUntilIdle: virtual time would run out the consent time limit
+            verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+            verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+            assertEquals(ending, 0, e.s.prover.calls)
+            assertTrue(ending, e.s.history.isEmpty())
+        }
+    }
+
+    @Test
+    fun circuitZkRedirect_cancellingTheFlowWhileConsentIsPending_refusesTheSignRequestOnceAndProvesNothing() = runTest(dispatcher) {
+        val gate = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        val e = engineCzk(consent = { gate.await() })
+        e.matchOnce()
+        advanceUntilIdle()
+        e.sign.emit(redirectSign())
+        runCurrent() // not advanceUntilIdle: virtual time would run out the consent time limit
+        @Suppress("UNCHECKED_CAST")
+        (getField(e.s.wallet, "_state") as MutableStateFlow<WalletState>).value = WalletState.FlowActive(
+            userId = "u", displayName = null, flowId = "f1", flowType = "presentation", status = "sign", credentials = emptyList(),
+        )
+        e.s.wallet.cancelCurrentFlow()
+        runCurrent() // not advanceUntilIdle: virtual time would run out the consent time limit
+        gate.complete(true)
+        runCurrent() // not advanceUntilIdle: virtual time would run out the consent time limit
+        // The pending sign request is refused (not left to the engine's timeout), and the late approval does nothing.
+        verify(exactly = 1) { e.engine.sendSignRefusal("f1", "m1", any()) }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+        assertEquals(0, e.s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkRedirect_aSessionThatEndsWhileConsentIsPending_orIsReplaced_provesAndSendsNothing() = runTest(dispatcher) {
+        for (how in listOf("teardown", "replaced")) {
+            val gate = kotlinx.coroutines.CompletableDeferred<Boolean>()
+            val e = engineCzk(consent = { gate.await() })
+            e.matchOnce()
+            advanceUntilIdle()
+            e.sign.emit(redirectSign())
+            runCurrent() // not advanceUntilIdle: virtual time would run out the consent time limit
+            assertEquals(1, e.s.consents.size)
+            val m = e.s.wallet::class.java.declaredMethods.first { it.name == if (how == "teardown") "stopAllZkSigning" else "bumpSessionGeneration" }
+            m.isAccessible = true
+            m.invoke(e.s.wallet)
+            runCurrent()
+            gate.complete(true)
+            runCurrent()
+            verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+            verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+            verify(exactly = 0) { e.engine.sendSignRefusal(any(), any(), any()) }
+            assertEquals(how, 0, e.s.prover.calls)
+            assertTrue(how, e.s.history.isEmpty())
+        }
+    }
+
+    @Test
+    fun circuitZkRedirect_aForcedReconnectWhileConsentIsPending_releasesThePresentationLockAndSendsNothing() = runTest(dispatcher) {
+        val gate = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        val e = engineCzk(consent = { gate.await() })
+        e.matchOnce()
+        advanceUntilIdle()
+        e.sign.emit(redirectSign())
+        runCurrent() // not advanceUntilIdle: virtual time would run out the consent time limit
+        assertEquals(1, e.s.consents.size)
+        val mutex = getField(e.s.wallet, "zkSigningMutex") as kotlinx.coroutines.sync.Mutex
+        assertTrue("the pending signing holds the presentation lock", mutex.isLocked)
+        // forceReconnect(): the old socket is dropped and the state goes to CONNECTING (not RECONNECTING).
+        e.state.value = WalletEngineSession.State.CONNECTING
+        runCurrent()
+        assertFalse("an unrelated (DC API) presentation is not held up by the stale dialog", mutex.isLocked)
+        gate.complete(true)
+        runCurrent()
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+        assertEquals(0, e.s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkRedirect_aProximityPresentationCannotUseTheSingleCopyAPendingRedirectWillConsume() = runTest(dispatcher) {
+        val gate = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        val e = engineCzk(consent = { gate.await() })
+        e.s.wallet.credentialConsumptionPolicy = CredentialConsumptionPolicy.CONSUME_ALL
+        var proximitySigned = 0
+        coEvery { (getField(e.s.wallet, "keystore") as KeystoreManager).signMdocPresentationForProximity(any(), any(), any(), any()) } coAnswers {
+            proximitySigned++
+            ByteArray(1)
+        }
+        e.matchOnce()
+        advanceUntilIdle()
+        e.sign.emit(redirectSign())
+        runCurrent() // the redirect now waits on its consent dialog, holding the presentation lock
+        assertEquals(1, e.s.consents.size)
+        val proximity = backgroundScope.async { runCatching { e.s.wallet.signMdocPresentationForProximity(1L, null, ByteArray(1)) } }
+        runCurrent()
+        assertTrue("the proximity presentation waits for the redirect's lock", proximity.isActive)
+        assertEquals(0, proximitySigned)
+        gate.complete(true)
+        advanceUntilIdle()
+        // The redirect consumed the only copy; the proximity presentation then finds nothing eligible and signs nothing.
+        val result = proximity.await()
+        assertTrue("proximity refused: $result", result.isFailure && result.exceptionOrNull() is WalletException)
+        assertEquals(0, proximitySigned)
+        assertEquals(1, e.s.history.size)
+    }
+
+    private fun queryForDoctype(doctype: String) = Json.parseToJsonElement(
+        """{"credentials":[{"id":"q","format":"zkp_req","meta":{"source_format":"mso_mdoc","doctype_value":"$doctype"},"_req":[{"fn_id":"pseudonym","return":"n","params":{"config":"known-offender-matching-psc","ver":1,"prf":"sha-256"}}]}]}""",
+    )
+
+    @Test
+    fun circuitZkRedirect_eachWayARequestCannotBeAnswered_hasItsOwnCodeAndUserMeaningfulReason() = runTest(dispatcher) {
+        timber.log.Timber.plant(czkTree)
+        try {
+            val cases = listOf<Triple<String, String, suspend () -> Pair<EngineCzk, kotlinx.serialization.json.JsonElement>>>(
+                Triple("disabled", "not enabled") { engineCzk(flagOn = false) to redirectQuery },
+                Triple("no-circuit", "no proof circuit") { engineCzk() to queryForDoctype("org.example.other") },
+                Triple("no-credential", "holds no credential") { engineCzk(credentials = emptyList()) to redirectQuery },
+                Triple("no-verifier-id", "did not identify itself") { engineCzk(seedTrust = false).also { it.progress.emit(serverTrust(trusted = true, withContext = false)) } to redirectQuery },
+            )
+            for ((code, text, make) in cases) {
+                czkLogs.clear()
+                val (e, query) = make()
+                advanceUntilIdle()
+                e.matchOnce(query)
+                advanceUntilIdle()
+                val reason = slot<String>()
+                verify(exactly = 1) { e.engine.sendCredentialsMatched("f1", emptyList(), capture(reason)) }
+                assertEquals("$code ($text): only a code reaches the engine", "request_not_answerable", reason.captured)
+                // The code is logged (and only the code: nothing of the request).
+                assertTrue(code, czkLogs.any { it.contains("code=$code") })
+                verify(exactly = 0) { e.engine.sendFlowAction("f1", "consent", any()) }
+            }
+        } finally {
+            timber.log.Timber.uproot(czkTree)
+        }
+    }
+
+    @Test
+    fun circuitZkRedirect_aReferenceToAnUnknownQuery_isRefused() = runTest(dispatcher) {
+        val e = engineCzk()
+        e.matchOnce()
+        advanceUntilIdle()
+        e.sign.emit(redirectSign().let { r ->
+            r.copy(params = r.params.copy(credentialsToInclude = listOf(org.siros.sdk.transport.engine.CredentialRef(credentialQueryId = "other", credentialId = "1"))))
+        })
+        advanceUntilIdle()
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+        verify(exactly = 0) { e.engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) }
+        assertEquals(0, e.s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkRedirect_aFreshSingleCopyCredential_isNotCountedConsumedBeforeItIsProved_underConsumeAll() = runTest(dispatcher) {
+        val e = engineCzkWith(null, CredentialConsumptionPolicy.CONSUME_ALL)
+        e.matchOnce()
+        advanceUntilIdle()
+        verify(exactly = 1) { e.engine.sendFlowAction("f1", "consent", any()) }
+        e.sign.emit(redirectSign())
+        advanceUntilIdle()
+        verify(exactly = 1) { e.engine.sendSignResponse("f1", responseJwe = any(), messageId = "m1") }
+        assertEquals(1, e.s.prover.calls)
+        // Recorded once, from what was really used.
+        assertEquals(listOf(listOf(1L)), e.s.history.map { it.credentialIds })
+    }
+
+    @Test
+    fun circuitZkRedirect_theVerifierMetadataDoesNotOutliveTheFlow() = runTest(dispatcher) {
+        fun cached(e: EngineCzk) = (getField(e.s.wallet, "circuitZkClientMetadataByFlow") as Map<*, *>).size
+        // A request that is refused at match time caches nothing.
+        val refused = engineCzk(flagOn = false)
+        refused.matchOnce()
+        advanceUntilIdle()
+        assertEquals(0, cached(refused))
+        // An accepted one holds it for the sign step only, whether the sign step answers or refuses.
+        val answered = engineCzk()
+        answered.matchOnce()
+        advanceUntilIdle()
+        assertEquals(1, cached(answered))
+        answered.sign.emit(redirectSign())
+        advanceUntilIdle()
+        assertEquals(0, cached(answered))
+        val failed = engineCzk()
+        failed.matchOnce()
+        advanceUntilIdle()
+        failed.sign.emit(redirectSign(thumbprint = "short"))
+        advanceUntilIdle()
+        assertEquals(0, cached(failed))
+        // And one that never reaches the sign step is dropped when the flow ends.
+        val completed = engineCzk()
+        completed.matchOnce()
+        advanceUntilIdle()
+        assertEquals(1, cached(completed))
+        completed.complete.emit(FlowCompleteMessage(flowId = "f1"))
+        advanceUntilIdle()
+        assertEquals(0, cached(completed))
+    }
+
+    @Test
+    fun circuitZkRedirect_theMatchRequestMessageIsAnsweredToo() = runTest(dispatcher) {
+        val e = engineCzk()
+        e.match.emit(MatchRequestMessage(flowId = "f1", dcqlQuery = redirectQuery, clientMetadata = redirectMetadata))
+        advanceUntilIdle()
+        val matches = slot<List<CredentialMatch>>()
+        verify(exactly = 1) { e.engine.sendMatchResponse("f1", capture(matches), any()) }
+        assertEquals(listOf("1"), matches.captured.map { it.credentialId })
+        assertEquals(listOf<List<String>?>(null), matches.captured.map { it.availableClaims })
+        assertTrue(e.s.history.isEmpty())
+    }
+
+    @Test
+    fun circuitZkRedirect_aMissingOrMalformedThumbprintAndOtherHandoverInputs_areRefused_nothingIsAskedOrProved() = runTest(dispatcher) {
+        for ((name, req) in listOf(
+            "short thumbprint" to redirectSign(thumbprint = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(31))),
+            "no response_uri" to redirectSign(responseUri = null),
+        )) {
+            val e = engineCzk()
+            e.matchOnce()
+            advanceUntilIdle()
+            e.sign.emit(req)
+            advanceUntilIdle()
+            verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+            // Exactly one SIGN_REFUSED answering the sign_request (message_id echoed); no decline action, no vp_token.
+            verify(exactly = 1) { e.engine.sendSignRefusal("f1", "m1", any()) }
+            verify(exactly = 0) { e.engine.cancelFlow(any()) }
+            assertEquals(name, 0, e.s.prover.calls)
+            assertTrue(name, e.s.consents.isEmpty())
+        }
+    }
+
+    @Test
+    fun circuitZkRedirect_anUntrustedVerifier_aWrongAudience_aDeclinedConsent_andARequestThatOfferedNoSystem_areNeverProved() = runTest(dispatcher) {
+        for ((name, make) in listOf<Pair<String, () -> Pair<EngineCzk, SignRequestMessage>>>(
+            "untrusted" to { engineCzk(trusted = false) to redirectSign() },
+            "audience" to { engineCzk() to redirectSign(audience = "x509_san_dns:evil.example") },
+            "declined" to { engineCzk(consent = { false }) to redirectSign() },
+            "no system offered" to { engineCzk(offersCircuit = false) to redirectSign() },
+            "a pick that is not a candidate" to { engineCzk() to redirectSign(creds = listOf("999")) },
+        )) {
+            val (e, req) = make()
+            e.matchOnce()
+            advanceUntilIdle()
+            e.sign.emit(req)
+            advanceUntilIdle()
+            verify(exactly = 0) { e.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+            // Exactly one SIGN_REFUSED answering the sign_request (message_id echoed); no decline action, no vp_token.
+            verify(exactly = 1) { e.engine.sendSignRefusal("f1", "m1", any()) }
+            verify(exactly = 0) { e.engine.cancelFlow(any()) }
+            if (name != "declined") assertEquals(name, 0, e.s.prover.calls)
+        }
+    }
+
+    @Test
+    fun circuitZkRedirect_withTheFeatureOff_orAMixedRequest_orATransactionData_nothingIsOffered() = runTest(dispatcher) {
+        val off = engineCzk(flagOn = false)
+        off.matchOnce()
+        advanceUntilIdle()
+        verify(exactly = 1) { off.engine.sendCredentialsMatched("f1", emptyList(), any()) }
+
+        val mixed = engineCzk()
+        mixed.matchOnce(Json.parseToJsonElement("""{"credentials":[{"id":"q","format":"zkp_req","meta":{"source_format":"mso_mdoc","doctype_value":"${CzkFixtures.DOCTYPE}"}},{"id":"p","format":"mso_mdoc","meta":{"doctype_value":"x"},"claims":[{"path":["x","y"]}]}]}"""))
+        advanceUntilIdle()
+        verify(exactly = 1) { mixed.engine.sendCredentialsMatched("f1", emptyList(), any()) }
+
+        val tx = engineCzk()
+        tx.matchOnce()
+        advanceUntilIdle()
+        tx.sign.emit(redirectSign().let { it.copy(params = it.params.copy(transactionData = listOf(org.siros.sdk.transport.wmp.openid4x.TransactionData(type = "t", credentialIds = listOf("c"), payload = JsonObject(emptyMap()))))) })
+        advanceUntilIdle()
+        verify(exactly = 0) { tx.engine.sendSignResponse(any(), vpToken = any(), messageId = any()) }
+        assertEquals(0, tx.s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkDcApi_aRequestThatOfferedNoCircuit_isRefusedAndNothingIsProved() = runTest(dispatcher) {
+        val s = czkSetup(offersCircuit = false)
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.PROOF_FAILED)
+        assertEquals(0, s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkDcApi_withNoConfiguredProver_usesTheRealCatalogProverAndRefusesWithoutANativeOne() = runTest(dispatcher) {
+        timber.log.Timber.plant(czkTree)
+        try {
+            val s = czkSetup(defaultProver = true)
+            czkRefused(s, czkRequest())
+            // The refusal came from the catalog prover's registry (every earlier step passed, as in the success case):
+            // no adapter claims the test circuit's system, so it is not offered. The fake is never substituted.
+            assertTrue(czkLogs.any { it.contains("step=CIRCUIT") })
+            assertEquals(0, s.prover.calls)
+        } finally {
+            timber.log.Timber.uproot(czkTree)
+        }
+    }
+
+    @Test
+    fun circuitZkDcApi_transactionData_isRefusedBeforeTrustAndProof() = runTest(dispatcher) {
+        // Fail closed: the circuit path has no transaction pipeline, so a transaction-bearing request
+        // (with or without a wallet consent handler) is refused, never proved.
+        for (txData in listOf("""["e30"]""", "[]")) {
+            val s = czkSetup()
+            czkRefused(s, czkRequest(transactionData = txData), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+            assertEquals(0, s.prover.calls)
+            coVerify(exactly = 0) { s.apiClient.evaluateTrust(any()) }
+        }
+    }
+
+    @Test
+    fun circuitZkDcApi_aQueryWithoutAnId_isNeverDroppedFromAProvedRequest() = runTest(dispatcher) {
+        // The matcher drops a credential query with no string id; the request is still not answered without it.
+        val s = czkSetup()
+        czkRefused(
+            s,
+            czkRequest(extraQueries = """,{"format":"mso_mdoc","meta":{"source_format":"mso_mdoc","doctype_value":"x"}}"""),
+            reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST,
+        )
+        assertEquals(0, s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkDcApi_consumeNonZkp_aCopyUsedForACircuitProofIsNotConsumed() = runTest(dispatcher) {
+        val s = czkSetup()
+        s.wallet.credentialConsumptionPolicy = CredentialConsumptionPolicy.CONSUME_NON_ZKP
+        assertEquals(listOf(1L), czkRun(s, czkRequest()).credentialIds)
+        // The first proof is in the history; the same single copy still answers a second request.
+        assertEquals(listOf(1L), czkRun(s, czkRequest(nonce = "czk-nonce-2")).credentialIds)
+        assertEquals(2, s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkDcApi_requestHardeningFailures_areRefusedBeforeTrust() = runTest(dispatcher) {
+        for (raw in listOf(
+            czkRequest(signed = false),
+            czkRequest(origins = """["https://evil.example"]"""),
+            czkRequest(origins = null),
+            czkRequest(protocol = "openid4vp-v1-multisigned"),
+        )) {
+            val s = czkSetup()
+            czkRefused(s, raw, reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.REQUEST_NOT_VERIFIED)
+            coVerify(exactly = 0) { s.apiClient.evaluateTrust(any()) }
+        }
+    }
+
+    @Test
+    fun circuitZkDcApi_circuitWithCapabilities_isSelectedOnlyWhenTheMatcherServesIt() = runTest(dispatcher) {
+        val caps = """{"schema":1,"presentation":"zkp_req","credential":{"format":"mso_mdoc","type":"${CzkFixtures.DOCTYPE}"},"functions":[]}"""
+        // No matcher answer: a circuit that declares capabilities is not unrestricted, so nothing is selected.
+        val noMatcher = czkSetup(capabilities = caps, serving = null)
+        czkRefused(noMatcher, czkRequest())
+        assertEquals(0, noMatcher.prover.calls)
+        val declined = czkSetup(capabilities = caps, serving = org.siros.sdk.credentials.CircuitZkServing { _, _, _ -> false })
+        czkRefused(declined, czkRequest())
+        assertEquals(0, declined.prover.calls)
+        // The matcher serves it: presented, and the matcher was asked about this circuit.
+        val asked = mutableListOf<String>()
+        val served = czkSetup(capabilities = caps, serving = org.siros.sdk.credentials.CircuitZkServing { c, _, _ -> asked += c.circuitId; true })
+        czkRun(served, czkRequest())
+        assertEquals(1, served.prover.calls)
+        assertTrue(asked.isNotEmpty() && asked.all { it == "c1" })
+    }
+
+    @Test
+    fun circuitZkDcApi_wrongCallingOrigin_isRefused() = runTest(dispatcher) {
+        val s = czkSetup()
+        czkRefused(s, czkRequest(), origin = "https://evil.example")
+        coVerify(exactly = 0) { s.apiClient.evaluateTrust(any()) }
+    }
+
+    private fun czkSscFunction(config: String = "known-offender-matching-ssc", extra: String = "") =
+        listOf(org.siros.sdk.credentials.CircuitZkFunction(
+            "pseudonym", "n", Json.parseToJsonElement("""{"config":"$config","ver":1,"prf":"sha-256"$extra}""").jsonObject,
+        ))
+
+    private fun czkSscSetup(
+        source: CredentialSecretSeedSource?,
+        config: String = "known-offender-matching-ssc",
+        extra: String = "",
+        ssc: ByteArray = NymTestCredentials.goodSsc,
+        consent: suspend (org.siros.sdk.credentials.PresentationConsentRequest) -> Boolean = { true },
+        noConsentHandler: Boolean = false,
+        proverSigns: Boolean = false,
+    ) =
+        czkSetup(
+            consent = consent, noConsentHandler = noConsentHandler, proverSigns = proverSigns,
+            functions = czkSscFunction(config, extra),
+            credentials = listOf(StoredCredential(
+                id = 1L, format = "mso_mdoc", raw = CzkFixtures.mdoc(ssc = ssc), credentialIssuerIdentifier = CzkFixtures.ISSUER,
+                metadata = CredentialMetadata(name = "Nym"), batchId = 1L, instanceId = 0,
+            )),
+            secretSeedSource = source,
+        )
+
+    @Test
+    fun circuitZkDcApi_sscConfig_isProvenWithTheDeliveredSeed_andTheSeedIsZeroedAndNeverPresented() = runTest(dispatcher) {
+        val handedOut = mutableListOf<ByteArray>()
+        val source = CredentialSecretSeedSource { id ->
+            if (id == 1L) NymTestCredentials.seed.copyOf().also { handedOut += it } else null
+        }
+        val s = czkSscSetup(source)
+        val result = czkRun(s, czkRequest())
+        assertEquals(
+            org.siros.sdk.credentials.ResultValue.Pseudonym(
+                org.siros.sdk.credentials.NymPseudonym.derive("known-offender-matching-ssc", NymTestCredentials.seed, verifierId = "x509_san_dns:rp.example"),
+            ),
+            czkPseudonymOf(result),
+        )
+        assertEquals(1, handedOut.size)
+        assertTrue("the wallet must zero the seed it fetched", handedOut.single().all { it == 0.toByte() })
+        assertNoSecretIn(result.responseJson)
+        assertNoSecretIn(s.history.toString())
+    }
+
+    @Test
+    fun circuitZkDcApi_accountRecoverySsc_isNotModelledByTheConsent_soItIsRefusedBeforeTheSeedIsFetched() = runTest(dispatcher) {
+        // Only per-verifier configs have consent wording; the others are refused for now, before anything is asked or fetched.
+        val s = czkSscSetup({ NymTestCredentials.seed.copyOf() }, "account-recovery-ssc", ""","verifier_context":"ctx-1"""")
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+        assertTrue(s.events.isEmpty())
+    }
+
+    @Test
+    fun circuitZkDcApi_sscConfig_isRefusedWithoutAFittingSeed() = runTest(dispatcher) {
+        // No seed held, a seed of another credential, and an ssc the seed does not open.
+        czkRefused(czkSscSetup(CredentialSecretSeedSource.NONE), czkRequest())
+        czkRefused(czkSscSetup({ ByteArray(16) { 3 } }), czkRequest())
+        czkRefused(czkSscSetup({ NymTestCredentials.seed.copyOf() }, ssc = NymTestCredentials.wrongSsc), czkRequest())
+        czkRefused(czkSscSetup({ NymTestCredentials.seed.copyOf(15) }), czkRequest())
+    }
+
+    @Test
+    fun circuitZkDcApi_pdpAnswerOnly_resolves_andTheRequestsClientIdIsNotAnInput() = runTest(dispatcher) {
+        // The only id comes from the PDP list; the client id (an x509_hash one here) is not parsed for it.
+        val s = czkSetup(trust = czkIds("x509_san_dns" to "pdp.example"))
+        assertEquals(
+            org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("x509_san_dns:pdp.example")),
+            czkPseudonymOf(czkRun(s, czkRequest(clientId = "x509_hash:abcdef"))),
+        )
+    }
+
+    @Test
+    fun circuitZkDcApi_theBareDnsFromThePdpIsPrefixed_andNotOtherwiseNormalisedByTheWallet() = runTest(dispatcher) {
+        // The PDP returns the bare A-label; the wallet adds the rulebook prefix and nothing else (lower case, no trailing dot: the PDP's job).
+        val mixed = "Rp.Example.COM"
+        val s = czkSetup(trust = czkIds("x509_san_dns" to mixed))
+        val got = czkPseudonymOf(czkRun(s, czkRequest()))
+        assertEquals(org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("x509_san_dns:$mixed")), got)
+        assertTrue(got != org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("x509_san_dns:" + mixed.lowercase())))
+    }
+
+    @Test
+    fun circuitZkDcApi_aPseudonymFunctionWithoutVerifierIdType_stillNeedsAndGetsAVerifierId() = runTest(dispatcher) {
+        // The request no longer carries verifier_id_type: the config alone says a verifier id is needed.
+        val bare = listOf(org.siros.sdk.credentials.CircuitZkFunction(
+            "pseudonym", "n", Json.parseToJsonElement("""{"config":"known-offender-matching-psc","ver":1,"prf":"sha-256"}""").jsonObject,
+        ))
+        val s = czkSetup(functions = bare, trust = czkIds("x509_san_dns" to "pdp.example"))
+        assertEquals(
+            org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("x509_san_dns:pdp.example")),
+            czkPseudonymOf(czkRun(s, czkRequest())),
+        )
+        czkRefused(
+            czkSetup(functions = bare, trust = { buildJsonObject { put("decision", true) } }),
+            czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE,
+        )
+    }
+
+    @Test
+    fun circuitZkDcApi_noPdpEntryForAnyListedType_isRefused_nothingIsDerivedLocally() = runTest(dispatcher) {
+        // The request carries a client id and an x5c chain whose SAN matches it, but nothing is derived from them.
+        val none = czkSetup(trust = { buildJsonObject { put("decision", true) } })
+        czkRefused(none, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE)
+        assertEquals(0, none.prover.calls)
+        // The PDP lists only types outside the wallet's list.
+        val other = czkSetup(trust = czkIds("dns" to "rp.example", "uri" to "https://rp.example"))
+        czkRefused(other, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE)
+        assertEquals(0, other.prover.calls)
+    }
+
+    /** What the wallet answered for query `q`: the one presentation OBJECT of the `circuit_zk` response shape. */
+    /** One presentation of the answer: the base64url CBOR `ZkpPresentation` string of the query `q`, decoded. */
+    private class CzkDecoded(val encoded: String) {
+        val cbor: com.upokecenter.cbor.CBORObject = com.upokecenter.cbor.CBORObject.DecodeFromBytes(java.util.Base64.getUrlDecoder().decode(encoded))
+        val members: Set<String> = cbor.keys.map { it.AsString() }.toSet()
+        val results: Map<String, org.siros.sdk.credentials.ResultValue> = cbor["results"].keys.associate { k ->
+            val v = cbor["results"][k]
+            k.AsString() to if (v.type == com.upokecenter.cbor.CBORType.ByteString) {
+                org.siros.sdk.credentials.ResultValue.Pseudonym(v.GetByteString())
+            } else {
+                assertTrue(v.isTrue)
+                org.siros.sdk.credentials.ResultValue.Predicate
+            }
+        }
+    }
+
+    private fun czkDecoded(responseJson: String): CzkDecoded {
+        val entry = Json.parseToJsonElement(responseJson).jsonObject["data"]!!.jsonObject["vp_token"]!!.jsonObject["q"]!!.jsonArray
+        return CzkDecoded(entry.single().jsonPrimitive.content)
+    }
+
+    private fun czkPseudonymOf(result: SirosWallet.DCAPIPresentationResult): org.siros.sdk.credentials.ResultValue? {
+        return czkDecoded(result.responseJson).results["n"]
+    }
+
+    private fun czkFnOfType(type: String) = org.siros.sdk.credentials.CircuitZkFunction(
+        "pseudonym", "n",
+        Json.parseToJsonElement("""{"config":"known-offender-matching-psc","ver":1,"prf":"sha-256"}""").jsonObject,
+    )
+
+    private fun czkIds(vararg entries: Pair<String, String>): suspend () -> JsonObject = {
+        buildJsonObject {
+            put("decision", true)
+            putJsonObject("context") {
+                putJsonArray("verifier_ids") { entries.forEach { (t, v) -> add(buildJsonObject { put("verifier_id_type", t); put("verifier_id", v) }) } }
+            }
+        }
+    }
+
+    @Test
+    fun circuitZkDcApi_theTypeTheRequestNames_isIgnoredForSelection_andNotRefusedOnMismatch() = runTest(dispatcher) {
+        // The request names x509_hash, which no source of the wallet produces; the wallet's own order governs.
+        val s = czkSetup(functions = listOf(czkFnOfType("x509_hash")), trust = czkIds("semantic" to "semantic_id:A"))
+        assertEquals(
+            org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("semantic_id:A")),
+            czkPseudonymOf(czkRun(s, czkRequest())),
+        )
+        // The request naming "semantic" does not make the wallet use semantic when its list says otherwise.
+        val other = czkSetup(
+            functions = listOf(czkFnOfType("semantic")), types = listOf("x509_san_dns"),
+            trust = czkIds("semantic" to "semantic_id:A", "x509_san_dns" to "b.example"),
+        )
+        assertEquals(
+            org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("x509_san_dns:b.example")),
+            czkPseudonymOf(czkRun(other, czkRequest())),
+        )
+    }
+
+    @Test
+    fun theDefaultValidator_acceptsAPseudonymFunctionNamingAnyVerifierIdType() {
+        val circuits = org.siros.sdk.credentials.CircuitZkCircuitSource {
+            listOf(org.siros.sdk.credentials.CircuitZkCircuit("sys", "c1", setOf(CzkFixtures.DOCTYPE)))
+        }
+        for (type in listOf("x509_hash", "semantic", "x509_san_dns", "anything-else")) {
+            val plan = org.siros.sdk.credentials.CircuitZkPlan(listOf(czkFnOfType(type)), raw = Json.parseToJsonElement("""{"meta":{"source_format":"mso_mdoc","doctype_value":"d"}}""").jsonObject)
+            assertEquals(type, org.siros.sdk.credentials.CircuitZkVerdict.Ok, defaultCircuitZkValidator(circuits).validate(plan))
+        }
+    }
+
+    @Test
+    fun circuitZkDcApi_theWalletsOrderIsRespected_firstTypeWinsWhenBothArePresent_theSecondWhenTheFirstIsAbsent() = runTest(dispatcher) {
+        val both = czkSetup(trust = czkIds("x509_san_dns" to "second.example", "semantic" to "semantic_id:first"))
+        assertEquals(org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("semantic_id:first")), czkPseudonymOf(czkRun(both, czkRequest())))
+        val onlySecond = czkSetup(trust = czkIds("x509_san_dns" to "second.example"))
+        assertEquals(org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("x509_san_dns:second.example")), czkPseudonymOf(czkRun(onlySecond, czkRequest())))
+        // Reordering the wallet's list flips the winner for the same PDP answer.
+        val reordered = czkSetup(
+            types = listOf("x509_san_dns", "semantic"),
+            trust = czkIds("x509_san_dns" to "second.example", "semantic" to "semantic_id:first"),
+        )
+        assertEquals(org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("x509_san_dns:second.example")), czkPseudonymOf(czkRun(reordered, czkRequest())))
+    }
+
+    @Test
+    fun circuitZkDcApi_aTypeWithConflictingDistinctValuesIsDeclined_andTheNextTypeIsTried() = runTest(dispatcher) {
+        val s = czkSetup(
+            trust = czkIds("semantic" to "semantic_id:1", "semantic" to "semantic_id:2", "x509_san_dns" to "ok.example"),
+        )
+        assertEquals(org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("x509_san_dns:ok.example")), czkPseudonymOf(czkRun(s, czkRequest())))
+        // Conflict on the only available type: nothing resolves, refused.
+        czkRefused(
+            czkSetup(trust = czkIds("semantic" to "semantic_id:1", "semantic" to "semantic_id:2")),
+            czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE,
+        )
+    }
+
+    @Test
+    fun circuitZkDcApi_onlyTheRulebookVerifierIdFormsAreTakenFromThePdp() = runTest(dispatcher) {
+        // A semantic value without its prefix, and the types that are no v0.4 verifier id form, are never used.
+        for ((name, ids) in listOf(
+            "semantic without prefix" to arrayOf("semantic" to "A"),
+            "x509_san_uri" to arrayOf("x509_san_uri" to "https://rp.example/x"),
+            "decentralized_identifier" to arrayOf("decentralized_identifier" to "did:web:rp.example"),
+            "openid_federation" to arrayOf("openid_federation" to "https://rp.example"),
+        )) {
+            czkRefused(
+                czkSetup(types = listOf("semantic", "x509_san_dns", "x509_san_uri", "decentralized_identifier", "openid_federation"), trust = czkIds(*ids)),
+                czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE,
+            )
+        }
+    }
+
+    @Test
+    fun authZenSource_aGoTrustShapedBareDns_resolvesToThePrefixedVerifierId_withTheArchiveHash() = runTest(dispatcher) {
+        val trust = TrustResult(trusted = true, context = buildJsonObject {
+            putJsonArray("verifier_ids") { add(buildJsonObject { put("verifier_id_type", "x509_san_dns"); put("verifier_id", "verifier.example"); put("basis", "client-id-binding") }) }
+        })
+        val ctx = VerifierIdContext(
+            org.siros.sdk.wallet.dcapi.DCAPIRequest(clientId = "x509_san_dns:verifier.example", responseMode = "direct_post.jwt", nonce = "n", dcqlQuery = null, clientMetadata = null, protocol = "openid4vp-redirect", state = null),
+            trust, "https://verifier.example",
+        )
+        val id = AuthZENSource("x509_san_dns").resolve(ctx)
+        assertEquals("x509_san_dns:verifier.example", id)
+        assertTrue(sha256HexOf(id!!.toByteArray()).startsWith("6eae85a0"))
+    }
+
+    @Test
+    fun circuitZkDcApi_anEmptyTypeList_refusesAPseudonymRequest_evenWhenThePdpHasIds() = runTest(dispatcher) {
+        val s = czkSetup(types = emptyList(), trust = czkIds("semantic" to "semantic_id:A"))
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE)
+        assertEquals(0, s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkDcApi_aHostRegisteredSourceIsUsable_forASupportedType_butNotForAnUnsupportedOne() = runTest(dispatcher) {
+        val none: suspend () -> JsonObject = { buildJsonObject { put("decision", true) } }
+        val calls = mutableListOf<String>()
+        // The PDP says nothing: the registered source answers for x509_san_dns.
+        val s = czkSetup(trust = none, sources = listOf(FixedSource("x509_san_dns", "host-id", calls)))
+        assertEquals(
+            org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("host-id")),
+            czkPseudonymOf(czkRun(s, czkRequest())),
+        )
+        // The type is not in the wallet's list: the source is never consulted.
+        calls.clear()
+        czkRefused(
+            czkSetup(trust = none, types = listOf("semantic"), sources = listOf(FixedSource("x509_san_dns", "host-id", calls))),
+            czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE,
+        )
+        assertTrue(calls.isEmpty())
+        // The PDP wins over a registered source for the same type, which is then not consulted.
+        calls.clear()
+        val both = czkSetup(trust = czkIds("x509_san_dns" to "from-pdp"), sources = listOf(FixedSource("x509_san_dns", "host-id", calls)))
+        assertEquals(org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("x509_san_dns:from-pdp")), czkPseudonymOf(czkRun(both, czkRequest())))
+        assertTrue(calls.isEmpty())
+    }
+
+    @Test
+    fun circuitZkDcApi_trustFailureAndPdpOutage_areRefused_withNoLocalOrCachedFallback() = runTest(dispatcher) {
+        val untrusted = czkSetup(trust = { buildJsonObject { put("decision", false) } })
+        czkRefused(untrusted, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NOT_TRUSTED)
+
+        // An outage: the request is refused and nothing stale or local stands in for it.
+        val outage = czkSetup(trust = { throw java.io.IOException("PDP unreachable") })
+        czkRefused(outage, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.TRUST_UNAVAILABLE)
+        coVerify(exactly = 1) { outage.apiClient.evaluateTrust(any()) }
+
+        val rejected = czkSetup(trust = { throw IllegalStateException("403") })
+        czkRefused(rejected, czkRequest())
+
+        // A wallet configured for local-only reader trust still asks the PDP for circuit_zk, and an outage is a refusal.
+        val localOnly = czkSetup(trust = { throw java.io.IOException("PDP unreachable") }, localOnlyTrust = true)
+        czkRefused(localOnly, czkRequest())
+        coVerify(exactly = 1) { localOnly.apiClient.evaluateTrust(any()) }
+    }
+
+    @Test
+    fun circuitZkDcApi_localOnlyTrustMode_stillUsesThePdp() = runTest(dispatcher) {
+        val s = czkSetup(localOnlyTrust = true)
+        assertEquals(listOf(1L), czkRun(s, czkRequest()).credentialIds)
+        coVerify(exactly = 1) { s.apiClient.evaluateTrust(any()) }
+    }
+
+    @Test
+    fun circuitZkDcApi_falseAgePredicate_isRefusedWithNoDescription() = runTest(dispatcher) {
+        val age = org.siros.sdk.credentials.CircuitZkFunction(
+            "age_check", "a", Json.parseToJsonElement("""{"ge":"2010-01-01"}""").jsonObject,
+        )
+        val s = czkSetup(functions = listOf(age))
+        czkRefused(s, czkRequest())
+        assertEquals(0, s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkDcApi_pscMismatch_isRefused() = runTest(dispatcher) {
+        val s = czkSetup(psc = ByteArray(32))
+        czkRefused(s, czkRequest())
+        assertEquals(0, s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkDcApi_noCredentialInTheWallet_isRefusedWithTheNoMatchReason() = runTest(dispatcher) {
+        val s = czkSetup(credentials = emptyList())
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NO_MATCHING_CREDENTIAL)
+        assertEquals(0, s.prover.calls)
+    }
+
+    private fun czkCred(id: Long, batch: Long, instance: Int = 0) = StoredCredential(
+        id = id, format = "mso_mdoc", raw = CzkFixtures.mdoc(CzkFixtures.psc, "2000-06-15"), credentialIssuerIdentifier = CzkFixtures.ISSUER,
+        metadata = CredentialMetadata(name = "Nym $id"), batchId = batch, instanceId = instance,
+    )
+
+    private fun czkSelectionSetup() = czkSetup(credentials = listOf(czkCred(1, 1), czkCred(2, 2), czkCred(3, 1, 1)))
+
+    private fun czkRunSelected(s: CzkSetup, vararg ids: Long, raw: String = czkRequest()) =
+        kotlinx.coroutines.runBlocking { s.wallet.handleDCAPIRequest(raw, CzkFixtures.ORIGIN, ids.toList()) }
+
+    @Test
+    fun circuitZkDcApi_presentsExactlyTheCredentialTheUserPicked() = runTest(dispatcher) {
+        // No pick is refused: nothing is chosen for the user (no silent first-eligible), and nothing is asked or proved.
+        val none = czkSelectionSetup()
+        czkRefused(none, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE, ids = emptyList())
+        assertTrue(none.consents.isEmpty())
+        assertEquals(0, none.prover.calls)
+        // A pick of the second credential is what is presented.
+        assertEquals(listOf(2L), czkRunSelected(czkSelectionSetup(), 2L).credentialIds)
+        // The prover ran once, for the picked credential only.
+        val s = czkSelectionSetup()
+        czkRunSelected(s, 2L)
+        assertEquals(1, s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkDcApi_aPickIsServedByAnotherCopyOfTheSameCredential() = runTest(dispatcher) {
+        // Credential 3 is the second copy (batch 1) of credential 1: picking 3 presents 3, not the other credential.
+        assertEquals(listOf(3L), czkRunSelected(czkSelectionSetup(), 3L).credentialIds)
+    }
+
+    @Test
+    fun circuitZkDcApi_aPickThatIsNotACandidateIsRefused_neverReplacedByAnotherCredential() = runTest(dispatcher) {
+        val plain = StoredCredential(id = 9L, format = "dc+sd-jwt", raw = "x", metadata = CredentialMetadata(name = "Plain"), batchId = 9L, instanceId = 0)
+        for (pick in listOf(longArrayOf(99L), longArrayOf(9L), longArrayOf(-1L))) {
+            val s = czkSetup(credentials = listOf(czkCred(1, 1), czkCred(2, 2), plain))
+            val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+                czkRunSelected(s, *pick)
+            }
+            assertEquals(org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE, e.reason)
+            assertEquals(0, s.prover.calls)
+            assertTrue(s.history.isEmpty())
+        }
+    }
+
+    @Test
+    fun circuitZkDcApi_multiQuery_eachQueryTakesAPickThatIsItsCandidate() = runTest(dispatcher) {
+        val raw = czkRequest(queryIds = listOf("q", "q2"))
+        // One credential picked for both (it satisfies both queries).
+        assertEquals(listOf(2L, 2L), czkRunSelected(czkSelectionSetup(), 2L, raw = raw).credentialIds)
+        // One credential per query, in query order.
+        assertEquals(listOf(2L, 1L), czkRunSelected(czkSelectionSetup(), 2L, 1L, raw = raw).credentialIds)
+        assertEquals(listOf(1L, 2L), czkRunSelected(czkSelectionSetup(), 1L, 2L, raw = raw).credentialIds)
+        // No pick at all is refused, not read as "the first eligible for each".
+        val none = czkSelectionSetup()
+        czkRefused(none, raw, reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE, ids = emptyList())
+        assertEquals(0, none.prover.calls)
+    }
+
+    @Test
+    fun circuitZkDcApi_multiQuery_aPartlyUnreadableOrForeignSelectionIsRefused_theReadableSubsetNeverAuthorises() = runTest(dispatcher) {
+        val raw = czkRequest(queryIds = listOf("q", "q2"))
+        // Both queries accept credential 2; the second pick is the unreadable sentinel or an unknown id.
+        for (pick in listOf(longArrayOf(2L, -1L), longArrayOf(-1L, 2L), longArrayOf(2L, 99L))) {
+            val s = czkSelectionSetup()
+            val e = org.junit.Assert.assertThrows(pick.toList().toString(), org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+                czkRunSelected(s, *pick, raw = raw)
+            }
+            assertEquals(org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE, e.reason)
+            assertEquals(0, s.prover.calls)
+            assertTrue(s.history.isEmpty())
+        }
+    }
+
+    @Test
+    fun circuitZkDcApi_multiQuery_aDuplicatedPickIsRefused() = runTest(dispatcher) {
+        val s = czkSelectionSetup()
+        val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+            czkRunSelected(s, 2L, 2L, raw = czkRequest(queryIds = listOf("q", "q2")))
+        }
+        assertEquals(org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE, e.reason)
+        assertEquals(0, s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkDcApi_multiQuery_aPickMatchingNoQueryIsStillRefused() = runTest(dispatcher) {
+        val s = czkSelectionSetup()
+        org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+            czkRunSelected(s, 77L, raw = czkRequest(queryIds = listOf("q", "q2")))
+        }
+        assertEquals(0, s.prover.calls)
+    }
+
+    @Test
+    fun circuitZkDcApi_multiQuery_aQueryTheUsersPickIsNotACandidateOf_isRefused_notAnsweredWithAnotherCredential() = runTest(dispatcher) {
+        // Query "qo" wants the other doctype (only credential 5 is its candidate); the user picked credential 1.
+        val other = StoredCredential(
+            id = 5L, format = "mso_mdoc", raw = CzkFixtures.mdoc(psc = CzkFixtures.pscFor(CzkFixtures.OTHER_DOCTYPE), docType = CzkFixtures.OTHER_DOCTYPE), credentialIssuerIdentifier = CzkFixtures.ISSUER,
+            metadata = CredentialMetadata(name = "Other"), batchId = 5L, instanceId = 0,
+        )
+        val raw = czkRequest(queryIds = listOf("qo", "q"), queryDoctypes = listOf(CzkFixtures.OTHER_DOCTYPE, CzkFixtures.DOCTYPE))
+        val s = czkSetup(credentials = listOf(czkCred(1, 1), other), extraDocTypes = setOf(CzkFixtures.OTHER_DOCTYPE))
+        val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) { czkRunSelected(s, 1L, raw = raw) }
+        assertEquals(org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE, e.reason)
+        assertEquals(0, s.prover.calls)
+        assertTrue(s.history.isEmpty())
+        // One pick per query is served, each from its own query's candidates.
+        assertEquals(listOf(5L, 1L), czkRunSelected(czkSetup(credentials = listOf(czkCred(1, 1), other), extraDocTypes = setOf(CzkFixtures.OTHER_DOCTYPE)), 5L, 1L, raw = raw).credentialIds)
+    }
+
+    @Test
+    fun circuitZkDcApi_flagOff_isRefusedAsBefore() = runTest(dispatcher) {
+        val s = czkSetup(flagOn = false)
+        czkRefused(s, czkRequest())
+        // The existing path: trust is evaluated, then nothing matches. The prover is never reached.
+        assertEquals(0, s.prover.calls)
+    }
+
+    // ── circuit_zk presentation consent ──
+
+    private fun czkAgeFunction(json: String) = org.siros.sdk.credentials.CircuitZkFunction("age_check", "a", Json.parseToJsonElement(json).jsonObject)
+
+    private fun czkSeedSource() = CredentialSecretSeedSource { NymTestCredentials.seed.copyOf() }
+
+    @Test
+    fun circuitZkConsent_isAskedBeforeAnySeedSignerOrProverCall() = runTest(dispatcher) {
+        val s = czkSscSetup(czkSeedSource(), proverSigns = true)
+        czkRun(s, czkRequest())
+        // Consent first; only then the seed, then the prover, which asks the signer.
+        assertEquals(listOf("consent", "seed", "prove", "sign"), s.events)
+    }
+
+    @Test
+    fun circuitZkConsent_declineThrowTimeoutAndCancelAreAllDeclines_withZeroSeedSignerProverCalls() = runTest(dispatcher) {
+        val variants = mapOf<String, suspend (org.siros.sdk.credentials.PresentationConsentRequest) -> Boolean>(
+            "decline" to { false },
+            "throws" to { throw IllegalStateException("boom") },
+            "handler cancelled (the dialog went away)" to { throw kotlinx.coroutines.CancellationException("dialog dismissed") },
+            "never answers" to { kotlinx.coroutines.awaitCancellation() },
+        )
+        for ((name, answer) in variants) {
+            val s = czkSscSetup(czkSeedSource(), consent = answer, proverSigns = true)
+            s.wallet.presentationConsentTimeoutMillis = 100L
+            czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.USER_DECLINED)
+            assertEquals(name, listOf("consent"), s.events)
+            assertEquals(name, 0, s.prover.calls)
+        }
+    }
+
+    @Test
+    fun circuitZkConsent_withNoHandlerAtAll_isRefusedAsUnavailable_neverProceeds() = runTest(dispatcher) {
+        val s = czkSscSetup(czkSeedSource(), noConsentHandler = true, proverSigns = true)
+        // The TS12 handler is a different consent: it neither enables nor stands in for this one.
+        s.wallet.transactionConsentHandler = TransactionConsentHandler { true }
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.CONSENT_UNAVAILABLE)
+        assertTrue(s.events.isEmpty())
+        coVerify(exactly = 0) { s.apiClient.evaluateTrust(any()) }
+    }
+
+    @Test
+    fun circuitZkConsent_aPerRequestHandlerIsUsedInsteadOfTheWalletOne_andAloneIsEnough() = runTest(dispatcher) {
+        val own = mutableListOf<org.siros.sdk.credentials.PresentationConsentRequest>()
+        val s = czkSscSetup(czkSeedSource())
+        kotlinx.coroutines.runBlocking {
+            s.wallet.handleDCAPIRequestWithPresentationConsent(czkRequest(), CzkFixtures.ORIGIN, PresentationConsentHandler { own += it; true }, listOf(1L))
+        }
+        assertEquals(1, own.size)
+        assertTrue("the wallet-level handler was not asked", s.consents.isEmpty())
+        // With no wallet-level handler, the per-request one is all that is needed.
+        val bare = czkSscSetup(czkSeedSource(), noConsentHandler = true)
+        kotlinx.coroutines.runBlocking {
+            bare.wallet.handleDCAPIRequestWithPresentationConsent(czkRequest(), CzkFixtures.ORIGIN, PresentationConsentHandler { true }, listOf(1L))
+        }
+        assertEquals(1, bare.prover.calls)
+        // A per-request handler that declines is a decline, whatever the wallet-level one would say.
+        val declined = czkSscSetup(czkSeedSource())
+        org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIRequestRefused::class.java) {
+            kotlinx.coroutines.runBlocking {
+                declined.wallet.handleDCAPIRequestWithPresentationConsent(czkRequest(), CzkFixtures.ORIGIN, PresentationConsentHandler { false }, listOf(1L))
+            }
+        }
+        assertEquals(0, declined.prover.calls)
+        assertTrue(declined.events.isEmpty())
+    }
+
+    @Test
+    fun circuitZkConsent_carriesTheItemsTheVerifierWillReceive_andNoSecret() = runTest(dispatcher) {
+        val s = czkSscSetup(czkSeedSource())
+        czkRun(s, czkRequest())
+        val request = s.consents.single()
+        assertEquals("rp.example", request.verifier.label)
+        assertEquals("x509_san_dns:rp.example", request.verifier.verifierId)
+        assertEquals("x509_san_dns", request.verifier.verifierIdType)
+        assertTrue(request.requestSigned)
+        val entry = request.entries.single()
+        assertEquals(org.siros.sdk.credentials.CredentialRef("Nym", null), entry.credential)
+        assertEquals(
+            listOf<org.siros.sdk.credentials.ConsentItem>(
+                org.siros.sdk.credentials.ConsentItem.Pseudonym(
+                    config = "known-offender-matching-ssc",
+                    scope = org.siros.sdk.credentials.PseudonymScope.PER_VERIFIER,
+                    remappableByIssuer = true,
+                    crossSite = false,
+                    verifierId = "x509_san_dns:rp.example",
+                    verifierContext = null,
+                ),
+            ),
+            entry.items,
+        )
+        // Nothing the user is shown carries a seed, a pseudonym value or a birth date.
+        val shown = request.toString()
+        assertFalse(shown.contains(java.util.HexFormat.of().formatHex(NymTestCredentials.seed)))
+        assertFalse(shown.contains("2000-06-15"))
+    }
+
+    @Test
+    fun circuitZkConsent_aTwoQueryRequest_isOneConsentCallCoveringBothQueries() = runTest(dispatcher) {
+        val s = czkSetup(
+            functions = listOf(
+                czkSscFunction("known-offender-matching-psc").single(),
+                czkAgeFunction("""{"ge":"1999-01-01","le":"2005-01-01"}"""),
+            ),
+            credentials = listOf(czkCred(1, 1), czkCred(2, 2)),
+        )
+        val raw = czkRequest(queryIds = listOf("q", "q2"))
+        val result = kotlinx.coroutines.runBlocking { s.wallet.handleDCAPIRequest(raw, CzkFixtures.ORIGIN, listOf(1L, 2L)) }
+        assertEquals(listOf(1L, 2L), result.credentialIds)
+        val request = s.consents.single()
+        assertEquals(listOf("Nym 1", "Nym 2"), request.entries.map { it.credential.name })
+        for (entry in request.entries) assertEquals(listOf("pseudonym", "age_range"), entry.items.map { if (it is org.siros.sdk.credentials.ConsentItem.Pseudonym) "pseudonym" else "age_range" })
+        // One consent, then everything else.
+        assertEquals("consent", s.events.first())
+        assertEquals(1, s.events.count { it == "consent" })
+    }
+
+    @Test
+    fun circuitZkConsent_anUnsatisfiablePredicate_isRefusedLocally_withoutAskingTheUser() = runTest(dispatcher) {
+        // The credential's birth_date is 2000-06-15; the request wants someone born in 1980 or earlier.
+        val s = czkSetup(functions = listOf(czkAgeFunction("""{"le":"1980-01-01"}""")), secretSeedSource = czkSeedSource())
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+        assertTrue("the user was not asked", s.consents.isEmpty())
+        assertTrue(s.events.isEmpty())
+        // A satisfiable one is asked, with the age item in its human form.
+        val ok = czkSetup(functions = listOf(czkAgeFunction("""{"ge":"1999-01-01","le":"2005-01-01"}""")))
+        czkRun(ok, czkRequest())
+        val age = ok.consents.single().entries.single().items.single() as org.siros.sdk.credentials.ConsentItem.Predicate
+        assertTrue(age.age is org.siros.sdk.credentials.AgeForm.Between)
+        assertEquals(listOf("birth_date"), age.claim.path)
+    }
+
+    @Test
+    fun circuitZkConsent_twoQueriesWhoseAgeBoundsTogetherPinTheBirthDate_areRefusedBeforeConsent() = runTest(dispatcher) {
+        // Each plan alone is one-sided and passes the rulebook; ge=D and le=D together would reveal the exact date.
+        val plans = listOf("""{"ge":"2000-06-15"}""", """{"le":"2000-06-15"}""")
+        val s = czkSetup(functionsPerQuery = { listOf(czkAgeFunction(plans[it])) })
+        czkRefused(s, czkRequest(queryIds = listOf("q", "q2")), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST, ids = listOf(1L))
+        assertTrue(s.consents.isEmpty())
+        assertTrue(s.events.isEmpty())
+    }
+
+    @Test
+    fun circuitZkConsent_aRefusalBeforeThePhaseOneEnds_neverAsks() = runTest(dispatcher) {
+        // Untrusted verifier, and no resolvable verifier id: both refused before the user is asked.
+        val untrusted = czkSscSetup(czkSeedSource())
+        coEvery { untrusted.apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", false) }
+        czkRefused(untrusted, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NOT_TRUSTED)
+        assertTrue(untrusted.consents.isEmpty())
+        val noId = czkSetup(functions = czkSscFunction(), trust = czkIds(), secretSeedSource = czkSeedSource())
+        czkRefused(noId, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.VERIFIER_ID_UNAVAILABLE)
+        assertTrue(noId.consents.isEmpty())
+        assertTrue(noId.events.isEmpty())
+    }
+
+    // ── predicates over any claim ──
+
+    private val numberRange = org.siros.sdk.credentials.PredicateFunction(
+        id = "number_range", claim = org.siros.sdk.credentials.ClaimSource.FromParam, valueType = org.siros.sdk.credentials.ValueType.NUMBER,
+        comparisons = linkedMapOf("ge" to org.siros.sdk.credentials.ComparisonOp.GE, "le" to org.siros.sdk.credentials.ComparisonOp.LE), minSpan = 10,
+    )
+
+    private fun czkScoreSetup(
+        score: Long,
+        params: String = """{"claim":"score","ge":10,"le":20}""",
+        scoreValue: com.upokecenter.cbor.CBORObject = com.upokecenter.cbor.CBORObject.FromObject(score),
+        declared: Boolean = true,
+        consent: suspend (org.siros.sdk.credentials.PresentationConsentRequest) -> Boolean = { false },
+        innerProver: org.siros.sdk.keystore.CircuitZkProver? = null,
+    ) = czkSetup(
+        functions = listOf(org.siros.sdk.credentials.CircuitZkFunction("number_range", "p", Json.parseToJsonElement(params).jsonObject)),
+        credentials = listOf(StoredCredential(
+            id = 1L, format = "mso_mdoc",
+            raw = CzkFixtures.mdoc(extra = listOf("score" to scoreValue)),
+            metadata = CredentialMetadata(name = "Nym", claims = listOf(org.siros.sdk.credentials.ClaimMeta(listOf(CzkFixtures.DOCTYPE, "score"), "Credit score"))), batchId = 1L, instanceId = 0,
+        )),
+        predicates = if (declared) org.siros.sdk.credentials.PredicateFunctions(listOf(org.siros.sdk.credentials.PredicateFunctions.AGE_CHECK, numberRange)) else null,
+        extraFunctions = setOf("number_range"),
+        consent = consent,
+        innerProver = innerProver,
+    )
+
+    @Test
+    fun circuitZkConsent_aPredicateOnAnotherClaim_isDescribedWithTheCredentialsOwnLabel_andNeverTheValue() = runTest(dispatcher) {
+        val s = czkScoreSetup(15)
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.USER_DECLINED)
+        val item = s.consents.single().entries.single().items.single() as org.siros.sdk.credentials.ConsentItem.Predicate
+        assertEquals("number_range", item.functionId)
+        assertEquals(org.siros.sdk.credentials.ClaimRef(listOf("score"), "Credit score"), item.claim)
+        assertNull(item.age)
+        assertFalse(s.consents.single().toString().contains("15,") || s.consents.single().toString().contains("value=15"))
+        assertEquals(listOf("consent"), s.events)
+    }
+
+    @Test
+    fun circuitZkDefaultValidator_takesItsPredicateRulesFromTheSameDeclarations() {
+        val plan = org.siros.sdk.credentials.CircuitZkPlan(listOf(
+            org.siros.sdk.credentials.CircuitZkFunction("number_range", "p", Json.parseToJsonElement("""{"claim":"score","ge":10,"le":20}""").jsonObject),
+        ), raw = Json.parseToJsonElement("""{"meta":{"source_format":"mso_mdoc","doctype_value":"d"}}""").jsonObject)
+        val declared = org.siros.sdk.credentials.PredicateFunctions(listOf(org.siros.sdk.credentials.PredicateFunctions.AGE_CHECK, numberRange))
+        assertEquals(org.siros.sdk.credentials.CircuitZkVerdict.Ok, defaultCircuitZkValidator(null, declared).validate(plan))
+        val narrow = org.siros.sdk.credentials.CircuitZkPlan(listOf(
+            org.siros.sdk.credentials.CircuitZkFunction("number_range", "p", Json.parseToJsonElement("""{"claim":"score","ge":10,"le":15}""").jsonObject),
+        ), raw = Json.parseToJsonElement("""{"meta":{"source_format":"mso_mdoc","doctype_value":"d"}}""").jsonObject)
+        assertEquals("number_range_span_too_short", (defaultCircuitZkValidator(null, declared).validate(narrow) as org.siros.sdk.credentials.CircuitZkVerdict.AccessDenied).ruleId)
+        // Undeclared: the validator does not know it.
+        assertEquals("function_unknown", (defaultCircuitZkValidator(null).validate(plan) as org.siros.sdk.credentials.CircuitZkVerdict.AccessDenied).ruleId)
+    }
+
+    @Test
+    fun circuitZkConsent_aDecoyNamespacesSameNamedClaimIsNeverTheLabel() = runTest(dispatcher) {
+        val s = czkSetup(
+            functions = listOf(org.siros.sdk.credentials.CircuitZkFunction("number_range", "p", Json.parseToJsonElement("""{"claim":"score","ge":10,"le":20}""").jsonObject)),
+            credentials = listOf(StoredCredential(
+                id = 1L, format = "mso_mdoc",
+                raw = CzkFixtures.mdoc(extra = listOf("score" to com.upokecenter.cbor.CBORObject.FromObject(15L))),
+                metadata = CredentialMetadata(name = "Nym", claims = listOf(org.siros.sdk.credentials.ClaimMeta(listOf("org.example.other", "score"), "Other score"))),
+                batchId = 1L, instanceId = 0,
+            )),
+            predicates = org.siros.sdk.credentials.PredicateFunctions(listOf(org.siros.sdk.credentials.PredicateFunctions.AGE_CHECK, numberRange)),
+            extraFunctions = setOf("number_range"),
+            consent = { false },
+        )
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.USER_DECLINED)
+        val item = s.consents.single().entries.single().items.single() as org.siros.sdk.credentials.ConsentItem.Predicate
+        assertNull(item.claim.label)
+        assertEquals("score", item.claim.display)
+    }
+
+    @Test
+    fun circuitZkConsent_theRulebookExamplesSourceParamIsAcceptedForAgeCheck_andAnotherSourceIsRefused() = runTest(dispatcher) {
+        fun age(source: String) = czkSetup(
+            functions = listOf(czkAgeFunction("""{"ge":"1999-01-01","le":"2005-01-01","source":$source}""")),
+            consent = { false },
+        )
+        val ok = age("""{"path":["birth_date"]}""")
+        czkRefused(ok, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.USER_DECLINED)
+        assertEquals(1, ok.consents.size)
+        val other = age("""{"path":["family_name"]}""")
+        czkRefused(other, czkRequest())
+        assertTrue(other.consents.isEmpty())
+    }
+
+    @Test
+    fun circuitZkConsent_aTaggedCborNumberIsANumber_notAMismatchingType() = runTest(dispatcher) {
+        // Tag 4 (decimal fraction) [-1, 150] is 15: within 10..20, so the user is asked.
+        val fifteen = com.upokecenter.cbor.CBORObject.FromObject(com.upokecenter.numbers.EDecimal.FromString("15.0"))
+        assertTrue(fifteen.isTagged)
+        val s = czkScoreSetup(0, scoreValue = fifteen)
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.USER_DECLINED)
+        assertEquals(1, s.consents.size)
+        // 25 is outside the range, tagged or not: refused locally, never asked.
+        val out = czkScoreSetup(0, scoreValue = com.upokecenter.cbor.CBORObject.FromObject(com.upokecenter.numbers.EDecimal.FromString("25.0")))
+        czkRefused(out, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+        assertTrue(out.consents.isEmpty())
+    }
+
+    /** A prover for a custom predicate: every planned function proves as a predicate. */
+    private val predicateOnlyProver = object : org.siros.sdk.keystore.CircuitZkProver {
+        override suspend fun prove(input: org.siros.sdk.keystore.CircuitZkProveInput) = org.siros.sdk.keystore.CircuitZkProveOutput(
+            proof = byteArrayOf(1), results = input.plan.functions.associate { it.handle to org.siros.sdk.credentials.ResultValue.Predicate },
+        )
+    }
+
+    @Test
+    fun circuitZkConsent_aDeclaredCustomPredicate_isPresentedAfterConsent_withTheStockKeystore() = runTest(dispatcher) {
+        // The presenter must know every function the wallet described to the user, not only the rulebook's.
+        val s = czkScoreSetup(15, consent = { true }, innerProver = predicateOnlyProver)
+        val result = czkRun(s, czkRequest())
+        assertEquals(listOf(1L), result.credentialIds)
+        assertEquals(1, s.prover.calls)
+        assertEquals(1, s.consents.size)
+    }
+
+    @Test
+    fun circuitZkConsent_theLocalPrecheck_isNotAboutBirthDate_andRefusesWithoutAsking() = runTest(dispatcher) {
+        val s = czkScoreSetup(5)
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
+        assertTrue(s.consents.isEmpty())
+    }
+
+    @Test
+    fun circuitZkConsent_aFunctionTheWalletCannotDescribe_isRefusedBeforeConsent() = runTest(dispatcher) {
+        // The validator and circuit accept number_range, but the wallet has no declaration for it: it cannot say what is disclosed.
+        val s = czkScoreSetup(15, declared = false)
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+        assertTrue(s.consents.isEmpty())
+        assertTrue(s.events.isEmpty())
+    }
+
+    @Test
+    fun circuitZkConsent_aPredicateThatPinsTheClaim_isRefusedByTheDeclaredMinimumSelectivity() = runTest(dispatcher) {
+        val s = czkScoreSetup(15, params = """{"claim":"score","ge":15,"le":15}""")
+        czkRefused(s, czkRequest(), reason = org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST)
+        assertTrue(s.consents.isEmpty())
+    }
+
+    private class FixedSource(override val type: String, val id: String?, val calls: MutableList<String>) : VerifierIdSource {
+        override suspend fun resolve(context: VerifierIdContext): String? { calls += id ?: "declined-$type"; return id }
+    }
+
+    @Test
+    fun circuitZkDcApi_theVerifierIdentityIsResolvedOncePerRequest_andEveryQueryAndTheConsentUseIt() = runTest(dispatcher) {
+        // A source that answers differently (here: then declines) on later calls must not split the request's identity.
+        var calls = 0
+        val flaky = object : VerifierIdSource {
+            override val type = "x509_san_dns"
+            override suspend fun resolve(context: VerifierIdContext): String? = if (++calls == 1) "x509_san_dns:first.example" else null
+        }
+        val s = czkSetup(trust = { buildJsonObject { put("decision", true) } }, sources = listOf(flaky))
+        val result = czkRun(s, czkRequest(queryIds = listOf("q", "q2")))
+        assertEquals(1, calls)
+        val tokens = Json.parseToJsonElement(result.responseJson).jsonObject["data"]!!.jsonObject["vp_token"]!!.jsonObject
+        val expected = org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("x509_san_dns:first.example"))
+        for (q in listOf("q", "q2")) assertEquals(q, expected, CzkDecoded(tokens[q]!!.jsonArray.single().jsonPrimitive.content).results["n"])
+        assertEquals("x509_san_dns:first.example", s.consents.single().verifier.verifierId)
+    }
+
+    @Test
+    fun circuitZkDcApi_sourcesForOneTypeAreTriedInOrder_andADecliningSourceFallsThrough() = runTest(dispatcher) {
+        val calls = mutableListOf<String>()
+        val s = czkSetup(trust = { buildJsonObject { put("decision", true) } }, sources = listOf(
+            FixedSource("x509_san_dns", null, calls),
+            FixedSource("x509_san_dns", "second-id", calls),
+            FixedSource("x509_san_dns", "third-id", calls),
+        ))
+        val result = czkRun(s, czkRequest())
+        val decoded = czkDecoded(result.responseJson)
+        assertEquals(org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("second-id")), decoded.results["n"])
+        assertEquals(listOf("declined-x509_san_dns", "second-id"), calls)
+    }
+
+    @Test
+    fun circuitZkDcApi_authZenSourceReadsTheVerifierIdFromTheTrustContext() = runTest(dispatcher) {
+        val semantic = org.siros.sdk.credentials.CircuitZkFunction(
+            "pseudonym", "n",
+            Json.parseToJsonElement("""{"config":"known-offender-matching-psc","ver":1,"prf":"sha-256"}""").jsonObject,
+        )
+        val withContext = czkSetup(functions = listOf(semantic), trust = {
+            buildJsonObject {
+                put("decision", true)
+                // go-trust #203: a LIST of {verifier_id_type, verifier_id, basis}. Entries of other types
+                // come first, and the requested type is listed twice with the same value (one identifier).
+                putJsonObject("context") {
+                    putJsonArray("verifier_ids") {
+                        add(buildJsonObject { put("verifier_id_type", "dns"); put("verifier_id", "rp.example.com"); put("basis", "client-id-binding") })
+                        add(buildJsonObject { put("verifier_id_type", "semantic"); put("verifier_id", "semantic_id:LEIXG-5299"); put("basis", "x5c-chain") })
+                        add(buildJsonObject { put("verifier_id_type", "semantic"); put("verifier_id", "semantic_id:LEIXG-5299"); put("basis", "other-basis") })
+                    }
+                }
+            }
+        })
+        val result = czkRun(withContext, czkRequest())
+        assertEquals(
+            org.siros.sdk.credentials.ResultValue.Pseudonym(czkExpectedPseudonym("semantic_id:LEIXG-5299")),
+            czkDecoded(result.responseJson).results["n"],
+        )
+
+        // No context, no verifier_ids, or a different type: the source declines and the request is refused.
+        for (trust in listOf<suspend () -> JsonObject>(
+            { buildJsonObject { put("decision", true) } },
+            { buildJsonObject { put("decision", true); putJsonObject("context") { put("framework", "x") } } },
+            { buildJsonObject { put("decision", true); putJsonObject("context") { putJsonArray("verifier_ids") { add(buildJsonObject { put("verifier_id_type", "other"); put("verifier_id", "v") }) } } } },
+            // Malformed or empty entries of the requested type are skipped, never guessed from.
+            { buildJsonObject { put("decision", true); putJsonObject("context") { putJsonArray("verifier_ids") { add(buildJsonObject { put("verifier_id_type", "semantic"); put("verifier_id", "") }); add(kotlinx.serialization.json.JsonPrimitive("semantic")) } } } },
+            // Two DISTINCT values of the requested type: the wallet does not choose, it declines.
+            { buildJsonObject { put("decision", true); putJsonObject("context") { putJsonArray("verifier_ids") {
+                add(buildJsonObject { put("verifier_id_type", "semantic"); put("verifier_id", "semantic_id:LEIXG-5299") })
+                add(buildJsonObject { put("verifier_id_type", "semantic"); put("verifier_id", "semantic_id:LEIXG-OTHER") })
+            } } } },
+            // The pre-contract map form is not the contract.
+            { buildJsonObject { put("decision", true); putJsonObject("context") { putJsonObject("verifier_ids") { put("semantic", "semantic_id:LEIXG-5299") } } } },
+        )) {
+            czkRefused(czkSetup(functions = listOf(semantic), trust = trust), czkRequest())
+        }
+    }
+
+    @Test
+    fun authZenSource_usesTheOneDistinctValueOfTheRequestedType_andDeclinesWhenAmbiguous() = runTest(dispatcher) {
+        fun ctx(ids: kotlinx.serialization.json.JsonElement) = VerifierIdContext(
+            org.siros.sdk.wallet.dcapi.DCAPIRequest(
+                clientId = "c", responseMode = "dc_api", nonce = "n", dcqlQuery = null, clientMetadata = null,
+                keyMaterial = null, protocol = "openid4vp-v1-signed", state = null,
+            ),
+            TrustResult(trusted = true, context = buildJsonObject { put("verifier_ids", ids) }), "https://rp.example",
+        )
+        val ids = Json.parseToJsonElement(
+            """[{"verifier_id_type":"semantic","verifier_id":""},{"verifier_id_type":"x509_san_dns","verifier_id":"d1"},
+               {"verifier_id_type":"x509_san_dns","verifier_id":"d2"},{"verifier_id_type":"uri","verifier_id":"u"},
+               {"verifier_id_type":"semantic","verifier_id":"semantic_id:one","basis":"x5c-chain"},{"verifier_id_type":"semantic","verifier_id":"semantic_id:one"}]""",
+        )
+        assertEquals("semantic_id:one", AuthZENSource("semantic").resolve(ctx(ids)))
+        // Distinct values of one type: declined, not guessed.
+        assertNull(AuthZENSource("x509_san_dns").resolve(ctx(ids)))
+        // A type that is no rulebook verifier id form is never taken.
+        assertNull(AuthZENSource("uri").resolve(ctx(ids)))
+    }
+
+    private class CancellingSource(override val type: String) : VerifierIdSource {
+        override suspend fun resolve(context: VerifierIdContext): String? = throw kotlinx.coroutines.CancellationException("cancelled")
+    }
+
+    @Test
+    fun verifierIdRegistry_doesNotSwallowCancellation_butStillSkipsAFailingSource() = runTest(dispatcher) {
+        val ctx = VerifierIdContext(
+            org.siros.sdk.wallet.dcapi.DCAPIRequest(
+                clientId = "c", responseMode = "dc_api", nonce = "n", dcqlQuery = null, clientMetadata = null,
+                keyMaterial = null, protocol = "openid4vp-v1-signed", state = null,
+            ),
+            TrustResult(trusted = true), "https://rp.example",
+        )
+        org.junit.Assert.assertThrows(kotlinx.coroutines.CancellationException::class.java) {
+            kotlinx.coroutines.runBlocking { VerifierIdRegistry(listOf("t"), listOf(CancellingSource("t"), FixedSource("t", "later", mutableListOf()))).resolve(ctx) }
+        }
+        val failing = object : VerifierIdSource {
+            override val type = "t"
+            override suspend fun resolve(context: VerifierIdContext): String? = error("boom")
+        }
+        assertEquals(ResolvedVerifierId("t", "later"), VerifierIdRegistry(listOf("t"), listOf(failing, FixedSource("t", "later", mutableListOf()))).resolve(ctx))
+    }
+
+    @Test
+    fun circuitZkDcApi_theTrustRequestNeverNarrowsTheVerifierIdType() = runTest(dispatcher) {
+        // Exactly one type is asked for: the PDP is still not narrowed, so the wallet can pick by its own order.
+        val s = czkSetup()
+        czkRun(s, czkRequest())
+        assertNull(s.trustRequests.single()["context"])
+        val noPseudonym = czkSetup(functions = listOf(org.siros.sdk.credentials.CircuitZkFunction(
+            "age_check", "a", Json.parseToJsonElement("""{"ge":"2000-01-01"}""").jsonObject,
+        )))
+        czkRun(noPseudonym, czkRequest())
+        assertNull(noPseudonym.trustRequests.single()["context"])
+    }
+
+    @Test
+    fun verifierIdRegistry_triesSourcesOfATypeInOrder_afterThePdp_andRejectsAnInvalidTypeList() = runTest(dispatcher) {
+        val ctx = VerifierIdContext(
+            org.siros.sdk.wallet.dcapi.DCAPIRequest(
+                clientId = "c", responseMode = "dc_api", nonce = "n", dcqlQuery = null, clientMetadata = null,
+                keyMaterial = null, protocol = "openid4vp-v1-signed", state = null,
+            ),
+            TrustResult(trusted = true), "https://rp.example",
+        )
+        val calls = mutableListOf<String>()
+        val r = VerifierIdRegistry(listOf("a", "b"), listOf(FixedSource("b", "b-id", calls), FixedSource("a", null, calls), FixedSource("a", "a-id", calls)))
+        assertEquals(ResolvedVerifierId("a", "a-id"), r.resolve(ctx))
+        assertEquals(listOf("declined-a", "a-id"), calls)
+        assertNull(VerifierIdRegistry(emptyList(), listOf(FixedSource("a", "x", mutableListOf()))).resolve(ctx))
+        for (bad in listOf(listOf("a", "a"), listOf(" "), listOf(""), listOf(" a"), listOf("a,b"))) {
+            org.junit.Assert.assertThrows(bad.toString(), IllegalArgumentException::class.java) { VerifierIdRegistry(bad) }
+            org.junit.Assert.assertThrows(bad.toString(), IllegalArgumentException::class.java) { WalletConfig(backendUrl = "https://b.example", circuitZkVerifierIdTypes = bad) }
+        }
+    }
+
+    @Test
+    fun verifierIdRegistry_earlyCheck_neverAsksAHostSourceWithTheEmptyMatchTimeContext() = runTest(dispatcher) {
+        val ctx = VerifierIdContext(
+            org.siros.sdk.wallet.dcapi.DCAPIRequest(
+                clientId = "c", responseMode = "direct_post.jwt", nonce = "", dcqlQuery = null, clientMetadata = null,
+                keyMaterial = null, protocol = "openid4vp-redirect", state = null,
+            ),
+            TrustResult(trusted = true), "",
+        )
+        val calls = mutableListOf<String>()
+        val custom = VerifierIdRegistry(listOf("a"), listOf(FixedSource("a", "a-id", calls)))
+        assertEquals(VerifierIdRegistry.EarlyCheck.Skipped, custom.earlyCheck(ctx))
+        assertEquals("a host source is not called at match time", emptyList<String>(), calls)
+        // Without a host source the PDP answer alone decides, now.
+        assertEquals(VerifierIdRegistry.EarlyCheck.Unresolvable, VerifierIdRegistry(listOf("a")).earlyCheck(ctx))
+    }
+
+    @Test
+    fun circuitZkDcApi_cancelledTrustEvaluation_propagatesCancellation_notARefusal() = runTest(dispatcher) {
+        val s = czkSetup(trust = { throw kotlinx.coroutines.CancellationException("cancelled") })
+        org.junit.Assert.assertThrows(kotlinx.coroutines.CancellationException::class.java) { czkRun(s, czkRequest()) }
+        assertEquals(0, s.prover.calls)
+    }
+
+    @Test
+    fun trustResult_contextIsAbsentByDefault() {
+        assertNull(TrustResult(trusted = true).context)
+    }
+
+    @Test
     fun handleDCAPIRequest_untrustedVerifier_throwsAndNeverSigns() = runTest(dispatcher) {
         val apiClient = mockk<BackendApiClient>()
         coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject {
@@ -5052,7 +10755,6 @@ class SirosWalletTest {
             "apiClient" to apiClient,
             "keystore" to keystore,
             "credentialStore" to store,
-            "trustCache" to TrustCache(),
             "_presentationHistory" to mutableListOf<PresentationRecord>(),
         )
 
@@ -5073,6 +10775,9 @@ class SirosWalletTest {
             thrown = e
         }
         assertTrue(thrown is WalletException)
+        // The user is told (coarsely) and the verifier's message is the same WalletException message as before.
+        assertEquals(org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NOT_TRUSTED, (thrown as org.siros.sdk.wallet.dcapi.DCAPIPresentationDeclined).reason)
+        assertTrue(thrown!!.message!!.startsWith("Verifier 'https://untrusted-relying-party.example' is not trusted"))
         coVerify(exactly = 0) { keystore.signVpToken(any(), any(), any(), any()) }
         assertEquals(0, wallet.presentationHistory.size)
     }
@@ -5110,7 +10815,6 @@ class SirosWalletTest {
             "apiClient" to apiClient,
             "keystore" to keystore,
             "credentialStore" to store,
-            "trustCache" to TrustCache(),
             "_presentationHistory" to mutableListOf<PresentationRecord>(),
         )
 
@@ -5167,7 +10871,6 @@ class SirosWalletTest {
                 "apiClient" to apiClient,
                 "keystore" to keystore,
                 "credentialStore" to store,
-                "trustCache" to TrustCache(),
                 "_presentationHistory" to mutableListOf<PresentationRecord>(),
             )
 
@@ -5235,7 +10938,6 @@ class SirosWalletTest {
                 "apiClient" to apiClient,
                 "keystore" to keystore,
                 "credentialStore" to store,
-                "trustCache" to TrustCache(),
                 "_presentationHistory" to mutableListOf<PresentationRecord>(),
             )
 
@@ -5293,7 +10995,6 @@ class SirosWalletTest {
             "apiClient" to apiClient,
             "keystore" to mockk<KeystoreManager>(relaxed = true),
             "credentialStore" to store,
-            "trustCache" to TrustCache(),
             "_presentationHistory" to mutableListOf<PresentationRecord>(),
         )
 
@@ -5307,6 +11008,59 @@ class SirosWalletTest {
             thrown = e
         }
         assertTrue(thrown is WalletException)
+        assertEquals(org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NO_MATCHING_CREDENTIAL, (thrown as org.siros.sdk.wallet.dcapi.DCAPIPresentationDeclined).reason)
+        assertEquals("No credential in the wallet matches the request", thrown.message)
+    }
+
+    private fun plainDcApiWallet(credential: StoredCredential?): SirosWallet {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        coEvery { keystore.signVpToken(any(), any(), any(), any()) } returns "signed-vp-token"
+        return newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "apiClient" to apiClient,
+            "keystore" to keystore,
+            "credentialStore" to FakeCredentialStore(listOfNotNull(credential).toMutableList()),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+    }
+
+    private fun declinedReason(block: suspend () -> Unit): org.siros.sdk.wallet.dcapi.DCAPIPresentationDeclined {
+        val e = org.junit.Assert.assertThrows(org.siros.sdk.wallet.dcapi.DCAPIPresentationDeclined::class.java) { kotlinx.coroutines.runBlocking { block() } }
+        // Still a WalletException: existing handlers (and the verifier's error_description) are unchanged.
+        assertTrue(e is WalletException)
+        return e
+    }
+
+    @Test
+    fun handleDCAPIRequest_missingEncryptionKey_isDeclinedWithAUserReason() = runTest(dispatcher) {
+        val wallet = plainDcApiWallet(StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw", metadata = CredentialMetadata(name = "X"), batchId = 1L, instanceId = 0))
+        val e = declinedReason {
+            wallet.handleDCAPIRequest(
+                wrapDCAPIRequest("openid4vp-v1-unsigned", buildJsonObject { put("nonce", "n"); put("response_mode", "dc_api.jwt") }),
+                origin = "https://relying-party.example",
+            )
+        }
+        assertEquals(org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.UNSUPPORTED_REQUEST, e.reason)
+        assertEquals("dc_api.jwt response_mode requires client_metadata.jwks with an encryption key", e.message)
+    }
+
+    @Test
+    fun handleDCAPIRequest_noEligibleCopyLeft_isDeclinedWithAUserReason() = runTest(dispatcher) {
+        // The credential's key is not in the keystore, so no copy is eligible.
+        val wallet = plainDcApiWallet(StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw", kid = "gone-kid", metadata = CredentialMetadata(name = "X"), batchId = 1L, instanceId = 0))
+        val e = declinedReason {
+            wallet.handleDCAPIRequest(
+                wrapDCAPIRequest("openid4vp-v1-unsigned", buildJsonObject { put("nonce", "n") }),
+                origin = "https://relying-party.example",
+            )
+        }
+        assertEquals(org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE, e.reason)
+        assertEquals("No eligible copies of the requested credential remain - renew it to get more", e.message)
     }
 
     @Test
@@ -5326,7 +11080,6 @@ class SirosWalletTest {
             "apiClient" to apiClient,
             "keystore" to keystore,
             "credentialStore" to store,
-            "trustCache" to TrustCache(),
             "_presentationHistory" to mutableListOf<PresentationRecord>(),
         )
 
@@ -5387,7 +11140,6 @@ class SirosWalletTest {
             "apiClient" to apiClient,
             "keystore" to keystore,
             "credentialStore" to store,
-            "trustCache" to TrustCache(),
             "_presentationHistory" to mutableListOf<PresentationRecord>(),
         )
 
@@ -5529,6 +11281,221 @@ class SirosWalletTest {
         assertTrue(!result.trusted)
         assertEquals("local-vical-root", result.framework)
         assertTrue(result.reason?.contains("no VICAL root certificate configured") == true)
+    }
+
+    // -- go-trust requires resource.id == subject.id on every full evaluation;
+    // a mismatch is a 400 there and a 502 from the backend's authzen proxy.
+
+    private fun issuerNamingFixtureCert(): java.security.cert.X509Certificate {
+        val pem = checkNotNull(javaClass.getResourceAsStream("/mdoc-issuer-identity/uri_and_dns.pem"))
+        return java.security.cert.CertificateFactory.getInstance("X.509").generateCertificate(pem)
+            as java.security.cert.X509Certificate
+    }
+
+    private fun sha256HexOf(bytes: ByteArray): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
+    @Test
+    fun evaluateIssuerTrust_issuerNamedSubject_resourceIdEqualsSubjectId() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        val request = slot<JsonObject>()
+        coEvery { apiClient.evaluateTrust(capture(request)) } returns buildJsonObject {
+            put("decision", JsonPrimitive(true))
+        }
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+        val cert = issuerNamingFixtureCert()
+
+        wallet.evaluateIssuerTrust(listOf(cert.encoded), docType = "org.iso.18013.5.1.mDL")
+
+        val subject = request.captured["subject"]!!.jsonObject
+        val resource = request.captured["resource"]!!.jsonObject
+        assertEquals("https://issuer.example/tenant", subject["id"]?.jsonPrimitive?.content)
+        assertEquals(subject["id"]?.jsonPrimitive?.content, resource["id"]?.jsonPrimitive?.content)
+        // The key material still travels in resource.key.
+        assertEquals("x5c", resource["type"]?.jsonPrimitive?.content)
+        assertEquals(
+            java.util.Base64.getEncoder().encodeToString(cert.encoded),
+            resource["key"]?.jsonArray?.single()?.jsonPrimitive?.content,
+        )
+    }
+
+    @Test
+    fun evaluateIssuerTrust_certificateNamingNoUrl_usesCertificateHashForBoth() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        val request = slot<JsonObject>()
+        coEvery { apiClient.evaluateTrust(capture(request)) } returns buildJsonObject {
+            put("decision", JsonPrimitive(false))
+        }
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+        val der = ByteArray(4) { it.toByte() } // not a certificate: names no URL
+
+        wallet.evaluateIssuerTrust(listOf(der), docType = null)
+
+        val expected = sha256HexOf(der)
+        assertEquals(expected, request.captured["subject"]!!.jsonObject["id"]?.jsonPrimitive?.content)
+        assertEquals(expected, request.captured["resource"]!!.jsonObject["id"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun evaluateReaderTrust_defaultCertificateSubject_resourceIdEqualsSubjectId() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        val request = slot<JsonObject>()
+        coEvery { apiClient.evaluateTrust(capture(request)) } returns buildJsonObject {
+            put("decision", JsonPrimitive(true))
+        }
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+        val der = ByteArray(6) { (it + 1).toByte() }
+
+        wallet.evaluateReaderTrust(listOf(der))
+
+        val subjectId = request.captured["subject"]!!.jsonObject["id"]?.jsonPrimitive?.content
+        assertEquals(sha256HexOf(der), subjectId)
+        assertEquals(subjectId, request.captured["resource"]!!.jsonObject["id"]?.jsonPrimitive?.content)
+        assertEquals("mdoc-reader-auth", request.captured["action"]!!.jsonObject["name"]?.jsonPrimitive?.content)
+    }
+
+    // -- Trust decision cache wiring: one cache across every evaluate call site.
+
+    @Test
+    fun trustDecisionCache_sameIssuerEvaluatedTwice_callsBackendOnce_andLogoutStyleClearReasks() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", JsonPrimitive(false)) }
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "trustDecisionCache" to TrustDecisionCache(java.time.Duration.ofMinutes(5), nowMillis = { System.nanoTime() / 1_000_000L }),
+        )
+        val cert = issuerNamingFixtureCert()
+
+        assertTrue(!wallet.evaluateIssuerTrust(listOf(cert.encoded), "org.iso.18013.5.1.mDL").trusted)
+        assertTrue(!wallet.evaluateIssuerTrust(listOf(cert.encoded), "org.iso.18013.5.1.mDL").trusted)
+        coVerify(exactly = 1) { apiClient.evaluateTrust(any()) }
+
+        // A different doc type is a different question; the reader action too.
+        wallet.evaluateIssuerTrust(listOf(cert.encoded), "eu.europa.ec.eudi.pid.1")
+        wallet.evaluateReaderTrust(listOf(cert.encoded))
+        coVerify(exactly = 3) { apiClient.evaluateTrust(any()) }
+
+        (getField(wallet, "trustDecisionCache") as TrustDecisionCache).clear()
+        wallet.evaluateIssuerTrust(listOf(cert.encoded), "org.iso.18013.5.1.mDL")
+        coVerify(exactly = 4) { apiClient.evaluateTrust(any()) }
+    }
+
+    @Test
+    fun trustDecisionCache_decisionOfAnOldClientNeverAnswersTheNewClient() = runTest(dispatcher) {
+        val oldClient = mockk<BackendApiClient>()
+        val newClient = mockk<BackendApiClient>()
+        coEvery { oldClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", JsonPrimitive(true)) }
+        coEvery { newClient.evaluateTrust(any()) } returns buildJsonObject { put("decision", JsonPrimitive(false)) }
+        val wallet = newWallet(
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "trustDecisionCache" to TrustDecisionCache(java.time.Duration.ofMinutes(5), nowMillis = { System.nanoTime() / 1_000_000L }),
+        )
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "evaluateTrustCached" }
+        method.isAccessible = true
+        val body = buildJsonObject { put("subject", buildJsonObject { put("id", JsonPrimitive("s")) }) }
+
+        // Old client's call completes after a re-login (the cache was cleared in between).
+        (getField(wallet, "trustDecisionCache") as TrustDecisionCache).clear()
+        method.callSuspend(wallet, oldClient, body)
+        val answer = method.callSuspend(wallet, newClient, body) as JsonObject
+
+        assertEquals(JsonPrimitive(false), answer["decision"])
+        coVerify(exactly = 1) { newClient.evaluateTrust(any()) }
+    }
+
+    @Test
+    fun trustDecisionCache_errorsAreNotCachedByTheWallet() = runTest(dispatcher) {
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws NetworkException("offline")
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "trustDecisionCache" to TrustDecisionCache(java.time.Duration.ofMinutes(5), nowMillis = { System.nanoTime() / 1_000_000L }),
+        )
+        wallet.evaluateReaderTrust(listOf(ByteArray(4)))
+        wallet.evaluateReaderTrust(listOf(ByteArray(4)))
+        coVerify(exactly = 2) { apiClient.evaluateTrust(any()) }
+    }
+
+    // -- Fallback to local validation: genuine unreachability only.
+
+    /** A wallet whose local VICAL root accepts [cert], so a fallback would say trusted=true. */
+    private fun issuerWalletWithLocalRoot(apiClient: BackendApiClient, cert: java.security.cert.X509Certificate) =
+        newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                issuerTrustRootCertificatesPem = listOf("unused"),
+            ),
+            "issuerTrustRootCertificates\$delegate" to lazy { listOf(cert) },
+        )
+
+    @Test
+    fun evaluateIssuerTrust_fallbackOnlyForGenuineUnreachability() = runTest(dispatcher) {
+        val cert = issuerNamingFixtureCert()
+        // (exception, expect local fallback)
+        val cases = listOf(
+            NetworkException("timeout") to true,
+            BackendApiException(502, "API request failed: 502", "") to true,
+            BackendApiException(502, "API request failed: 502", "{}") to true,
+            BackendApiException(503, "API request failed: 503", "<html>Service Unavailable</html>") to true,
+            BackendApiException(504, "API request failed: 504", "upstream timed out") to true,
+            BackendApiException(400, "API request failed: 400", """{"error":"bad request"}""") to false,
+            BackendApiException(401, "API request failed: 401", "") to false,
+            BackendApiException(403, "API request failed: 403", "") to false,
+            BackendApiException(404, "API request failed: 404", "") to false,
+            BackendApiException(500, "API request failed: 500", "") to false,
+            BackendApiException(502, "API request failed: 502", """{"error":"resource.id must match subject.id"}""") to false,
+            BackendApiException(503, "API request failed: 503", """{"error":"pdp refused"}""") to false,
+            BackendApiException(0, "Missing field in response", "") to false,
+        )
+        for ((exception, expectFallback) in cases) {
+            val apiClient = mockk<BackendApiClient>()
+            coEvery { apiClient.evaluateTrust(any()) } throws exception
+            val wallet = issuerWalletWithLocalRoot(apiClient, cert)
+
+            val result = wallet.evaluateIssuerTrust(listOf(cert.encoded), docType = null)
+
+            val label = "$exception (${(exception as? BackendApiException)?.code}) body=${(exception as? BackendApiException)?.body}"
+            if (expectFallback) {
+                assertEquals(label, "local-vical-root", result.framework)
+                assertTrue(label, result.trusted)
+            } else {
+                assertEquals(label, "vical", result.framework)
+                assertTrue(label, !result.trusted)
+            }
+        }
+    }
+
+    @Test
+    fun evaluateIssuerTrust_remoteOnly_502WithoutBody_isNotTrusted() = runTest(dispatcher) {
+        val cert = issuerNamingFixtureCert()
+        val apiClient = mockk<BackendApiClient>()
+        coEvery { apiClient.evaluateTrust(any()) } throws BackendApiException(502, "API request failed: 502", "")
+        val wallet = newWallet(
+            "apiClient" to apiClient,
+            "config" to WalletConfig(
+                backendUrl = "https://wallet.example.com",
+                issuerTrustEvaluationMode = MdocTrustEvaluationMode.REMOTE_ONLY,
+                issuerTrustRootCertificatesPem = listOf("unused"),
+            ),
+            "issuerTrustRootCertificates\$delegate" to lazy { listOf(cert) },
+        )
+
+        val result = wallet.evaluateIssuerTrust(listOf(cert.encoded), docType = null)
+
+        assertTrue(!result.trusted)
+        assertEquals("vical", result.framework)
     }
 
     @Test
@@ -6981,6 +12948,595 @@ class SirosWalletTest {
         coVerify(exactly = 2) { f.apiClient.deleteAccount("ch-1", f.assertion, "DELETE") }
     }
 
+    // ---- Issuance start: visible state before any network work ----------
+
+    private val engineGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+
+    private val startOffer = org.siros.sdk.credentials.CredentialOffer(
+        credentialConfigurationId = "pid",
+        credentialIssuerIdentifier = "https://issuer.invalid",
+        credentialName = "Personal ID",
+        issuerName = "Issuer",
+    )
+
+    private fun startingWallet(engine: WalletEngineSession, stateFlow: MutableStateFlow<WalletState>) = newWallet(
+        "_state" to stateFlow,
+        "engineSession" to engine,
+        "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+    )
+
+    /** Records every state the wallet publishes, in order, interleaved with [log] entries. */
+    private fun CoroutineScope.recordStates(stateFlow: MutableStateFlow<WalletState>, log: MutableList<String>) =
+        launch(Dispatchers.Unconfined) {
+            stateFlow.collect { s ->
+                log += when {
+                    s is WalletState.FlowActive && s.isPending -> "state:${s.status}"
+                    s is WalletState.FlowActive -> "state:flow:${s.flowId}:${s.flowType}:${s.status}"
+                    else -> "state:${s::class.simpleName}"
+                }
+            }
+        }
+
+    @Test
+    fun startIssuanceByOffer_emitsInitializing_beforeAnyNetworkWork_andStepsThroughTheStart() = runTest(dispatcher) {
+        val log = mutableListOf<String>()
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        coEvery { engine.forceReconnect() } coAnswers { log += "net:forceReconnect" }
+        coEvery { engine.awaitConnected(any()) } coAnswers { log += "net:awaitConnected" }
+        every { engine.startIssuance(any(), any(), any(), any(), any(), any()) } answers { log += "net:startIssuance" }
+        val wallet = startingWallet(engine, stateFlow)
+        val recorder = recordStates(stateFlow, log)
+
+        wallet.startIssuanceByOffer(startOffer)
+        recorder.cancel()
+
+        val steps = log.filter { it.startsWith("state:") || it.startsWith("net:") }
+        assertEquals(
+            listOf(
+                "state:Ready",
+                "state:initializing",
+                "state:connecting_engine",
+                "net:forceReconnect",
+                "state:establishing_session",
+                "net:awaitConnected",
+                "state:checking_entitlement",
+                "state:preparing_issuance",
+                "state:starting_flow",
+                "net:startIssuance",
+            ),
+            steps,
+        )
+        // Still the flow screen, not Ready, until the engine reports its first
+        // progress step; a host must not drop back to the list in this window.
+        val now = stateFlow.value as WalletState.FlowActive
+        assertTrue(now.isPending)
+        assertEquals("issuance", now.flowType)
+    }
+
+    @Test
+    fun startIssuance_withOfferUri_emitsInitializing_beforeAnyNetworkWork() = runTest(dispatcher) {
+        val log = mutableListOf<String>()
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        coEvery { engine.forceReconnect() } coAnswers { log += "net:forceReconnect" }
+        val wallet = startingWallet(engine, stateFlow)
+        val recorder = recordStates(stateFlow, log)
+
+        wallet.startIssuance("""{"credential_issuer":"https://issuer.invalid","credential_configuration_ids":["pid"]}""")
+        recorder.cancel()
+
+        val steps = log.filter { it.startsWith("state:") || it.startsWith("net:") }
+        assertEquals(listOf("state:Ready", "state:initializing", "state:connecting_engine", "net:forceReconnect"), steps.take(4))
+        assertTrue(steps.contains("state:starting_flow"))
+        assertFalse("no entitlement check on the offer-URI path", steps.contains("state:checking_entitlement"))
+    }
+
+    @Test
+    fun startIssuanceByOffer_engineUnreachable_clearsPendingState_andThrows() = runTest(dispatcher) {
+        val log = mutableListOf<String>()
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        coEvery { engine.awaitConnected(any()) } throws IllegalStateException("Engine WebSocket connection failed")
+        val wallet = startingWallet(engine, stateFlow)
+        val recorder = recordStates(stateFlow, log)
+
+        val e = runCatching { wallet.startIssuanceByOffer(startOffer) }.exceptionOrNull()
+        recorder.cancel()
+
+        assertTrue("the failure must reach the caller, was $e", e is IllegalStateException)
+        assertTrue("pending state was shown first: $log", "state:establishing_session" in log)
+        // Never left on a spinner nothing will clear, and never a silent return
+        // to a state the caller cannot tell from "nothing happened".
+        assertTrue(stateFlow.value is WalletState.Ready)
+        assertFalse(getField(wallet, "issuanceInFlight") as Boolean)
+        verify(exactly = 0) { engine.startIssuance(any(), any(), any(), any(), any(), any()) }
+
+        // And a retry is allowed.
+        coEvery { engine.awaitConnected(any()) } returns Unit
+        wallet.startIssuanceByOffer(startOffer)
+        verify(exactly = 1) { engine.startIssuance(any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun startIssuanceByOffer_engineStartThrows_clearsPendingState() = runTest(dispatcher) {
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        every { engine.startIssuance(any(), any(), any(), any(), any(), any()) } throws IllegalStateException("not connected")
+        val wallet = startingWallet(engine, stateFlow)
+
+        val e = runCatching { wallet.startIssuanceByOffer(startOffer) }.exceptionOrNull()
+
+        assertTrue(e is IllegalStateException)
+        assertTrue(stateFlow.value is WalletState.Ready)
+        assertFalse(getField(wallet, "issuanceInFlight") as Boolean)
+    }
+
+    @Test
+    fun cancelDuringStart_resetsAtOnce_andTheSuspendedStartNeverReachesTheEngine() = runTest(dispatcher) {
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        coEvery { engine.forceReconnect() } coAnswers { gate.await() }
+        val wallet = startingWallet(engine, stateFlow)
+
+        val job = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            runCatching { wallet.startIssuanceByOffer(startOffer) }
+        }
+        assertTrue("pending state is up while the engine connects", (stateFlow.value as WalletState.FlowActive).isPending)
+
+        wallet.cancelCurrentFlow()
+
+        assertTrue(stateFlow.value is WalletState.Ready)
+        assertFalse(getField(wallet, "issuanceInFlight") as Boolean)
+        // There is no engine flow to cancel yet - sending one would name a
+        // flow id that does not exist.
+        verify(exactly = 0) { engine.cancelFlow(any()) }
+
+        gate.complete(Unit)
+        job.join()
+
+        verify(exactly = 0) { engine.startIssuance(any(), any(), any(), any(), any(), any()) }
+        assertTrue("the cancelled start must not resurrect the flow", stateFlow.value is WalletState.Ready)
+        assertFalse(getField(wallet, "issuanceInFlight") as Boolean)
+    }
+
+    @Test
+    fun cancelledStart_doesNotClobberANewerStart() = runTest(dispatcher) {
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        var first = true
+        coEvery { engine.forceReconnect() } coAnswers { if (first) { first = false; gate.await() } }
+        val wallet = startingWallet(engine, stateFlow)
+
+        val job = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            runCatching { wallet.startIssuanceByOffer(startOffer) }
+        }
+        wallet.cancelCurrentFlow()
+        wallet.startIssuanceByOffer(startOffer) // second attempt completes
+        gate.complete(Unit)
+        job.join() // first attempt unwinds as cancelled
+
+        verify(exactly = 1) { engine.startIssuance(any(), any(), any(), any(), any(), any()) }
+        assertTrue("the newer start's pending state survives", (stateFlow.value as WalletState.FlowActive).isPending)
+        assertTrue("and so does its in-flight guard", getField(wallet, "issuanceInFlight") as Boolean)
+    }
+
+    @Test
+    fun firstEngineProgress_replacesPendingState_andKeepsTheIssuanceFlowType() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val engine = mockEngineConstructor(progressFlow = progressFlow)
+        every { engine.startIssuance(any(), any(), any(), any(), any(), any()) } just runs
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val wallet = newWallet(
+            "_state" to stateFlow,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", tenantId = "tenant-1"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to mockk<WalletEventListener>(relaxed = true),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        wallet.startIssuanceByOffer(startOffer)
+        assertTrue((stateFlow.value as WalletState.FlowActive).isPending)
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-1", step = "parsing_offer").also { it.connectionGeneration = engineGeneration.get() })
+        advanceUntilIdle()
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-1", step = "offer_parsed").also { it.connectionGeneration = engineGeneration.get() })
+        advanceUntilIdle()
+
+        val s = stateFlow.value as WalletState.FlowActive
+        assertEquals("flow-1", s.flowId)
+        assertFalse(s.isPending)
+        assertEquals("issuance", s.flowType)
+        assertEquals("offer_parsed", s.status)
+    }
+
+    @Test
+    fun flowLost_aSentIssuanceStartWhoseConnectionIsReplacedBeforeItsFirstProgressIsRetired() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val generations = MutableStateFlow(0)
+        val engine = mockEngineConstructor(progressFlow = progressFlow, generations = generations)
+        every { engine.startIssuance(any(), any(), any(), any(), any(), any()) } just runs
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val wallet = newWallet(
+            "_state" to stateFlow,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", tenantId = "tenant-1"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to listener,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        wallet.startIssuanceByOffer(startOffer)
+        assertTrue((stateFlow.value as WalletState.FlowActive).isPending)
+        // The socket is replaced before any progress arrived.
+        engineGeneration.incrementAndGet()
+        generations.value = engineGeneration.get()
+        advanceUntilIdle()
+        assertTrue("no stranded spinner", stateFlow.value is WalletState.Ready)
+        verify(exactly = 1) { listener.onFlowError(any(), SirosWallet.FLOW_LOST_MESSAGE, any()) }
+        assertEquals("a new issuance can start", false, getField(wallet, "issuanceInFlight"))
+    }
+
+    @Test
+    fun failureOfACancelledStart_unwindsAsCancellation_notAsTheNetworkError() = runTest(dispatcher) {
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        // Fails only after the cancel, past every epoch check, so it is the
+        // network error itself that has to be suppressed.
+        coEvery { engine.awaitConnected(any()) } coAnswers {
+            gate.await()
+            throw IllegalStateException("Engine WebSocket connection failed")
+        }
+        coEvery { engine.forceReconnect() } just runs
+        val wallet = startingWallet(engine, stateFlow)
+        var result: Throwable? = null
+        val job = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            result = runCatching { wallet.startIssuanceByOffer(startOffer) }.exceptionOrNull()
+        }
+        wallet.cancelCurrentFlow()
+        gate.complete(Unit)
+        job.join()
+
+        assertTrue("a late failure after cancel must not surface as an error, was $result",
+            result is kotlinx.coroutines.CancellationException)
+        assertTrue(stateFlow.value is WalletState.Ready)
+    }
+
+    @Test
+    fun cancelDuringMetadataFetch_doesNotPublishIntoSharedFields() = runTest(dispatcher) {
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val vctmFetcher = mockk<org.siros.sdk.credentials.VctmFetcher>(relaxed = true)
+        val reached = kotlinx.coroutines.CompletableDeferred<Unit>()
+        coEvery { vctmFetcher.fetchDocument(any(), any(), any(), any(), any()) } coAnswers {
+            reached.complete(Unit)
+            gate.await()
+            null
+        }
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val wallet = newWallet(
+            "_state" to stateFlow,
+            "engineSession" to engine,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "vctmFetcher" to vctmFetcher,
+        )
+        val job = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            runCatching { wallet.startIssuanceByOffer(startOffer) }
+        }
+        // Wait until the start is parked inside the metadata fetch (after the
+        // entitlement check, which runs on the IO dispatcher), then cancel.
+        reached.await()
+        wallet.cancelCurrentFlow()
+        setField(wallet, "activeOffer", null)
+        gate.complete(Unit)
+        job.join()
+
+        assertNull("cancelled start published its offer", getField(wallet, "activeOffer"))
+        verify(exactly = 0) { engine.startIssuance(any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun cancelAfterFlowStartSent_cancelsTheFlowOnItsFirstEvent_andIgnoresIt() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val engine = mockEngineConstructor(progressFlow = progressFlow)
+        every { engine.startIssuance(any(), any(), any(), any(), any(), any()) } just runs
+        every { engine.cancelFlow(any()) } just runs
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val wallet = newWallet(
+            "_state" to stateFlow,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", tenantId = "tenant-1"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to listener,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        wallet.startIssuanceByOffer(startOffer) // flow_start is out, no flow id yet
+        wallet.cancelCurrentFlow()
+        assertTrue(stateFlow.value is WalletState.Ready)
+
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-late", step = "parsing_offer").also { it.connectionGeneration = engineGeneration.get() })
+        advanceUntilIdle()
+
+        verify(exactly = 1) { engine.cancelFlow("flow-late") }
+        assertTrue("the cancelled flow must not reopen: ${stateFlow.value}", stateFlow.value is WalletState.Ready)
+    }
+
+    private fun abandonedStartWallet(
+        progressFlow: MutableSharedFlow<FlowProgressMessage>,
+        flowErrors: MutableSharedFlow<FlowErrorMessage> = MutableSharedFlow(),
+        listener: WalletEventListener,
+        stateFlow: MutableStateFlow<WalletState>,
+    ): Pair<SirosWallet, WalletEngineSession> {
+        val engine = mockEngineConstructor(progressFlow = progressFlow, flowErrors = flowErrors)
+        every { engine.startIssuance(any(), any(), any(), any(), any(), any()) } just runs
+        every { engine.cancelFlow(any()) } just runs
+        val wallet = newWallet(
+            "_state" to stateFlow,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", tenantId = "tenant-1"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to listener,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        return wallet to engine
+    }
+
+    @Test
+    fun cancelledStart_whoseFirstReplyIsAnError_doesNotResetState_orReachTheHost() = runTest(dispatcher) {
+        val flowErrors = MutableSharedFlow<FlowErrorMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val (wallet, engine) = abandonedStartWallet(MutableSharedFlow(), flowErrors, listener, stateFlow)
+        advanceUntilIdle()
+        wallet.startIssuanceByOffer(startOffer)
+        wallet.cancelCurrentFlow()
+
+        flowErrors.emit(
+            FlowErrorMessage(flowId = "flow-late", error = org.siros.sdk.transport.engine.FlowError(code = "x", message = "boom")).also { it.connectionGeneration = engineGeneration.get() }
+        )
+        advanceUntilIdle()
+
+        verify(exactly = 1) { engine.cancelFlow("flow-late") }
+        verify(exactly = 0) { listener.onFlowError(any(), any(), any()) }
+    }
+
+    @Test
+    fun retryAfterACancelledStart_isNotMistakenForTheCancelledFlow() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val (wallet, engine) = abandonedStartWallet(progressFlow, listener = listener, stateFlow = stateFlow)
+        advanceUntilIdle()
+        wallet.startIssuanceByOffer(startOffer)
+        wallet.cancelCurrentFlow()
+        // The retry replaces the socket; the cancelled flow's reply can no longer arrive.
+        wallet.startIssuanceByOffer(startOffer)
+
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-retry", step = "parsing_offer").also { it.connectionGeneration = engineGeneration.get() })
+        advanceUntilIdle()
+
+        verify(exactly = 0) { engine.cancelFlow(any()) }
+        assertEquals("flow-retry", (stateFlow.value as WalletState.FlowActive).flowId)
+    }
+
+    @Test
+    fun supersededStartResumingAfterReconnect_doesNotEraseALaterCancelledStartsMarker() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val (wallet, engine) = abandonedStartWallet(progressFlow, listener = listener, stateFlow = stateFlow)
+        advanceUntilIdle()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var calls = 0
+        coEvery { engine.forceReconnect() } coAnswers { if (calls++ == 0) gate.await() }
+
+        val a = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            runCatching { wallet.startIssuanceByOffer(startOffer) }
+        }
+        wallet.cancelCurrentFlow()                      // A parked in forceReconnect, cancelled
+        wallet.startIssuanceByOffer(startOffer)         // B sends its start...
+        wallet.cancelCurrentFlow()                      // ...and is cancelled after send
+        gate.complete(Unit)                             // A resumes: must not touch B's marker
+        a.join()
+
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-b", step = "parsing_offer"))
+        advanceUntilIdle()
+
+        verify(exactly = 1) { engine.cancelFlow("flow-b") }
+        assertTrue(stateFlow.value is WalletState.Ready)
+    }
+
+    @Test
+    fun cancelledIssuanceMarker_isRetiredByAnyConnectionReplacement_notJustAnIssuanceRetry() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val (wallet, engine) = abandonedStartWallet(progressFlow, listener = listener, stateFlow = stateFlow)
+        advanceUntilIdle()
+        wallet.startIssuanceByOffer(startOffer)
+        wallet.cancelCurrentFlow()
+
+        // A presentation/renewal path reconnects through ensureEngineConnected.
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "ensureEngineConnected" }
+        method.isAccessible = true
+        method.callSuspend(wallet, engine)
+
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-presentation", step = "parsing_request").also { it.connectionGeneration = engineGeneration.get() })
+        advanceUntilIdle()
+
+        verify(exactly = 0) { engine.cancelFlow(any()) }
+        assertEquals("flow-presentation", (stateFlow.value as WalletState.FlowActive).flowId)
+    }
+
+    @Test
+    fun staleBufferedCompletion_afterARetry_isRecognisedAsTheCancelledStarts_andNotTheRetrys() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val completes = MutableSharedFlow<FlowCompleteMessage>()
+        val engine = mockEngineConstructor(progressFlow = progressFlow, flowComplete = completes)
+        every { engine.startIssuance(any(), any(), any(), any(), any(), any()) } just runs
+        every { engine.cancelFlow(any()) } just runs
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val wallet = newWallet(
+            "_state" to stateFlow,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", tenantId = "tenant-1"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to listener,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        wallet.startIssuanceByOffer(startOffer)
+        val oldGeneration = engineGeneration.get() // the connection the start was sent on
+        wallet.cancelCurrentFlow()                 // cancelled after send, on that connection
+        wallet.startIssuanceByOffer(startOffer)    // retry: new connection
+
+        // The retry's own first event arrives first and must not be taken for the cancelled flow...
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-new", step = "parsing_offer").also { it.connectionGeneration = engineGeneration.get() })
+        advanceUntilIdle()
+        assertEquals("flow-new", (stateFlow.value as WalletState.FlowActive).flowId)
+        verify(exactly = 0) { engine.cancelFlow("flow-new") }
+
+        // ...and the buffered completion of the cancelled start, still tagged with
+        // the old connection, is dropped instead of acting on the retry's state.
+        completes.emit(FlowCompleteMessage(flowId = "flow-old").also { it.connectionGeneration = oldGeneration })
+        advanceUntilIdle()
+        verify(exactly = 1) { engine.cancelFlow("flow-old") }
+        assertEquals("flow-new", (stateFlow.value as WalletState.FlowActive).flowId)
+    }
+
+    @Test
+    fun reconnectBetweenSendAndCancel_stillMatchesTheConnectionTheStartWasSentOn() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val (wallet, engine) = abandonedStartWallet(progressFlow, listener = listener, stateFlow = stateFlow)
+        advanceUntilIdle()
+        wallet.startIssuanceByOffer(startOffer)
+        val sentOn = engineGeneration.get()
+        engineGeneration.incrementAndGet() // automatic reconnect before the user cancels
+        wallet.cancelCurrentFlow()
+
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-late", step = "parsing_offer").also { it.connectionGeneration = sentOn })
+        advanceUntilIdle()
+
+        verify(exactly = 1) { engine.cancelFlow("flow-late") }
+        assertTrue(stateFlow.value is WalletState.Ready)
+    }
+
+    @Test
+    fun sessionReplacement_doesNotReuseAnAbandonedMarkerFromTheOldSession() = runTest(dispatcher) {
+        val progress1 = MutableSharedFlow<FlowProgressMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val (wallet, engine1) = abandonedStartWallet(progress1, listener = listener, stateFlow = stateFlow)
+        advanceUntilIdle()
+        wallet.startIssuanceByOffer(startOffer)
+        val generation = engineGeneration.get()
+        wallet.cancelCurrentFlow()               // marker: session 1, generation g
+        every { engine1.disconnect() } just runs
+
+        // Logout/login: a brand new session whose generations restart at the same number.
+        val progress2 = MutableSharedFlow<FlowProgressMessage>()
+        val engine2 = mockEngineConstructor(progressFlow = progress2)
+        every { engine2.startIssuance(any(), any(), any(), any(), any(), any()) } just runs
+        every { engine2.cancelFlow(any()) } just runs
+        engineGeneration.set(generation - 1) // so the new session's first connection is generation g again
+        invokeConnectEngine(wallet, "app-token-2")
+        advanceUntilIdle()
+        wallet.startIssuanceByOffer(startOffer)
+        assertEquals(generation, engineGeneration.get())
+
+        progress2.emit(FlowProgressMessage(flowId = "flow-legit", step = "parsing_offer").also { it.connectionGeneration = generation })
+        advanceUntilIdle()
+
+        verify(exactly = 0) { engine2.cancelFlow(any()) }
+        assertEquals("flow-legit", (stateFlow.value as WalletState.FlowActive).flowId)
+    }
+
+    @Test
+    fun cancelFromASynchronousStateCollector_onStartingFlow_stopsTheStartBeforeItIsSent() = runTest(dispatcher) {
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val wallet = startingWallet(engine, stateFlow)
+        val collector = CoroutineScope(Dispatchers.Unconfined).launch {
+            stateFlow.collect { s ->
+                if (s is WalletState.FlowActive && s.status == WalletState.FlowActive.STEP_STARTING_FLOW) {
+                    wallet.cancelCurrentFlow()
+                }
+            }
+        }
+
+        val e = runCatching { wallet.startIssuanceByOffer(startOffer) }.exceptionOrNull()
+        collector.cancel()
+
+        assertTrue("start must unwind as a cancellation, was $e", e is kotlinx.coroutines.CancellationException)
+        verify(exactly = 0) { engine.startIssuance(any(), any(), any(), any(), any(), any()) }
+        assertTrue(stateFlow.value is WalletState.Ready)
+    }
+
+    @Test
+    fun cancellationErrorOfAnActiveFlow_doesNotClearAnImmediateRetry() = runTest(dispatcher) {
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val flowErrors = MutableSharedFlow<FlowErrorMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val (wallet, engine) = abandonedStartWallet(progressFlow, flowErrors, listener, stateFlow)
+        advanceUntilIdle()
+        wallet.startIssuanceByOffer(startOffer)
+        progressFlow.emit(FlowProgressMessage(flowId = "flow-old", step = "parsing_offer").also { it.connectionGeneration = engineGeneration.get() })
+        advanceUntilIdle()
+        assertEquals("flow-old", (stateFlow.value as WalletState.FlowActive).flowId)
+
+        wallet.cancelCurrentFlow()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        coEvery { engine.forceReconnect() } coAnswers { gate.await() }
+        val retry = launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            runCatching { wallet.startIssuanceByOffer(startOffer) }
+        }
+        // The old flow's cancellation error arrives while the retry refreshes its token.
+        flowErrors.emit(FlowErrorMessage(flowId = "flow-old", error = org.siros.sdk.transport.engine.FlowError(code = "cancelled", message = "cancelled")))
+        advanceUntilIdle()
+
+        verify(exactly = 0) { listener.onFlowError(any(), any(), any()) }
+        assertTrue("retry keeps its pending state", (stateFlow.value as WalletState.FlowActive).isPending)
+        assertTrue("and its in-flight guard", getField(wallet, "issuanceInFlight") as Boolean)
+        gate.complete(Unit)
+        retry.join()
+    }
+
+    @Test
+    fun cancelledStart_whoseFirstReplyIsAnErrorWithoutAFlowId_isIgnored() = runTest(dispatcher) {
+        val flowErrors = MutableSharedFlow<FlowErrorMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice"))
+        val (wallet, engine) = abandonedStartWallet(MutableSharedFlow(), flowErrors, listener, stateFlow)
+        advanceUntilIdle()
+        wallet.startIssuanceByOffer(startOffer)
+        wallet.cancelCurrentFlow()
+        wallet.startIssuanceByOffer(startOffer) // immediate retry; its reconnect has not replaced the socket yet in the old reply's view
+        val sentOn = engineGeneration.get() - 1  // the cancelled start's connection
+
+        flowErrors.emit(
+            FlowErrorMessage(flowId = null, error = org.siros.sdk.transport.engine.FlowError(code = "x", message = "boom"))
+                .also { it.connectionGeneration = sentOn }
+        )
+        advanceUntilIdle()
+
+        verify(exactly = 0) { listener.onFlowError(any(), any(), any()) }
+        verify(exactly = 0) { engine.cancelFlow(any()) }
+        assertTrue("retry keeps its pending state", (stateFlow.value as WalletState.FlowActive).isPending)
+        assertTrue(getField(wallet, "issuanceInFlight") as Boolean)
+    }
+
     private fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {
         val wallet = allocateInstance(SirosWallet::class.java) as SirosWallet
         val values = fields.toMap(mutableMapOf())
@@ -6988,8 +13544,22 @@ class SirosWalletTest {
         if (stateFlow != null && "state" !in values) {
             values["state"] = stateFlow.asStateFlow()
         }
+        if ("holderCommitmentsByFlow" !in values) {
+            values["holderCommitmentsByFlow"] = java.util.concurrent.ConcurrentHashMap<String, List<org.siros.sdk.credentials.HolderCommitment>>()
+        }
+        // allocateInstance skips this initializer too; the lost-flow sweeps ask whether a browser authorization is parked.
+        if ("pendingAuthorizations" !in values) {
+            values["pendingAuthorizations"] = mutableMapOf<String, Any>()
+        }
+        if ("pscIssuerByFlow" !in values) {
+            values["pscIssuerByFlow"] = java.util.concurrent.ConcurrentHashMap<String, String>()
+        }
         if ("terminatedFlowIds" !in values) {
             values["terminatedFlowIds"] = mutableSetOf<String>()
+        }
+        // allocateInstance skips the initializer of the response-key holder too; flow ends and cancels clear it.
+        if ("blindIssuance" !in values) {
+            values["blindIssuance"] = BlindIssuance()
         }
         // allocateInstance bypasses property initializers entirely, so
         // pendingMatchResultsByFlow's default (empty map) never runs unless
@@ -7007,9 +13577,68 @@ class SirosWalletTest {
         // (flow_complete/flow_error/reportSignFailure/cancelCurrentFlow)
         // now discards this flow's ZK issuance preparation, so a null map
         // NPEs there.
+        // Disabled by default so cache behaviour never leaks into other tests.
+        if ("zkSigningMutex" !in values) {
+            values["zkSigningMutex"] = kotlinx.coroutines.sync.Mutex()
+        }
+        if ("zkSignJobsByFlow" !in values) {
+            values["zkSignJobsByFlow"] = java.util.concurrent.ConcurrentHashMap<String, Any>()
+        }
+        if ("flowConnectionGeneration" !in values) {
+            values["flowConnectionGeneration"] = java.util.concurrent.ConcurrentHashMap<String, Int>()
+        }
+        if ("lostFlowIds" !in values) {
+            values["lostFlowIds"] = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<String, Boolean>())
+        }
+        if ("selectionJobsByFlow" !in values) {
+            values["selectionJobsByFlow"] = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
+        }
+        if ("lastTrustResults" !in values) {
+            values["lastTrustResults"] = mutableMapOf<String, TrustResult>()
+        }
+        if ("circuitZkClientMetadataByFlow" !in values) {
+            values["circuitZkClientMetadataByFlow"] = mutableMapOf<String, JsonObject>()
+        }
+        if ("consentLock" !in values) {
+            // allocateInstance skips consentLock's own `= Any()` initializer, same as every other field here - without a
+            // default, the first synchronized(consentLock) call (clearPerFlowAuthorizationState, recordIfCurrent,
+            // clearFlowMatchState/clearFlowMatchStateIfLive) throws a NullPointerException.
+            values["consentLock"] = Any()
+        }
+        if ("consentRecordsByFlow" !in values) {
+            // A test not about ConsentGuard itself should not have to know every flow id it touches needs a seeded record:
+            // this map answers every lookup with ConsentRecord.unrestrictedForTests() (still a real, non-null record, so the
+            // "no consent recorded" refusal never fires), while staying a normal mutable map for put()/remove() elsewhere.
+            // A test that DOES exercise ConsentGuard passes its own "consentRecordsByFlow" map instead.
+            values["consentRecordsByFlow"] = object : java.util.HashMap<String, ConsentRecord>() {
+                override fun get(key: String): ConsentRecord = super.get(key) ?: ConsentRecord.unrestrictedForTests()
+            }
+        }
+        if ("trustDecisionCache" !in values) {
+            values["trustDecisionCache"] = TrustDecisionCache(java.time.Duration.ZERO)
+        }
         if ("zkPreparationsByFlow" !in values) {
             values["zkPreparationsByFlow"] =
                 java.util.concurrent.ConcurrentHashMap<String, org.siros.sdk.credentials.ZkIssuancePreparation>()
+        }
+        // Same allocateInstance reason: the start-attempt counter's initializer
+        // never runs, and every issuance start and cancel touches it.
+        // readyState() (cancel/failure of a pending issuance start) reads the account list.
+        if ("accountRegistry" !in values) {
+            val registry = mockk<AccountRegistry>(relaxed = true)
+            every { registry.listAccounts() } returns emptyList()
+            values["accountRegistry"] = registry
+        }
+        if ("abandonedStarts" !in values) {
+            values["abandonedStarts"] = java.util.concurrent.CopyOnWriteArrayList<Any>()
+        }
+        if ("abandonedFlowIds" !in values) {
+            values["abandonedFlowIds"] = java.util.Collections.newSetFromMap(
+                java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+            )
+        }
+        if ("issuanceStartEpoch" !in values) {
+            values["issuanceStartEpoch"] = java.util.concurrent.atomic.AtomicInteger(0)
         }
         if ("credentialConsumptionPolicy" !in values) {
             values["credentialConsumptionPolicy"] = CredentialConsumptionPolicy.NEVER_CONSUME
@@ -7047,6 +13676,17 @@ class SirosWalletTest {
         return wallet
     }
 
+    /** What the wallet's advertisement record holds: the v0.1 adapter for the one configuration, or nothing. */
+    private fun advertisedSelections(advertised: Boolean): java.util.concurrent.ConcurrentHashMap<Pair<String, String>, org.siros.sdk.credentials.AuxiliarySelection.Selected> =
+        java.util.concurrent.ConcurrentHashMap<Pair<String, String>, org.siros.sdk.credentials.AuxiliarySelection.Selected>().also {
+            if (advertised) it["https://issuer.example" to "nym"] = org.siros.sdk.credentials.AuxiliarySelection.Selected(
+                org.siros.sdk.credentials.AuxiliaryDataV01,
+                org.siros.sdk.credentials.AuxiliaryAdvertisement(
+                    listOf(org.siros.sdk.credentials.AuxiliaryAdvertisement.Slot(listOf("ssc"), "sha-256", false, "hex")), emptyList(),
+                ),
+            )
+        }
+
     private fun setField(target: Any, fieldName: String, value: Any?) {
         val field = target.javaClass.getDeclaredField(fieldName)
         field.isAccessible = true
@@ -7064,15 +13704,19 @@ class SirosWalletTest {
         engine: WalletEngineSession,
         flowId: String,
         payload: JsonObject,
+        // Defaulted to a fresh scope: production always passes connectEngine's own connectionScope (see its doc comment),
+        // but a direct-invocation test of this function alone need not know about it.
+        connectionScope: CoroutineScope = CoroutineScope(dispatcher + SupervisorJob()),
     ) {
         val method = wallet.javaClass.getDeclaredMethod(
             "handleTrustEvaluation",
             WalletEngineSession::class.java,
             String::class.java,
             JsonObject::class.java,
+            CoroutineScope::class.java,
         )
         method.isAccessible = true
-        method.invoke(wallet, engine, flowId, payload)
+        method.invoke(wallet, engine, flowId, payload, connectionScope)
     }
 
     private fun invokeHandleWmpTrustEvaluation(
@@ -7323,7 +13967,8 @@ class SirosWalletTest {
     private class ScaFixture(
         val wallet: SirosWallet,
         val log: InMemoryTransactionLog,
-        val keystore: org.siros.sdk.keystore.JweKeystore,
+        val keystore: org.siros.sdk.keystore.WscdKeystoreAdapter,
+        val signer: ScaTestSigner,
         val consent: MutableList<TransactionConsentRequest>,
     )
 
@@ -7336,17 +13981,17 @@ class SirosWalletTest {
     private fun scaFixture(
         enabled: Boolean = true,
         answer: Boolean = true,
-        factors: List<org.siros.sdk.keystore.AuthenticationFactor> = scaFactors,
+        /** What the signer's SCA sign applies; null models a signer that cannot reach two categories. */
+        factors: List<org.siros.sdk.keystore.AuthenticationFactor>? = scaFactors,
         declaredEngine: Boolean = enabled,
         declaredWmp: Boolean = enabled,
         extra: Array<Pair<String, Any?>> = emptyArray(),
-        useDefaultProvider: Boolean = false,
-        keystoreWrapper: ((org.siros.sdk.keystore.JweKeystore) -> KeystoreManager)? = null,
+        userCancelsAuthentication: Boolean = false,
+        keystoreWrapper: ((org.siros.sdk.keystore.WscdKeystoreAdapter) -> KeystoreManager)? = null,
     ): ScaFixture {
-        val keystore = org.siros.sdk.keystore.JweKeystore()
-        runBlocking {
-            keystore.unlock(ByteArray(32) { it.toByte() }, ByteArray(0), ByteArray(32) { (it + 0x10).toByte() }, "SIROS Wallet PRF".toByteArray())
-        }
+        val signer = ScaTestSigner(factors, userCancelsAuthentication)
+        val keystore = org.siros.sdk.keystore.WscdKeystoreAdapter(signer)
+        runBlocking { keystore.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0)) }
         val kid = runBlocking { keystore.generateKey() }
         val cred = StoredCredential(
             id = 1L, format = "dc+sd-jwt",
@@ -7367,7 +14012,6 @@ class SirosWalletTest {
             ),
             "engineFlowDeclaredTransactionData" to declaredEngine,
             "wmpSessionDeclaredTransactionData" to declaredWmp,
-            *(if (useDefaultProvider) emptyArray() else arrayOf("customFactorsProvider" to AuthenticationFactorsProvider { factors })),
             "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
             "json" to Json { ignoreUnknownKeys = true },
             "httpClient" to OkHttpClient(),
@@ -7376,7 +14020,7 @@ class SirosWalletTest {
         )
         wallet.transactionDataEnabled = enabled
         wallet.transactionConsentHandler = TransactionConsentHandler { consent += it; answer }
-        return ScaFixture(wallet, log, keystore, consent)
+        return ScaFixture(wallet, log, keystore, signer, consent)
     }
 
     private val scaRaw = org.siros.sdk.wallet.transaction.TransactionTestFixtures.raw(algs = """["sha-384"]""")
@@ -7464,8 +14108,25 @@ class SirosWalletTest {
     }
 
     @Test
+    fun scaEngine_cancellingTheAuthenticationAfterConsent_isLoggedAsDeclined_notRefused() = runTest(dispatcher) {
+        val fx = scaFixture(userCancelsAuthentication = true)
+
+        val (sent, _) = sendEngineSignRequest(fx)
+
+        assertTrue(sent.isEmpty())
+        // signing and the log write finish on other dispatchers: keep the test scheduler running while waiting
+        val deadline = System.currentTimeMillis() + 5_000
+        while (fx.log.items.size < 2 && System.currentTimeMillis() < deadline) {
+            dispatcher.scheduler.runCurrent()
+            Thread.sleep(20)
+        }
+        assertEquals(listOf(TransactionOutcome.DECLINED, TransactionOutcome.CONSENTED), fx.log.items.map { it.outcome })
+        assertEquals("declined", fx.log.items.first().reason)
+    }
+
+    @Test
     fun scaEngine_insufficientFactors_signsNothing() = runTest(dispatcher) {
-        val fx = scaFixture(factors = emptyList())
+        val fx = scaFixture(factors = null)
 
         val (sent, _) = sendEngineSignRequest(fx)
 
@@ -7564,6 +14225,28 @@ class SirosWalletTest {
         assertEquals(setOf("aud", "iat", "nonce", "sd_hash"), plainClaims.keys)
     }
 
+    @Test
+    fun wmpGenerateProof_withAuxiliaryData_refusesAnAttestationOnlyRequestWithoutSigning() = runTest(dispatcher) {
+        val keystore = pscKeystore(mutableListOf())
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "A")),
+            "keystore" to keystore,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+        val e = runCatching {
+            invokeWmpSign(
+                wallet,
+                org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams(
+                    action = "generate_proof", nonce = "n", audience = "aud", proofType = "attestation",
+                    auxiliaryDataToIssuer = listOf(auxEntry()), credentialType = "t", credentialIssuer = "https://issuer.example",
+                ),
+            )
+        }.exceptionOrNull()
+        assertTrue(e is org.siros.sdk.credentials.WalletException)
+        coVerify(exactly = 0) { keystore.generateProof(any(), any(), any(), any(), any()) }
+        coVerify(exactly = 0) { keystore.generateKeyAttestation(any(), any()) }
+    }
+
     // WMP
 
     private fun invokeWmpSign(wallet: SirosWallet, params: org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams): org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult {
@@ -7631,7 +14314,7 @@ class SirosWalletTest {
         val api = mockk<BackendApiClient>()
         coEvery { api.evaluateTrust(any()) } returns buildJsonObject { put("decision", true) }
         setField(fx.wallet, "apiClient", api)
-        setField(fx.wallet, "trustCache", TrustCache())
+        setField(fx.wallet, "trustDecisionCache", TrustDecisionCache(java.time.Duration.ZERO))
         setField(fx.wallet, "_presentationHistory", mutableListOf<PresentationRecord>())
     }
 
@@ -7702,9 +14385,8 @@ class SirosWalletTest {
     // ── review fixes: ordering, defaults, TOCTOU, isolation, wording ──
 
     @Test
-    fun scaDefaults_theSdkDefaultProviderIsTheConservativeOne_andRefusesBeforeConsent() = runTest(dispatcher) {
-        val fx = scaFixture(useDefaultProvider = true)
-        assertTrue(fx.wallet.authenticationFactorsProvider === ConservativeAuthenticationFactorsProvider)
+    fun scaDefaults_aSignerThatCannotReachTwoCategoriesRefusesBeforeConsent() = runTest(dispatcher) {
+        val fx = scaFixture(factors = null)
 
         val (sent, _) = sendEngineSignRequest(fx)
 
@@ -7713,7 +14395,7 @@ class SirosWalletTest {
         assertEquals("insufficientAuthenticationFactors", fx.log.items.single().reason)
     }
 
-    private fun spyKeystore(events: MutableList<String>): (org.siros.sdk.keystore.JweKeystore) -> KeystoreManager = { real ->
+    private fun spyKeystore(events: MutableList<String>): (org.siros.sdk.keystore.WscdKeystoreAdapter) -> KeystoreManager = { real ->
         val spy = io.mockk.spyk(real)
         coEvery { spy.signVpToken(any(), any(), any(), any(), any(), any()) } answers { events += "sign"; callOriginal() }
         coEvery { spy.signVpToken(any(), any(), any(), any(), any()) } answers { events += "sign"; callOriginal() }
@@ -7822,7 +14504,7 @@ class SirosWalletTest {
     @Test
     fun scaEngine_refusalTextIsGenericAndADeclineIsNotAnError() = runTest(dispatcher) {
         val refused = mockk<WalletEventListener>(relaxed = true)
-        val a = scaFixture(factors = emptyList(), useDefaultProvider = true, extra = arrayOf("eventListener" to refused))
+        val a = scaFixture(factors = null, extra = arrayOf("eventListener" to refused))
         sendEngineSignRequest(a)
         verify(exactly = 1) { refused.onFlowError("flow-sca", "Payment confirmation refused: insufficientAuthenticationFactors", any()) }
 
@@ -7911,8 +14593,14 @@ class SirosWalletTest {
     ): org.siros.sdk.transport.wmp.openid4x.MatchResult {
         val method = wallet::class.declaredMemberFunctions.first { it.name == "handleWmpMatchRequest" }
         method.isAccessible = true
+        // handleWmpMatchRequest's 3rd parameter (a ConsentTicket, private to SirosWallet) defaults to issueConsentTicket(flowId)
+        // in production, but reflection's callSuspend does not apply default values for a plain positional call - a fresh
+        // ticket is fetched the same way and passed explicitly instead.
+        val issueTicket = wallet::class.declaredMemberFunctions.first { it.name == "issueConsentTicket" }
+        issueTicket.isAccessible = true
+        val ticket = issueTicket.call(wallet, flowId)
         return kotlinx.coroutines.runBlocking {
-            method.callSuspend(wallet, flowId, payload)
+            method.callSuspend(wallet, flowId, payload, ticket)
         } as org.siros.sdk.transport.wmp.openid4x.MatchResult
     }
 
@@ -7922,12 +14610,17 @@ class SirosWalletTest {
         progressFlow: MutableSharedFlow<FlowProgressMessage> = MutableSharedFlow(),
         flowComplete: MutableSharedFlow<FlowCompleteMessage> = MutableSharedFlow(),
         flowErrors: MutableSharedFlow<FlowErrorMessage> = MutableSharedFlow(),
+        state: MutableStateFlow<WalletEngineSession.State> = MutableStateFlow(WalletEngineSession.State.CONNECTED),
+        generations: MutableStateFlow<Int> = MutableStateFlow(0),
     ): WalletEngineSession {
         val engine = mockk<WalletEngineSession>()
         every { engine.connect(any(), any(), any()) } just runs
         coEvery { engine.awaitConnected(any()) } just runs
-        coEvery { engine.forceReconnect() } just runs
-        every { engine.state } returns MutableStateFlow(WalletEngineSession.State.CONNECTED)
+        // Each reconnect opens a new connection generation, as the real session does.
+        coEvery { engine.forceReconnect() } coAnswers { engineGeneration.incrementAndGet() }
+        every { engine.connectionGeneration } answers { engineGeneration.get() }
+        every { engine.state } returns state
+        every { engine.connectionGenerations } returns generations
         every { engine.sendSignResponse(any(), any(), any(), any()) } just runs
         every { engine.sendMatchResponse(any(), any(), any()) } just runs
         every { engine.sendCredentialsMatched(any(), any(), any()) } just runs
@@ -7955,6 +14648,3267 @@ class SirosWalletTest {
         override suspend fun append(entry: TransactionLogEntry) { items.add(0, entry) }
         override suspend fun entries(): List<TransactionLogEntry> = items.toList()
         override suspend fun clear() { items.clear() }
+    }
+
+    // ── Issuer-delivered credential_metadata (secret_seed) receipt ───────────
+
+    /** A store that, like the production one, keeps the credential in the keystore too. */
+    private class KeystoreMirroringStore(
+        private val keystore: org.siros.sdk.keystore.JweKeystore,
+        val inner: FakeCredentialStore = FakeCredentialStore(mutableListOf()),
+        private val mirror: Boolean = true,
+    ) : CredentialStore by inner {
+        override suspend fun save(credential: StoredCredential) {
+            inner.save(credential)
+            if (mirror) keystore.saveCredential(credential.id, Json.encodeToString(StoredCredential.serializer(), credential))
+        }
+
+        override suspend fun delete(id: Long) {
+            inner.delete(id)
+            keystore.deleteCredential(id)
+        }
+    }
+
+    private class DeliveredScenario(
+        val wallet: SirosWallet,
+        val store: KeystoreMirroringStore,
+        val keystore: org.siros.sdk.keystore.JweKeystore,
+        val listener: WalletEventListener,
+        val engine: WalletEngineSession,
+        val blind: BlindIssuance,
+    )
+
+    /** What an issuer does with the wallet's advertised key: encrypt the Credential Response to it. */
+    private fun issuerEncrypt(jwk: JsonObject, alg: String, enc: String, plaintext: String): String {
+        val header = com.nimbusds.jose.JWEHeader.Builder(com.nimbusds.jose.JWEAlgorithm.parse(alg), com.nimbusds.jose.EncryptionMethod.parse(enc)).build()
+        val obj = com.nimbusds.jose.JWEObject(header, com.nimbusds.jose.Payload(plaintext))
+        obj.encrypt(com.nimbusds.jose.crypto.ECDHEncrypter(com.nimbusds.jose.jwk.ECKey.parse(jwk.toString())))
+        return obj.serialize()
+    }
+
+    private val deliveredMember = org.siros.sdk.credentials.AuxiliaryDataV01.RESPONSE_MEMBER
+    private val deliveredOpening = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(NymTestCredentials.seed)
+
+    /** The Credential Auxiliary Data v0.1 member delivering the opening of the credential's `ssc` slot. */
+    private fun deliveredAux(): kotlinx.serialization.json.JsonElement = Json.parseToJsonElement(
+        """[{"type":"hash_commitment","alg":"sha-256","path":["ssc"],"opening":"$deliveredOpening"}]""",
+    )
+
+    private fun deliveredAuxBody() = buildJsonObject { put(deliveredMember, deliveredAux()) }
+
+    private fun deliveredMetadata() = org.siros.sdk.transport.ResponseCredentialMetadata(
+        buildJsonObject {
+            put(deliveredMember, deliveredAux())
+            put("example.other", JsonPrimitive("kept as is"))
+        },
+    )
+
+    private fun deliveredResult(
+        credential: String = NymTestCredentials.sdJwt(),
+        notificationId: String? = "notif-1",
+        format: String = "dc+sd-jwt",
+    ) = CredentialResult(format = format, credential = credential, notificationId = notificationId)
+
+    private suspend fun kotlinx.coroutines.test.TestScope.deliveredScenario(
+        results: List<CredentialResult>,
+        metadata: org.siros.sdk.transport.ResponseCredentialMetadata? = deliveredMetadata(),
+        /** True: the issuer's response was a JWE the WALLET opened (the engine never held it); false: a plain issuance. */
+        encrypted: Boolean = true,
+        /** Null: advertised exactly when an encrypted delivery carries the v0.1 member. */
+        advertised: Boolean? = null,
+        redactedMembers: Set<String> = emptySet(),
+        /** True: the engine reports an encrypted issuance but the wallet holds no decrypted response for it. */
+        lostResponse: Boolean = false,
+        /** The number of credential entries the engine's completion lists, when it is not [results]'s size. */
+        engineEntries: Int? = null,
+        /** The raw `credential_metadata` member of the engine's completion frame (decoded by the real allowlist). */
+        wireMetadata: String? = null,
+        /** True: a response key was offered although the issuer then answered in clear (an optional encryption). */
+        offeredKey: Boolean = false,
+        /** With [offeredKey]: the socket the flow lived on was replaced (and the sweep ran) before the completion arrived. */
+        socketReplacedSinceOffer: Boolean = false,
+        /** The engine delivers the very same completion a SECOND time (the transport does not de-duplicate). */
+        repeatCompletion: Boolean = false,
+        /** Runs after the key was offered and before the completion arrives (to put the holder under pressure, say). */
+        beforeCompletion: (BlindIssuance) -> Unit = {},
+        /** The `notification_id` the engine's ENCRYPTED completion frame carries on its entries (it should never be read). */
+        frameNotificationId: String? = null,
+        /** True: another flow (`flow-other`) holds an issuance key and an opened response while this one completes. */
+        bystander: Boolean = false,
+        refreshToken: String? = null,
+        preexisting: List<StoredCredential> = emptyList(),
+        renewalSourceBatchId: Long? = null,
+        configure: (WalletConfig) -> WalletConfig = { it },
+        mirrorToKeystore: Boolean = true,
+        issuerTrust: org.siros.sdk.transport.engine.IssuerTrustReport? = null,
+        /** False: the wallet has no active offer (a replayed or resumed completion in a fresh wallet). */
+        withOffer: Boolean = true,
+    ): DeliveredScenario {
+        val flowId = "flow-delivered"
+        val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val keystore = org.siros.sdk.keystore.JweKeystore()
+        keystore.unlock(ByteArray(32) { it.toByte() }, ByteArray(0), ByteArray(32) { 5 }, "info".toByteArray())
+        val store = KeystoreMirroringStore(keystore, mirror = mirrorToKeystore)
+        preexisting.forEach { store.save(it) }
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        every { sessionStore.privateDataJwe } returns null
+        coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+        val engine = mockEngineConstructor(flowComplete = completeFlow)
+        every { engine.sendCredentialNotification(any(), any(), any(), any()) } just runs
+        // An encrypted issuance: the wallet generated the key, the issuer encrypted to it, the wallet opened the
+        // response. The engine's completion then carries no credential, no notification_id and no metadata.
+        val blind = BlindIssuance()
+        // Opened after the engine connects: a new connection drops the keys of the flows of the one it replaces.
+        val openResponse = {
+            val jwk = blind.offer(flowId, org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false))!!
+            val body = buildJsonObject {
+                put("credentials", kotlinx.serialization.json.JsonArray(results.map { buildJsonObject { put("credential", JsonPrimitive(it.credential)) } }))
+                results.firstNotNullOfOrNull { it.notificationId }?.let { put("notification_id", JsonPrimitive(it)) }
+                metadata?.let { put("credential_metadata", if (it.malformed) JsonPrimitive("not-an-object") else JsonObject(it.members)) }
+            }
+            blind.open(flowId, issuerEncrypt(jwk, "ECDH-ES", "A256GCM", body.toString()), deferred = false)
+        }
+        val completionResults = if (encrypted) {
+            List(engineEntries ?: results.size) { results.first().copy(credential = "", notificationId = frameNotificationId) }
+        } else {
+            results
+        }
+        val fields = mutableListOf<Pair<String, Any?>>(
+            "blindIssuance" to blind,
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.FlowActive(
+                    userId = "user-1", displayName = "Alice", flowId = flowId,
+                    flowType = "issuance", status = "in_progress", credentials = emptyList(),
+                ),
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to configure(WalletConfig(backendUrl = "https://wallet.example.com")),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to sessionStore,
+            "apiClient" to apiClient,
+            "eventListener" to listener,
+            "secretSeedAdvertised" to advertisedSelections(advertised ?: (encrypted && metadata?.members?.containsKey(deliveredMember) == true)),
+        )
+        if (renewalSourceBatchId != null) fields += "pendingRenewalSourceBatchId" to renewalSourceBatchId
+        if (withOffer) {
+            fields += "activeOffer" to org.siros.sdk.credentials.CredentialOffer(
+                credentialConfigurationId = "nym", credentialIssuerIdentifier = "https://issuer.example", credentialName = "Nym", issuerName = "Issuer",
+            )
+        }
+        val wallet = newWallet(*fields.toTypedArray())
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        if (encrypted && !lostResponse) openResponse()
+        if (bystander) {
+            val other = blind.offer("flow-other", org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false))!!
+            blind.open("flow-other", issuerEncrypt(other, "ECDH-ES", "A256GCM", issuerBody("bystander credential").toString()), deferred = false)
+        }
+        if (offeredKey) {
+            blind.offer(flowId, org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false), generation = 0)
+            if (socketReplacedSinceOffer) blind.markStaleBefore(1)
+            beforeCompletion(blind)
+        }
+        val completionMessage = FlowCompleteMessage(
+            flowId = flowId, credentials = completionResults,
+            credentialIssuer = "https://issuer.example", selectedCredentialConfigurationId = "nym",
+            credentialResponseEncrypted = encrypted,
+            credentialMetadata = wireMetadata?.let {
+                Json.decodeFromString(FlowCompleteMessage.serializer(), """{"flow_id":"$flowId","credential_metadata":$it}""").credentialMetadata
+            },
+            redactedMembers = redactedMembers, refreshToken = refreshToken, dpopKeyId = refreshToken?.let { "key-1" },
+            issuerTrust = issuerTrust,
+        )
+        completeFlow.emit(completionMessage)
+        advanceUntilIdle()
+        if (repeatCompletion) {
+            completeFlow.emit(completionMessage)
+            advanceUntilIdle()
+        }
+        return DeliveredScenario(wallet, store, keystore, listener, engine, blind)
+    }
+
+    private fun storedCopy(id: Long, batchId: Long) = StoredCredential(
+        id = id, format = "dc+sd-jwt", raw = NymTestCredentials.sdJwt(), batchId = batchId, instanceId = 0,
+    )
+
+    private suspend fun assertNothingStored(s: DeliveredScenario) {
+        assertEquals(0, s.store.getAll().size)
+        assertEquals(0, s.keystore.getAllCredentials().size)
+        verify(exactly = 0) { s.listener.onCredentialReceived(any()) }
+        verify(exactly = 0) { s.listener.onFlowComplete(any(), any()) }
+    }
+
+    private fun assertNoSecretIn(text: String?) {
+        val t = text.orEmpty()
+        assertFalse(t.contains(NymTestCredentials.seedHex))
+        assertFalse(t.contains(deliveredOpening))
+        assertFalse(t.contains(NymTestCredentials.hex(NymTestCredentials.goodSsc)))
+        assertFalse(t.contains(NymTestCredentials.hex(NymTestCredentials.wrongSsc)))
+    }
+
+    private fun wrongSscCredential() = NymTestCredentials.sdJwt(sscValues = listOf(NymTestCredentials.hex(NymTestCredentials.wrongSsc)))
+
+    @Test
+    fun deliveredSeed_matchingSsc_storesCredentialAndMetadata_andAccepts() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult()))
+        val stored = s.store.getAll().single()
+        val md = s.keystore.getCredentialMetadata(stored.id)!!
+        assertEquals(2, md.size)
+        assertEquals(JsonPrimitive(deliveredMember), md[0].jsonObject["type"])
+        assertEquals(
+            JsonPrimitive(deliveredOpening),
+            md[0].jsonObject["value"]!!.jsonArray[0].jsonObject["opening"],
+        )
+        assertEquals(JsonPrimitive("kept as is"), md[1].jsonObject["value"])
+        // The secret never reaches the stored credential JSON, display metadata or the wallet state.
+        assertNoSecretIn(s.keystore.getCredential(stored.id))
+        assertNoSecretIn(Json.encodeToString(StoredCredential.serializer(), stored))
+        assertNoSecretIn((s.wallet.state.value as WalletState.Ready).credentials.toString())
+        verify(exactly = 1) {
+            s.engine.sendCredentialNotification(flowId = "flow-delivered", notificationId = "notif-1", event = CredentialNotificationEvent.ACCEPTED)
+        }
+        verify(exactly = 1) { s.listener.onFlowComplete("flow-delivered", any()) }
+    }
+
+    @Test
+    fun aCompletionWithNoActiveOffer_keepsTheIssuerTheEngineStates() = runTest(dispatcher) {
+        // A replayed or resumed flow_complete in a fresh wallet: no offer, no preceding sign request. The stored credential must
+        // still be bound to the exact issuer (its private_seed derives from that string), not to null.
+        val withOffer = deliveredScenario(listOf(deliveredResult()))
+        assertEquals("https://issuer.example", withOffer.store.getAll().single().credentialIssuerIdentifier)
+        val fresh = deliveredScenario(listOf(deliveredResult()), withOffer = false)
+        assertEquals("https://issuer.example", fresh.store.getAll().single().credentialIssuerIdentifier)
+    }
+
+    @Test
+    fun deliveredSeed_everyCopyOfABatchCarriesTheSameMetadata() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult(), deliveredResult(), deliveredResult()))
+        val all = s.store.getAll()
+        assertEquals(3, all.size)
+        val first = s.keystore.getCredentialMetadata(all[0].id)!!
+        for (c in all) assertEquals(first, s.keystore.getCredentialMetadata(c.id))
+        assertEquals(2, first.size)
+    }
+
+    @Test
+    fun deliveredMetadata_withoutTheSeedMember_isStoredUninterpreted() = runTest(dispatcher) {
+        val md = org.siros.sdk.transport.ResponseCredentialMetadata(buildJsonObject { put("example.other", JsonPrimitive("v")) })
+        val s = deliveredScenario(listOf(deliveredResult()), metadata = md)
+        assertEquals(1, s.keystore.getCredentialMetadata(s.store.getAll().single().id)!!.size)
+    }
+
+    /** The wallet-opened response whose `credential_metadata` is the raw JSON [metadataJson], however malformed. */
+    private suspend fun kotlinx.coroutines.test.TestScope.deliveredScenarioOfJson(metadataJson: String, notificationId: String = "notif-1") =
+        deliveredScenario(
+            listOf(deliveredResult(notificationId = notificationId)),
+            metadata = Json.decodeFromString(org.siros.sdk.transport.ResponseCredentialMetadata.serializer(), metadataJson),
+        )
+
+    @Test
+    fun deliveredMetadata_membersAreStoredExactlyAsReceived_inOrder_withLiteralsVerbatim() = runTest(dispatcher) {
+        val wire = """{"z.last":{"n":1.50,"nested":{"a":[1,2.0,null]}},"a.first":1}"""
+        val s = deliveredScenarioOfJson(wire)
+        val stored = s.keystore.getCredentialMetadata(s.store.getAll().single().id)!!
+        assertEquals(listOf("z.last", "a.first"), stored.map { it.jsonObject["type"]!!.jsonPrimitive.content })
+        val text = stored[0].toString()
+        assertTrue(text, "\"n\":1.50" in text && "[1,2.0,null]" in text)
+    }
+
+    @Test
+    fun deliveredSeed_fromAnUntrustedIssuer_isRefusedByTheTrustGate_nothingStoredAndNoSeedKept() = runTest(dispatcher) {
+        // A valid seed + a matching ssc would be accepted on its own (see deliveredSeed_matchingSsc_...);
+        // the engine's negative issuer trust must still refuse the whole issuance, fail closed.
+        val s = deliveredScenario(
+            listOf(deliveredResult()),
+            issuerTrust = org.siros.sdk.transport.engine.IssuerTrustReport("https://issuer.example", false, "fw", "not listed"),
+        )
+        assertNothingStored(s)
+        verify(exactly = 1) { s.listener.onIssuerNotTrusted("flow-delivered", "https://issuer.example", any()) }
+        verify(exactly = 1) { s.engine.sendCredentialNotification("flow-delivered", "notif-1", CredentialNotificationEvent.FAILURE, any()) }
+        verify(exactly = 0) { s.engine.sendCredentialNotification(any(), any(), CredentialNotificationEvent.ACCEPTED, any()) }
+    }
+
+    @Test
+    fun deliveredSeed_wrongSeed_failsTheIssuance_storesNothing_andNotifiesFailure() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult(credential = wrongSscCredential())))
+        assertNothingStored(s)
+        verify(exactly = 1) {
+            s.engine.sendCredentialNotification(
+                flowId = "flow-delivered", notificationId = "notif-1",
+                event = CredentialNotificationEvent.FAILURE, eventDescription = any(),
+            )
+        }
+        verify(exactly = 0) {
+            s.engine.sendCredentialNotification(any(), any(), CredentialNotificationEvent.ACCEPTED, any())
+        }
+        val message = slot<String>()
+        verify(exactly = 1) { s.listener.onFlowError("flow-delivered", capture(message), any()) }
+        assertNoSecretIn(message.captured)
+        assertTrue(s.wallet.state.value is WalletState.Ready)
+    }
+
+    @Test
+    fun deliveredSeed_aPlainResponseOfAnAdvertisedConfiguration_failsTheIssuance() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult()), encrypted = false, advertised = true)
+        assertNothingStored(s)
+        verify(exactly = 1) {
+            s.engine.sendCredentialNotification(any(), "notif-1", CredentialNotificationEvent.FAILURE, any())
+        }
+    }
+
+    @Test
+    fun deliveredSeed_withoutANotificationId_failsLocally_andSaysSo() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult(notificationId = null)))
+        assertNothingStored(s)
+        verify(exactly = 0) { s.engine.sendCredentialNotification(any(), any(), any(), any()) }
+        val message = slot<String>()
+        verify(exactly = 1) { s.listener.onFlowError("flow-delivered", capture(message), any()) }
+        assertTrue(message.captured, message.captured.contains("could not be notified"))
+        assertNoSecretIn(message.captured)
+    }
+
+    @Test
+    fun deliveredSeed_oneBadCopyFailsTheWholeBatch() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult(), deliveredResult(credential = wrongSscCredential())))
+        assertNothingStored(s)
+        verify(exactly = 1) { s.engine.sendCredentialNotification(any(), "notif-1", CredentialNotificationEvent.FAILURE, any()) }
+    }
+
+    @Test
+    fun deliveredSeed_failedRenewalKeepsTheOldBatch() = runTest(dispatcher) {
+        val s = deliveredScenario(
+            listOf(deliveredResult(credential = wrongSscCredential())),
+            preexisting = listOf(storedCopy(id = 41L, batchId = 77L)),
+            renewalSourceBatchId = 77L,
+        )
+        assertEquals(listOf(41L), s.store.getAll().map { it.id })
+        verify(exactly = 0) { s.listener.onFlowComplete(any(), any()) }
+    }
+
+    @Test
+    fun aLiveCompletionCapturesTheRenewalMaterial() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult()), refreshToken = "rt-1")
+        val batch = s.store.getAll().single().batchId!!
+        val entry = s.keystore.exportCredentialRefreshTokens()[batch]!!
+        assertEquals("rt-1", entry.refreshToken)
+        assertEquals("key-1", entry.dpopKeyId)
+    }
+
+    @Test
+    fun aReplayedCompletion_storesItsCredentials_butCapturesNoRenewalMaterial_andIsNotRenewable() = runTest(dispatcher) {
+        // No seed is needed (a credential without a commitment): the credentials are stored normally.
+        val plain = NymTestCredentials.sdJwt(sscValues = emptyList())
+        val s = deliveredScenario(listOf(deliveredResult(credential = plain)), metadata = null, redactedMembers = setOf("dpop_key_id", "refresh_token"), refreshToken = "rt-must-not-be-kept")
+        val stored = s.store.getAll()
+        assertEquals(1, stored.size)
+        assertTrue(s.keystore.exportCredentialRefreshTokens().isEmpty())
+        verify(exactly = 1) { s.listener.onFlowComplete("flow-delivered", any()) }
+        // Renewal of that batch is unavailable: nothing stale is reused.
+        val e = try {
+            kotlinx.coroutines.runBlocking { s.wallet.renewCredential(stored.single().batchId!!) }
+            null
+        } catch (t: Exception) {
+            t
+        }
+        assertTrue(e?.message.orEmpty(), e?.message.orEmpty().contains("No refresh_token stored"))
+    }
+
+    @Test
+    fun anEncryptedCompletionTheWalletHoldsNoResponseFor_failsAndStoresNothing() = runTest(dispatcher) {
+        // A replayed or resumed completion (the app restarted mid-flow, say): the engine never had the credentials, so
+        // nothing can be recovered and nothing is invented.
+        val s = deliveredScenario(listOf(deliveredResult()), lostResponse = true)
+        assertNothingStored(s)
+        // The engine never told the wallet a notification_id either: there is no channel to the issuer.
+        verify(exactly = 0) { s.engine.sendCredentialNotification(any(), any(), any(), any()) }
+        val message = slot<String>()
+        verify(exactly = 1) { s.listener.onFlowError("flow-delivered", capture(message), any()) }
+        assertTrue(message.captured, message.captured.contains("not available in this wallet"))
+        assertTrue(s.keystore.exportCredentialRefreshTokens().isEmpty())
+    }
+
+    @Test
+    fun anAdvertisedConfiguration_refusesAnUnencryptedCompletion_evenWithoutMetadata() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult()), metadata = null, encrypted = false, advertised = true)
+        assertNothingStored(s)
+        verify(exactly = 1) { s.engine.sendCredentialNotification(any(), "notif-1", CredentialNotificationEvent.FAILURE, any()) }
+        // An encrypted one that carries the seed is fine.
+        val ok = deliveredScenario(listOf(deliveredResult()), encrypted = true, advertised = true)
+        assertEquals(1, ok.store.getAll().size)
+    }
+
+    @Test
+    fun malformedDeliveredMetadataOnTheWire_endsTheIssuanceAsARefusal() = runTest(dispatcher) {
+        listOf("""[{"type":"other","value":1}]""", """"text"""", "5").forEach { md ->
+            val s = deliveredScenarioOfJson(md)
+            assertNothingStored(s)
+            verify(exactly = 1) {
+                s.engine.sendCredentialNotification(flowId = "flow-delivered", notificationId = "notif-1", event = CredentialNotificationEvent.FAILURE, eventDescription = any())
+            }
+            verify(exactly = 1) { s.listener.onFlowError("flow-delivered", any(), any()) }
+            assertTrue(md, s.wallet.state.value is WalletState.Ready)
+        }
+    }
+
+    @Test
+    fun wellFormedDeliveredMetadataOnTheWire_isUnaffected() = runTest(dispatcher) {
+        val s = deliveredScenarioOfJson("""{"example.other":{"scope":"issuer"}}""")
+        assertEquals(1, s.store.getAll().size)
+        verify(exactly = 0) { s.listener.onFlowError(any(), any(), any()) }
+    }
+
+    @Test
+    fun wmpFlowComplete_refusesMalformedAndUnencryptedSeedMetadata_withItsNotificationIds() = runTest(dispatcher) {
+        val flowId = "flow-wmp"
+        val seedBody = deliveredAuxBody()
+        /** A wallet that opened an issuer response whose `credential_metadata` is [metadata] (null: none). */
+        fun walletHolding(metadata: kotlinx.serialization.json.JsonElement?, advertised: Boolean = (metadata as? JsonObject)?.containsKey(deliveredMember) == true, withOffer: Boolean = false): SirosWallet {
+            val blind = BlindIssuance()
+            val jwk = blind.offer(flowId, org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A128GCM", false))!!
+            val body = buildJsonObject {
+                put("credentials", kotlinx.serialization.json.JsonArray(listOf(buildJsonObject { put("credential", JsonPrimitive(NymTestCredentials.sdJwt())) })))
+                put("notification_id", JsonPrimitive("n9"))
+                metadata?.let { put("credential_metadata", it) }
+            }
+            blind.open(flowId, issuerEncrypt(jwk, "ECDH-ES", "A128GCM", body.toString()), deferred = false)
+            return newWallet(
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+                "keystore" to org.siros.sdk.keystore.JweKeystore(),
+                "blindIssuance" to blind,
+                "secretSeedAdvertised" to advertisedSelections(advertised),
+                // The WMP completion names no configuration: the offer's is used, so only a wallet with an offer finds the advertisement.
+                "activeOffer" to (if (withOffer) org.siros.sdk.credentials.CredentialOffer("nym", "https://issuer.example", "n", issuerName = "i") else null),
+            )
+        }
+        val encrypted = Json.parseToJsonElement(
+            """{"credentials":[{"format":"dc+sd-jwt"}],"credential_response_encrypted":true,"credential_issuer":"https://issuer.example"}""",
+        ).jsonObject
+        val refused = walletHolding(Json.parseToJsonElement("""[{"type":"other"}]""")).wmpDeliveredMetadataRefusal(flowId, encrypted)
+        assertEquals(DeliveredMetadataRefusal.MALFORMED, refused!!.first)
+        assertEquals(listOf("n9"), refused.second)
+        assertEquals(DeliveredMetadataRefusal.MALFORMED, walletHolding(JsonPrimitive("text")).wmpDeliveredMetadataRefusal(flowId, encrypted)!!.first)
+        assertEquals(null, walletHolding(Json.parseToJsonElement("""{"example.other":1}""")).wmpDeliveredMetadataRefusal(flowId, encrypted))
+        // The seed, wallet-decrypted, opens the credential's ssc: accepted.
+        assertEquals(null, walletHolding(seedBody, withOffer = true).wmpDeliveredMetadataRefusal(flowId, encrypted))
+        // A plain completion delivers no metadata the engine could have relayed: nothing to refuse. (The WMP completion
+        // names no configuration id, so the advertised-but-plain refusal is the legacy transport's alone.)
+        val plain = Json.parseToJsonElement(
+            """{"credentials":[{"format":"dc+sd-jwt","credential":${JsonPrimitive(NymTestCredentials.sdJwt())},"notification_id":"n9"}],"credential_issuer":"https://issuer.example"}""",
+        ).jsonObject
+        val advertisedWallet = walletHolding(null, advertised = true)
+        assertEquals(null, advertisedWallet.wmpDeliveredMetadataRefusal("other-flow", plain))
+        // A plain completion's relayed metadata is read (display-only): one that is not an object is refused as malformed,
+        // while a seed in the frame is dropped and so neither refused nor taken.
+        fun plainWith(md: String) = Json.parseToJsonElement(
+            """{"credentials":[{"format":"dc+sd-jwt","credential":${JsonPrimitive(NymTestCredentials.sdJwt(sscValues = emptyList()))},"notification_id":"n9"}],"credential_metadata":$md}""",
+        ).jsonObject
+        assertEquals(DeliveredMetadataRefusal.MALFORMED, advertisedWallet.wmpDeliveredMetadataRefusal("p", plainWith("\"text\""))!!.first)
+        assertEquals(null, advertisedWallet.wmpDeliveredMetadataRefusal("p", plainWith(seedBody.toString())))
+        // A member of a superseded shape in a plain completion is refused (its value is dropped by the relay, its presence is not).
+        for (name in listOf("org.siros.secret_seed", "org.siros.holder_commitments", "org.siros.psc", "holder_commitments", "secret_members")) {
+            assertEquals(name, DeliveredMetadataRefusal.LEGACY_SECRET_MEMBER, advertisedWallet.wmpDeliveredMetadataRefusal("p", plainWith("""{"$name":{"k":"v"}}"""))!!.first)
+        }
+        // An encrypted completion with no response held for the flow cannot be completed, and nothing is invented.
+        val lost = advertisedWallet.wmpDeliveredMetadataRefusal("unknown-flow", encrypted)
+        assertEquals(DeliveredMetadataRefusal.RESPONSE_UNAVAILABLE, lost!!.first)
+        assertEquals(null, advertisedWallet.wmpDeliveredMetadataRefusal("x", null))
+    }
+
+    @Test
+    fun deliveredSeed_aKeystoreThatRefusesTheMetadata_rollsBackTheWholeBatch() = runTest(dispatcher) {
+        // The store never put the credentials into the keystore, so attaching their metadata fails.
+        val s = deliveredScenario(listOf(deliveredResult(), deliveredResult()), mirrorToKeystore = false)
+        assertEquals(0, s.store.getAll().size)
+        verify(exactly = 0) { s.listener.onCredentialReceived(match { false }) }
+        verify(exactly = 0) { s.listener.onFlowComplete(any(), any()) }
+        verify(exactly = 1) { s.engine.sendCredentialNotification(any(), "notif-1", CredentialNotificationEvent.FAILURE, any()) }
+        verify(exactly = 0) { s.engine.sendCredentialNotification(any(), any(), CredentialNotificationEvent.ACCEPTED, any()) }
+    }
+
+    @Test
+    fun anAdvertisementWithAValueInPublicIssuerMetadata_makesTheConfigurationNotOffered() = runTest(dispatcher) {
+        val wallet = newWallet(
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "secretSeedAdvertised" to advertisedSelections(false),
+        )
+        fun offer(secretSeed: String?): Any? {
+            val member = if (secretSeed != null) ""","org.siros.secret_seed":$secretSeed""" else ""
+            val metadata = Json { ignoreUnknownKeys = true }.decodeFromString(
+                org.siros.sdk.credentials.IssuerMetadata.serializer(),
+                """{"credential_issuer":"https://issuer.example","credential_endpoint":"https://issuer.example/c","credential_configurations_supported":{"nym":{"format":"dc+sd-jwt","vct":"urn:nym","credential_metadata":{"display":[{"name":"Nym"}]$member}}}}""",
+            )
+            val m = wallet.javaClass.getDeclaredMethod("buildCredentialOfferFromMetadata", String::class.java, String::class.java, org.siros.sdk.credentials.IssuerMetadata::class.java)
+            m.isAccessible = true
+            return m.invoke(wallet, "https://issuer.example", "nym", metadata)
+        }
+        assertNotNull(offer(null))
+        // A superseded seed advertisement or value is never offered.
+        assertEquals(null, offer("""{"namespaces":["org.siros.nym_auth"]}"""))
+        assertEquals(null, offer("""{"org.siros.nym_auth":"00112233445566778899aabbccddeeff"}"""))
+        assertEquals(null, offer("""{"namespaces":["org.siros.nym_auth"],"org.siros.nym_auth":"00112233445566778899aabbccddeeff"}"""))
+    }
+
+    @Test
+    fun deliveredSeed_aKeystoreThatCannotHoldItFailsClosed() = runTest(dispatcher) {
+        // The shared mock keystore of the older tests is neither a JweKeystore nor a WscdKeystoreAdapter.
+        val completeFlow = MutableSharedFlow<FlowCompleteMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val store = FakeCredentialStore(mutableListOf())
+        val keystore = mockk<KeystoreManager>()
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        every { keystore.isUnlocked } returns true
+        coEvery { keystore.exportEncryptedContainer() } returns """{"prfKeys":[],"jwe":"j"}""".toByteArray()
+        coEvery { apiClient.updatePrivateData(any()) } returns buildJsonObject {}
+        val engine = mockEngineConstructor(flowComplete = completeFlow)
+        every { engine.sendCredentialNotification(any(), any(), any(), any()) } just runs
+        val blind = BlindIssuance()
+        val wallet = newWallet(
+            "blindIssuance" to blind,
+            "_state" to MutableStateFlow<WalletState>(
+                WalletState.FlowActive(userId = "u", displayName = null, flowId = "f", flowType = "issuance", status = "in_progress", credentials = emptyList()),
+            ),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "sessionStore" to sessionStore,
+            "apiClient" to apiClient,
+            "eventListener" to listener,
+            "secretSeedAdvertised" to advertisedSelections(false),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        val jwk = blind.offer("f", org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A128GCM", false))!!
+        val body = buildJsonObject {
+            put("credentials", kotlinx.serialization.json.JsonArray(listOf(buildJsonObject { put("credential", JsonPrimitive(deliveredResult().credential)) })))
+            put("notification_id", JsonPrimitive("notif-1"))
+            put("credential_metadata", JsonObject(deliveredMetadata().members))
+        }
+        blind.open("f", issuerEncrypt(jwk, "ECDH-ES", "A128GCM", body.toString()), deferred = false)
+        completeFlow.emit(FlowCompleteMessage(flowId = "f", credentials = listOf(deliveredResult(notificationId = null).copy(credential = "")), credentialResponseEncrypted = true))
+        advanceUntilIdle()
+        assertEquals(0, store.getAll().size)
+        verify(exactly = 1) { engine.sendCredentialNotification("f", "notif-1", CredentialNotificationEvent.FAILURE, any()) }
+    }
+
+    // ---- engine-blind encryption: the wallet holds the response key and builds the encrypted responses ----
+
+    private val blindVerifier: com.nimbusds.jose.jwk.ECKey = com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256)
+        .keyUse(com.nimbusds.jose.jwk.KeyUse.ENCRYPTION).keyID("verifier-1").generate()
+
+    private fun blindResponseEncryption() = org.siros.sdk.transport.ResponseEncryptionRequest(
+        jwk = Json.parseToJsonElement(blindVerifier.toPublicJWK().toJSONString()).jsonObject,
+        alg = "ECDH-ES",
+        enc = "A128GCM",
+    )
+
+    /** The claims of a compact JARM JWE, opened with the verifier's private key. */
+    private fun openJarm(jwe: String): JsonObject {
+        val obj = com.nimbusds.jose.JWEObject.parse(jwe)
+        obj.decrypt(com.nimbusds.jose.crypto.ECDHDecrypter(blindVerifier))
+        return Json.parseToJsonElement(obj.payload.toString()).jsonObject
+    }
+
+    private fun issuerBody(vararg credentials: String, extra: Map<String, kotlinx.serialization.json.JsonElement> = emptyMap()) = buildJsonObject {
+        put("credentials", kotlinx.serialization.json.JsonArray(credentials.map { buildJsonObject { put("credential", JsonPrimitive(it)) } }))
+        extra.forEach { (k, v) -> put(k, v) }
+    }
+
+    @Test
+    fun legacyGenerateProof_withAResponseEncryptionRequest_answersWithAFreshPublicKeyAndHoldsThePrivateOne() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.isWscdOnboarded() } returns true
+        coEvery { keystore.generateProof(audience = "aud-1", nonce = "nonce-1", freshKey = any(), holderBinding = any()) } returns "proof-jwt"
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        val blind = BlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to keystore,
+            "blindIssuance" to blind,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-enc",
+                action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "aud-1", nonce = "nonce-1",
+                    proofTypesSupported = buildJsonObject { putJsonObject("jwt") {} },
+                    credentialResponseEncryption = org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES+A256KW", "A128GCM", required = true),
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        val jwk = slot<JsonObject>()
+        verify(exactly = 1) {
+            engine.sendSignResponse(
+                "flow-enc",
+                proofs = listOf(ProofObject(proofType = "jwt", jwt = "proof-jwt")),
+                messageId = null,
+                credentialResponseEncryptionJwk = capture(jwk),
+            )
+        }
+        assertEquals("enc", jwk.captured["use"]!!.jsonPrimitive.content)
+        assertEquals("ECDH-ES+A256KW", jwk.captured["alg"]!!.jsonPrimitive.content)
+        assertFalse("the private part never leaves the wallet", jwk.captured.containsKey("d"))
+        assertTrue(blind.holdsKey("flow-enc"))
+    }
+
+    @Test
+    fun legacyGenerateProof_aRequiredEncryptionTheWalletCannotProvide_failsBeforeAnyProofIsMade() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        coEvery { keystore.isWscdOnboarded() } returns true
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-enc",
+                action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "aud-1", nonce = "nonce-1",
+                    credentialResponseEncryption = org.siros.sdk.transport.CredentialResponseEncryptionRequest("RSA-OAEP", "A128GCM", required = true),
+                ),
+            )
+        )
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { keystore.generateProof(any(), any(), any(), any()) }
+        coVerify(exactly = 0) { keystore.generateProof(any(), any(), any(), any(), any()) }
+        verify(exactly = 1) { listener.onFlowError("flow-enc", match { it.contains("requires an encrypted credential response") }, any()) }
+        verify(exactly = 0) { engine.sendSignResponse(any(), any(), any(), proofs = any(), messageId = any()) }
+    }
+
+    @Test
+    fun legacyDecryptCredentialResponse_opensTheJweAndAnswersWithTheControlFieldsOnly() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        val blind = BlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "blindIssuance" to blind,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        val jwk = blind.offer("flow-d", org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false))!!
+        val jwe = issuerEncrypt(
+            jwk, "ECDH-ES", "A256GCM",
+            buildJsonObject { put("transaction_id", JsonPrimitive("tx-77")); put("interval", JsonPrimitive(5)) }.toString(),
+        )
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-d", messageId = "msg-d", action = "decrypt_credential_response",
+                params = SignRequestParams(jwe = jwe, deferred = false),
+            )
+        )
+        advanceUntilIdle()
+
+        verify(exactly = 1) {
+            engine.sendSignResponse(flowId = "flow-d", messageId = "msg-d", transactionId = "tx-77", interval = 5)
+        }
+    }
+
+    @Test
+    fun legacyGenerateProof_keyOnly_returnsTheKeyAndNoProofsAndMakesNoProof() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val keystore = mockk<KeystoreManager>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        val blind = BlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to keystore,
+            "blindIssuance" to blind,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-key", messageId = "msg-key", action = "generate_proof",
+                // A configuration with no proof_types_supported that still wants an encrypted response.
+                params = SignRequestParams(credentialResponseEncryption = org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", required = true)),
+            )
+        )
+        advanceUntilIdle()
+
+        val jwk = slot<JsonObject>()
+        verify(exactly = 1) { engine.sendSignResponse("flow-key", messageId = "msg-key", credentialResponseEncryptionJwk = capture(jwk)) }
+        assertEquals(setOf("kty", "crv", "x", "y", "use", "alg"), jwk.captured.keys)
+        assertTrue(blind.holdsKey("flow-key"))
+        // The strict keystore mock would have thrown had a proof been attempted.
+    }
+
+    @Test
+    fun legacyDecryptCredentialResponse_ofIssuedCredentials_answersWithTheCountOnly() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        val blind = BlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "blindIssuance" to blind,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        val jwk = blind.offer("flow-d", org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false))!!
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-d", messageId = "msg-d", action = "decrypt_credential_response",
+                params = SignRequestParams(jwe = issuerEncrypt(jwk, "ECDH-ES", "A256GCM", issuerBody("c1", "c2").toString()), deferred = false),
+            )
+        )
+        advanceUntilIdle()
+        verify(exactly = 1) { engine.sendSignResponse(flowId = "flow-d", messageId = "msg-d", credentialCount = 2) }
+    }
+
+    @Test
+    fun legacyDecryptCredentialResponse_aResponseTheWalletReadButRejects_isReportedToTheIssuerBeforeTheErrorAnswer() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        every { engine.sendCredentialNotification(any(), any(), any(), any()) } just runs
+        val blind = BlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "blindIssuance" to blind,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        val jwk = blind.offer("flow-d", org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false))!!
+        // Decrypts, but carries neither credentials nor a transaction_id: refused, with its notification_id.
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-d", messageId = "msg-d", action = "decrypt_credential_response",
+                params = SignRequestParams(
+                    jwe = issuerEncrypt(jwk, "ECDH-ES", "A256GCM", buildJsonObject { put("notification_id", JsonPrimitive("n-r")) }.toString()),
+                    deferred = false,
+                ),
+            )
+        )
+        advanceUntilIdle()
+        io.mockk.verifyOrder {
+            engine.sendCredentialNotification("flow-d", "n-r", CredentialNotificationEvent.FAILURE, "credential_response_rejected")
+            engine.sendSignResponse(flowId = "flow-d", messageId = "msg-d", error = any())
+        }
+        verify(exactly = 0) { engine.sendSignResponse(flowId = "flow-d", messageId = "msg-d", credentialCount = any()) }
+    }
+
+    @Test
+    fun legacyDecryptCredentialResponse_aDeferredAnswerThatAgainReportsATransactionId_isAnsweredWithItAgain() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        val blind = BlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "blindIssuance" to blind,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        val jwk = blind.offer("flow-d", org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false))!!
+        for ((n, deferred) in listOf("tx-1" to false, "tx-2" to true)) {
+            signFlow.emit(
+                SignRequestMessage(
+                    flowId = "flow-d", messageId = "msg-$n", action = "decrypt_credential_response",
+                    params = SignRequestParams(
+                        jwe = issuerEncrypt(jwk, "ECDH-ES", "A256GCM", buildJsonObject { put("transaction_id", JsonPrimitive(n)); put("interval", JsonPrimitive(3)) }.toString()),
+                        deferred = deferred,
+                    ),
+                )
+            )
+            advanceUntilIdle()
+            verify(exactly = 1) { engine.sendSignResponse(flowId = "flow-d", messageId = "msg-$n", transactionId = n, interval = 3) }
+        }
+    }
+
+    @Test
+    fun wmpGenerateProof_keyOnly_returnsTheKeyAndNoProofs() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>() // strict: a proof attempt would throw
+        val blind = BlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "keystore" to keystore,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "blindIssuance" to blind,
+        )
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "handleWmpSignRequest" }
+        method.isAccessible = true
+        val result = runBlocking {
+            method.callSuspend(
+                wallet, "flow-w",
+                org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams(
+                    action = "generate_proof",
+                    credentialResponseEncryption = org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", true),
+                ),
+            )
+        } as org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult
+        assertEquals(null, result.proofs)
+        assertEquals(setOf("kty", "crv", "x", "y", "use", "alg"), result.credentialResponseEncryptionJwk!!.keys)
+        assertTrue(blind.holdsKey("flow-w"))
+    }
+
+    @Test
+    fun wmpDecryptCredentialResponse_answersWithTheCount_andAResponseItRejectsIsReportedToTheIssuer() = runTest(dispatcher) {
+        val blind = BlindIssuance()
+        val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "wmpPeer" to peer,
+            "blindIssuance" to blind,
+        )
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "handleWmpSignRequest" }
+        method.isAccessible = true
+        val jwk = blind.offer("flow-w", org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false))!!
+        val counted = runBlocking {
+            method.callSuspend(
+                wallet, "flow-w",
+                org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams(
+                    action = "decrypt_credential_response", deferred = false,
+                    jwe = issuerEncrypt(jwk, "ECDH-ES", "A256GCM", issuerBody("c1", "c2", "c3").toString()),
+                ),
+            )
+        } as org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult
+        assertEquals(3, counted.credentialCount)
+        assertEquals(null, counted.transactionId)
+
+        val thrown = runCatching {
+            runBlocking {
+                method.callSuspend(
+                    wallet, "flow-w",
+                    org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams(
+                        action = "decrypt_credential_response", deferred = true,
+                        jwe = issuerEncrypt(jwk, "ECDH-ES", "A256GCM", buildJsonObject { put("notification_id", JsonPrimitive("n-r")) }.toString()),
+                    ),
+                )
+            }
+        }.exceptionOrNull()
+        assertTrue(unwrapped(thrown ?: throw AssertionError("expected a refusal")) is BlindIssuanceException)
+        coVerify(exactly = 1) {
+            peer.sendCredentialNotification(flowId = "flow-w", notificationId = "n-r", event = CredentialNotificationEvent.FAILURE, eventDescription = "credential_response_rejected")
+        }
+    }
+
+    @Test
+    fun aPlainDirectPostPresentation_isUnchangedOnBothTransports_evenWithAVerifiedRequest() = runTest(dispatcher) {
+        val verifiedPlain = org.siros.sdk.transport.VerifiedRequest(clientId = "client-id-1", responseMode = "direct_post", responseUri = "https://v.example/r")
+        // Legacy transport.
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        coEvery { keystore.signVpToken(any(), any(), any(), any(), any()) } returns "plain-vp-token"
+        coEvery { keystore.signPresentation(any(), any(), any()) } returns "plain-vp-token"
+        val cred = StoredCredential(id = 7L, format = "dc+sd-jwt", raw = "raw-sd-jwt", batchId = 1L, instanceId = 0)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "keystore" to keystore,
+            "credentialStore" to FakeCredentialStore(mutableListOf(cred)),
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-plain", messageId = "msg-plain", action = "sign_presentation",
+                params = SignRequestParams(
+                    audience = "admin", nonce = "n",
+                    credentialsToInclude = listOf(org.siros.sdk.transport.engine.CredentialRef(credentialQueryId = "pid", credentialId = "7")),
+                    verifiedRequest = verifiedPlain,
+                ),
+            )
+        )
+        repeat(5) {
+            runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(50) }
+            advanceUntilIdle()
+        }
+        verify(exactly = 1) { engine.sendSignResponse(flowId = "flow-plain", vpToken = "plain-vp-token", messageId = "msg-plain") }
+        verify(exactly = 0) { engine.sendSignResponse(flowId = any(), responseJwe = any()) }
+        // WMP transport.
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "handleWmpSignRequest" }
+        method.isAccessible = true
+        val result = runBlocking {
+            method.callSuspend(
+                wallet, "flow-w",
+                org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams(action = "sign_presentation", nonce = "n", audience = "admin", verifiedRequest = verifiedPlain),
+            )
+        } as org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult
+        assertEquals("plain-vp-token", result.vpToken)
+        assertEquals(null, result.responseJwe)
+    }
+
+    @Test
+    fun anEncryptedResponseForAModeThatIsNotDirectPostJwt_isRefusedOnBothTransports() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        coEvery { keystore.signPresentation(any(), any(), any()) } returns "vp"
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "keystore" to keystore,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+        )
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "handleWmpSignRequest" }
+        method.isAccessible = true
+        for (mode in listOf("direct_post", "query", "fragment")) {
+            val thrown = runCatching {
+                runBlocking {
+                    method.callSuspend(
+                        wallet, "flow-w",
+                        org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams(
+                            action = "sign_presentation", nonce = "n", audience = "admin",
+                            responseEncryption = blindResponseEncryption(),
+                            verifiedRequest = org.siros.sdk.transport.VerifiedRequest(clientId = "c", responseMode = mode),
+                        ),
+                    )
+                }
+            }.exceptionOrNull()
+            assertTrue(mode, unwrapped(thrown ?: throw AssertionError("expected a refusal for $mode")).message.orEmpty().contains("not direct_post.jwt"))
+        }
+    }
+
+    // ---- review follow-ups: the response key and opened responses are released on every teardown, failure and end ----
+
+    /** A holder with a key for two flows and a response opened for one of them. */
+    private fun heldBlindIssuance(): BlindIssuance {
+        val blind = BlindIssuance()
+        val request = org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false)
+        val jwk = blind.offer("flow-a", request)!!
+        blind.open("flow-a", issuerEncrypt(jwk, "ECDH-ES", "A256GCM", issuerBody("secret credential!").toString()), deferred = false)
+        blind.offer("flow-b", request)
+        return blind
+    }
+
+    private fun assertBlindEmpty(blind: BlindIssuance) {
+        assertFalse(blind.holdsKey("flow-a"))
+        assertFalse(blind.holdsKey("flow-b"))
+        assertEquals("what was opened is gone too", null, blind.take("flow-a"))
+    }
+
+    @Test
+    fun logout_clearsTheResponseKeysAndTheOpenedResponses() = runTest(dispatcher) {
+        val blind = heldBlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "sessionStore" to mockk<SessionStore>(relaxed = true),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "blindIssuance" to blind,
+        )
+        wallet.logout()
+        assertBlindEmpty(blind)
+    }
+
+    private fun recordedCommitment() = listOf(org.siros.sdk.credentials.HolderCommitment(listOf("psc"), "sha-256", true, ByteArray(32) { 7 }))
+
+    @Test
+    fun logout_dropsAndZeroesEveryRecordedHolderCommitment() = runTest(dispatcher) {
+        val recorded = java.util.concurrent.ConcurrentHashMap<String, List<org.siros.sdk.credentials.HolderCommitment>>()
+        val c = recordedCommitment()
+        recorded["f1"] = c
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "sessionStore" to mockk<SessionStore>(relaxed = true),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "holderCommitmentsByFlow" to recorded,
+        )
+        wallet.logout()
+        assertTrue(recorded.isEmpty())
+        assertTrue("zeroed, not merely forgotten", c.single().commitment.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun cancellingAnIssuanceDropsAndZeroesItsRecordedHolderCommitments() = runTest(dispatcher) {
+        val recorded = java.util.concurrent.ConcurrentHashMap<String, List<org.siros.sdk.credentials.HolderCommitment>>()
+        val c = recordedCommitment()
+        recorded["flow-x"] = c
+        recorded["other"] = recordedCommitment()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.FlowActive(userId = "user-1", displayName = "Alice", flowId = "flow-x", flowType = "issuance", status = "s")),
+            "engineSession" to mockk<WalletEngineSession>(relaxed = true),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "holderCommitmentsByFlow" to recorded,
+        )
+        wallet.cancelCurrentFlow()
+        assertEquals(setOf("other"), recorded.keys)
+        assertTrue(c.single().commitment.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun destroy_clearsTheResponseKeysAndTheOpenedResponses() = runTest(dispatcher) {
+        val blind = heldBlindIssuance()
+        val app = mockk<android.content.Context>(relaxed = true)
+        val activity = mockk<android.app.Activity>(relaxed = true)
+        every { activity.applicationContext } returns app
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "supervisorJob" to SupervisorJob(),
+            "activity" to activity,
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> { error("not initialised") },
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "blindIssuance" to blind,
+        )
+        wallet.destroy()
+        assertBlindEmpty(blind)
+    }
+
+    @Test
+    fun aWmpGenerateProofThatFailsAfterTheKeyWasOffered_releasesTheFlowsKey() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.generateProof(any(), any(), any(), any()) } throws org.siros.sdk.credentials.KeystoreException("signing failed")
+        coEvery { keystore.generateProof(any(), any(), any(), any(), any()) } throws org.siros.sdk.credentials.KeystoreException("signing failed")
+        val blind = BlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "keystore" to keystore,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "blindIssuance" to blind,
+        )
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "handleWmpSignRequest" }
+        method.isAccessible = true
+        val thrown = runCatching {
+            runBlocking {
+                method.callSuspend(
+                    wallet, "flow-w",
+                    org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams(
+                        action = "generate_proof", nonce = "n", audience = "aud",
+                        proofTypesSupported = buildJsonObject { putJsonObject("jwt") {} },
+                        credentialResponseEncryption = org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", true),
+                    ),
+                )
+            }
+        }.exceptionOrNull()
+        assertTrue("the failure still reaches the profile", thrown != null)
+        assertFalse("the private key of a failed request is released", blind.holdsKey("flow-w"))
+    }
+
+    @Test
+    fun aWmpFlowError_releasesTheFlowsKeyAndOpenedResponseAndStillTellsTheListener() = runTest(dispatcher) {
+        val blind = heldBlindIssuance()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "eventListener" to listener,
+            "blindIssuance" to blind,
+        )
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "onWmpFlowError" }
+        method.isAccessible = true
+        // lifetime=0: these freshly allocated test wallets never run clearPerFlowAuthorizationState, so consentEpoch is
+        // still its zero default - this test is about the existing release/report behavior, not about a replaced peer (see
+        // wmpTerminalCallbacks_boundToTheirOwnPeersLifetime_doNotClearAReplacementPeersConsent for that).
+        runBlocking { method.callSuspend(wallet, "flow-a", "CREDENTIAL_ERROR", "boom", 0) }
+        assertFalse(blind.holdsKey("flow-a"))
+        assertEquals(null, blind.take("flow-a"))
+        assertTrue("another flow's key is not touched", blind.holdsKey("flow-b"))
+        verify(exactly = 1) { listener.onFlowError("flow-a", "CREDENTIAL_ERROR: boom", any()) }
+    }
+
+    @Test
+    fun aMalformedPlainWmpCompletion_isNeverReportedAsSuccess() = runTest(dispatcher) {
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to org.siros.sdk.keystore.JweKeystore(),
+            "eventListener" to listener,
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "blindIssuance" to BlindIssuance(),
+        )
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "onWmpFlowComplete" }
+        method.isAccessible = true
+        val malformed = Json.parseToJsonElement("""{"credentials":[{"format":"dc+sd-jwt"}]}""").jsonObject
+        // lifetime=0: this test is about the existing malformed-completion rejection, not about a replaced peer.
+        runBlocking { method.callSuspend(wallet, null, "flow-m", malformed, 0) }
+        verify(exactly = 0) { listener.onFlowComplete(any(), any()) }
+        verify(exactly = 1) { listener.onFlowError("flow-m", any(), any()) }
+    }
+
+    @Test
+    fun aRenewalWhoseReplacementIsRejectedOrUnreadable_leavesTheOldBatchInPlace() = runTest(dispatcher) {
+        val old = listOf(storedCopy(id = 41L, batchId = 77L))
+        // Plain, non-empty but unreadable: no replacement could be stored.
+        val unreadable = deliveredScenario(
+            listOf(deliveredResult(credential = "not-a-credential")),
+            encrypted = false, preexisting = old, renewalSourceBatchId = 77L,
+        )
+        assertEquals(listOf(41L), unreadable.store.getAll().map { it.id })
+        // Encrypted, but the wallet holds no response for it.
+        val lost = deliveredScenario(listOf(deliveredResult()), lostResponse = true, preexisting = old, renewalSourceBatchId = 77L)
+        assertEquals(listOf(41L), lost.store.getAll().map { it.id })
+        // Encrypted, but the entry count differs from what the wallet opened.
+        val mismatch = deliveredScenario(listOf(deliveredResult()), engineEntries = 2, preexisting = old, renewalSourceBatchId = 77L)
+        assertEquals(listOf(41L), mismatch.store.getAll().map { it.id })
+    }
+
+    @Test
+    fun aRenewalWhoseReplacementIsStored_stillSupersedesTheOldBatch() = runTest(dispatcher) {
+        val s = deliveredScenario(
+            listOf(deliveredResult(credential = NymTestCredentials.sdJwt(sscValues = emptyList()))),
+            encrypted = false, preexisting = listOf(storedCopy(id = 41L, batchId = 77L)), renewalSourceBatchId = 77L,
+        )
+        val ids = s.store.getAll().map { it.id }
+        assertEquals(1, ids.size)
+        assertFalse("the superseded batch is gone", 41L in ids)
+    }
+
+    @Test
+    fun aBufferedPlainCompletionAfterASocketReplacement_isStillRefusedAsADowngrade() = runTest(dispatcher) {
+        // Controlled interleaving: a key was held for the flow, the socket was replaced (the sweep dropped the key), THEN the plaintext
+        // completion that was buffered before the replacement is processed.
+        val s = deliveredScenario(
+            listOf(deliveredResult(credential = NymTestCredentials.sdJwt(sscValues = emptyList()))),
+            encrypted = false, offeredKey = true, socketReplacedSinceOffer = true,
+        )
+        assertFalse("the sweep did drop the key", s.blind.holdsKey("flow-delivered"))
+        assertNothingStored(s)
+        verify(exactly = 1) { s.engine.sendCredentialNotification("flow-delivered", "notif-1", CredentialNotificationEvent.FAILURE, any()) }
+        verify(exactly = 1) { s.listener.onFlowError("flow-delivered", match { it.contains("answered in clear") }, any()) }
+        assertFalse("the marker ends with the flow", s.blind.wasOffered("flow-delivered"))
+    }
+
+    @Test
+    fun aRepeatedPlaintextCompletionOfARefusedFlow_isIgnored_neverStoredAsAFreshOne() = runTest(dispatcher) {
+        val s = deliveredScenario(
+            listOf(deliveredResult(credential = NymTestCredentials.sdJwt(sscValues = emptyList()))),
+            encrypted = false, offeredKey = true, repeatCompletion = true,
+        )
+        // The first plaintext completion was refused (a key was offered) and the flow is terminal; the repeat finds no marker any
+        // more, so without the terminal-flow check it would be accepted as an ordinary plain completion and stored.
+        assertNothingStored(s)
+        verify(exactly = 1) { s.listener.onFlowError("flow-delivered", match { it.contains("answered in clear") }, any()) }
+        verify(exactly = 1) { s.engine.sendCredentialNotification("flow-delivered", "notif-1", CredentialNotificationEvent.FAILURE, any()) }
+    }
+
+    @Test
+    fun aRepeatedAcceptedCompletion_isNotStoredTwice() = runTest(dispatcher) {
+        val s = deliveredScenario(
+            listOf(deliveredResult(credential = NymTestCredentials.sdJwt(sscValues = emptyList()))),
+            encrypted = false, repeatCompletion = true,
+        )
+        assertEquals(1, s.store.getAll().size)
+        verify(exactly = 1) { s.listener.onFlowComplete("flow-delivered", any()) }
+    }
+
+    @Test
+    fun aPlainCompletionForTheOldestFlowAfterCapacityPressure_isStillRefusedAndTheNewOfferIsTheOneRefused() = runTest(dispatcher) {
+        val request = org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false)
+        val s = deliveredScenario(
+            listOf(deliveredResult(credential = NymTestCredentials.sdJwt(sscValues = emptyList()))),
+            encrypted = false, offeredKey = true, socketReplacedSinceOffer = true,
+            beforeCompletion = { blind ->
+                // Fill the table to capacity with other flows, then offer one more: THAT offer is refused, nothing is evicted.
+                repeat(BlindIssuance.MAX_OFFERED_MARKERS - 1) { blind.offer("filler-$it", request, generation = 0) }
+                org.junit.Assert.assertThrows(BlindIssuanceException::class.java) { blind.offer("one-too-many", request) }
+                assertTrue("the oldest flow is still expected to be encrypted", blind.wasOffered("flow-delivered"))
+            },
+        )
+        // Its plaintext completion is refused: nothing stored, the issuer told.
+        assertNothingStored(s)
+        verify(exactly = 1) { s.engine.sendCredentialNotification("flow-delivered", "notif-1", CredentialNotificationEvent.FAILURE, any()) }
+        verify(exactly = 1) { s.listener.onFlowError("flow-delivered", match { it.contains("answered in clear") }, any()) }
+    }
+
+    @Test
+    fun aBufferedPlainWmpCompletionAfterASocketReplacement_isStillRefusedAsADowngrade() = runTest(dispatcher) {
+        val blind = BlindIssuance()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to org.siros.sdk.keystore.JweKeystore(),
+            "eventListener" to listener,
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "blindIssuance" to blind,
+        )
+        blind.offer("flow-b", org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false), generation = 0)
+        blind.markStaleBefore(1)
+        assertFalse(blind.holdsKey("flow-b"))
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "onWmpFlowComplete" }
+        method.isAccessible = true
+        // lifetime=0: this test is about the existing downgrade-refusal behavior, not about a replaced peer.
+        runBlocking { method.callSuspend(wallet, null, "flow-b", Json.parseToJsonElement("""{"credentials":[{"format":"dc+sd-jwt","credential":"x"}]}""").jsonObject, 0) }
+        verify(exactly = 0) { listener.onFlowComplete("flow-b", any()) }
+        verify(exactly = 1) { listener.onFlowError("flow-b", match { it.contains("answered in clear") }, any()) }
+        assertFalse(blind.wasOffered("flow-b"))
+    }
+
+    @Test
+    fun aWmpPlainCompletion_releasesTheKeyOfAnOptionalEncryptionOffer_andAnEncryptedOneStillReadsItsResponseFirst() = runTest(dispatcher) {
+        val blind = heldBlindIssuance()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to org.siros.sdk.keystore.JweKeystore(),
+            "eventListener" to listener,
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "blindIssuance" to blind,
+        )
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "onWmpFlowComplete" }
+        method.isAccessible = true
+        // lifetime=0 for both calls below: this test is about the existing key-release/completion behavior, not about a
+        // replaced peer.
+        // flow-b: the issuer answered in clear although a key was offered.
+        val plain = Json.parseToJsonElement("""{"credentials":[{"format":"dc+sd-jwt","credential":"x"}]}""").jsonObject
+        runBlocking { method.callSuspend(wallet, null, "flow-b", plain, 0) }
+        assertFalse("a plain completion releases the key", blind.holdsKey("flow-b"))
+        // ... and is an error, not a success: a key was offered.
+        verify(exactly = 0) { listener.onFlowComplete("flow-b", any()) }
+        verify(exactly = 1) { listener.onFlowError("flow-b", match { it.contains("answered in clear") }, any()) }
+        // flow-a: an encrypted completion is processed against the opened response, and only then released.
+        val encrypted = Json.parseToJsonElement("""{"credentials":[{"format":"dc+sd-jwt"}],"credential_response_encrypted":true}""").jsonObject
+        runBlocking { method.callSuspend(wallet, null, "flow-a", encrypted, 0) }
+        verify(exactly = 1) { listener.onFlowComplete("flow-a", any()) }
+        verify(exactly = 0) { listener.onFlowError("flow-a", any(), any()) }
+        assertFalse(blind.holdsKey("flow-a"))
+        assertEquals(null, blind.take("flow-a"))
+    }
+
+    @Test
+    fun aLegacyPlainCompletion_releasesTheKeyOfAnOptionalEncryptionOffer() = runTest(dispatcher) {
+        val s = deliveredScenario(
+            listOf(deliveredResult(credential = NymTestCredentials.sdJwt(sscValues = emptyList()))),
+            encrypted = false, offeredKey = true,
+        )
+        // A key was offered, so a plaintext completion is an ERROR and nothing is stored; the issuer is told.
+        assertNothingStored(s)
+        verify(exactly = 1) { s.engine.sendCredentialNotification("flow-delivered", "notif-1", CredentialNotificationEvent.FAILURE, any()) }
+        verify(exactly = 1) { s.listener.onFlowError("flow-delivered", match { it.contains("answered in clear") }, any()) }
+        assertFalse(s.blind.holdsKey("flow-delivered"))
+    }
+
+    @Test
+    fun legacyGenerateProof_aRequiredEncryptionTheWalletCannotProvide_answersTheEngineWithAnErrorForThatMessage() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "eventListener" to listener,
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-enc", messageId = "msg-original", action = "generate_proof",
+                params = SignRequestParams(
+                    audience = "aud-1", nonce = "nonce-1",
+                    credentialResponseEncryption = org.siros.sdk.transport.CredentialResponseEncryptionRequest("RSA-OAEP", "A128GCM", required = true),
+                ),
+            )
+        )
+        advanceUntilIdle()
+        val error = slot<String>()
+        verify(exactly = 1) { engine.sendSignResponse(flowId = "flow-enc", messageId = "msg-original", error = capture(error)) }
+        assertTrue(error.captured, error.captured.contains("requires an encrypted credential response"))
+        verify(exactly = 1) { listener.onFlowError("flow-enc", any(), any()) }
+    }
+
+    @Test
+    fun legacyDecryptCredentialResponse_aJweThatDoesNotOpen_answersWithAnErrorAndEndsTheFlow() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val blind = BlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "eventListener" to listener,
+            "blindIssuance" to blind,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        blind.offer("flow-d", org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false))
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-d", messageId = "msg-d", action = "decrypt_credential_response",
+                params = SignRequestParams(jwe = "not.a.valid.jwe.value"),
+            )
+        )
+        advanceUntilIdle()
+
+        val error = slot<String>()
+        verify(exactly = 1) { engine.sendSignResponse(flowId = "flow-d", messageId = "msg-d", error = capture(error)) }
+        assertFalse(error.captured.contains("not.a.valid.jwe.value"))
+        verify(exactly = 1) { listener.onFlowError("flow-d", any(), any()) }
+        assertFalse("the issuance is over, so is its key", blind.holdsKey("flow-d"))
+    }
+
+    @Test
+    fun legacySignPresentation_refusesWhenCredentialsToIncludeAsksForMoreThanWasConsented() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502): credentials_to_include round-trips from this wallet's OWN "consent" flow
+        // action - a buggy or compromised engine could instead ask to disclose more than the user actually consented to.
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        coEvery { keystore.signVpToken(any(), any(), any(), any(), any()) } returns "should never be used"
+        val cred = StoredCredential(id = 7L, format = "dc+sd-jwt", raw = "raw-sd-jwt", batchId = 1L, instanceId = 0)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "credentialStore" to FakeCredentialStore(mutableListOf(cred)),
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        // Set AFTER connectEngine, not via newWallet: connectEngine clears consentRecordsByFlow at the start of every
+        // connection (a flow id of a replaced connection must not inherit stale consent - see clearPerFlowAuthorizationState's
+        // doc comment), so seeding it before would be wiped before the sign request ever arrives, and the test would then pass
+        // for the wrong reason (NoRecord, not ExtraClaims).
+        // The user consented to disclosing ONLY given_name for this query/credential - not the permissive test default.
+        setField(wallet, "consentRecordsByFlow", mutableMapOf("flow-guard" to ConsentRecord(listOf(ConsentedSelection("pid", "7", setOf("given_name"))))))
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-guard", messageId = "msg-guard", action = "sign_presentation",
+                params = SignRequestParams(
+                    audience = "admin-audience", nonce = "n",
+                    // The engine asks for every claim although the user only consented to one.
+                    credentialsToInclude = listOf(org.siros.sdk.transport.engine.CredentialRef(credentialQueryId = "pid", credentialId = "7", disclosedClaims = listOf("given_name", "family_name", "birth_date"))),
+                    verifiedRequest = org.siros.sdk.transport.VerifiedRequest(clientId = "client-id-1", clientIdScheme = "x509_san_dns", responseMode = "direct_post.jwt", responseUri = "https://verifier.example.com/response", signed = true, signatureVerification = "verified"),
+                ),
+            )
+        )
+        repeat(5) {
+            runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(50) }
+            advanceUntilIdle()
+        }
+        coVerify(exactly = 0) { keystore.signVpToken(any(), any(), any(), any(), any()) }
+        verify(exactly = 0) { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) }
+        verify(exactly = 1) { listener.onFlowError("flow-guard", match { it.contains("does not match what was consented to") }, any()) }
+    }
+
+    @Test
+    fun connectingANewEngineSession_clearsStalePerFlowConsentFromAReplacedConnection() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502): a flow id of a replaced/ended session reused by a later one (the
+        // backend's flow id namespace is not guaranteed session-scoped) must not inherit stale consent recorded under
+        // that id by the PRIOR session - see clearPerFlowAuthorizationState's doc comment.
+        val store = FakeCredentialStore(mutableListOf())
+        mockEngineConstructor()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+        )
+        setField(
+            wallet, "consentRecordsByFlow",
+            mutableMapOf("stale-flow" to ConsentRecord(listOf(ConsentedSelection("pid", "7", setOf("given_name"))))),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        @Suppress("UNCHECKED_CAST")
+        val remaining = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+        assertTrue("a stale flow's consent must not survive a new/replaced engine connection", remaining.isEmpty())
+    }
+
+    @Test
+    fun legacySignPresentation_mdocConsentedAsAWhole_discloses_everything_not_nothing() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502), correctness: a credential consented to as a WHOLE (no DCQL claims
+        // restriction) is recorded with claims = null, never an empty set - MdocDeviceResponseBuilder reads a non-null
+        // EMPTY disclosed-claims list as "disclose nothing" but null as "disclose everything" (unlike SD-JWT's signer,
+        // which treats null and empty the same). Collapsing "whole credential" to an empty set here would silently strip
+        // every element of a legitimately whole-attestation-consented mdoc.
+        // Production code decodes cred.raw via android.util.Base64 before calling the keystore - the Android SDK stub jar
+        // throws on any real call in a plain (non-Robolectric) JUnit test (see handleDCAPIRequest_mdocCredential_... above).
+        io.mockk.mockkStatic(android.util.Base64::class)
+        every { android.util.Base64.decode(any<String>(), any()) } returns "fake-cbor".toByteArray()
+        every { android.util.Base64.encodeToString(any(), any()) } returns "ZGV2aWNlLXJlc3BvbnNl"
+        try {
+            val signFlow = MutableSharedFlow<SignRequestMessage>()
+            val engine = mockEngineConstructor(signRequests = signFlow)
+            every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+            val keystore = mockk<KeystoreManager>(relaxed = true)
+            coEvery { keystore.signMdocPresentation(any(), any(), any(), any(), any(), any(), any()) } returns byteArrayOf(1, 2, 3)
+            val cred = StoredCredential(id = 9L, format = "mso_mdoc", raw = "ZmFrZS1jYm9y", batchId = 1L, instanceId = 0)
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+                "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                "keystore" to keystore,
+                "credentialStore" to FakeCredentialStore(mutableListOf(cred)),
+                "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            )
+            invokeConnectEngine(wallet, "app-token")
+            advanceUntilIdle()
+            // Whole-credential consent: claims = null, as handleCredentialSelection records a non-DCQL/no-claims-array match.
+            setField(wallet, "consentRecordsByFlow", mutableMapOf("flow-mdoc" to ConsentRecord(listOf(ConsentedSelection("pid", "9", null)))))
+            signFlow.emit(
+                SignRequestMessage(
+                    flowId = "flow-mdoc", messageId = "msg-mdoc", action = "sign_presentation",
+                    params = SignRequestParams(
+                        audience = "admin-audience", nonce = "n",
+                        // The engine's own disclosedClaims value here is irrelevant - and MUST be ignored - either way.
+                        credentialsToInclude = listOf(org.siros.sdk.transport.engine.CredentialRef(credentialQueryId = "pid", credentialId = "9", disclosedClaims = null)),
+                        verifiedRequest = org.siros.sdk.transport.VerifiedRequest(clientId = "client-id-1", clientIdScheme = "x509_san_dns", responseMode = "direct_post.jwt", responseUri = "https://verifier.example.com/response", signed = true, signatureVerification = "verified"),
+                    ),
+                )
+            )
+            repeat(5) {
+                runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(50) }
+                advanceUntilIdle()
+            }
+            coVerify(exactly = 1) { keystore.signMdocPresentation(any(), isNull(), any(), any(), any(), any(), any()) }
+            verify(exactly = 1) { engine.sendSignResponse(flowId = "flow-mdoc", vpToken = any(), messageId = "msg-mdoc") }
+        } finally {
+            io.mockk.unmockkStatic(android.util.Base64::class)
+        }
+    }
+
+    @Test
+    fun legacySignPresentation_overDirectPostJwt_answersWithTheEncryptedResponseAndNeverTheVpToken() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        coEvery { keystore.signVpToken(any(), any(), any(), any(), any()) } returns "secret vp token!"
+        val cred = StoredCredential(id = 7L, format = "dc+sd-jwt", raw = "raw-sd-jwt", batchId = 1L, instanceId = 0)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "keystore" to keystore,
+            "credentialStore" to FakeCredentialStore(mutableListOf(cred)),
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-vp", messageId = "msg-vp", action = "sign_presentation",
+                params = SignRequestParams(
+                    // The admin-configured audience differs from the request's own client_id: the JARM aud is the latter.
+                    audience = "admin-audience", nonce = "n", state = "st-9",
+                    credentialsToInclude = listOf(org.siros.sdk.transport.engine.CredentialRef(credentialQueryId = "pid", credentialId = "7")),
+                    responseEncryption = blindResponseEncryption(),
+                    verifiedRequest = org.siros.sdk.transport.VerifiedRequest(clientId = "client-id-1", clientIdScheme = "x509_san_dns", responseMode = "direct_post.jwt", responseUri = "https://verifier.example.com/response", signed = true, signatureVerification = "verified"),
+                ),
+            )
+        )
+        repeat(5) {
+            runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(50) }
+            advanceUntilIdle()
+        }
+
+        val jwe = slot<String>()
+        verify(exactly = 1) { engine.sendSignResponse(flowId = "flow-vp", messageId = "msg-vp", responseJwe = capture(jwe)) }
+        verify(exactly = 0) { engine.sendSignResponse(any(), any(), vpToken = any(), proofs = any(), messageId = any()) }
+        assertFalse(jwe.captured.contains("secret vp token!"))
+        val claims = openJarm(jwe.captured)
+        assertEquals("client-id-1", claims["aud"]!!.jsonPrimitive.content)
+        assertEquals("st-9", claims["state"]!!.jsonPrimitive.content)
+        assertEquals(
+            JsonObject(mapOf("pid" to kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive("secret vp token!"))))),
+            claims["vp_token"],
+        )
+    }
+
+    @Test
+    fun legacySignPresentation_overDirectPostJwt_withoutAVerifiedClientId_buildsNothingAndRefusesLocally() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        coEvery { keystore.signVpToken(any(), any(), any(), any(), any()) } returns "secret vp token!"
+        val cred = StoredCredential(id = 7L, format = "dc+sd-jwt", raw = "raw-sd-jwt", batchId = 1L, instanceId = 0)
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "keystore" to keystore,
+            "credentialStore" to FakeCredentialStore(mutableListOf(cred)),
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "eventListener" to listener,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        // `audience` is present but is not the request's validated client_id: nothing may be built from it.
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-vp", messageId = "msg-vp", action = "sign_presentation",
+                params = SignRequestParams(
+                    audience = "admin-audience", nonce = "n",
+                    credentialsToInclude = listOf(org.siros.sdk.transport.engine.CredentialRef(credentialQueryId = "pid", credentialId = "7")),
+                    responseEncryption = blindResponseEncryption(),
+                ),
+            )
+        )
+        repeat(5) {
+            runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(50) }
+            advanceUntilIdle()
+        }
+
+        verify(exactly = 0) { engine.sendSignResponse(any(), any(), responseJwe = any(), proofs = any(), messageId = any()) }
+        verify(exactly = 0) { engine.sendSignResponse(any(), any(), vpToken = any(), proofs = any(), messageId = any()) }
+        verify(exactly = 1) { listener.onFlowError("flow-vp", match { it.contains("no verified client_id") }, any()) }
+    }
+
+    @Test
+    fun wmpSignPresentation_overDirectPostJwt_withoutAVerifiedClientId_isRefused() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        coEvery { keystore.signPresentation(any(), any(), any()) } returns "secret vp token!"
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "keystore" to keystore,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+        )
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "handleWmpSignRequest" }
+        method.isAccessible = true
+        val thrown = runCatching {
+            runBlocking {
+                method.callSuspend(
+                    wallet, "flow-w",
+                    org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams(
+                        action = "sign_presentation", nonce = "n", audience = "admin-audience",
+                        responseEncryption = blindResponseEncryption(),
+                    ),
+                )
+            }
+        }.exceptionOrNull()
+        assertTrue(thrown.toString(), unwrapped(thrown ?: throw AssertionError("expected a refusal")).message.orEmpty().contains("no verified client_id"))
+    }
+
+    @Test
+    fun wmpGenerateProof_andDecryptCredentialResponse_carryTheSameAnswersAsTheLegacyTransport() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>()
+        coEvery { keystore.generateProof(audience = "aud-1", nonce = "nonce-1", freshKey = any(), holderBinding = any()) } returns "proof-jwt"
+        val blind = BlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "keystore" to keystore,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "blindIssuance" to blind,
+        )
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "handleWmpSignRequest" }
+        method.isAccessible = true
+
+        val proof = runBlocking {
+            method.callSuspend(
+                wallet, "flow-w",
+                org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams(
+                    action = "generate_proof", nonce = "nonce-1", audience = "aud-1",
+                    credentialResponseEncryption = org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false),
+                ),
+            )
+        } as org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult
+        val jwk = proof.credentialResponseEncryptionJwk!!
+        assertEquals("enc", jwk["use"]!!.jsonPrimitive.content)
+        assertFalse(jwk.containsKey("d"))
+        assertTrue(blind.holdsKey("flow-w"))
+
+        val jwe = issuerEncrypt(jwk, "ECDH-ES", "A256GCM", buildJsonObject { put("transaction_id", JsonPrimitive("tx-5")) }.toString())
+        val opened = runBlocking {
+            method.callSuspend(
+                wallet, "flow-w",
+                org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams(action = "decrypt_credential_response", jwe = jwe, deferred = false),
+            )
+        } as org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult
+        assertEquals("tx-5", opened.transactionId)
+        assertEquals(null, opened.proofs)
+    }
+
+    @Test
+    fun wmpDecryptCredentialResponse_aJweThatDoesNotOpen_isRefusedAndDropsTheKey() = runTest(dispatcher) {
+        val blind = BlindIssuance()
+        blind.offer("flow-w", org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "blindIssuance" to blind,
+        )
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "handleWmpSignRequest" }
+        method.isAccessible = true
+        val thrown = runCatching {
+            runBlocking {
+                method.callSuspend(
+                    wallet, "flow-w",
+                    org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams(action = "decrypt_credential_response", jwe = "a.b.c.d.e"),
+                )
+            }
+        }.exceptionOrNull()
+        assertTrue(thrown.toString(), unwrapped(thrown ?: throw AssertionError("expected a refusal")) is BlindIssuanceException)
+        assertFalse(blind.holdsKey("flow-w"))
+    }
+
+    @Test
+    fun wmpSignPresentation_overDirectPostJwt_answersWithTheEncryptedResponse() = runTest(dispatcher) {
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        coEvery { keystore.signPresentation(any(), any(), any()) } returns "secret vp token!"
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "keystore" to keystore,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+        )
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "handleWmpSignRequest" }
+        method.isAccessible = true
+        val result = runBlocking {
+            method.callSuspend(
+                wallet, "flow-w",
+                org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams(
+                    action = "sign_presentation", nonce = "n", audience = "admin-audience", state = "st-9",
+                    credentialsToInclude = listOf(org.siros.sdk.transport.engine.CredentialRef(credentialQueryId = "pid", credentialId = "7")),
+                    responseEncryption = blindResponseEncryption(),
+                    verifiedRequest = org.siros.sdk.transport.VerifiedRequest(clientId = "client-id-1", clientIdScheme = "x509_san_dns", responseMode = "direct_post.jwt", responseUri = "https://verifier.example.com/response", signed = true, signatureVerification = "verified"),
+                ),
+            )
+        } as org.siros.sdk.transport.wmp.openid4x.SignSubFlowResult
+
+        assertEquals(null, result.vpToken)
+        val claims = openJarm(result.responseJwe!!)
+        assertEquals("client-id-1", claims["aud"]!!.jsonPrimitive.content)
+        assertEquals("st-9", claims["state"]!!.jsonPrimitive.content)
+        assertEquals("secret vp token!", claims["vp_token"]!!.jsonObject["pid"]!!.jsonArray[0].jsonPrimitive.content)
+    }
+
+    @Test
+    fun aPlainCompletion_storesTheRelayedDisplayMetadata_butRefusesAMemberOfASupersededShape() = runTest(dispatcher) {
+        // Display-only metadata is relayed and stored as before.
+        val ok = deliveredScenario(
+            listOf(deliveredResult(credential = NymTestCredentials.sdJwt(sscValues = emptyList()))),
+            encrypted = false, wireMetadata = """{"display":[{"name":"Nym"}],"claims":[{"path":["a"]}]}""",
+        )
+        val stored = ok.keystore.getCredentialMetadata(ok.store.getAll().single().id)!!
+        assertEquals(listOf("display", "claims"), stored.map { it.jsonObject["type"]!!.jsonPrimitive.content })
+        // A member of a superseded secret-bearing shape in a PLAIN completion (the engine's relay drops its value, not its
+        // presence): the response is refused, nothing is stored and the issuer is told (credential_failure).
+        for (name in listOf("org.siros.secret_seed", "org.siros.holder_commitments", "org.siros.psc", "holder_commitments", "secret_members")) {
+            val wire = """{"display":[{"name":"Nym"}],"$name":{"org.siros.nym_auth":"${NymTestCredentials.seedHex}"},"claims":[{"path":["a"]}]}"""
+            val s = deliveredScenario(
+                listOf(deliveredResult(credential = NymTestCredentials.sdJwt(sscValues = emptyList()))),
+                encrypted = false, wireMetadata = wire,
+            )
+            assertNothingStored(s)
+            verify(exactly = 1) { s.engine.sendCredentialNotification(any(), "notif-1", CredentialNotificationEvent.FAILURE, any()) }
+            verify(exactly = 0) { s.engine.sendCredentialNotification(any(), any(), CredentialNotificationEvent.ACCEPTED, any()) }
+        }
+    }
+
+    @Test
+    fun aPlainCompletionCarryingOnlyASeed_deliversNoSeedAndIsRefusedWhenTheConfigurationAdvertisedOne() = runTest(dispatcher) {
+        val wire = """{"org.siros.secret_seed":{"org.siros.nym_auth":"${NymTestCredentials.seedHex}"}}"""
+        // Advertised: the response had to be encrypted, and the frame's seed is not taken either way.
+        val advertised = deliveredScenario(listOf(deliveredResult()), encrypted = false, advertised = true, wireMetadata = wire)
+        assertNothingStored(advertised)
+        // Not advertised: the credential needs a seed it never receives, so nothing is verified against a seed and no seed is kept.
+        val plain = deliveredScenario(listOf(deliveredResult()), encrypted = false, advertised = false, wireMetadata = wire)
+        // A member of a superseded shape is refused outright: nothing is stored.
+        assertNothingStored(plain)
+    }
+
+    @Test
+    fun anEncryptedCompletion_ignoresAnyCredentialMetadataTheEngineFrameCarries() = runTest(dispatcher) {
+        // The wallet decrypted {example.other}; the frame claims a different object, including a seed.
+        val md = org.siros.sdk.transport.ResponseCredentialMetadata(buildJsonObject { put("example.other", JsonPrimitive("from-the-wallet")) })
+        val wire = """{"display":[{"name":"from-the-engine"}],"org.siros.secret_seed":{"org.siros.nym_auth":"${NymTestCredentials.seedHex}"}}"""
+        val s = deliveredScenario(
+            listOf(deliveredResult(credential = NymTestCredentials.sdJwt(sscValues = emptyList()))),
+            metadata = md, wireMetadata = wire,
+        )
+        val stored = s.keystore.getCredentialMetadata(s.store.getAll().single().id)!!
+        assertEquals(listOf("example.other"), stored.map { it.jsonObject["type"]!!.jsonPrimitive.content })
+        assertNoSecretIn(stored.toString())
+    }
+
+    @Test
+    fun anEncryptedCompletion_isFilledFromTheWalletsOwnResponse_andTheKeyIsGoneAfterwards() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult()))
+        assertEquals(1, s.store.getAll().size)
+        assertEquals(NymTestCredentials.sdJwt(), s.store.getAll().single().raw)
+        assertFalse(s.blind.holdsKey("flow-delivered"))
+    }
+
+    @Test
+    fun anEncryptedCompletionWhoseEntryCountDiffersFromTheOpenedResponse_isRefusedAndStoresNothing() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult()), engineEntries = 2)
+        assertNothingStored(s)
+        // The wallet's own notification_id still reaches the issuer, so the refusal can be reported.
+        verify(exactly = 1) { s.engine.sendCredentialNotification(any(), "notif-1", CredentialNotificationEvent.FAILURE, any()) }
+        assertFalse(s.blind.holdsKey("flow-delivered"))
+    }
+
+    @Test
+    fun theResponseKeyIsDroppedWhenTheFlowFailsAndWhenTheConnectionIsReplaced() = runTest(dispatcher) {
+        val flowErrors = MutableSharedFlow<FlowErrorMessage>()
+        val engine = mockEngineConstructor(flowErrors = flowErrors)
+        every { engine.disconnect() } just runs
+        val blind = BlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "blindIssuance" to blind,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        val request = org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false)
+        blind.offer("flow-e", request)
+        flowErrors.emit(FlowErrorMessage(flowId = "flow-e", error = FlowError(code = "CREDENTIAL_ERROR", message = "boom")))
+        advanceUntilIdle()
+        assertFalse("a failed flow forgets its key", blind.holdsKey("flow-e"))
+
+        blind.offer("flow-f", request)
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        assertFalse("a replaced connection abandons its flows' keys", blind.holdsKey("flow-f"))
+    }
+
+    // ---- review round 2: notification ids, flow-scoped release, cancel, partial presentations, answered failures ----
+
+    @Test
+    fun anEncryptedCompletion_neverTakesTheFramesNotificationId_aMissingOneInTheResponseStaysMissing() = runTest(dispatcher) {
+        // The decrypted response carries a seed but no notification_id; the engine frame supplies one. It must not stand in.
+        val s = deliveredScenario(listOf(deliveredResult(notificationId = null)), frameNotificationId = "frame-n")
+        assertNothingStored(s)
+        verify(exactly = 0) { s.engine.sendCredentialNotification(any(), "frame-n", any(), any()) }
+        val message = slot<String>()
+        verify(exactly = 1) { s.listener.onFlowError("flow-delivered", capture(message), any()) }
+        assertTrue(message.captured, message.captured.contains("could not be notified"))
+    }
+
+    @Test
+    fun anEncryptedCompletion_aConflictingFrameNotificationIdIsIgnored_theDecryptedOneIsReported() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult(credential = wrongSscCredential())), frameNotificationId = "frame-evil")
+        assertNothingStored(s)
+        verify(exactly = 1) { s.engine.sendCredentialNotification("flow-delivered", "notif-1", CredentialNotificationEvent.FAILURE, any()) }
+        verify(exactly = 0) { s.engine.sendCredentialNotification(any(), "frame-evil", any(), any()) }
+    }
+
+    @Test
+    fun anEncryptedCompletion_anEmptyFrameNotificationIdIsIgnored_andTheDecryptedOneIsUsed() = runTest(dispatcher) {
+        val s = deliveredScenario(listOf(deliveredResult()), frameNotificationId = "")
+        assertEquals(1, s.store.getAll().size)
+        verify(exactly = 1) { s.engine.sendCredentialNotification("flow-delivered", "notif-1", CredentialNotificationEvent.ACCEPTED, any()) }
+    }
+
+    @Test
+    fun aPlainCompletionKeepsTheNotificationIdTheEngineSupplied() = runTest(dispatcher) {
+        val s = deliveredScenario(
+            listOf(deliveredResult(credential = NymTestCredentials.sdJwt(sscValues = emptyList()), notificationId = "plain-n")),
+            encrypted = false,
+        )
+        assertEquals(1, s.store.getAll().size)
+        verify(exactly = 1) { s.engine.sendCredentialNotification("flow-delivered", "plain-n", CredentialNotificationEvent.ACCEPTED, any()) }
+    }
+
+    @Test
+    fun wmpEncryptedCompletion_neverTakesTheFramesNotificationId() = runTest(dispatcher) {
+        val flowId = "flow-wmp"
+        fun walletHolding(notificationInBody: String?): SirosWallet {
+            val blind = BlindIssuance()
+            val jwk = blind.offer(flowId, org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A128GCM", false))!!
+            val body = buildJsonObject {
+                put("credentials", kotlinx.serialization.json.JsonArray(listOf(buildJsonObject { put("credential", JsonPrimitive(NymTestCredentials.sdJwt())) })))
+                notificationInBody?.let { put("notification_id", JsonPrimitive(it)) }
+                put("credential_metadata", deliveredAuxBody())
+            }
+            blind.open(flowId, issuerEncrypt(jwk, "ECDH-ES", "A128GCM", body.toString()), deferred = false)
+            return newWallet(
+                "secretSeedAdvertised" to advertisedSelections(true),
+                "activeOffer" to org.siros.sdk.credentials.CredentialOffer("nym", "https://issuer.example", "n", issuerName = "i"),
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+                "keystore" to org.siros.sdk.keystore.JweKeystore(),
+                "blindIssuance" to blind,
+            )
+        }
+        fun frame(id: String?) = Json.parseToJsonElement(
+            """{"credentials":[{"format":"dc+sd-jwt"${id?.let { ""","notification_id":"$it"""" } ?: ""}}],"credential_response_encrypted":true,"credential_issuer":"https://issuer.example"}""",
+        ).jsonObject
+        // Missing in the response, supplied by the frame: refused as having no notification_id, the frame's id unused.
+        val missing = walletHolding(null).wmpDeliveredMetadataRefusal(flowId, frame("frame-n"))!!
+        assertEquals(DeliveredMetadataRefusal.NO_NOTIFICATION_ID, missing.first)
+        assertEquals(emptyList<String>(), missing.second)
+        // Conflicting: the decrypted id is the one reported.
+        val conflicting = walletHolding("decrypted-n").wmpDeliveredMetadataRefusal(flowId, frame("frame-evil"))
+        assertEquals(null, conflicting)
+        // Empty in the frame: ignored.
+        assertEquals(null, walletHolding("decrypted-n").wmpDeliveredMetadataRefusal(flowId, frame("")))
+        // A refusal reports the decrypted id, whatever the frame said.
+        val refused = walletHolding("decrypted-n").wmpDeliveredMetadataRefusal(flowId, Json.parseToJsonElement(
+            """{"credentials":[{"format":"mso_mdoc","notification_id":"frame-evil"}],"credential_response_encrypted":true,"credential_issuer":"https://issuer.example"}""",
+        ).jsonObject)!!
+        assertEquals(listOf("decrypted-n"), refused.second)
+    }
+
+    @Test
+    fun aPresentationEndingNeverReleasesAnotherFlowsIssuanceKeyAndOpenedResponse() = runTest(dispatcher) {
+        // An unrelated plain completion (a presentation, say) goes through the global issuance reset.
+        val s = deliveredScenario(
+            listOf(deliveredResult(credential = NymTestCredentials.sdJwt(sscValues = emptyList()))),
+            encrypted = false, bystander = true,
+        )
+        assertTrue("the other flow keeps its key", s.blind.holdsKey("flow-other"))
+        assertEquals(listOf("bystander credential"), s.blind.take("flow-other")!!.credentials)
+    }
+
+    @Test
+    fun aPresentationSignFailureNeverReleasesAnotherFlowsIssuanceKeyAndOpenedResponse() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        coEvery { keystore.signPresentation(any(), any(), any()) } throws org.siros.sdk.credentials.KeystoreException("no key")
+        val blind = BlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "keystore" to keystore,
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "blindIssuance" to blind,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        // Opened after connecting: a new connection drops the keys of the flows of the one it replaces.
+        val other = blind.offer("flow-other", org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false))!!
+        blind.open("flow-other", issuerEncrypt(other, "ECDH-ES", "A256GCM", issuerBody("bystander credential").toString()), deferred = false)
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-p", messageId = "msg-p", action = "sign_presentation",
+                params = SignRequestParams(audience = "https://verifier.example.com", nonce = "n"),
+            )
+        )
+        repeat(5) {
+            runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(50) }
+            advanceUntilIdle()
+        }
+        assertTrue("the failure of the presentation flow reached the failure path", wallet.state.value is WalletState.Ready)
+        assertTrue(blind.holdsKey("flow-other"))
+        assertEquals(listOf("bystander credential"), blind.take("flow-other")!!.credentials)
+    }
+
+    @Test
+    fun aWmpCancel_releasesThatFlowsKeyAndOpenedResponseOnly() = runTest(dispatcher) {
+        val blind = heldBlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "blindIssuance" to blind,
+        )
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "onWmpFlowCancel" }
+        method.isAccessible = true
+        // isLive=true for both calls: this test is about the existing key/response release behavior, not about a replaced peer.
+        // flow-b holds only a key (cancelled after key generation); flow-a also an opened response (after decryption).
+        method.call(wallet, "flow-b", 0)
+        assertFalse(blind.holdsKey("flow-b"))
+        assertTrue("another flow is untouched", blind.holdsKey("flow-a"))
+        method.call(wallet, "flow-a", 0)
+        assertFalse(blind.holdsKey("flow-a"))
+        assertEquals(null, blind.take("flow-a"))
+    }
+
+    @Test
+    fun theWalletsWmpProfile_releasesAFlowsKeyWhenTheOrchestratorCancelsIt() = runTest(dispatcher) {
+        val blind = heldBlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "blindIssuance" to blind,
+        )
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "wmpProfile" }
+        method.isAccessible = true
+        val profile = method.call(wallet, null, getField(wallet, "consentEpoch") as Int, CoroutineScope(dispatcher + SupervisorJob())) as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
+        runBlocking {
+            profile.handleCancel(org.siros.sdk.transport.wmp.FlowCancelParams(flowId = "flow-a", reason = "user"))
+        }
+        assertFalse(blind.holdsKey("flow-a"))
+        assertEquals(null, blind.take("flow-a"))
+        assertTrue("another flow is untouched", blind.holdsKey("flow-b"))
+    }
+
+    @Test
+    fun aFailedReauthentication_stillReleasesTheIssuanceMaterialOfTheEndedSession() = runTest(dispatcher) {
+        val blind = heldBlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "blindIssuance" to blind,
+        )
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "reloginAfterCutOff" }
+        method.isAccessible = true
+        // The teardown is cut short here (no token store in this fixture), as a login that ends in an error leaves nothing to
+        // replace the old connection: the holder must already be empty.
+        runCatching { runBlocking { method.callSuspend(wallet, 0) } }
+        assertBlindEmpty(blind)
+    }
+
+    @Test
+    fun aSocketReplacedOnTheSameSession_dropsTheAbandonedFlowsKey_keepsWhatItOpenedForAGraceOnly() = runTest(dispatcher) {
+        val state = MutableStateFlow(WalletEngineSession.State.CONNECTED)
+        val generations = MutableStateFlow(0)
+        val engine = mockEngineConstructor(state = state, generations = generations)
+        val blind = BlindIssuance(clock = { dispatcher.scheduler.currentTime })
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "blindIssuance" to blind,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        val request = org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false)
+        val jwk = blind.offer("flow-a", request, engine.connectionGeneration)!!
+        blind.open("flow-a", issuerEncrypt(jwk, "ECDH-ES", "A256GCM", issuerBody("buffered credential").toString()), deferred = false)
+        blind.offer("flow-b", request, engine.connectionGeneration)
+        // The SAME session object gets a new socket (forceReconnect() or an automatic reconnect): none is constructed.
+        engineGeneration.incrementAndGet()
+        generations.value = engineGeneration.get()
+        dispatcher.scheduler.runCurrent()
+        assertFalse("the abandoned flow's private key is gone", blind.holdsKey("flow-a"))
+        assertFalse(blind.holdsKey("flow-b"))
+        // A completion buffered before the replacement still finds what its flow opened...
+        // ...but only within the grace.
+        dispatcher.scheduler.advanceTimeBy(SirosWallet.BLIND_STALE_GRACE_MS + 1)
+        dispatcher.scheduler.runCurrent()
+        assertEquals("forgotten after the grace", null, blind.take("flow-a"))
+    }
+
+    @Test
+    fun anAutomaticReconnect_isNoticedWhenItsGenerationIsIncrementedAfterTheBackoff_withNoFurtherStateChange() = runTest(dispatcher) {
+        val state = MutableStateFlow(WalletEngineSession.State.CONNECTED)
+        val generations = MutableStateFlow(0)
+        val engine = mockEngineConstructor(state = state, generations = generations)
+        val blind = BlindIssuance(clock = { dispatcher.scheduler.currentTime })
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "blindIssuance" to blind,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        blind.offer("flow-a", org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false), engine.connectionGeneration)
+        // Production order: RECONNECTING is published BEFORE the backoff, the generation is incremented when the new socket
+        // opens, and nothing is published on the state afterwards.
+        state.value = WalletEngineSession.State.RECONNECTING
+        dispatcher.scheduler.runCurrent()
+        dispatcher.scheduler.advanceTimeBy(5_000)
+        dispatcher.scheduler.runCurrent()
+        assertTrue("nothing is replaced yet: the old socket's flow still has its key", blind.holdsKey("flow-a"))
+        engineGeneration.incrementAndGet()
+        generations.value = engineGeneration.get()
+        dispatcher.scheduler.runCurrent()
+        assertFalse("the replacement is noticed without another state change", blind.holdsKey("flow-a"))
+    }
+
+    @Test
+    fun aWmpMatchRequest_isRefusedAfterLogout_anOldPeersBufferedCallbackCannotRecreateConsent() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502, PR #344 follow-up, issue #345): onMatchRequest now records consent (see
+        // ConsentGuard's doc comment), same as onSignRequest already needed a liveness gate for its own reasons. Without
+        // requireLive() here, a peer's buffered/in-flight match callback firing AFTER logout/teardown could recreate a
+        // consent record for a flow id the (now cleared) consentRecordsByFlow knows nothing about.
+        val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        val profileSlot = slot<org.siros.sdk.transport.wmp.WmpProfile>()
+        every { peer.use(capture(profileSlot)) } just runs
+        val previous = SirosWallet.createWmpPeer
+        SirosWallet.createWmpPeer = { peer }
+        val cred = StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw-1", batchId = 1L, instanceId = 0)
+        try {
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+                "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                "supervisorJob" to SupervisorJob(),
+                "keystore" to mockk<KeystoreManager>(relaxed = true),
+                "sessionStore" to mockk<SessionStore>(relaxed = true),
+                "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+                "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> { error("not initialised") },
+                "legacyAppToken" to "app-token",
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com", engineUrl = "https://engine.example.com", useWmpProtocol = true),
+                "credentialStore" to FakeCredentialStore(mutableListOf(cred)),
+            )
+            val connect = wallet::class.declaredMemberFunctions.first { it.name == "connectEngineForNewSession" }
+            connect.isAccessible = true
+            runBlocking { connect.callSuspend(wallet) }
+            val profile = profileSlot.captured as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
+            profile.init(RecordingPeerContext())
+
+            wallet.logout()
+
+            // The SAME, now-stale profile object delivers one more match request, as a buffered/in-flight callback of the
+            // closed peer would.
+            runBlocking {
+                profile.handleProgress(
+                    org.siros.sdk.transport.wmp.FlowProgressParams(flowId = "flow-after-logout", step = "match_request", payload = buildJsonObject {})
+                )
+            }
+
+            @Suppress("UNCHECKED_CAST")
+            val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+            assertFalse(
+                "a stale WMP peer's match callback must not record consent after logout",
+                records.containsKey("flow-after-logout"),
+            )
+        } finally {
+            SirosWallet.createWmpPeer = previous
+        }
+    }
+
+    @Test
+    fun wmpMatchRequest_epochBumpedBetweenRequireLiveAndTicketConstruction_stillBuildsFromThePeersOwnLifetime() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345's finding #1): a true race window -
+        // requireLive() passes, then (before the ticket is built) a replacement bumps consentEpoch - must not let the
+        // ticket silently adopt the NEW epoch via a fresh issueConsentTicket read; it must stay tied to THIS peer's own
+        // captured lifetime. A true multi-thread race between two adjacent volatile reads is not reliably reproducible by
+        // timing alone (same reasoning as Fido2EnrolmentSession.testHookBeforeInstall), so this is exercised via a
+        // narrowly-scoped, null-in-production test hook (wmpMatchTicketIssueHook) landing exactly in that window.
+        val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        val profileSlot = slot<org.siros.sdk.transport.wmp.WmpProfile>()
+        every { peer.use(capture(profileSlot)) } just runs
+        val previous = SirosWallet.createWmpPeer
+        SirosWallet.createWmpPeer = { peer }
+        val cred = StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw-1", batchId = 1L, instanceId = 0)
+        try {
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+                "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                "supervisorJob" to SupervisorJob(),
+                "keystore" to mockk<KeystoreManager>(relaxed = true),
+                "sessionStore" to mockk<SessionStore>(relaxed = true),
+                "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+                "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> { error("not initialised") },
+                "legacyAppToken" to "app-token",
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com", engineUrl = "https://engine.example.com", useWmpProtocol = true),
+                "credentialStore" to FakeCredentialStore(mutableListOf(cred)),
+            )
+            val connect = wallet::class.declaredMemberFunctions.first { it.name == "connectEngineForNewSession" }
+            connect.isAccessible = true
+            runBlocking { connect.callSuspend(wallet) }
+            val profile = profileSlot.captured as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
+            profile.init(RecordingPeerContext())
+
+            // Land the race exactly where Copilot's finding #1 describes it: AFTER requireLive() has already passed
+            // (this peer IS still live at that instant), but BEFORE the ticket is built - a replacement (here, a second
+            // connectEngineForNewSession, the same real event a reconnect or re-login would trigger) happens in between.
+            setField(wallet, "wmpMatchTicketIssueHook", { runBlocking { connect.callSuspend(wallet) }; Unit })
+
+            profile.handleProgress(
+                org.siros.sdk.transport.wmp.FlowProgressParams(flowId = "flow-raced", step = "match_request", payload = buildJsonObject {})
+            )
+            advanceUntilIdle()
+
+            @Suppress("UNCHECKED_CAST")
+            val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+            assertFalse(
+                "a ticket built from a fresh epoch read (not this peer's own captured lifetime) must not let a raced " +
+                    "replacement's write through",
+                records.containsKey("flow-raced"),
+            )
+        } finally {
+            SirosWallet.createWmpPeer = previous
+        }
+    }
+
+    @Test
+    fun wmpMatchRequest_peerReplacedWhileCredentialStoreGetAllSuspends_doesNotRecordConsent() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345's finding #2): requireLive() only proves
+        // liveness at the instant onMatchRequest is entered - handleWmpMatchRequest's own first line, credentialStore.getAll(),
+        // is a LATER suspension point a replacement peer can land in between. The ticket issued before that call (not
+        // requireLive's earlier, already-past check) is what the final write re-validates against.
+        val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        val profileSlot = slot<org.siros.sdk.transport.wmp.WmpProfile>()
+        every { peer.use(capture(profileSlot)) } just runs
+        val previous = SirosWallet.createWmpPeer
+        SirosWallet.createWmpPeer = { peer }
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val cred = StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw-1", batchId = 1L, instanceId = 0)
+        val store = mockk<org.siros.sdk.credentials.CredentialStore>()
+        coEvery { store.getAll() } coAnswers { gate.await(); listOf(cred) }
+        try {
+            val testScope = CoroutineScope(dispatcher + SupervisorJob())
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+                "scope" to testScope,
+                "supervisorJob" to SupervisorJob(),
+                "keystore" to mockk<KeystoreManager>(relaxed = true),
+                "sessionStore" to mockk<SessionStore>(relaxed = true),
+                "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+                "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> { error("not initialised") },
+                "legacyAppToken" to "app-token",
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com", engineUrl = "https://engine.example.com", useWmpProtocol = true),
+                "credentialStore" to store,
+            )
+            val connect = wallet::class.declaredMemberFunctions.first { it.name == "connectEngineForNewSession" }
+            connect.isAccessible = true
+            runBlocking { connect.callSuspend(wallet) }
+            val profile = profileSlot.captured as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
+            profile.init(RecordingPeerContext())
+
+            testScope.launch {
+                profile.handleProgress(
+                    org.siros.sdk.transport.wmp.FlowProgressParams(flowId = "flow-getall", step = "match_request", payload = buildJsonObject {})
+                )
+            }
+            advanceUntilIdle()
+            // Parked inside credentialStore.getAll().
+            assertEquals(emptySet<String>(), (getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>).keys)
+
+            // The WMP peer is replaced wholesale (a fresh connectEngineForNewSession, same as a real re-login would do),
+            // bumping consentEpoch, while the match request above is still parked inside credentialStore.getAll().
+            runBlocking { connect.callSuspend(wallet) }
+
+            gate.complete(Unit)
+            advanceUntilIdle()
+
+            @Suppress("UNCHECKED_CAST")
+            val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+            assertFalse(
+                "a peer replaced while credentialStore.getAll() was suspended must not let the write that follows it through",
+                records.containsKey("flow-getall"),
+            )
+        } finally {
+            SirosWallet.createWmpPeer = previous
+        }
+    }
+
+    @Test
+    fun handleCredentialSelection_resumedAfterTheEngineSessionIsReplaced_doesNotRecordConsent() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502, PR #344/#346 follow-up, issue #345): a credential-selection coroutine
+        // suspended on the listener, resumed only after the wallet's engine session has been wholesale replaced (logout,
+        // a cut-off re-login, a fresh connectEngine), must not act as if its CAPTURED (now stale) ConsentTicket were still
+        // current. isFlowLost's generation check alone does not catch this: the captured engine object's OWN
+        // connectionGeneration never advances just because a REPLACEMENT session was connected - only consentEpoch (bumped
+        // by clearPerFlowAuthorizationState, which every real replacement path calls) does.
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        coEvery { listener.onCredentialSelectionRequired(any()) } coAnswers { gate.await(); listOf(1L) }
+        val store = FakeCredentialStore(
+            mutableListOf(
+                StoredCredential(
+                    id = 1L, format = "dc+sd-jwt", raw = "raw-pid",
+                    metadata = CredentialMetadata(name = "PID", vct = "urn:eu.europa.ec.eudi:pid:1"),
+                    batchId = 1L, instanceId = 0,
+                ),
+            )
+        )
+        val engineA = mockEngineConstructor(progressFlow = progressFlow)
+        every { engineA.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice", credentials = store.getAll())),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "flow-replaced", step = "credential_selection",
+                payload = vctQueryPayload("urn:eu.europa.ec.eudi:pid:1"),
+            )
+        )
+        advanceUntilIdle()
+        // Still parked on the listener (gate not yet completed).
+        assertEquals(emptySet<String>(), (getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>).keys)
+
+        // The session is replaced wholesale with a DIFFERENT engine object - exactly what a real connectEngine call does
+        // (logout and a cut-off re-login go through the same clearPerFlowAuthorizationState/consentEpoch bump) - while the
+        // coroutine above is still suspended on the (slow) consent dialog.
+        mockEngineConstructor()
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        @Suppress("UNCHECKED_CAST")
+        val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+        assertFalse(
+            "a selection resumed after the session was replaced must not record consent for the stale engine's flow",
+            records.containsKey("flow-replaced"),
+        )
+    }
+
+    @Test
+    fun handleCredentialSelection_resumedAfterSessionReplacement_doesNotTearDownAReusedFlowIdsNewState() = runTest(dispatcher) {
+        // Regression (go-wallet-backend#502/PR #346 follow-up, issue #345's finding #4): an EARLIER fix for the test above
+        // made isFlowLost itself check engine-session identity, conflating "my whole session moved on" with "this flow is
+        // dead" - a stale coroutine would then call endFlowLost(flowId) on a flow id a REPLACEMENT session may have ALREADY
+        // reused with its own, legitimate, NEW consent - tearing that down instead of just abandoning its own stale work.
+        // The ConsentTicket fix checks staleness FIRST and, if stale, touches NOTHING - no endFlowLost, no write - proven
+        // here by seeding what a replacement session's own legitimate consent for the SAME flow id would look like and
+        // confirming it survives, untouched, byte for byte, and no "flow lost" side effect fires for it either.
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        coEvery { listener.onCredentialSelectionRequired(any()) } coAnswers { gate.await(); listOf(1L) }
+        val store = FakeCredentialStore(
+            mutableListOf(
+                StoredCredential(
+                    id = 1L, format = "dc+sd-jwt", raw = "raw-pid",
+                    metadata = CredentialMetadata(name = "PID", vct = "urn:eu.europa.ec.eudi:pid:1"),
+                    batchId = 1L, instanceId = 0,
+                ),
+            )
+        )
+        val engineA = mockEngineConstructor(progressFlow = progressFlow)
+        every { engineA.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>()
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice", credentials = store.getAll())),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "shared-flow", step = "credential_selection",
+                payload = vctQueryPayload("urn:eu.europa.ec.eudi:pid:1"),
+            )
+        )
+        advanceUntilIdle()
+
+        // The session is replaced wholesale (a fresh connectEngine), bumping consentEpoch.
+        mockEngineConstructor()
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        // A REPLACEMENT session's own, legitimate consent for a flow id the backend happens to have reused.
+        val replacementRecord = ConsentRecord(listOf(ConsentedSelection("pid", "1", null)))
+        setField(wallet, "consentRecordsByFlow", mutableMapOf("shared-flow" to replacementRecord))
+
+        // The stale coroutine from BEFORE the replacement now resumes.
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        @Suppress("UNCHECKED_CAST")
+        val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+        assertSame(
+            "a stale resume must not touch a flow id a replacement session has already recorded its own consent for",
+            replacementRecord, records["shared-flow"],
+        )
+        @Suppress("UNCHECKED_CAST")
+        val lostFlowIds = getField(wallet, "lostFlowIds") as Set<String>
+        assertFalse("a stale resume must not call endFlowLost on a flow id a replacement session is using", "shared-flow" in lostFlowIds)
+        verify(exactly = 0) { listener.onFlowError("shared-flow", any(), any()) }
+    }
+
+    @Test
+    fun handleCredentialSelection_sessionReplacedWhileRecordPresentationSuspends_doesNotRecordConsent() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345's finding #1): the listener await is not the
+        // only suspension point between the ticket's issue and the consent write - recordPresentation (here, via
+        // keystore.savePresentationRecord) is another one. A check taken only once, right after the FIRST await, would miss
+        // a replacement that happens during this LATER one.
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf(1L)
+        val store = FakeCredentialStore(
+            mutableListOf(
+                StoredCredential(
+                    id = 1L, format = "dc+sd-jwt", raw = "raw-pid",
+                    metadata = CredentialMetadata(name = "PID", vct = "urn:eu.europa.ec.eudi:pid:1"),
+                    batchId = 1L, instanceId = 0,
+                ),
+            )
+        )
+        val engineA = mockEngineConstructor(progressFlow = progressFlow)
+        every { engineA.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns true
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        coEvery { keystore.savePresentationRecord(any(), any()) } coAnswers { gate.await() }
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice", credentials = store.getAll())),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "flow-recordpresentation", step = "credential_selection",
+                payload = vctQueryPayload("urn:eu.europa.ec.eudi:pid:1"),
+            )
+        )
+        advanceUntilIdle()
+        // Parked inside recordPresentation (past the listener, which answered immediately this time).
+        assertEquals(emptySet<String>(), (getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>).keys)
+
+        mockEngineConstructor()
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        @Suppress("UNCHECKED_CAST")
+        val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+        assertFalse(
+            "a session replaced while recordPresentation was suspended must not let the write that follows it through",
+            records.containsKey("flow-recordpresentation"),
+        )
+    }
+
+    @Test
+    fun handleCredentialSelection_credentialSharedAcrossAlternatives_isRefusedBeforeRecordingPresentation() = runTest(dispatcher) {
+        // Extends issue #345's "don't record before validating" principle (the test above) to the
+        // credential_sets exclusivity validation added for #353's follow-up fix. A Copilot review on
+        // that fix caught the two steps in the wrong order: credentialSetChoiceIsValid ran AFTER
+        // recordPresentation, so a refused selection - here, the SAME credential answering BOTH of
+        // two mutually-exclusive alternatives at once, which is never a valid choice - was still
+        // recorded as presented. Under CONSUME_ALL/CONSUME_NON_ZKP this would wrongly spend an
+        // unused copy for a presentation that was never actually sent.
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        // The wallet's one stored credential matches BOTH "a" and "b" (same vct) - selecting it
+        // answers both alternatives of the same required set at once.
+        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf(1L)
+        val store = FakeCredentialStore(
+            mutableListOf(
+                StoredCredential(
+                    id = 1L, format = "dc+sd-jwt", raw = "raw-pid",
+                    metadata = CredentialMetadata(name = "PID", vct = "urn:eu.europa.ec.eudi:pid:1"),
+                    batchId = 1L, instanceId = 0,
+                ),
+            )
+        )
+        val engine = mockEngineConstructor(progressFlow = progressFlow)
+        every { engine.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        val history = mutableListOf<PresentationRecord>()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice", credentials = store.getAll())),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "_presentationHistory" to history,
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        val query = Json.parseToJsonElement(
+            """{
+              "credentials": [
+                {"id":"a","format":"dc+sd-jwt","meta":{"vct_values":["urn:eu.europa.ec.eudi:pid:1"]}},
+                {"id":"b","format":"dc+sd-jwt","meta":{"vct_values":["urn:eu.europa.ec.eudi:pid:1"]}}
+              ],
+              "credential_sets": [{"options": [["a"], ["b"]], "required": true}]
+            }""",
+        )
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "flow-shared-alt", step = "credential_selection",
+                payload = buildJsonObject { put("dcql_query", query) },
+            )
+        )
+        advanceUntilIdle()
+
+        val declineSlot = slot<JsonObject>()
+        verify(exactly = 1) { engine.sendFlowAction("flow-shared-alt", "decline", capture(declineSlot)) }
+        assertEquals("user_declined", declineSlot.captured["reason"]?.jsonPrimitive?.content)
+        verify(exactly = 0) { engine.sendFlowAction("flow-shared-alt", "consent", any()) }
+        assertTrue("a refused credential_sets choice must never be recorded as presented", history.isEmpty())
+    }
+
+    @Test
+    fun handleCredentialSelection_sessionReplacedWhileCredentialStoreGetAllSuspends_neverPublishesMatchStateOrAsksTheUser() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345, round 4's finding #3): credentialStore.getAll()
+        // is handleCredentialSelection's FIRST suspension point - well before its ticket check, which only runs after the
+        // LISTENER await. A ticket-only fix would let a resumption write pendingMatchResultsByFlow and show the user a
+        // consent dialog for an already-dead flow before ever reaching that check. The structural fix (this coroutine now
+        // launches into connectEngine's own connectionScope, cancelled outright on replacement) stops it from resuming
+        // PAST the suspension at all - proven here by asserting NEITHER of those side effects ever happens, not just that
+        // the eventual consent write is skipped.
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf(1L)
+        val cred = StoredCredential(
+            id = 1L, format = "dc+sd-jwt", raw = "raw-pid",
+            metadata = CredentialMetadata(name = "PID", vct = "urn:eu.europa.ec.eudi:pid:1"),
+            batchId = 1L, instanceId = 0,
+        )
+        val store = mockk<org.siros.sdk.credentials.CredentialStore>()
+        coEvery { store.getAll() } coAnswers { gate.await(); listOf(cred) }
+        val engineA = mockEngineConstructor(progressFlow = progressFlow)
+        every { engineA.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "flow-getall", step = "credential_selection",
+                payload = vctQueryPayload("urn:eu.europa.ec.eudi:pid:1"),
+            )
+        )
+        advanceUntilIdle()
+        // Parked inside credentialStore.getAll() - before even the listener is asked.
+        coVerify(exactly = 0) { listener.onCredentialSelectionRequired(any()) }
+
+        // The session is replaced wholesale (a fresh connectEngine), cancelling this coroutine's own connectionScope.
+        mockEngineConstructor()
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) {
+            listener.onCredentialSelectionRequired(any())
+        }
+        @Suppress("UNCHECKED_CAST")
+        val pending = getField(wallet, "pendingMatchResultsByFlow") as Map<String, List<CredentialMatcher.MatchResult>>
+        assertFalse(
+            "a session replaced while credentialStore.getAll() was suspended must not publish match state either",
+            pending.containsKey("flow-getall"),
+        )
+        @Suppress("UNCHECKED_CAST")
+        val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+        assertFalse(records.containsKey("flow-getall"))
+    }
+
+    @Test
+    fun matchRequests_merelyReconnectedWhileRecordPresentationSuspends_isCaughtByIsFlowLostNotJustTheTicket() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345's finding #4): a MERE socket reconnect on
+        // the SAME engine (connectionGeneration bumped, no clearPerFlowAuthorizationState call - this is a reconnect
+        // within the same logical session, not a replacement) does not change consentEpoch, so the ticket alone stays
+        // "current" across it. The reconnect ends and clears THIS flow specifically (flowConnectionGeneration ties it to
+        // the OLD generation), including cancelling its selectionJobsByFlow entry - but THIS collector's own registration
+        // of that entry is scoped only to the listener await (removed right after it, in a finally block, same as
+        // production), so by the time recordPresentation suspends there is nothing left for endFlowLost's cancellation to
+        // reach: only re-checking isFlowLost AFTER the await (not just the ticket) catches this (unlike
+        // handleCredentialSelection, whose OWN selectionJobsByFlow registration spans its whole lifetime and so is also
+        // backstopped by cancellation - this collector has no such backstop).
+        val matchFlow = MutableSharedFlow<MatchRequestMessage>()
+        val generationsFlow = MutableStateFlow(0)
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf(1L)
+        val store = FakeCredentialStore(
+            mutableListOf(
+                StoredCredential(
+                    id = 1L, format = "dc+sd-jwt", raw = "raw-pid",
+                    metadata = CredentialMetadata(name = "PID", vct = "urn:eu.europa.ec.eudi:pid:1"),
+                    batchId = 1L, instanceId = 0,
+                ),
+            )
+        )
+        val engineA = mockEngineConstructor(matchRequests = matchFlow, generations = generationsFlow)
+        every { engineA.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns true
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        coEvery { keystore.savePresentationRecord(any(), any()) } coAnswers { gate.await() }
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice", credentials = store.getAll())),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        matchFlow.emit(MatchRequestMessage(flowId = "flow-reconnect", dcqlQuery = null))
+        advanceUntilIdle()
+        // Parked inside recordPresentation (past the listener, which answered immediately this time).
+        assertEquals(emptySet<String>(), (getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>).keys)
+
+        // A mere reconnect on the SAME engine object: connectionGeneration advances, consentEpoch does not.
+        engineGeneration.incrementAndGet()
+        generationsFlow.value = engineGeneration.get()
+        advanceUntilIdle()
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        @Suppress("UNCHECKED_CAST")
+        val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+        assertFalse(
+            "a flow ended by a mere reconnect while recordPresentation was suspended must not record consent",
+            records.containsKey("flow-reconnect"),
+        )
+    }
+
+    @Test
+    fun connectingANewWmpPeer_clearsStalePerFlowConsentFromAReplacedPeer() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502, PR #344 follow-up, issue #345): connectEngine already clears stale
+        // per-flow consent on replacing a prior connection (see clearPerFlowAuthorizationState's doc comment);
+        // connectViaWmp - the WMP equivalent of the same "replace a prior live session" moment - did not.
+        val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        every { peer.use(any()) } just runs
+        val previous = SirosWallet.createWmpPeer
+        SirosWallet.createWmpPeer = { peer }
+        try {
+            val wallet = newWallet(
+                "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+                "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                "supervisorJob" to SupervisorJob(),
+                "keystore" to mockk<KeystoreManager>(relaxed = true),
+                "sessionStore" to mockk<SessionStore>(relaxed = true),
+                "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+                "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> { error("not initialised") },
+                "config" to WalletConfig(backendUrl = "https://wallet.example.com", engineUrl = "https://engine.example.com", useWmpProtocol = true),
+            )
+            setField(
+                wallet, "consentRecordsByFlow",
+                mutableMapOf("stale-flow" to ConsentRecord(listOf(ConsentedSelection("q", "1", null)))),
+            )
+            val connectViaWmp = wallet::class.declaredMemberFunctions.first { it.name == "connectViaWmp" }
+            connectViaWmp.isAccessible = true
+            runBlocking { connectViaWmp.callSuspend(wallet, "app-token") }
+
+            @Suppress("UNCHECKED_CAST")
+            val remaining = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+            assertTrue("a stale flow's consent must not survive connecting a new/replaced WMP peer", remaining.isEmpty())
+        } finally {
+            SirosWallet.createWmpPeer = previous
+        }
+    }
+
+    @Test
+    fun wmpTerminalCallbacks_clearTheFlowsRecordedConsent_completeErrorAndCancel() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502, PR #344 follow-up, issue #345): unlike the legacy transport's
+        // flowComplete/flowErrors collectors (which already call clearFlowMatchState), the WMP terminal callbacks never did -
+        // so a flow's recorded consent outlived the flow itself, retrievable by a later flow id collision.
+        for (terminal in listOf<suspend (org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile, String) -> Unit>(
+            { profile, flowId -> profile.handleComplete(org.siros.sdk.transport.wmp.FlowCompleteParams(flowId = flowId)) },
+            { profile, flowId -> profile.handleError(org.siros.sdk.transport.wmp.FlowErrorParams(flowId = flowId, code = "E", message = "m")) },
+            { profile, flowId -> profile.handleCancel(org.siros.sdk.transport.wmp.FlowCancelParams(flowId = flowId)) },
+        )) {
+            val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+            val profileSlot = slot<org.siros.sdk.transport.wmp.WmpProfile>()
+            every { peer.use(capture(profileSlot)) } just runs
+            val previous = SirosWallet.createWmpPeer
+            SirosWallet.createWmpPeer = { peer }
+            try {
+                val wallet = newWallet(
+                    "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+                    "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                    "supervisorJob" to SupervisorJob(),
+                    "keystore" to mockk<KeystoreManager>(relaxed = true),
+                    "sessionStore" to mockk<SessionStore>(relaxed = true),
+                    "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+                    "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> { error("not initialised") },
+                    "legacyAppToken" to "app-token",
+                    "config" to WalletConfig(backendUrl = "https://wallet.example.com", engineUrl = "https://engine.example.com", useWmpProtocol = true),
+                )
+                val connect = wallet::class.declaredMemberFunctions.first { it.name == "connectEngineForNewSession" }
+                connect.isAccessible = true
+                runBlocking { connect.callSuspend(wallet) }
+                val profile = profileSlot.captured as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
+                profile.init(RecordingPeerContext())
+
+                setField(wallet, "consentRecordsByFlow", mutableMapOf("flow-done" to ConsentRecord(listOf(ConsentedSelection("q", "1", null)))))
+                runBlocking { terminal(profile, "flow-done") }
+
+                @Suppress("UNCHECKED_CAST")
+                val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+                assertFalse("a terminated WMP flow's recorded consent must not outlive it", records.containsKey("flow-done"))
+            } finally {
+                SirosWallet.createWmpPeer = previous
+            }
+        }
+    }
+
+    @Test
+    fun wmpTerminalCallbacks_boundToTheirOwnPeersLifetime_doNotClearAReplacementPeersConsent() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345's finding #3): a terminal callback belongs
+        // to the peer whose wmpProfile(peer) built it, not to "whichever peer is current when it happens to run" - a late
+        // completion/error/cancel from an ALREADY-REPLACED peer must not delete a REPLACEMENT peer's legitimate consent for
+        // a flow id the backend happens to have reused.
+        for (terminal in listOf<suspend (org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile, String) -> Unit>(
+            { profile, flowId -> profile.handleComplete(org.siros.sdk.transport.wmp.FlowCompleteParams(flowId = flowId)) },
+            { profile, flowId -> profile.handleError(org.siros.sdk.transport.wmp.FlowErrorParams(flowId = flowId, code = "E", message = "m")) },
+            { profile, flowId -> profile.handleCancel(org.siros.sdk.transport.wmp.FlowCancelParams(flowId = flowId)) },
+        )) {
+            val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+            val profileSlot = slot<org.siros.sdk.transport.wmp.WmpProfile>()
+            every { peer.use(capture(profileSlot)) } just runs
+            val previous = SirosWallet.createWmpPeer
+            SirosWallet.createWmpPeer = { peer }
+            try {
+                val wallet = newWallet(
+                    "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+                    "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                    "supervisorJob" to SupervisorJob(),
+                    "keystore" to mockk<KeystoreManager>(relaxed = true),
+                    "sessionStore" to mockk<SessionStore>(relaxed = true),
+                    "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+                    "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> { error("not initialised") },
+                    "legacyAppToken" to "app-token",
+                    "config" to WalletConfig(backendUrl = "https://wallet.example.com", engineUrl = "https://engine.example.com", useWmpProtocol = true),
+                )
+                val connect = wallet::class.declaredMemberFunctions.first { it.name == "connectEngineForNewSession" }
+                connect.isAccessible = true
+                runBlocking { connect.callSuspend(wallet) }
+                // peerA's profile - captured BEFORE the replacement below.
+                val staleProfile = profileSlot.captured as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
+                staleProfile.init(RecordingPeerContext())
+
+                // The peer is replaced wholesale (a fresh connectEngineForNewSession, as a real re-login would do).
+                runBlocking { connect.callSuspend(wallet) }
+                profileSlot.captured.init(RecordingPeerContext())
+
+                // The REPLACEMENT peer's own, legitimate consent for a flow id the backend happens to have reused.
+                val replacementRecord = ConsentRecord(listOf(ConsentedSelection("q", "1", null)))
+                setField(wallet, "consentRecordsByFlow", mutableMapOf("shared-flow" to replacementRecord))
+
+                // A late terminal message for peerA (the one that was REPLACED) arrives for the same flow id.
+                runBlocking { terminal(staleProfile, "shared-flow") }
+
+                @Suppress("UNCHECKED_CAST")
+                val records = getField(wallet, "consentRecordsByFlow") as Map<String, ConsentRecord>
+                assertSame(
+                    "a replaced peer's late terminal callback must not clear a REPLACEMENT peer's own consent for a reused flow id",
+                    replacementRecord, records["shared-flow"],
+                )
+            } finally {
+                SirosWallet.createWmpPeer = previous
+            }
+        }
+    }
+
+    @Test
+    fun consentLock_isActuallySharedByEveryConsentMutation_blockingOneBlocksTheOthers() {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345's finding #5): @Volatile alone makes each
+        // individual read/write of consentEpoch visible across threads, but does not make a check-then-act sequence
+        // atomic - clearPerFlowAuthorizationState, recordIfCurrent and clearFlowMatchStateIfLive must all synchronize on
+        // the SAME lock, or a stale write/clear can still land in the gap between another thread's check and its own act.
+        // A true concurrent race is not reliably reproducible by timing alone (same reasoning as every other hook-based
+        // test in this class) - this instead proves the underlying STRUCTURAL guarantee directly: while this thread holds
+        // consentLock, clearPerFlowAuthorizationState (and, in turn, every other consent mutation sharing the same lock)
+        // must block until it is released. A deterministic, non-flaky way to verify mutual exclusion is actually in
+        // effect, rather than two functions that merely happen to both use the word "synchronized".
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+        )
+        val lockField = wallet.javaClass.getDeclaredField("consentLock")
+        lockField.isAccessible = true
+        val lock = lockField.get(wallet)
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "clearPerFlowAuthorizationState" }
+        method.isAccessible = true
+
+        val started = java.util.concurrent.CountDownLatch(1)
+        val finished = java.util.concurrent.CountDownLatch(1)
+        synchronized(lock) {
+            val thread = Thread {
+                started.countDown()
+                method.call(wallet)
+                finished.countDown()
+            }
+            thread.isDaemon = true
+            thread.start()
+            assertTrue("the background thread must actually start", started.await(2, java.util.concurrent.TimeUnit.SECONDS))
+            assertFalse(
+                "clearPerFlowAuthorizationState must block while consentLock is held elsewhere - if it used a different " +
+                    "lock (or none), it would complete almost immediately instead",
+                finished.await(300, java.util.concurrent.TimeUnit.MILLISECONDS),
+            )
+        }
+        assertTrue(
+            "once consentLock is released, clearPerFlowAuthorizationState proceeds",
+            finished.await(2, java.util.concurrent.TimeUnit.SECONDS),
+        )
+    }
+
+    @Test
+    fun aRegistrationOrLoginThatBumpsTheSessionGenerationAfterConnectingStillServesWmpSignRequests_andRefusesAfterLogoutOrDestroy() = runTest(dispatcher) {
+        for (ending in listOf<(SirosWallet) -> Unit>({ it.logout() }, { it.destroy() })) {
+            val blind = BlindIssuance()
+            val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+            val profileSlot = slot<org.siros.sdk.transport.wmp.WmpProfile>()
+            every { peer.use(capture(profileSlot)) } just runs
+            val previous = SirosWallet.createWmpPeer
+            SirosWallet.createWmpPeer = { peer }
+            try {
+                val wallet = newWallet(
+                    "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+                    "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+                    "supervisorJob" to SupervisorJob(),
+                    "keystore" to mockk<KeystoreManager>(relaxed = true),
+                    "sessionStore" to mockk<SessionStore>(relaxed = true),
+                    "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+                    "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> { error("not initialised") },
+                    "legacyAppToken" to "app-token",
+                    "config" to WalletConfig(backendUrl = "https://wallet.example.com", engineUrl = "https://engine.example.com", useWmpProtocol = true),
+                    "blindIssuance" to blind,
+                )
+                // The path registration and login take: connect the engine, THEN end the previous session generation.
+                val connect = wallet::class.declaredMemberFunctions.first { it.name == "connectEngineForNewSession" }
+                connect.isAccessible = true
+                runBlocking { connect.callSuspend(wallet) }
+                val profile = profileSlot.captured as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
+                val ctx = RecordingPeerContext()
+                profile.init(ctx)
+
+                runBlocking { profile.handleProgress(wmpKeyOnlyRequest()) }
+                assertTrue("a sign request of the live session is served", blind.holdsKey("flow-late"))
+                assertTrue(ctx.notifications.any { it.second?.containsKey("credential_response_encryption_jwk") == true })
+
+                ending(wallet)
+                val after = RecordingPeerContext()
+                profile.init(after)
+                blind.offer("x", null)
+                runBlocking {
+                    profile.handleProgress(wmpKeyOnlyRequest().copy(flowId = "flow-after"))
+                }
+                assertFalse("after logout or destroy the same peer's request is refused", blind.holdsKey("flow-after"))
+                assertTrue(after.notifications.none { it.second?.containsKey("credential_response_encryption_jwk") == true })
+            } finally {
+                SirosWallet.createWmpPeer = previous
+            }
+        }
+    }
+
+    @Test
+    fun aLoginOnTheLegacyTransportStillServesSignRequestsAfterTheGenerationBump() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        val blind = BlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "legacyAppToken" to "app-token",
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "blindIssuance" to blind,
+        )
+        val connect = wallet::class.declaredMemberFunctions.first { it.name == "connectEngineForNewSession" }
+        connect.isAccessible = true
+        runBlocking { connect.callSuspend(wallet) }
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-k", messageId = "m", action = "generate_proof",
+                params = SignRequestParams(credentialResponseEncryption = org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", true)),
+            )
+        )
+        advanceUntilIdle()
+        assertTrue(blind.holdsKey("flow-k"))
+        verify(exactly = 1) { engine.sendSignResponse("flow-k", messageId = "m", credentialRequestExtras = any(), credentialResponseEncryptionJwk = any()) }
+    }
+
+    @Test
+    fun aKeyOfferedByTheLegacyHandler_isTiedToTheSocketItWasOfferedOn() = runTest(dispatcher) {
+        val state = MutableStateFlow(WalletEngineSession.State.CONNECTED)
+        val generations = MutableStateFlow(0)
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow, state = state, generations = generations)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        val blind = BlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "blindIssuance" to blind,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-k", messageId = "m", action = "generate_proof",
+                params = SignRequestParams(credentialResponseEncryption = org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", true)),
+            )
+        )
+        advanceUntilIdle()
+        assertTrue(blind.holdsKey("flow-k"))
+        engineGeneration.incrementAndGet()
+        generations.value = engineGeneration.get()
+        dispatcher.scheduler.runCurrent()
+        assertFalse("the new socket abandons the flow of the old one", blind.holdsKey("flow-k"))
+    }
+
+    @Test
+    fun aSocketReplacedOnTheSameSession_leavesABufferedCompletionItsOpenedResponseWithinTheGrace() = runTest(dispatcher) {
+        val state = MutableStateFlow(WalletEngineSession.State.CONNECTED)
+        val generations = MutableStateFlow(0)
+        val engine = mockEngineConstructor(state = state, generations = generations)
+        val blind = BlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "blindIssuance" to blind,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        val jwk = blind.offer("flow-a", org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false), engine.connectionGeneration)!!
+        blind.open("flow-a", issuerEncrypt(jwk, "ECDH-ES", "A256GCM", issuerBody("buffered credential").toString()), deferred = false)
+        engineGeneration.incrementAndGet()
+        generations.value = engineGeneration.get()
+        dispatcher.scheduler.runCurrent()
+        assertFalse(blind.holdsKey("flow-a"))
+        assertEquals(listOf("buffered credential"), blind.take("flow-a")!!.credentials)
+    }
+
+    // ---- review round 4: ended sessions allocate nothing; the peer is really closed; obsolete socket requests are dropped ----
+
+    private class RecordingPeerContext : org.siros.sdk.transport.wmp.WmpPeerContext {
+        override val codec = org.siros.sdk.transport.wmp.WmpCodec()
+        val notifications = mutableListOf<Pair<String, JsonObject?>>()
+        override suspend fun notify(method: String, params: JsonObject?) { notifications += method to params }
+        override suspend fun call(method: String, params: JsonObject?) = org.siros.sdk.transport.wmp.JsonRpcResponse(id = null)
+    }
+
+    private fun wmpKeyOnlyRequest() = org.siros.sdk.transport.wmp.FlowProgressParams(
+        flowId = "flow-late", step = "sign_request",
+        payload = buildJsonObject {
+            put("action", JsonPrimitive("generate_proof"))
+            put("credential_response_encryption", buildJsonObject { put("alg", JsonPrimitive("ECDH-ES")); put("enc", JsonPrimitive("A256GCM")); put("required", JsonPrimitive(true)) })
+        },
+    )
+
+    private fun endedSessionWallet(blind: BlindIssuance, peer: org.siros.sdk.transport.wmp.WmpPeer? = null): SirosWallet = newWallet(
+        "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+        "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+        "supervisorJob" to SupervisorJob(),
+        "keystore" to mockk<KeystoreManager>(relaxed = true),
+        "sessionStore" to mockk<SessionStore>(relaxed = true),
+        "activity" to mockk<android.app.Activity>(relaxed = true).also { every { it.applicationContext } returns mockk(relaxed = true) },
+        "defaultCircuitZkProverHolder" to lazy<org.siros.sdk.keystore.CatalogCircuitZkProver> { error("not initialised") },
+        "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        "blindIssuance" to blind,
+    ).also { w -> if (peer != null) { val f = SirosWallet::class.java.getDeclaredField("wmpPeer"); f.isAccessible = true; f.set(w, peer) } }
+
+    @Test
+    fun logout_reallyClosesTheWmpPeer_notWhateverTheFieldHoldsAfterwards() = runTest(dispatcher) {
+        val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        val wallet = endedSessionWallet(BlindIssuance(), peer)
+        wallet.logout()
+        coVerify(exactly = 1, timeout = 3000) { peer.close(any()) }
+    }
+
+    @Test
+    fun destroy_closesTheWmpPeerEvenThoughItCancelsTheWalletsOwnScope() = runTest(dispatcher) {
+        val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        val wallet = endedSessionWallet(BlindIssuance(), peer)
+        wallet.destroy()
+        coVerify(exactly = 1, timeout = 3000) { peer.close(any()) }
+    }
+
+    @Test
+    fun aKeyOnlyRequestArrivingOverWmpAfterLogoutOrDestroy_allocatesNothing() = runTest(dispatcher) {
+        for (teardown in listOf<(SirosWallet) -> Unit>({ it.logout() }, { it.destroy() })) {
+            val blind = BlindIssuance()
+            val wallet = endedSessionWallet(blind)
+            val method = wallet::class.declaredMemberFunctions.first { it.name == "wmpProfile" }
+            method.isAccessible = true
+            // The profile (and so the callbacks the peer would still deliver to) was built while the session was live.
+            val profile = method.call(wallet, null, getField(wallet, "consentEpoch") as Int, CoroutineScope(dispatcher + SupervisorJob())) as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
+            val ctx = RecordingPeerContext()
+            profile.init(ctx)
+            teardown(wallet)
+            runBlocking { profile.handleProgress(wmpKeyOnlyRequest()) }
+            assertFalse("no key is generated for an ended session", blind.holdsKey("flow-late"))
+            assertTrue("the request is answered with a flow error", ctx.notifications.isNotEmpty())
+            assertTrue(ctx.notifications.none { it.second?.containsKey("credential_response_encryption_jwk") == true })
+        }
+    }
+
+    @Test
+    fun aKeyOnlyRequestArrivingOverTheLegacyTransportAfterLogout_allocatesNothingAndIsNotAnswered() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.disconnect() } just runs
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        val blind = BlindIssuance()
+        val wallet = endedSessionWallet(blind)
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        wallet.logout()
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-late", messageId = "m", action = "generate_proof",
+                params = SignRequestParams(credentialResponseEncryption = org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", true)),
+            )
+        )
+        advanceUntilIdle()
+        assertFalse(blind.holdsKey("flow-late"))
+        verify(exactly = 0) { engine.sendSignResponse(flowId = "flow-late") }
+    }
+
+    @Test
+    fun aSignRequestOfAReplacedSocketProcessedAfterTheSweep_getsNoKeyAndNoAnswer_aCurrentOneDoes() = runTest(dispatcher) {
+        val state = MutableStateFlow(WalletEngineSession.State.CONNECTED)
+        val generations = MutableStateFlow(0)
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow, state = state, generations = generations)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        val blind = BlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "blindIssuance" to blind,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        // The socket is replaced and the sweep has run, THEN a request stamped with the old socket is processed (the channel is buffered).
+        engineGeneration.incrementAndGet()
+        generations.value = engineGeneration.get()
+        dispatcher.scheduler.runCurrent()
+        val encryption = org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", true)
+        signFlow.emit(
+            SignRequestMessage(flowId = "flow-old", messageId = "m-old", action = "generate_proof", params = SignRequestParams(credentialResponseEncryption = encryption))
+                .also { it.connectionGeneration = 0 },
+        )
+        advanceUntilIdle()
+        assertFalse("no key is allocated for a replaced socket's request", blind.holdsKey("flow-old"))
+        verify(exactly = 0) { engine.sendSignResponse(flowId = "flow-old") }
+        // One of the current socket is served and tied to it.
+        signFlow.emit(
+            SignRequestMessage(flowId = "flow-new", messageId = "m-new", action = "generate_proof", params = SignRequestParams(credentialResponseEncryption = encryption))
+                .also { it.connectionGeneration = engine.connectionGeneration },
+        )
+        advanceUntilIdle()
+        assertTrue(blind.holdsKey("flow-new"))
+    }
+
+    @Test
+    fun aWmpCallbackPausedBetweenItsLivenessCheckAndTheKeyClaim_retainsNothingAfterTeardown() = runTest(dispatcher) {
+        for (teardown in listOf<(SirosWallet) -> Unit>({ it.logout() }, { it.destroy() })) {
+            val paused = java.util.concurrent.CountDownLatch(1)
+            val release = java.util.concurrent.CountDownLatch(1)
+            val blind = BlindIssuance()
+            val wallet = endedSessionWallet(blind)
+            wallet.signDispatchHook = { paused.countDown(); release.await() }
+            val method = wallet::class.declaredMemberFunctions.first { it.name == "wmpProfile" }
+            method.isAccessible = true
+            val profile = method.call(wallet, null, getField(wallet, "consentEpoch") as Int, CoroutineScope(dispatcher + SupervisorJob())) as org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile
+            val ctx = RecordingPeerContext()
+            profile.init(ctx)
+            // The callback passes its liveness check and stops just before it claims the flow's state.
+            val running = java.util.concurrent.Executors.newSingleThreadExecutor().submit { runBlocking { profile.handleProgress(wmpKeyOnlyRequest()) } }
+            assertTrue(paused.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            teardown(wallet)
+            release.countDown()
+            running.get(5, java.util.concurrent.TimeUnit.SECONDS)
+            assertFalse("the teardown is not undone by the late claim", blind.holdsKey("flow-late"))
+            assertEquals(null, blind.take("flow-late"))
+            assertTrue("no key is answered", ctx.notifications.none { it.second?.containsKey("credential_response_encryption_jwk") == true })
+        }
+    }
+
+    @Test
+    fun aLegacyRequestPausedBetweenItsGuardAndTheKeyClaim_retainsNothingAfterLogout_andIsNotAnswered() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.disconnect() } just runs
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        val paused = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val blind = BlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(Dispatchers.IO + SupervisorJob()),
+            "supervisorJob" to SupervisorJob(),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "sessionStore" to mockk<SessionStore>(relaxed = true),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "blindIssuance" to blind,
+        )
+        wallet.signDispatchHook = { paused.countDown(); release.await() }
+        invokeConnectEngine(wallet, "app-token")
+        runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(200) }
+        val emitter = kotlinx.coroutines.GlobalScope.launch(Dispatchers.Default) {
+            signFlow.emit(
+                SignRequestMessage(
+                    flowId = "flow-late", messageId = "m", action = "generate_proof",
+                    params = SignRequestParams(credentialResponseEncryption = org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", true)),
+                )
+            )
+        }
+        assertTrue(paused.await(5, java.util.concurrent.TimeUnit.SECONDS))
+        wallet.logout()
+        release.countDown()
+        runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(300) }
+        emitter.cancel()
+        assertFalse("the logout is not undone by the late claim", blind.holdsKey("flow-late"))
+        verify(exactly = 0) { engine.sendSignResponse(flowId = "flow-late", messageId = any(), error = any()) }
+        verify(exactly = 0) { engine.sendSignResponse(flowId = "flow-late", messageId = any(), credentialResponseEncryptionJwk = any()) }
+    }
+
+    @Test
+    fun aPendingDeferredResponseCarryingASeed_isReportedToTheIssuerOnBothTransports() = runTest(dispatcher) {
+        val seedBody = """{"transaction_id":"tx","interval":5,"notification_id":"n-seed","credential_metadata":{"org.siros.secret_seed":{"org.siros.nym_auth":"${NymTestCredentials.seedHex}"}}}"""
+        // Legacy transport.
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        every { engine.sendCredentialNotification(any(), any(), any(), any()) } just runs
+        val blind = BlindIssuance()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "blindIssuance" to blind,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        val jwk = blind.offer("flow-d", org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false))!!
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-d", messageId = "msg-d", action = "decrypt_credential_response",
+                params = SignRequestParams(jwe = issuerEncrypt(jwk, "ECDH-ES", "A256GCM", seedBody), deferred = true),
+            )
+        )
+        advanceUntilIdle()
+        io.mockk.verifyOrder {
+            engine.sendCredentialNotification("flow-d", "n-seed", CredentialNotificationEvent.FAILURE, "credential_response_rejected")
+            engine.sendSignResponse(flowId = "flow-d", messageId = "msg-d", error = any())
+        }
+        verify(exactly = 0) { engine.sendSignResponse(flowId = "flow-d", messageId = "msg-d", transactionId = any(), interval = any()) }
+        // WMP transport.
+        val peer = mockk<org.siros.sdk.transport.wmp.WmpPeer>(relaxed = true)
+        val wmpBlind = BlindIssuance()
+        val wmpWallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "keystore" to mockk<KeystoreManager>(relaxed = true),
+            "credentialStore" to FakeCredentialStore(mutableListOf()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "wmpPeer" to peer,
+            "blindIssuance" to wmpBlind,
+        )
+        val method = wmpWallet::class.declaredMemberFunctions.first { it.name == "handleWmpSignRequest" }
+        method.isAccessible = true
+        val wjwk = wmpBlind.offer("flow-w", org.siros.sdk.transport.CredentialResponseEncryptionRequest("ECDH-ES", "A256GCM", false))!!
+        val thrown = runCatching {
+            runBlocking {
+                method.callSuspend(
+                    wmpWallet, "flow-w",
+                    org.siros.sdk.transport.wmp.openid4x.SignSubFlowParams(action = "decrypt_credential_response", deferred = true, jwe = issuerEncrypt(wjwk, "ECDH-ES", "A256GCM", seedBody)),
+                )
+            }
+        }.exceptionOrNull()
+        assertTrue(unwrapped(thrown ?: throw AssertionError("expected a refusal")) is BlindIssuanceException)
+        coVerify(exactly = 1) {
+            peer.sendCredentialNotification(flowId = "flow-w", notificationId = "n-seed", event = CredentialNotificationEvent.FAILURE, eventDescription = "credential_response_rejected")
+        }
+    }
+
+    private fun legacyEncryptedPresentationWallet(
+        credentials: List<StoredCredential>,
+        keystore: KeystoreManager,
+        listener: WalletEventListener,
+    ): SirosWallet = newWallet(
+        "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+        "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+        "keystore" to keystore,
+        "credentialStore" to FakeCredentialStore(credentials.toMutableList()),
+        "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+        "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+        "eventListener" to listener,
+    )
+
+    @Test
+    fun legacySignPresentation_overDirectPostJwt_aSelectedCredentialThatIsGone_isNeverPresentedPartially() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        coEvery { keystore.signVpToken(any(), any(), any(), any(), any()) } returns "secret vp token!"
+        val wallet = legacyEncryptedPresentationWallet(
+            listOf(StoredCredential(id = 7L, format = "dc+sd-jwt", raw = "raw", batchId = 1L, instanceId = 0)), keystore, listener,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-vp", messageId = "msg-vp", action = "sign_presentation",
+                params = SignRequestParams(
+                    audience = "admin", nonce = "n", state = "st",
+                    // Credential 8 is no longer in the store.
+                    credentialsToInclude = listOf(
+                        org.siros.sdk.transport.engine.CredentialRef(credentialQueryId = "pid", credentialId = "7"),
+                        org.siros.sdk.transport.engine.CredentialRef(credentialQueryId = "age", credentialId = "8"),
+                    ),
+                    responseEncryption = blindResponseEncryption(),
+                    verifiedRequest = org.siros.sdk.transport.VerifiedRequest(clientId = "client-id-1", responseMode = "direct_post.jwt"),
+                ),
+            )
+        )
+        repeat(5) {
+            runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(50) }
+            advanceUntilIdle()
+        }
+        verify(exactly = 0) { engine.sendSignResponse(flowId = any(), responseJwe = any()) }
+        verify(exactly = 0) { engine.sendSignResponse(flowId = any(), vpToken = any()) }
+        val error = slot<String>()
+        verify(exactly = 1) { engine.sendSignResponse(flowId = "flow-vp", messageId = "msg-vp", error = capture(error)) }
+        assertFalse("the answer names no credential or token", error.captured.contains("secret vp token!") || error.captured.contains("raw"))
+        verify(exactly = 1) { listener.onFlowError("flow-vp", any(), any()) }
+    }
+
+    @Test
+    fun legacySignPresentation_overDirectPostJwt_aFailureBuildingTheResponse_isAnsweredBeforeLocalCleanup_andNeverFallsBackToPlain() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        coEvery { keystore.signVpToken(any(), any(), any(), any(), any()) } returns "secret vp token!"
+        val wallet = legacyEncryptedPresentationWallet(
+            listOf(StoredCredential(id = 7L, format = "dc+sd-jwt", raw = "raw", batchId = 1L, instanceId = 0)), keystore, listener,
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        // No verified_request: the audience of the response cannot be established.
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-vp", messageId = "msg-vp", action = "sign_presentation",
+                params = SignRequestParams(
+                    audience = "admin", nonce = "n",
+                    credentialsToInclude = listOf(org.siros.sdk.transport.engine.CredentialRef(credentialQueryId = "pid", credentialId = "7")),
+                    responseEncryption = blindResponseEncryption(),
+                ),
+            )
+        )
+        repeat(5) {
+            runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(50) }
+            advanceUntilIdle()
+        }
+        io.mockk.verifyOrder {
+            engine.sendSignResponse(flowId = "flow-vp", messageId = "msg-vp", error = any())
+            listener.onFlowError("flow-vp", any(), any())
+        }
+        verify(exactly = 0) { engine.sendSignResponse(flowId = any(), vpToken = any()) }
+        verify(exactly = 0) { engine.sendSignResponse(flowId = any(), responseJwe = any()) }
+    }
+
+    @Test
+    fun scaEngine_overDirectPostJwt_aFailureBuildingTheResponse_isAnsweredBeforeLocalCleanup() = runTest(dispatcher) {
+        val fx = scaFixture()
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every { engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } just runs
+        invokeConnectEngine(fx.wallet, "app-token")
+        dispatcher.scheduler.advanceUntilIdle()
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-sca", messageId = "m1", action = "sign_presentation",
+                params = SignRequestParams(
+                    audience = "x509_san_dns:shop.example.com", nonce = "n-1", responseMode = "direct_post.jwt",
+                    credentialsToInclude = listOf(org.siros.sdk.transport.engine.CredentialRef(credentialQueryId = "pay", credentialId = "1")),
+                    transactionData = listOf(scaWire()),
+                    responseEncryption = blindResponseEncryption(),
+                    // no verified_request: the response cannot be built
+                ),
+            )
+        )
+        repeat(8) {
+            runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(50) }
+            dispatcher.scheduler.advanceUntilIdle()
+        }
+        verify(exactly = 1) { engine.sendSignResponse(flowId = "flow-sca", messageId = "m1", error = any()) }
+        verify(exactly = 0) { engine.sendSignResponse(flowId = any(), vpToken = any()) }
+        verify(exactly = 0) { engine.sendSignResponse(flowId = any(), responseJwe = any()) }
     }
 
     private class FakeCredentialStore(
