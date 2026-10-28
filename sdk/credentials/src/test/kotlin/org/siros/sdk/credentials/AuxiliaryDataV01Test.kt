@@ -127,10 +127,10 @@ class AuxiliaryDataV01Test {
         val adv = (AuxiliaryDataShapes.select(config(goodAdvert)) as AuxiliarySelection.Selected).advertisement
         val d = SecretDelivery(listOf("ssc"), "sha-256", opening)
         val extra = SecretDelivery(listOf("other"), "sha-256", opening)
-        assertEquals(listOf(d), AuxiliaryDataV01.deliveriesToVerify(listOf(d), "ignored", adv))
-        assertNull("an unadvertised secret", AuxiliaryDataV01.deliveriesToVerify(listOf(d, extra), "ignored", adv))
-        assertNull("an advertised secret that did not arrive", AuxiliaryDataV01.deliveriesToVerify(listOf(extra), "ignored", adv))
-        assertNull("no advertisement known: nothing is accepted", AuxiliaryDataV01.deliveriesToVerify(listOf(d), "ignored", null))
+        assertEquals(listOf(d), AuxiliaryDataV01.deliveriesToVerify(listOf(d), adv))
+        assertNull("an unadvertised secret", AuxiliaryDataV01.deliveriesToVerify(listOf(d, extra), adv))
+        assertNull("an advertised secret that did not arrive", AuxiliaryDataV01.deliveriesToVerify(listOf(extra), adv))
+        assertNull("no advertisement known: nothing is accepted", AuxiliaryDataV01.deliveriesToVerify(listOf(d), null))
     }
 
     private fun sdJwt(claimName: String, valueB64: String, disclosed: Boolean, inClearAlso: Boolean = false): String {
@@ -230,11 +230,11 @@ class AuxiliaryDataV01Test {
         val parsed = (AuxiliaryDataV01.parseDeliveries(md) as AuxiliaryParse.Parsed).deliveries
         assertEquals(listOf(listOf("ssc")), parsed.map { it.path })
         val adv = (AuxiliaryDataShapes.select(config(goodAdvert)) as AuxiliarySelection.Selected).advertisement
-        assertEquals(parsed, AuxiliaryDataV01.deliveriesToVerify(parsed, "x", adv))
+        assertEquals(parsed, AuxiliaryDataV01.deliveriesToVerify(parsed, adv))
         // Only extensions delivered: nothing recognised, so the advertised slot did not arrive.
         val onlyExt = (AuxiliaryDataV01.parseDeliveries(response(ext)) as AuxiliaryParse.Parsed).deliveries
         assertTrue(onlyExt.isEmpty())
-        assertNull(AuxiliaryDataV01.deliveriesToVerify(onlyExt, "x", adv))
+        assertNull(AuxiliaryDataV01.deliveriesToVerify(onlyExt, adv))
     }
 
     @Test
@@ -337,6 +337,37 @@ class AuxiliaryDataV01Test {
         for (member in listOf(""","encoding":"hex"""", ""","commitment":"AAAA"""")) {
             val md = response("""{"type":"hash_commitment","alg":"sha-256","path":["ssc"],"opening":"$openingB64"$member}""")
             assertTrue(member, AuxiliaryDataV01.parseDeliveries(md) is AuxiliaryParse.Malformed)
+        }
+    }
+
+    // ---- the wallet's own entry/path-count bound (32, independent of the engine's now-removed maxAuxEntries/maxAuxPathLen) ----
+
+    private fun slot(claim: String) = """{"type":"hash_commitment","alg":"sha-256","path":["$claim"],"encoding":"base64url"}"""
+
+    @Test
+    fun upTo32AdvertisedToWalletEntriesAreAccepted_33AreNot() {
+        val entries32 = (0 until 32).joinToString(",") { slot("c$it") }
+        assertTrue(AuxiliaryDataShapes.select(config("""{"to_wallet":[$entries32]}""")) is AuxiliarySelection.Selected)
+        val entries33 = (0 until 33).joinToString(",") { slot("c$it") }
+        assertTrue(AuxiliaryDataShapes.select(config("""{"to_wallet":[$entries33]}""")) is AuxiliarySelection.Malformed)
+    }
+
+    @Test
+    fun upTo32DeliveredEntriesAreAccepted_33AreNot() {
+        fun delivery(n: Int) = Array(n) { """{"type":"hash_commitment","alg":"sha-256","path":["c$it"],"opening":"$openingB64"}""" }
+        assertTrue(AuxiliaryDataV01.parseDeliveries(response(*delivery(32))) is AuxiliaryParse.Parsed)
+        assertTrue(AuxiliaryDataV01.parseDeliveries(response(*delivery(33))) is AuxiliaryParse.Malformed)
+    }
+
+    @Test
+    fun upTo32ToIssuerEntriesAreAnsweredBySlotsToAnswer_33Refuses() {
+        fun entry(n: Int) = Json.parseToJsonElement(slot("c$n")).jsonObject
+        assertEquals(32, AuxiliaryDataV01.slotsToAnswer((0 until 32).map { entry(it) }).size)
+        try {
+            AuxiliaryDataV01.slotsToAnswer((0 until 33).map { entry(it) })
+            fail("accepted 33 to_issuer entries")
+        } catch (e: WalletException) {
+            assertEquals("holder_commitment_unsupported", e.errorCode)
         }
     }
 }

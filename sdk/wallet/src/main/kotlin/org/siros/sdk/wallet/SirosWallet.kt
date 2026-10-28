@@ -3,6 +3,7 @@ package org.siros.sdk.wallet
 
 import android.app.Activity
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
@@ -186,6 +187,11 @@ private data class PendingAuthorization(
     val redirectUri: String,
     val codeVerifier: String?,
     val state: String,
+    /**
+     * The issuance attempt ([SirosWallet]'s start epoch) this authorization belongs to, when it was saved. A callback that arrives
+     * after a cancel or a newer issuance is for a SUPERSEDED attempt and must not resume anything (nor borrow the newer one's context).
+     */
+    val issuanceEpoch: Int = -1,
 )
 
 /** Facade methods that need a live backend session throw this when there is none. */
@@ -412,7 +418,7 @@ class SirosWallet private constructor(
      */
     @Volatile
     internal var credentialSecretSeedSource: CredentialSecretSeedSource =
-        KeystoreSecretSeedSource(config.secretSeedNamespace) { id -> storedCredentialMetadata(id) }
+        KeystoreSecretSeedSource { id -> storedCredentialMetadata(id) }
 
     /** The delivered `metadata` of a stored credential. Never display it, log it or put it in a presentation. */
     internal suspend fun storedCredentialMetadata(id: Long): kotlinx.serialization.json.JsonArray? =
@@ -841,6 +847,7 @@ class SirosWallet private constructor(
      */
     @Synchronized
     private fun bumpSessionGeneration() {
+        presentationLinks?.releaseInFlight()
         sessionGeneration += 1
         reloginDoneForGeneration = false
         // A zkp_req signing waiting on the user belongs to the session that just ended or was replaced.
@@ -864,6 +871,11 @@ class SirosWallet private constructor(
         // This session's issuance material goes with its connections and keystore, whether or not the replacement login
         // succeeds (a login that ends in WalletState.Error leaves no new connection to replace it).
         blindIssuance.clear()
+        // Cancels every coroutine of this cut-off session's own connection - see connectionScope's doc comment - before
+        // the window between this teardown and the eventual connectEngine/connectViaWmp call inside login() below.
+        connectionScope?.cancel()
+        // A flow id of this cut-off session reused by the replacement login must not inherit its consent - see the doc comment.
+        clearPerFlowAuthorizationState()
         engineStateJob?.cancel()
         engineStateJob = null
         engineSession?.disconnect()
@@ -872,8 +884,7 @@ class SirosWallet private constructor(
         // re-checks the cut-off at every flow start - leaving it connected
         // would keep a socket authenticated by a token the backend has already
         // stopped accepting, and the next connect would overwrite the
-        // reference without ever closing it.
-        wmpLifetime++
+        // reference without ever closing it. clearPerFlowAuthorizationState above already bumped consentEpoch before this.
         wmpPeer?.close()
         wmpPeer = null
         credentialNotifier = null
@@ -1892,8 +1903,14 @@ class SirosWallet private constructor(
      * refused this installation.
      */
     private fun endSessionLocally() {
+        // Presentations still waiting for an answer belong to the session that ends here.
+        presentationLinks?.releaseInFlight()
         // A zkp_req signing still waiting on the user belongs to the session that ends here: nothing of it may act on a later one.
         stopAllZkSigning()
+        // Cancels every coroutine of this ended session's own connection - see connectionScope's doc comment.
+        connectionScope?.cancel()
+        // A flow id of this ended session reused by a later one must not inherit its consent - see the doc comment.
+        clearPerFlowAuthorizationState()
         engineStateJob?.cancel()
         engineStateJob = null
         engineSession?.disconnect()
@@ -2173,6 +2190,9 @@ class SirosWallet private constructor(
         dropAllHolderCommitments()
         keystore.lock()
         apiClient = null
+        // connectionScope has its own standalone SupervisorJob (see its doc comment), so it is NOT a child of
+        // supervisorJob below and would otherwise keep running after this instance is torn down.
+        connectionScope?.cancel()
         supervisorJob.cancel()
         Timber.i("Wallet instance destroyed")
     }
@@ -3798,8 +3818,8 @@ class SirosWallet private constructor(
             resolvedForStart?.metadata?.credentialConfigurationsSupported?.get(offer.credentialConfigurationId)?.let { cfg ->
                 if (!recordAuxiliarySelection(offer.credentialIssuerIdentifier, offer.credentialConfigurationId, cfg)) {
                     throw WalletException(
-                        "The issuer's auxiliary data advertisement for this credential is malformed; issuance is refused",
-                        errorCode = "auxiliary_data_advertisement_malformed",
+                        AUX_DATA_ADVERTISEMENT_MALFORMED_MESSAGE,
+                        errorCode = AUX_DATA_ADVERTISEMENT_MALFORMED_CODE,
                     )
                 }
             }
@@ -3997,8 +4017,8 @@ class SirosWallet private constructor(
             if (resolvedDisplay != null && !resolvedDisplay.record()) {
                 // The advertisement is malformed NOW: any earlier selection was cleared above, and the issuance is refused.
                 throw WalletException(
-                    "The issuer's auxiliary data advertisement for this credential is malformed; issuance is refused",
-                    errorCode = "auxiliary_data_advertisement_malformed",
+                    AUX_DATA_ADVERTISEMENT_MALFORMED_MESSAGE,
+                    errorCode = AUX_DATA_ADVERTISEMENT_MALFORMED_CODE,
                 )
             }
             if (displayOffer != null) {
@@ -4102,16 +4122,35 @@ class SirosWallet private constructor(
      *
      * @param requestUri the OID4VP request URI.
      */
-    suspend fun startPresentation(requestUri: String) {
+    suspend fun startPresentation(requestUri: String): Boolean {
         val engine = engineSession ?: throw WalletException(NOT_CONNECTED)
-        ensureEngineConnected(engine)
-        val declare = isTransactionDataEffectivelyEnabled
-        engineFlowDeclaredTransactionData = declare
-        engine.startPresentation(
-            requestUri = requestUri,
-            features = TransactionDataSupport.engineFeatures(declare),
-        )
+        // The same link delivered again (an issuer's page re-firing its request on the way back, an intent delivered twice) is not a
+        // new request: no second flow, no second consent screen. The caller is told (false) so it can clear a "starting" indicator.
+        if (presentationLinks?.admit(requestUri, engine.connectionGeneration) == false) {
+            Timber.i("A presentation request identical to one started moments ago was delivered again; ignoring the duplicate")
+            return false
+        }
+        try {
+            ensureEngineConnected(engine)
+            val declare = isTransactionDataEffectivelyEnabled
+            engineFlowDeclaredTransactionData = declare
+            // The start is sent on the connection that is current NOW (ensureEngineConnected may have replaced it, which releases the
+            // entries of the old one - including this one, hence the re-bind).
+            presentationLinks?.rebind(requestUri, engine.connectionGeneration)
+            engine.startPresentation(
+                requestUri = requestUri,
+                features = TransactionDataSupport.engineFeatures(declare),
+            )
+            return true
+        } catch (e: Exception) {
+            // A start that did not happen can be retried at once.
+            presentationLinks?.release(requestUri)
+            throw e
+        }
     }
+
+    // Nullable like [resumingFlowIds]: a test that builds a wallet without running initialisers leaves it null (no dedupe).
+    private val presentationLinks: PresentationLinkLedger? = PresentationLinkLedger()
 
     /**
      * The final payload to hand back to the OS/browser for a W3C Digital
@@ -4761,6 +4800,7 @@ class SirosWallet private constructor(
         val presenter = (keystore as? org.siros.sdk.keystore.HolderWitnessSource)
             ?.circuitZkPresenter(prover, support.circuits, support.validator, handlers = presenterHandlers, serving = support.serving)
             ?: org.siros.sdk.keystore.CircuitZkPresenter(prover, support.circuits, support.validator, NoWitnessProvider, handlers = presenterHandlers, serving = support.serving)
+        presenter.withProofSystemPreference(config.zkProofSystemPreference)
         val today = java.time.LocalDate.now(java.time.ZoneOffset.UTC)
 
         // ── Phase 1: decide what would be presented. No secret is touched here: no seed, no signature, no proof. ──
@@ -5143,6 +5183,9 @@ class SirosWallet private constructor(
      * issuance was ever in flight, so it's always safe to call from here.
      */
     fun cancelCurrentFlow() {
+        // Only the cancelled presentation is released (its flow, or a start no flow was reported for); answered links keep their window.
+        (_state.value as? WalletState.FlowActive)?.flowId?.let { presentationLinks?.releaseFlow(it) }
+        presentationLinks?.releaseUnassociated()
         // Invalidate any start still suspended in network work: it stops at its
         // next step instead of sending the engine a flow that was cancelled.
         issuanceStartEpoch.incrementAndGet()
@@ -5231,13 +5274,33 @@ class SirosWallet private constructor(
             throw WalletException("Authorization state mismatch for flow $flowId (possible CSRF)")
         }
         pendingAuthorizations.remove(flowId)
+        // A callback for a SUPERSEDED attempt (cancelled, or a newer issuance began since this authorization was saved) resumes nothing:
+        // not reconnecting, not borrowing the newer attempt's offer context.
+        if (pending.issuanceEpoch >= 0 && pending.issuanceEpoch != issuanceStartEpoch.get()) {
+            Timber.w("Authorization callback for flow $flowId ignored: its issuance attempt was cancelled or superseded")
+            return
+        }
+        // The resume owns the issuance from here until it completes or fails: the original flow's guards may have been reset (it was ended
+        // locally), and without them a second issuance could replace the offer before the resumed flow requests its proof.
+        issuanceInFlight = true
         Timber.i("Resuming authorization of flow $flowId after the browser: reconnecting the engine WebSocket (was ${engine.state.value}) and sending a new, stateless flow_start; the engine will answer under a new flow id")
         resumingFlowIds?.add(flowId)
+        val resumeEpoch = issuanceStartEpoch.get()
+        val resumeSession = sessionGeneration
         scope.launch {
             try {
                 engine.forceReconnect()
                 engine.awaitConnected()
                 Timber.i("Engine WebSocket reconnected (${engine.state.value}); sending the resume flow_start for flow $flowId")
+                // The resumed flow needs the same offer context the first one had (the key-storage tier is decided from it); ending the
+                // original flow locally cleared it.
+                if (!restoreOfferContextForResume(pending.offerJson, resumeEpoch, resumeSession)) {
+                    // Cancelled or superseded while the context was being resolved: nothing is sent for it.
+                    resumingFlowIds?.remove(flowId)
+                    // Not released here: a cancel has reset the guards already, and the attempt that superseded this one owns them now.
+                    Timber.i("The resume of flow $flowId was cancelled or superseded before it was sent")
+                    return@launch
+                }
                 // Client attestation for the resumed flow arrives the same way
                 // as for a fresh one: go-wallet-backend's Execute() runs its
                 // attestation setup before branching on msg.AuthCode, so it
@@ -5245,6 +5308,10 @@ class SirosWallet private constructor(
                 // too (the token request - the one that actually needs it for
                 // redirect-based authorization_code issuers - only ever happens
                 // via this path). See handleRequestAttestation.
+                // The resumed start is registered on ITS connection: if that socket is lost before the first reply, no flow id exists
+                // for any sweep, so the connection-loss handlers release the guard through this.
+                resumeStartGeneration = engine.connectionGeneration
+                resumeStartFlowId = flowId
                 engine.resumeIssuance(
                     offer = pending.offerJson,
                     redirectUri = pending.redirectUri,
@@ -5253,6 +5320,7 @@ class SirosWallet private constructor(
                 )
             } catch (e: Exception) {
                 resumingFlowIds?.remove(flowId)
+                if (issuanceStartEpoch.get() == resumeEpoch) resetIssuanceGuards()
                 Timber.e(e, "Failed to resume authorization for flow $flowId (engine WebSocket ${engine.state.value})")
                 eventListener?.onFlowError(flowId, e.message ?: "Failed to resume authorization")
             }
@@ -5730,6 +5798,14 @@ class SirosWallet private constructor(
     private val circuitZkClientMetadataByFlow = mutableMapOf<String, JsonObject>()
 
     /**
+     * What this wallet itself reported consenting to for a flow, exactly as sent in the `consent` flow action - see
+     * [ConsentGuard]'s doc comment for why `sign_presentation`'s `credentials_to_include` must be checked against this rather
+     * than trusted as the engine round-trips it. PEEKED (never removed) by a sign handler: more than one `sign_presentation`
+     * can arrive for a flow (a retried request, several queries signed one at a time). Removed only in [clearFlowMatchState].
+     */
+    private val consentRecordsByFlow = mutableMapOf<String, ConsentRecord>()
+
+    /**
      * Fires [ZkMdocPresentation.prewarmVega] for every ZK-eligible match as
      * soon as a verifier's request names its claims - well before the user
      * has approved anything, let alone before `sign_presentation` arrives -
@@ -5783,13 +5859,45 @@ class SirosWallet private constructor(
     /** New flow id -> the flow id it resumed; logging only. */
     private val flowContinuations: MutableMap<String, String>? = java.util.concurrent.ConcurrentHashMap()
 
+    /** The connection generation a resumed authorization's `flow_start` was sent on, until the engine's first reply (null otherwise). */
+    private var resumeStartGeneration: Int? = null
+    private var resumeStartFlowId: String? = null
+
+    /**
+     * A resumed start whose connection is gone before any reply can never be answered: its issuance guard is released and the app is told
+     * (once) that the flow it was waiting on is lost. [lostUpTo] is the newest connection generation that is gone.
+     */
+    private fun endResumedStartLost(lostUpTo: Int) {
+        val generation = resumeStartGeneration ?: return
+        if (generation > lostUpTo) return
+        val flowId = resumeStartFlowId
+        resumeStartGeneration = null
+        resumeStartFlowId = null
+        flowId?.let { resumingFlowIds?.remove(it) }
+        resetIssuanceGuards()
+        if (flowId != null) eventListener?.onFlowError(flowId, FLOW_LOST_MESSAGE)
+        val current = _state.value
+        if (current is WalletState.FlowActive && (current.isPending || current.flowId == flowId)) {
+            _state.value = readyState(current.userId, current.displayName, current.credentials)
+        }
+    }
+
     private fun noteFlowId(flowId: String) {
+        // The engine's first reply for the resumed start: it is on record now (as a flow), no longer a pending start.
+        if (resumeStartGeneration != null && resumingFlowIds?.peek() != null) {
+            resumeStartGeneration = null
+            resumeStartFlowId = null
+        }
+        // The first event of a flow tells which in-flight presentation link it belongs to (by the connection it arrived on).
+        engineSession?.let { presentationLinks?.associate(flowId, it.connectionGeneration) }
         val resuming = resumingFlowIds ?: return
         val continuations = flowContinuations ?: return
         val old = resuming.peek() ?: return
         if (flowId == old || continuations.containsKey(flowId)) return
         resuming.poll()
         continuations[flowId] = old
+        // The original flow is superseded by the resumed one: a later reconnect must not sweep it as "lost" either.
+        flowConnectionGeneration.remove(old)
         Timber.i("Flow $old (authorization resumed after the browser) continues as NEW flow $flowId")
     }
 
@@ -5860,6 +5968,8 @@ class SirosWallet private constructor(
      * the real error the moment it's caught instead.
      */
     private suspend fun reportSignFailure(flowId: String, message: String, notifyError: Boolean = true) {
+        // A local failure ends the presentation without an answer: its link is retryable at once.
+        presentationLinks?.releaseFlow(flowId)
         terminatedFlowIds.add(flowId)
         clearFlowMatchState(flowId)
         if (notifyError) eventListener?.onFlowError(flowId, message)
@@ -6216,10 +6326,9 @@ class SirosWallet private constructor(
         val verdict = DeliveredCredentialMetadata.check(
             response = opened ?: PlainDeliveredResponse(decoded.credentialMetadata),
             credentials = creds.map { DeliveredCredential(it.format, it.credential, it.notificationId) },
-            secretNamespace = config.secretSeedNamespace,
             canStoreSecret = keystoreCanHoldCredentialMetadata(),
             advertised = isSecretSeedAdvertised(decoded.credentialIssuer, wmpConfigurationId),
-            shape = auxiliarySelection(decoded.credentialIssuer, wmpConfigurationId)?.shape ?: org.siros.sdk.credentials.LegacyOrgSirosShape,
+            shape = auxiliarySelection(decoded.credentialIssuer, wmpConfigurationId)?.shape ?: org.siros.sdk.credentials.AuxiliaryDataV01,
             advertisement = auxiliarySelection(decoded.credentialIssuer, wmpConfigurationId)?.advertisement,
             holderCommitments = sentCommitments,
         )
@@ -6969,7 +7078,7 @@ class SirosWallet private constructor(
     /**
      * What a registration or a login does once it has a token: connect the engine, THEN end the previous session generation. The
      * callbacks of the connections made here must therefore never be bound to [sessionGeneration] (it changes right after): the
-     * WMP profile is bound to [wmpLifetime] instead.
+     * WMP profile is bound to [consentEpoch] instead.
      */
     private suspend fun connectEngineForNewSession() {
         connectEngineWithToken()
@@ -6992,14 +7101,48 @@ class SirosWallet private constructor(
     /** Test seam: runs after a sign request has passed its liveness checks and before it is dispatched (to pause it there). */
     internal var signDispatchHook: (() -> Unit)? = null
 
-    /** Counts the ends of WMP peers: a callback built for one lifetime is refused once it has moved on (see [wmpProfile]). */
-    @Volatile
-    private var wmpLifetime: Int = 0
+    /**
+     * Test seam: runs in `onMatchRequest` between `requireLive()` passing and the `ConsentTicket` being built from
+     * `lifetime` - the one window go-wallet-backend#502 follow-up, issue #345's finding #1 is about (a true multi-thread
+     * race between a volatile read and the next one is not reliably reproducible by timing alone; the same reasoning as
+     * `Fido2EnrolmentSession.testHookBeforeInstall`). Null in production.
+     */
+    internal var wmpMatchTicketIssueHook: (() -> Unit)? = null
+
+    /**
+     * Test seam: runs in the legacy transport's `flowComplete()`/`flowErrors()` collectors, right before their
+     * conditional `clearFlowMatchStateIfLive` call, to land a replacement/reconnect exactly there - a true race between
+     * an already-dequeued message (past its own `collect {}` entry, with no further suspension before this call) and a
+     * concurrent `connectEngine` call is not reliably reproducible by timing alone (same reasoning as
+     * `wmpMatchTicketIssueHook`). Null in production.
+     */
+    internal var legacyCollectorClearHook: (() -> Unit)? = null
+
+    /**
+     * Test seam: runs in the legacy transport's `matchRequests()` collector, right before its [issueConsentTicket]-style
+     * ticket is built from `engineEpoch`, to land a replacement/reconnect exactly in that window (the engine-side analog
+     * of `wmpMatchTicketIssueHook` - same reasoning: a true race between message entry and ticket construction is not
+     * reliably reproducible by timing alone). Null in production.
+     */
+    internal var engineMatchTicketIssueHook: (() -> Unit)? = null
+
+    /** Test seam: replaces the display lookup of a resumed authorization's offer (the resolved offer, or null for a malformed advertisement, and its `record`). */
+    internal var offerResolveHook: (suspend (String) -> Pair<CredentialOffer?, () -> Boolean>?)? = null
 
     private suspend fun connectViaWmp(appToken: String) {
         // Same leaked-connection hazard as connectEngine's engineSession -
-        // tear down any prior live peer before replacing the reference (its callbacks end with it).
-        wmpLifetime++
+        // tear down any prior live peer before replacing the reference (its callbacks end with it). Bumping the epoch
+        // BEFORE closing the old peer (rather than after) leaves no window where a callback of the peer being replaced
+        // could still see itself as current - see consentEpoch's and ConsentTicket's doc comments.
+        // Cancels EVERY coroutine this wallet launched on behalf of the REPLACED peer's callbacks - see connectionScope's
+        // doc comment - BEFORE anything else runs.
+        connectionScope?.cancel()
+        // THIS peer's own epoch, from clearPerFlowAuthorizationState's OWN return value (never a separate read
+        // afterward - see its doc comment on why).
+        val peerEpoch = clearPerFlowAuthorizationState()
+        // THIS peer's own scope - see connectionScope's doc comment.
+        val thisConnectionScope = CoroutineScope(scope.coroutineContext + SupervisorJob())
+        connectionScope = thisConnectionScope
         wmpPeer?.close()
         blindIssuance.clear()
 
@@ -7012,7 +7155,7 @@ class SirosWallet private constructor(
 
         val peer = createWmpPeer(wsUrl)
 
-        val profile = wmpProfile(peer)
+        val profile = wmpProfile(peer, peerEpoch, thisConnectionScope)
         peer.use(profile)
         // Offered per session: a later change of transactionDataEnabled
         // reaches the orchestrator only with the next session.
@@ -7111,7 +7254,6 @@ class SirosWallet private constructor(
         count: Int,
         proofTypesSupported: Set<String>?,
         proofTypeHint: String?,
-        holderCommitments: List<String>? = null,
         credentialType: String? = null,
         credentialIssuer: String? = null,
         auxiliaryDataToIssuer: List<kotlinx.serialization.json.JsonObject>? = null,
@@ -7126,15 +7268,9 @@ class SirosWallet private constructor(
             else -> "jwt"
         }
         val auxiliarySlots = if (auxiliaryDataToIssuer.isNullOrEmpty()) emptyList() else {
-            if (!holderCommitments.isNullOrEmpty()) {
-                throw WalletException(
-                    "The request asks for holder commitments in two shapes at once",
-                    errorCode = "holder_commitment_unsupported",
-                )
-            }
             org.siros.sdk.credentials.AuxiliaryDataV01.slotsToAnswer(auxiliaryDataToIssuer)
         }
-        if (chosen == "attestation" && (!holderCommitments.isNullOrEmpty() || auxiliarySlots.isNotEmpty())) {
+        if (chosen == "attestation" && auxiliarySlots.isNotEmpty()) {
             // An attestation proof has no payload to carry the claim; answering
             // without it would be refused by the issuer after the user has waited.
             throw WalletException(
@@ -7157,7 +7293,6 @@ class SirosWallet private constructor(
                 // may have started a hardware operation). Never logged.
                 val witness = effectiveKeystore as? org.siros.sdk.keystore.HolderWitnessSource
                 val derive = witness?.let { w -> { type: String, issuer: String -> w.privateSeedCommitment(type, issuer) } }
-                val commitmentClaims = HolderCommitments.proofClaims(holderCommitments, credentialType, credentialIssuer, derive)
                 // Credential Auxiliary Data v0.1: ONE value, computed once, goes into every proof of the request.
                 val auxiliaryClaims = if (auxiliarySlots.isEmpty()) emptyMap() else {
                     // The request's credential type and issuer string when it carries them; the offer's otherwise.
@@ -7194,28 +7329,15 @@ class SirosWallet private constructor(
                         val keyId = extractProofKeyId(proofJwt)
                         return@map GeneratedProofData(proofType = "jwt", jwt = proofJwt, attestedKeyIds = keyId?.let { listOf(it) })
                     }
-                    // The four-argument form when there is nothing to add: a keystore
-                    // that predates extra claims keeps working for every issuer that
-                    // asked for none.
-                    val proofJwt = if (commitmentClaims.isEmpty()) {
-                        effectiveKeystore.generateProof(
-                            audience = audience,
-                            nonce = nonce,
-                            freshKey = count > 1,
-                            // `audience` is the credential issuer, which is what
-                            // decides whether this proof names the holder key by
-                            // did:jwk (DIIP) or carries it (HAIP).
-                            holderBinding = holderBindingFor(audience),
-                        )
-                    } else {
-                        effectiveKeystore.generateProof(
-                            audience = audience,
-                            nonce = nonce,
-                            freshKey = count > 1,
-                            holderBinding = holderBindingFor(audience),
-                            extraClaims = commitmentClaims,
-                        )
-                    }
+                    val proofJwt = effectiveKeystore.generateProof(
+                        audience = audience,
+                        nonce = nonce,
+                        freshKey = count > 1,
+                        // `audience` is the credential issuer, which is what
+                        // decides whether this proof names the holder key by
+                        // did:jwk (DIIP) or carries it (HAIP).
+                        holderBinding = holderBindingFor(audience),
+                    )
                     val keyId = extractProofKeyId(proofJwt)
                     GeneratedProofData(proofType = "jwt", jwt = proofJwt, attestedKeyIds = keyId?.let { listOf(it) })
                 }
@@ -7277,6 +7399,10 @@ class SirosWallet private constructor(
                     securityProperties = securityProps,
                     credentialIssuer = audience,
                     walletInstanceId = currentWalletInstanceId(),
+                    // Only the claim of the keystore that actually generated these keys: located by identity in the registry, so a
+                    // keystore with no entry (or not registered) sends nothing and never borrows another keystore's claim.
+                    plugin = config.availableKeystores?.entries?.firstOrNull { it.value === effectiveKeystore }?.key
+                        ?.let { config.wscdPluginClaims[it] },
                 )
                 // keypairs[i]'s key is exactly attested_keys[i] in the JWT just
                 // built (jwks preserves list order) - the issuer is expected to
@@ -7396,6 +7522,127 @@ class SirosWallet private constructor(
         return keystore
     }
 
+    /**
+     * Gives the resumed flow back the offer context of the flow it resumes ([activeOffer], [activeVctm]) when it was cleared in the
+     * meantime, from the `credential_offer` saved at the authorization step: its issuer and configuration id are all the key-storage
+     * tier decision ([resolveEffectiveKeystoreForIssuance]) needs, so an unresolvable display lookup still leaves a minimal offer.
+     * Nothing is replaced when an offer is already active.
+     */
+    /** The issuer and first configuration id a saved `credential_offer` names, or null. */
+    private fun offerIdentityOf(offerJson: String): Pair<String, String>? = try {
+        val o = json.parseToJsonElement(offerJson).jsonObject
+        val issuer = o["credential_issuer"]?.jsonPrimitive?.contentOrNull
+        val configId = (o["credential_configuration_ids"] as? kotlinx.serialization.json.JsonArray)?.firstOrNull()?.jsonPrimitive?.contentOrNull
+        if (issuer != null && configId != null) issuer to configId else null
+    } catch (e: Exception) {
+        null
+    }
+
+    private suspend fun restoreOfferContextForResume(offerJson: String?, epoch: Int, session: Int): Boolean {
+        // The resume is ONE attempt: a cancel, a new issuance or a session change since it began ends it, wherever it is.
+        fun stillCurrent() = issuanceStartEpoch.get() == epoch && sessionGeneration == session
+        if (offerJson == null) return stillCurrent()
+        activeOffer?.let { active ->
+            // An offer context that is already there is reused only if it belongs to THIS authorization.
+            return stillCurrent() && offerIdentityOf(offerJson)?.let { (issuer, configId) ->
+                active.credentialIssuerIdentifier == issuer && active.credentialConfigurationId == configId
+            } == true
+        }
+        // Lookups stay LOCAL: nothing is published until the attempt is confirmed to still be the current one.
+        val hook = offerResolveHook
+        val resolved = try {
+            if (hook != null) hook(offerJson)?.let { ResolvedOfferForDisplay(it.first, it.second) } else resolveOfferForDisplay(offerJson)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+        val offer = resolved?.offer ?: if (resolved != null) {
+            // A resolution without an offer is a MALFORMED auxiliary-data advertisement, not a failed display lookup: no fallback.
+            null
+        } else try {
+            val o = json.parseToJsonElement(offerJson).jsonObject
+            val issuer = o["credential_issuer"]?.jsonPrimitive?.contentOrNull
+            val configId = (o["credential_configuration_ids"] as? kotlinx.serialization.json.JsonArray)
+                ?.firstOrNull()?.jsonPrimitive?.contentOrNull
+            if (issuer != null && configId != null) {
+                org.siros.sdk.credentials.CredentialOffer(
+                    credentialConfigurationId = configId,
+                    credentialIssuerIdentifier = issuer,
+                    credentialName = configId,
+                    issuerName = issuer,
+                )
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            null
+        }
+        val vctmDocument = offer?.let {
+            try {
+                vctmFetcher.fetchDocument(
+                    issuerUrl = it.credentialIssuerIdentifier,
+                    scope = it.credentialConfigurationId,
+                    // The offer's type: with it the lookup also resolves by type (registry, well-known, cache), as a fresh issuance does.
+                    vct = it.vct,
+                    registryUrl = registryUrl,
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+        }
+        if (!stillCurrent()) return false
+        // Recorded (and a malformed advertisement refused) BEFORE any context is published or the resume is sent.
+        if (resolved != null && !resolved.record()) {
+            throw WalletException(
+                AUX_DATA_ADVERTISEMENT_MALFORMED_MESSAGE,
+                errorCode = AUX_DATA_ADVERTISEMENT_MALFORMED_CODE,
+            )
+        }
+        if (offer == null) {
+            Timber.w("Resumed flow: the saved credential offer names no issuer and configuration; the key-storage tier cannot be decided from it")
+            return true
+        }
+        activeOffer = offer
+        // BOTH the raw document and its parsed VCTM, as a fresh issuance publishes them: the integrity check of the delivered credential
+        // needs the document, and a parsed VCTM with no document would let an unresolvable pin pass as "no metadata applies".
+        activeVctmDocument = vctmDocument
+        activeVctm = vctmDocument?.vctm
+        return true
+    }
+
+    /**
+     * The key-storage tier required for [credentialType]: the credential catalog's, raised (never lowered) by [issuerTier]; just
+     * [issuerTier] when no [WalletConfig.credentialTierCatalog] is configured. Throws [KeyStorageTierUndeterminedException] when a
+     * catalog is configured and the tier cannot be determined.
+     */
+    private suspend fun catalogBaselineTier(issuer: String, credentialType: String, issuerTier: String?): String? {
+        val catalog = config.credentialTierCatalog ?: return issuerTier
+        val baseline = when (val answer = try {
+            catalog.tierFor(credentialType)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            org.siros.sdk.credentials.CatalogTier.Unavailable
+        }) {
+            is org.siros.sdk.credentials.CatalogTier.Known -> answer.tier
+            org.siros.sdk.credentials.CatalogTier.NotListed ->
+                throw KeyStorageTierUndeterminedException(issuer, credentialType, "the catalog does not list the credential type")
+            org.siros.sdk.credentials.CatalogTier.Unavailable ->
+                throw KeyStorageTierUndeterminedException(issuer, credentialType, "the catalog could not be consulted")
+        }
+        if (WscdPluginCapabilities.rankOf(baseline) < 0) {
+            throw KeyStorageTierUndeterminedException(issuer, credentialType, "the catalog states a tier that is not a known ISO 18045 tier")
+        }
+        if (issuerTier == null) return baseline
+        if (WscdPluginCapabilities.rankOf(issuerTier) < 0) {
+            throw KeyStorageTierUndeterminedException(issuer, credentialType, "the issuer states a tier that is not a known ISO 18045 tier")
+        }
+        return if (WscdPluginCapabilities.rankOf(issuerTier) > WscdPluginCapabilities.rankOf(baseline)) issuerTier else baseline
+    }
+
     private suspend fun resolveEffectiveKeystoreForIssuance(): KeystoreManager {
         val available = config.availableKeystores
         if (available.isNullOrEmpty()) {
@@ -7403,6 +7650,10 @@ class SirosWallet private constructor(
             return requireDefaultKeystoreOnboarded("default", null, null, null)
         }
         val offer = activeOffer ?: run {
+            // With a catalog the tier of an unknown credential cannot be decided: refuse rather than use the default keystore.
+            if (config.credentialTierCatalog != null) {
+                throw KeyStorageTierUndeterminedException(null, null, "no credential offer is active")
+            }
             Timber.i("resolveEffectiveKeystoreForIssuance: no activeOffer, using default keystore")
             return requireDefaultKeystoreOnboarded(available.entries.firstOrNull { it.value === keystore }?.key ?: "default", null, null, null)
         }
@@ -7426,8 +7677,27 @@ class SirosWallet private constructor(
         } else {
             null
         }
-        val requiredTier = activeVctm?.requiredKeyStorage ?: mddlSchema?.requiredKeyStorage
-        val credentialType = activeVctm?.vct ?: mddlSchema?.doctype ?: offer.credentialConfigurationId
+        val issuerTier = activeVctm?.requiredKeyStorage ?: mddlSchema?.requiredKeyStorage
+        // With a catalog the type is the one the OFFER advertised; type metadata that names another type is refused BEFORE the catalog is
+        // asked (an issuer could advertise a high-tier type and return the metadata of a basic one).
+        val catalogged = config.credentialTierCatalog != null
+        if (catalogged) {
+            val metadataVct = activeVctm?.vct
+            val metadataDoctype = mddlSchema?.doctype
+            if ((offer.vct != null && metadataVct != null && metadataVct != offer.vct) ||
+                (offer.doctype != null && metadataDoctype != null && metadataDoctype != offer.doctype)
+            ) {
+                throw KeyStorageTierUndeterminedException(issuer, offer.vct ?: offer.doctype, "the type metadata names another type than the offer advertised")
+            }
+        }
+        val credentialType = if (catalogged) {
+            offer.vct ?: offer.doctype ?: activeVctm?.vct ?: mddlSchema?.doctype ?: offer.credentialConfigurationId
+        } else {
+            activeVctm?.vct ?: mddlSchema?.doctype ?: offer.credentialConfigurationId
+        }
+        // The catalog's tier is the BASELINE; the issuer's own metadata may raise it, never lower it. With a catalog configured an
+        // undeterminable tier refuses (no fallback to a weaker keystore).
+        val requiredTier = catalogBaselineTier(issuer, credentialType, issuerTier)
 
         // Identify which registered plugin (if any) is already the active
         // default, so WscdSelectionPolicy can prefer it over switching
@@ -7577,6 +7847,7 @@ class SirosWallet private constructor(
         peer: org.siros.sdk.transport.wmp.WmpPeer?,
         flowId: String,
         result: kotlinx.serialization.json.JsonObject?,
+        lifetime: Int,
     ) {
         try {
             val refusal = wmpDeliveredMetadataRefusal(flowId, result)
@@ -7600,6 +7871,13 @@ class SirosWallet private constructor(
             }
         } finally {
             blindIssuance.drop(flowId)
+            // Unlike the legacy transport's flowComplete collector, which already does this: drops what this flow's match
+            // step left (including any recorded consent - see ConsentGuard's doc comment) now that it is done. Checked
+            // ATOMICALLY with the clear itself, HERE and not when this callback started: the awaits above
+            // (rejectDeliveredMetadata among them) can let this peer be replaced meanwhile, and a replacement peer may
+            // already have reused flowId (issue #345's finding #3); a bare liveness check followed by a separate clear
+            // call would still leave a window for a racing bump+clear or a racing write to land in between (finding #5).
+            clearFlowMatchStateIfLive(flowId, lifetime)
         }
     }
 
@@ -7613,8 +7891,14 @@ class SirosWallet private constructor(
     private val selectionJobsByFlow = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
 
     /**
-     * Whether [flowId] can no longer complete: it was ended as lost, or it lives on an engine connection that has been replaced
-     * (the engine answers an action for it with nothing: "action for unknown flow").
+     * Whether [flowId] can no longer complete WITHIN [engine]'s own session: it was ended as lost, or it lives on an engine
+     * connection that has been replaced (the engine answers an action for it with nothing: "action for unknown flow").
+     *
+     * Deliberately narrow: this answers "is this flow dead inside the session [engine] belongs to", nothing broader. Whether
+     * [engine]'s WHOLE session has since been replaced wholesale (logout, a cut-off re-login, a fresh `connectEngine`) is a
+     * different question, answered by [ConsentTicket] - conflating the two here caused a real regression (go-wallet-backend
+     * #502 follow-up, issue #345): calling [endFlowLost] for a flow id that a REPLACEMENT session may have already reused
+     * would tear down that NEW session's state, not just abandon the stale caller's own. See [ConsentTicket]'s doc comment.
      */
     private fun isFlowLost(engine: WalletEngineSession, flowId: String): Boolean {
         if (flowId in lostFlowIds || flowId in terminatedFlowIds) return true
@@ -7633,7 +7917,12 @@ class SirosWallet private constructor(
         // A browser authorization in progress is resumable on a new flow and socket (completeAuthorization): not lost, and the context
         // it will resume with must stay.
         if (pendingAuthorizations.containsKey(flowId)) return
+        // The flow whose authorization is being resumed right now: its OWN resumption replaces the socket (completeAuthorization takes
+        // the saved context out of [pendingAuthorizations] and then reconnects), so the replacement must not report it as failed - the
+        // resumed flow continues under a new id and answers for the user.
+        if (resumingFlowIds?.contains(flowId) == true || flowContinuations?.containsValue(flowId) == true) return
         if (!lostFlowIds.add(flowId)) return
+        presentationLinks?.releaseFlow(flowId)
         Timber.w("Flow $flowId lost with its engine connection; ending it locally")
         terminatedFlowIds.add(flowId)
         // Shared issuance state is reset only when this flow owns it: a presentation lost while a new issuance has just claimed the
@@ -7683,12 +7972,14 @@ class SirosWallet private constructor(
     }
 
     private fun endFlowsOnConnectionLoss() {
+        engineSession?.let { presentationLinks?.releaseUpTo(it.connectionGeneration) }
         endSentPendingStartLost(null)
         val active = (_state.value as? WalletState.FlowActive)?.takeIf { !it.isPending }?.flowId
         val ids = LinkedHashSet<String>()
         active?.let { ids.add(it) }
         ids.addAll(selectionJobsByFlow.keys)
         ids.forEach { endFlowLost(it) }
+        engineSession?.let { endResumedStartLost(it.connectionGeneration) }
     }
 
     /** Flows first seen on a connection older than [generation] are gone with it. */
@@ -7702,8 +7993,12 @@ class SirosWallet private constructor(
      * buffered can still be processed against it.
      */
     private fun onEngineSocketReplaced(generation: Int) {
+        // What was started on the connections that are gone can never be answered.
+        presentationLinks?.releaseOlderThan(generation)
         // The engine keeps a flow only as long as its session: the flows of an older socket can never complete.
         endFlowsOfOlderConnections(generation)
+        // After the sweep (which spares a flow whose resumption is under way), so the lost resumption is reported exactly once.
+        endResumedStartLost(generation - 1)
         endSentPendingStartLost(generation)
         blindIssuance.markStaleBefore(generation)
         scope.launch {
@@ -7717,7 +8012,8 @@ class SirosWallet private constructor(
      * closed it) on a scope of its own: a `destroy()` cancels the wallet's scope and must not cancel the close.
      */
     private fun closeWmpPeer(peer: org.siros.sdk.transport.wmp.WmpPeer?) {
-        wmpLifetime++
+        // Both callers (endSessionLocally, destroy) already invalidate every live ConsentTicket before this runs - via
+        // clearPerFlowAuthorizationState's consentEpoch bump, or isDestroyed, respectively.
         if (peer == null) return
         kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
@@ -7735,13 +8031,29 @@ class SirosWallet private constructor(
      * after the session it was built for has ended (a logout or destroy; the peer has a scope of its own and may still deliver
      * a request) is refused BEFORE it allocates anything.
      */
-    private fun wmpProfile(peer: org.siros.sdk.transport.wmp.WmpPeer?): org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile {
+    private fun wmpProfile(
+        peer: org.siros.sdk.transport.wmp.WmpPeer?,
+        // THIS peer's own epoch, from connectViaWmp's clearPerFlowAuthorizationState return value - never a separate
+        // consentEpoch read (see clearPerFlowAuthorizationState's doc comment on why).
+        lifetime: Int,
+        // THIS peer's own connectionScope, from connectViaWmp - see connectionScope's doc comment. Every suspending
+        // callback below runs under THIS scope's own Job (via withContext(peerJob), not a fresh async/launch of its own -
+        // that would dispatch onto peerScope's own dispatcher, needing it to be independently pumped, which a caller
+        // driving this via a plain runBlocking rather than its own event loop may never do; withContext(peerJob) instead
+        // keeps running on whatever dispatcher the peer itself invokes these on, only ADDING peerJob as the job a
+        // cancellation is checked against) so a replacement/teardown cancels it outright - it can never resume PAST a
+        // suspension (credentialStore.getAll() among them) to act on stale state. Structural, not just the
+        // requireLive()/ConsentTicket checks below (go-wallet-backend#502 follow-up, issue #345, round 4).
+        peerScope: CoroutineScope,
+    ): org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile {
         // Bound to the lifetime of THIS peer (ended by logout, destroy, the re-login teardown and the replacement of the peer),
         // not to [sessionGeneration]: a registration or login bumps that right AFTER connecting, which would end every
-        // callback of the connection it has just made.
-        val lifetime = wmpLifetime
+        // callback of the connection it has just made. consentEpoch is the SAME counter ConsentTicket uses for the legacy
+        // transport - one mechanism for both.
+        val peerJob = checkNotNull(peerScope.coroutineContext[kotlinx.coroutines.Job]) { "peerScope must carry a Job" }
+        fun isLive() = !isDestroyed && consentEpoch == lifetime
         fun requireLive() {
-            if (isDestroyed || wmpLifetime != lifetime) throw WalletException("This wallet session has ended")
+            if (!isLive()) throw WalletException("This wallet session has ended")
         }
         return org.siros.sdk.transport.wmp.openid4x.OpenID4xProfile(
             org.siros.sdk.transport.wmp.openid4x.OpenID4xConfig(
@@ -7751,26 +8063,70 @@ class SirosWallet private constructor(
                     val epoch = blindIssuance.epoch
                     requireLive()
                     signDispatchHook?.invoke()
-                    handleWmpSignRequestAt(flowId, params, epoch)
+                    withContext(peerJob) { handleWmpSignRequestAt(flowId, params, epoch) }
                 },
-                onMatchRequest = { flowId, payload -> handleWmpMatchRequest(flowId, payload) },
-                onTrustEvaluation = { flowId, payload -> handleWmpTrustEvaluation(flowId, payload) },
-                onComplete = { flowId, result -> onWmpFlowComplete(peer, flowId, result) },
-                onError = { flowId, code, message -> onWmpFlowError(flowId, code, message) },
-                onCancel = { flowId -> onWmpFlowCancel(flowId) },
+                onMatchRequest = { flowId, payload ->
+                    // Same liveness gate as onSignRequest, and for the same reason: handleWmpMatchRequest now records
+                    // consent (see ConsentGuard's doc comment) - an old peer's buffered/in-flight callback must not be able
+                    // to recreate a consent record for a flow id after teardown has already cleared it.
+                    requireLive()
+                    wmpMatchTicketIssueHook?.invoke()
+                    // Built from `lifetime` (THIS peer's own captured epoch), never a fresh issueConsentTicket read: a
+                    // replacement can land between requireLive() passing and that read, which would hand an old peer's
+                    // callback a ticket for the NEW epoch and let its later write through (issue #345 finding #1). Run
+                    // under peerJob (issue #345 finding #3's WMP shape): requireLive() above only proves liveness at
+                    // this instant, not at the write that follows whatever this suspends on (finding #2) - peerJob being
+                    // cancelled on replacement means this cannot resume past that suspension at all, regardless.
+                    withContext(peerJob) { handleWmpMatchRequest(flowId, payload, ConsentTicket(lifetime, flowId)) }
+                },
+                onTrustEvaluation = { flowId, payload -> withContext(peerJob) { handleWmpTrustEvaluation(flowId, payload) } },
+                // onComplete/onError are fire-and-forget notifications (nothing reads a response from them), unlike
+                // onSignRequest/onMatchRequest/onTrustEvaluation: those three's OWN OpenID4xProfile wrapper already
+                // catches any exception their handler throws and turns it into a declared refusal the engine is
+                // waiting for - a sensible outcome for a request shape. handleComplete/handleError have no such
+                // wrapper, so entering withContext(peerJob) with an ALREADY-cancelled peerJob (a replacement/teardown
+                // that raced ahead of this callback) throws CancellationException straight out to the peer - there is
+                // no refusal to send for a terminal notification, so this is caught and swallowed here instead: the
+                // outcome (nothing happens) is identical to what onWmpFlowComplete/onWmpFlowError's own lifetime check
+                // below would have done anyway, just reached via cancellation rather than by suspending past it
+                // (go-wallet-backend#502 follow-up, issue #345, round 4).
+                onComplete = { flowId, result ->
+                    try {
+                        withContext(peerJob) { onWmpFlowComplete(peer, flowId, result, lifetime) }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        if (!currentCoroutineContext().isActive) throw e
+                    }
+                },
+                onError = { flowId, code, message ->
+                    try {
+                        withContext(peerJob) { onWmpFlowError(flowId, code, message, lifetime) }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        if (!currentCoroutineContext().isActive) throw e
+                    }
+                },
+                onCancel = { flowId -> onWmpFlowCancel(flowId, lifetime) },
             )
         )
     }
 
-    /** The orchestrator cancelled a WMP flow: its response key and opened response are released. */
-    private fun onWmpFlowCancel(flowId: String) {
+    /** The orchestrator cancelled a WMP flow: its response key, opened response and match/consent state are released. */
+    private fun onWmpFlowCancel(flowId: String, lifetime: Int) {
         blindIssuance.drop(flowId)
+        // Only this flow's OWN peer may clear its state: a peer already replaced must not touch a flow id a REPLACEMENT
+        // peer may have already reused (issue #345's finding #3) - checked ATOMICALLY with the clear itself, under the
+        // same lock clearPerFlowAuthorizationState/recordIfCurrent use (issue #345's finding #5: a bare isLive() check
+        // here, then a separate clearFlowMatchState call, leaves a window for a racing bump+clear or a racing write).
+        clearFlowMatchStateIfLive(flowId, lifetime)
     }
 
-    /** A WMP flow failed: the listener is told, and the flow's response key and opened response are released. */
-    private suspend fun onWmpFlowError(flowId: String, code: String?, message: String?) {
+    /** A WMP flow failed: the listener is told, and the flow's response key, opened response and match/consent state are released. */
+    private suspend fun onWmpFlowError(flowId: String, code: String?, message: String?, lifetime: Int) {
         Timber.e("WMP flow $flowId error: $code — $message")
         blindIssuance.drop(flowId)
+        // Only this flow's OWN peer may clear its state - see onWmpFlowCancel's identical comment (issue #345's findings
+        // #3 and #5). Checked HERE, not when this callback started: the awaits above (rejectDeliveredMetadata-equivalent
+        // work elsewhere) can let this peer be replaced meanwhile.
+        clearFlowMatchStateIfLive(flowId, lifetime)
         if (!reportPseudonymCommitmentConflict(flowId, code, message)) {
             eventListener?.onFlowError(flowId, "$code: $message")
         }
@@ -7823,7 +8179,6 @@ class SirosWallet private constructor(
                     count = count,
                     proofTypesSupported = params.proofTypesSupported?.keys,
                     proofTypeHint = params.proofType,
-                    holderCommitments = params.holderCommitments,
                     credentialType = params.credentialType,
                     credentialIssuer = params.credentialIssuer,
                     auxiliaryDataToIssuer = params.auxiliaryDataToIssuer,
@@ -7887,7 +8242,7 @@ class SirosWallet private constructor(
                         wmpPresentationResult(
                             params,
                             signScaPresentation(
-                                params.credentialsToInclude.orEmpty(), params.nonce, params.audience, params.responseMode,
+                                flowId, params.credentialsToInclude.orEmpty(), params.nonce, params.audience, params.responseMode,
                                 wire, verifierName, wmpSessionDeclaredTransactionData,
                             ),
                         )
@@ -7896,6 +8251,9 @@ class SirosWallet private constructor(
                         throw e
                     }
                 }
+                // Defence in depth: see ConsentGuard's doc comment. This fallback path reads no per-ref claims, but the
+                // referenced credential/query must still be one the user actually consented to.
+                ConsentGuard.verify(consentRecordsByFlow[flowId], params.credentialsToInclude.orEmpty())
                 val vpToken = keystore.signPresentation(
                     nonce = params.nonce,
                     audience = params.audience,
@@ -7952,6 +8310,7 @@ class SirosWallet private constructor(
      * the same (combined) request is refused before the user is asked.
      */
     private suspend fun signScaPresentation(
+        flowId: String,
         refs: List<org.siros.sdk.transport.engine.CredentialRef>,
         nonce: String,
         audience: String,
@@ -7960,6 +8319,9 @@ class SirosWallet private constructor(
         verifierName: String?,
         declared: Boolean,
     ): List<Pair<String?, String>> {
+        // Defence in depth: see ConsentGuard's doc comment. Checked for the whole batch before anything is signed; only the
+        // consented claims are ever used below, never a ref's own disclosedClaims.
+        val consentVerified = ConsentGuard.verify(consentRecordsByFlow[flowId], refs)
         val all = credentialStore.getAll()
         val selected = refs.map { ref -> ref to all.find { it.id == ref.credentialId.toLongOrNull() } }
         val verifier = verifierName ?: audience
@@ -7986,7 +8348,7 @@ class SirosWallet private constructor(
                 verifier = verifier,
                 requestSigned = null,
                 disclosures = selected.mapNotNull { (ref, c) ->
-                    c?.let { org.siros.sdk.wallet.transaction.DisclosureInput(ref.credentialQueryId, it.metadata?.name, ref.disclosedClaims) }
+                    c?.let { org.siros.sdk.wallet.transaction.DisclosureInput(ref.credentialQueryId, it.metadata?.name, consentVerified[ref.credentialQueryId to ref.credentialId]?.toList()) }
                 },
             ),
             declared = declared,
@@ -7998,10 +8360,11 @@ class SirosWallet private constructor(
                 "A selected credential is not in the wallet",
             )
             val binding = plan.bindingFor(ref.credentialQueryId)
+            val consentedClaims = consentVerified[ref.credentialQueryId to ref.credentialId]?.toList()
             tokens += ref.credentialQueryId to if (binding != null) {
-                signScaVp(c, ref.disclosedClaims, nonce, audience, binding, plan)
+                signScaVp(c, consentedClaims, nonce, audience, binding, plan)
             } else {
-                keystore.signVpToken(c.raw, ref.disclosedClaims, nonce, audience, c.kid)
+                keystore.signVpToken(c.raw, consentedClaims, nonce, audience, c.kid)
             }
         }
         return tokens
@@ -8061,6 +8424,11 @@ class SirosWallet private constructor(
             if (ended()) return
             fun refuse(step: String, reason: org.siros.sdk.wallet.dcapi.DCAPIRefusalReason): Nothing = throw CircuitZkEngineRefusal(step, reason)
             val params = msg.params
+            // The wallet's own zkp_req policy (the engine does not apply it), the same as the web wallet's: a signed request object whose
+            // signature the engine verified AND an encrypted response. Read from the engine's verified_request, never assumed.
+            ZkpReqPolicy.refusalStep(params.verifiedRequest, params.responseEncryption != null)?.let { step ->
+                refuse(step, org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.NOT_TRUSTED)
+            }
             val audience = params.audience.orEmpty()
             val nonce = params.nonce.orEmpty()
             val responseUri = params.responseUri.orEmpty()
@@ -8109,6 +8477,12 @@ class SirosWallet private constructor(
                 val queryId = ref.credentialQueryId ?: refuse("selection-query", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
                 if (selectionByQuery.put(queryId, id).let { it != null && it != id }) refuse("selection-ambiguous", org.siros.sdk.wallet.dcapi.DCAPIRefusalReason.SELECTED_CREDENTIAL_UNAVAILABLE)
             }
+            // NOT guarded by ConsentGuard here, deliberately: a zkp_req query's credential assignment can legitimately differ
+            // from what consent-time recorded (confirmed by circuitZkRedirect_aCredentialReusedAcrossQueries_keepsEveryQueriesOwnChoice
+            // et al. - the engine may validly reassign which eligible credential answers which query between consent and sign).
+            // This path's own checks (every ref names a query that was actually matched, above) plus its FRESH
+            // presentationConsentHandler ask inside answerCircuitZkQueries - built from the credential about to be used, not a
+            // stale record - are its defence in depth instead. See ConsentGuard's doc comment for the three sites it does guard.
             val picked = selectionByQuery.values.distinct()
             val origin = try {
                 java.net.URI(responseUri).let { u -> "${u.scheme}://${u.authority}" }
@@ -8144,7 +8518,7 @@ class SirosWallet private constructor(
                 verifierContext = VerifierIdContext(request, trust, origin),
                 verifiedClientIdDisplayName = ClientIdScheme.parse(audience).displayName,
                 attestedOrigin = origin,
-                // The engine verified the signed request object and the trust decision is positive for its key.
+                // Established by the policy gate above (verified_request.signed with a verified signature), not assumed.
                 requestSigned = true,
                 support = support,
                 prover = prover,
@@ -8218,6 +8592,7 @@ class SirosWallet private constructor(
             val verifierName = lastTrustResults[msg.flowId]?.entityName
             validateAudience(msg.flowId, audience)
             val presented = signScaPresentation(
+                flowId = msg.flowId,
                 refs = params.credentialsToInclude.orEmpty(),
                 nonce = params.nonce ?: "",
                 audience = audience,
@@ -8232,6 +8607,12 @@ class SirosWallet private constructor(
             } else {
                 engine.sendSignResponse(msg.flowId, vpToken = presented.joinToString("\n") { it.second }, messageId = msg.messageId)
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Same reasoning as handleCircuitZkEngineSignPresentation's own CancellationException catch: a
+            // replacement/teardown cancelling THIS connection's connectionScope mid-signing is not a sign failure,
+            // and must not run reportSignFailure's unconditional cleanup against a possibly-replaced session
+            // (go-wallet-backend#502 follow-up, issue #345, round 4).
+            throw e
         } catch (e: TransactionDataError) {
             // Only the reason code is logged or shown: the message may hold URLs, credential ids or payload text.
             Timber.w("Refused transaction_data (${e.reason.code}) for flow ${msg.flowId}")
@@ -8266,6 +8647,9 @@ class SirosWallet private constructor(
     private suspend fun handleWmpMatchRequest(
         flowId: String,
         payload: kotlinx.serialization.json.JsonObject?,
+        // Defaulted (not passed by production's onMatchRequest, which issues its own BEFORE calling this - see
+        // ConsentTicket's doc comment) only so direct-invocation tests of this function alone need not know about it.
+        ticket: ConsentTicket = issueConsentTicket(flowId),
     ): org.siros.sdk.transport.wmp.openid4x.MatchResult {
         val allCreds = credentialStore.getAll()
         // `as? JsonObject`, not `.jsonObject`: a non-DCQL request shape has
@@ -8278,6 +8662,12 @@ class SirosWallet private constructor(
             // candidate, which is what this handler always answered. The bug
             // was answering that for a real query too.
             Timber.w("WMP match request for flow $flowId carries no dcql_query; offering every stored credential")
+            // This IS WMP's consent for this flow: the profile has no separate interactive selection step (see
+            // ConsentGuard's doc comment on why this matters) - whatever is offered here is what a LATER sign_presentation
+            // may validly ask to disclose. No query at all: every credential, unrestricted (null, not an empty set).
+            // recordIfCurrent re-validates the ticket HERE, not when this function was entered: credentialStore.getAll()
+            // above can suspend long enough for this peer to be replaced meanwhile (issue #345's finding #2).
+            ticket.recordIfCurrent(ConsentRecord(allCreds.map { cred -> ConsentedSelection(null, cred.id.toString(), null) }))
             return org.siros.sdk.transport.wmp.openid4x.MatchResult(
                 matches = allCreds.map { cred ->
                     org.siros.sdk.transport.wmp.openid4x.CredentialMatch(
@@ -8298,25 +8688,32 @@ class SirosWallet private constructor(
         val matchResultByCredentialId = buildMap {
             for (r in matchResults) for (c in r.candidates) putIfAbsent(c.id, r)
         }
+        // Each requestedClaims entry is a full DCQL claim path; only its last segment is the disclosable element id (see
+        // the legacy consent payload's identical mapNotNull). Empty/absent means the whole credential: null, not an empty
+        // set (see ConsentedSelection's doc comment - mdoc specifically needs that distinction).
+        val claimsByCredentialId = matchResultByCredentialId.mapValues { (_, result) ->
+            result.requestedClaims.mapNotNull { it.lastOrNull() }.distinct().toSet().ifEmpty { null }
+        }
         val matches = matchResultByCredentialId.map { (credentialId, result) ->
             org.siros.sdk.transport.wmp.openid4x.CredentialMatch(
                 credentialId = credentialId.toString(),
                 credentialQueryId = result.queryId,
-                // Each requestedClaims entry is a full DCQL claim path; only
-                // its last segment is the disclosable element id (see the
-                // legacy consent payload's identical mapNotNull).
-                disclosedClaims = result.requestedClaims.mapNotNull { it.lastOrNull() }.distinct()
-                    .takeIf { it.isNotEmpty() },
+                disclosedClaims = claimsByCredentialId[credentialId]?.toList(),
             )
         }
         if (matches.isNotEmpty()) {
+            // This IS WMP's consent for this flow - see the no-dcql_query branch's identical comment above (including why
+            // recordIfCurrent re-validates HERE rather than trusting requireLive's earlier, pre-suspension check).
+            ticket.recordIfCurrent(ConsentRecord(matchResultByCredentialId.map { (credentialId, result) ->
+                ConsentedSelection(result.queryId, credentialId.toString(), claimsByCredentialId[credentialId])
+            }))
             return org.siros.sdk.transport.wmp.openid4x.MatchResult(matches = matches)
         }
         val reason = noMatchReason(dcqlQuery, allCreds.size)
         Timber.i("WMP match request for flow $flowId matched nothing: $reason")
         return org.siros.sdk.transport.wmp.openid4x.MatchResult(
             matches = emptyList(),
-            noMatchReason = reason,
+            noMatchReason = org.siros.sdk.transport.engine.NoMatchCodes.NO_MATCHING_CREDENTIAL,
         )
     }
 
@@ -8470,8 +8867,21 @@ class SirosWallet private constructor(
         // connections for the same user that kept evicting each other.
         engineStateJob?.cancel()
         engineSession?.disconnect()
+        // Cancels EVERY collector/coroutine of the REPLACED connection - including one currently suspended mid-operation
+        // (recordPresentation, credentialStore.getAll()) - before anything else runs: see connectionScope's doc comment.
+        connectionScope?.cancel()
         // Flows of the replaced connection are abandoned: so are their response keys.
         blindIssuance.clear()
+        // A flow id of the replaced connection reused by the new one must not inherit its consent - see the doc comment.
+        // THIS connection's own epoch, taken from clearPerFlowAuthorizationState's OWN return value (never a separate
+        // read afterward - see its doc comment on why) - every ConsentTicket issued by a collector installed below for
+        // THIS engine is built from this captured value.
+        val engineEpoch = clearPerFlowAuthorizationState()
+        // THIS connection's own scope - a fresh child of the wallet's scope, cancelled above (for the PRIOR connection)
+        // and again whenever THIS one is itself replaced or torn down. Every collector/coroutine installed below for
+        // THIS engine launches into this scope, never the wallet-wide scope directly - see connectionScope's doc comment.
+        val thisConnectionScope = CoroutineScope(scope.coroutineContext + SupervisorJob())
+        connectionScope = thisConnectionScope
 
         // Resolve engine URL: explicit config > discovery > same as backend
         val engineBaseUrl = config.engineUrl
@@ -8481,7 +8891,7 @@ class SirosWallet private constructor(
         engineSession = engine
         credentialNotifier = engine
         engineStateJob?.cancel()
-        engineStateJob = scope.launch {
+        engineStateJob = thisConnectionScope.launch {
             // A new socket on the SAME session (an automatic or forced reconnect) abandons the flows of the old one. It is
             // observed on its own flow, not on [state]: an automatic reconnect publishes RECONNECTING BEFORE its backoff and
             // increments the generation only when the new socket opens, with no state change of its own.
@@ -8529,7 +8939,7 @@ class SirosWallet private constructor(
         engine.awaitConnected()
 
         // Observe sign requests → auto-sign with keystore
-        scope.launch {
+        thisConnectionScope.launch {
             engine.signRequests().collect { msg ->
                 // Read BEFORE the liveness guard below and handed to the key claim, which re-checks it (see BlindIssuance.epoch).
                 val blindEpoch = blindIssuance.epoch
@@ -8568,14 +8978,14 @@ class SirosWallet private constructor(
                     zkSignJobsByFlow.entries.filter { it.value.connection != msg.connectionGeneration }.forEach { (flow, old) ->
                         if (zkSignJobsByFlow.remove(flow, old)) old.job.cancel()
                     }
-                    val job = scope.launch { handleCircuitZkEngineSignPresentation(engine, msg) }
+                    val job = thisConnectionScope.launch { handleCircuitZkEngineSignPresentation(engine, msg) }
                     val entry = ZkSignJob(job, msg.messageId, msg.connectionGeneration)
                     zkSignJobsByFlow[msg.flowId] = entry
                     job.invokeOnCompletion { zkSignJobsByFlow.remove(msg.flowId, entry) }
                     return@collect
                 }
                 if (msg.action == "sign_presentation" && !msg.params?.transactionData.isNullOrEmpty()) {
-                    scope.launch { handleScaEngineSignPresentation(engine, msg) }
+                    thisConnectionScope.launch { handleScaEngineSignPresentation(engine, msg) }
                     return@collect
                 }
                 try {
@@ -8613,7 +9023,6 @@ class SirosWallet private constructor(
                                 count = count,
                                 proofTypesSupported = params?.proofTypesSupported?.keys,
                                 proofTypeHint = params?.proofType,
-                                holderCommitments = params?.holderCommitments,
                                 credentialType = params?.credentialType,
                                 credentialIssuer = params?.credentialIssuer,
                                 auxiliaryDataToIssuer = params?.auxiliaryDataToIssuer,
@@ -8627,7 +9036,7 @@ class SirosWallet private constructor(
                 // the first entry's list (as this used to) silently dropped every
                 // index past 0 for a "jwt" batch of more than one credential.
                 activeAttestedKeyIds = generated.flatMap { it.attestedKeyIds.orEmpty() }.ifEmpty { null }
-                            if (!params?.holderCommitments.isNullOrEmpty() || !params?.auxiliaryDataToIssuer.isNullOrEmpty()) {
+                            if (!params?.auxiliaryDataToIssuer.isNullOrEmpty()) {
                                 (params?.credentialIssuer?.takeIf { it.isNotEmpty() } ?: activeOffer?.credentialIssuerIdentifier)?.let { pscIssuerByFlow[msg.flowId] = it }
                             }
                             val proofs = generated.map {
@@ -8670,6 +9079,11 @@ class SirosWallet private constructor(
                                     "sign_presentation: flow=${msg.flowId} storedMatchResults=" +
                                         "${storedMatchResults?.map { "${it.queryId}:${it.format}" }}"
                                 )
+                                // Defence in depth: credentials_to_include round-trips from the consent this wallet itself sent
+                                // (handleCredentialSelection) - the engine must not be trusted to echo it back unchanged. Checked
+                                // for the WHOLE batch before anything is signed; only the consented claims are ever used below,
+                                // never ref.disclosedClaims itself (a null/empty value there is not a safe "nothing more").
+                                val consentVerified = ConsentGuard.verify(consentRecordsByFlow[msg.flowId], credsToInclude)
                                 val vpParts = credsToInclude.mapNotNull { ref ->
                                   val presentedToken: String? = run {
                                     // ref.credentialId arrives as a string over the WMP wire
@@ -8683,10 +9097,15 @@ class SirosWallet private constructor(
                                     val matchResult = storedMatchResults?.firstOrNull { r ->
                                         r.queryId == ref.credentialQueryId || r.candidates.any { it.id == cred.id }
                                     }
+                                    // null = whole credential consented, no claim-level restriction - must stay null
+                                    // downstream (never defaulted to an empty list: mdoc's signer reads an empty,
+                                    // non-null disclosed-claims list as "disclose nothing", the opposite of null's
+                                    // "disclose everything" - see ConsentedSelection's doc comment).
+                                    val consentedClaims = consentVerified[ref.credentialQueryId to ref.credentialId]?.toList()
                                     Timber.d(
                                         "sign_presentation: credentialQueryId=${ref.credentialQueryId} " +
                                             "credId=${cred.id} matchResult.format=${matchResult?.format} " +
-                                            "zkSystemTypes=${matchResult?.zkSystemTypes} disclosedClaims=${ref.disclosedClaims}"
+                                            "zkSystemTypes=${matchResult?.zkSystemTypes} disclosedClaims.size=${consentedClaims?.size}"
                                     )
 
                                     if (matchResult?.format?.equals("mso_mdoc_zk", ignoreCase = true) == true) {
@@ -8702,7 +9121,7 @@ class SirosWallet private constructor(
                                         val kid = cred.kid ?: keystore.listKeys().firstOrNull()?.keyId
                                         // Only bind a pseudonym when actually disclosed for this
                                         // query - see handleDCAPIRequest's identical comment.
-                                        val wantsPseudonym = ref.disclosedClaims?.contains(LongfellowZkProofSystem.PSEUDONYM_CLAIM) == true
+                                        val wantsPseudonym = consentedClaims?.contains(LongfellowZkProofSystem.PSEUDONYM_CLAIM) == true
                                         val verifierIdentity = if (wantsPseudonym) {
                                             // audience has already been checked against the
                                             // trust-evaluated verifier identifier by
@@ -8746,7 +9165,7 @@ class SirosWallet private constructor(
                                                     credentialBytes = credBytes,
                                                     requestedSystems = matchResult.zkSystemTypes.orEmpty(),
                                                     sessionTranscript = sessionTranscript,
-                                                    requestedClaims = ref.disclosedClaims ?: emptyList(),
+                                                    requestedClaims = consentedClaims.orEmpty(),
                                                     verifierIdentity = verifierIdentity,
                                                 ),
                                                 signer = { algorithm, data ->
@@ -8771,7 +9190,7 @@ class SirosWallet private constructor(
                                         val credBytes = android.util.Base64.decode(cred.raw, android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING or android.util.Base64.NO_WRAP)
                                         val deviceResponse = keystore.signMdocPresentation(
                                             credentialBytes = credBytes,
-                                            disclosedClaims = ref.disclosedClaims,
+                                            disclosedClaims = consentedClaims,
                                             nonce = nonce,
                                             audience = audience,
                                             responseUri = params?.responseUri ?: "",
@@ -8783,7 +9202,7 @@ class SirosWallet private constructor(
                                         // SD-JWT VP token with KB-JWT
                                         keystore.signVpToken(
                                             credential = cred.raw,
-                                            disclosedClaims = ref.disclosedClaims,
+                                            disclosedClaims = consentedClaims,
                                             nonce = nonce,
                                             audience = audience,
                                             kid = cred.kid,
@@ -8851,6 +9270,14 @@ class SirosWallet private constructor(
                             engine.sendSignResponse(flowId = msg.flowId, messageId = msg.messageId)
                         }
                     }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // A replacement/teardown cancelling THIS connection's own connectionScope mid-signing is not a
+                    // sign failure - CancellationException is an Exception subclass, so it would otherwise be caught
+                    // by the generic catch below and run reportSignFailure's unconditional cleanup (clearFlowMatchState,
+                    // resetIssuanceGuards, a wallet-wide WalletState.Ready reset), potentially stomping a REPLACEMENT
+                    // session that has since claimed this same flow id (go-wallet-backend#502 follow-up, issue #345,
+                    // round 4). Caught first and rethrown so normal coroutine cancellation semantics apply instead.
+                    throw e
                 } catch (e: TransactionDataError) {
                     // The legacy protocol has no sign-refusal message: the
                     // engine learns of this when its sign request times out.
@@ -8867,7 +9294,7 @@ class SirosWallet private constructor(
         }
 
         // Observe match requests → DCQL-filtered credential matching
-        scope.launch {
+        thisConnectionScope.launch {
             engine.matchRequests().collect { msg ->
                 // Stamped on receipt: a request that came in on a replaced connection, or for a flow already lost, is never asked
                 // about and never answered (the engine session that wanted the answer is gone).
@@ -8877,6 +9304,14 @@ class SirosWallet private constructor(
                 }
                 noteFlowId(msg.flowId)
                 flowConnectionGeneration.putIfAbsent(msg.flowId, msg.connectionGeneration)
+                // Built from engineEpoch (THIS engine's own installation-time epoch captured in connectEngine), not a
+                // fresh issueConsentTicket read - a fresh read taken here, after a replacement has already bumped
+                // consentEpoch, would wrongly adopt the NEW epoch as if it belonged to this (old) engine's message
+                // (issue #345, round 4's analog of finding #1). Issued HERE, before this block's first suspension point
+                // (credentialStore.getAll() next) - see ConsentTicket's doc comment on why a single check right after
+                // that first await is not enough.
+                engineMatchTicketIssueHook?.invoke()
+                val consentTicket = ConsentTicket(engineEpoch, msg.flowId)
                 try {
                     Timber.d("Match request for flow ${msg.flowId}")
                     val allCreds = credentialStore.getAll()
@@ -8915,8 +9350,8 @@ class SirosWallet private constructor(
                     val zkPlan = planCircuitZkMatches(msg.flowId, dcqlOutput, clientMetadata, lastTrustResults[msg.flowId]?.identifier)
                     if (zkPlan?.refusal != null) {
                         Timber.i("Match request for flow ${msg.flowId}: a zkp_req request that cannot be answered; not answered (code=${zkPlan.code})")
-                        engine.sendMatchResponse(msg.flowId, emptyList(), zkPlan.refusal)
-                        engine.sendCredentialsMatched(msg.flowId, emptyList(), zkPlan.refusal)
+                        engine.sendMatchResponse(msg.flowId, emptyList(), org.siros.sdk.transport.engine.NoMatchCodes.REQUEST_NOT_ANSWERABLE)
+                        engine.sendCredentialsMatched(msg.flowId, emptyList(), org.siros.sdk.transport.engine.NoMatchCodes.REQUEST_NOT_ANSWERABLE)
                         return@collect
                     }
                     val matchResults = zkPlan?.matchResults ?: dcqlOutput.queryResults
@@ -8943,9 +9378,10 @@ class SirosWallet private constructor(
                         // on consent/decline that will never come, so say so
                         // in the action it acts on too (#336).
                         val reason = noMatchReason(dcqlQuery, allCreds.size)
+                        // The description stays in the local log; only a code goes to the engine.
                         Timber.i("Match request for flow ${msg.flowId} matched nothing: $reason")
-                        engine.sendMatchResponse(msg.flowId, emptyList(), reason)
-                        engine.sendCredentialsMatched(msg.flowId, emptyList(), reason)
+                        engine.sendMatchResponse(msg.flowId, emptyList(), org.siros.sdk.transport.engine.NoMatchCodes.NO_MATCHING_CREDENTIAL)
+                        engine.sendCredentialsMatched(msg.flowId, emptyList(), org.siros.sdk.transport.engine.NoMatchCodes.NO_MATCHING_CREDENTIAL)
                         return@collect
                     }
 
@@ -8960,7 +9396,13 @@ class SirosWallet private constructor(
                         val trustResultForFlow = lastTrustResults[msg.flowId]
                         // The wait is registered like the progress route's, so a lost connection stops THIS wait (and only it: the
                         // shared match collector keeps serving new flows) and the answer is not sent to a session that does not know it.
-                        val selection = scope.async {
+                        // Launched into THIS connection's own connectionScope (not the wallet-wide scope): a `scope.async` here
+                        // would not be a structural child of the collector coroutine that cancelling connectionScope cancels, so
+                        // cancelling the COLLECTOR (via connectionScope's teardown) would make its own `.await()` below throw but
+                        // leave this listener invocation itself still running, untracked (the finally block below removes its
+                        // registry entry without ever cancelling it) - an orphaned, never-dismissed consent prompt
+                        // (go-wallet-backend#502 follow-up, issue #345, round 4).
+                        val selection = thisConnectionScope.async {
                             listener.onCredentialSelectionRequired(
                                 PresentationRequest(
                                     verifierName = trustResultForFlow?.entityName,
@@ -8986,6 +9428,13 @@ class SirosWallet private constructor(
                         eligibleInstances(candidates, isZk).map { it.id }
                     }
 
+                    // Order matters: a stale ticket means THIS WHOLE SESSION has moved on, so nothing below - including
+                    // isFlowLost/endFlowLost, which assume msg.flowId still belongs to a live, current session - is safe to
+                    // act on (a REPLACEMENT session may already have reused msg.flowId; issue #345's finding #4 was exactly
+                    // this: endFlowLost tearing down a NEW flow's state because it only ever checked the flow id). A stale
+                    // ticket bails out touching nothing; only once it is confirmed current does the narrower, per-flow
+                    // isFlowLost question even make sense to ask.
+                    if (!consentTicket.isCurrent()) return@collect
                     if (isFlowLost(engine, msg.flowId)) {
                         endFlowLost(msg.flowId)
                         return@collect
@@ -8999,6 +9448,52 @@ class SirosWallet private constructor(
                         throw WalletException("Selected credential has no eligible copies remaining - renew it to get more")
                     }
 
+                    // Which query the selection actually answers, validated and resolved BEFORE anything is recorded as
+                    // presented or cached for signing - not after, as this used to (a Copilot review on #353's follow-up
+                    // caught both consequences): a selection a credential_sets alternative refuses (an unsatisfiable
+                    // combination, a credential shared by two alternatives) must never first be written to presentation
+                    // history (CONSUME_ALL/CONSUME_NON_ZKP would then wrongly count an unused copy as spent, with no
+                    // presentation actually sent), and what gets cached into pendingMatchResultsByFlow for the LATER
+                    // circuit_zk sign step must be the resolved, ACTIVE query subset - not every entry of the full,
+                    // unfiltered matchResults - or that sign step's own "every query needs a pick" check refuses a
+                    // perfectly valid choice over an alternative's deliberately-unanswered sibling query.
+                    //
+                    // zkp_req: one entry per query (a credential may answer several), never the first-match-only view.
+                    val zkSelection = if (zkPlan != null) {
+                        circuitZkSelectionByQuery(matchResults, selectedIds, dcqlOutput.credentialSets, dcqlOutput.satisfiableOptions) ?: run {
+                            engine.sendMatchResponse(msg.flowId, emptyList(), org.siros.sdk.transport.engine.NoMatchCodes.NO_SELECTION)
+                            engine.sendCredentialsMatched(msg.flowId, emptyList(), org.siros.sdk.transport.engine.NoMatchCodes.NO_SELECTION)
+                            return@collect
+                        }
+                    } else null
+                    // Which query each SELECTED credential actually answers (non-ZK path only - zkSelection above already
+                    // carries this for the ZK one) - never matchResultByCredentialId's first-match-in-list-order view,
+                    // which can attribute a different alternative's claims than the one the consent screen
+                    // (PresentationConsentScreen.kt) actually showed for it; see resolveActiveQueryPerCredential's doc
+                    // comment. Validated as a whole first: the answered queries must be exactly one option per
+                    // credential_sets entry, defence in depth against a selection that, however it was built, is not a
+                    // valid single choice (also catches a credential that happens to satisfy two different alternatives
+                    // at once, which resolveActiveQueryPerCredential alone cannot tell apart).
+                    val activeQueries = matchResults.filter { r -> r.candidates.any { it.id in selectedIds.toSet() } }
+                    val allQueryIds = matchResults.filter { it.candidates.isNotEmpty() }.map { it.queryId }.toSet()
+                    val resolvedMatchResultById = if (zkSelection == null) {
+                        if (!credentialSetChoiceIsValid(dcqlOutput.credentialSets, dcqlOutput.satisfiableOptions, allQueryIds, activeQueries.map { it.queryId }.toSet())) {
+                            engine.sendMatchResponse(msg.flowId, emptyList(), org.siros.sdk.transport.engine.NoMatchCodes.NO_SELECTION)
+                            engine.sendCredentialsMatched(msg.flowId, emptyList(), org.siros.sdk.transport.engine.NoMatchCodes.NO_SELECTION)
+                            return@collect
+                        }
+                        resolveActiveQueryPerCredential(activeQueries, selectedIds) ?: run {
+                            engine.sendMatchResponse(msg.flowId, emptyList(), org.siros.sdk.transport.engine.NoMatchCodes.NO_SELECTION)
+                            engine.sendCredentialsMatched(msg.flowId, emptyList(), org.siros.sdk.transport.engine.NoMatchCodes.NO_SELECTION)
+                            return@collect
+                        }
+                    } else {
+                        emptyMap()
+                    }
+                    // The resolved, ACTIVE query set, whichever branch answered: exactly what will be cached below and -
+                    // for the non-ZK branch - what recordPresentation's own requestedClaims is built from.
+                    val answeredQueries = zkSelection?.map { it.first }?.distinct() ?: activeQueries
+
                     // Track this presentation. A zkp_req presentation is recorded once, when it is answered, from what was really
                     // used: recording the pick here would also count it as consumed before anything was proved.
                     if (zkPlan == null) recordPresentation(PresentationRecord(
@@ -9008,26 +9503,38 @@ class SirosWallet private constructor(
                         credentialNames = selectedIds.mapNotNull { id ->
                             allCreds.find { it.id == id }?.metadata?.name
                         },
-                        requestedClaims = matchResults.flatMap { result ->
+                        requestedClaims = answeredQueries.flatMap { result ->
                             result.requestedClaims.mapNotNull { path -> path.lastOrNull() }
                         }.distinct(),
                         zkProof = selectedIds.any { it in zkRequestedIds },
                         timestamp = System.currentTimeMillis(),
                     ))
+                    // Re-checked AGAIN after recordPresentation's own suspension - issue #345's finding #1 was exactly a
+                    // check taken before this await, not after it, with the write that follows trusting a now-stale result.
+                    if (!consentTicket.isCurrent()) return@collect
+                    // isFlowLost is ALSO re-checked here, not just the ticket: a mere socket reconnect on the SAME engine
+                    // (connectionGeneration bumped, no clearPerFlowAuthorizationState call, so consentEpoch is unchanged)
+                    // can end and clear THIS flow's state while recordPresentation was suspended - the selection job was
+                    // already removed from selectionJobsByFlow above (its normal cancellation route), so this collector
+                    // is the only thing left that would notice (issue #345 finding #4).
+                    if (isFlowLost(engine, msg.flowId)) {
+                        endFlowLost(msg.flowId)
+                        return@collect
+                    }
 
-                    pendingMatchResultsByFlow[msg.flowId] = matchResults
-                    prewarmZkMatches(matchResults)
+                    // The resolved, ACTIVE subset only - not the full matchResults - so the circuit_zk sign step's own
+                    // "every query needs a pick" check (answerCircuitZkQueries) never requires a pick for a
+                    // deliberately-unchosen alternative sibling of the one actually answered.
+                    pendingMatchResultsByFlow[msg.flowId] = answeredQueries
+                    prewarmZkMatches(answeredQueries)
 
-                    // zkp_req: one entry per query (a credential may answer several), never the first-match-only view.
-                    val zkSelection = if (zkPlan != null) {
-                        circuitZkSelectionByQuery(matchResults, selectedIds) ?: run {
-                            val reason = "No credential was selected for every query"
-                            engine.sendMatchResponse(msg.flowId, emptyList(), reason)
-                            engine.sendCredentialsMatched(msg.flowId, emptyList(), reason)
-                            return@collect
-                        }
-                    } else null
                     if (zkSelection != null) {
+                        // Recorded in parallel, same as handleCredentialSelection: this IS the real interactive consent for
+                        // this (legacy match_request/match_response) transport - the engine's LATER sign_presentation must be
+                        // checked against this, not trusted as-is. See ConsentGuard's doc comment.
+                        consentTicket.recordIfCurrent(ConsentRecord(zkSelection.mapNotNull { (r, id) ->
+                            allCreds.find { it.id == id }?.let { ConsentedSelection(r.queryId, id.toString(), emptySet()) }
+                        }))
                         engine.sendMatchResponse(msg.flowId, zkSelection.mapNotNull { (r, id) ->
                             allCreds.find { it.id == id }?.let { cred ->
                                 CredentialMatch(credentialQueryId = r.queryId, credentialId = cred.id.toString(), format = cred.format, vct = CredentialUtils.vctOf(cred), availableClaims = null)
@@ -9035,9 +9542,22 @@ class SirosWallet private constructor(
                         })
                         return@collect
                     }
+                    // Recorded in parallel, same as handleCredentialSelection: this IS the real interactive consent for this
+                    // (legacy match_request/match_response) transport - see ConsentGuard's doc comment. Empty/absent
+                    // requestedClaims means the whole credential was consented (no DCQL claims array) - recorded as null, not
+                    // an empty set (see ConsentedSelection's doc comment for why mdoc specifically needs that distinction).
+                    consentTicket.recordIfCurrent(ConsentRecord(selectedIds.mapNotNull { id ->
+                        allCreds.find { it.id == id }?.let { cred ->
+                            ConsentedSelection(
+                                resolvedMatchResultById[id]?.queryId,
+                                cred.id.toString(),
+                                resolvedMatchResultById[id]?.requestedClaims?.mapNotNull { it.lastOrNull() }?.distinct()?.toSet()?.ifEmpty { null },
+                            )
+                        }
+                    }))
                     val matches = selectedIds.mapNotNull { id ->
                         allCreds.find { it.id == id }?.let { cred ->
-                            val queryId = matchResultByCredentialId[id]?.queryId
+                            val queryId = resolvedMatchResultById[id]?.queryId
                             CredentialMatch(
                                 credentialQueryId = queryId,
                                 // The WMP engine's own wire protocol keeps
@@ -9048,7 +9568,7 @@ class SirosWallet private constructor(
                                 format = cred.format,
                                 vct = CredentialUtils.vctOf(cred),
                                 // A zkp_req query discloses no claims (the engine's consent check would refuse any): offer none.
-                                availableClaims = if (matchResultByCredentialId[id]?.format?.let { CredentialUtils.isCircuitZkFormat(it) } == true) null else extractAvailableClaims(cred),
+                                availableClaims = if (resolvedMatchResultById[id]?.format?.let { CredentialUtils.isCircuitZkFormat(it) } == true) null else extractAvailableClaims(cred),
                             )
                         }
                     }
@@ -9062,7 +9582,7 @@ class SirosWallet private constructor(
         }
 
         // Observe flow progress
-        scope.launch {
+        thisConnectionScope.launch {
             engine.flowProgress().collect { msg ->
                 if (isAbandonedFlowEvent(engine, msg.flowId, msg.connectionGeneration)) return@collect
                 // Progress buffered before a loss reaches this collector after the sweeps ran: a lost flow, or one first seen on an
@@ -9091,7 +9611,7 @@ class SirosWallet private constructor(
                 if ((msg.step == "evaluating_trust" || msg.step == "evaluating_verifier_trust") &&
                     msg.payload?.jsonObject?.get("trust_evaluation_required")?.jsonPrimitive?.boolean == true
                 ) {
-                    handleTrustEvaluation(engine, msg.flowId, msg.payload!!.jsonObject)
+                    handleTrustEvaluation(engine, msg.flowId, msg.payload!!.jsonObject, thisConnectionScope)
                 }
 
                 // A trust decision the ENGINE made itself (a verifier PDP is configured, or a cached verdict): there is no handshake, so
@@ -9107,7 +9627,7 @@ class SirosWallet private constructor(
 
                 // Handle credential selection — verifier wants credentials, user must consent
                 if (msg.step == "credential_selection") {
-                    handleCredentialSelection(engine, msg.flowId, msg.payload?.jsonObject)
+                    handleCredentialSelection(engine, msg.flowId, msg.payload?.jsonObject, engineEpoch, thisConnectionScope)
                 }
 
                 // Handle authorization required — user must approve in browser
@@ -9155,6 +9675,7 @@ class SirosWallet private constructor(
                                     redirectUri = redirectUri,
                                     codeVerifier = codeVerifier,
                                     state = effectiveState,
+                                    issuanceEpoch = issuanceStartEpoch.get(),
                                 )
                             }
                             eventListener?.onAuthorizationRequired(
@@ -9197,7 +9718,7 @@ class SirosWallet private constructor(
         }
 
         // Observe flow completion → sync new credentials
-        scope.launch {
+        thisConnectionScope.launch {
             engine.flowComplete().collect { completion ->
                 if (isAbandonedFlowEvent(engine, completion.flowId, completion.connectionGeneration)) return@collect
                 // A flow that already ended (completed, refused, failed) completes once: the transport does not de-duplicate, and a
@@ -9221,10 +9742,18 @@ class SirosWallet private constructor(
                 // An encrypted response is read only from what the wallet decrypted; a plain one may relay display-only members.
                 val openedResponse: DeliveredResponseMetadata = filled.opened ?: PlainDeliveredResponse(msg.credentialMetadata)
                 noteFlowId(msg.flowId)
+                presentationLinks?.completeFlow(msg.flowId)
                 Timber.i("Flow ${msg.flowId} complete" + (flowContinuations?.get(msg.flowId)?.let { " (the resumption of flow $it)" } ?: ""))
                 terminatedFlowIds.add(msg.flowId)
                 stopZkSigning(msg.flowId, refuse = false)
-                clearFlowMatchState(msg.flowId)
+                // Conditional on THIS engine still being current (engineEpoch), not unconditional: this collector is
+                // bound to connectionScope and so is normally cancelled outright on replacement, but a message already
+                // dequeued (and not yet at a suspension point) when that cancellation lands could still reach here -
+                // this is the belt-and-suspenders backstop for that narrow window (go-wallet-backend#502 follow-up,
+                // issue #345, round 4 finding #2: the OLD engine's surviving collector must not delete a REPLACEMENT
+                // session's consent for a reused flow id).
+                legacyCollectorClearHook?.invoke()
+                clearFlowMatchStateIfLive(msg.flowId, engineEpoch)
 
                 // The issuer's response-level credential_metadata (a secret_seed, say) is checked once for the
                 // whole response, and against EVERY credential's ssc, before anything is stored or replaced: one
@@ -9236,11 +9765,10 @@ class SirosWallet private constructor(
                 val deliveredVerdict = DeliveredCredentialMetadata.check(
                     response = openedResponse,
                     credentials = msg.credentials.orEmpty().map { DeliveredCredential(it.format, it.credential, it.notificationId) },
-                    secretNamespace = config.secretSeedNamespace,
                     canStoreSecret = canStoreDelivered,
                     advertised = isSecretSeedAdvertised(msg.credentialIssuer, msg.selectedCredentialConfigurationId),
                     shape = auxiliarySelection(msg.credentialIssuer, msg.selectedCredentialConfigurationId)?.shape
-                        ?: org.siros.sdk.credentials.LegacyOrgSirosShape,
+                        ?: org.siros.sdk.credentials.AuxiliaryDataV01,
                     advertisement = auxiliarySelection(msg.credentialIssuer, msg.selectedCredentialConfigurationId)?.advertisement,
                     holderCommitments = sentCommitments,
                 )
@@ -9681,7 +10209,7 @@ class SirosWallet private constructor(
         }
 
         // Observe flow errors
-        scope.launch {
+        thisConnectionScope.launch {
             engine.flowErrors().collect { msg ->
                 if (isAbandonedFlowEvent(engine, msg.flowId, msg.connectionGeneration)) return@collect
                 Timber.e("Flow ${msg.flowId} error: ${msg.error.code} — ${msg.error.message}")
@@ -9702,10 +10230,18 @@ class SirosWallet private constructor(
                     return@collect
                 }
                 terminatedFlowIds.add(fid)
+                // Only an error that is acted on (not a late or ignored one) ends the presentation of THAT flow: its link is released.
+                if (msg.flowId != null) {
+                    engineSession?.let { presentationLinks?.associate(fid, it.connectionGeneration) }
+                    presentationLinks?.releaseFlow(fid)
+                }
                 selectionJobsByFlow.remove(fid)?.cancel()
                 flowConnectionGeneration.remove(fid)
                 stopZkSigning(fid, refuse = false)
-                clearFlowMatchState(fid)
+                // Conditional on THIS engine still being current - see the flowComplete collector's identical comment
+                // (issue #345, round 4 finding #2).
+                legacyCollectorClearHook?.invoke()
+                clearFlowMatchStateIfLive(fid, engineEpoch)
                 pscIssuerByFlow.remove(fid)
                 dropHolderCommitments(fid)
                 blindIssuance.drop(fid)
@@ -9801,8 +10337,10 @@ class SirosWallet private constructor(
         engine: WalletEngineSession,
         flowId: String,
         payload: kotlinx.serialization.json.JsonObject,
+        // Bound to THIS engine's own connectionScope, not the wallet-wide scope: see connectionScope's doc comment.
+        connectionScope: CoroutineScope,
     ) {
-        scope.launch {
+        connectionScope.launch {
             val request = payload["request"]?.jsonObject
             val subjectId = request?.get("subject_id")?.jsonPrimitive?.contentOrNull
             val subjectType = request?.get("subject_type")?.jsonPrimitive?.contentOrNull
@@ -10828,25 +11366,153 @@ class SirosWallet private constructor(
         )
     }
 
-    /**
-     * The credential for EACH query of a zkp_req request, from the credentials the user picked (the picker reports plain ids): a pick that
-     * is a candidate of the query answers it, preferring the pick at the query's own position, and one credential may answer several
-     * queries. Null when some query has no pick: the request is then not answerable and no selection is sent.
-     */
-    private fun circuitZkSelectionByQuery(results: List<CredentialMatcher.MatchResult>, selectedIds: List<Long>): List<Pair<CredentialMatcher.MatchResult, Long>>? {
-        val out = ArrayList<Pair<CredentialMatcher.MatchResult, Long>>()
-        for ((i, r) in results.withIndex()) {
-            val own = selectedIds.filter { id -> r.candidates.any { it.id == id } }
-            val id = (if (selectedIds.size == results.size && selectedIds[i] in own) selectedIds[i] else own.firstOrNull()) ?: return null
-            out += r to id
-        }
-        return out
-    }
-
     /** Drops what a flow's match step left for its sign step; called wherever a flow ends. */
     private fun clearFlowMatchState(flowId: String) {
         pendingMatchResultsByFlow.remove(flowId)
         circuitZkClientMetadataByFlow.remove(flowId)
+        synchronized(consentLock) { consentRecordsByFlow.remove(flowId) }
+    }
+
+    /**
+     * Atomically: if [lifetime] (an engine/peer's own epoch, captured once when it was installed - see [consentEpoch]'s
+     * doc comment) is still the CURRENT [consentEpoch], clears [flowId]'s match/consent state; otherwise does nothing.
+     *
+     * Used by the WMP terminal callbacks instead of a bare `if (isLive()) clearFlowMatchState(flowId)`: that shape checks
+     * liveness and then clears as two SEPARATE operations, leaving a window between them for a concurrent
+     * [clearPerFlowAuthorizationState] (a replacement peer's own teardown) or a concurrent [ConsentTicket.recordIfCurrent]
+     * (a replacement peer's own, legitimate write) to land in between - `@Volatile` makes each individual read/write of
+     * [consentEpoch] visible across threads, but does not make a CHECK-THEN-ACT sequence atomic (go-wallet-backend#502
+     * follow-up, issue #345's finding #5: WMP callbacks can run on a different dispatcher/thread than the collector that
+     * installed them). Checking and clearing under the same [consentLock] every other consent mutation uses closes that
+     * window.
+     */
+    private fun clearFlowMatchStateIfLive(flowId: String, lifetime: Int) {
+        synchronized(consentLock) {
+            if (isDestroyed || consentEpoch != lifetime) return
+            pendingMatchResultsByFlow.remove(flowId)
+            circuitZkClientMetadataByFlow.remove(flowId)
+            consentRecordsByFlow.remove(flowId)
+        }
+    }
+
+    /**
+     * Drops EVERY flow's recorded consent, not just one - called wherever this wallet instance tears down or replaces its
+     * engine session OR its WMP peer (logout, a cut-off-driven re-login, `connectEngine`/`connectViaWmp` reconnecting with a
+     * new session) while staying alive for reuse. Without this, a flow id from the ended session that happens to be reused
+     * by a later one (the backend's flow id namespace is not guaranteed session-scoped) would find a stale [ConsentRecord]
+     * still sitting in [consentRecordsByFlow] and let [ConsentGuard] pass a credential/query pair the CURRENT session's user
+     * never actually consented to. The per-flow connection-generation checks elsewhere guard against a stale MESSAGE
+     * arriving late on a replaced socket; they do not guard against this, since a message legitimately tagged with the NEW
+     * generation is not stale by that check even if it reuses an old flow id.
+     *
+     * Returns the NEW epoch: a caller that needs "my own installation epoch" (`connectEngine`'s `engineEpoch`,
+     * `connectViaWmp`'s equivalent) MUST use this returned value directly, never a separate read of [consentEpoch]
+     * afterward - two concurrent calls to `connectEngine`/`connectViaWmp` (e.g. a racing reconnect) would otherwise let a
+     * later bump land in between THIS call's own bump and a separate read, handing the earlier call's connection an
+     * epoch that belongs to the LATER one instead of its own (go-wallet-backend#502 follow-up, issue #345, round 4).
+     */
+    private fun clearPerFlowAuthorizationState(): Int {
+        synchronized(consentLock) {
+            consentEpoch++
+            consentRecordsByFlow.clear()
+            return consentEpoch
+        }
+    }
+
+    /**
+     * Guards [consentEpoch] and [consentRecordsByFlow] together: every check-then-mutate sequence against them (a
+     * [ConsentTicket]'s final write, a WMP terminal callback's check-and-clear, [clearPerFlowAuthorizationState]'s own
+     * bump+clear) runs under this lock, so one can never observe the other mid-way through (go-wallet-backend#502
+     * follow-up, issue #345's finding #5). A plain `@Volatile` read/write of [consentEpoch] alone only guarantees each
+     * individual access is visible across threads - it does not make a read-then-later-write atomic, which is exactly
+     * what a check-then-act sequence needs.
+     */
+    private val consentLock = Any()
+
+    /**
+     * The scope every collector/coroutine belonging to the CURRENT engine session or WMP peer lives in - cancelled (not
+     * merely state-cleared) by `connectEngine`/`connectViaWmp` whenever that connection is replaced or torn down, so a
+     * coroutine suspended mid-operation (`recordPresentation`, `credentialStore.getAll()`, the user's own consent dialog)
+     * can never resume PAST that cancellation to act on stale state.
+     *
+     * The structural fix for the "a collector/coroutine outlives its own connection" bug family (go-wallet-backend#502
+     * follow-up, issue #345, round 4): earlier rounds answered this with one more epoch/`ConsentTicket` re-check at each
+     * newly-discovered call site (the listener await, `recordPresentation`'s suspension, `credentialStore.getAll()`'s
+     * suspension, the legacy `flowComplete`/`flowErrors` collectors' unconditional clears, `handleCredentialSelection`'s
+     * own side effects before its ticket check) - always one more site away from being provably complete. Binding the
+     * coroutines themselves to their OWNING connection's lifetime removes the whole category at once: a cancelled
+     * coroutine cannot resume past a suspension point at all, regardless of what code runs after it or whether anyone
+     * remembered to add a check there. `ConsentTicket`/`isFlowLost` remain as defence in depth for the one thing scope
+     * cancellation does NOT cover - a flow individually lost within the SAME, still-live connection (a mere socket
+     * reconnect bumps `WalletEngineSession.connectionGeneration` without tearing down this scope).
+     */
+    private var connectionScope: CoroutineScope? = null
+
+    /**
+     * Bumped by [clearPerFlowAuthorizationState] - the one moment this wallet's engine session OR WMP peer changes identity
+     * (logout, a cut-off-driven re-login, `connectEngine`/`connectViaWmp` replacing a prior connection). Also the SAME
+     * counter `wmpProfile`'s `requireLive` used to track separately as `wmpLifetime` (merged here: both answered the exact
+     * same question, "has this wallet's live connection moved on since I started", for the two transports).
+     *
+     * Exists so [ConsentTicket] can tell "my session is still the one I started with" apart from "my flow is specifically
+     * dead within it" ([isFlowLost]) - go-wallet-backend#502 follow-up, issue #345's finding #4 was exactly this conflation:
+     * treating "the session moved on" as if it meant "this flow died", which made a stale coroutine call [endFlowLost] on a
+     * flow id a REPLACEMENT session might have already reused, tearing down that session's own state instead of just
+     * abandoning its own stale one.
+     *
+     * A [ConsentTicket] (or `wmpProfile`'s `lifetime`) must ALWAYS be built from the value captured once when the engine
+     * session/WMP peer it belongs to was installed (`connectEngine`'s `engineEpoch`, `wmpProfile`'s `lifetime`) - never
+     * from a fresh read of this field at message-processing time. A fresh read is exactly as stale as the event it is
+     * meant to detect: `disconnect()` closes an engine/peer's channels without discarding what is already queued, and the
+     * collectors (and any coroutines they launch) that read those queued messages keep running in this wallet's own scope
+     * after the disconnect - a fresh read at that point sees the NEW (post-replacement) epoch and would wrongly treat the
+     * OLD, now-replaced connection's buffered work as belonging to the current one (issue #345's findings #1 and #3).
+     */
+    @Volatile
+    private var consentEpoch: Int = 0
+
+    /**
+     * A capture of "the live session/peer this wallet had when I started" plus the flow id I concern, taken BEFORE a
+     * suspending consent-writing (or consent-owning-cleanup) operation's FIRST suspension point - from the OWNING
+     * engine/peer's own captured epoch (`connectEngine`'s `engineEpoch`, `wmpProfile`'s `lifetime`), never a fresh
+     * [issueConsentTicket] read once that engine/peer is already installed (see [consentEpoch]'s doc comment).
+     * [issueConsentTicket] itself remains for the few paths with no separate engine/peer epoch to thread through (direct
+     * test invocation of a handler in isolation; production call sites of the three collectors below always build a
+     * ticket from their own engine/peer's captured epoch instead).
+     *
+     * Re-validated via [isCurrent] immediately before the write/cleanup it guards - not merely once, after the operation's
+     * first `await` - because ANY suspension along the way (the user's own consent dialog, [recordPresentation],
+     * `credentialStore.getAll()`) can let a teardown or session/peer replacement happen underneath it. A single check right
+     * after the first suspension point is not enough: go-wallet-backend#502 follow-up, issue #345's findings #1 and #2 were
+     * both exactly this - a check taken too early relative to a LATER suspension and the write that follows it.
+     *
+     * Equality is on BOTH [epoch] and [flowId]: a flow id alone is not enough, because a REPLACEMENT session can
+     * legitimately reuse the same flow id once the one before it ends - keying on the epoch too means a resumed STALE
+     * operation can never be mistaken for a fresh one over a reused id (issue #345's finding #4).
+     */
+    private data class ConsentTicket(val epoch: Int, val flowId: String)
+
+    /** Issues a [ConsentTicket] for [flowId] against the wallet's CURRENT [consentEpoch] - only for a path with no owning
+     * engine/peer epoch to build it from instead (see [ConsentTicket]'s doc comment). Call before the first suspension
+     * point of the operation the ticket will guard, never after. */
+    private fun issueConsentTicket(flowId: String): ConsentTicket = ConsentTicket(consentEpoch, flowId)
+
+    /** Whether [this] ticket's session/peer is still the live one - see [ConsentTicket]'s doc comment. A cheap, lock-free
+     * read: used for early-exit guards mid-operation, never as the final word before a write (see [recordIfCurrent]). */
+    private fun ConsentTicket.isCurrent(): Boolean = !isDestroyed && epoch == consentEpoch
+
+    /**
+     * Writes [record] for [ConsentTicket.flowId] only if the ticket is still current (see [ConsentTicket]); a stale
+     * ticket's record is silently discarded - the session or peer it was issued for has already moved on, and that
+     * teardown already cleared (or will clear) whatever this would otherwise have written. The check and the write happen
+     * under [consentLock], atomically with each other and with every other consent mutation (go-wallet-backend#502
+     * follow-up, issue #345's finding #5): an early-exit [isCurrent] check earlier in the same operation is a cheap
+     * optimization, not a substitute for this one.
+     */
+    private fun ConsentTicket.recordIfCurrent(record: ConsentRecord) {
+        synchronized(consentLock) {
+            if (!isDestroyed && epoch == consentEpoch) consentRecordsByFlow[flowId] = record
+        }
     }
 
     /**
@@ -10860,8 +11526,20 @@ class SirosWallet private constructor(
         engine: WalletEngineSession,
         flowId: String,
         payload: kotlinx.serialization.json.JsonObject?,
+        // THIS engine's own installation-time epoch, from connectEngine - see engineEpoch's doc comment there (issue #345
+        // finding #3): a fresh issueConsentTicket read here would let a buffered call for an already-replaced engine pass
+        // as if it belonged to the current one.
+        engineEpoch: Int,
+        // THIS engine's own connectionScope, from connectEngine - see connectionScope's doc comment. Launching into it
+        // (not the wallet-wide scope) means a replacement/teardown cancels this coroutine outright, so it can never
+        // resume PAST a suspension (credentialStore.getAll(), recordPresentation, the listener await) to act on stale
+        // state - structural, not just the ticket re-check below (go-wallet-backend#502 follow-up, issue #345, round 4).
+        connectionScope: CoroutineScope,
     ) {
-        val selectionJob = scope.launch {
+        // Issued HERE, before this coroutine's first suspension point - see ConsentTicket's doc comment on why a single
+        // check right after that first await is not enough (go-wallet-backend#502 follow-up, issue #345).
+        val consentTicket = ConsentTicket(engineEpoch, flowId)
+        val selectionJob = connectionScope.launch {
             try {
                 // `.jsonObject` throws on JsonNull rather than treating it
                 // like absent - a real NIST reference-verifier request over
@@ -10896,8 +11574,23 @@ class SirosWallet private constructor(
                 // The verifier's client_metadata (verbatim, when the engine relays it) plans zkp_req queries.
                 val clientMetadata = payload?.get("client_metadata") as? JsonObject
                 val zkPlan: CircuitZkMatchPlan?
+                // Carried out of the `dcqlQuery != null` branch below rather
+                // than read off a locally-scoped `output`: this is the
+                // redirect-flow/haip-vp:// path the comment above already
+                // calls out as the one actually exercised live for
+                // "credential_selection" (matchRequests() never fires here) -
+                // dropping these on the floor, as this did before, meant
+                // PresentationRequest.satisfiableOptions/credentialSets were
+                // always empty/null for every live presentation through this
+                // path, so a consent UI keyed off them (see
+                // PresentationRequest.exclusiveChoiceGroups) never had
+                // anything to act on no matter what it did with them.
+                var credentialSets: List<CredentialMatcher.CredentialSetQuery>? = null
+                var satisfiableOptions: List<CredentialMatcher.SatisfiableOption> = emptyList()
                 val matchResults = if (dcqlQuery != null) {
                     val output = CredentialMatcher.matchDcql(dcqlQuery, allCreds, zkSystemIds, circuitZkSupport, clientMetadata)
+                    credentialSets = output.credentialSets
+                    satisfiableOptions = output.satisfiableOptions
                     zkPlan = planCircuitZkMatches(flowId, output, clientMetadata, verifierInfo?.get("client_id")?.jsonPrimitive?.contentOrNull)
                     zkPlan?.matchResults ?: output.queryResults
                 } else {
@@ -10941,7 +11634,7 @@ class SirosWallet private constructor(
                 if (zkPlan?.refusal != null) {
                     // A zkp_req request is answered whole or not at all; the verifier gets the engine's no-match answer.
                     Timber.i("Credential selection for flow $flowId: a zkp_req request that cannot be answered; not answered (code=${zkPlan.code})")
-                    engine.sendCredentialsMatched(flowId, emptyList(), zkPlan.refusal)
+                    engine.sendCredentialsMatched(flowId, emptyList(), org.siros.sdk.transport.engine.NoMatchCodes.REQUEST_NOT_ANSWERABLE)
                     return@launch
                 }
                                 if (candidates.isEmpty() || (listener == null && eligible.isEmpty())) {
@@ -10958,7 +11651,11 @@ class SirosWallet private constructor(
                         exhaustedOnly = candidates.isNotEmpty(),
                     )
                     Timber.i("Credential selection for flow $flowId matched nothing: $reason")
-                    engine.sendCredentialsMatched(flowId, emptyList(), reason)
+                    engine.sendCredentialsMatched(
+                        flowId,
+                        emptyList(),
+                        if (candidates.isNotEmpty()) org.siros.sdk.transport.engine.NoMatchCodes.CREDENTIALS_EXHAUSTED else org.siros.sdk.transport.engine.NoMatchCodes.NO_MATCHING_CREDENTIAL,
+                    )
                     return@launch
                 }
                 val selectedIds = if (listener != null) {
@@ -10977,12 +11674,21 @@ class SirosWallet private constructor(
                             trustResult = lastTrustResults[flowId],
                             matchResults = matchResults,
                             candidates = candidates,
+                            credentialSets = credentialSets,
+                            satisfiableOptions = satisfiableOptions,
                         )
                     )
                 } else {
                     eligible.map { it.id }
                 }
 
+                // Order matters: a stale ticket means THIS WHOLE SESSION has moved on, so nothing below - including
+                // isFlowLost/endFlowLost, which assume flowId still belongs to a live, current session - is safe to act on
+                // (a REPLACEMENT session may already have reused flowId; issue #345's finding #4 was exactly this:
+                // endFlowLost tearing down a NEW flow's state because it only ever checked the flow id). A stale ticket
+                // bails out touching nothing; only once it is confirmed current does the narrower, per-flow isFlowLost
+                // question even make sense to ask.
+                if (!consentTicket.isCurrent()) return@launch
                 // The flow's engine session may be gone by the time the user answers (the socket was replaced or lost while the
                 // consent screen was up): an action for it would reach a session that does not know the flow, and nothing would
                 // ever answer. The listener has been told the flow was lost (endFlowLost); nothing is sent.
@@ -11008,6 +11714,58 @@ class SirosWallet private constructor(
                     throw WalletException("Selected credential has no eligible copies remaining - renew it to get more")
                 }
 
+                // Which query the selection actually answers, validated and resolved BEFORE anything is recorded as
+                // presented or cached for signing - not after, as this used to (a Copilot review on #353's follow-up
+                // caught both consequences): a selection a credential_sets alternative refuses (an unsatisfiable
+                // combination, a credential shared by two alternatives) must never first be written to presentation
+                // history (CONSUME_ALL/CONSUME_NON_ZKP would then wrongly count an unused copy as spent, with no
+                // presentation actually sent), and what pendingMatchResultsByFlow is overwritten with below for the LATER
+                // circuit_zk sign step must be the resolved, ACTIVE query subset - not every entry of the full,
+                // unfiltered matchResults it was prefilled with above - or that sign step's own "every query needs a
+                // pick" check refuses a perfectly valid choice over an alternative's deliberately-unanswered sibling
+                // query.
+                //
+                // zkp_req: the credential for EACH query, or the request is declined (a query without a pick cannot be answered).
+                val zkSelection = if (zkPlan != null) {
+                    circuitZkSelectionByQuery(matchResults, selectedIds, credentialSets, satisfiableOptions) ?: run {
+                        engine.sendFlowAction(flowId, "decline", kotlinx.serialization.json.buildJsonObject {
+                            put("reason", kotlinx.serialization.json.JsonPrimitive("user_declined"))
+                        })
+                        return@launch
+                    }
+                } else null
+
+                // Which query each SELECTED credential actually answers (non-ZK path only - the
+                // ZK path's own per-query zkSelection above already carries this) - never
+                // matchResults.firstOrNull's first-match-in-list-order view, which can attribute a
+                // different alternative's claims than the one the consent screen
+                // (PresentationConsentScreen.kt) actually showed for it; see
+                // resolveActiveQueryPerCredential's doc comment. Validated as a whole first via
+                // credentialSetChoiceIsValid: defence in depth against a selection that is not a
+                // valid single credential_sets choice, including a credential that happens to
+                // satisfy two different alternatives at once.
+                val activeQueries = matchResults.filter { r -> r.candidates.any { it.id in selectedIds.toSet() } }
+                val allQueryIds = matchResults.filter { it.candidates.isNotEmpty() }.map { it.queryId }.toSet()
+                val resolvedMatchResultById = if (zkSelection == null) {
+                    if (!credentialSetChoiceIsValid(credentialSets, satisfiableOptions, allQueryIds, activeQueries.map { it.queryId }.toSet())) {
+                        engine.sendFlowAction(flowId, "decline", kotlinx.serialization.json.buildJsonObject {
+                            put("reason", kotlinx.serialization.json.JsonPrimitive("user_declined"))
+                        })
+                        return@launch
+                    }
+                    resolveActiveQueryPerCredential(activeQueries, selectedIds) ?: run {
+                        engine.sendFlowAction(flowId, "decline", kotlinx.serialization.json.buildJsonObject {
+                            put("reason", kotlinx.serialization.json.JsonPrimitive("user_declined"))
+                        })
+                        return@launch
+                    }
+                } else {
+                    emptyMap()
+                }
+                // The resolved, ACTIVE query set, whichever branch answered: exactly what overwrites
+                // pendingMatchResultsByFlow below, and what recordPresentation's own requestedClaims is built from.
+                val answeredQueries = zkSelection?.map { it.first }?.distinct() ?: activeQueries
+
                 // Record presentation history (a zkp_req presentation is recorded when it is answered, from what was really used)
                 if (zkPlan == null) recordPresentation(PresentationRecord(
                     id = randomUint32Id(),
@@ -11017,30 +11775,47 @@ class SirosWallet private constructor(
                     credentialNames = selectedIds.mapNotNull { id ->
                         allCreds.find { it.id == id }?.metadata?.name
                     },
-                    requestedClaims = matchResults.flatMap { result ->
+                    requestedClaims = answeredQueries.flatMap { result ->
                         result.requestedClaims.mapNotNull { path -> path.lastOrNull() }
                     }.distinct(),
                     zkProof = selectedIds.any { it in zkRequestedIds },
                     timestamp = System.currentTimeMillis(),
                 ))
+                // Re-checked AGAIN after recordPresentation's own suspension - issue #345's finding #1 was exactly a check
+                // taken before this await, not after it, with the write that follows trusting a now-stale result.
+                if (!consentTicket.isCurrent()) return@launch
+                // isFlowLost is ALSO re-checked here, not just the ticket: a mere socket reconnect on the SAME engine
+                // (connectionGeneration bumped, no clearPerFlowAuthorizationState call, so consentEpoch is unchanged) can
+                // end and clear THIS flow's state while recordPresentation was suspended (issue #345 finding #4). This
+                // coroutine's own selectionJobsByFlow registration (set once for its whole lifetime, below) means
+                // endFlowLost's own cancellation is ALSO a backstop here - unlike the narrower-scoped registration the
+                // matchRequests() collector below uses (removed right after ITS listener await, so its OWN equivalent
+                // coroutine has nothing left to cancel by the time it reaches recordPresentation) - but this check stays
+                // as defence in depth rather than relying on cancellation timing alone.
+                if (isFlowLost(engine, flowId)) {
+                    endFlowLost(flowId)
+                    return@launch
+                }
 
-                // zkp_req: the credential for EACH query, or the request is declined (a query without a pick cannot be answered).
-                val zkSelection = if (zkPlan != null) {
-                    circuitZkSelectionByQuery(matchResults, selectedIds) ?: run {
-                        engine.sendFlowAction(flowId, "decline", kotlinx.serialization.json.buildJsonObject {
-                            put("reason", kotlinx.serialization.json.JsonPrimitive("user_declined"))
-                        })
-                        return@launch
-                    }
-                } else null
+                // Overwrites the full-matchResults prefill set above (before the listener was even asked, so a
+                // concurrently-arriving sign_presentation's circuit_zk routing check at engine.signRequests() has
+                // SOMETHING to read while consent is still pending) with the resolved, ACTIVE subset - see this
+                // function's opening comment on why the sign step needs the narrowed set, not the full one.
+                pendingMatchResultsByFlow[flowId] = answeredQueries
+                prewarmZkMatches(answeredQueries)
 
                 // Build consent payload with selected credentials
                 // Must match backend ConsentSelection: credential_query_id, credential_id, disclosed_claims
+                // Recorded in parallel (ConsentedSelection, never mutated afterward): the engine's LATER sign_presentation
+                // round-trips credentials_to_include from exactly this, and a buggy or compromised engine asking to disclose
+                // more than this must be refused rather than trusted - see ConsentGuard's doc comment.
+                val consentedSelections = mutableListOf<ConsentedSelection>()
                 val consentPayload = kotlinx.serialization.json.buildJsonObject {
                     put("selected_credentials", kotlinx.serialization.json.buildJsonArray {
                         if (zkSelection != null) {
                             // zkp_req: one selection per query, a credential reusable across queries, no disclosed claims.
                             for ((r, id) in zkSelection) {
+                                consentedSelections += ConsentedSelection(r.queryId, id.toString(), emptySet())
                                 add(kotlinx.serialization.json.buildJsonObject {
                                     put("credential_query_id", kotlinx.serialization.json.JsonPrimitive(r.queryId))
                                     put("credential_id", kotlinx.serialization.json.JsonPrimitive(id.toString()))
@@ -11051,9 +11826,7 @@ class SirosWallet private constructor(
                         }
                         for (id in selectedIds) {
                             allCreds.find { it.id == id } ?: continue
-                            val matchResult = matchResults.firstOrNull { r ->
-                                r.candidates.any { it.id == id }
-                            }
+                            val matchResult = resolvedMatchResultById[id]
                             add(kotlinx.serialization.json.buildJsonObject {
                                 matchResult?.queryId?.let {
                                     put("credential_query_id", kotlinx.serialization.json.JsonPrimitive(it))
@@ -11083,6 +11856,10 @@ class SirosWallet private constructor(
                                     ?.mapNotNull { it.lastOrNull() }
                                     ?.distinct()
                                     ?: emptyList()
+                                // Empty requestedClaims means the whole credential was consented (no DCQL claims array, or a
+                                // non-DCQL match) - recorded as null, not an empty set: see ConsentedSelection's doc comment
+                                // for why the two are not interchangeable downstream (mdoc's signer in particular).
+                                consentedSelections += ConsentedSelection(matchResult?.queryId, id.toString(), requestedClaims.toSet().ifEmpty { null })
                                 put("disclosed_claims", kotlinx.serialization.json.buildJsonArray {
                                     for (claim in requestedClaims) {
                                         add(kotlinx.serialization.json.JsonPrimitive(claim))
@@ -11092,13 +11869,16 @@ class SirosWallet private constructor(
                         }
                     })
                 }
+                consentTicket.recordIfCurrent(ConsentRecord(consentedSelections))
                 engine.sendFlowAction(flowId, "consent", consentPayload)
             } catch (e: Throwable) {
                 // Not only Exception: a native matcher/prover linkage Error would otherwise kill this coroutine with no log and no
                 // answer, leaving the flow (and the app's spinner) waiting for a reply that never comes.
                 if (e is VirtualMachineError || e is kotlinx.coroutines.CancellationException) throw e
                 Timber.e(e, "Error handling credential selection (code=credential_selection_failed, flow $flowId)")
-                // A callback that ignored the cancellation and failed later must not decline into a session that does not know the flow.
+                // A callback that ignored the cancellation and failed later must not decline into a session that does not know the flow,
+                // nor touch a flow id a REPLACEMENT session may have already reused (see the ticket check further up).
+                if (!consentTicket.isCurrent()) return@launch
                 if (isFlowLost(engine, flowId)) {
                     endFlowLost(flowId)
                     return@launch
@@ -11146,9 +11926,8 @@ class SirosWallet private constructor(
      * failure for an issuance the user may still be completing.
      */
     /**
-     * Routes the engine's `PSC_CONFLICT` flow error (the issuer already holds a
-     * different pseudonym commitment for this subject) to the typed
-     * [WalletEventListener.onPseudonymCommitmentConflict]. Returns whether
+     * Routes the engine's `AUXILIARY_DATA_CONFLICT` flow error and an issuer's `auxiliary_data: ` refusal to the typed
+     * [WalletEventListener.onAuxiliaryDataConflict] / [WalletEventListener.onAuxiliaryDataRefused]. Returns whether
      * [code] was that error, so the caller does not also report a generic one.
      * Nothing was issued, so there is nothing to roll back.
      */
@@ -11161,9 +11940,7 @@ class SirosWallet private constructor(
             eventListener?.onAuxiliaryDataConflict(flowId, AuxiliaryDataConflictException(message.orEmpty()))
             return true
         }
-        if (code != PseudonymCommitmentConflictException.FLOW_ERROR_CODE) return false
-        eventListener?.onPseudonymCommitmentConflict(flowId, PseudonymCommitmentConflictException(message.orEmpty()))
-        return true
+        return false
     }
 
     private fun reportNoMatchingCredential(presentationFlowId: String, error: FlowError) {
@@ -11275,6 +12052,11 @@ class SirosWallet private constructor(
 
         /** Shown when a sign request fails without a message. */
         private const val SIGNING_FAILED_MESSAGE = "Signing failed"
+
+        /** Thrown (with [AUX_DATA_ADVERTISEMENT_MALFORMED_CODE]) wherever a malformed auxiliary-data advertisement refuses issuance. */
+        private const val AUX_DATA_ADVERTISEMENT_MALFORMED_MESSAGE =
+            "The issuer's auxiliary data advertisement for this credential is malformed; issuance is refused"
+        private const val AUX_DATA_ADVERTISEMENT_MALFORMED_CODE = "auxiliary_data_advertisement_malformed"
 
         /** Largest registry answer accepted on the `transaction_data` path. */
         private const val TRANSACTION_METADATA_MAX_BYTES = 256L * 1024
