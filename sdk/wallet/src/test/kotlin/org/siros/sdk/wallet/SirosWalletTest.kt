@@ -7141,6 +7141,124 @@ class SirosWalletTest {
         )
     }
 
+    @Test
+    fun aCancelledSignHandler_rethrowsRatherThanRunningReportSignFailuresUnconditionalCleanup() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345, round 4 - found by Copilot on this
+        // round's OWN connectionScope-cancellation commit): handleScaEngineSignPresentation's (and, identically,
+        // handleCircuitZkEngineSignPresentation's) generic `catch (e: Exception)` would otherwise also catch a
+        // CancellationException - it IS an Exception subclass - and run reportSignFailure's UNCONDITIONAL cleanup
+        // (clearFlowMatchState, resetIssuanceGuards, a wallet-wide WalletState.Ready reset), potentially stomping a
+        // REPLACEMENT session that has since claimed this flow id. Since this handler is now launched into
+        // connectEngine's own connectionScope, a replacement's connectionScope?.cancel() can land here mid-signing;
+        // the fix catches CancellationException FIRST and rethrows it so normal coroutine cancellation semantics
+        // apply instead of a false "sign failure" report. Exercised without needing a real coroutine-scope
+        // cancellation: credentialStore.getAll() (signScaPresentation's own first suspension point) throws a
+        // CancellationException directly, which is exactly what a cancelled connectionScope would otherwise surface
+        // on this handler's own next suspension point.
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        val store = mockk<org.siros.sdk.credentials.CredentialStore>()
+        coEvery { store.getAll() } throws kotlinx.coroutines.CancellationException("simulated connectionScope cancellation")
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "credentialStore" to store,
+            "eventListener" to listener,
+        )
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val msg = SignRequestMessage(
+            flowId = "flow-cancelled-sign",
+            action = "sign_presentation",
+            params = SignRequestParams(
+                audience = "https://verifier.example.com",
+                nonce = "nonce-1",
+                credentialsToInclude = listOf(org.siros.sdk.transport.engine.CredentialRef(credentialQueryId = "q1", credentialId = "1")),
+            ),
+        )
+        val method = wallet::class.declaredMemberFunctions.first { it.name == "handleScaEngineSignPresentation" }
+        method.isAccessible = true
+
+        var thrown: Throwable? = null
+        try {
+            kotlinx.coroutines.runBlocking { method.callSuspend(wallet, engine, msg) }
+        } catch (e: Throwable) {
+            // kotlin-reflect's callSuspend drives the suspend fun via raw Java reflection under the hood, which wraps
+            // whatever it throws in InvocationTargetException - unwrap to see the real exception.
+            thrown = (e as? java.lang.reflect.InvocationTargetException)?.cause ?: e
+        }
+
+        assertTrue(
+            "a CancellationException from a cancelled connection must propagate, not be swallowed as a sign failure, " +
+                "got: $thrown",
+            thrown is kotlinx.coroutines.CancellationException,
+        )
+        coVerify(exactly = 0) { listener.onFlowError(any(), any()) }
+    }
+
+    @Test
+    fun matchRequests_consentListenerDeferred_isCancelledWithTheCollectorNotOrphaned() = runTest(dispatcher) {
+        // Defence in depth (go-wallet-backend#502/PR #346 follow-up, issue #345, round 4 - found by Copilot on this
+        // round's OWN connectionScope-cancellation commit): the consent listener invocation used to be launched via
+        // `scope.async` (the wallet-wide scope), not `thisConnectionScope.async` - not a structural child of the
+        // matchRequests collector coroutine that connectionScope cancellation cancels. Cancelling the collector (a
+        // replacement engine) would then make its own `.await()` throw and give up, but leave the listener invocation
+        // itself still running, untracked - selectionJobsByFlow's entry is removed in the collector's own `finally`
+        // without ever calling `.cancel()` on it - an orphaned, never-dismissed consent prompt. Fixed by launching it
+        // into thisConnectionScope instead, so connectionScope's cancellation cancels it directly. Exercised with a
+        // gate: the listener is parked mid-call when the engine is replaced, and the deferred itself must report
+        // cancelled afterward (not merely abandoned-but-still-running).
+        val matchFlow = MutableSharedFlow<MatchRequestMessage>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val listener = mockk<WalletEventListener>()
+        var capturedSelectionDeferred: kotlinx.coroutines.Deferred<List<Long>>? = null
+        coEvery { listener.onCredentialSelectionRequired(any()) } coAnswers {
+            capturedSelectionDeferred = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job] as? kotlinx.coroutines.Deferred<List<Long>>
+            gate.await()
+            emptyList()
+        }
+        val cred = StoredCredential(
+            id = 2L, format = "dc+sd-jwt", raw = "raw-2",
+            metadata = CredentialMetadata(name = "Credential Two", vct = "urn:example:vct"),
+            batchId = 2L, instanceId = 0,
+        )
+        val engineA = mockEngineConstructor(matchRequests = matchFlow)
+        every { engineA.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to FakeCredentialStore(mutableListOf(cred)),
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "_presentationHistory" to mutableListOf<PresentationRecord>(),
+        )
+
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+        matchFlow.emit(MatchRequestMessage(flowId = "flow-parked", dcqlQuery = null))
+        advanceUntilIdle()
+
+        // The listener is parked; the collector is waiting on selection.await().
+        @Suppress("UNCHECKED_CAST")
+        val jobsByFlow = getField(wallet, "selectionJobsByFlow") as Map<String, kotlinx.coroutines.Job>
+        assertTrue("the selection must be registered while parked", jobsByFlow.containsKey("flow-parked"))
+
+        // The engine is replaced wholesale, cancelling connectionScope - and with it, this listener invocation itself.
+        mockEngineConstructor()
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        val captured = capturedSelectionDeferred
+        assertTrue("the listener's own Deferred must have been captured", captured != null)
+        assertTrue(
+            "the consent listener invocation must be cancelled along with its collector, not merely abandoned-but-running",
+            captured!!.isCancelled,
+        )
+        gate.complete(Unit)
+    }
+
     /**
      * Regression: an engine-relayed `mso_mdoc_zk` query must offer the plain
      * mdoc it can be proven from. An earlier version dropped ZK queries'
