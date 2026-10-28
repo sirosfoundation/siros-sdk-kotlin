@@ -674,7 +674,7 @@ class SirosWallet private constructor(
                 accountRegistry.activeAccountId = null
             },
             LocalWipeStep("transactionLog") { transactionLogStore.clear() },
-            LocalWipeStep("trustCache") { trustCache.clear() },
+            LocalWipeStep("trustDecisionCache") { trustDecisionCache.clear() },
             LocalWipeStep("wscdSelectionPolicy") { wscdSelectionPolicy.clearAll() },
             LocalWipeStep("displayMetadataCache") { (displayMetadataCache as? FileFetchCache)?.clear() },
             LocalWipeStep("pickerIconCache") { PickerIconCache(activity.applicationContext).clear() },

@@ -28,7 +28,6 @@ import kotlin.reflect.full.declaredMemberFunctions
 import kotlin.reflect.jvm.isAccessible
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
-import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import okhttp3.OkHttpClient
@@ -12783,7 +12782,7 @@ class SirosWalletTest {
             "sessionStore" to f.sessionStore,
             "accountRegistry" to f.accountRegistry,
             "customTransactionLogStore" to f.transactionLog,
-            "trustCache" to TrustCache(),
+            "trustDecisionCache" to TrustDecisionCache(java.time.Duration.ZERO),
             "wscdSelectionPolicy" to f.wscdPolicy,
             "displayMetadataCache" to f.metadataCache,
             "authServerClient" to f.authServerClient,
