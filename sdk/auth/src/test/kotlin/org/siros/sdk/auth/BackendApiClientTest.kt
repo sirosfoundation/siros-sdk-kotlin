@@ -68,25 +68,42 @@ class BackendApiClientTest {
     }
 
     @Test
-    fun cancellingWhileTheResponseBodyIsStillTricklingInStopsTheRequestPromptly() = runBlocking {
-        // Headers arrive promptly, but the body trickles in far slower than the timeout below: if cancellation only
-        // covered the wait for headers (the bug this test guards against), the coroutine's cancellation would not
-        // actually interrupt the OkHttp call, and body.string() would keep blocking the IO thread for the whole
-        // ~6.4 second trickle regardless of the job being cancelled.
+    fun cancellingWhileTheResponseBodyIsStillTricklingInActuallyCancelsTheUnderlyingCall() = runBlocking {
+        // A coroutine job completing promptly after cancel() is NOT, by itself, proof that the HTTP call was
+        // interrupted: suspendCancellableCoroutine unwinds the COROUTINE as soon as its own continuation is
+        // cancelled, regardless of whether anything was done to stop the underlying work - a job.join() check alone
+        // would pass even with the invokeOnCancellation { call.cancel() } hook removed entirely (found via Copilot
+        // review). This test instead listens for OkHttp's own `canceled` event, which fires only when
+        // Call.cancel() is actually invoked, and requires it to fire WHILE the body is demonstrably still being
+        // read (an EventListener.responseBodyStart gate), so the assertion is about the real network call, not
+        // coroutine timing.
         server.enqueue(
             MockResponse()
                 .setBody("x".repeat(32 * 1024))
                 .throttleBody(1024, 200, java.util.concurrent.TimeUnit.MILLISECONDS)
         )
-        val client = newClient()
+        val bodyStarted = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val cancelled = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val httpClient = okhttp3.OkHttpClient.Builder()
+            .eventListener(object : okhttp3.EventListener() {
+                override fun responseBodyStart(call: okhttp3.Call) {
+                    bodyStarted.complete(Unit)
+                }
+                override fun canceled(call: okhttp3.Call) {
+                    cancelled.complete(Unit)
+                }
+            })
+            .build()
+        val client = newClient(httpClient)
         val job = launch(Dispatchers.IO) {
             client.healthCheck()
         }
-        delay(300) // long enough for headers, nowhere near enough for the whole trickling body
+        withTimeout(3_000) { bodyStarted.await() } // don't cancel until streaming has genuinely begun
         job.cancel()
-        withTimeout(3_000) {
-            job.join() // must return promptly; timing out here means cancellation did not interrupt the body read
+        withTimeout(2_000) {
+            cancelled.await() // the underlying okhttp3.Call must actually be cancelled - timing out means it never was
         }
+        job.join()
         assertTrue(job.isCancelled)
     }
 
@@ -656,11 +673,11 @@ class BackendApiClientTest {
     private fun erasureIncomplete(body: String) =
         MockResponse().setResponseCode(409).setBody(body)
 
-    private fun newClient(): BackendApiClient {
+    private fun newClient(httpClient: okhttp3.OkHttpClient = okhttp3.OkHttpClient()): BackendApiClient {
         val baseUrl = server.url("/").toString().trimEnd('/')
         // No waiting between erasure retries in tests; the production default
         // is 1 s → 8 s (see BackendApiClient.erasureRetryDelaysMs).
-        return BackendApiClient(baseUrl = baseUrl, tenantId = "default")
+        return BackendApiClient(baseUrl = baseUrl, tenantId = "default", httpClient = httpClient)
             .apply { erasureRetryDelaysMs = listOf(0, 0, 0, 0) }
     }
 }
