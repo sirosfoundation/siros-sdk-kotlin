@@ -229,6 +229,11 @@ class WscdKeystoreAdapter private constructor(
     override suspend fun deleteKey(keyId: String) {
         checkUnlocked()
         signer.deleteKey(keyId)
+        // For an exportable software signer (see the class doc comment), the key's private JWK may already be folded
+        // into credentialsKeystore by an earlier exportEncryptedContainer() - remove it there too, or it stays in
+        // S.keypairs forever and the next unlock() imports it straight back into the signer, resurrecting a key this
+        // call just reported deleted.
+        credentialsKeystore.removeKeypair(keyId)
     }
 
     override suspend fun sign(keyId: String, payload: ByteArray, algorithm: String): ByteArray {

@@ -278,6 +278,32 @@ class WscdKeystoreAdapterTest {
     }
 
     @Test
+    fun deletingAnExportableSignersKeyIsNotResurrectedByTheNextUnlock() = runTest {
+        val keyJwk = com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256)
+            .keyID("softkey-1").generate().toJSONString()
+        val signer = mockk<Signer>(relaxed = true)
+        // The signer itself "deletes" the key (stops reporting it) once deleteKey() is called - simulating an
+        // exportable software plugin that actually removed its own copy.
+        var deleted = false
+        coEvery { signer.exportPrivateKeypairs() } answers {
+            if (deleted) emptyList() else listOf(ExportedPrivateKeypair(keyId = "softkey-1", algorithm = "ES256", privateJwk = keyJwk))
+        }
+        coEvery { signer.deleteKey("softkey-1") } answers { deleted = true }
+        val adapter = WscdKeystoreAdapter(signer)
+        adapter.unlock(fakePrfOutput, ByteArray(0), hkdfSalt, hkdfInfo)
+
+        // export → delete → export → unlock: the key must not come back.
+        adapter.exportEncryptedContainer() // folds softkey-1 into credentialsKeystore, as a real session would have already done
+        adapter.deleteKey("softkey-1")
+        val exportedAfterDelete = adapter.exportEncryptedContainer()
+        adapter.lock()
+
+        adapter.unlock(fakePrfOutput, exportedAfterDelete, hkdfSalt, hkdfInfo)
+
+        coVerify(exactly = 0) { signer.importPrivateKeypairs(match { it.any { kp -> kp.keyId == "softkey-1" } }) }
+    }
+
+    @Test
     fun signerWithNoExportableKeysNeverTriggersImport() = runTest {
         // The default Signer.exportPrivateKeypairs()/importPrivateKeypairs()
         // no-ops (hardware/remote-HSM plugins have nothing exportable) -

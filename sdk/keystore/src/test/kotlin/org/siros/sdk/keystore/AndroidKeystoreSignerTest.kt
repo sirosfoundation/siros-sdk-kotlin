@@ -141,6 +141,9 @@ class AndroidKeystoreSignerTest {
         val id = s.generateKey("ES256")
         val jwk = kotlinx.serialization.json.Json.parseToJsonElement(String(s.exportPublicKey(id))) as kotlinx.serialization.json.JsonObject
         assertEquals("P-256", (jwk["crv"] as kotlinx.serialization.json.JsonPrimitive).content)
+        // kid carries the key id so WscdKeystoreAdapter/SirosWallet.extractProofKeyId can recover which holder key an
+        // embedded-JWK proof was made with (a multi-key mdoc batch would otherwise fall back to the wrong key).
+        assertEquals(id, (jwk["kid"] as kotlinx.serialization.json.JsonPrimitive).content)
         val x = Base64.getUrlDecoder().decode((jwk["x"] as kotlinx.serialization.json.JsonPrimitive).content)
         val y = Base64.getUrlDecoder().decode((jwk["y"] as kotlinx.serialization.json.JsonPrimitive).content)
         assertEquals(32, x.size)

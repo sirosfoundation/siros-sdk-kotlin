@@ -3128,7 +3128,7 @@ class SirosWallet private constructor(
             }
             sessionStore.instanceKeyId = keyId
             persistAndSyncKeystore()
-            retireInstanceKey(oldKeyId)
+            retireInstanceKey(oldKeyId, account, generation)
             keyId
         }
     }
@@ -3138,15 +3138,33 @@ class SirosWallet private constructor(
 
     /**
      * Retention rule: a replaced instance key is deleted ONLY when nothing can still refer to it, that is when it was never used for
-     * DPoP in this process and no stored refresh token names it as its `dpop_key_id`. Otherwise it is retained (it is not the
-     * instance key any more, it is only kept for those tokens). The bound is one key per such token plus the keys of this process;
-     * the settled ordering ([settledInstanceKeyId]) means a key only rotates before DPoP ever used it, so in practice a key a
-     * token references is not rotated at all.
+     * DPoP in this process, no stored refresh token names it as its `dpop_key_id`, and no stored credential names it as its `kid`
+     * (with the adapter as the default keystore and `freshKey = false`, `WscdKeystoreAdapter.generateProofWithJsonClaims` can pick
+     * the instance key as a credential's own holder key - deleting it then would permanently break that credential's presentation).
+     * Otherwise it is retained (it is not the instance key any more, it is only kept for those references). The bound is one key per
+     * such reference plus the keys of this process; the settled ordering ([settledInstanceKeyId]) means a key only rotates before
+     * DPoP ever used it, so in practice a key a token references is not rotated at all.
+     *
+     * [account]/[generation] are the ownership [rotateInstanceKey] confirmed just before calling this: [persistAndSyncKeystore] can
+     * wait on the backend for a while, so they are re-checked here, before AND after reading the refresh-token/credential snapshot
+     * used to decide retention. A switch to another account in that window means the snapshot just read may be the NEW account's,
+     * not [oldKeyId]'s - never delete on a cross-account snapshot; the key is retained instead (best-effort cleanup, never a wrong
+     * deletion).
      */
-    private suspend fun retireInstanceKey(keyId: String) {
-        val referenced = keyId in dpopBoundInstanceKeys || exportCredentialRefreshTokens().values.any { it.dpopKeyId == keyId }
-        if (referenced) {
-            Timber.i("The replaced instance key is still referenced by DPoP-bound tokens; it is retained")
+    private suspend fun retireInstanceKey(keyId: String, account: String?, generation: Int) {
+        fun stillOurs() = sessionStore.activeAccountId == account && sessionGeneration == generation
+        if (!stillOurs()) {
+            Timber.i("The account/session changed while retiring the replaced instance key; it is retained rather than checked against another account's data")
+            return
+        }
+        val referencedByDpop = keyId in dpopBoundInstanceKeys || exportCredentialRefreshTokens().values.any { it.dpopKeyId == keyId }
+        val referencedByCredential = getCredentials(includeExpired = true).any { it.kid == keyId }
+        if (!stillOurs()) {
+            Timber.i("The account/session changed while reading retention references for the replaced instance key; it is retained")
+            return
+        }
+        if (referencedByDpop || referencedByCredential) {
+            Timber.i("The replaced instance key is still referenced by a DPoP-bound token or a stored credential; it is retained")
             return
         }
         try {
@@ -3544,6 +3562,7 @@ class SirosWallet private constructor(
         var pop: String? = null
         var failure: String? = null
         val dpopAsked = !htm.isNullOrBlank() && !htu.isNullOrBlank()
+        val hinted = !keyIdHint.isNullOrBlank()
         try {
             // The DPoP key is the wallet instance key of the DEFAULT keystore (the WIA's `cnf` key, see
             // ensureInstanceKeyId), and the proof is made in that same keystore; the keystore resolved for credential
@@ -3561,11 +3580,26 @@ class SirosWallet private constructor(
                 )
             }
             if (!audience.isNullOrBlank()) {
-                wia = ensureWalletInstanceAttestation()
-                if (wia == null) {
-                    Timber.d("No Wallet Instance Attestation available for flow $flowId; answering sign_client_auth unattested")
+                // A WIA/PoP attests whatever key is CURRENTLY the instance key (its cnf). A hinted key id (a renewal
+                // passing the key an earlier token was bound to) can be a RETAINED, already-rotated-away key - see
+                // retireInstanceKey's retention rule - in which case a freshly obtained WIA/PoP would attest the NEW
+                // key while this call's DPoP proof (above) is signed with the OLD, hinted one: material an issuer that
+                // requires the same key for both would reject outright. Attest only when the hinted key still IS the
+                // current instance key; a hint for a retained, superseded key goes out unattested, like any other
+                // best-effort WIA miss.
+                val attestsCurrentKey = !hinted || keyId == ensureInstanceKeyId()
+                if (attestsCurrentKey) {
+                    wia = ensureWalletInstanceAttestation()
+                    if (wia == null) {
+                        Timber.d("No Wallet Instance Attestation available for flow $flowId; answering sign_client_auth unattested")
+                    } else {
+                        pop = buildClientAttestationPoP(audience, clientId)
+                    }
                 } else {
-                    pop = buildClientAttestationPoP(audience, clientId)
+                    Timber.d(
+                        "sign_client_auth for flow $flowId: DPoP key $keyId is a retained, non-current instance key; " +
+                            "omitting attestation rather than attesting a different (the current) key",
+                    )
                 }
             }
         } catch (e: kotlinx.coroutines.CancellationException) {

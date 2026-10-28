@@ -4,6 +4,8 @@ package org.siros.sdk.keystore
 import java.math.BigInteger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import java.security.interfaces.ECPublicKey
 import java.util.Base64
 import java.util.UUID
@@ -92,6 +94,11 @@ class AndroidKeystoreSigner(
         return if (chain.size >= 2) AttestationChain(chain, ByteArray(0), AttestationChain.FORMAT_ANDROID_KEY) else null
     }
 
+    /**
+     * `kid` is the exported key id: `WscdKeystoreAdapter` embeds this JWK unchanged into a credential proof, and
+     * `SirosWallet.extractProofKeyId` reads it back from `kid`/`jwk.kid` to recover the holder key a multi-key mdoc batch
+     * was proved with. Without it an embedded-JWK proof loses that binding and verification can fall back to the wrong key.
+     */
     override suspend fun exportPublicKey(keyId: String): ByteArray {
         val key = backend.publicKey(keyId)
         val b64 = Base64.getUrlEncoder().withoutPadding()
@@ -99,7 +106,14 @@ class AndroidKeystoreSigner(
             val src = if (raw.size > 32) raw.copyOfRange(raw.size - 32, raw.size) else raw
             System.arraycopy(src, 0, out, 32 - src.size, src.size)
         } })
-        return """{"kty":"EC","crv":"P-256","x":"${coord(key.w.affineX)}","y":"${coord(key.w.affineY)}"}""".toByteArray(Charsets.UTF_8)
+        val jwk = buildJsonObject {
+            put("kty", JsonPrimitive("EC"))
+            put("crv", JsonPrimitive("P-256"))
+            put("x", JsonPrimitive(coord(key.w.affineX)))
+            put("y", JsonPrimitive(coord(key.w.affineY)))
+            put("kid", JsonPrimitive(keyId))
+        }
+        return jwk.toString().toByteArray(Charsets.UTF_8)
     }
 
     override suspend fun migrateKey(keyId: String, targetPlugin: String): MigrationResult = MigrationResult.ReEnrollmentRequired(keyId)
