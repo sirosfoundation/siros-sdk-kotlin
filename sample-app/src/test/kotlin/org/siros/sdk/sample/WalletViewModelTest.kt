@@ -174,6 +174,20 @@ class WalletViewModelTest {
      * `WalletState.FlowActive` branch that renders FlowActiveView, so the
      * chooser screen was drawn forever over a flow silently progressing
      * underneath it (PR #362, Copilot finding on MainActivity.kt:624).
+     *
+     * Drives this through [WalletViewModel.openAddCredential], the real
+     * public entry point, rather than `setField`-injecting a brand new
+     * `MutableStateFlow` for `_showAddCredential` - an earlier version of
+     * this test did that, and `showAddCredential` (WalletViewModel.kt:631)
+     * is a `val` initialized once from the *original* `_showAddCredential`
+     * instance, so overwriting the private field afterwards leaves the
+     * public property pointing at the old, untouched flow: the final
+     * assertion would then read that stale flow's default `false` and pass
+     * regardless of whether handleQrResult clears anything at all (Copilot's
+     * finding on PR #362, WalletViewModelTest.kt:186 - a vacuous test that
+     * can't fail). Asserting the precondition (`showAddCredential` is true
+     * right after opening it) before calling handleQrResult is what proves
+     * this test is actually exercising the same flow instance throughout.
      */
     @Test
     @Ignore("Requires native WSCD library — run as instrumented test on device")
@@ -181,9 +195,12 @@ class WalletViewModelTest {
         val wallet = mockWallet(state = MutableStateFlow(WalletState.Ready(userId = "u1", displayName = "Alice", credentials = emptyList())))
         every { SirosWallet.create(any(), any()) } returns wallet
         val viewModel = WalletViewModel(mockk<Activity>(relaxed = true))
+
         // Simulate having opened Add Credential and then tapped its "Scan QR
-        // code" option (openActivate()) before this QR result comes in.
-        setField(viewModel, "_showAddCredential", MutableStateFlow(true))
+        // code" option, through the real public method.
+        viewModel.openAddCredential()
+        advanceUntilIdle()
+        assertTrue(viewModel.showAddCredential.value)
 
         viewModel.handleQrResult("openid-credential-offer://offer?credential_offer=test")
         advanceUntilIdle()
