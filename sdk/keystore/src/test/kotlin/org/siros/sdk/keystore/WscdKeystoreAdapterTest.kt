@@ -4,6 +4,8 @@ import com.upokecenter.cbor.CBORObject
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import io.mockk.slot
+import org.siros.sdk.credentials.KeystoreException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -11,6 +13,8 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import org.siros.sdk.credentials.TransactionDataError
+import org.siros.sdk.credentials.TransactionDataReason
 
 class WscdKeystoreAdapterTest {
 
@@ -588,11 +592,20 @@ class WscdKeystoreAdapterTest {
         hashes = listOf("aGFzaDE"),
         hashAlg = "sha-512",
         responseMode = "dc_api",
-        authenticationFactors = listOf(
-            AuthenticationFactor(AuthenticationCategory.KNOWLEDGE, "other"),
-            AuthenticationFactor(AuthenticationCategory.POSSESSION, "key_in_remote_wscd"),
-        ),
     )
+
+    private val pinFactor = AuthenticationFactor(AuthenticationCategory.KNOWLEDGE, "pin_6_or_more_digits")
+    private val keyFactor = AuthenticationFactor(AuthenticationCategory.POSSESSION, "key_in_remote_wscd")
+
+    /** A session that claims [declared] and whose sign reports [applied]. */
+    private fun session(declared: List<AuthenticationFactor>, applied: List<AuthenticationFactor>, signature: ByteArray = ByteArray(64) { 1 }) =
+        object : ScaSignSession {
+            var closed = false
+            var signs = 0
+            override val declaredFactors = declared
+            override suspend fun sign(data: ByteArray): ScaSignature { signs++; return ScaSignature(signature, applied) }
+            override fun close() { closed = true }
+        }
 
     @Test
     fun signVpToken_nonSca_keepsTheSignersRfc8176Amr_andNothingElse() = runTest {
@@ -609,14 +622,21 @@ class WscdKeystoreAdapterTest {
         assertEquals(listOf("hwk", "pin"), claims["amr"])
     }
 
-    @Test
-    fun signVpToken_sca_carriesTheTs12Claims_andNotTheStaleRfc8176Amr() = runTest {
+    private suspend fun scaAdapter(session: ScaSignSession?): Pair<WscdKeystoreAdapter, Signer> {
         val signer = createMultiKeyMockSigner()
         coEvery { signer.securityProperties(any()) } returns SignerSecurityProperties(
             keyStorage = listOf("hardware"), amr = listOf("hwk", "pin"),
         )
+        if (session != null) coEvery { signer.beginScaSign(any()) } returns session
         val adapter = WscdKeystoreAdapter(signer)
         adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+        return adapter to signer
+    }
+
+    @Test
+    fun signVpToken_sca_claimsTheFactorsTheSignReported_notTheStaleRfc8176Amr() = runTest {
+        val s = session(listOf(keyFactor, pinFactor), listOf(pinFactor, keyFactor))
+        val (adapter, signer) = scaAdapter(s)
 
         val claims = kbClaims(adapter.signVpToken(fakeSdJwtVc(), null, "n", "aud", "key-b", scaBinding))
 
@@ -626,9 +646,218 @@ class WscdKeystoreAdapterTest {
         )
         assertEquals("sha-512", claims["transaction_data_hashes_alg"])
         assertEquals(
-            listOf(mapOf("knowledge" to "other"), mapOf("possession" to "key_in_remote_wscd")),
+            listOf(mapOf("possession" to "key_in_remote_wscd"), mapOf("knowledge" to "pin_6_or_more_digits")),
             claims["amr"],
         )
-        coVerify { signer.sign("key-b", any()) }
+        assertEquals(1, s.signs)
+        assertTrue("the session is closed so a PIN typed ahead is wiped", s.closed)
+        // The plain sign path is not used for an SCA sign.
+        coVerify(exactly = 0) { signer.sign(any(), any()) }
+    }
+
+    @Test
+    fun signVpToken_sca_isRefused_whenTheSignAppliedDifferentFactorsThanTheClaim() = runTest {
+        val s = session(listOf(keyFactor, pinFactor), listOf(keyFactor, AuthenticationFactor(AuthenticationCategory.KNOWLEDGE, "pin_less_than_6_digits")))
+        val (adapter, _) = scaAdapter(s)
+
+        val e = runCatching { adapter.signVpToken(fakeSdJwtVc(), null, "n", "aud", "key-b", scaBinding) }.exceptionOrNull()
+
+        assertEquals(TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS, (e as TransactionDataError).reason)
+        assertTrue(s.closed)
+    }
+
+    @Test
+    fun signVpToken_sca_comparesTheReportWithTheFactorsThatWereSerialised_notWithAGetterRead_afterSigning() = runTest {
+        // A session whose declared list changes once the sign has started: the JWT carries
+        // [key, pin6], and the report [key, face] is what the changed list would now match.
+        val face = AuthenticationFactor(AuthenticationCategory.INHERENCE, "face_device")
+        var current = listOf(keyFactor, pinFactor)
+        val s = object : ScaSignSession {
+            override val declaredFactors get() = current
+            override suspend fun sign(data: ByteArray): ScaSignature {
+                current = listOf(keyFactor, face)
+                return ScaSignature(ByteArray(64), listOf(keyFactor, face))
+            }
+        }
+        val (adapter, _) = scaAdapter(s)
+
+        val e = runCatching { adapter.signVpToken(fakeSdJwtVc(), null, "n", "aud", "key-b", scaBinding) }.exceptionOrNull()
+
+        assertEquals(TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS, (e as TransactionDataError).reason)
+    }
+
+    @Test
+    fun signVpToken_sca_isRefused_whenTheSignAppliedOnlyOneCategory() = runTest {
+        val s = session(listOf(keyFactor, pinFactor), listOf(keyFactor))
+        val (adapter, _) = scaAdapter(s)
+
+        val e = runCatching { adapter.signVpToken(fakeSdJwtVc(), null, "n", "aud", "key-b", scaBinding) }.exceptionOrNull()
+
+        assertEquals(TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS, (e as TransactionDataError).reason)
+    }
+
+    @Test
+    fun signVpToken_sca_isRefused_whenTheSignReportsExtraFactorsBeyondTheClaim() = runTest {
+        val s = session(listOf(keyFactor, pinFactor), listOf(keyFactor, pinFactor, AuthenticationFactor(AuthenticationCategory.INHERENCE, "other")))
+        val (adapter, _) = scaAdapter(s)
+
+        val e = runCatching { adapter.signVpToken(fakeSdJwtVc(), null, "n", "aud", "key-b", scaBinding) }.exceptionOrNull()
+
+        assertEquals(TransactionDataReason.INSUFFICIENT_AUTHENTICATION_FACTORS, (e as TransactionDataError).reason)
+    }
+
+    @Test
+    fun signVpToken_sca_withASignerThatReportsNoFactors_isRefused_andNeverSignsPlainly() = runTest {
+        val (adapter, signer) = scaAdapter(null)
+        coEvery { signer.beginScaSign(any()) } throws ScaSignSession.insufficient("no factors")
+
+        val e = runCatching { adapter.signVpToken(fakeSdJwtVc(), null, "n", "aud", "key-b", scaBinding) }.exceptionOrNull()
+
+        assertTrue(e.toString(), e is TransactionDataError)
+        coVerify(exactly = 0) { signer.sign(any(), any()) }
+    }
+
+    @Test
+    fun scaAuthenticationCapability_comesFromTheSignerForTheCredentialsKey() = runTest {
+        val (adapter, signer) = scaAdapter(null)
+        coEvery { signer.scaAuthenticationCapability("key-b") } returns ScaAuthenticationCapability(true)
+
+        assertTrue(adapter.scaAuthenticationCapability(fakeSdJwtVc(), "key-b").canReachTwoCategories)
+    }
+
+    @Test
+    fun scaAuthenticationCapability_failsClosed_whenTheSignerThrows() = runTest {
+        val (adapter, signer) = scaAdapter(null)
+        coEvery { signer.scaAuthenticationCapability(any()) } throws IllegalStateException("boom")
+
+        assertFalse(adapter.scaAuthenticationCapability(fakeSdJwtVc(), "key-b").isPossible)
+    }
+
+    @Test
+    fun scaAuthenticationCapability_failsClosed_forAnUnknownKey() = runTest {
+        val (adapter, _) = scaAdapter(null)
+
+        assertFalse(adapter.scaAuthenticationCapability(fakeSdJwtVc(), "no-such-key").isPossible)
+    }
+
+    private fun jwtClaims(jwt: String): kotlinx.serialization.json.JsonObject =
+        kotlinx.serialization.json.Json.parseToJsonElement(
+            String(java.util.Base64.getUrlDecoder().decode(jwt.split('.')[1]), Charsets.UTF_8),
+        ) as kotlinx.serialization.json.JsonObject
+
+    // Includes strings whose JSON escaping differs between serialisers: U+2028/U+2029, quotes, a backslash, a slash, non-ASCII.
+    private val auxiliaryClaim = kotlinx.serialization.json.Json.parseToJsonElement(
+        """[{"type":"hash_commitment","alg":"sha-256","path":["psc","\u2028line","\u2029para"],"commitment":"JhQM6yeuK84BoGVVSxbLL9HjjeiBERnWHEZSIIMqwd0"},{"type":"hash_commitment","alg":"sha-256","path":["a/b","q\"uote","back\\slash","\u00e5\u4e2d"],"commitment":"AAAA"}]""",
+    )
+
+    private suspend fun wscdAdapter(signer: Signer = createMockSigner()): WscdKeystoreAdapter {
+        val jwk = com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256).generate().toPublicJWK().toJSONString()
+        coEvery { signer.exportPublicKey(any()) } returns jwk.toByteArray()
+        return WscdKeystoreAdapter(signer).also { it.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0)) }
+    }
+
+    @Test
+    fun generateProofWithJsonClaimsSignsTheAuxiliaryDataClaimByTheWscd() = runTest {
+        val signer = createMockSigner()
+        val adapter = wscdAdapter(signer)
+        val jwt = adapter.generateProofWithJsonClaims("aud-1", "n-1", false, null, mapOf("auxiliary_data" to auxiliaryClaim))
+        val claims = jwtClaims(jwt)
+        assertEquals(auxiliaryClaim, claims["auxiliary_data"])
+        assertEquals("n-1", (claims["nonce"] as kotlinx.serialization.json.JsonPrimitive).content)
+        // The claim is inside the bytes the WSCD signed.
+        val signedInput = slot<ByteArray>()
+        coVerify(exactly = 1) { signer.sign(any(), capture(signedInput)) }
+        assertEquals(jwt.substringBeforeLast('.'), String(signedInput.captured, Charsets.UTF_8))
+    }
+
+    @Test
+    fun theAuxiliaryDataClaimIsByteIdenticalToTheSoftwareKeystoresClaim() = runTest {
+        val wscd = wscdAdapter().generateProofWithJsonClaims("aud-1", "n-1", false, null, mapOf("auxiliary_data" to auxiliaryClaim))
+        val jwe = JweKeystore()
+        jwe.unlock(ByteArray(32) { it.toByte() }, ByteArray(0), ByteArray(32) { (it + 0x10).toByte() }, "info".toByteArray())
+        jwe.generateKey()
+        val soft = jwe.generateProofWithJsonClaims("aud-1", "n-1", false, null, mapOf("auxiliary_data" to auxiliaryClaim))
+        // The serialised member, character for character (key order, escaping, number form), not merely equal after parsing.
+        fun member(jwt: String): String {
+            val payload = String(java.util.Base64.getUrlDecoder().decode(jwt.split('.')[1]), Charsets.UTF_8)
+            val start = payload.indexOf("\"auxiliary_data\":") + "\"auxiliary_data\":".length
+            var depth = 0; var end = start
+            while (end < payload.length) {
+                when (payload[end]) { '[', '{' -> depth++; ']', '}' -> { depth--; if (depth == 0) { end++; break } } }
+                end++
+            }
+            return payload.substring(start, end)
+        }
+        assertEquals(member(soft), member(wscd))
+        assertTrue(member(wscd).startsWith("[{"))
+        // The escape-sensitive characters really are in the claim, and encoded the way Nimbus encodes them.
+        assertTrue(member(wscd), member(wscd).contains("\\u2028") && member(wscd).contains("\\u2029"))
+    }
+
+    @Test
+    fun aClaimTheWscdSignerCannotRepresentIsRefusedBeforeAnyKeyIsUsed() = runTest {
+        val signer = createMockSigner()
+        val adapter = wscdAdapter(signer)
+        val bad = listOf(
+            mapOf("x" to kotlinx.serialization.json.JsonNull),
+            mapOf("x" to kotlinx.serialization.json.JsonPrimitive(1.5)),
+            mapOf("x" to kotlinx.serialization.json.JsonArray(listOf(kotlinx.serialization.json.JsonNull))),
+            mapOf("aud" to kotlinx.serialization.json.JsonPrimitive("other")), // would replace the keystore's own claim
+            mapOf("nonce" to kotlinx.serialization.json.JsonPrimitive("other")),
+            mapOf("x" to (1..20).fold<Int, kotlinx.serialization.json.JsonElement>(kotlinx.serialization.json.JsonPrimitive("leaf")) { acc, _ -> kotlinx.serialization.json.JsonArray(listOf(acc)) }),
+        )
+        for (claims in bad) {
+            try {
+                adapter.generateProofWithJsonClaims("aud-1", "n-1", true, null, claims)
+                org.junit.Assert.fail("signed a claim it cannot represent: $claims")
+            } catch (_: KeystoreException) {
+            }
+        }
+        coVerify(exactly = 0) { signer.generateKey(any()) }
+        coVerify(exactly = 0) { signer.sign(any(), any()) }
+    }
+
+    @Test
+    fun generateProofCarriesTheSignedExtraClaims() = runTest {
+        val signer = createMockSigner()
+        // A real curve point: the proof header carries the public key.
+        val jwk = com.nimbusds.jose.jwk.gen.ECKeyGenerator(com.nimbusds.jose.jwk.Curve.P_256).generate().toPublicJWK().toJSONString()
+        coEvery { signer.exportPublicKey(any()) } returns jwk.toByteArray()
+        val adapter = WscdKeystoreAdapter(signer)
+        adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+
+        val jwt = adapter.generateProof("https://issuer.example", "n-1", false, null, mapOf("org.siros.psc" to "PSC-VALUE"))
+
+        val claims = jwtClaims(jwt)
+        assertEquals("PSC-VALUE", (claims["org.siros.psc"] as kotlinx.serialization.json.JsonPrimitive).content)
+        assertEquals("n-1", (claims["nonce"] as kotlinx.serialization.json.JsonPrimitive).content)
+        // The claim is part of what the WSCD signs, not added afterwards.
+        val signed = io.mockk.slot<ByteArray>()
+        coVerify { signer.sign("test-key-1", capture(signed)) }
+        assertTrue(String(signed.captured, Charsets.UTF_8).contains(jwt.split('.')[1]))
+        // The shorter overloads add nothing.
+        val plain = adapter.generateProof("https://issuer.example", "n-2", false, null)
+        assertFalse(jwtClaims(plain).containsKey("org.siros.psc"))
+    }
+
+    /**
+     * The onboarding gate (#297) belongs to ISSUANCE: a token with no key yet is exactly what enrolment (register/activate, where
+     * the authenticator is asked to set its PIN) is for, so those calls must reach the signer without consulting
+     * `isWscdOnboarded()`.
+     */
+    @Test
+    fun enrolmentOfATokenThatIsNotOnboardedYetIsNotGated() = runTest {
+        val signer = mockk<Signer>(relaxed = true, moreInterfaces = arrayOf(WscdManager::class))
+        coEvery { signer.isWscdOnboarded() } returns false
+        val manager = signer as WscdManager
+        val adapter = WscdKeystoreAdapter(signer)
+
+        adapter.registerLifecycle(mockk(relaxed = true))
+        adapter.activateLifecycle(mockk(relaxed = true))
+
+        coVerify(exactly = 1) { manager.registerLifecycle(any()) }
+        coVerify(exactly = 1) { manager.activateLifecycle(any()) }
+        coVerify(exactly = 0) { signer.isWscdOnboarded() }
+        assertFalse(adapter.isWscdOnboarded())
     }
 }

@@ -1,5 +1,52 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="siros_dcapi_zk_proof_status">Genererar nollkunskapsbevis…</string>
-    <string name="siros_dcapi_zk_proof_detail">Inga personuppgifter delas - endast ett kryptografiskt bevis på att du uppfyller begäran.</string>
+    <string name="siros_dcapi_zk_proof_detail">Ditt bevis avslöjar bara det du bekräftar att du delar - inget annat om din legitimation.</string>
+    <string name="siros_dcapi_refused_title">Begäran slutfördes inte</string>
+    <string name="siros_dcapi_refused_ok">OK</string>
+    <string name="siros_dcapi_refused_not_trusted">Den här webbplatsen är inte en som din plånbok litar på, så ingenting delades.</string>
+    <string name="siros_dcapi_refused_trust_unavailable">Din plånbok kunde inte kontrollera just nu om webbplatsen går att lita på, så ingenting delades. Kontrollera anslutningen och försök igen.</string>
+    <string name="siros_dcapi_refused_no_matching_credential">Du har ingen legitimation som uppfyller begäran, så ingenting delades.</string>
+    <string name="siros_dcapi_refused_selected_unavailable">Legitimationen du valde kan inte användas för den här begäran, eller har inga användningar kvar, så ingenting delades.</string>
+    <string name="siros_dcapi_refused_unsupported_request">Din plånbok kan inte besvara den här typen av begäran, så ingenting delades.</string>
+    <string name="siros_dcapi_refused_request_not_verified">Begäran kunde inte verifieras som kommande från webbplatsen du befinner dig på, så ingenting delades.</string>
+    <string name="siros_dcapi_refused_verifier_id_unavailable">Din plånbok kunde inte avgöra vem som frågar, så ingenting delades.</string>
+    <string name="siros_dcapi_refused_proof_failed">Din plånbok kunde inte skapa beviset, så ingenting delades. Försök igen.</string>
+    <!-- Unreviewed translation. Shown when the issuer refuses the wallet's pseudonym commitment (PSC_CONFLICT). -->
+    <string name="siros_auxiliary_data_conflict">Utfärdaren uppger att dess uppgifter om dig strider mot det som plånboken skickade. Att försöka igen hjälper inte; kontakta utfärdaren.</string>
+    <string name="siros_auxiliary_data_refused">Utfärdaren avvisade plånbokens identitetsåtagandedata. Att försöka igen hjälper inte; kontakta utfärdaren.</string>
+    <!-- circuit_zk consent. Wording approved by leifj 2026-10-20. -->
+    <string name="siros_consent_title">Bekräfta delning</string>
+    <string name="siros_consent_share">Dela</string>
+    <string name="siros_consent_cancel">Avbryt</string>
+    <string name="siros_consent_verifier_prove">%1$s ber dig bevisa:</string>
+    <string name="siros_consent_verifier_share">%1$s ber dig dela:</string>
+    <string name="siros_consent_age_between">Du är född mellan %1$s och %2$s (ungefär %3$d–%4$d år gammal). Ditt exakta födelsedatum delas inte.</string>
+    <string name="siros_consent_age_at_least">Du är minst %1$d år gammal. Ditt exakta födelsedatum delas inte.</string>
+    <string name="siros_consent_age_at_most">Du är högst %1$d år gammal. Ditt exakta födelsedatum delas inte.</string>
+    <string name="siros_consent_pseudonym_issuer">En pseudonym för %1$s delas. Du får samma pseudonym varje gång du besöker den här tjänsten och en annan pseudonym hos varje annan tjänst. Tjänsten som utfärdade ditt intyg kan ta reda på vem pseudonymen tillhör.</string>
+    <string name="siros_consent_pseudonym">En pseudonym för %1$s delas. Du får samma pseudonym varje gång du besöker den här tjänsten och en annan pseudonym hos varje annan tjänst.</string>
+    <string name="siros_consent_footer">Inga andra personuppgifter delas.</string>
+    <string name="siros_consent_claim">Värdet för ”%1$s” från ditt intyg delas.</string>
+    <string name="siros_consent_legacy_pseudonym">En pseudonym delas med %1$s.</string>
+    <string name="siros_dcapi_refused_consent_unavailable">Din plånbok kan inte be om ditt godkännande just nu, så ingenting delades.</string>
+    <string name="siros_dcapi_refused_user_declined">Du godkände inte begäran, så ingenting delades.</string>
+    <!-- circuit_zk generic predicate wording (any claim). Approved by leifj 2026-10-20. -->
+    <string name="siros_consent_predicate_eq">%1$s är %2$s.</string>
+    <string name="siros_consent_predicate_ne">%1$s är inte %2$s.</string>
+    <string name="siros_consent_predicate_lt">%1$s är mindre än %2$s.</string>
+    <string name="siros_consent_predicate_le">%1$s är högst %2$s.</string>
+    <string name="siros_consent_predicate_gt">%1$s är större än %2$s.</string>
+    <string name="siros_consent_predicate_ge">%1$s är minst %2$s.</string>
+    <string name="siros_consent_predicate_in">%1$s är något av: %2$s.</string>
+    <!-- circuit_zk predicate wording for DATE-typed claims (generic comparison wording stays for numbers and strings). Approved by leifj 2026-10-20. -->
+    <string name="siros_consent_predicate_date_eq">%1$s är den %2$s.</string>
+    <string name="siros_consent_predicate_date_ne">%1$s är inte den %2$s.</string>
+    <string name="siros_consent_predicate_date_lt">%1$s är före %2$s.</string>
+    <string name="siros_consent_predicate_date_le">%1$s är den %2$s eller tidigare.</string>
+    <string name="siros_consent_predicate_date_gt">%1$s är efter %2$s.</string>
+    <string name="siros_consent_predicate_date_ge">%1$s är den %2$s eller senare.</string>
+    <string name="siros_consent_predicate_date_in">%1$s är något av datumen: %2$s.</string>
+    <!-- Shown when an issuance is refused because the issuer's trust could not be established. -->
+    <string name="siros_issuer_not_trusted">Utfärdaren kunde inte verifieras som betrodd, så legitimationen lades inte till.</string>
 </resources>

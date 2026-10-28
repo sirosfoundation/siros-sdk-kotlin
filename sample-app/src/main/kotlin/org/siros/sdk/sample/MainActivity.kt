@@ -152,6 +152,9 @@ class MainActivity : ComponentActivity() {
                     viewModel = viewModel(factory = vmFactory)
                     LaunchedEffect(Unit) {
                         dispatchIncomingUri(intent?.data)
+                        // The launching intent is handled once: an activity re-created later (a configuration change, a return from the
+                        // browser) would otherwise deliver the same deep link again from getIntent().
+                        setIntent(android.content.Intent(intent).apply { data = null })
                         pendingWscaIntent?.let {
                             dispatchWscaTestAction(it)
                             pendingWscaIntent = null
@@ -244,6 +247,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
     val pendingPinEntry by viewModel.pendingPinEntry.collectAsState()
     val pendingTransportChoice by viewModel.pendingTransportChoice.collectAsState()
     val fido2AwaitingPresentation by viewModel.fido2AwaitingPresentation.collectAsState()
+    val fido2EnrolmentDiscovering by viewModel.fido2EnrolmentDiscovering.collectAsState()
     val fido2TransportMode by viewModel.fido2TransportMode.collectAsState()
     val pendingAutoEnrollOffer by viewModel.pendingAutoEnrollOffer.collectAsState()
     val presentationHistory by viewModel.presentationHistory.collectAsState()
@@ -255,6 +259,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
     val useWmpProtocol by viewModel.useWmpProtocol.collectAsState()
     val showCredentialDetails by viewModel.showCredentialDetails.collectAsState()
     val pendingTransactionConsent by viewModel.pendingTransactionConsent.collectAsState()
+    val pendingPresentationConsent by viewModel.pendingPresentationConsent.collectAsState()
     val showTransactionLog by viewModel.showTransactionLog.collectAsState()
 
     LaunchedEffect(errorMessage) {
@@ -332,6 +337,16 @@ fun WalletScreen(viewModel: WalletViewModel) {
     if (fido2AwaitingPresentation) {
         Fido2PresentKeyGuide(
             mode = fido2TransportMode,
+            onCancel = viewModel::cancelWscdLifecycleOp,
+        )
+    }
+
+    // Enrolment's first tap: the SDK is describing the key, before any PIN dialog (or, for a key without a PIN, before the
+    // ceremony itself) takes over - see WalletViewModel.fido2EnrolmentDiscovering's doc comment.
+    if (fido2EnrolmentDiscovering) {
+        Fido2PresentKeyGuide(
+            mode = fido2TransportMode,
+            discovering = true,
             onCancel = viewModel::cancelWscdLifecycleOp,
         )
     }
@@ -454,6 +469,16 @@ fun WalletScreen(viewModel: WalletViewModel) {
                 onConfirm = { viewModel.answerTransactionConsent(true) },
                 onDeny = { viewModel.answerTransactionConsent(false) },
             )
+
+            // circuit_zk presentation (what the verifier will receive) - the SDK built the request and owns the wording
+            pendingPresentationConsent != null -> pendingPresentationConsent!!.let { shown ->
+                // The answer names the request this dialog showed.
+                PresentationConsentDialog(
+                    request = shown.request,
+                    onAgree = { viewModel.answerPresentationConsent(shown, true) },
+                    onDecline = { viewModel.answerPresentationConsent(shown, false) },
+                )
+            }
 
             showTransactionLog -> TransactionLogScreen(
                 entries = viewModel.transactionLog.collectAsState().value,
@@ -693,6 +718,8 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onUpdateReaderTrustRootCertificatePem = viewModel::updateReaderTrustRootCertificatePem,
                             vegaProfilingEnabled = viewModel.vegaProfilingEnabled.collectAsState().value,
                             onUpdateVegaProfilingEnabled = viewModel::updateVegaProfilingEnabled,
+                            walletPolicy = viewModel.walletPolicy.collectAsState().value,
+                            onUpdateWalletPolicy = viewModel::updateWalletPolicy,
                         )
                         else -> CredentialsTab(
                             state = state,
@@ -1404,6 +1431,8 @@ fun SettingsTab(
     onUpdateReaderTrustRootCertificatePem: ((String) -> Unit)? = null,
     vegaProfilingEnabled: Boolean = false,
     onUpdateVegaProfilingEnabled: ((Boolean) -> Unit)? = null,
+    walletPolicy: org.siros.sdk.wallet.WalletPolicyOptions = org.siros.sdk.wallet.WalletPolicyOptions(),
+    onUpdateWalletPolicy: ((org.siros.sdk.wallet.WalletPolicyOptions) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -1640,6 +1669,10 @@ fun SettingsTab(
                 }
             }
         }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        RequestPolicyCard(policy = walletPolicy, onChange = onUpdateWalletPolicy)
 
         Spacer(modifier = Modifier.height(16.dp))
 

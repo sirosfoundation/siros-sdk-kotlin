@@ -19,6 +19,15 @@ interface KeystoreManager {
     val isUnlocked: Boolean
 
     /**
+     * Whether this keystore's WSCD has been ONBOARDED: a token-backed plugin (FIDO2) holds at least
+     * one enrolled key. Callers use it to fail with a clear error BEFORE asking the user for a PIN,
+     * which is meaningless when no token has been onboarded. `false` also means "could not be
+     * determined" (fail closed). The default is `true`: a keystore whose keys need no onboarding
+     * (software keys) has nothing to onboard.
+     */
+    suspend fun isWscdOnboarded(): Boolean = true
+
+    /**
      * Unlock the keystore using PRF-derived key material.
      *
      * @param prfOutput   raw PRF output from the WebAuthn authenticator.
@@ -153,6 +162,53 @@ interface KeystoreManager {
     }
 
     /**
+     * [generateProof] with extra string claims in the proof JWT payload, signed
+     * together with the rest (so the proof of possession covers them). Used for
+     * the issuer-advertised holder commitments (`org.siros.psc`).
+     *
+     * Fail-closed default: an empty [extraClaims] forwards to the four-argument
+     * form; a non-empty one throws, because a keystore that cannot place the
+     * claims must not return a proof that silently lacks what the issuer asked
+     * for. The keystores in this SDK override it. Claim values are never logged.
+     */
+    suspend fun generateProof(
+        audience: String,
+        nonce: String,
+        freshKey: Boolean,
+        holderBinding: HolderBinding?,
+        extraClaims: Map<String, String>,
+    ): String {
+        if (extraClaims.isNotEmpty()) {
+            throw KeystoreException(
+                "This KeystoreManager does not implement generateProof(..., extraClaims) and so cannot " +
+                    "add the requested proof claims - refusing rather than returning a proof without them.",
+            )
+        }
+        return generateProof(audience, nonce, freshKey, holderBinding)
+    }
+
+    /**
+     * [generateProof] with extra claims of ANY JSON type (the Credential Auxiliary Data v0.1 `auxiliary_data` claim is an array),
+     * signed with the rest. Fail-closed default: claims that are all strings forward to the string form; anything else throws,
+     * because a keystore that cannot place a claim must not return a proof without it.
+     */
+    suspend fun generateProofWithJsonClaims(
+        audience: String,
+        nonce: String,
+        freshKey: Boolean,
+        holderBinding: HolderBinding?,
+        extraJsonClaims: Map<String, kotlinx.serialization.json.JsonElement>,
+    ): String {
+        val strings = extraJsonClaims.mapValues { (_, v) ->
+            (v as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString }?.content
+                ?: throw KeystoreException(
+                    "This KeystoreManager cannot place a non-string proof claim - refusing rather than returning a proof without it.",
+                )
+        }
+        return generateProof(audience, nonce, freshKey, holderBinding, strings)
+    }
+
+    /**
      * Sign a verifiable presentation for OID4VP.
      * @param nonce the verifier nonce
      * @param audience the verifier URL
@@ -200,7 +256,8 @@ interface KeystoreManager {
     /**
      * As [signVpToken], for an SCA presentation that binds OpenID4VP
      * `transaction_data` (EC TS12): the KB-JWT additionally carries the
-     * claims of [transaction] and no other `amr`.
+     * claims of [transaction] and no other `amr`; the `amr` is the factors the
+     * signing operation itself applied, never a precomputed set.
      *
      * The default refuses: a keystore that does not override it cannot
      * produce a compliant SCA key binding JWT, and must not fall back to
@@ -219,6 +276,16 @@ interface KeystoreManager {
         "This keystore cannot bind transaction_data to a presentation",
         errorCode = "transaction_data_unsupported_keystore",
     )
+
+    /**
+     * Whether an SCA presentation of [credential] (signed with [kid], or the key
+     * the credential is bound to) could reach two authentication categories, asked
+     * BEFORE the user is shown the transaction. Never prompts. The default says it
+     * cannot: a keystore that does not report the authentication its signatures
+     * apply must not be offered for SCA.
+     */
+    suspend fun scaAuthenticationCapability(credential: String, kid: String?): ScaAuthenticationCapability =
+        ScaAuthenticationCapability.cannot("This keystore does not report the authentication it applies")
 
     /**
      * Build an mDoc DeviceResponse (ISO 18013-5) for OID4VP presentation.
@@ -324,6 +391,21 @@ interface KeystoreManager {
 
     /** Remove all stored credentials. */
     suspend fun clearCredentials()
+
+    /**
+     * Erase this keystore's own LOCAL private key material (not the stored
+     * credential records [clearCredentials] removes), for when the account
+     * that owns it is deleted. Never a remote or hardware operation: a key
+     * held by an external authenticator (FIDO2 security key) or a remote
+     * HSM (R2PS) cannot be, and is not, erased by this - only in-process
+     * software key material is, and only for a keystore backed by it.
+     *
+     * Default: no-op. [JweKeystore]'s own keys live inside the encrypted
+     * container [clearCredentials]/the keystore lock already handle; only
+     * [WscdKeystoreAdapter] (whose [Signer] can hold key material of its
+     * own, outside that container) overrides this.
+     */
+    suspend fun resetLocalKeys() {}
 
     // ── Presentation-history storage (PRF-encrypted alongside keys) ─
 

@@ -81,7 +81,10 @@ class WscdKeystoreAdapter private constructor(
     // Extension state has to land in the same blob the credentials do, or
     // it does not reach the account's other devices - and [credentialsKeystore]
     // is the JweKeystore that owns this adapter's container.
-    ExtensionStore by credentialsKeystore {
+    ExtensionStore by credentialsKeystore,
+    // The mainKey lives in [credentialsKeystore]; a wallet whose signing keys
+    // are in a WSCD still derives its private seed from that same key.
+    HolderWitnessSource by credentialsKeystore {
 
     constructor(signer: Signer) : this(signer, JweKeystore())
 
@@ -115,6 +118,8 @@ class WscdKeystoreAdapter private constructor(
     override suspend fun destroyLifecycle(request: DestroyLifecycleRequest): DestructionOutcome =
         requireWscdManager().destroyLifecycle(request)
 
+    override suspend fun isWscdOnboarded(): Boolean = signer.isWscdOnboarded()
+
     override fun registerFido2Plugin(transport: Ctap2TransportProvider) =
         requireWscdManager().registerFido2Plugin(transport)
 
@@ -123,6 +128,9 @@ class WscdKeystoreAdapter private constructor(
 
     override fun exportFido2State(): ByteArray =
         requireWscdManager().exportFido2State()
+
+    override suspend fun describeFido2Authenticator(): Fido2AuthenticatorInfo =
+        requireWscdManager().describeFido2Authenticator()
 
     /**
      * The persisted (privatedata-synced) copy of every hardware-backed WSCD
@@ -154,6 +162,14 @@ class WscdKeystoreAdapter private constructor(
     /** See [JweKeystore.setCredentialRefreshToken]. */
     suspend fun setCredentialRefreshToken(batchId: Long, entry: CredentialRefreshTokenEntry) =
         credentialsKeystore.setCredentialRefreshToken(batchId, entry)
+
+    /** See [JweKeystore.getCredentialMetadata]. */
+    suspend fun getCredentialMetadata(id: Long): kotlinx.serialization.json.JsonArray? =
+        credentialsKeystore.getCredentialMetadata(id)
+
+    /** See [JweKeystore.setCredentialMetadata]. */
+    suspend fun setCredentialMetadata(id: Long, metadata: kotlinx.serialization.json.JsonArray?) =
+        credentialsKeystore.setCredentialMetadata(id, metadata)
 
     /** See [JweKeystore.removeCredentialRefreshToken]. */
     suspend fun removeCredentialRefreshToken(batchId: Long) =
@@ -217,8 +233,30 @@ class WscdKeystoreAdapter private constructor(
         nonce: String,
         freshKey: Boolean,
         holderBinding: HolderBinding?,
+    ): String = generateProof(audience, nonce, freshKey, holderBinding, emptyMap())
+
+    override suspend fun generateProof(
+        audience: String,
+        nonce: String,
+        freshKey: Boolean,
+        holderBinding: HolderBinding?,
+        extraClaims: Map<String, String>,
+    ): String = generateProofWithJsonClaims(audience, nonce, freshKey, holderBinding, extraClaims.mapValues { kotlinx.serialization.json.JsonPrimitive(it.value) })
+
+    /**
+     * The proof with claims of any JSON type (the v0.1 `auxiliary_data` array), signed by the WSCD with the rest. The conversion is
+     * [ProofClaims], shared with the software keystore, so the claim is byte-identical either way; a claim it cannot carry is refused.
+     */
+    override suspend fun generateProofWithJsonClaims(
+        audience: String,
+        nonce: String,
+        freshKey: Boolean,
+        holderBinding: HolderBinding?,
+        extraJsonClaims: Map<String, kotlinx.serialization.json.JsonElement>,
     ): String {
         checkUnlocked()
+        // Converted (and refused) BEFORE any key is generated or used.
+        val converted = ProofClaims.toJava(extraJsonClaims)
         var keys = signer.listKeys()
         if (keys.isEmpty() || freshKey) {
             // Auto-generate a key for VCI proof-of-possession
@@ -257,6 +295,7 @@ class WscdKeystoreAdapter private constructor(
             .issueTime(Date())
             .claim("nonce", nonce)
         did?.let { claimsBuilder.issuer(it) }
+        converted.forEach { (k, v) -> claimsBuilder.claim(k, v) }
         val claims = claimsBuilder.build()
 
         val signingInput = "${base64Url(header.toJSONObject())}.${base64Url(claims.toJSONObject())}"
@@ -358,21 +397,11 @@ class WscdKeystoreAdapter private constructor(
     ): String = buildVpToken(credential, disclosedClaims, nonce, audience, kid, transaction)
 
     /**
-     * The `amr` side of a KB-JWT. SCA: the TS12 claims (hashes, `jti`,
-     * `response_mode`, and a two-category `amr` built for this operation); the
-     * RFC 8176 string array describes the PREVIOUS authentication and is the
-     * wrong shape for TS12, so it is not emitted. Non-SCA presentations are
-     * unchanged: the signer's last-operation `amr`, when it reports one.
+     * The `amr` side of a non-SCA KB-JWT, unchanged: the signer's last-operation
+     * `amr`, when it reports one. (An SCA KB-JWT takes its `amr` from the signing
+     * operation itself; see [buildVpToken].)
      */
-    private suspend fun addAuthenticationClaims(
-        claims: JWTClaimsSet.Builder,
-        keyId: String,
-        transaction: TransactionBinding?,
-    ) {
-        if (transaction != null) {
-            transaction.applyTo(claims)
-            return
-        }
+    private suspend fun addLegacyAuthenticationClaims(claims: JWTClaimsSet.Builder, keyId: String) {
         try {
             val props = signer.securityProperties(keyId)
             if (props.amr.isNotEmpty()) {
@@ -380,6 +409,21 @@ class WscdKeystoreAdapter private constructor(
             }
         } catch (_: Exception) {
             // Security properties not available: omit amr
+        }
+    }
+
+    override suspend fun scaAuthenticationCapability(credential: String, kid: String?): ScaAuthenticationCapability {
+        checkUnlocked()
+        val key = try {
+            val cnfKid = resolveCnfKid(cnfOf(credential))
+            selectSigningKey(signer.listKeys(), kid ?: cnfKid)
+        } catch (e: Exception) {
+            return ScaAuthenticationCapability.cannot("The key for the credential could not be determined")
+        }
+        return try {
+            signer.scaAuthenticationCapability(key.keyId)
+        } catch (e: Exception) {
+            ScaAuthenticationCapability.cannot("The signer could not say which authentication it can perform")
         }
     }
 
@@ -421,6 +465,9 @@ class WscdKeystoreAdapter private constructor(
             }
         } else disclosures
 
+        // Fail closed: never disclose (or silently strip) a protected claim.
+        org.siros.sdk.credentials.CredentialDisclosureGuard.requireNoneProtectedSdJwt(credential, selected)
+
         // Build SD-JWT presentation
         val sdJwtPresentation = buildString {
             append(issuerJwt)
@@ -456,15 +503,42 @@ class WscdKeystoreAdapter private constructor(
             .claim("nonce", nonce)
             .claim("sd_hash", sdHash)
 
-        addAuthenticationClaims(claims, key.keyId, transaction)
-
-        val claimsSet = claims.build()
-
-        val signingInput = "${base64Url(header.toJSONObject())}.${base64Url(claimsSet.toJSONObject())}"
-        val signature = signer.sign(key.keyId, signingInput.toByteArray(Charsets.UTF_8))
-        val kbJwt = "$signingInput.${base64UrlEncode(signature)}"
+        val kbJwt = if (transaction != null) {
+            signScaKbJwt(key.keyId, header, claims, transaction)
+        } else {
+            addLegacyAuthenticationClaims(claims, key.keyId)
+            val signingInput = "${base64Url(header.toJSONObject())}.${base64Url(claims.build().toJSONObject())}"
+            val signature = signer.sign(key.keyId, signingInput.toByteArray(Charsets.UTF_8))
+            "$signingInput.${base64UrlEncode(signature)}"
+        }
 
         return sdJwtPresentation + kbJwt
+    }
+
+    /**
+     * Signs an SCA KB-JWT. The factors are settled by the signing operation, which is
+     * started here (after consent) so a PIN asked for ahead of it is for THIS sign. The
+     * KB-JWT claims exactly those factors, and the signature is discarded unless the sign
+     * itself reports the same ones. The claim is snapshotted once: the report is compared
+     * with the very list that was serialised, whatever the session's getter returns later.
+     */
+    private suspend fun signScaKbJwt(
+        keyId: String,
+        header: JWSHeader,
+        claims: JWTClaimsSet.Builder,
+        transaction: TransactionBinding,
+    ): String {
+        val session = signer.beginScaSign(keyId)
+        try {
+            val declared = session.declaredFactors.toList()
+            transaction.applyTo(claims, declared)
+            val signingInput = "${base64Url(header.toJSONObject())}.${base64Url(claims.build().toJSONObject())}"
+            val signed = session.sign(signingInput.toByteArray(Charsets.UTF_8))
+            ScaSignSession.requireMatching(declared, signed.factors)
+            return "$signingInput.${base64UrlEncode(signed.signature)}"
+        } finally {
+            session.close()
+        }
     }
 
     override suspend fun signMdocPresentation(
@@ -634,6 +708,10 @@ class WscdKeystoreAdapter private constructor(
 
     override suspend fun clearCredentials() {
         credentialsKeystore.clearCredentials()
+    }
+
+    override suspend fun resetLocalKeys() {
+        signer.resetLocalKeys()
     }
 
     // ── Presentation-history storage (delegated to credentialsKeystore) ─
@@ -841,16 +919,13 @@ class WscdKeystoreAdapter private constructor(
         }
     }
 
-    private fun base64Url(obj: Map<String, Any>): String {
-        val jsonObj = kotlinx.serialization.json.JsonObject(
-            obj.mapValues { (_, v) -> toJsonElement(v) }
-        )
-        val json = Json.encodeToString(
-            kotlinx.serialization.json.JsonObject.serializer(),
-            jsonObj
-        )
-        return base64UrlEncode(json.toByteArray(Charsets.UTF_8))
-    }
+    /**
+     * The JWS segment of [obj]: serialised by Nimbus (`JSONObjectUtils`), the same serialiser [JweKeystore] signs through, so a
+     * claim is encoded identically by both keystores (including the escaping of U+2028 / U+2029, which kotlinx.serialization
+     * emits literally).
+     */
+    private fun base64Url(obj: Map<String, Any>): String =
+        base64UrlEncode(com.nimbusds.jose.util.JSONObjectUtils.toJSONString(obj).toByteArray(Charsets.UTF_8))
 
     private fun toJsonElement(value: Any?): kotlinx.serialization.json.JsonElement {
         return when (value) {

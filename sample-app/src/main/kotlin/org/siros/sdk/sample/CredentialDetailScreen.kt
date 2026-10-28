@@ -56,6 +56,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import org.siros.sdk.credentials.StoredCredential
+import org.siros.sdk.credentials.CredentialDisclosureGuard
 import org.siros.sdk.credentials.CredentialUtils
 import org.siros.sdk.credentials.DisplayClaim
 import org.siros.sdk.credentials.interop.CredentialStatus
@@ -228,32 +229,16 @@ private fun InfoTab(credential: StoredCredential) {
         // Logo
         meta?.logo?.uri?.let { logoUri ->
             Row(verticalAlignment = Alignment.CenterVertically) {
-                val logo = rememberNormalizedLogoModel(logoUri)
-                Box(
+                IssuerLogo(
+                    uri = logoUri,
+                    initial = meta.name ?: credential.format,
+                    contentDescription = meta.logo?.altText,
                     modifier = Modifier
                         .size(48.dp)
                         .clip(RoundedCornerShape(8.dp)),
-                ) {
-                    // Full-bleed raster background (if any) drawn underneath the
-                    // (now `<image>`-free) SVG - see NormalizedLogo's doc comment;
-                    // without this a logo SVG with an embedded full-card raster
-                    // <image> mis-renders via AndroidSVG with a dark band roughly
-                    // 30% down, the same bug already fixed for full-size cards.
-                    logo.backgroundImageBytes?.let { backgroundBytes ->
-                        AsyncImage(
-                            model = backgroundBytes,
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop,
-                        )
-                    }
-                    AsyncImage(
-                        model = logo.model,
-                        contentDescription = meta.logo?.altText,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit,
-                    )
-                }
+                    contentScale = ContentScale.Fit,
+                    initialColor = MaterialTheme.colorScheme.onSurface,
+                )
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
                     text = meta.name ?: credential.format,
@@ -371,7 +356,9 @@ private fun RawTab(credential: StoredCredential) {
     // credential.raw is "<jwt>~<disclosure>~<disclosure>~..." per the SD-JWT
     // spec, not one JSON blob - decode it into its actual parts so each is
     // individually readable and copyable, instead of one opaque string.
-    val parts = remember(credential.raw) { CredentialUtils.parseSdJwtParts(credential.raw) }
+    // The SDK decides what may be shown: a credential with protected claims is redacted there.
+    val view = remember(credential.raw) { CredentialDisclosureGuard.rawViewOf(credential) }
+    val parts = view.parts
 
     Column(
         modifier = Modifier
@@ -407,9 +394,16 @@ private fun RawTab(credential: StoredCredential) {
                 disclosure.toString(),
             )
         }
-        if (parts.header == null && parts.payload == null && parts.disclosures.isEmpty()) {
+        if (view.redacted) {
+            Text(
+                text = stringResource(R.string.credential_detail_raw_redacted),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        view.rawText?.let { text ->
             // Unparseable - still show the raw string rather than nothing.
-            CopyableTextBlock(text = credential.raw, modifier = Modifier.fillMaxWidth())
+            CopyableTextBlock(text = text, modifier = Modifier.fillMaxWidth())
         }
     }
 }

@@ -2,6 +2,7 @@ package org.siros.sdk.credentials
 
 import com.upokecenter.cbor.CBORObject
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -763,7 +764,7 @@ class CredentialMatcherTest {
         val query = json.parseToJsonElement(
             """{"credentials":[
                  {"id":"pid","format":"dc+sd-jwt","meta":{"vct_values":["urn:eu.europa.ec.eudi:pid:1"]}},
-                 {"id":"mdl","format":"mso_mdoc","meta":{"doctype_value":"org.iso.18013.5.1.mDL"}}
+                 {"id":"mdl","format":"mso_mdoc","meta":{"source_format":"mso_mdoc","doctype_value":"org.iso.18013.5.1.mDL"}}
                ]}"""
         ).jsonObject
 
@@ -812,5 +813,180 @@ class CredentialMatcherTest {
                 json.parseToJsonElement("""{"nonsense":true}""").jsonObject
             ).isEmpty()
         )
+    }
+
+    private fun pid() = listOf(
+        StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "raw-1", metadata = CredentialMetadata(vct = "urn:eu:pid:1"), batchId = 1L, instanceId = 0),
+    )
+
+    private fun candidates(query: String) =
+        CredentialMatcher.match(json.parseToJsonElement(query).jsonObject, pid()).flatMap { it.candidates }.map { it.id }
+
+    /**
+     * Matcher 0.7.0 rejects a request repeating a credential query id or a claim id. The engine's
+     * rejection must not fall back to the built-in matcher, which answers it: a reference to the
+     * repeated id would resolve to whichever came first.
+     */
+    @Test
+    fun a_repeated_credential_query_id_offers_nothing() {
+        val ok = """{"credentials":[{"id":"a","format":"dc+sd-jwt","meta":{"vct_values":["urn:eu:pid:1"]}}]}"""
+        assertEquals(listOf(1L), candidates(ok))
+        val repeated = """{"credentials":[
+            {"id":"a","format":"dc+sd-jwt","meta":{"vct_values":["urn:eu:pid:1"]}},
+            {"id":"a","format":"dc+sd-jwt","meta":{"vct_values":["urn:eu:pid:1"]}}]}"""
+        assertTrue(candidates(repeated).isEmpty())
+    }
+
+    @Test
+    fun a_repeated_claim_id_offers_nothing() {
+        val repeated = """{"credentials":[{"id":"a","format":"dc+sd-jwt","meta":{"vct_values":["urn:eu:pid:1"]},
+            "claims":[{"id":"c","path":["x"]},{"id":"c","path":["y"]}]}]}"""
+        assertTrue(candidates(repeated).isEmpty())
+        // Claim ids repeated across DIFFERENT queries are not a repeat.
+        val acrossQueries = """{"credentials":[
+            {"id":"a","claims":[{"id":"c","path":["x"]}]},
+            {"id":"b","claims":[{"id":"c","path":["x"]}]}]}"""
+        assertTrue(!CredentialMatcher.hasDuplicateDcqlIds(json.parseToJsonElement(acrossQueries).jsonObject["credentials"]!!.jsonArray))
+    }
+
+    /**
+     * gdc e2e / nym_auth live shape: one required credential_sets entry, five single-credential
+     * alternatives (mdl, photoid, pid_1_5, pid_1_8, pid_mdoc_id), properly shaped per OID4VP §6.2
+     * (each option is an array, even a one-element one). The wallet holds credentials for three of
+     * them. This is the baseline the parser must keep handling correctly.
+     */
+    @Test
+    fun matchDcql_fiveOptionCredentialSet_withThreeSatisfiable_findsAllThreeOptions() {
+        val credentials = listOf(
+            StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "r1", metadata = CredentialMetadata(vct = "mdl-vct"), batchId = 1L, instanceId = 0),
+            StoredCredential(id = 2L, format = "dc+sd-jwt", raw = "r2", metadata = CredentialMetadata(vct = "pid-1-8-vct"), batchId = 2L, instanceId = 0),
+            StoredCredential(id = 3L, format = "dc+sd-jwt", raw = "r3", metadata = CredentialMetadata(vct = "pid-mdoc-id-vct"), batchId = 3L, instanceId = 0),
+        )
+        val query = json.parseToJsonElement(
+            """
+            {
+              "credentials": [
+                { "id": "mdl", "format": "dc+sd-jwt", "meta": { "vct_values": ["mdl-vct"] } },
+                { "id": "photoid", "format": "dc+sd-jwt", "meta": { "vct_values": ["photoid-vct"] } },
+                { "id": "pid_1_5", "format": "dc+sd-jwt", "meta": { "vct_values": ["pid-1-5-vct"] } },
+                { "id": "pid_1_8", "format": "dc+sd-jwt", "meta": { "vct_values": ["pid-1-8-vct"] } },
+                { "id": "pid_mdoc_id", "format": "dc+sd-jwt", "meta": { "vct_values": ["pid-mdoc-id-vct"] } }
+              ],
+              "credential_sets": [
+                { "required": true, "options": [["mdl"], ["photoid"], ["pid_1_5"], ["pid_1_8"], ["pid_mdoc_id"]] }
+              ]
+            }
+            """.trimIndent()
+        ).jsonObject
+
+        val output = CredentialMatcher.matchDcql(query, credentials)
+        assertEquals(1, output.credentialSets!!.size)
+        assertEquals(3, output.satisfiableOptions.size)
+        assertEquals(
+            setOf("mdl", "pid_1_8", "pid_mdoc_id"),
+            output.satisfiableOptions.flatMap { it.queryIds }.toSet(),
+        )
+    }
+
+    /**
+     * A single-credential `credential_sets` option shaped as a bare string (`"options": ["mdl"]`)
+     * rather than the one-element array OID4VP §6.2 always requires (`"options": [["mdl"]]`) - seen
+     * live (gdc e2e, nym_auth) relayed this way for every option of a required, five-alternative
+     * set. `optElement as? JsonArray` alone silently dropped every such option, `options.isEmpty()`
+     * then dropped the WHOLE credential_sets entry, and `credentialSets` came back null even though
+     * `credentials` and its per-query candidates parsed and matched completely normally (this is
+     * exactly what made the bug hard to see live: every alternative still "matched" with the right
+     * candidate count, only the grouping that was supposed to make them mutually exclusive silently
+     * vanished). With `credentialSets` null, `satisfiableOptions` is never populated, and
+     * [org.siros.sdk.wallet.PresentationRequest.exclusiveChoiceGroups] has nothing to group on - the
+     * consent screen falls straight back into the pre-#353 "every matching alternative is its own
+     * independently checkable step" union bug for exactly the request #353 was meant to catch.
+     *
+     * Revert-proved: reverting [CredentialMatcher.parseCredentialSets] to only accept a `JsonArray`
+     * option fails this test (`credentialSets` comes back `null`).
+     */
+    @Test
+    fun parseCredentialSets_acceptsABareStringOptionAsAOneElementOption() {
+        val query = json.parseToJsonElement(
+            """
+            {
+              "credentials": [],
+              "credential_sets": [
+                { "required": true, "options": ["mdl", "photoid", "pid_1_5", "pid_1_8", "pid_mdoc_id"] }
+              ]
+            }
+            """.trimIndent()
+        ).jsonObject
+
+        val sets = CredentialMatcher.parseCredentialSets(query)!!
+        assertEquals(1, sets.size)
+        assertTrue(sets[0].required)
+        assertEquals(
+            listOf(listOf("mdl"), listOf("photoid"), listOf("pid_1_5"), listOf("pid_1_8"), listOf("pid_mdoc_id")),
+            sets[0].options,
+        )
+    }
+
+    /**
+     * The live gdc/nym_auth shape end to end through [CredentialMatcher.matchDcql], with the
+     * bare-string option malformation [parseCredentialSets_acceptsABareStringOptionAsAOneElementOption]
+     * covers in isolation: three of the five alternatives are satisfiable, and the fix must still
+     * find all three (not just parse the shape without dropping candidates).
+     */
+    @Test
+    fun matchDcql_fiveOptionCredentialSetAsBareStrings_withThreeSatisfiable_stillFindsAllThreeOptions() {
+        val credentials = listOf(
+            StoredCredential(id = 1L, format = "dc+sd-jwt", raw = "r1", metadata = CredentialMetadata(vct = "mdl-vct"), batchId = 1L, instanceId = 0),
+            StoredCredential(id = 2L, format = "dc+sd-jwt", raw = "r2", metadata = CredentialMetadata(vct = "pid-1-8-vct"), batchId = 2L, instanceId = 0),
+            StoredCredential(id = 3L, format = "dc+sd-jwt", raw = "r3", metadata = CredentialMetadata(vct = "pid-mdoc-id-vct"), batchId = 3L, instanceId = 0),
+        )
+        val query = json.parseToJsonElement(
+            """
+            {
+              "credentials": [
+                { "id": "mdl", "format": "dc+sd-jwt", "meta": { "vct_values": ["mdl-vct"] } },
+                { "id": "photoid", "format": "dc+sd-jwt", "meta": { "vct_values": ["photoid-vct"] } },
+                { "id": "pid_1_5", "format": "dc+sd-jwt", "meta": { "vct_values": ["pid-1-5-vct"] } },
+                { "id": "pid_1_8", "format": "dc+sd-jwt", "meta": { "vct_values": ["pid-1-8-vct"] } },
+                { "id": "pid_mdoc_id", "format": "dc+sd-jwt", "meta": { "vct_values": ["pid-mdoc-id-vct"] } }
+              ],
+              "credential_sets": [
+                { "required": true, "options": ["mdl", "photoid", "pid_1_5", "pid_1_8", "pid_mdoc_id"] }
+              ]
+            }
+            """.trimIndent()
+        ).jsonObject
+
+        val output = CredentialMatcher.matchDcql(query, credentials)
+        assertEquals(
+            "per-query matching must be unaffected by the options shape",
+            setOf("mdl", "pid_1_8", "pid_mdoc_id"),
+            output.queryResults.filter { it.candidates.isNotEmpty() }.map { it.queryId }.toSet(),
+        )
+        assertEquals(1, output.credentialSets!!.size)
+        assertEquals(3, output.satisfiableOptions.size)
+        assertEquals(
+            setOf("mdl", "pid_1_8", "pid_mdoc_id"),
+            output.satisfiableOptions.flatMap { it.queryIds }.toSet(),
+        )
+    }
+
+    /** A malformed option that is neither an array nor a string (a number) is still dropped, as before. */
+    @Test
+    fun parseCredentialSets_stillSkipsAnOptionThatIsNeitherAnArrayNorAString() {
+        val query = json.parseToJsonElement(
+            """
+            {
+              "credentials": [],
+              "credential_sets": [
+                { "options": [["valid"], 42, null] }
+              ]
+            }
+            """.trimIndent()
+        ).jsonObject
+
+        val sets = CredentialMatcher.parseCredentialSets(query)!!
+        assertEquals(1, sets.size)
+        assertEquals(listOf(listOf("valid")), sets[0].options)
     }
 }

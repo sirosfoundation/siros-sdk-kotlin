@@ -23,6 +23,34 @@ interface Signer {
      */
     suspend fun sign(keyId: String, data: ByteArray): ByteArray
 
+    /**
+     * Whether an SCA sign (EC TS12 v1.0.1) with [keyId] could reach two
+     * authentication categories. Never prompts. The default says it cannot: a
+     * signer that does not report authentication factors must not be offered
+     * for SCA.
+     */
+    suspend fun scaAuthenticationCapability(keyId: String): ScaAuthenticationCapability =
+        ScaAuthenticationCapability.cannot("This signer does not report the authentication it applies")
+
+    /**
+     * Starts one SCA sign with [keyId]: a fresh user authentication whose factors
+     * are reported by the signature itself (see [ScaSignSession]). The default refuses.
+     *
+     * @throws org.siros.sdk.credentials.TransactionDataError with
+     *   `INSUFFICIENT_AUTHENTICATION_FACTORS` when two categories cannot be established.
+     */
+    suspend fun beginScaSign(keyId: String): ScaSignSession =
+        throw ScaSignSession.insufficient("This signer does not report the authentication it applies")
+
+    /**
+     * Whether the WSCD this signer needs has been ONBOARDED (a token-backed plugin holds an
+     * enrolled key), answered WITHOUT prompting. A PIN is only meaningful for an onboarded token,
+     * so callers refuse before asking when this is `false`. Anything that cannot be determined is
+     * `false` (fail closed). The default is `true`: a signer whose keys need no onboarding
+     * (software keys, a remote service) has nothing to onboard.
+     */
+    suspend fun isWscdOnboarded(): Boolean = true
+
     /** List all keys managed by this signer. */
     suspend fun listKeys(): List<SignerKeyInfo>
 
@@ -85,6 +113,21 @@ interface Signer {
      * to accept keys back.
      */
     suspend fun importPrivateKeypairs(keypairs: List<ExportedPrivateKeypair>) {}
+
+    /**
+     * Erase every LOCAL private key this signer directly holds (in-process
+     * key material only), for when the account that owns them is deleted.
+     *
+     * This is never a remote or hardware operation: a hardware-backed key
+     * (FIDO2 security key) or a remote-HSM-backed one (R2PS) cannot be, and
+     * is not, erased by this - only the signer's own in-process software key
+     * material is. It is also distinct from a lifecycle's own deliberate
+     * remote-revoke/destroy path, which this never triggers.
+     *
+     * Default: no-op, since a signer with no in-process key material (a
+     * plain hardware/remote-backed one) has nothing local to erase.
+     */
+    suspend fun resetLocalKeys() {}
 }
 
 /**

@@ -122,6 +122,11 @@ data class CredentialConfiguration(
      */
     @SerialName("cryptographic_binding_methods_supported")
     val cryptographicBindingMethodsSupported: List<String>? = null,
+    /**
+     * Credential Auxiliary Data v0.1 advertisement (`{"to_wallet": [...], "to_issuer": [...]}`), kept raw so a value that must
+     * not be there can be told from a slot list; read by [AuxiliaryDataV01.advertisement]. Appended: binary API of a data class.
+     */
+    @SerialName("auxiliary_data_supported") val auxiliaryDataSupported: JsonElement? = null,
 )
 
 /**
@@ -131,7 +136,31 @@ data class CredentialConfiguration(
 data class CredentialDisplayMetadata(
     val display: List<CredentialDisplayEntry>? = null,
     val claims: List<JsonElement>? = null,
-)
+    /**
+     * The PRESENCE of each member of a REMOVED secret-bearing shape in the configuration's public metadata, never its value
+     * ([LegacyMemberPresence]): a configuration that publishes any of them is a superseded shape and is not offered
+     * ([AuxiliaryDataV01.advertisement]). [carriesLegacyMember] is the test.
+     */
+    @SerialName("org.siros.secret_seed") @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val legacySecretSeed: LegacyMemberPresence = LegacyMemberPresence.ABSENT,
+    @SerialName("org.siros.holder_commitments") @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val legacyOrgHolderCommitments: LegacyMemberPresence = LegacyMemberPresence.ABSENT,
+    @SerialName("org.siros.psc") @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val legacyOrgPsc: LegacyMemberPresence = LegacyMemberPresence.ABSENT,
+    @SerialName("holder_commitments") @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val legacyHolderCommitments: LegacyMemberPresence = LegacyMemberPresence.ABSENT,
+    @SerialName("secret_members") @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val legacySecretMembers: LegacyMemberPresence = LegacyMemberPresence.ABSENT,
+    /**
+     * The Auxiliary Data v0.1 response member as it appears in PUBLIC metadata, where it is forbidden: kept raw only so its
+     * presence can be told ([AuxiliaryDataV01.advertisement] classifies the configuration as malformed). Appended: binary API.
+     */
+    @SerialName("auxiliary_data") val auxiliaryData: JsonElement? = null,
+) {
+    /** Whether any member of a removed secret-bearing shape was present. */
+    val carriesLegacyMember: Boolean
+        get() = listOf(legacySecretSeed, legacyOrgHolderCommitments, legacyOrgPsc, legacyHolderCommitments, legacySecretMembers).any { it == LegacyMemberPresence.PRESENT }
+}
 
 @Serializable
 data class CredentialDisplayEntry(
