@@ -84,25 +84,33 @@ data class PresentationRequest(
         val options: List<CredentialMatcher.SatisfiableOption>,
     )
 
-    val exclusiveChoiceGroups: List<ExclusiveChoiceGroup>
+    /**
+     * [satisfiableOptions] grouped by `credentialSetIndex`, re-checked against [consentMatchResults]
+     * rather than trusted at face value: a circuit_zk request's candidates are narrowed further by
+     * its plan's own predicate check AFTER [satisfiableOptions] was computed (see SirosWallet's
+     * `planCircuitZkMatches`), so an option reported satisfiable there can have lost its only
+     * candidate by the time this is read. An option like that is not a real alternative any more -
+     * [consentMatchResults] already has nothing for it - so it is dropped here before grouping,
+     * not after: [exclusiveChoiceGroups] and [activeConsentMatchResults] share this SAME recheck
+     * (a Copilot review on #353's follow-up caught them disagreeing - `exclusiveChoiceGroups` saw
+     * the recheck and correctly reported `[[a],[b]]` as no-longer-ambiguous once `a` lost its
+     * candidates, but [activeConsentMatchResults] still grouped the stale, pre-recheck options and
+     * so still required a choice nothing would ever render, silently excluding the surviving `b`
+     * instead of activating it automatically).
+     */
+    private val validSatisfiableOptionsByCredentialSetIndex: Map<Int, List<CredentialMatcher.SatisfiableOption>>
         get() {
-            // Re-checked against consentMatchResults rather than trusted at
-            // face value: a circuit_zk request's candidates are narrowed
-            // further by its plan's own predicate check AFTER
-            // satisfiableOptions was computed (see SirosWallet's
-            // planCircuitZkMatches), so an option reported satisfiable there
-            // can have lost its only candidate by the time this is read. An
-            // option like that is not a real alternative to choose between -
-            // consentMatchResults already has nothing for it.
             val consentQueryIds = consentMatchResults.map { it.queryId }.toSet()
             return satisfiableOptions
                 .filter { option -> option.queryIds.all { it in consentQueryIds } }
                 .groupBy { it.credentialSetIndex }
-                .entries
-                .sortedBy { it.key }
-                .map { (setIndex, options) -> ExclusiveChoiceGroup(setIndex, options) }
-                .filter { it.options.size > 1 }
         }
+
+    val exclusiveChoiceGroups: List<ExclusiveChoiceGroup>
+        get() = validSatisfiableOptionsByCredentialSetIndex.entries
+            .sortedBy { it.key }
+            .map { (setIndex, options) -> ExclusiveChoiceGroup(setIndex, options) }
+            .filter { it.options.size > 1 }
 
     /**
      * [consentMatchResults] restricted to the queries actually part of this presentation.
@@ -139,7 +147,7 @@ data class PresentationRequest(
         // (nothing to choose: that option IS the answer, multi-element or not). A set with zero
         // satisfiable options contributes nothing - neither its members' free pass (they ARE
         // constrained) nor an option to include.
-        val activeFromSets = satisfiableOptions.groupBy { it.credentialSetIndex }.values.flatMap { options ->
+        val activeFromSets = validSatisfiableOptionsByCredentialSetIndex.values.flatMap { options ->
             val active = if (options.size > 1) {
                 options.firstOrNull { it.optionIndex == chosenOptionIndex[options.first().credentialSetIndex] }
             } else {

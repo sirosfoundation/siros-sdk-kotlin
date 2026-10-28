@@ -245,4 +245,28 @@ class PresentationRequestStepsTest {
         assertTrue("only one option is satisfiable - nothing to choose", r.exclusiveChoiceGroups.isEmpty())
         assertEquals(listOf("a"), r.activeConsentMatchResults(emptyMap()).map { it.queryId })
     }
+
+    // ── Regression test for a second Copilot review on #353's follow-up fix ──
+
+    @Test
+    fun exclusiveChoiceGroupsAndActiveConsentMatchResultsAgreeWhenAnOptionGoesStaleAfterSatisfiableOptionsWasComputed() {
+        // [[a],[b]], both reported satisfiable when satisfiableOptions was computed, but "a" has
+        // since lost its only candidate (e.g. a circuit_zk predicate check run AFTER matching -
+        // see exclusiveChoiceGroups's doc comment). exclusiveChoiceGroups correctly drops "a" and
+        // reports no ambiguity (nothing to choose: "b" is the only survivor) -
+        // activeConsentMatchResults MUST agree: the earlier (buggy) implementation grouped the
+        // RAW, pre-recheck satisfiableOptions directly, so it still saw two options for this set,
+        // found no entry in chosenOptionIndex (nothing chose one, because exclusiveChoiceGroups
+        // never asked the UI to), and so activated neither - silently excluding the surviving "b"
+        // instead of activating it automatically.
+        val b = result("b", "mso_mdoc", listOf(listOf("ns", "x")))
+        val r = request(
+            unmatched("a"), b,
+            satisfiableOptions = listOf(option(0, "a"), option(1, "b")),
+            credentialSets = listOf(credentialSet(listOf("a"), listOf("b"))),
+        )
+
+        assertTrue("only b survived - nothing to choose", r.exclusiveChoiceGroups.isEmpty())
+        assertEquals(listOf("b"), r.activeConsentMatchResults(emptyMap()).map { it.queryId })
+    }
 }

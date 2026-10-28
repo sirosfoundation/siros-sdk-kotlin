@@ -8352,6 +8352,8 @@ class SirosWalletTest {
         seedTrust: Boolean = true,
         clientId: String = redirectClientId,
         flows: List<String> = listOf("f1"),
+        /** Further doctypes the (single) circuit serves - see czkSetup's own param of the same name. */
+        extraDocTypes: Set<String> = emptySet(),
     ): EngineCzk {
         val match = MutableSharedFlow<MatchRequestMessage>()
         val sign = MutableSharedFlow<SignRequestMessage>()
@@ -8368,7 +8370,7 @@ class SirosWalletTest {
         every { engine.sendSignResponse(any(), responseJwe = any(), messageId = any()) } just runs
         every { engine.sendMatchResponse(any(), any(), any()) } just runs
         val seen = mutableListOf<JsonObject?>()
-        val s = czkSetup(trust = czkIds("x509_san_dns" to redirectClientId.removePrefix("x509_san_dns:")), consent = consent, flagOn = flagOn, offersCircuit = offersCircuit, credentials = credentials, onPlan = { seen += it })
+        val s = czkSetup(trust = czkIds("x509_san_dns" to redirectClientId.removePrefix("x509_san_dns:")), consent = consent, flagOn = flagOn, offersCircuit = offersCircuit, credentials = credentials, extraDocTypes = extraDocTypes, onPlan = { seen += it })
         invokeConnectEngine(s.wallet, "app-token")
         advanceUntilIdle()
         // What the engine's trust step left for this flow.
@@ -9069,8 +9071,12 @@ class SirosWalletTest {
             metadata = CredentialMetadata(name = "Nym B"), batchId = 2L, instanceId = 0),
     )
 
-    private fun TestScope.engineCzkWith(credentials: List<StoredCredential>?, policy: CredentialConsumptionPolicy? = null): EngineCzk {
-        val e = engineCzk(credentials = credentials)
+    private fun TestScope.engineCzkWith(
+        credentials: List<StoredCredential>?,
+        policy: CredentialConsumptionPolicy? = null,
+        extraDocTypes: Set<String> = emptySet(),
+    ): EngineCzk {
+        val e = engineCzk(credentials = credentials, extraDocTypes = extraDocTypes)
         policy?.let { e.s.wallet.credentialConsumptionPolicy = it }
         return e
     }
@@ -9176,6 +9182,70 @@ class SirosWalletTest {
         val matches = slot<List<CredentialMatch>>()
         verify(exactly = 1) { e.engine.sendMatchResponse("f1", capture(matches), any()) }
         assertEquals(listOf("q1" to "1", "q2" to "2"), matches.captured.map { it.credentialQueryId to it.credentialId })
+    }
+
+    /** Like [redirectQueries], but each query asks for its own [doctypes] entry and the whole set is one required
+     *  credential_sets entry of single-credential alternatives - the gdc/nym_auth shape, generalised to let each
+     *  alternative be backed by its OWN distinct credential (a different doctype) rather than all sharing one. */
+    private fun redirectQueriesWithDoctypes(vararg doctypes: String) = Json.parseToJsonElement(
+        """{"credentials":[""" + doctypes.withIndex().joinToString(",") { (i, dt) ->
+            val id = "q${i + 1}"
+            """{"id":"$id","format":"zkp_req","meta":{"source_format":"mso_mdoc","doctype_value":"$dt"},"_req":[{"fn_id":"pseudonym","return":"n$id","params":{"config":"known-offender-matching-psc","ver":1,"prf":"sha-256"}}]}"""
+        } + """],"credential_sets":[{"options":[${doctypes.indices.joinToString(",") { "[\"q${it + 1}\"]" }}],"required":true}]}""",
+    )
+
+    @Test
+    fun circuitZkRedirect_choosingOneAlternative_signingSucceedsWithoutAPickForTheUnchosenOne() = runTest(dispatcher) {
+        // Copilot #353 follow-up, finding 1: credential_sets [[q1],[q2]], DISTINCT credentials (q1's
+        // doctype, q2's OTHER doctype) so choosing q2 only is unambiguous. Signing used to still
+        // fail: the unchosen q1 was still cached in pendingMatchResultsByFlow (the full, unfiltered
+        // matchResults, not the resolved ACTIVE subset), and answerCircuitZkQueries's "every query
+        // needs a pick" check refused the whole presentation for a query that was never meant to be
+        // answered - the consent step had already (correctly) resolved and sent only q2.
+        val credA = StoredCredential(
+            id = 1L, format = "mso_mdoc", raw = CzkFixtures.mdoc(docType = CzkFixtures.DOCTYPE, birth = "2000-06-15"),
+            credentialIssuerIdentifier = CzkFixtures.ISSUER, metadata = CredentialMetadata(name = "A"), batchId = 1L, instanceId = 0,
+        )
+        val credB = StoredCredential(
+            id = 2L, format = "mso_mdoc",
+            raw = CzkFixtures.mdoc(psc = CzkFixtures.pscFor(CzkFixtures.OTHER_DOCTYPE), docType = CzkFixtures.OTHER_DOCTYPE, birth = "1990-01-01"),
+            credentialIssuerIdentifier = CzkFixtures.ISSUER, metadata = CredentialMetadata(name = "B"), batchId = 2L, instanceId = 0,
+        )
+        val e = engineCzkWith(listOf(credA, credB), extraDocTypes = setOf(CzkFixtures.OTHER_DOCTYPE))
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf(2L) // choose q2's credential only
+        e.s.wallet.setEventListener(listener)
+
+        e.matchOnce(redirectQueriesWithDoctypes(CzkFixtures.DOCTYPE, CzkFixtures.OTHER_DOCTYPE))
+        advanceUntilIdle()
+
+        val consent = slot<JsonObject>()
+        verify(exactly = 1) { e.engine.sendFlowAction("f1", "consent", capture(consent)) }
+        val entries = consent.captured["selected_credentials"]!!.jsonArray.map { it.jsonObject }
+        assertEquals(
+            listOf("q2" to "2"),
+            entries.map { it["credential_query_id"]!!.jsonPrimitive.content to it["credential_id"]!!.jsonPrimitive.content },
+        )
+
+        e.sign.emit(SignRequestMessage(
+            flowId = "f1", messageId = "m1", action = "sign_presentation",
+            params = SignRequestParams(
+                audience = redirectClientId, nonce = "n-redirect", responseUri = "https://rp.example/response",
+                verifierJwkThumbprint = redirectKeyThumbprint,
+                credentialsToInclude = listOf(org.siros.sdk.transport.engine.CredentialRef(credentialQueryId = "q2", credentialId = "2")),
+                responseEncryption = org.siros.sdk.transport.ResponseEncryptionRequest(
+                    jwk = Json.parseToJsonElement(redirectKey.toPublicJWK().toJSONString()).jsonObject, alg = "ECDH-ES", enc = "A128GCM",
+                ),
+                state = "st-1",
+                verifiedRequest = org.siros.sdk.transport.VerifiedRequest(clientId = redirectClientId, responseMode = "direct_post.jwt", signed = true, signatureVerification = "verified"),
+            ),
+        ))
+        advanceUntilIdle()
+
+        // Succeeds - never refused for q1 (the alternative the user did not choose) having no pick.
+        verify(exactly = 1) { e.engine.sendSignResponse("f1", responseJwe = any(), messageId = "m1") }
+        verify(exactly = 0) { e.engine.sendSignRefusal(any(), any(), any()) }
+        assertEquals(1, e.s.prover.calls)
     }
 
     private fun serverTrust(trusted: Boolean, withContext: Boolean = true) = FlowProgressMessage(
@@ -16851,6 +16921,73 @@ class SirosWalletTest {
             "a session replaced while recordPresentation was suspended must not let the write that follows it through",
             records.containsKey("flow-recordpresentation"),
         )
+    }
+
+    @Test
+    fun handleCredentialSelection_credentialSharedAcrossAlternatives_isRefusedBeforeRecordingPresentation() = runTest(dispatcher) {
+        // Extends issue #345's "don't record before validating" principle (the test above) to the
+        // credential_sets exclusivity validation added for #353's follow-up fix. A Copilot review on
+        // that fix caught the two steps in the wrong order: credentialSetChoiceIsValid ran AFTER
+        // recordPresentation, so a refused selection - here, the SAME credential answering BOTH of
+        // two mutually-exclusive alternatives at once, which is never a valid choice - was still
+        // recorded as presented. Under CONSUME_ALL/CONSUME_NON_ZKP this would wrongly spend an
+        // unused copy for a presentation that was never actually sent.
+        val progressFlow = MutableSharedFlow<FlowProgressMessage>()
+        val listener = mockk<WalletEventListener>(relaxed = true)
+        // The wallet's one stored credential matches BOTH "a" and "b" (same vct) - selecting it
+        // answers both alternatives of the same required set at once.
+        coEvery { listener.onCredentialSelectionRequired(any()) } returns listOf(1L)
+        val store = FakeCredentialStore(
+            mutableListOf(
+                StoredCredential(
+                    id = 1L, format = "dc+sd-jwt", raw = "raw-pid",
+                    metadata = CredentialMetadata(name = "PID", vct = "urn:eu.europa.ec.eudi:pid:1"),
+                    batchId = 1L, instanceId = 0,
+                ),
+            )
+        )
+        val engine = mockEngineConstructor(progressFlow = progressFlow)
+        every { engine.disconnect() } just runs
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.isUnlocked } returns false
+        every { keystore.listKeys() } returns listOf(KeyInfo("test-kid", "ES256", 0L))
+        val history = mutableListOf<PresentationRecord>()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice", credentials = store.getAll())),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "credentialStore" to store,
+            "keystore" to keystore,
+            "eventListener" to listener,
+            "lastTrustResults" to mutableMapOf<String, TrustResult>(),
+            "_presentationHistory" to history,
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        val query = Json.parseToJsonElement(
+            """{
+              "credentials": [
+                {"id":"a","format":"dc+sd-jwt","meta":{"vct_values":["urn:eu.europa.ec.eudi:pid:1"]}},
+                {"id":"b","format":"dc+sd-jwt","meta":{"vct_values":["urn:eu.europa.ec.eudi:pid:1"]}}
+              ],
+              "credential_sets": [{"options": [["a"], ["b"]], "required": true}]
+            }""",
+        )
+        progressFlow.emit(
+            FlowProgressMessage(
+                flowId = "flow-shared-alt", step = "credential_selection",
+                payload = buildJsonObject { put("dcql_query", query) },
+            )
+        )
+        advanceUntilIdle()
+
+        val declineSlot = slot<JsonObject>()
+        verify(exactly = 1) { engine.sendFlowAction("flow-shared-alt", "decline", capture(declineSlot)) }
+        assertEquals("user_declined", declineSlot.captured["reason"]?.jsonPrimitive?.content)
+        verify(exactly = 0) { engine.sendFlowAction("flow-shared-alt", "consent", any()) }
+        assertTrue("a refused credential_sets choice must never be recorded as presented", history.isEmpty())
     }
 
     @Test
