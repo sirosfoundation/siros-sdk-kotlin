@@ -1,11 +1,14 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.wallet
 
+import io.mockk.Runs
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
+import io.mockk.just
 import io.mockk.mockk
 import io.mockk.slot
+import java.security.MessageDigest
 import java.util.Base64
 import kotlin.reflect.full.callSuspend
 import kotlin.reflect.full.declaredMemberFunctions
@@ -34,6 +37,7 @@ import org.siros.sdk.credentials.BackendApiException
 import org.siros.sdk.keystore.AttestationChain
 import org.siros.sdk.keystore.KeyInfo
 import org.siros.sdk.keystore.KeystoreManager
+import org.siros.sdk.keystore.WscdManager
 
 /** Instance-key evidence in the WIA flow (go-wallet-backend pull 486): one key per challenge, a NEW key and challenge on failure. */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -543,5 +547,78 @@ class InstanceKeyEvidenceFlowTest {
         invoke(r.wallet, "settledInstanceKeyId")
         assertNull(obtain(r.wallet))
         coVerify(exactly = 1) { r.api.generateWIA(pop = any(), challenge = any(), clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) }
+    }
+
+    /**
+     * generateInstanceKey()'s REAL call path with a WSCD-backed keystore (what `WscdKeystoreAdapter(UniFFISigner(...))`
+     * actually is in the live app, unlike [rig]'s plain [KeystoreManager] mock above): [KeystoreManager.supportsAttestedKeyGeneration]
+     * is never overridden by `UniFFISigner`, so without this wiring a live Android Keystore device would always fall
+     * through to a plain, unattested key. The fix routes a WSCD-backed `keystore` (one that is ALSO a [WscdManager], exactly
+     * like [org.siros.sdk.keystore.WscdKeystoreAdapter]) through [WscdManager.registerAndroidKeystorePlugin] +
+     * [WscdManager.generateAndroidKeystoreKeyWithChallenge] instead, registering the plugin on [KeystoreManager] itself (never
+     * a separate signer) so the resulting key stays reachable through every other call on that same `keystore` (sign,
+     * attestationChain, listKeys, generateDPoPProof).
+     */
+    private fun wscdRig(challenge: String = "C-wscd-1", attestedKeyId: String = "android-key-1"): Pair<SirosWallet, KeystoreManager> {
+        val keystore = mockk<KeystoreManager>(relaxed = true, moreInterfaces = arrayOf(WscdManager::class))
+        val wscd = keystore as WscdManager
+        every { wscd.registerAndroidKeystorePlugin(any(), any()) } just Runs
+        coEvery { wscd.generateAndroidKeystoreKeyWithChallenge(any()) } returns attestedKeyId
+        val api = mockk<BackendApiClient>(relaxed = true)
+        coEvery { api.requestWIAChallenge() } returns buildJsonObject { put("challenge", JsonPrimitive(challenge)) }
+        val wallet = SirosWalletTest().newWallet(
+            "keystore" to keystore,
+            "apiClient" to api,
+            "instanceKeyMutex" to kotlinx.coroutines.sync.Mutex(),
+            "wiaMutex" to kotlinx.coroutines.sync.Mutex(),
+            "dpopBoundInstanceKeys" to java.util.concurrent.ConcurrentHashMap.newKeySet<String>(),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+        )
+        wallet.instanceKeyClock = { 1_000_000L }
+        wallet.deviceStateFingerprint = { "os-1" }
+        return wallet to keystore
+    }
+
+    private fun generateInstanceKey(wallet: SirosWallet): String {
+        val m = SirosWallet::class.declaredMemberFunctions.first { it.name == "generateInstanceKey" }
+        m.isAccessible = true
+        return runBlocking { m.callSuspend(wallet) as String }
+    }
+
+    @Test
+    fun aWscdBackedKeystore_registersTheAndroidKeystorePlugin_andGeneratesTheAttestedKeyThroughIt_withTheBackendsExactChallengeDerivation() {
+        val (wallet, keystore) = wscdRig(challenge = "C-wscd-1", attestedKeyId = "android-key-1")
+        val wscd = keystore as WscdManager
+        val challengeBytes = slot<ByteArray>()
+        coEvery { wscd.generateAndroidKeystoreKeyWithChallenge(capture(challengeBytes)) } returns "android-key-1"
+
+        val keyId = generateInstanceKey(wallet)
+
+        assertEquals("android-key-1", keyId)
+        // Pinned independently of InstanceKeyEvidence.challengeHash, matching go-wallet-backend's
+        // InstanceKeyAttestationChallenge (internal/service/instance_key_evidence.go): SHA-256("siros-instance-key-v1" || C),
+        // C as the challenge's own ASCII/UTF-8 bytes, no separator, never decoded.
+        val expected = MessageDigest.getInstance("SHA-256").digest(("siros-instance-key-v1" + "C-wscd-1").toByteArray(Charsets.UTF_8))
+        assertArrayEquals(expected, challengeBytes.captured)
+        coVerify(exactly = 1) { wscd.registerAndroidKeystorePlugin(any(), any()) }
+        coVerify(exactly = 1) { keystore.markInstanceKey("android-key-1") }
+        // The legacy direct-Signer path (only ever hit by a keystore that is NOT WSCD-backed) must not also run.
+        coVerify(exactly = 0) { keystore.generateAttestedKey(any(), any()) }
+    }
+
+    @Test
+    fun aWscdBackedKeystore_registersTheAndroidKeystorePluginOnlyOnce_acrossRepeatedInstanceKeyGeneration() {
+        val (wallet, keystore) = wscdRig(challenge = "C-wscd-1", attestedKeyId = "android-key-1")
+        val wscd = keystore as WscdManager
+
+        generateInstanceKey(wallet)
+        coEvery { wscd.generateAndroidKeystoreKeyWithChallenge(any()) } returns "android-key-2"
+        generateInstanceKey(wallet)
+
+        // "Register this at most once per process" (WscdManager.registerAndroidKeystorePlugin's doc comment) - a second
+        // registration on the SAME keystore is neither needed nor safe to repeat, even though key generation itself
+        // (a per-call operation) runs again each time.
+        coVerify(exactly = 1) { wscd.registerAndroidKeystorePlugin(any(), any()) }
+        coVerify(exactly = 2) { wscd.generateAndroidKeystoreKeyWithChallenge(any()) }
     }
 }
