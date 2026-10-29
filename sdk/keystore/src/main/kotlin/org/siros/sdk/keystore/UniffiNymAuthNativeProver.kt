@@ -49,12 +49,16 @@ interface NymAuthBinding {
  * an unsupported circuit. Proving runs off the caller's dispatcher.
  */
 class UniffiNymAuthNativeProver(
-    private val bindings: List<NymAuthBinding>,
+    bindings: List<NymAuthBinding>,
 ) : ResidentNymAuthNativeProver {
 
+    // A defensive, immutable copy: the constructor parameter can be a caller-held MutableList, and mutating it after
+    // construction must not change dispatch or resurrect the empty-list/duplicate-system checks below.
+    private val bindings: List<NymAuthBinding> = bindings.toList()
+
     init {
-        require(bindings.isNotEmpty()) { "A nymauth prover needs at least one binding" }
-        val twice = bindings.groupBy { it.system }.filterValues { it.size > 1 }.keys
+        require(this.bindings.isNotEmpty()) { "A nymauth prover needs at least one binding" }
+        val twice = this.bindings.groupBy { it.system }.filterValues { it.size > 1 }.keys
         require(twice.isEmpty()) { "More than one binding for $twice: a system has exactly one implementation" }
     }
 

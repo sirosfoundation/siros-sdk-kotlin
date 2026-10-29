@@ -110,6 +110,14 @@ class PresentationConsentText(
         )
     }
 
+    /**
+     * The sentences of [items] alone, in order - the same wording [render] puts in a [ConsentScreen] entry, without needing a
+     * full [PresentationConsentRequest]. For a host that has the plan's [ConsentItem]s (via [ConsentItems.build]) but not yet
+     * the rest of a `circuit_zk` DC API request - the engine/WMP presentation transport's own consent UI, say, which resolves
+     * a credential before `circuit_zk`'s verifier-id machinery runs.
+     */
+    fun renderItems(items: List<ConsentItem>, verifierName: String): List<String> = items.flatMap { lines(it, verifierName) }
+
     private fun lines(item: ConsentItem, verifierName: String): List<String> = when (item) {
         is ConsentItem.Predicate -> (predicateRenderers[item.functionId] ?: ::predicateLines)(item)
         is ConsentItem.Pseudonym -> {

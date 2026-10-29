@@ -130,6 +130,10 @@ class UniFFISigner(
 
     override fun exportFido2State(): ByteArray = ffi.exportFido2State()
 
+    override suspend fun describeFido2Authenticator(): Fido2AuthenticatorInfo = withContext(Dispatchers.IO) {
+        ffi.describeAuthenticator("fido2").toSdk()
+    }
+
     override suspend fun generateKey(algorithm: String): String = withContext(Dispatchers.IO) {
         val ffiAlgorithm = algorithm.toFfiAlgorithm()
         val result: FfiGeneratedKey = withPinAuth { auth ->
@@ -306,6 +310,20 @@ class UniFFISigner(
             }
         }
         ffi.importSoftkeyContainer(rawKeys.toString().toByteArray(Charsets.UTF_8))
+    }
+
+    /**
+     * Erases this instance's own internal softkey plugin (every instance
+     * registers one in [init] regardless of [defaultPluginId] - see
+     * [exportPrivateKeypairs]'s doc comment) by replacing its container with
+     * an empty one, the same shape [importPrivateKeypairs] already uses to
+     * populate it. A fido2 or r2ps plugin's keys are never touched here -
+     * they live on external hardware or a remote server, outside anything a
+     * software wipe can (or should) reach.
+     */
+    override suspend fun resetLocalKeys(): Unit = withContext(Dispatchers.IO) {
+        ffi.importSoftkeyContainer("[]".toByteArray(Charsets.UTF_8))
+        publicKeyCache.clear()
     }
 
     /**

@@ -24,6 +24,9 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import kotlin.reflect.full.callSuspend
+import kotlin.reflect.full.declaredMemberFunctions
+import kotlin.reflect.jvm.isAccessible
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -52,6 +55,7 @@ class WalletViewModelTest {
         every { Log.w(any(), any<String>()) } returns 0
         every { Log.e(any(), any()) } returns 0
         every { Log.e(any(), any(), any()) } returns 0
+        every { Log.w(any(), any<String>(), any()) } returns 0
     }
 
     @After
@@ -157,6 +161,51 @@ class WalletViewModelTest {
         assertNull(viewModel.activateMode.value)
         coVerify(exactly = 1) { wallet.startIssuance("openid-credential-offer://offer?credential_offer=test") }
         coVerify(exactly = 0) { wallet.startPresentation(any()) }
+    }
+
+    /**
+     * "Scan QR code" is reachable from the Add Credential chooser now (see
+     * AddCredentialScreen's onScanQr → WalletViewModel.openActivate), not
+     * just from Home - so `_showAddCredential` can legitimately be true when
+     * a QR is actually scanned and a flow starts. Before this fix,
+     * handleQrResult only called closeActivate(), leaving
+     * `_showAddCredential` true for the rest of the flow: MainActivity's
+     * top-level `when` checks `showAddCredential` before it ever reaches the
+     * `WalletState.FlowActive` branch that renders FlowActiveView, so the
+     * chooser screen was drawn forever over a flow silently progressing
+     * underneath it (PR #362, Copilot finding on MainActivity.kt:624).
+     *
+     * Drives this through [WalletViewModel.openAddCredential], the real
+     * public entry point, rather than `setField`-injecting a brand new
+     * `MutableStateFlow` for `_showAddCredential` - an earlier version of
+     * this test did that, and `showAddCredential` (WalletViewModel.kt:631)
+     * is a `val` initialized once from the *original* `_showAddCredential`
+     * instance, so overwriting the private field afterwards leaves the
+     * public property pointing at the old, untouched flow: the final
+     * assertion would then read that stale flow's default `false` and pass
+     * regardless of whether handleQrResult clears anything at all (Copilot's
+     * finding on PR #362, WalletViewModelTest.kt:186 - a vacuous test that
+     * can't fail). Asserting the precondition (`showAddCredential` is true
+     * right after opening it) before calling handleQrResult is what proves
+     * this test is actually exercising the same flow instance throughout.
+     */
+    @Test
+    @Ignore("Requires native WSCD library — run as instrumented test on device")
+    fun handleQrResult_closes_add_credential_so_flow_active_can_show() = runTest(dispatcher) {
+        val wallet = mockWallet(state = MutableStateFlow(WalletState.Ready(userId = "u1", displayName = "Alice", credentials = emptyList())))
+        every { SirosWallet.create(any(), any()) } returns wallet
+        val viewModel = WalletViewModel(mockk<Activity>(relaxed = true))
+
+        // Simulate having opened Add Credential and then tapped its "Scan QR
+        // code" option, through the real public method.
+        viewModel.openAddCredential()
+        advanceUntilIdle()
+        assertTrue(viewModel.showAddCredential.value)
+
+        viewModel.handleQrResult("openid-credential-offer://offer?credential_offer=test")
+        advanceUntilIdle()
+
+        assertFalse(viewModel.showAddCredential.value)
     }
 
     @Test
@@ -315,5 +364,43 @@ class WalletViewModelTest {
         val field = target.javaClass.getDeclaredField(fieldName)
         field.isAccessible = true
         return field.get(target)
+    }
+
+    /** A new instance of [clazz] with NO constructor or property initializer run - every field is left at its JVM default. */
+    private fun allocateInstance(clazz: Class<*>): Any {
+        val unsafeClass = Class.forName("sun.misc.Unsafe")
+        val unsafeField = unsafeClass.getDeclaredField("theUnsafe")
+        unsafeField.isAccessible = true
+        val unsafe = unsafeField.get(null)
+        val allocateInstance = unsafeClass.getMethod("allocateInstance", Class::class.java)
+        return allocateInstance.invoke(unsafe, clazz)
+    }
+
+    /**
+     * allocateInstance skips WalletViewModel's constructor (which needs a real Activity and the native WSCD library - see
+     * every other test in this file), so enrollCeremony can be driven directly with the manager it is given, isolated from
+     * enrollWscd's PIN/discovery steps above it. Regression for a real bug: the plugin tabs stay enabled during discovery,
+     * so a tab switch between enrollWscd capturing `pluginId` and this call must not change which lifecycle context the
+     * key is registered and activated under.
+     */
+    @Test
+    fun enrollCeremony_usesTheCapturedPluginIdsContext_notTheLiveTab() = runTest(dispatcher) {
+        val viewModel = allocateInstance(WalletViewModel::class.java) as WalletViewModel
+        setField(viewModel, "_lifecycleState", MutableStateFlow<org.siros.sdk.keystore.LifecycleState?>(null))
+        setField(viewModel, "_selectedPluginId", MutableStateFlow("softkey")) // the LIVE tab, switched after pluginId was captured
+        setField(viewModel, "wallet", mockk<SirosWallet>(relaxed = true))
+        val manager = mockk<org.siros.sdk.keystore.WscdManager>()
+        val registered = slot<org.siros.sdk.keystore.RegisterLifecycleRequest>()
+        val activated = slot<org.siros.sdk.keystore.ActivateLifecycleRequest>()
+        coEvery { manager.registerLifecycle(capture(registered)) } returns org.siros.sdk.keystore.RegistrationOutcome("ctx-fido2", org.siros.sdk.keystore.LifecycleState.Registered)
+        coEvery { manager.activateLifecycle(capture(activated)) } returns org.siros.sdk.keystore.ActivationOutcome("ctx-fido2", org.siros.sdk.keystore.LifecycleState.Active)
+        coEvery { manager.exportFido2State() } returns ByteArray(0)
+
+        val method = viewModel::class.declaredMemberFunctions.first { it.name == "enrollCeremony" }
+        method.isAccessible = true
+        method.callSuspend(viewModel, manager, "fido2")
+
+        assertEquals("ctx-fido2", registered.captured.contextId)
+        assertEquals("ctx-fido2", activated.captured.contextId)
     }
 }

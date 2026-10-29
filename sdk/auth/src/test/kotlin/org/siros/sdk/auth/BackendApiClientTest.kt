@@ -5,6 +5,7 @@ import io.mockk.coEvery
 import io.mockk.mockk
 import io.mockk.verify
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -435,205 +436,396 @@ class BackendApiClientTest {
         }
     }
 
-    @Test
-    fun set_wallet_instance_status_decodes_full_object_when_returned() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"id":"jkt-1","status":"revoked","credential_id":"pk-1","status_reason":"stolen"}"""))
-        val client = newClient()
-        client.setAppToken("t")
+    // ---- Account deletion (SID-AUTH-06, go-wallet-backend#352) ----
 
-        val result = client.setWalletInstanceStatus("jkt-1", WalletInstanceStatus.REVOKED, "stolen")
+    private val assertion = AuthenticateResult(
+        credentialId = byteArrayOf(1, 2, 3),
+        authenticatorData = byteArrayOf(4, 5),
+        clientDataJSON = byteArrayOf(6),
+        signature = byteArrayOf(7, 8),
+        userHandle = byteArrayOf(9),
+    )
 
-        assertEquals("revoked", result.status)
-        assertEquals("pk-1", result.credentialId)
-        assertEquals("stolen", result.statusReason)
+    private fun b64(vararg bytes: Byte) = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+
+    private suspend fun deleteWith(response: MockResponse): DeleteAccountOutcome {
+        server.enqueue(response)
+        val client = newClient().apply { setAppToken("tok") }
+        return client.deleteAccount("ch-1", assertion, "DELETE")
     }
 
-    @Test
-    fun set_wallet_instance_status_puts_status_and_reason() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"id":"jkt-1","status":"suspended"}"""))
-        val client = newClient()
-        client.setAppToken("t")
-
-        val result = client.setWalletInstanceStatus("jkt-1", WalletInstanceStatus.SUSPENDED, reason = "lost phone")
-
-        val request = server.takeRequest()
-        assertEquals("PUT", request.method)
-        assertEquals("/user/session/instances/jkt-1/status", request.path)
-        val body = request.body.readUtf8()
-        assertTrue(body, body.contains("\"status\":\"suspended\"") && body.contains("\"reason\":\"lost phone\""))
-        assertEquals("suspended", result.status)
-    }
+    private fun body(code: Int, json: String = "{}") = MockResponse().setResponseCode(code).setBody(json)
 
     @Test
-    fun revoke_all_wallet_instances_fails_on_malformed_response() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"ok":true}"""))
-        val client = newClient()
-        client.setAppToken("t")
-        try {
-            client.revokeAllWalletInstances()
-            fail("a reply without the revoked count must not read as zero revoked")
-        } catch (e: BackendApiException) {
-            assertTrue(e.message!!.contains("revoked"))
-        }
-    }
+    fun delete_begin_posts_and_decodes_the_assertion_options() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"challengeId":"ch-1","publicKey":{"rpId":"example.com","challenge":{"${'$'}b64u":"${b64(1, 2)}"},
+                "allowCredentials":[{"type":"public-key","id":{"${'$'}b64u":"${b64(3)}"}}],"userVerification":"required"}}"""
+            )
+        )
+        val client = newClient().apply { setAppToken("tok") }
 
-    @Test
-    fun revoke_all_wallet_instances_posts_and_returns_count() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"revoked":2}"""))
-        val client = newClient()
-        client.setAppToken("t")
-
-        val outcome = client.revokeAllWalletInstances("device stolen")
+        val challenge = (client.deleteAccountBegin() as DeleteAccountBegin.Ready).challenge
 
         val request = server.takeRequest()
         assertEquals("POST", request.method)
-        assertEquals("/user/session/instances/revoke-all", request.path)
-        assertTrue(request.body.readUtf8().contains("device stolen"))
-        assertEquals(2, outcome.revoked)
-        assertTrue(outcome.complete)
+        assertEquals("/user/session/delete-begin", request.path)
+        assertEquals("Bearer tok", request.getHeader("Authorization"))
+        assertEquals("default", request.getHeader("X-Tenant-ID"))
+        assertEquals("ch-1", challenge.challengeId)
+        assertEquals("example.com", challenge.options.rpId)
+        assertEquals(listOf<Byte>(1, 2), challenge.options.challenge.toList())
+        assertEquals(listOf<Byte>(3), challenge.options.allowCredentials!!.single().id.toList())
+        assertEquals("required", challenge.options.userVerification)
     }
 
-    // ---- 409 ERASURE_INCOMPLETE retry protocol (SID-AUTH-06) ----
-
-    /**
-     * The backend records the revocations before it erases, so a 409 means
-     * "the status stands, re-run the erasure" - the client repeats the
-     * identical request until it gets a 200. The repeat answers
-     * `{"revoked": 0}` (nothing left to revoke), so the count reported to the
-     * caller must be the one from the first answer, not the last.
-     */
     @Test
-    fun revoke_all_repeats_the_request_until_the_erasure_completes() = runBlocking {
-        server.enqueue(erasureIncomplete("""{"error":"ERASURE_INCOMPLETE","revoked":2}"""))
-        server.enqueue(MockResponse().setBody("""{"revoked":0}"""))
-        val client = newClient()
-        client.setAppToken("t")
+    fun delete_begin_rejects_a_response_without_a_challenge_id() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"publicKey":{"rpId":"x","challenge":"AQ"}}"""))
+        val client = newClient().apply { setAppToken("tok") }
+        try {
+            client.deleteAccountBegin()
+            fail("a begin response without challengeId must not be usable")
+        } catch (e: BackendApiException) {
+            assertTrue(e.message!!.contains("challengeId"))
+        }
+    }
 
-        val outcome = client.revokeAllWalletInstances("device stolen")
+    @Test
+    fun delete_begin_maps_every_defined_refusal_without_throwing() = runBlocking {
+        val client = newClient().apply { setAppToken("tok") }
+        val cases = listOf(
+            body(400, """{"error":"NO_PASSKEY","message":"none"}""") to DeleteAccountBegin.NoPasskey("none"),
+            body(403, """{"error":"INSUFFICIENT_SCOPE"}""") to DeleteAccountBegin.Forbidden(null),
+            body(401) to DeleteAccountBegin.SessionRevoked(null),
+            body(404) to DeleteAccountBegin.NotFound(null),
+        )
+        for ((response, expected) in cases) {
+            server.enqueue(response)
+            assertEquals(expected, client.deleteAccountBegin())
+        }
+        server.enqueue(body(400, """{"error":"SOMETHING_ELSE"}"""))
+        try {
+            client.deleteAccountBegin()
+            fail("an unrelated 400 must throw")
+        } catch (e: BackendApiException) {
+            assertEquals(400, e.code)
+        }
+    }
 
-        assertEquals(2, server.requestCount)
-        val first = server.takeRequest()
+    @Test
+    fun delete_sends_the_json_body_with_assertion_and_confirmation() = runBlocking {
+        val outcome = deleteWith(body(200, """{"result":"DELETED"}"""))
+
+        assertEquals(DeleteAccountOutcome.Deleted, outcome)
+        val request = server.takeRequest()
+        assertEquals("DELETE", request.method)
+        assertEquals("/user/session", request.path)
+        assertEquals("Bearer tok", request.getHeader("Authorization"))
+        assertEquals("default", request.getHeader("X-Tenant-ID"))
+        assertTrue(request.getHeader("Content-Type")!!.startsWith("application/json"))
+        val sent = Json.parseToJsonElement(request.body.readUtf8()).jsonObject
+        assertEquals("ch-1", sent["challengeId"]!!.jsonPrimitive.content)
+        assertEquals("DELETE", sent["confirm"]!!.jsonPrimitive.content)
+        val credential = sent["credential"]!!.jsonObject
+        assertEquals(b64(1, 2, 3), credential["id"]!!.jsonPrimitive.content)
+        assertEquals(b64(1, 2, 3), credential["rawId"]!!.jsonPrimitive.content)
+        assertEquals("public-key", credential["type"]!!.jsonPrimitive.content)
+        val response = credential["response"]!!.jsonObject
+        assertEquals(b64(4, 5), response["authenticatorData"]!!.jsonPrimitive.content)
+        assertEquals(b64(6), response["clientDataJSON"]!!.jsonPrimitive.content)
+        assertEquals(b64(7, 8), response["signature"]!!.jsonPrimitive.content)
+        assertEquals(b64(9), response["userHandle"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun begin_then_delete_is_the_documented_sequence() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"challengeId":"ch-9","publicKey":{"rpId":"x","challenge":"AQ"}}"""))
+        server.enqueue(body(200))
+        val client = newClient().apply { setAppToken("tok") }
+
+        val challenge = (client.deleteAccountBegin() as DeleteAccountBegin.Ready).challenge
+        client.deleteAccount(challenge.challengeId, assertion, "DELETE")
+
+        assertEquals("/user/session/delete-begin", server.takeRequest().path)
         val second = server.takeRequest()
-        // "repeating the identical request re-runs the erasure" - same body.
-        assertEquals(first.path, second.path)
-        assertEquals(first.body.readUtf8(), second.body.readUtf8())
-        assertEquals(2, outcome.revoked)
-        assertTrue(outcome.complete)
+        assertEquals("DELETE", second.method)
+        assertTrue(second.body.readUtf8().contains("\"challengeId\":\"ch-9\""))
     }
 
-    /**
-     * Five attempts, then stop: the wallet is deactivated either way, so the
-     * caller is told the erasure is unfinished (residual data for an
-     * administrator) rather than being handed an exception for a change that
-     * did take effect.
-     */
     @Test
-    fun revoke_all_reports_incomplete_after_the_retry_budget() = runBlocking {
-        repeat(5) { server.enqueue(erasureIncomplete("""{"error":"ERASURE_INCOMPLETE","revoked":2}""")) }
-        val client = newClient()
-        client.setAppToken("t")
-
-        val outcome = client.revokeAllWalletInstances()
-
-        assertEquals(5, server.requestCount)
-        assertEquals(2, outcome.revoked)
-        assertEquals(false, outcome.complete)
+    fun delete_maps_202_cleanup_pending() = runBlocking {
+        assertEquals(
+            DeleteAccountOutcome.CleanupPending,
+            deleteWith(body(202, """{"result":"DELETION_CLEANUP_PENDING"}""")),
+        )
     }
 
-    /**
-     * The acting token's exemption from the lifecycle cut-off ends with the
-     * key material. A 401 after a 409 is therefore the erasure having reached
-     * the keys - the wallet is deactivated, which is exactly "complete".
-     */
     @Test
-    fun revoke_all_treats_a_401_after_the_409_as_a_completed_erasure() = runBlocking {
-        server.enqueue(erasureIncomplete("""{"error":"ERASURE_INCOMPLETE","revoked":3}"""))
-        server.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":"unauthorized"}"""))
-        val client = newClient()
-        client.setAppToken("t")
-
-        val outcome = client.revokeAllWalletInstances()
-
-        assertEquals(2, server.requestCount)
-        assertEquals(3, outcome.revoked)
-        assertTrue(outcome.complete)
+    fun delete_maps_202_operator_required() = runBlocking {
+        assertEquals(
+            DeleteAccountOutcome.OperatorRequired,
+            deleteWith(body(202, """{"result":"DELETION_OPERATOR_REQUIRED"}""")),
+        )
     }
 
-    /** A 401 that was never preceded by a 409 is an ordinary auth failure. */
     @Test
-    fun revoke_all_still_fails_on_a_plain_401() = runBlocking {
-        server.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":"unauthorized"}"""))
-        val client = newClient()
-        client.setAppToken("t")
-
+    fun delete_does_not_guess_an_unrecognised_202() = runBlocking {
         try {
-            client.revokeAllWalletInstances()
-            fail("a 401 with no preceding ERASURE_INCOMPLETE must not read as a completed erasure")
+            deleteWith(body(202, """{"result":"SOMETHING_NEW"}"""))
+            fail("an unknown 202 must not read as a deletion")
         } catch (e: BackendApiException) {
-            assertEquals(401, e.code)
+            assertEquals(202, e.code)
         }
-        assertEquals(1, server.requestCount)
     }
 
-    /** A 409 that is not ERASURE_INCOMPLETE (invalid transition) is not retried. */
     @Test
-    fun set_wallet_instance_status_does_not_retry_an_invalid_transition() = runBlocking {
-        server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":"invalid status transition"}"""))
-        val client = newClient()
-        client.setAppToken("t")
+    fun delete_maps_409_to_retry_needed() = runBlocking {
+        val outcome = deleteWith(body(409, """{"error":"DELETION_INCOMPLETE","message":"try again"}"""))
+        assertEquals(DeleteAccountOutcome.RetryNeeded("try again"), outcome)
+    }
 
+    @Test
+    fun delete_maps_step_up_required_and_failed() = runBlocking {
+        assertEquals(
+            DeleteAccountOutcome.StepUpRequired(null),
+            deleteWith(body(401, """{"error":"STEP_UP_REQUIRED"}""")),
+        )
+        assertEquals(
+            DeleteAccountOutcome.StepUpFailed("bad"),
+            deleteWith(body(401, """{"error":"STEP_UP_FAILED","message":"bad"}""")),
+        )
+    }
+
+    @Test
+    fun delete_maps_410_to_step_up_expired() = runBlocking {
+        assertEquals(
+            DeleteAccountOutcome.StepUpExpired(null),
+            deleteWith(body(410, """{"error":"STEP_UP_EXPIRED"}""")),
+        )
+    }
+
+    @Test
+    fun delete_maps_400_confirmation_required_but_not_other_400s() = runBlocking {
+        assertEquals(
+            DeleteAccountOutcome.ConfirmationRequired(null),
+            deleteWith(body(400, """{"error":"CONFIRMATION_REQUIRED"}""")),
+        )
         try {
-            client.setWalletInstanceStatus("jkt-1", WalletInstanceStatus.ACTIVE)
-            fail("an invalid transition must surface, not be retried")
+            deleteWith(body(400, """{"error":"BAD_REQUEST"}"""))
+            fail("an unrelated 400 must throw")
         } catch (e: BackendApiException) {
-            assertEquals(409, e.code)
+            assertEquals(400, e.code)
         }
-        assertEquals(1, server.requestCount)
-    }
-
-    /**
-     * Revoking the last instance runs the same erasure cascade, so the status
-     * write retries on the same budget and reports the status that was
-     * recorded even when the cascade never finished.
-     */
-    @Test
-    fun set_wallet_instance_status_retries_the_erasure_and_keeps_the_recorded_status() = runBlocking {
-        repeat(5) {
-            server.enqueue(erasureIncomplete("""{"error":"ERASURE_INCOMPLETE","id":"jkt-1","status":"revoked"}"""))
-        }
-        val client = newClient()
-        client.setAppToken("t")
-
-        val result = client.setWalletInstanceStatus("jkt-1", WalletInstanceStatus.REVOKED, "stolen")
-
-        assertEquals(5, server.requestCount)
-        assertEquals("jkt-1", result.id)
-        assertEquals("revoked", result.status)
-        assertEquals(WalletInstanceStatus.REVOKED, result.statusEnum)
     }
 
     @Test
-    fun deprecated_string_status_rejects_a_value_the_backend_would_refuse() = runBlocking {
-        val client = newClient()
-        client.setAppToken("t")
+    fun delete_maps_a_plain_401_to_session_revoked_and_404_to_not_found() = runBlocking {
+        assertEquals(DeleteAccountOutcome.SessionRevoked(null), deleteWith(body(401, """{"error":"TOKEN_REVOKED"}""")))
+        assertEquals(DeleteAccountOutcome.NotFound(null), deleteWith(body(404)))
+    }
+
+    @Test
+    fun a_step_up_401_is_not_counted_as_a_rejected_bearer_token() = runBlocking {
+        val tokens = mockk<AuthTokens>(relaxed = true)
+        coEvery { tokens.ensureBackendToken() } returns mockk<AccessToken>(relaxed = true) { io.mockk.every { raw } returns "jwt" }
+        val client = newClient().apply { setAuthTokens(tokens) }
+
+        server.enqueue(body(401, """{"error":"STEP_UP_FAILED"}"""))
+        client.deleteAccount("ch-1", assertion, "DELETE")
+        verify(exactly = 0) { tokens.registerTokenRejection(any()) }
+
+        server.enqueue(body(401, """{"error":"TOKEN_REVOKED"}"""))
+        client.deleteAccount("ch-1", assertion, "DELETE")
+        verify(exactly = 1) { tokens.registerTokenRejection(AuthTokens.TOKEN_BACKEND) }
+    }
+
+    /** Every status the contract defines comes back as a value; none throws. */
+    @Test
+    fun no_expected_outcome_throws() = runBlocking {
+        val expected = listOf(
+            body(200),
+            body(202, """{"result":"DELETION_CLEANUP_PENDING"}"""),
+            body(202, """{"result":"DELETION_OPERATOR_REQUIRED"}"""),
+            body(409, """{"error":"DELETION_INCOMPLETE"}"""),
+            body(401, """{"error":"STEP_UP_REQUIRED"}"""),
+            body(401, """{"error":"STEP_UP_FAILED"}"""),
+            body(401, """{"error":"TOKEN_REVOKED"}"""),
+            body(410, """{"error":"STEP_UP_EXPIRED"}"""),
+            body(400, """{"error":"CONFIRMATION_REQUIRED"}"""),
+            body(404, """{"error":"NOT_FOUND"}"""),
+            body(401, "not json"),
+        )
+        for (response in expected) {
+            deleteWith(response) // throws -> test fails
+        }
+        assertEquals(expected.size, server.requestCount)
+    }
+
+    @Test
+    fun an_unexpected_status_throws() = runBlocking {
         try {
-            @Suppress("DEPRECATION")
-            client.setWalletInstanceStatus("jkt-1", "disabled")
-            fail("an unknown status must be rejected locally, not sent")
-        } catch (e: IllegalArgumentException) {
-            assertTrue(e.message!!.contains("disabled"))
+            deleteWith(body(500))
+            fail("a 500 is not a defined outcome")
+        } catch (e: BackendApiException) {
+            assertEquals(500, e.code)
         }
-        assertEquals(0, server.requestCount)
     }
 
-    private fun erasureIncomplete(body: String) =
-        MockResponse().setResponseCode(409).setBody(body)
+    // ---- Adding a passkey (go-wallet-backend#453) ----
+
+    private val created = RegisterResult(
+        credentialId = byteArrayOf(5, 6),
+        attestationObject = byteArrayOf(7),
+        clientDataJSON = byteArrayOf(8),
+    )
+
+    private fun beginBody(authorization: String = "") = """{"username":"alice","challengeId":"enr-1","createOptions":{"publicKey":{
+        "rp":{"id":"example.com","name":"Example"},"user":{"id":{"${'$'}b64u":"${b64(1)}"},"name":"alice","displayName":"Alice"},
+        "challenge":{"${'$'}b64u":"${b64(2, 3)}"},"authenticatorSelection":{"residentKey":"required","userVerification":"preferred"}}}$authorization}"""
+
+    private suspend fun finishWith(response: MockResponse, authorization: AuthenticateResult? = assertion): AddPasskeyOutcome {
+        server.enqueue(response)
+        val client = newClient().apply { setAppToken("tok") }
+        return client.passkeyRegisterFinish("enr-1", created, "Phone", byteArrayOf(1, 2), authorization, ifMatch = null)
+    }
+
+    @Test
+    fun passkey_begin_decodes_create_and_authorization_options() = runBlocking {
+        val authorization = ""","authorization":{"publicKey":{"rpId":"example.com","challenge":{"${'$'}b64u":"${b64(9)}"},
+            "allowCredentials":[{"type":"public-key","id":{"${'$'}b64u":"${b64(4)}"}}],"userVerification":"required"}}"""
+        server.enqueue(MockResponse().setBody(beginBody(authorization)))
+        val client = newClient().apply { setAppToken("tok") }
+
+        val challenge = (client.passkeyRegisterBegin() as AddPasskeyBegin.Ready).challenge
+
+        val request = server.takeRequest()
+        assertEquals("POST", request.method)
+        assertEquals("/user/session/webauthn/register-begin", request.path)
+        assertEquals("enr-1", challenge.challengeId)
+        assertEquals("example.com", challenge.createOptions.rpId)
+        assertEquals("Alice", challenge.createOptions.userDisplayName)
+        assertEquals(listOf<Byte>(2, 3), challenge.createOptions.challenge.toList())
+        assertEquals(listOf<Byte>(1), challenge.createOptions.userId.toList())
+        val auth = challenge.authorization!!
+        assertEquals(listOf<Byte>(9), auth.challenge.toList())
+        assertEquals(listOf<Byte>(4), auth.allowCredentials!!.single().id.toList())
+        assertEquals("required", auth.userVerification)
+    }
+
+    @Test
+    fun passkey_begin_has_no_authorization_for_an_account_without_a_passkey() = runBlocking {
+        server.enqueue(MockResponse().setBody(beginBody()))
+        val client = newClient().apply { setAppToken("tok") }
+        assertEquals(null, (client.passkeyRegisterBegin() as AddPasskeyBegin.Ready).challenge.authorization)
+    }
+
+    @Test
+    fun passkey_begin_maps_refusals() = runBlocking {
+        server.enqueue(body(403, """{"message":"no scope"}"""))
+        server.enqueue(body(401, """{"message":"gone"}"""))
+        val client = newClient().apply { setAppToken("tok") }
+        assertEquals(AddPasskeyBegin.Forbidden("no scope"), client.passkeyRegisterBegin())
+        assertEquals(AddPasskeyBegin.SessionRevoked("gone"), client.passkeyRegisterBegin())
+    }
+
+    @Test
+    fun passkey_finish_sends_credential_authorization_private_data_and_if_match() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"credentialId":"cred-9"}""").setHeader("X-Private-Data-ETag", "\"new\""))
+        val client = newClient().apply { setAppToken("tok") }
+
+        val outcome = client.passkeyRegisterFinish("enr-1", created, "Phone", byteArrayOf(1, 2), assertion, ifMatch = "\"old\"")
+
+        assertEquals(AddPasskeyOutcome.Added("cred-9"), outcome)
+        assertEquals("\"new\"", client.privateDataEtag)
+        val request = server.takeRequest()
+        assertEquals("/user/session/webauthn/register-finish", request.path)
+        assertEquals("\"old\"", request.getHeader("X-Private-Data-If-Match"))
+        val sent = Json.parseToJsonElement(request.body.readUtf8()).jsonObject
+        assertEquals("enr-1", sent["challengeId"]!!.jsonPrimitive.content)
+        assertEquals("Phone", sent["nickname"]!!.jsonPrimitive.content)
+        assertEquals(b64(5, 6), sent["credential"]!!.jsonObject["id"]!!.jsonPrimitive.content)
+        assertEquals(b64(7), sent["credential"]!!.jsonObject["response"]!!.jsonObject["attestationObject"]!!.jsonPrimitive.content)
+        assertEquals(b64(1, 2), sent["privateData"]!!.jsonObject["${'$'}b64u"]!!.jsonPrimitive.content)
+        assertEquals(b64(7, 8), sent["authorization"]!!.jsonObject["response"]!!.jsonObject["signature"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun passkey_finish_omits_authorization_when_there_is_none() = runBlocking {
+        finishWith(MockResponse().setBody("{}"), authorization = null)
+        val sent = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        assertTrue("authorization" !in sent)
+    }
+
+    @Test
+    fun passkey_finish_defaults_if_match_to_the_last_seen_etag() = runBlocking {
+        server.enqueue(MockResponse().setBody("{}").setHeader("X-Private-Data-ETag", "\"seen\""))
+        server.enqueue(MockResponse().setBody("{}"))
+        val client = newClient().apply { setAppToken("tok") }
+        client.getPrivateData()
+        client.passkeyRegisterFinish("enr-1", created, "Phone", null, null)
+        server.takeRequest()
+        assertEquals("\"seen\"", server.takeRequest().getHeader("X-Private-Data-If-Match"))
+    }
+
+    @Test
+    fun passkey_finish_maps_every_defined_outcome() = runBlocking {
+        assertEquals(
+            AddPasskeyOutcome.AuthorizationRequired("m"),
+            finishWith(body(401, """{"error":"ENROLLMENT_AUTHORIZATION_REQUIRED","message":"m"}""")),
+        )
+        assertEquals(
+            AddPasskeyOutcome.AuthorizationFailed("m"),
+            finishWith(body(401, """{"error":"ENROLLMENT_AUTHORIZATION_FAILED","message":"m"}""")),
+        )
+        assertEquals(AddPasskeyOutcome.SessionRevoked(null), finishWith(body(401)))
+        assertEquals(AddPasskeyOutcome.RetryNeeded(null), finishWith(body(404)))
+        assertEquals(
+            AddPasskeyOutcome.PrivateDataConflict("\"cur\""),
+            finishWith(MockResponse().setResponseCode(412).setHeader("X-Private-Data-ETag", "\"cur\"")),
+        )
+        assertEquals(
+            AddPasskeyOutcome.RegistrationRejected(400, "Registration response could not be verified"),
+            finishWith(body(400, """{"error":"Registration response could not be verified"}""")),
+        )
+        assertEquals(AddPasskeyOutcome.RegistrationRejected(403, "Authenticator not allowed"), finishWith(body(403, """{"error":"Authenticator not allowed"}""")))
+    }
+
+    @Test
+    fun passkey_finish_412_does_not_adopt_the_remote_etag() = runBlocking {
+        // This device's cache is at "mine"; another device has since written
+        // "newer", which the 412 response reports back.
+        server.enqueue(MockResponse().setBody("{}").setHeader("X-Private-Data-ETag", "\"mine\""))
+        server.enqueue(MockResponse().setResponseCode(412).setHeader("X-Private-Data-ETag", "\"newer-from-another-device\""))
+        val client = newClient().apply { setAppToken("tok") }
+        client.getPrivateData()
+        assertEquals("\"mine\"", client.privateDataEtag)
+
+        val outcome = client.passkeyRegisterFinish("enr-1", created, "Phone", byteArrayOf(1, 2), assertion, ifMatch = "\"mine\"")
+
+        assertEquals(AddPasskeyOutcome.PrivateDataConflict("\"newer-from-another-device\""), outcome)
+        // The cached ETag must NOT move to the server's newer value: this
+        // device's cached container was never updated to match it, so a
+        // later retry using the adopted ETag as If-Match would submit stale
+        // data tagged as current, silently overwriting the other device's
+        // write. The remote value is only ever surfaced via the conflict
+        // result above, for the caller to fetch-and-reconcile explicitly.
+        assertEquals("\"mine\"", client.privateDataEtag)
+    }
+
+    @Test
+    fun passkey_finish_throws_on_an_unexpected_status() = runBlocking {
+        try {
+            finishWith(body(500))
+            fail("a 500 is not a defined outcome")
+        } catch (e: BackendApiException) {
+            assertEquals(500, e.code)
+        }
+    }
 
     private fun newClient(): BackendApiClient {
         val baseUrl = server.url("/").toString().trimEnd('/')
-        // No waiting between erasure retries in tests; the production default
-        // is 1 s → 8 s (see BackendApiClient.erasureRetryDelaysMs).
         return BackendApiClient(baseUrl = baseUrl, tenantId = "default")
-            .apply { erasureRetryDelaysMs = listOf(0, 0, 0, 0) }
     }
 }

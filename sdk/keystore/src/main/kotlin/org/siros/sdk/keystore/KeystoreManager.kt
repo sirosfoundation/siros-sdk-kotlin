@@ -65,6 +65,32 @@ interface KeystoreManager {
      */
     fun setCredentialId(credentialId: ByteArray) {}
 
+    /**
+     * Wrap this unlocked keystore's main key for an additional passkey
+     * (the wallet-frontend's `keystore.addPrf`), without changing anything yet.
+     *
+     * Returns the container that includes the new passkey's PRF entry, to be
+     * sent to the backend. Only once the backend has accepted it is
+     * [commitPrfKey] called, so a refused enrolment leaves the keystore as it
+     * was. The main key and the wallet state are unchanged: the other passkeys
+     * keep working.
+     *
+     * @throws UnsupportedOperationException for a keystore with no PRF container.
+     * @throws KeystoreException when the keystore is locked.
+     */
+    suspend fun preparePrfKey(
+        credentialId: ByteArray,
+        prfOutput: ByteArray,
+        prfSalt: ByteArray,
+        hkdfSalt: ByteArray,
+        hkdfInfo: ByteArray,
+    ): PreparedPrfKey = throw UnsupportedOperationException("This keystore cannot add a passkey")
+
+    /** Makes the [prepared] PRF entry part of this keystore's container, once the backend stored it. */
+    suspend fun commitPrfKey(prepared: PreparedPrfKey) {
+        throw UnsupportedOperationException("This keystore cannot add a passkey")
+    }
+
     /** Generate a new keypair and return the key ID. */
     suspend fun generateKey(algorithm: String = "ES256"): String
 
@@ -366,6 +392,21 @@ interface KeystoreManager {
     /** Remove all stored credentials. */
     suspend fun clearCredentials()
 
+    /**
+     * Erase this keystore's own LOCAL private key material (not the stored
+     * credential records [clearCredentials] removes), for when the account
+     * that owns it is deleted. Never a remote or hardware operation: a key
+     * held by an external authenticator (FIDO2 security key) or a remote
+     * HSM (R2PS) cannot be, and is not, erased by this - only in-process
+     * software key material is, and only for a keystore backed by it.
+     *
+     * Default: no-op. [JweKeystore]'s own keys live inside the encrypted
+     * container [clearCredentials]/the keystore lock already handle; only
+     * [WscdKeystoreAdapter] (whose [Signer] can hold key material of its
+     * own, outside that container) overrides this.
+     */
+    suspend fun resetLocalKeys() {}
+
     // ── Presentation-history storage (PRF-encrypted alongside keys) ─
 
     /**
@@ -507,4 +548,14 @@ data class KeyInfo(
 data class KeypairInfo(
     val keyId: String,
     val publicKeyJWK: kotlinx.serialization.json.JsonObject,
+)
+
+/**
+ * A container carrying a new passkey's PRF entry that has not been committed
+ * to the keystore yet; see [KeystoreManager.preparePrfKey].
+ */
+class PreparedPrfKey(
+    /** The serialized container to store on the backend. */
+    val container: ByteArray,
+    internal val entry: PrfKeyInfo,
 )

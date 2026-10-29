@@ -221,4 +221,24 @@ class UniffiNymAuthNativeProverTest {
         }
         assertTrue(vega.handles.isEmpty())
     }
+
+    @Test
+    fun `mutating the caller's list after construction does not change dispatch`() {
+        // A caller-held MutableList must be snapshotted at construction: later mutation must not swap which
+        // binding answers a system, and must not resurrect the duplicate-system / empty-list checks.
+        val mutable = mutableListOf<NymAuthBinding>(vega, lf)
+        val p = UniffiNymAuthNativeProver(mutable)
+        val replacement = FakeBinding(NymAuthCircuitZkAdapter.VEGA_SYSTEM, implementation = "swapped-in-after-construction")
+
+        mutable[0] = replacement
+        mutable.removeAt(1)
+        mutable.clear()
+
+        prove(p, request(NymAuthCircuitZkAdapter.VEGA_SYSTEM))
+        assertEquals("the original binding proved, not the caller's post-construction swap", 1, vega.proves)
+        assertEquals(0, replacement.proves)
+        assertEquals("zk-cred-vega or a fake, never the mutated list's entry", vega.implementation, p.implementationFor(NymAuthCircuitZkAdapter.VEGA_SYSTEM))
+        prove(p, request(NymAuthCircuitZkAdapter.LONGFELLOW_SYSTEM, "nymauth-longfellow-mdoc-v1"))
+        assertEquals("longfellow is still served although the caller cleared its list", 1, lf.proves)
+    }
 }

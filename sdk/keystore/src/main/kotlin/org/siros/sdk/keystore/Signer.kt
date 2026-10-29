@@ -113,6 +113,21 @@ interface Signer {
      * to accept keys back.
      */
     suspend fun importPrivateKeypairs(keypairs: List<ExportedPrivateKeypair>) {}
+
+    /**
+     * Erase every LOCAL private key this signer directly holds (in-process
+     * key material only), for when the account that owns them is deleted.
+     *
+     * This is never a remote or hardware operation: a hardware-backed key
+     * (FIDO2 security key) or a remote-HSM-backed one (R2PS) cannot be, and
+     * is not, erased by this - only the signer's own in-process software key
+     * material is. It is also distinct from a lifecycle's own deliberate
+     * remote-revoke/destroy path, which this never triggers.
+     *
+     * Default: no-op, since a signer with no in-process key material (a
+     * plain hardware/remote-backed one) has nothing local to erase.
+     */
+    suspend fun resetLocalKeys() {}
 }
 
 /**

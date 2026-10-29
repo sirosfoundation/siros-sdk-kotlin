@@ -6,13 +6,15 @@ import org.siros.sdk.credentials.NetworkException
 import org.siros.sdk.credentials.CertificationInfo
 import org.siros.sdk.credentials.SignerSecurityProperties
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -22,6 +24,7 @@ import timber.log.Timber
 
 
 private val JSON_MEDIA_TYPE = "application/json".toMediaType()
+private const val PRIVATE_DATA_ETAG_HEADER = "X-Private-Data-ETag"
 
 /**
  * Authenticated HTTP client for the wallet backend REST API.
@@ -38,20 +41,6 @@ class BackendApiClient(
     private val httpClient: OkHttpClient = OkHttpClient(),
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
-    /**
-     * Waits between the attempts of a `409 ERASURE_INCOMPLETE` retry (see
-     * [revokeAllWalletInstances]). One more attempt is made than there are
-     * entries here, so the default is five attempts over about 15 s - long
-     * enough for a transient backend failure to clear, short enough that the
-     * OS will not suspend the app mid-loop.
-     *
-     * Deliberately a property rather than a constructor parameter: adding one
-     * would change this class's JVM constructor signature and break already
-     * compiled consumers, for something only the tests (which lower it to
-     * zeros) ever set.
-     */
-    internal var erasureRetryDelaysMs: List<Long> = listOf(1_000, 2_000, 4_000, 8_000)
-
     private var appToken: String? = null
     private var authTokens: AuthTokens? = null
 
@@ -343,151 +332,336 @@ class BackendApiClient(
         return arr.map { json.decodeFromJsonElement(WalletInstance.serializer(), it) }
     }
 
+    // ---- Account deletion (SID-AUTH-06, go-wallet-backend#352) ----
+
     /**
-     * PUT /user/session/instances/{id}/status — suspend, reactivate or revoke
-     * one of this user's instances. Throws [BackendApiException] with code 404
-     * for an instance that is not the caller's and 409 for an invalid
-     * transition (e.g. reactivating a revoked instance).
-     *
-     * Revoking the caller's last instance deactivates the wallet, so this
-     * request runs the same erasure cascade as [revokeAllWalletInstances] and
-     * can answer `409 ERASURE_INCOMPLETE`; it is retried here on the same
-     * budget. If the erasure is still unfinished when the budget runs out the
-     * recorded status is returned anyway (it stands - only the cascade is
-     * unfinished) and the residual is logged for an administrator.
+     * POST /user/session/delete-begin — start a step-up for account deletion.
+     * On [DeleteAccountBegin.Ready] the options must be answered with a fresh
+     * passkey assertion within two minutes and passed to [deleteAccount].
+     * Needs a token with the `w` scope; an account without a passkey cannot
+     * be deleted this way and gets [DeleteAccountBegin.NoPasskey].
      */
-    suspend fun setWalletInstanceStatus(
-        instanceId: String,
-        status: WalletInstanceStatus,
-        reason: String? = null,
-    ): WalletInstance {
-        val body = kotlinx.serialization.json.buildJsonObject {
-            put("status", kotlinx.serialization.json.JsonPrimitive(status.wire))
-            if (!reason.isNullOrBlank()) put("reason", kotlinx.serialization.json.JsonPrimitive(reason))
+    suspend fun deleteAccountBegin(): DeleteAccountBegin {
+        val (status, text) = sendRaw("/user/session/delete-begin") { it.post(JsonObject(emptyMap()).toString().toRequestBody(JSON_MEDIA_TYPE)) }
+        val fields = parseFields(text)
+        val message = fields.string("message")
+        return when (status) {
+            200 -> DeleteAccountBegin.Ready(parseChallenge(TaggedBinary.decode(json.parseToJsonElement(text)).jsonObject))
+            400 -> if (fields.string("error") == ERROR_NO_PASSKEY) {
+                DeleteAccountBegin.NoPasskey(message)
+            } else {
+                throw BackendApiException(status, "API request failed: $status", text)
+            }
+            401 -> {
+                authTokens?.registerTokenRejection(AuthTokens.TOKEN_BACKEND)
+                DeleteAccountBegin.SessionRevoked(message)
+            }
+            403 -> DeleteAccountBegin.Forbidden(message)
+            404 -> DeleteAccountBegin.NotFound(message)
+            else -> throw BackendApiException(status, "API request failed: $status", text)
         }
-        val attempted = retryWhileErasureIncomplete("setWalletInstanceStatus($instanceId, ${status.wire})") {
-            decodeInstance(put("/user/session/instances/$instanceId/status", body), instanceId)
-        }
-        // A 409 that outlived the retries, or a 401 that dropped the acting
-        // token with the erased key material, both leave the recorded status
-        // standing - report it rather than failing a change that took effect.
-        return attempted.value ?: WalletInstance(id = instanceId, status = status.wire)
     }
 
-    /**
-     * Deprecated string form of [setWalletInstanceStatus]. Kept for one
-     * release so callers built against SDK 0.16 keep compiling; an unknown
-     * status is rejected locally instead of being sent to the backend.
-     */
-    @Deprecated(
-        "Use the WalletInstanceStatus overload",
-        ReplaceWith("setWalletInstanceStatus(instanceId, requireNotNull(WalletInstanceStatus.fromWire(status)), reason)"),
-    )
-    suspend fun setWalletInstanceStatus(instanceId: String, status: String, reason: String? = null): WalletInstance =
-        setWalletInstanceStatus(
-            instanceId,
-            WalletInstanceStatus.fromWire(status)
-                ?: throw IllegalArgumentException("Unknown wallet instance status: $status"),
-            reason,
-        )
-
-    private fun decodeInstance(result: JsonObject, instanceId: String): WalletInstance =
-        // Today the backend answers {id, status}; decode the whole object when
-        // it sends more, so callers see every field it returns.
-        runCatching { json.decodeFromJsonElement(WalletInstance.serializer(), result) }.getOrElse {
-            WalletInstance(
-                id = (result["id"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: instanceId,
-                status = (result["status"] as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    ?: throw BackendApiException(0, "Missing status in response", ""),
-            )
+    private fun parseChallenge(response: JsonObject): DeleteAccountChallenge {
+        val challengeId = (response["challengeId"] as? JsonPrimitive)?.content
+            ?: throw BackendApiException(0, "Missing challengeId in response", "")
+        val publicKey = response["publicKey"]?.jsonObject
+            ?: throw BackendApiException(0, "Missing publicKey in response", "")
+        val rpId = (publicKey["rpId"] as? JsonPrimitive)?.content
+            ?: throw BackendApiException(0, "Missing rpId in response", "")
+        val challenge = (publicKey["challenge"] as? JsonPrimitive)?.content
+            ?: throw BackendApiException(0, "Missing challenge in response", "")
+        val allow = (publicKey["allowCredentials"] as? JsonArray)?.map {
+            val id = (it.jsonObject["id"] as? JsonPrimitive)?.content
+                ?: throw BackendApiException(0, "Missing allowCredentials id in response", "")
+            AllowCredential(WebAuthnAuthClient.decodeBase64Url(id))
         }
-
-    /**
-     * POST /user/session/instances/revoke-all — deactivate the wallet: every
-     * instance revoked, wallet data erased server-side, new enrollment required.
-     *
-     * The backend records the revocations before it erases, so it can answer
-     * `409 ERASURE_INCOMPLETE`; repeating the identical request re-runs the
-     * erasure. This does that on the documented budget (five attempts, 1 s →
-     * 8 s) and reports what happened in [DeactivationOutcome.complete]. A
-     * `401` after such a `409` means the acting token was dropped together
-     * with the erased key material, which is the erasure having succeeded -
-     * it counts as complete.
-     */
-    suspend fun revokeAllWalletInstances(reason: String? = null): DeactivationOutcome {
-        val body = kotlinx.serialization.json.buildJsonObject {
-            if (!reason.isNullOrBlank()) put("reason", kotlinx.serialization.json.JsonPrimitive(reason))
-        }
-        // The first attempt reports how many instances it revoked; a repeat
-        // answers 0 because there is nothing left to revoke. Keep the largest
-        // count seen (the 409 body carries it too) so the caller can tell the
-        // user what actually happened.
-        var revoked = 0
-        val attempted = retryWhileErasureIncomplete(
-            "revokeAllWalletInstances",
-            onIncomplete = { e -> revoked = maxOf(revoked, revokedCount(e.body) ?: 0) },
-        ) {
-            val result = post("/user/session/instances/revoke-all", body)
-            (result["revoked"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull()
-                ?: throw BackendApiException(0, "Missing revoked count in response", "")
-        }
-        return DeactivationOutcome(
-            revoked = maxOf(revoked, attempted.value ?: 0),
-            complete = attempted.complete,
+        return DeleteAccountChallenge(
+            challengeId = challengeId,
+            options = AuthenticateOptions(
+                rpId = rpId,
+                challenge = WebAuthnAuthClient.decodeBase64Url(challenge),
+                allowCredentials = allow,
+                userVerification = (publicKey["userVerification"] as? JsonPrimitive)?.content ?: "required",
+            ),
         )
     }
 
-    private fun revokedCount(body: String?): Int? = runCatching {
-        (json.parseToJsonElement(body ?: return null).jsonObject["revoked"] as? kotlinx.serialization.json.JsonPrimitive)
-            ?.content?.toIntOrNull()
-    }.getOrNull()
-
-    private class Attempted<T>(val value: T?, val complete: Boolean)
+    // ---- Adding a passkey to an existing account (go-wallet-backend#453) ----
 
     /**
-     * Run [request], repeating it while the backend answers `409
-     * ERASURE_INCOMPLETE` (SID-AUTH-06): the status change is already
-     * recorded, only the erasure cascade needs re-running, and the protocol
-     * says to repeat the identical request until it answers `200`.
-     *
-     * Ends with `complete = false` when the budget runs out, and with
-     * `complete = true, value = null` on a `401` that follows such a `409` -
-     * that is the acting token being dropped along with the erased key
-     * material, i.e. the erasure got far enough that the wallet is gone. A
-     * `401` on the very first attempt is an ordinary authentication failure
-     * and is rethrown.
+     * The `X-Private-Data-ETag` of the most recent response that carried one
+     * (private-data reads and writes, a passkey enrolment). Sent as
+     * `X-Private-Data-If-Match` by [passkeyRegisterFinish] so that an enrolment
+     * cannot overwrite private data another device wrote in the meantime.
      */
-    private suspend fun <T> retryWhileErasureIncomplete(
-        what: String,
-        onIncomplete: (BackendApiException) -> Unit = {},
-        request: suspend () -> T,
-    ): Attempted<T> {
-        val attempts = erasureRetryDelaysMs.size + 1
-        var lastIncomplete: BackendApiException? = null
-        for (attempt in 0 until attempts) {
-            if (attempt > 0) delay(erasureRetryDelaysMs[attempt - 1])
-            try {
-                return Attempted(request(), complete = true)
-            } catch (e: BackendApiException) {
-                when {
-                    e.code == 409 && e.apiErrorCode() == ERROR_ERASURE_INCOMPLETE -> {
-                        lastIncomplete = e
-                        onIncomplete(e)
-                        Timber.w("$what: ERASURE_INCOMPLETE (attempt ${attempt + 1}/$attempts) — repeating the request")
-                    }
-                    e.code == 401 && lastIncomplete != null -> {
-                        Timber.i("$what: acting token dropped with the erased key material — erasure complete")
-                        return Attempted(null, complete = true)
-                    }
-                    else -> throw e
+    @Volatile
+    var privateDataEtag: String? = null
+        private set
+
+    /**
+     * Restores [privateDataEtag] after a process restart, from whatever this
+     * account's SDK-side session storage persisted alongside the cached
+     * private-data container.
+     *
+     * A fresh [BackendApiClient] otherwise starts with a null
+     * [privateDataEtag] even when the cached container it will be used
+     * against is actually current, so [passkeyRegisterFinish]'s default
+     * `ifMatch` omits `X-Private-Data-If-Match` entirely and the backend
+     * skips its optimistic-concurrency check - letting this device's
+     * enrollment silently clobber a newer write from another device. Call
+     * this right after constructing the client for a resumed session, before
+     * any private-data-affecting call.
+     */
+    fun restorePrivateDataEtag(etag: String?) {
+        privateDataEtag = etag
+    }
+
+    /**
+     * POST /user/session/webauthn/register-begin - start adding a passkey to
+     * the caller's account. On [AddPasskeyBegin.Ready] run the create ceremony
+     * and, if [PasskeyEnrollmentChallenge.authorization] is set, the
+     * authorising assertion, then pass both to [passkeyRegisterFinish].
+     */
+    suspend fun passkeyRegisterBegin(): AddPasskeyBegin {
+        val (status, text) = sendRaw("/user/session/webauthn/register-begin") { it.post(JsonObject(emptyMap()).toString().toRequestBody(JSON_MEDIA_TYPE)) }
+        val fields = parseFields(text)
+        val message = fields.string("message")
+        return when (status) {
+            200 -> AddPasskeyBegin.Ready(parseEnrollment(TaggedBinary.decode(json.parseToJsonElement(text)).jsonObject))
+            401 -> {
+                authTokens?.registerTokenRejection(AuthTokens.TOKEN_BACKEND)
+                AddPasskeyBegin.SessionRevoked(message)
+            }
+            403 -> AddPasskeyBegin.Forbidden(message)
+            else -> throw BackendApiException(status, "API request failed: $status", text)
+        }
+    }
+
+    private fun parseEnrollment(response: JsonObject): PasskeyEnrollmentChallenge {
+        val challengeId = (response["challengeId"] as? JsonPrimitive)?.content
+            ?: throw BackendApiException(0, "Missing challengeId in response", "")
+        val publicKey = response["createOptions"]?.jsonObject?.get("publicKey")?.jsonObject
+            ?: throw BackendApiException(0, "Missing createOptions.publicKey in response", "")
+        fun str(o: JsonObject, name: String, what: String) =
+            (o[name] as? JsonPrimitive)?.content ?: throw BackendApiException(0, "Missing $what in response", "")
+        val rp = publicKey["rp"]?.jsonObject ?: throw BackendApiException(0, "Missing rp in response", "")
+        val user = publicKey["user"]?.jsonObject ?: throw BackendApiException(0, "Missing user in response", "")
+        val rpId = str(rp, "id", "rp.id")
+        val username = (response["username"] as? JsonPrimitive)?.content
+        val userName = (user["name"] as? JsonPrimitive)?.content ?: username ?: ""
+        val selection = publicKey["authenticatorSelection"] as? JsonObject
+        return PasskeyEnrollmentChallenge(
+            challengeId = challengeId,
+            username = username,
+            createOptions = RegisterOptions(
+                rpId = rpId,
+                rpName = (rp["name"] as? JsonPrimitive)?.content ?: rpId,
+                userId = WebAuthnAuthClient.decodeBase64Url(str(user, "id", "user.id")),
+                userName = userName,
+                userDisplayName = (user["displayName"] as? JsonPrimitive)?.content ?: userName,
+                challenge = WebAuthnAuthClient.decodeBase64Url(str(publicKey, "challenge", "challenge")),
+                attestation = (publicKey["attestation"] as? JsonPrimitive)?.content ?: "none",
+                authenticatorSelection = selection?.let {
+                    AuthenticatorSelection(
+                        authenticatorAttachment = (it["authenticatorAttachment"] as? JsonPrimitive)?.content,
+                        residentKey = (it["residentKey"] as? JsonPrimitive)?.content ?: "required",
+                        userVerification = (it["userVerification"] as? JsonPrimitive)?.content ?: "preferred",
+                    )
+                },
+            ),
+            authorization = (response["authorization"] as? JsonObject)?.let { parseAssertionOptions(it) },
+        )
+    }
+
+    private fun parseAssertionOptions(container: JsonObject): AuthenticateOptions {
+        val publicKey = container["publicKey"]?.jsonObject
+            ?: throw BackendApiException(0, "Missing authorization.publicKey in response", "")
+        val rpId = (publicKey["rpId"] as? JsonPrimitive)?.content
+            ?: throw BackendApiException(0, "Missing authorization rpId in response", "")
+        val challenge = (publicKey["challenge"] as? JsonPrimitive)?.content
+            ?: throw BackendApiException(0, "Missing authorization challenge in response", "")
+        val allow = (publicKey["allowCredentials"] as? JsonArray)?.map {
+            val id = (it.jsonObject["id"] as? JsonPrimitive)?.content
+                ?: throw BackendApiException(0, "Missing allowCredentials id in response", "")
+            AllowCredential(WebAuthnAuthClient.decodeBase64Url(id))
+        }
+        return AuthenticateOptions(
+            rpId = rpId,
+            challenge = WebAuthnAuthClient.decodeBase64Url(challenge),
+            allowCredentials = allow,
+            userVerification = (publicKey["userVerification"] as? JsonPrimitive)?.content ?: "required",
+        )
+    }
+
+    /**
+     * POST /user/session/webauthn/register-finish - complete adding a passkey.
+     *
+     * [credential] is the new passkey, [authorization] the assertion an
+     * existing passkey made over [PasskeyEnrollmentChallenge.authorization]
+     * (required unless begin returned none), [privateData] the container with
+     * the new passkey's PRF entry. [ifMatch] defaults to [privateDataEtag].
+     *
+     * Every outcome the backend defines is returned as an [AddPasskeyOutcome];
+     * only an unexpected status or a network failure throws. A step-up `401` is
+     * not counted as a rejected bearer token.
+     */
+    suspend fun passkeyRegisterFinish(
+        challengeId: String,
+        credential: RegisterResult,
+        nickname: String,
+        privateData: ByteArray?,
+        authorization: AuthenticateResult?,
+        ifMatch: String? = privateDataEtag,
+    ): AddPasskeyOutcome {
+        val body = buildJsonObject {
+            put("challengeId", JsonPrimitive(challengeId))
+            put("nickname", JsonPrimitive(nickname))
+            put("credential", credential.toAttestationJson())
+            if (privateData != null) {
+                put("privateData", buildJsonObject { put("\$b64u", JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(privateData))) })
+            }
+            if (authorization != null) put("authorization", authorization.toAssertionJson())
+        }
+        val (status, text, etag) = sendRawWithEtag("/user/session/webauthn/register-finish") { b ->
+            if (ifMatch != null) b.header("X-Private-Data-If-Match", ifMatch)
+            b.post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+        }
+        val fields = parseFields(text)
+        val message = fields.string("message")
+        return when (status) {
+            200 -> {
+                etag?.let { privateDataEtag = it }
+                AddPasskeyOutcome.Added(fields.string("credentialId"))
+            }
+            404 -> AddPasskeyOutcome.RetryNeeded(message)
+            412 -> {
+                // Do NOT adopt the server's newer ETag here: this device's cached
+                // container has not been updated to match it, so trusting the new
+                // version would let a later retry submit stale private data tagged
+                // as current, silently clobbering another device's concurrent
+                // write. Surface the remote ETag only as data on the conflict so
+                // callers can fetch-and-reconcile before retrying with it.
+                AddPasskeyOutcome.PrivateDataConflict(etag)
+            }
+            400, 403 -> AddPasskeyOutcome.RegistrationRejected(status, fields.string("error") ?: message)
+            401 -> when (fields.string("error")) {
+                ERROR_ENROLLMENT_AUTHORIZATION_REQUIRED -> AddPasskeyOutcome.AuthorizationRequired(message)
+                ERROR_ENROLLMENT_AUTHORIZATION_FAILED -> AddPasskeyOutcome.AuthorizationFailed(message)
+                else -> {
+                    authTokens?.registerTokenRejection(AuthTokens.TOKEN_BACKEND)
+                    AddPasskeyOutcome.SessionRevoked(message)
                 }
             }
+            else -> throw BackendApiException(status, "API request failed: $status", text)
         }
-        Timber.e(
-            "$what: still ERASURE_INCOMPLETE after $attempts attempts — the status change stands, " +
-                "residual data must be cleaned up by an administrator: ${lastIncomplete?.body}"
-        )
-        return Attempted(null, complete = false)
+    }
+
+    private fun RegisterResult.toAttestationJson(): JsonObject {
+        val id = WebAuthnAuthClient.encodeBase64Url(credentialId)
+        return buildJsonObject {
+            put("id", JsonPrimitive(id))
+            put("rawId", JsonPrimitive(id))
+            put("type", JsonPrimitive("public-key"))
+            put("response", buildJsonObject {
+                put("attestationObject", JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(attestationObject)))
+                put("clientDataJSON", JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(clientDataJSON)))
+            })
+        }
+    }
+
+    private fun parseFields(text: String): JsonObject? =
+        runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull()
+
+    private fun JsonObject?.string(name: String): String? =
+        (this?.get(name) as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
+
+    /** Sends the request built by [configure] against [path] and returns the status and body without judging either. */
+    private suspend fun sendRaw(path: String, configure: (Request.Builder) -> Request.Builder): Pair<Int, String> =
+        sendRawWithEtag(path, configure).let { it.first to it.second }
+
+    /** [sendRaw] that also returns the response's `X-Private-Data-ETag`, if any. */
+    private suspend fun sendRawWithEtag(path: String, configure: (Request.Builder) -> Request.Builder): Triple<Int, String, String?> =
+        withContext(Dispatchers.IO) {
+            val builder = configure(Request.Builder().url("$baseUrl$path"))
+            addCommonHeaders(builder)
+            val request = builder.build()
+            try {
+                httpClient.newCall(request).execute().use {
+                    Triple(it.code, it.body?.string().orEmpty(), it.header(PRIVATE_DATA_ETAG_HEADER))
+                }
+            } catch (e: java.io.IOException) {
+                throw NetworkException("Network error: ${request.url}", e)
+            }
+        }
+
+    /**
+     * DELETE /user/session — delete the caller's account, authorised by the
+     * assertion [credential] that answered [challengeId] and by [confirm]
+     * (which must be [DELETE_ACCOUNT_CONFIRMATION]).
+     *
+     * Every outcome the backend defines is returned as a [DeleteAccountOutcome]
+     * rather than thrown; only an unexpected status (or a network failure)
+     * throws. A step-up `401` is not counted as a rejected bearer token, so a
+     * wrong passkey cannot log the session out.
+     */
+    suspend fun deleteAccount(
+        challengeId: String,
+        credential: AuthenticateResult,
+        confirm: String,
+    ): DeleteAccountOutcome {
+        val body = buildJsonObject {
+            put("challengeId", JsonPrimitive(challengeId))
+            put("credential", credential.toAssertionJson())
+            put("confirm", JsonPrimitive(confirm))
+        }
+        val (status, text) = sendRaw("/user/session") { it.delete(body.toString().toRequestBody(JSON_MEDIA_TYPE)) }
+        val fields = parseFields(text)
+        fun field(name: String) = fields.string(name)
+        val message = field("message")
+        val error = field("error")
+        // `202` carries its code as `result` (as `200 {"result":"DELETED"}` does).
+        val code = field("result")
+        return when (status) {
+            200 -> DeleteAccountOutcome.Deleted
+            202 -> when (code) {
+                CODE_DELETION_CLEANUP_PENDING -> DeleteAccountOutcome.CleanupPending
+                CODE_DELETION_OPERATOR_REQUIRED -> DeleteAccountOutcome.OperatorRequired
+                else -> throw BackendApiException(status, "Unrecognised 202 from account deletion", text)
+            }
+            409 -> DeleteAccountOutcome.RetryNeeded(message)
+            410 -> DeleteAccountOutcome.StepUpExpired(message)
+            404 -> DeleteAccountOutcome.NotFound(message)
+            400 -> if (error == ERROR_CONFIRMATION_REQUIRED) {
+                DeleteAccountOutcome.ConfirmationRequired(message)
+            } else {
+                throw BackendApiException(status, "API request failed: $status", text)
+            }
+            401 -> when (error) {
+                ERROR_STEP_UP_REQUIRED -> DeleteAccountOutcome.StepUpRequired(message)
+                ERROR_STEP_UP_FAILED -> DeleteAccountOutcome.StepUpFailed(message)
+                else -> {
+                    authTokens?.registerTokenRejection(AuthTokens.TOKEN_BACKEND)
+                    DeleteAccountOutcome.SessionRevoked(message)
+                }
+            }
+            else -> throw BackendApiException(status, "API request failed: $status", text)
+        }
+    }
+
+    private fun AuthenticateResult.toAssertionJson(): JsonObject {
+        val id = WebAuthnAuthClient.encodeBase64Url(credentialId)
+        return buildJsonObject {
+            put("id", JsonPrimitive(id))
+            put("rawId", JsonPrimitive(id))
+            put("type", JsonPrimitive("public-key"))
+            put("response", buildJsonObject {
+                put("authenticatorData", JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(authenticatorData)))
+                put("clientDataJSON", JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(clientDataJSON)))
+                put("signature", JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(signature)))
+                userHandle?.let { put("userHandle", JsonPrimitive(WebAuthnAuthClient.encodeBase64Url(it))) }
+            })
+        }
     }
 
     /**
@@ -549,14 +723,6 @@ class BackendApiClient(
         execute(builder.build())
     }
 
-    private suspend fun put(path: String, body: JsonObject): JsonObject = withContext(Dispatchers.IO) {
-        val builder = Request.Builder()
-            .url("$baseUrl$path")
-            .put(body.toString().toRequestBody(JSON_MEDIA_TYPE))
-        addCommonHeaders(builder)
-        execute(builder.build())
-    }
-
     private suspend fun delete(path: String): JsonObject = withContext(Dispatchers.IO) {
         val builder = Request.Builder()
             .url("$baseUrl$path")
@@ -589,6 +755,7 @@ class BackendApiClient(
             throw NetworkException("Network error: ${request.url}", e)
         }
         val responseBody = response.body?.string() ?: "{}"
+        response.header(PRIVATE_DATA_ETAG_HEADER)?.let { privateDataEtag = it }
 
         if (!response.isSuccessful) {
             Timber.e("API request failed: ${request.method} ${request.url} -> ${response.code}")
