@@ -114,6 +114,19 @@ class WscdKeystoreAdapter private constructor(
         this(signer, JweKeystore(), InteropProfile.DEFAULT, assuranceScheme)
 
     /**
+     * Construct with BOTH a non-default [InteropProfile] (e.g. a DIIP
+     * integration that wants `did:jwk` holder binding) AND a deployment's
+     * own [Iso18045AssuranceScheme] - a Copilot review correctly caught that
+     * [constructor] (profile-only) and [constructor] (scheme-only) above
+     * each force the other setting to its default, so a caller needing both
+     * had no way to get them together. Forwards [profile] to both this
+     * adapter and its [JweKeystore], exactly like the profile-only
+     * constructor does.
+     */
+    constructor(signer: Signer, profile: InteropProfile, assuranceScheme: Iso18045AssuranceScheme) :
+        this(signer, JweKeystore(profile = profile), profile, assuranceScheme)
+
+    /**
      * Non-null only when [signer] is itself WSCD-backed (i.e. a
      * [UniFFISigner]) - a plain software [Signer] has no lifecycle or
      * plugin-registration concept.

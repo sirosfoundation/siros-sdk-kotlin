@@ -50,14 +50,19 @@ package org.siros.sdk.keystore
  *
  * The OID4VCI Key Attestation JWT is the one call site that is NOT free to
  * swap vocabularies: `key_storage`/`user_authentication` are a registered
- * external wire format whose values ARE `iso_18045_basic`/
- * `iso_18045_moderate`/`iso_18045_high` by spec, not a deployment's choice -
- * so [WscdKeystoreAdapter] always builds those two claims through an
- * [Iso18045AssuranceScheme] specifically (never an arbitrary
- * [WscdAssuranceScheme] a deployment might otherwise be using for plugin
- * selection), even though exactly which [WscdCertificationLevel]/key-storage
- * type maps to which of the three real ISO 18045 tiers remains
- * deployment-configurable DATA on that class.
+ * external wire format whose values ARE the four ISO 18045 AVA_VAN tiers
+ * `iso_18045_basic`/`iso_18045_enhanced-basic`/`iso_18045_moderate`/
+ * `iso_18045_high` (OID4VCI Appendix D.2, "Attack Potential Resistance") by
+ * spec, not a deployment's choice - so [WscdKeystoreAdapter] always builds
+ * those two claims through an [Iso18045AssuranceScheme] specifically (never
+ * an arbitrary [WscdAssuranceScheme] a deployment might otherwise be using
+ * for plugin selection), even though exactly which
+ * [WscdCertificationLevel]/key-storage type maps to which of those four real
+ * ISO 18045 tiers remains deployment-configurable DATA on that class. Note
+ * this four-tier wire vocabulary is BROADER than the three-tier scale
+ * ([Iso18045AssuranceScheme.DEFAULT_TIER_ORDER]: basic/moderate/high) plugin
+ * SELECTION uses - a credential catalog here never REQUIRES enhanced-basic,
+ * but a confirmed hardware fact may legitimately be REPORTED as it.
  */
 interface WscdAssuranceScheme {
 
@@ -134,12 +139,36 @@ class Iso18045AssuranceScheme(
 ) : WscdAssuranceScheme {
 
     override fun labelFor(level: WscdCertificationLevel): String =
-        certificationLevelLabels[level] ?: BASIC
+        validated(certificationLevelLabels[level])
 
     override fun labelForKeyStorageType(rawKeyStorageType: String): String {
-        if (rawKeyStorageType.startsWith("iso_18045_")) return rawKeyStorageType // already spec-compliant, pass through
-        return keyStorageTypeLabels[rawKeyStorageType.lowercase()] ?: BASIC
+        val candidate = if (rawKeyStorageType.startsWith("iso_18045_")) {
+            rawKeyStorageType // already claims to be spec-compliant - still validated below, not trusted blindly
+        } else {
+            keyStorageTypeLabels[rawKeyStorageType.lowercase()]
+        }
+        return validated(candidate)
     }
+
+    /**
+     * [candidate] if it is one of the three real, registered ISO-18045 wire
+     * labels ([BASIC]/[MODERATE]/[HIGH]), else [BASIC].
+     *
+     * This type ALWAYS emits one of exactly those three strings, however
+     * [certificationLevelLabels]/[keyStorageTypeLabels] were configured -
+     * [WscdKeystoreAdapter] builds the OID4VCI Key Attestation JWT's
+     * `key_storage`/`user_authentication` claims from this type specifically
+     * (never the generic [WscdAssuranceScheme] interface) precisely because
+     * that wire format's registered values ARE these four strings
+     * ([BASIC]/[ENHANCED_BASIC]/[MODERATE]/[HIGH] - OID4VCI Appendix D.2,
+     * "Attack Potential Resistance") by spec, not a deployment's free choice
+     * (see [WscdAssuranceScheme]'s doc comment) - a misconfigured map entry
+     * (a typo, or a value copied from a different vocabulary entirely) must
+     * never reach an issuer as an unrecognized `key_storage` value, which a
+     * real conformance-test issuer has already been confirmed to reject once
+     * (see [DEFAULT_KEY_STORAGE_TYPE_LABELS]'s doc comment).
+     */
+    private fun validated(candidate: String?): String = if (candidate in WIRE_LABELS) candidate!! else BASIC
 
     override fun nominalLabelFor(pluginId: String): String? = nominalPluginLabels[pluginId]
 
@@ -155,11 +184,38 @@ class Iso18045AssuranceScheme(
 
     companion object {
         const val BASIC = "iso_18045_basic"
+        const val ENHANCED_BASIC = "iso_18045_enhanced-basic"
         const val MODERATE = "iso_18045_moderate"
         const val HIGH = "iso_18045_high"
 
-        /** Ascending assurance order for [meets]/[rankOf]. */
+        /**
+         * Ascending assurance order for plugin-SELECTION eligibility
+         * ([meets]/[rankOf]) - the SDK's own three-tier scale, matching the
+         * wire's `attestation_los` field (see
+         * [org.siros.sdk.credentials.Vctm.requiredKeyStorage]) and
+         * [WscdPluginCapabilities]'s original, deliberate scope: this
+         * ecosystem's credential catalog/issuers never declare
+         * [ENHANCED_BASIC] as a REQUIREMENT, so it is intentionally absent
+         * from this list - NOT the same thing as [WIRE_LABELS] below, which
+         * is what a CONFIRMED hardware fact may be reported AS.
+         */
         val DEFAULT_TIER_ORDER = listOf(BASIC, MODERATE, HIGH)
+
+        /**
+         * The full OID4VCI-registered ISO 18045 AVA_VAN wire vocabulary
+         * (Appendix D.2, "Attack Potential Resistance") [labelFor]/
+         * [labelForKeyStorageType] are allowed to emit - see [validated].
+         * FOUR tiers, not three: broader than [DEFAULT_TIER_ORDER] (the
+         * SDK's own narrower plugin-SELECTION scale) because the external
+         * wire format defines [ENHANCED_BASIC] as a real, registered tier
+         * between [BASIC] and [MODERATE] that a confirmed hardware fact can
+         * legitimately be reported as, even though no credential catalog in
+         * this ecosystem ever REQUIRES it. Deliberately NOT
+         * [DEFAULT_TIER_ORDER] (a deployment-configurable, potentially
+         * reordered/narrower list): this set is fixed by the OID4VCI spec
+         * itself, not by any constructor parameter.
+         */
+        private val WIRE_LABELS: Set<String> = setOf(BASIC, ENHANCED_BASIC, MODERATE, HIGH)
 
         /**
          * wscd-manager's own objective tiers, as this DEFAULT scheme reads
@@ -186,26 +242,20 @@ class Iso18045AssuranceScheme(
          * overclaiming resistance this scheme can't back up is worse than
          * underclaiming it.
          *
-         * `"trusted_execution"` reads as [MODERATE] here - NOT the stray
-         * `"iso_18045_enhanced-basic"` string the mapping this replaced used:
-         * that string was never part of the three-tier `iso_18045_basic`/
-         * `moderate`/`high` vocabulary used anywhere else in this codebase or
-         * registered for the OID4VCI Key Attestation JWT's `key_storage`
-         * claim, so a strict validator has no meaning for it at all - the
-         * exact class of bug a real conformance-test issuer already caught
-         * once for the `"software"` case (see this class's git history). A
-         * TEE-backed key is real hardware isolation from the OS, clearly
-         * above a pure software key, so [BASIC] would underclaim it; [MODERATE] -
-         * the same tier `"hardware"` reads as - is the most defensible of the
-         * three REAL tiers for it (not [HIGH]: unlike a dedicated secure
-         * element, a TEE shares silicon with the main CPU and has its own
-         * attack surface, so this default does not overclaim resistance a TEE
-         * cannot back up).
+         * `"trusted_execution"` reads as [ENHANCED_BASIC] here - a REAL,
+         * registered OID4VCI tier (VAN.3, between [BASIC]/VAN.2 and
+         * [MODERATE]/VAN.4 - see [WIRE_LABELS]'s doc comment), not a stray
+         * string: a TEE-backed key is real hardware isolation from the OS,
+         * clearly above a pure software key, but (unlike a dedicated secure
+         * element) a TEE shares silicon with the main CPU and has its own
+         * attack surface, so this default does not overclaim it as fully
+         * [MODERATE] either - [ENHANCED_BASIC] is the precise, correct fit,
+         * not a compromise between two coarser choices.
          */
         val DEFAULT_KEY_STORAGE_TYPE_LABELS: Map<String, String> = mapOf(
             "software" to BASIC,
             "hardware" to MODERATE,
-            "trusted_execution" to MODERATE,
+            "trusted_execution" to ENHANCED_BASIC,
             "remote_hsm" to HIGH,
         )
 
@@ -218,18 +268,26 @@ class Iso18045AssuranceScheme(
          * best-effort/config-dependent (a remote-HSM-backed plugin, so its
          * real assurance depends entirely on which HSM a given deployment's
          * R2PS server is backed by - this is a nominal ceiling, not a
-         * guarantee); `"android-keystore"` -> [MODERATE] (Android Key
-         * Attestation is real and hardware-rooted, but this default does not
-         * assume every device reaches StrongBox - only the TEE floor every
-         * device with this plugin registered is guaranteed to have; a
-         * deployment that verifies StrongBox/the attestation security level
-         * per device can configure this higher).
+         * guarantee); `"android-keystore"` -> [BASIC], deliberately
+         * conservative (NOT [MODERATE]): per a real Copilot review finding,
+         * the v0.13.0 Android Keystore plugin's non-StrongBox fallback can
+         * accept a software/unknown security level, so merely registering
+         * this plugin does not guarantee the TEE floor its name suggests -
+         * admitting it as [MODERATE] here, BEFORE any key exists to confirm
+         * that, would let [WscdSelectionPolicy] select it for a moderate
+         * requirement without ever having verified the generated key's real
+         * assurance. [BASIC] is the only nominal claim this table can make
+         * safely until a real per-key confirmation path (`generateKeyForLevel`/
+         * [WscdManager.generateKeyForLevel]'s confirm-after-generate contract)
+         * is actually wired into production issuance - see that method's doc
+         * comment. A deployment that has verified its fleet's StrongBox/TEE
+         * availability out of band may configure this higher.
          */
         val DEFAULT_NOMINAL_PLUGIN_LABELS: Map<String, String> = mapOf(
             "softkey" to BASIC,
             "fido2" to HIGH,
             "r2ps" to HIGH,
-            "android-keystore" to MODERATE,
+            "android-keystore" to BASIC,
         )
 
         /** This scheme's own default instance - see the class doc comment. */

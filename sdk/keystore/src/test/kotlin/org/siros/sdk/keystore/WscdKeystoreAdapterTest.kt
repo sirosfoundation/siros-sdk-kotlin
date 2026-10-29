@@ -939,13 +939,15 @@ class WscdKeystoreAdapterTest {
     // ── the SAME configurable Iso18045AssuranceScheme as WscdPluginCapabilities ─
 
     @Test
-    fun generateKeyAttestationMapsTrustedExecutionToModerate_notTheStrayEnhancedBasicString() = runTest {
-        // Regression test for the fix documented on
-        // Iso18045AssuranceScheme.DEFAULT_KEY_STORAGE_TYPE_LABELS: the
-        // previous, now-removed toIso18045AttackPotential switch mapped
-        // "trusted_execution" to the non-canonical "iso_18045_enhanced-basic"
-        // string, which is not part of the 3-tier iso_18045_basic/moderate/high
-        // vocabulary registered for this JWT's key_storage claim at all.
+    fun generateKeyAttestationMapsTrustedExecutionToEnhancedBasic() = runTest {
+        // "iso_18045_enhanced-basic" is a REAL, OID4VCI-registered value
+        // (Appendix D.2, VAN.3, between basic/VAN.2 and moderate/VAN.4) - see
+        // Iso18045AssuranceScheme.DEFAULT_KEY_STORAGE_TYPE_LABELS's doc
+        // comment. This regression test proves the single shared scheme
+        // still produces this value (unchanged from the previous, separate
+        // toIso18045AttackPotential table this replaced) rather than
+        // collapsing it into the coarser "moderate" the SDK's own narrower
+        // plugin-SELECTION scale uses.
         val signer = mockk<Signer>(relaxed = true).also {
             coEvery { it.generateKey(any()) } returns "test-key-1"
             coEvery { it.sign(any(), any()) } returns ByteArray(64) { i -> i.toByte() }
@@ -961,7 +963,7 @@ class WscdKeystoreAdapterTest {
         val jwt = adapter.generateKeyAttestation(nonce = "n", count = 1)
         val claims = com.nimbusds.jwt.SignedJWT.parse(jwt).jwtClaimsSet
 
-        assertEquals(listOf("iso_18045_moderate"), claims.getClaim("key_storage"))
+        assertEquals(listOf("iso_18045_enhanced-basic"), claims.getClaim("key_storage"))
     }
 
     @Test
@@ -984,6 +986,39 @@ class WscdKeystoreAdapterTest {
             keyStorageTypeLabels = mapOf("hardware" to Iso18045AssuranceScheme.HIGH),
         )
         val adapter = WscdKeystoreAdapter(signer, assuranceScheme = lenientDeployment)
+        adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+
+        val jwt = adapter.generateKeyAttestation(nonce = "n", count = 1)
+        val claims = com.nimbusds.jwt.SignedJWT.parse(jwt).jwtClaimsSet
+
+        assertEquals(listOf("iso_18045_high"), claims.getClaim("key_storage"))
+    }
+
+    @Test
+    fun constructorCombiningProfileAndAssuranceSchemeAppliesBoth() = runTest {
+        // Regression test for a real Copilot finding: the profile-only and
+        // scheme-only constructors each forced the other setting to its
+        // default, so a DIIP integration (non-default InteropProfile) could
+        // not also customize its attestation mapping. This constructor
+        // combines both - proves the scheme is applied (the profile itself
+        // is exercised by this adapter's existing profile-specific tests).
+        val signer = mockk<Signer>(relaxed = true).also {
+            coEvery { it.generateKey(any()) } returns "test-key-1"
+            coEvery { it.sign(any(), any()) } returns ByteArray(64) { i -> i.toByte() }
+            coEvery { it.exportPublicKey(any()) } returns realPublicKeyJwkJson().toByteArray()
+            coEvery { it.securityProperties(any()) } returns SignerSecurityProperties(
+                keyStorage = listOf("hardware"),
+                userAuthentication = emptyList(),
+            )
+        }
+        val lenientDeployment = Iso18045AssuranceScheme(
+            keyStorageTypeLabels = mapOf("hardware" to Iso18045AssuranceScheme.HIGH),
+        )
+        val adapter = WscdKeystoreAdapter(
+            signer,
+            org.siros.sdk.credentials.interop.InteropProfile.DEFAULT,
+            lenientDeployment,
+        )
         adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
 
         val jwt = adapter.generateKeyAttestation(nonce = "n", count = 1)

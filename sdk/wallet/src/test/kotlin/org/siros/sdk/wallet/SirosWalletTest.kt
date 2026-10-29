@@ -3395,6 +3395,45 @@ class SirosWalletTest {
         }
     }
 
+    /** Minimal [WscdUserOverrideStore] fake for [buildWscdSelectionPolicy]-level tests that don't exercise overrides. */
+    private class NoopTestWscdUserOverrideStore : WscdUserOverrideStore {
+        override fun get(issuer: String, credentialType: String): String? = null
+        override fun put(issuer: String, credentialType: String, pluginId: String) {}
+        override fun getGlobal(): String? = null
+        override fun setGlobal(pluginId: String) {}
+    }
+
+    /**
+     * Regression test for a real gap a Copilot review caught: [WalletConfig]
+     * gained a `wscdAssuranceScheme` field, and [WscdSelectionPolicy] (the
+     * type) fully supported one, but nothing in [SirosWallet]'s own
+     * construction actually forwarded it - real wallet issuance silently
+     * always used [org.siros.sdk.keystore.Iso18045AssuranceScheme.DEFAULT]
+     * no matter what a deployment configured. [buildWscdSelectionPolicy] is
+     * the exact function [SirosWallet]'s own init block calls, so this
+     * proves the real wiring, not a reimplementation of it.
+     */
+    @Test
+    fun buildWscdSelectionPolicy_threadsConfiguredAssuranceSchemeThrough() = runTest {
+        val strictDeployment = org.siros.sdk.keystore.Iso18045AssuranceScheme(
+            nominalPluginLabels = mapOf("fido2" to org.siros.sdk.keystore.Iso18045AssuranceScheme.MODERATE),
+        )
+        val config = WalletConfig(backendUrl = "https://wallet.example.com", wscdAssuranceScheme = strictDeployment)
+        val policy = buildWscdSelectionPolicy(config, InMemoryWscdTofuStore(), NoopTestWscdUserOverrideStore())
+
+        try {
+            policy.resolve(
+                issuer = "https://issuer.example.com",
+                credentialType = "urn:eu.europa.ec.eudi:pid:1",
+                requiredTier = "iso_18045_high",
+                availablePluginIds = setOf("fido2"),
+            )
+            org.junit.Assert.fail("expected NoEligibleWscdPluginException: the wallet-configured scheme caps fido2 at iso_18045_moderate")
+        } catch (e: NoEligibleWscdPluginException) {
+            // expected
+        }
+    }
+
     /**
      * End-to-end: an issuer with multiple registered [WalletConfig.availableKeystores]
      * plugins, requesting a Key Attestation for a credential type that
