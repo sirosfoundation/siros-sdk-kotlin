@@ -189,6 +189,15 @@ class WscdKeystoreAdapter private constructor(
     override fun registerR2psPlugin(config: R2psConfig, transport: R2psTransportProvider) =
         requireWscdManager().registerR2psPlugin(config, transport)
 
+    override fun registerAndroidKeystorePlugin(backend: AndroidKeyStoreBackend, authenticator: UserAuthenticator?) =
+        requireWscdManager().registerAndroidKeystorePlugin(backend, authenticator)
+
+    override suspend fun generateAndroidKeystoreKeyWithChallenge(attestationChallenge: ByteArray): String =
+        requireWscdManager().generateAndroidKeystoreKeyWithChallenge(attestationChallenge)
+
+    override suspend fun generateKeyForLevel(requiredLevel: WscdCertificationLevel, candidatePluginIds: List<String>): String =
+        requireWscdManager().generateKeyForLevel(requiredLevel, candidatePluginIds)
+
     override val isUnlocked: Boolean get() = credentialsKeystore.isUnlocked
 
     override suspend fun unlock(

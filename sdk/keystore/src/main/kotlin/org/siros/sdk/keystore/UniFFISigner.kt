@@ -16,6 +16,7 @@ import org.siros.sdk.credentials.SignerSecurityProperties
 import uniffi.siros_wscd_manager.FfiActivateLifecycleRequest
 import uniffi.siros_wscd_manager.FfiActivationOutcome
 import uniffi.siros_wscd_manager.FfiAlgorithm
+import uniffi.siros_wscd_manager.FfiAttestationFormat
 import uniffi.siros_wscd_manager.FfiAuthCallback
 import uniffi.siros_wscd_manager.FfiCertificationLevel
 import uniffi.siros_wscd_manager.FfiDestroyLifecycleRequest
@@ -101,6 +102,26 @@ class UniFFISigner(
         )
         ffi.registerR2psPlugin(ffiConfig, R2psTransportBridge(transport))
     }
+
+    override fun registerAndroidKeystorePlugin(backend: AndroidKeyStoreBackend, authenticator: UserAuthenticator?) {
+        ffi.registerAndroidKeystorePlugin(AndroidKeystoreWscdCallbackBridge(backend, authenticator))
+    }
+
+    override suspend fun generateAndroidKeystoreKeyWithChallenge(attestationChallenge: ByteArray): String =
+        withContext(Dispatchers.IO) {
+            val result = ffi.generateAndroidKeystoreKeyWithChallenge(attestationChallenge, FfiAlgorithm.ES256, noOpProgress())
+            publicKeyCache[result.kid] = result.publicKeyJwk.toByteArray(Charsets.UTF_8)
+            result.kid
+        }
+
+    override suspend fun generateKeyForLevel(requiredLevel: WscdCertificationLevel, candidatePluginIds: List<String>): String =
+        withContext(Dispatchers.IO) {
+            val result: FfiGeneratedKey = withPinAuth { auth ->
+                ffi.generateKeyForLevel(requiredLevel.toFfi(), candidatePluginIds, FfiAlgorithm.ES256, auth, noOpProgress())
+            }
+            publicKeyCache[result.kid] = result.publicKeyJwk.toByteArray(Charsets.UTF_8)
+            result.kid
+        }
 
 
     override fun registerFido2Plugin(transport: Ctap2TransportProvider) {
@@ -349,8 +370,45 @@ class UniFFISigner(
         Unit
     }
 
+    /**
+     * siros-wscd-manager's `AttestationChain` carries an explicit `format`
+     * discriminant (`FfiAttestationFormat.X509_CHAIN`/`OPAQUE`) - unlike this
+     * SDK's own [AttestationChain], whose `certificates` field is overloaded
+     * to also mean "the one opaque blob" for [AttestationChain.FORMAT_FIDO2_PACKED]
+     * (see that class's doc comment: a pre-existing design predating the
+     * Rust-side discriminant, kept so `BackendApiClient.registerFido2Attestation`
+     * and `InstanceKeyEvidence` - both written against that shape - need no
+     * change). Map explicitly rather than forwarding `certificates`
+     * unconditionally: the fido2 plugin now reports `OPAQUE` (its CBOR
+     * attestation object lives in `opaqueAttestation`, not `certificates`),
+     * so a blind `AttestationChain(it.certificates, ...)` would silently
+     * produce an EMPTY certificates list for fido2 the moment that plugin's
+     * shape was corrected Rust-side - exactly the breakage flagged and
+     * fixed here instead of discovered later as a silent regression.
+     *
+     * `X509_CHAIN` is mapped to [AttestationChain.FORMAT_ANDROID_KEY]: of
+     * the plugins reachable through this signer today, only the Android
+     * Keystore plugin can ever return that format (fido2 always returns
+     * `OPAQUE`; r2ps's `attestation_chain()` always returns `null`, pending
+     * HSM-vendor attestation support). If a future plugin also returns a
+     * genuine X.509 chain, this mapping will need to distinguish by plugin
+     * id, not format alone - not needed yet.
+     */
     override suspend fun attestationChain(keyId: String): AttestationChain? = withContext(Dispatchers.IO) {
-        ffi.attestationChain(keyId)?.let { AttestationChain(it.certificates, it.clientDataHash) }
+        ffi.attestationChain(keyId)?.let { chain ->
+            when (chain.format) {
+                FfiAttestationFormat.X509_CHAIN -> AttestationChain(
+                    certificates = chain.certificates,
+                    clientDataHash = chain.clientDataHash,
+                    format = AttestationChain.FORMAT_ANDROID_KEY,
+                )
+                FfiAttestationFormat.OPAQUE -> AttestationChain(
+                    certificates = listOf(chain.opaqueAttestation),
+                    clientDataHash = chain.clientDataHash,
+                    format = AttestationChain.FORMAT_FIDO2_PACKED,
+                )
+            }
+        }
     }
 
     override suspend fun exportPublicKey(keyId: String): ByteArray = withContext(Dispatchers.IO) {
@@ -472,6 +530,13 @@ class UniFFISigner(
         FfiKeyStorageType.HARDWARE -> "hardware"
         FfiKeyStorageType.REMOTE_HSM -> "remote_hsm"
         FfiKeyStorageType.TRUSTED_EXECUTION -> "trusted_execution"
+    }
+
+    private fun WscdCertificationLevel.toFfi(): FfiCertificationLevel = when (this) {
+        WscdCertificationLevel.NONE -> FfiCertificationLevel.NONE
+        WscdCertificationLevel.BASELINE -> FfiCertificationLevel.BASELINE
+        WscdCertificationLevel.SUBSTANTIAL -> FfiCertificationLevel.SUBSTANTIAL
+        WscdCertificationLevel.HIGH -> FfiCertificationLevel.HIGH
     }
 
     private fun FfiCertificationLevel.toSdkCertification(): CertificationInfo = when (this) {
