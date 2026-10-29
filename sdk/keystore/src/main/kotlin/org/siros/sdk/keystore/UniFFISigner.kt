@@ -151,23 +151,47 @@ class UniFFISigner(
         return result.kid
     }
 
+    /**
+     * Unlike [generateAndroidKeystoreKeyWithChallenge], this has a second
+     * fallible step AFTER the key exists - reading back which candidate won
+     * via [FfiWscdManager.listKeys] (see below) - so it cannot reuse
+     * [generateManagedNative], which only guards the race between a
+     * successful native call returning and this suspend function delivering
+     * its result. Here, [created] is set as soon as generation itself
+     * succeeds, and BOTH a cancellation and an ordinary exception from the
+     * plugin-id lookup that follows go through the same cleanup: an
+     * unrelated registered plugin (e.g. an unreachable R2PS server) failing
+     * [FfiWscdManager.listKeys] must not leak the key this call just
+     * created, nor silently drop its id with no way to delete it later.
+     */
     override suspend fun generateKeyForLevel(
         requiredLevel: WscdCertificationLevel,
         candidatePluginIds: List<String>,
     ): GeneratedKeyWithPlugin {
-        val result = generateManagedNative({ it.kid }) {
-            withPinAuth { auth ->
-                ffi.generateKeyForLevel(requiredLevel.toFfi(), candidatePluginIds, FfiAlgorithm.ES256, auth, noOpProgress())
+        var created: FfiGeneratedKey? = null
+        return try {
+            withContext(Dispatchers.IO) {
+                val result = withPinAuth { auth ->
+                    ffi.generateKeyForLevel(requiredLevel.toFfi(), candidatePluginIds, FfiAlgorithm.ES256, auth, noOpProgress())
+                }
+                created = result
+                publicKeyCache[result.kid] = result.publicKeyJwk.toByteArray(Charsets.UTF_8)
+                // generate_key_for_level tries candidates in order and keeps
+                // whichever one's result was actually confirmed sufficient -
+                // that may not be the first (or only) candidate offered, so
+                // the winner is read back from the manager's own record
+                // rather than assumed.
+                val pluginId = ffi.listKeys().firstOrNull { it.kid == result.kid }?.pluginId
+                    ?: error("generateKeyForLevel's own manager has no record of the key it just generated (${result.kid})")
+                GeneratedKeyWithPlugin(keyId = result.kid, pluginId = pluginId)
             }
+        } catch (e: CancellationException) {
+            created?.let { t -> withContext(NonCancellable) { runCatching { ffi.deleteKey(t.kid) } } }
+            throw e
+        } catch (e: Exception) {
+            created?.let { t -> withContext(NonCancellable) { runCatching { ffi.deleteKey(t.kid) } } }
+            throw e
         }
-        publicKeyCache[result.kid] = result.publicKeyJwk.toByteArray(Charsets.UTF_8)
-        // generate_key_for_level tries candidates in order and keeps
-        // whichever one's result was actually confirmed sufficient - that
-        // may not be the first (or only) candidate offered, so the winner
-        // is read back from the manager's own record rather than assumed.
-        val pluginId = ffi.listKeys().firstOrNull { it.kid == result.kid }?.pluginId
-            ?: error("generateKeyForLevel's own manager has no record of the key it just generated (${result.kid})")
-        return GeneratedKeyWithPlugin(keyId = result.kid, pluginId = pluginId)
     }
 
     override fun registerFido2Plugin(transport: Ctap2TransportProvider) {

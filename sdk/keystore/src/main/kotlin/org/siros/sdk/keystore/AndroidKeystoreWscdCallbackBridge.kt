@@ -1,8 +1,8 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.keystore
 
+import com.nimbusds.jose.jwk.JWK
 import kotlinx.coroutines.runBlocking
-import org.siros.sdk.credentials.KeystoreException
 import timber.log.Timber
 import uniffi.siros_wscd_manager.FfiAndroidKeystoreCallback
 import uniffi.siros_wscd_manager.FfiAndroidKeystoreSecurityLevel
@@ -49,22 +49,54 @@ class AndroidKeystoreWscdCallbackBridge @JvmOverloads constructor(
         userAuthenticationMethods: List<String>,
         unlockedDeviceRequired: Boolean,
     ): FfiAndroidKeystoreSecurityLevel {
-        val methods = userAuthenticationMethods.mapNotNull { it.toAuthenticationMethodOrNull() }.toSet()
-        return try {
-            backend.generate(alias, attestationChallenge, strongBox, methods, unlockedDeviceRequired).toFfi()
-        } catch (e: AndroidKeyStoreBackend.StrongBoxUnavailable) {
-            throw FfiWscdException.StrongBoxUnavailable("StrongBox is unavailable on this device")
+        // An unrecognized name is rejected, not dropped: silently generating
+        // with fewer methods than requested can turn "requires biometric or
+        // device credential" into "requires nothing" (an empty set means no
+        // user-authentication requirement at all to the Keystore) the moment
+        // the only requested method here is one this bridge does not
+        // recognize - an unenforceable policy must never silently succeed as
+        // an unauthenticated key.
+        val methods = userAuthenticationMethods.map {
+            it.toAuthenticationMethodOrNull()
+                ?: throw FfiWscdException.Plugin("Unsupported Android Keystore authentication method requested: '$it'")
+        }.toSet()
+        return wrapPlatformExceptions("generate $alias") {
+            try {
+                backend.generate(alias, attestationChallenge, strongBox, methods, unlockedDeviceRequired).toFfi()
+            } catch (e: AndroidKeyStoreBackend.StrongBoxUnavailable) {
+                throw FfiWscdException.StrongBoxUnavailable("StrongBox is unavailable on this device")
+            }
         }
     }
 
-    override fun certificateChain(alias: String): List<ByteArray> = backend.certificateChain(alias)
+    override fun certificateChain(alias: String): List<ByteArray> =
+        wrapPlatformExceptions("certificateChain $alias") { backend.certificateChain(alias) }
 
-    override fun publicKeyJwk(alias: String): String = EcdsaSignatures.publicJwk(backend.publicKey(alias))
+    /**
+     * Includes the RFC 7638 JWK thumbprint as `kid`, computed the same way
+     * [KeypairIdentity]'s own thumbprint matching does (`nimbus-jose-jwt`'s
+     * [JWK.computeThumbprint]) - this MUST equal the key id
+     * `AndroidKeystorePlugin::finish_generate_key` (siros-wscd-manager)
+     * independently derives via its own `jwk_thumbprint`, which reads only
+     * the canonical `crv`/`kty`/`x`/`y` members and ignores any `kid`
+     * already present, so embedding the matching thumbprint here is
+     * self-consistent, not circular. Without it, `SirosWallet
+     * .extractProofKeyId` cannot recover which key a proof was made with in
+     * a multi-key wallet - see [EcdsaSignatures.publicJwk]'s doc comment.
+     */
+    override fun publicKeyJwk(alias: String): String = wrapPlatformExceptions("publicKeyJwk $alias") {
+        val key = backend.publicKey(alias)
+        val kid = JWK.parse(EcdsaSignatures.publicJwk(key)).computeThumbprint().toString()
+        EcdsaSignatures.publicJwk(key, kid)
+    }
 
-    override fun securityLevel(alias: String): FfiAndroidKeystoreSecurityLevel = backend.securityLevel(alias).toFfi()
+    override fun securityLevel(alias: String): FfiAndroidKeystoreSecurityLevel =
+        wrapPlatformExceptions("securityLevel $alias") { backend.securityLevel(alias).toFfi() }
 
     override fun userAuthenticationMethods(alias: String): List<String> =
-        backend.userAuthenticationMethods(alias).map { it.toWireName() }
+        wrapPlatformExceptions("userAuthenticationMethods $alias") {
+            backend.userAuthenticationMethods(alias).map { it.toWireName() }
+        }
 
     /**
      * Mirrors [AndroidKeystoreSigner.sign]/its private `finish` exactly: a
@@ -74,12 +106,8 @@ class AndroidKeystoreWscdCallbackBridge @JvmOverloads constructor(
      * [AndroidKeystoreCallback]'s Rust-side one for why.
      */
     override fun sign(alias: String, data: ByteArray): ByteArray {
-        val methods = backend.userAuthenticationMethods(alias)
-        val signature = try {
-            backend.newSignature(alias)
-        } catch (e: KeystoreException) {
-            throw FfiWscdException.Plugin("could not start a signature with $alias: ${e.message}")
-        }
+        val methods = wrapPlatformExceptions("userAuthenticationMethods $alias") { backend.userAuthenticationMethods(alias) }
+        val signature = wrapPlatformExceptions("could not start a signature with $alias") { backend.newSignature(alias) }
         if (methods.isNotEmpty()) {
             val auth = authenticator
                 ?: throw FfiWscdException.AuthRequired("key $alias requires user authentication and no authenticator was configured")
@@ -93,19 +121,37 @@ class AndroidKeystoreWscdCallbackBridge @JvmOverloads constructor(
                 throw FfiWscdException.AuthCancelled("authenticated with $used, which key $alias does not allow")
             }
         }
-        val der = try {
+        val der = wrapPlatformExceptions("Android Keystore could not sign with $alias") {
             signature.update(data)
             signature.sign()
-        } catch (e: Exception) {
-            throw FfiWscdException.Plugin("Android Keystore could not sign with $alias: ${e.message}")
         }
         return EcdsaSignatures.derToRawLowS(der)
     }
 
-    override fun aliases(): List<String> = backend.aliases()
+    override fun aliases(): List<String> = wrapPlatformExceptions("aliases") { backend.aliases() }
 
     override fun delete(alias: String) {
-        backend.delete(alias)
+        wrapPlatformExceptions("delete $alias") { backend.delete(alias) }
+    }
+
+    /**
+     * Every method here runs on Rust's own FFI callback thread, never the
+     * Android main thread (see this class's doc comment) - an ordinary
+     * platform exception escaping uncaught would reach UniFFI as an
+     * `UnexpectedUniFFICallbackError` instead of a typed [FfiWscdException],
+     * bypassing the Rust side's typed cleanup/fallback handling (e.g. a
+     * generate-then-fails-to-read-back-the-attestation sequence that should
+     * delete the orphaned key). A [FfiWscdException] already thrown deeper
+     * (e.g. [FfiWscdException.StrongBoxUnavailable], [sign]'s
+     * [FfiWscdException.AuthRequired]/`AuthCancelled`) passes through
+     * unchanged; anything else becomes a plain [FfiWscdException.Plugin].
+     */
+    private inline fun <T> wrapPlatformExceptions(what: String, block: () -> T): T = try {
+        block()
+    } catch (e: FfiWscdException) {
+        throw e
+    } catch (e: Exception) {
+        throw FfiWscdException.Plugin("Android Keystore $what failed: ${e.message}")
     }
 
     private fun AndroidKeystoreSigner.SecurityLevel.toFfi(): FfiAndroidKeystoreSecurityLevel = when (this) {
@@ -120,13 +166,15 @@ class AndroidKeystoreWscdCallbackBridge @JvmOverloads constructor(
         AndroidKeystoreSigner.AuthenticationMethod.DEVICE_CREDENTIAL -> "device_credential"
     }
 
-    /** The reverse of [toWireName]; an unrecognized string is dropped rather than thrown - see that function's doc comment. */
+    /**
+     * The reverse of [toWireName] - `null` for an unrecognized string, which
+     * [generate] turns into a thrown [FfiWscdException.Plugin] rather than
+     * silently dropping the method (see [generate]'s doc comment on why
+     * dropping is unsafe).
+     */
     private fun String.toAuthenticationMethodOrNull(): AndroidKeystoreSigner.AuthenticationMethod? = when (this) {
         "biometric" -> AndroidKeystoreSigner.AuthenticationMethod.BIOMETRIC
         "device_credential" -> AndroidKeystoreSigner.AuthenticationMethod.DEVICE_CREDENTIAL
-        else -> {
-            Timber.w("Unrecognized Android Keystore authentication method '$this' from siros-wscd-manager; ignoring")
-            null
-        }
+        else -> null
     }
 }
