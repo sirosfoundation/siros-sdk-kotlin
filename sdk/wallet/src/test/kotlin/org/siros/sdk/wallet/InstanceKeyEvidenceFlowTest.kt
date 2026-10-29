@@ -237,14 +237,38 @@ class InstanceKeyEvidenceFlowTest {
         var n = 0
         coEvery { r.keystore.generateAttestedKey(any(), any()) } answers {
             // Generation itself (StrongBox + attestation) takes long enough alone to exceed the freshness window,
-            // even though no further time passes before the WIA is requested right after this call returns.
-            r.clock[0] += 10 * 60 * 1000
+            // even though no further time passes before the WIA is requested right after this call returns. Only
+            // the FIRST attempt is slow - the replacement's own generation is normal speed, so it is used
+            // successfully (see aReplacementThatAlsoGoesStaleDuringGenerationIsNeverSubmittedEither for the case
+            // where it, too, is slow).
+            if (n == 0) r.clock[0] += 10 * 60 * 1000
             "attested-${++n}"
         }
         coEvery { r.api.generateWIA(pop = any(), challenge = "C-2", clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } returns jwt()
         assertNotNull(obtain(r.wallet))
         coVerify(exactly = 0) { r.api.generateWIA(pop = any(), challenge = "C-1", clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) }
         assertEquals("attested-2", r.stored())
+    }
+
+    /**
+     * Review of #312 (round 2): the freshness check used to run only once, before obtainWia's retry loop started -
+     * a replacement challenge generated to fix a stale one could itself go stale during ITS OWN generation and
+     * still be submitted unchecked, repeating the very bug the check exists to prevent. The check must run on
+     * every loop iteration, not just the first.
+     */
+    @Test
+    fun aReplacementThatAlsoGoesStaleDuringGenerationIsNeverSubmittedEither() {
+        val r = rig()
+        var n = 0
+        coEvery { r.keystore.generateAttestedKey(any(), any()) } answers {
+            // EVERY attempt's generation - including the replacement rotateInstanceKey generates for the first
+            // stale challenge - is slow enough alone to exceed the freshness window. Nothing should ever be
+            // submitted, so which key id comes back does not matter.
+            r.clock[0] += 10 * 60 * 1000
+            "attested-${++n}"
+        }
+        assertNull(obtain(r.wallet))
+        coVerify(exactly = 0) { r.api.generateWIA(pop = any(), challenge = any(), clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) }
     }
 
     /**

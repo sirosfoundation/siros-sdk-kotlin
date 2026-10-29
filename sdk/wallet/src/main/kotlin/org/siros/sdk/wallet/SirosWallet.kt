@@ -3702,14 +3702,19 @@ class SirosWallet private constructor(
     private suspend fun obtainWia(client: BackendApiClient, keyId: String, pending: PendingInstanceKeyEvidence?, account: String?, generation: Int, budget: RotationBudget): String {
         var key = keyId
         var evidence = pending
-        if (evidence != null && evidence.isStale(instanceKeyClock())) {
-            // The challenge is single use and short lived: do not spend it, replace the key.
-            if (!budget.spend()) throw WalletException("The instance key challenge went stale and no replacement is left in this attempt")
-            Timber.w("The instance key challenge went stale before use; replacing the key")
-            key = rotateInstanceKey(key, account, generation)
-            evidence = takePendingInstanceKeyEvidence(key)
-        }
         while (true) {
+            if (evidence != null && evidence.isStale(instanceKeyClock())) {
+                // The challenge is single use and short lived: do not spend it, replace the key. Checked on every
+                // loop iteration, not just once before it starts - a replacement challenge can itself go stale
+                // before use (slow key generation, slow persistence), and submitting it anyway would repeat the
+                // very bug this check exists to prevent. The shared rotation budget (see the INVALID/UNAVAILABLE
+                // case below) bounds how many times this can happen in one attempt.
+                if (!budget.spend()) throw WalletException("The instance key challenge went stale and no replacement is left in this attempt")
+                Timber.w("The instance key challenge went stale before use; replacing the key")
+                key = rotateInstanceKey(key, account, generation)
+                evidence = takePendingInstanceKeyEvidence(key)
+                continue
+            }
             val challenge = evidence?.challenge ?: client.requestWIAChallenge()["challenge"]?.jsonPrimitive?.contentOrNull
                 ?: throw WalletException("The backend gave no WIA challenge")
             val keyAttestation = evidence?.let { InstanceKeyEvidence.androidKey(keystore.attestationChain(key)) }
