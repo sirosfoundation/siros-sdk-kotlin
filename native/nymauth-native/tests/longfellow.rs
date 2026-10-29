@@ -17,8 +17,13 @@ use serde_json::{Value, json};
 
 const TEEN_PSEUDONYM: &str = "61266c285395e6fa97f3fa2d93ee428de03d99e9e0e62a3fcc38664faaaa4c30";
 
+// Vendored under circuits/longfellow-mdoc/ (params.tsv and hash-semantic.tsv are also compiled into
+// the library itself via include_str!; circuits.zst is only needed here, as a test fixture, so it is
+// not embedded in the library). All three are the exact bytes `APPROVED[0]` checks against (circuits.zst
+// decompresses to artifact_len/artifact_sha256), fetched once from AltmannPeter/readdit-demo at the
+// pinned commit (Cargo.toml) rather than assumed to live in some sibling checkout.
 fn circuits_dir() -> PathBuf {
-  Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../readdit-demo/native/longfellow/circuits/mdoc")
+  Path::new(env!("CARGO_MANIFEST_DIR")).join("circuits/longfellow-mdoc")
 }
 
 fn fixture() -> Value {
@@ -159,8 +164,8 @@ fn proves_the_teen_pseudonym_and_age_and_both_verifiers_accept() {
   }
   .encode()
   .unwrap();
-  let anchors = std::fs::read_to_string(circuits_dir().join("../../../vega/demo/document-signer.pem")).unwrap();
-  let verifier = nym_longfellow::verifier::Verifier::load(&circuits_dir(), &anchors, 300).unwrap();
+  let anchors = include_str!("fixtures/document-signer.pem");
+  let verifier = nym_longfellow::verifier::Verifier::load(&circuits_dir(), anchors, 300).unwrap();
   let f = fixture();
   let input = serde_json::from_value(json!({
     "request": f["request"],
