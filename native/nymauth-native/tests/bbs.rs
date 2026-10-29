@@ -1,9 +1,9 @@
 //! BBS (bbs_cd) through this library's UniFFI surface: community-demo's teen BBS credential, its device
 //! key signing as a host's signer would, checked by community-demo's own BBS verifier (nym-bbs), and
-//! the refusals. Reads readdit-demo's `app/wallet/demo-wallet-bbs.json` and `native/bbs/demo/issuer-params.bin`.
+//! the refusals. Vendored from readdit-demo's `app/wallet/demo-wallet-bbs.json` and
+//! `native/bbs/demo/issuer-params.bin`, at the same commit Cargo.toml pins nym-bbs to (tests/fixtures/).
 #![cfg(feature = "bbs")]
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -14,12 +14,8 @@ use p256::ecdsa::signature::Signer as _;
 use p256::ecdsa::{Signature, SigningKey};
 use serde_json::{Value, json};
 
-fn demo(p: &str) -> PathBuf {
-  PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../readdit-demo").join(p)
-}
-
 fn wallet() -> Value {
-  serde_json::from_str(&std::fs::read_to_string(demo("app/wallet/demo-wallet-bbs.json")).unwrap()).unwrap()
+  serde_json::from_str(include_str!("fixtures/demo-wallet-bbs.json")).unwrap()
 }
 
 fn request(nonce: &str, age: Option<Value>) -> Value {
@@ -93,7 +89,7 @@ fn prove(p: &BbsProver, req: &Value, signer: Arc<Software>, public: Vec<u8>, cre
 }
 
 fn verify(req: &Value, presentation: &[u8]) -> Value {
-  let verifier = Verifier::load(&std::fs::read(demo("native/bbs/demo/issuer-params.bin")).unwrap()).unwrap();
+  let verifier = Verifier::load(include_bytes!("fixtures/issuer-params.bin")).unwrap();
   let input: VerifyInput = serde_json::from_value(json!({
     "request": req, "credential_query_id": "nym_attestation_bbs", "presentation": nym_bbs::b64url(presentation),
     "handover": { "client_id": req["client_id"], "nonce": req["nonce"], "response_uri": req["response_uri"], "jwk_thumbprint": null },
