@@ -72,6 +72,31 @@ interface WscdManager : SignerLifecycleManager {
     )
 
     /**
+     * Register the Android Keystore plugin restored from a previously
+     * [exportAndroidKeystoreState]-exported blob (kid-to-alias mapping,
+     * attestation chains, confirmed security levels - no private key
+     * material, that never leaves the Keystore) - use instead of
+     * [registerAndroidKeystorePlugin] when restoring a wallet whose keys
+     * were generated in an earlier process, so those keys stay addressable.
+     * Without this, a generated key's `kid` still exists in
+     * credential/session metadata after an app restart, but the plugin has
+     * no record of the alias needed to sign with it again - mirrors
+     * [registerFido2PluginWithState]'s doc comment exactly.
+     */
+    fun registerAndroidKeystorePluginWithState(
+        state: ByteArray,
+        backend: AndroidKeyStoreBackend = SystemAndroidKeyStore(),
+        authenticator: UserAuthenticator? = null,
+    )
+
+    /**
+     * Export the Android Keystore plugin's current key state, to persist
+     * and later restore via [registerAndroidKeystorePluginWithState].
+     * Throws if the android-keystore plugin isn't registered.
+     */
+    fun exportAndroidKeystoreState(): ByteArray
+
+    /**
      * Generate a key with the Android Keystore plugin under a
      * CALLER-SUPPLIED Android Key Attestation challenge, instead of the
      * random one [generateKeyForLevel]/the plain `Signer.generateKey` path
@@ -111,10 +136,23 @@ interface WscdManager : SignerLifecycleManager {
      * wscd-manager, which has no business deciding what counts as
      * "iso_18045_high" for any given deployment's own compliance posture.
      *
-     * @return the new key's id (a JWK thumbprint).
+     * @return the new key's id AND which candidate actually won - the
+     *   caller needs the plugin id to call
+     *   [WscdSelectionPolicy.confirmAutoPickWinner] with the VERIFIED
+     *   winner (which may be any candidate in the list, not necessarily
+     *   the first), not just a bare kid with no way to tell which plugin
+     *   it ended up bound to.
      */
-    suspend fun generateKeyForLevel(requiredLevel: WscdCertificationLevel, candidatePluginIds: List<String>): String
+    suspend fun generateKeyForLevel(requiredLevel: WscdCertificationLevel, candidatePluginIds: List<String>): GeneratedKeyWithPlugin
 }
+
+/**
+ * The result of [WscdManager.generateKeyForLevel]: the new key's id, and
+ * which of the offered candidates actually won (generated the key AND had
+ * its result confirmed to meet the required level) - see that method's doc
+ * comment for why both are needed.
+ */
+data class GeneratedKeyWithPlugin(val keyId: String, val pluginId: String)
 
 /**
  * wscd-manager's own objective certification-level vocabulary - mirrors

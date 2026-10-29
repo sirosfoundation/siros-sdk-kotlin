@@ -1,7 +1,9 @@
 package org.siros.sdk.keystore
 
 import timber.log.Timber
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -107,22 +109,66 @@ class UniFFISigner(
         ffi.registerAndroidKeystorePlugin(AndroidKeystoreWscdCallbackBridge(backend, authenticator))
     }
 
-    override suspend fun generateAndroidKeystoreKeyWithChallenge(attestationChallenge: ByteArray): String =
-        withContext(Dispatchers.IO) {
-            val result = ffi.generateAndroidKeystoreKeyWithChallenge(attestationChallenge, FfiAlgorithm.ES256, noOpProgress())
-            publicKeyCache[result.kid] = result.publicKeyJwk.toByteArray(Charsets.UTF_8)
-            result.kid
-        }
+    override fun registerAndroidKeystorePluginWithState(
+        state: ByteArray,
+        backend: AndroidKeyStoreBackend,
+        authenticator: UserAuthenticator?,
+    ) {
+        ffi.registerAndroidKeystorePluginWithState(AndroidKeystoreWscdCallbackBridge(backend, authenticator), state)
+    }
 
-    override suspend fun generateKeyForLevel(requiredLevel: WscdCertificationLevel, candidatePluginIds: List<String>): String =
-        withContext(Dispatchers.IO) {
-            val result: FfiGeneratedKey = withPinAuth { auth ->
+    override fun exportAndroidKeystoreState(): ByteArray = ffi.exportAndroidKeystoreState()
+
+    /**
+     * Runs a native generate call that may have already persisted (and, for
+     * [generateKeyForLevel], already bound to its manager) a real key by
+     * the time it returns, so a cancellation racing the dispatcher handoff
+     * back to the caller - after the native call succeeded, before this
+     * suspend function delivers its result - must not silently lose that
+     * key: [kidOf] extracts the id from whatever [call] returned, and a
+     * cancellation caught here deletes it via [deleteKey] in a
+     * [NonCancellable] cleanup before rethrowing, mirroring
+     * [AndroidKeystoreSigner.generateManaged]'s identical rationale for the
+     * exact same race on this plugin's own generation paths.
+     */
+    private suspend fun <T> generateManagedNative(kidOf: (T) -> String, call: () -> T): T {
+        var created: T? = null
+        return try {
+            withContext(Dispatchers.IO) { call().also { created = it } }
+        } catch (e: CancellationException) {
+            created?.let { t ->
+                withContext(NonCancellable) { runCatching { ffi.deleteKey(kidOf(t)) } }
+            }
+            throw e
+        }
+    }
+
+    override suspend fun generateAndroidKeystoreKeyWithChallenge(attestationChallenge: ByteArray): String {
+        val result = generateManagedNative({ it.kid }) {
+            ffi.generateAndroidKeystoreKeyWithChallenge(attestationChallenge, FfiAlgorithm.ES256, noOpProgress())
+        }
+        publicKeyCache[result.kid] = result.publicKeyJwk.toByteArray(Charsets.UTF_8)
+        return result.kid
+    }
+
+    override suspend fun generateKeyForLevel(
+        requiredLevel: WscdCertificationLevel,
+        candidatePluginIds: List<String>,
+    ): GeneratedKeyWithPlugin {
+        val result = generateManagedNative({ it.kid }) {
+            withPinAuth { auth ->
                 ffi.generateKeyForLevel(requiredLevel.toFfi(), candidatePluginIds, FfiAlgorithm.ES256, auth, noOpProgress())
             }
-            publicKeyCache[result.kid] = result.publicKeyJwk.toByteArray(Charsets.UTF_8)
-            result.kid
         }
-
+        publicKeyCache[result.kid] = result.publicKeyJwk.toByteArray(Charsets.UTF_8)
+        // generate_key_for_level tries candidates in order and keeps
+        // whichever one's result was actually confirmed sufficient - that
+        // may not be the first (or only) candidate offered, so the winner
+        // is read back from the manager's own record rather than assumed.
+        val pluginId = ffi.listKeys().firstOrNull { it.kid == result.kid }?.pluginId
+            ?: error("generateKeyForLevel's own manager has no record of the key it just generated (${result.kid})")
+        return GeneratedKeyWithPlugin(keyId = result.kid, pluginId = pluginId)
+    }
 
     override fun registerFido2Plugin(transport: Ctap2TransportProvider) {
         ffi.registerFido2Plugin(Ctap2TransportBridge(transport))

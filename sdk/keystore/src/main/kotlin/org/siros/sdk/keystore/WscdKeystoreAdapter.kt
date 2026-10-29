@@ -192,11 +192,22 @@ class WscdKeystoreAdapter private constructor(
     override fun registerAndroidKeystorePlugin(backend: AndroidKeyStoreBackend, authenticator: UserAuthenticator?) =
         requireWscdManager().registerAndroidKeystorePlugin(backend, authenticator)
 
+    override fun registerAndroidKeystorePluginWithState(
+        state: ByteArray,
+        backend: AndroidKeyStoreBackend,
+        authenticator: UserAuthenticator?,
+    ) = requireWscdManager().registerAndroidKeystorePluginWithState(state, backend, authenticator)
+
+    override fun exportAndroidKeystoreState(): ByteArray =
+        requireWscdManager().exportAndroidKeystoreState()
+
     override suspend fun generateAndroidKeystoreKeyWithChallenge(attestationChallenge: ByteArray): String =
         requireWscdManager().generateAndroidKeystoreKeyWithChallenge(attestationChallenge)
 
-    override suspend fun generateKeyForLevel(requiredLevel: WscdCertificationLevel, candidatePluginIds: List<String>): String =
-        requireWscdManager().generateKeyForLevel(requiredLevel, candidatePluginIds)
+    override suspend fun generateKeyForLevel(
+        requiredLevel: WscdCertificationLevel,
+        candidatePluginIds: List<String>,
+    ): GeneratedKeyWithPlugin = requireWscdManager().generateKeyForLevel(requiredLevel, candidatePluginIds)
 
     override val isUnlocked: Boolean get() = credentialsKeystore.isUnlocked
 
