@@ -184,7 +184,30 @@ class AndroidKeystoreSigner @JvmOverloads constructor(
 
     override val supportsAttestedKeyGeneration: Boolean get() = true
 
+    /** The alias a NEW key for [keyId] is made under - never used to look up an existing key, see [existingAlias]. */
     private fun alias(keyId: String) = aliasPrefix + keyId
+
+    /**
+     * The physical Keystore alias actually holding [keyId], or null if none does. Checks `aliasPrefix + keyId`
+     * first, then the bare [keyId] itself: #312's original (now-merged) scheme had no separate prefix - a key's id
+     * WAS its whole alias, including that version's own baked-in `"siros-ak-"` prefix. Without this fallback, every
+     * key made before this port - including a live WIA instance key - would resolve to a nonexistent alias after
+     * upgrading: `sign`/`exportPublicKey`/`attestationChain`/`deleteKey` would all refuse it as `key_not_found`, and
+     * `SirosWallet.ensureInstanceKeyId()` would silently replace it with a new identity.
+     */
+    private fun existingAlias(keyId: String): String? {
+        val prefixed = alias(keyId)
+        val existing = backend.aliases()
+        return when {
+            prefixed in existing -> prefixed
+            keyId in existing -> keyId
+            else -> null
+        }
+    }
+
+    /** [existingAlias], or `key_not_found` naming [keyId] in the current (never the legacy) form. */
+    private fun requireAlias(keyId: String): String = existingAlias(keyId)
+        ?: throw KeystoreException("No Android Keystore key $keyId", errorCode = "key_not_found")
 
     private fun requireEs256(algorithm: String) {
         if (!algorithm.equals(ES256, ignoreCase = true)) {
@@ -331,19 +354,13 @@ class AndroidKeystoreSigner @JvmOverloads constructor(
         return withContext(Dispatchers.IO) { finish(keyId, signature, data) }
     }
 
-    private fun userAuthenticationMethodsOf(keyId: String): Set<AuthenticationMethod> {
-        ensureExists(keyId)
-        return backend.userAuthenticationMethods(alias(keyId))
-    }
-
-    private fun ensureExists(keyId: String) {
-        if (alias(keyId) !in backend.aliases()) throw KeystoreException("No Android Keystore key $keyId", errorCode = "key_not_found")
-    }
+    private fun userAuthenticationMethodsOf(keyId: String): Set<AuthenticationMethod> =
+        backend.userAuthenticationMethods(requireAlias(keyId))
 
     private fun newSignature(keyId: String): Signature {
-        ensureExists(keyId)
+        val resolved = requireAlias(keyId)
         return try {
-            backend.newSignature(alias(keyId))
+            backend.newSignature(resolved)
         } catch (e: KeystoreException) {
             throw e
         } catch (e: Exception) {
@@ -372,28 +389,31 @@ class AndroidKeystoreSigner @JvmOverloads constructor(
     }
 
     /**
-     * This signer's keys (ES256), under its own [aliasPrefix] only. The [KEY_ID] filter (not just [aliasPrefix])
-     * matters when one signer's prefix extends another's ("p." and "p.other."): stripping "p." from "p.other.<id>"
-     * leaves "other.<id>", which is not a bare id and so is excluded - without it, a signer would also see every key
-     * of every OTHER signer whose prefix happens to start with its own.
+     * This signer's keys (ES256), under its own [aliasPrefix] only, PLUS - only for the default [aliasPrefix] - any key
+     * still held under #312's original scheme (bare `"siros-ak-"` + UUID alias, no separate prefix/id split; see
+     * [existingAlias]'s doc comment). A custom-prefixed signer never sees those: the "two signers never see each
+     * other's keys" guarantee stays intact for anyone who deliberately scopes a signer instance.
+     *
+     * The [KEY_ID] filter (not just [aliasPrefix]) matters when one signer's prefix extends another's ("p." and
+     * "p.other."): stripping "p." from "p.other.<id>" leaves "other.<id>", which is not a bare id and so is excluded
+     * - without it, a signer would also see every key of every OTHER signer whose prefix happens to start with its own.
      */
     override suspend fun listKeys(): List<SignerKeyInfo> = withContext(Dispatchers.IO) {
-        backend.aliases()
-            .filter { it.startsWith(aliasPrefix) }
-            .map { it.removePrefix(aliasPrefix) }
-            .filter { KEY_ID.matches(it) }
-            .map { SignerKeyInfo(keyId = it, algorithm = ES256) }
+        val all = backend.aliases()
+        val current = all.filter { it.startsWith(aliasPrefix) }.map { it.removePrefix(aliasPrefix) }.filter { KEY_ID.matches(it) }
+        val legacy = if (aliasPrefix == DEFAULT_ALIAS_PREFIX) all.filter { LEGACY_KEY_ID.matches(it) } else emptyList()
+        (current + legacy).map { SignerKeyInfo(keyId = it, algorithm = ES256) }
     }
 
     /** Deletes the key; deleting a key that does not exist does nothing. */
-    override suspend fun deleteKey(keyId: String): Unit = withContext(Dispatchers.IO) { backend.delete(alias(keyId)) }
+    override suspend fun deleteKey(keyId: String): Unit = withContext(Dispatchers.IO) { backend.delete(existingAlias(keyId) ?: alias(keyId)) }
 
     /**
      * The attestation chain as DER certificates, LEAF FIRST, in [AttestationChain.FORMAT_ANDROID_KEY]; null for a key with
-     * fewer than two certificates (Android Key Attestation was not available when the key was made).
+     * fewer than two certificates (Android Key Attestation was not available when the key was made) or that does not exist.
      */
     override suspend fun attestationChain(keyId: String): AttestationChain? = withContext(Dispatchers.IO) {
-        val chain = backend.certificateChain(alias(keyId))
+        val chain = backend.certificateChain(existingAlias(keyId) ?: alias(keyId))
         if (chain.size >= 2) AttestationChain(chain, ByteArray(0), AttestationChain.FORMAT_ANDROID_KEY) else null
     }
 
@@ -403,8 +423,7 @@ class AndroidKeystoreSigner @JvmOverloads constructor(
      * was proved with. Without it an embedded-JWK proof loses that binding and verification can fall back to the wrong key.
      */
     override suspend fun exportPublicKey(keyId: String): ByteArray = withContext(Dispatchers.IO) {
-        ensureExists(keyId)
-        val key = backend.publicKey(alias(keyId))
+        val key = backend.publicKey(requireAlias(keyId))
         EcdsaSignatures.publicJwk(key, kid = keyId).toByteArray(Charsets.UTF_8)
     }
 
@@ -417,9 +436,9 @@ class AndroidKeystoreSigner @JvmOverloads constructor(
      * for none); no certification.
      */
     override suspend fun securityProperties(keyId: String): SignerSecurityProperties = withContext(Dispatchers.IO) {
-        ensureExists(keyId)
-        val level = backend.securityLevel(alias(keyId))
-        val methods = backend.userAuthenticationMethods(alias(keyId))
+        val resolved = requireAlias(keyId)
+        val level = backend.securityLevel(resolved)
+        val methods = backend.userAuthenticationMethods(resolved)
         SignerSecurityProperties(
             keyStorage = listOf(keyStorageName(level)),
             userAuthentication = methods.map { userAuthenticationName(it) }.sorted(),
@@ -429,8 +448,7 @@ class AndroidKeystoreSigner @JvmOverloads constructor(
 
     /** Where the Keystore holds [keyId] right now (Android 12+ tell StrongBox from the TEE; before that a hardware key reports [SecurityLevel.TRUSTED_ENVIRONMENT]). */
     suspend fun securityLevel(keyId: String): SecurityLevel = withContext(Dispatchers.IO) {
-        ensureExists(keyId)
-        backend.securityLevel(alias(keyId))
+        backend.securityLevel(requireAlias(keyId))
     }
 
     /**
@@ -463,12 +481,13 @@ class AndroidKeystoreSigner @JvmOverloads constructor(
         val used = authenticate(keyId, methods, signature)
         val factors = scaFactors(used)
         return object : ScaSignSession {
-            private var spent = false
+            // Atomic: two concurrent callers racing sign() must not both pass a plain check-then-set, which could let
+            // both dispatch finish() against the same non-thread-safe Signature and interleave their payloads.
+            private val spent = java.util.concurrent.atomic.AtomicBoolean(false)
             override val declaredFactors: List<AuthenticationFactor> = factors
 
             override suspend fun sign(data: ByteArray): ScaSignature {
-                check(!spent) { "An SCA sign session signs once" }
-                spent = true
+                check(spent.compareAndSet(false, true)) { "An SCA sign session signs once" }
                 return ScaSignature(withContext(Dispatchers.IO) { finish(keyId, signature, data) }, factors)
             }
         }
@@ -494,6 +513,14 @@ class AndroidKeystoreSigner @JvmOverloads constructor(
          * this class does not need in practice (every production caller uses the default [newAlias]).
          */
         private val KEY_ID = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+        /**
+         * A whole alias made by #312's original (now-merged) `newAlias`: `"siros-ak-"` immediately followed by a UUID,
+         * with no separate prefix/id split - that version's keyId WAS the whole alias. Used only by [listKeys], to
+         * surface a pre-existing key made before this port alongside the current scheme's keys; [existingAlias]
+         * resolves such a keyId for every other operation by checking the backend directly, needing no regex.
+         */
+        private val LEGACY_KEY_ID = Regex("siros-ak-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
         /** Whether [level] satisfies [requirement]. */
         internal fun meets(level: SecurityLevel, requirement: HardwareRequirement): Boolean = when (requirement) {

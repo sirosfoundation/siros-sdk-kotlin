@@ -7,8 +7,12 @@ import java.security.Signature
 import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
 import java.util.Base64
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -97,6 +101,13 @@ class AndroidKeystoreSignerTest {
         override fun delete(alias: String) {
             deleted += alias
             entries.remove(alias)
+        }
+
+        /** Seeds [alias] as a key already existing exactly as #312's original (now-merged) scheme made it: the whole
+         * alias string, with no separate aliasPrefix/keyId split - simulating a key made before this port. */
+        fun seedLegacyKey(alias: String, methods: Set<AuthenticationMethod> = emptySet()) {
+            val keyPair = KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair()
+            entries[alias] = Entry(SecurityLevel.STRONGBOX, methods, keyPair)
         }
     }
 
@@ -399,6 +410,37 @@ class AndroidKeystoreSignerTest {
         }
     }
 
+    /**
+     * Copilot review of this port: a plain `var spent = false; check(!spent); spent = true` lets two genuinely
+     * concurrent callers both observe `false` before either sets it, so both would dispatch `finish()` against the
+     * same non-thread-safe `Signature` - a real `runTest` (single-threaded, cooperative) cannot reproduce this, so
+     * this uses `runBlocking` with real `Dispatchers.Default` parallelism, repeated to make a reintroduced race show
+     * up reliably rather than by chance.
+     */
+    @Test
+    fun scaSignSession_underGenuinelyConcurrentCallers_exactlyOneClaimsIt() = runBlocking {
+        repeat(200) {
+            val b = FakeBackend()
+            val authenticator = UserAuthenticator { request -> request.allowed.first() }
+            val s = signer(b, authenticator = authenticator)
+            val created = s.createKey(KeyPolicy(HardwareRequirement.ANY, UserAuthentication.EveryUse(setOf(AuthenticationMethod.BIOMETRIC))))
+            val session = s.beginScaSign(created.keyId)
+            val successes = java.util.concurrent.atomic.AtomicInteger(0)
+            coroutineScope {
+                (1..8).map { n ->
+                    async(Dispatchers.Default) {
+                        try {
+                            session.sign(byteArrayOf(n.toByte()))
+                            successes.incrementAndGet()
+                        } catch (_: IllegalStateException) {
+                        }
+                    }
+                }.forEach { it.await() }
+            }
+            assertEquals("exactly one of several concurrent callers may claim a single-use session", 1, successes.get())
+        }
+    }
+
     // ---------------------------------------------------------------------------------------------------------------
     // Signing, export, listing, migration, dispatcher placement.
     // ---------------------------------------------------------------------------------------------------------------
@@ -452,6 +494,37 @@ class AndroidKeystoreSignerTest {
         assertTrue(s.listKeys().isEmpty())
         assertEquals(listOf(bKey), other.listKeys().map { it.keyId })
         other.deleteKey(bKey)
+    }
+
+    /**
+     * Copilot review of this port: #312's original (now-merged) scheme had no separate aliasPrefix/keyId split - a
+     * key's id WAS its whole alias, "siros-ak-<uuid>". Without resolving that legacy form, every key made before this
+     * port - including a live WIA instance key - would become unreachable after upgrading (resolving to a nonexistent
+     * `aliasPrefix + legacyId` alias), and `SirosWallet.ensureInstanceKeyId()` would silently replace it.
+     */
+    @Test
+    fun existingKeysFromBeforeThisPort_resolveByTheirBareLegacyAlias() = runTest {
+        val b = FakeBackend()
+        val legacyId = "siros-ak-${java.util.UUID.randomUUID()}"
+        b.seedLegacyKey(legacyId)
+        val s = signer(b) // the default aliasPrefix: the one real production instance ever used
+        assertEquals(64, s.sign(legacyId, byteArrayOf(1)).size)
+        val jwk = Json.parseToJsonElement(String(s.exportPublicKey(legacyId))) as JsonObject
+        assertEquals(legacyId, (jwk["kid"] as JsonPrimitive).content)
+        assertEquals(listOf("hardware"), s.securityProperties(legacyId).keyStorage)
+        s.deleteKey(legacyId)
+        assertTrue("the legacy alias itself must be deleted, not a nonexistent prefixed one", b.aliases().isEmpty())
+    }
+
+    @Test
+    fun listKeys_surfacesLegacyKeys_onlyUnderTheDefaultAliasPrefix() = runTest {
+        val b = FakeBackend()
+        val legacyId = "siros-ak-${java.util.UUID.randomUUID()}"
+        b.seedLegacyKey(legacyId)
+        val default = signer(b)
+        assertTrue(legacyId in default.listKeys().map { it.keyId })
+        val custom = AndroidKeystoreSigner(b, aliasPrefix = "${AndroidKeystoreSigner.DEFAULT_ALIAS_PREFIX}other.")
+        assertTrue("a custom-scoped signer's own listing must not pick up another instance's legacy key", custom.listKeys().isEmpty())
     }
 
     @Test

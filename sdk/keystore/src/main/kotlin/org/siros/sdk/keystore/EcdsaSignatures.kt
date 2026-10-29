@@ -4,6 +4,8 @@ package org.siros.sdk.keystore
 import java.math.BigInteger
 import java.security.interfaces.ECPublicKey
 import java.util.Base64
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import org.siros.sdk.credentials.KeystoreException
 
 /**
@@ -48,16 +50,22 @@ internal object EcdsaSignatures {
      * when given. `WscdKeystoreAdapter` embeds this JWK unchanged into a credential proof, and
      * `SirosWallet.extractProofKeyId` reads [kid] back from it to recover the holder key a multi-key mdoc batch was
      * proved with - omitting it loses that binding.
+     *
+     * [kid] is JSON-escaped (via [buildJsonObject], not raw string interpolation): the key id a custom `newAlias`
+     * produces is not guaranteed to be a clean UUID, and an unescaped `"` would corrupt the exported JSON while a
+     * `\` could silently change the decoded id and break the proof's key binding.
      */
     fun publicJwk(key: ECPublicKey, kid: String? = null): String {
         val enc = Base64.getUrlEncoder().withoutPadding()
         val x = enc.encodeToString(fixed(key.w.affineX))
         val y = enc.encodeToString(fixed(key.w.affineY))
-        return if (kid == null) {
-            """{"kty":"EC","crv":"P-256","x":"$x","y":"$y"}"""
-        } else {
-            """{"kty":"EC","crv":"P-256","x":"$x","y":"$y","kid":"$kid"}"""
-        }
+        return buildJsonObject {
+            put("kty", JsonPrimitive("EC"))
+            put("crv", JsonPrimitive("P-256"))
+            put("x", JsonPrimitive(x))
+            put("y", JsonPrimitive(y))
+            if (kid != null) put("kid", JsonPrimitive(kid))
+        }.toString()
     }
 
     /** [value] as exactly 32 big-endian bytes. */

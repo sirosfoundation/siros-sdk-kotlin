@@ -77,5 +77,8 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.6.2")
     // AndroidKeystoreSignerInteractiveTest: an EmptyFragmentActivity to show BiometricPrompt over.
     androidTestImplementation("androidx.fragment:fragment-testing:1.8.5")
+    // fragment-testing's EmptyFragmentActivity must be declared in the manifest merged into the APK under test;
+    // the -manifest artifact provides that. Without it ActivityScenario.launch() fails before the test runs.
+    debugImplementation("androidx.fragment:fragment-testing-manifest:1.8.5")
     androidTestImplementation("androidx.test:core:1.6.1")
 }

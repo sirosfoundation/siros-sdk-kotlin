@@ -120,6 +120,19 @@ class EcdsaSignaturesTest {
         assertEquals("the-key-id", jwk["kid"]!!.jsonPrimitive.content)
     }
 
+    /**
+     * Copilot review of this port: a `newAlias` callback can produce any string, not only a clean UUID. Raw string
+     * interpolation of `kid` into the JSON would let a quote corrupt the output and a backslash silently change the
+     * decoded id (breaking the proof's key binding) - this must round-trip exactly through real JSON parsing.
+     */
+    @Test
+    fun publicJwk_jsonEscapesAnArbitraryKid() {
+        val key = p256().public as ECPublicKey
+        val tricky = """a"quote\and\backslash"""
+        val jwk = Json.parseToJsonElement(EcdsaSignatures.publicJwk(key, kid = tricky)).jsonObject
+        assertEquals(tricky, jwk["kid"]!!.jsonPrimitive.content)
+    }
+
     @Test
     fun securityLevels_mapToTheKeyStorageNamesUniFFISignerUses() {
         assertEquals(AndroidKeystoreSigner.SecurityLevel.STRONGBOX, AndroidKeystoreSigner.levelOf(2))
