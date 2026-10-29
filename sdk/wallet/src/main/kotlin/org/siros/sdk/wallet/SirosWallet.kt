@@ -4305,7 +4305,16 @@ class SirosWallet private constructor(
                 ?: issuerDisplay?.backgroundColor,
             textColor = credDisplay?.textColor
                 ?: issuerDisplay?.textColor,
-            logoUri = credDisplay?.logo?.uri,
+            // `logo` is a small icon; `rendering` is OID4VCI's richer alternative - a `simple.logo` or a full SVG
+            // card template (vc's `MetadataRendering`). A configuration that only publishes `rendering` (no flat
+            // `logo`) used to fall back all the way to backgroundColor + an initial-letter badge: `rendering` had
+            // no field to decode into at all, so it was silently dropped like any other unknown key, not cached or
+            // ignored deliberately. [org.siros.sdk.credentials.logo.LogoSanitizer] already rasterizes an SVG card
+            // template exactly like a logo (it is one, by this wallet's existing display convention - see
+            // AddCredentialScreen's CredentialOfferRow comment), so no renderer change is needed, only decoding it.
+            logoUri = credDisplay?.logo?.uri
+                ?: credDisplay?.rendering?.simple?.logo?.uri
+                ?: credDisplay?.rendering?.svgTemplates?.firstOrNull()?.uri,
             issuerLogoUri = issuerDisplay?.logo?.uri,
             cryptographicBindingMethodsSupported = config.cryptographicBindingMethodsSupported.orEmpty(),
         )

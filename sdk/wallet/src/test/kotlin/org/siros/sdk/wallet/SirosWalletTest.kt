@@ -16269,6 +16269,63 @@ class SirosWalletTest {
     }
 
     @Test
+    fun nymAuthsIssuedDisplayRendering_isUsedAsTheOfferLogoInsteadOfTheFlatGreenFallback() = runTest(dispatcher) {
+        // Pulled live from the gdc environment's nym_auth issuer (sirosid-gdc-vc-apigw.fly.dev, 2026-10-29): the
+        // published display entry carries BOTH the original flat fields (kept for older readers) AND a `rendering`
+        // block with a properly designed SVG card - not a cache-staleness scenario, every refresh re-fetches this
+        // same document. Before this test's fix, `CredentialDisplayEntry` had no `rendering` field at all, so
+        // kotlinx.serialization's `ignoreUnknownKeys` silently dropped it (no exception, no fallback-to-cache: the
+        // decode simply never modeled the field), and the offer fell back to the flat `background_color`
+        // (`#006400`, dark green) with no logo - the "still shows the old green thumbnail" symptom.
+        val wallet = newWallet(
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com"),
+            "secretSeedAdvertised" to advertisedSelections(false),
+        )
+        val svgDataUri = "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzY1IiBoZWlnaHQ9IjI0MyIvPg=="
+        val metadata = Json { ignoreUnknownKeys = true }.decodeFromString(
+            org.siros.sdk.credentials.IssuerMetadata.serializer(),
+            """
+            {
+              "credential_issuer": "https://sirosid-gdc-vc-apigw.fly.dev",
+              "credential_endpoint": "https://sirosid-gdc-vc-apigw.fly.dev/credential",
+              "credential_configurations_supported": {
+                "nym_auth": {
+                  "format": "mso_mdoc",
+                  "doctype": "eu.europa.ec.eudi.nym_auth.1",
+                  "credential_metadata": {
+                    "display": [
+                      {
+                        "locale": "en-US",
+                        "name": "Nym authentication",
+                        "description": "Anonymous/pseudonymous authentication attestation for zero-knowledge pseudonym and age predicate presentations",
+                        "background_color": "#006400",
+                        "text_color": "#ffffff",
+                        "rendering": {
+                          "svg_templates": [
+                            {"uri": "$svgDataUri", "properties": {"orientation": "landscape"}}
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+            """.trimIndent(),
+        )
+        val m = wallet.javaClass.getDeclaredMethod("buildCredentialOfferFromMetadata", String::class.java, String::class.java, org.siros.sdk.credentials.IssuerMetadata::class.java)
+        m.isAccessible = true
+        val offer = m.invoke(wallet, "https://sirosid-gdc-vc-apigw.fly.dev", "nym_auth", metadata) as org.siros.sdk.credentials.CredentialOffer
+
+        assertEquals("Nym authentication", offer.credentialName)
+        // The flat fallback color is still carried (nothing regresses for a reader that only understands it)...
+        assertEquals("#006400", offer.backgroundColor)
+        // ...but the SVG card template - the issuer's actual, current, properly designed display - is what the
+        // catalog now shows as the offer's logo, the same way a flat `logo.uri` always has been.
+        assertEquals(svgDataUri, offer.logoUri)
+    }
+
+    @Test
     fun deliveredSeed_aKeystoreThatCannotHoldItFailsClosed() = runTest(dispatcher) {
         // The shared mock keystore of the older tests is neither a JweKeystore nor a WscdKeystoreAdapter.
         val completeFlow = MutableSharedFlow<FlowCompleteMessage>()

@@ -171,6 +171,48 @@ data class CredentialDisplayEntry(
     @SerialName("text_color") val textColor: String? = null,
     @SerialName("background_image") val backgroundImage: BackgroundImage? = null,
     val logo: LogoInfo? = null,
+    /**
+     * OID4VCI's optional richer rendering (mirroring `sirosfoundation/vc`'s
+     * `MetadataRendering`/`CredentialMetadataDisplay.Rendering`): a `simple.logo`
+     * alternative to [logo], or a full SVG card template. Before this was added, a
+     * configuration that only advertised [rendering] (no flat [logo]) silently kept
+     * ignoreUnknownKeys' default treatment - type parsed fine, [rendering] vanished,
+     * and the offer fell back to [backgroundColor]/an initial-letter badge even
+     * though the issuer had published a properly designed card (confirmed live for
+     * nym_auth: `display[0]` carries both the legacy flat fields AND
+     * `rendering.svg_templates`, every refresh, not a stale cache - see
+     * [org.siros.sdk.wallet.SirosWallet.buildCredentialOfferFromMetadata], which
+     * reads this field down into [org.siros.sdk.credentials.CredentialOffer.logoUri]).
+     */
+    val rendering: CredentialDisplayRendering? = null,
+)
+
+/** See [CredentialDisplayEntry.rendering]; field-for-field mirror of vc's `MetadataRendering`. */
+@Serializable
+data class CredentialDisplayRendering(
+    val simple: CredentialSimpleRendering? = null,
+    @SerialName("svg_templates") val svgTemplates: List<CredentialSvgTemplate>? = null,
+)
+
+/** mirrors vc's `MetadataSimpleRendering`: a logo alternative to [CredentialDisplayEntry.logo]. */
+@Serializable
+data class CredentialSimpleRendering(
+    val logo: LogoInfo? = null,
+)
+
+/** mirrors vc's `MetadataSvgTemplate`: a full SVG card template, same shape [org.siros.sdk.credentials.logo.LogoSanitizer] already rasterizes as a logo. */
+@Serializable
+data class CredentialSvgTemplate(
+    val uri: String,
+    val properties: CredentialSvgTemplateProperties? = null,
+)
+
+/** mirrors vc's `MetadataSvgTemplateProperties`. */
+@Serializable
+data class CredentialSvgTemplateProperties(
+    val orientation: String? = null,
+    @SerialName("color_scheme") val colorScheme: String? = null,
+    val contrast: String? = null,
 )
 
 @Serializable
