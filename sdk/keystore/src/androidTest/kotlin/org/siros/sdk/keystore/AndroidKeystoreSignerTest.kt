@@ -28,7 +28,6 @@ import org.junit.Assert.fail
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.siros.sdk.credentials.COSE_ALG_ES256
 import org.siros.sdk.credentials.KeystoreException
 import org.siros.sdk.keystore.AndroidKeystoreSigner.AuthenticationMethod
 import org.siros.sdk.keystore.AndroidKeystoreSigner.HardwareRequirement
@@ -135,14 +134,6 @@ class AndroidKeystoreSignerTest {
     fun refusesOtherAlgorithmsAndUnknownKeys() {
         assertCode("unsupported_algorithm") { signer.generateKey("EdDSA") }
         assertCode("key_not_found") { signer.sign("no-such-key", byteArrayOf(1)) }
-    }
-
-    @Test
-    fun zkWitnessSigner_signsEs256AndRefusesAnythingElse() = runBlocking {
-        val keyId = signer.generateKey("ES256")
-        val zk = signer.zkWitnessSigner(keyId)
-        assertEquals(64, zk.sign(COSE_ALG_ES256, byteArrayOf(1, 2, 3)).size)
-        assertCode("unsupported_algorithm") { zk.sign(-35, byteArrayOf(1)) } // ES384
     }
 
     @Test

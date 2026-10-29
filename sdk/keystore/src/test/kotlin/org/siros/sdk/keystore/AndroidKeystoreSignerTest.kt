@@ -20,7 +20,6 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
-import org.siros.sdk.credentials.COSE_ALG_ES256
 import org.siros.sdk.credentials.KeystoreException
 import org.siros.sdk.credentials.TransactionDataError
 import org.siros.sdk.keystore.AndroidKeystoreSigner.AuthenticationMethod
@@ -463,20 +462,6 @@ class AndroidKeystoreSignerTest {
             fail("expected key_not_found")
         } catch (e: KeystoreException) {
             assertEquals("key_not_found", e.errorCode)
-        }
-    }
-
-    @Test
-    fun zkWitnessSigner_signsEs256AndRefusesAnythingElse() = runTest {
-        val s = signer(FakeBackend())
-        val id = s.generateKey("ES256")
-        val zk = s.zkWitnessSigner(id)
-        assertEquals(64, zk.sign(COSE_ALG_ES256, byteArrayOf(1, 2, 3)).size)
-        try {
-            zk.sign(-35, byteArrayOf(1)) // ES384
-            fail("accepted")
-        } catch (e: KeystoreException) {
-            assertEquals("unsupported_algorithm", e.errorCode)
         }
     }
 

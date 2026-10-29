@@ -9,10 +9,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
-import org.siros.sdk.credentials.COSE_ALG_ES256
 import org.siros.sdk.credentials.CertificationInfo
 import org.siros.sdk.credentials.KeystoreException
-import org.siros.sdk.credentials.ZkWitnessSigner
 import timber.log.Timber
 
 /**
@@ -90,8 +88,10 @@ interface AndroidKeyStoreBackend {
  *
  * [sign] returns the raw `r || s` (64 bytes, low `s`) that JWS and COSE carry. Origin is always GENERATED: nothing is
  * imported, which is part of what the backend verifies; keys are device-bound, so [migrateKey] always answers
- * [MigrationResult.ReEnrollmentRequired]. [zkWitnessSigner] exposes this signer as the device signature a ZK presentation
- * binds ([org.siros.sdk.credentials.ZkWitnessSigner]).
+ * [MigrationResult.ReEnrollmentRequired]. A ZK presentation's device signature is this signer like any other: built at the
+ * call site as `ZkWitnessSigner { algorithm, data -> keystore.sign(keyId, data) }` over the ordinary [sign] method, through
+ * [KeystoreManager]/[WscdKeystoreAdapter] - never a signer-specific shortcut, so nothing can reach a key by a path that
+ * bypasses whatever policy lives there.
  *
  * @param backend The platform seam; defaults to the real [SystemAndroidKeyStore]. A test gives its own [AndroidKeyStoreBackend].
  * @param aliasPrefix Prefix of this signer's Android Keystore aliases; a key's id (a UUID by default, see [newAlias]) is the
@@ -472,17 +472,6 @@ class AndroidKeystoreSigner @JvmOverloads constructor(
                 return ScaSignature(withContext(Dispatchers.IO) { finish(keyId, signature, data) }, factors)
             }
         }
-    }
-
-    /**
-     * The device signature a ZK presentation binds, made with [keyId]: ES256 only (another COSE algorithm is refused
-     * rather than substituted, as [ZkWitnessSigner] requires). A key that requires user authentication prompts, as [sign] does.
-     */
-    fun zkWitnessSigner(keyId: String): ZkWitnessSigner = ZkWitnessSigner { algorithm, data ->
-        if (algorithm != COSE_ALG_ES256) {
-            throw KeystoreException("The Android Keystore signer signs ES256 (-7) only, not $algorithm", errorCode = "unsupported_algorithm")
-        }
-        sign(keyId, data)
     }
 
     companion object {
