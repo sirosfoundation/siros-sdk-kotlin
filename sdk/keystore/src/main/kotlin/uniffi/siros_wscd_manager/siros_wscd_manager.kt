@@ -692,6 +692,15 @@ internal interface UniffiCallbackInterfaceFfiHttpTransportMethod0 : com.sun.jna.
 internal interface UniffiCallbackInterfaceFfiProgressCallbackMethod0 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`progress`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
+internal interface UniffiCallbackInterfaceFfiSecureEnclaveCallbackMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`keyTag`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceFfiSecureEnclaveCallbackMethod1 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`keyTag`: RustBuffer.ByValue,`data`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceFfiSecureEnclaveCallbackMethod2 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`keyTag`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
 @Structure.FieldOrder("uniffiFree", "uniffiClone", "generate", "certificateChain", "publicKeyJwk", "securityLevel", "userAuthenticationMethods", "sign", "aliases", "delete")
 internal open class UniffiVTableCallbackInterfaceFfiAndroidKeystoreCallback(
     @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
@@ -814,6 +823,31 @@ internal open class UniffiVTableCallbackInterfaceFfiProgressCallback(
     }
 
 }
+@Structure.FieldOrder("uniffiFree", "uniffiClone", "generateKey", "sign", "deleteKey")
+internal open class UniffiVTableCallbackInterfaceFfiSecureEnclaveCallback(
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    @JvmField internal var `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+    @JvmField internal var `generateKey`: UniffiCallbackInterfaceFfiSecureEnclaveCallbackMethod0? = null,
+    @JvmField internal var `sign`: UniffiCallbackInterfaceFfiSecureEnclaveCallbackMethod1? = null,
+    @JvmField internal var `deleteKey`: UniffiCallbackInterfaceFfiSecureEnclaveCallbackMethod2? = null,
+) : Structure() {
+    class UniffiByValue(
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+        `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+        `generateKey`: UniffiCallbackInterfaceFfiSecureEnclaveCallbackMethod0? = null,
+        `sign`: UniffiCallbackInterfaceFfiSecureEnclaveCallbackMethod1? = null,
+        `deleteKey`: UniffiCallbackInterfaceFfiSecureEnclaveCallbackMethod2? = null,
+    ): UniffiVTableCallbackInterfaceFfiSecureEnclaveCallback(`uniffiFree`,`uniffiClone`,`generateKey`,`sign`,`deleteKey`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceFfiSecureEnclaveCallback) {
+        `uniffiFree` = other.`uniffiFree`
+        `uniffiClone` = other.`uniffiClone`
+        `generateKey` = other.`generateKey`
+        `sign` = other.`sign`
+        `deleteKey` = other.`deleteKey`
+    }
+
+}
 
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
@@ -859,6 +893,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_android_keystore_state(
     ): Int
+    external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_apple_secure_enclave_state(
+    ): Int
     external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_fido2_state(
     ): Int
     external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_public_key(
@@ -884,6 +920,10 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_android_keystore_plugin(
     ): Int
     external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_android_keystore_plugin_with_state(
+    ): Int
+    external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_apple_secure_enclave_plugin(
+    ): Int
+    external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_apple_secure_enclave_plugin_with_state(
     ): Int
     external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_fido2_plugin(
     ): Int
@@ -933,6 +973,12 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_siros_wscd_manager_checksum_method_ffiprogresscallback_on_progress(
     ): Int
+    external fun uniffi_siros_wscd_manager_checksum_method_ffisecureenclavecallback_generate_key(
+    ): Int
+    external fun uniffi_siros_wscd_manager_checksum_method_ffisecureenclavecallback_sign(
+    ): Int
+    external fun uniffi_siros_wscd_manager_checksum_method_ffisecureenclavecallback_delete_key(
+    ): Int
     external fun ffi_siros_wscd_manager_uniffi_contract_version(
     ): Int
 
@@ -954,6 +1000,7 @@ internal object UniffiLib {
         uniffiCallbackInterfaceFfiCtap2Transport.register(this)
         uniffiCallbackInterfaceFfiHttpTransport.register(this)
         uniffiCallbackInterfaceFfiProgressCallback.register(this)
+        uniffiCallbackInterfaceFfiSecureEnclaveCallback.register(this)
         
     }
 
@@ -977,6 +1024,8 @@ internal object UniffiLib {
     external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_destroy_lifecycle(`ptr`: Long,`request`: RustBuffer.ByValue,`auth`: Long,`progress`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_export_android_keystore_state(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_export_apple_secure_enclave_state(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_export_fido2_state(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1003,6 +1052,10 @@ internal object UniffiLib {
     external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_android_keystore_plugin(`ptr`: Long,`callback`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_android_keystore_plugin_with_state(`ptr`: Long,`callback`: Long,`state`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_apple_secure_enclave_plugin(`ptr`: Long,`callback`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_apple_secure_enclave_plugin_with_state(`ptr`: Long,`callback`: Long,`state`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_fido2_plugin(`ptr`: Long,`transport`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -1031,6 +1084,8 @@ internal object UniffiLib {
     external fun uniffi_siros_wscd_manager_fn_init_callback_vtable_ffihttptransport(`vtable`: UniffiVTableCallbackInterfaceFfiHttpTransport,
     ): Unit
     external fun uniffi_siros_wscd_manager_fn_init_callback_vtable_ffiprogresscallback(`vtable`: UniffiVTableCallbackInterfaceFfiProgressCallback,
+    ): Unit
+    external fun uniffi_siros_wscd_manager_fn_init_callback_vtable_ffisecureenclavecallback(`vtable`: UniffiVTableCallbackInterfaceFfiSecureEnclaveCallback,
     ): Unit
     external fun uniffi_siros_wscd_manager_fn_func_decode_cose_ec2_public_key(`coseBytes`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1187,6 +1242,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_android_keystore_state() and 0xFFFF) != 11408) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_apple_secure_enclave_state() and 0xFFFF) != 39965) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_fido2_state() and 0xFFFF) != 64045) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1205,7 +1263,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_generate_key_for_level() and 0xFFFF) != 54910) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_generate_key_with_plugin() and 0xFFFF) != 18816) {
+    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_generate_key_with_plugin() and 0xFFFF) != 23888) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_import_softkey_container() and 0xFFFF) != 44885) {
@@ -1224,6 +1282,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_android_keystore_plugin_with_state() and 0xFFFF) != 2276) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_apple_secure_enclave_plugin() and 0xFFFF) != 13381) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_apple_secure_enclave_plugin_with_state() and 0xFFFF) != 27780) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_fido2_plugin() and 0xFFFF) != 39324) {
@@ -1296,6 +1360,15 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiprogresscallback_on_progress() and 0xFFFF) != 5963) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffisecureenclavecallback_generate_key() and 0xFFFF) != 16748) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffisecureenclavecallback_sign() and 0xFFFF) != 53200) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffisecureenclavecallback_delete_key() and 0xFFFF) != 7889) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1777,6 +1850,13 @@ public interface FfiWscdManagerInterface {
     fun `exportAndroidKeystoreState`(): kotlin.ByteArray
     
     /**
+     * Export the Apple Secure Enclave plugin's key state (Keychain tags +
+     * public keys) for the host app to persist and later restore via
+     * [`register_apple_secure_enclave_plugin_with_state`].
+     */
+    fun `exportAppleSecureEnclaveState`(): kotlin.ByteArray
+    
+    /**
      * Export the FIDO2 plugin's key state (credential handles + public
      * keys) for the host app to persist and later restore via
      * [`register_fido2_plugin_with_state`].
@@ -1842,19 +1922,29 @@ public interface FfiWscdManagerInterface {
     
     /**
      * Generate a key with a SPECIFIC registered plugin, bypassing the
-     * default-plugin resolution chain (`resolve_for_generate`) entirely.
+     * default-plugin resolution chain (`resolve_for_generate`) entirely,
+     * with a RANDOM attestation challenge (the plugin's own, same as the
+     * plain `generate_key`).
      *
-     * **This is the forced path Wallet Instance Attestation (WIA) must
-     * always use.** WIA's hardware root is a fixed, specific plugin (e.g.
-     * `"android-keystore"`) chosen by the device/platform, never something
-     * a selection policy picks among several candidates - call this with
-     * that plugin's id directly. Never call the plain `generate_key` (which
-     * goes through `resolve_for_generate`) or `generate_key_for_level`
-     * (which tries several candidates) for WIA's instance key: both exist
-     * for Key Attestation's pluggable path, where trying a different
-     * plugin on a later call is fine; WIA's hardware root must not move
-     * around depending on manager configuration or plugin registration
-     * order.
+     * This is the generic forced-plugin path: for a plugin whose generation
+     * has no external challenge-binding contract to satisfy, call this with
+     * that plugin's id directly rather than going through
+     * `resolve_for_generate`/`generate_key_for_level`'s selection-among-
+     * candidates logic.
+     *
+     * **This is NOT what Android Keystore's Wallet Instance Attestation
+     * path needs** - WIA's Android Key Attestation challenge must be
+     * `SHA-256("siros-instance-key-v1" || C)` for a server-issued `C`
+     * (see `AndroidKeystorePlugin`'s doc comment), and this method's
+     * random challenge cannot satisfy that fixed formula. Use
+     * [`generate_android_keystore_key_with_challenge`] for that case
+     * specifically. Never call the plain `generate_key` (which goes
+     * through `resolve_for_generate`) or `generate_key_for_level` (which
+     * tries several candidates) for a WIA-style forced hardware root
+     * either way: both exist for Key Attestation's pluggable path, where
+     * trying a different plugin on a later call is fine; a forced
+     * hardware root must not move around depending on manager
+     * configuration or plugin registration order.
      */
     fun `generateKeyWithPlugin`(`pluginId`: kotlin.String, `algorithm`: FfiAlgorithm, `auth`: FfiAuthCallback, `progress`: FfiProgressCallback): FfiGeneratedKey
     
@@ -1904,6 +1994,29 @@ public interface FfiWscdManagerInterface {
      * [`register_fido2_plugin_with_state`]'s doc comment exactly).
      */
     fun `registerAndroidKeystorePluginWithState`(`callback`: FfiAndroidKeystoreCallback, `state`: kotlin.ByteArray)
+    
+    /**
+     * Register the Apple Secure Enclave (`apple-se`) plugin.
+     *
+     * The caller supplies a [`FfiSecureEnclaveCallback`] implementation
+     * backed by CryptoKit's `SecureEnclave.P256.Signing.PrivateKey` + a
+     * Keychain tag. **Staged release:** keys this plugin generates carry
+     * no per-key attestation chain - see
+     * [`crate::callbacks::SecureEnclaveCallback`]'s doc comment.
+     */
+    fun `registerAppleSecureEnclavePlugin`(`callback`: FfiSecureEnclaveCallback)
+    
+    /**
+     * Register the Apple Secure Enclave plugin restored from a previously
+     * [`export_apple_secure_enclave_state`]-exported blob (Keychain tags +
+     * public keys only, no private material - that never leaves the
+     * Secure Enclave). The host app must persist that blob itself and pass
+     * it back here on the next launch, or every enrolled `apple-se` key
+     * becomes unreachable (its `kid` still exists in credential/session
+     * metadata, but the manager has no record of the Keychain tag needed
+     * to sign with it again).
+     */
+    fun `registerAppleSecureEnclavePluginWithState`(`callback`: FfiSecureEnclaveCallback, `state`: kotlin.ByteArray)
     
     /**
      * Register the FIDO2 previewSign (rawSign) plugin for hardware
@@ -2229,6 +2342,25 @@ open class FfiWscdManager: Disposable, AutoCloseable, FfiWscdManagerInterface
 
     
     /**
+     * Export the Apple Secure Enclave plugin's key state (Keychain tags +
+     * public keys) for the host app to persist and later restore via
+     * [`register_apple_secure_enclave_plugin_with_state`].
+     */
+    @Throws(FfiWscdException::class)override fun `exportAppleSecureEnclaveState`(): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FfiWscdException) { _status ->
+    UniffiLib.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_export_apple_secure_enclave_state(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Export the FIDO2 plugin's key state (credential handles + public
      * keys) for the host app to persist and later restore via
      * [`register_fido2_plugin_with_state`].
@@ -2378,19 +2510,29 @@ open class FfiWscdManager: Disposable, AutoCloseable, FfiWscdManagerInterface
     
     /**
      * Generate a key with a SPECIFIC registered plugin, bypassing the
-     * default-plugin resolution chain (`resolve_for_generate`) entirely.
+     * default-plugin resolution chain (`resolve_for_generate`) entirely,
+     * with a RANDOM attestation challenge (the plugin's own, same as the
+     * plain `generate_key`).
      *
-     * **This is the forced path Wallet Instance Attestation (WIA) must
-     * always use.** WIA's hardware root is a fixed, specific plugin (e.g.
-     * `"android-keystore"`) chosen by the device/platform, never something
-     * a selection policy picks among several candidates - call this with
-     * that plugin's id directly. Never call the plain `generate_key` (which
-     * goes through `resolve_for_generate`) or `generate_key_for_level`
-     * (which tries several candidates) for WIA's instance key: both exist
-     * for Key Attestation's pluggable path, where trying a different
-     * plugin on a later call is fine; WIA's hardware root must not move
-     * around depending on manager configuration or plugin registration
-     * order.
+     * This is the generic forced-plugin path: for a plugin whose generation
+     * has no external challenge-binding contract to satisfy, call this with
+     * that plugin's id directly rather than going through
+     * `resolve_for_generate`/`generate_key_for_level`'s selection-among-
+     * candidates logic.
+     *
+     * **This is NOT what Android Keystore's Wallet Instance Attestation
+     * path needs** - WIA's Android Key Attestation challenge must be
+     * `SHA-256("siros-instance-key-v1" || C)` for a server-issued `C`
+     * (see `AndroidKeystorePlugin`'s doc comment), and this method's
+     * random challenge cannot satisfy that fixed formula. Use
+     * [`generate_android_keystore_key_with_challenge`] for that case
+     * specifically. Never call the plain `generate_key` (which goes
+     * through `resolve_for_generate`) or `generate_key_for_level` (which
+     * tries several candidates) for a WIA-style forced hardware root
+     * either way: both exist for Key Attestation's pluggable path, where
+     * trying a different plugin on a later call is fine; a forced
+     * hardware root must not move around depending on manager
+     * configuration or plugin registration order.
      */
     @Throws(FfiWscdException::class)override fun `generateKeyWithPlugin`(`pluginId`: kotlin.String, `algorithm`: FfiAlgorithm, `auth`: FfiAuthCallback, `progress`: FfiProgressCallback): FfiGeneratedKey {
             return FfiConverterTypeFfiGeneratedKey.lift(
@@ -2528,6 +2670,54 @@ open class FfiWscdManager: Disposable, AutoCloseable, FfiWscdManagerInterface
         it,
         
         FfiConverterTypeFfiAndroidKeystoreCallback.lower(`callback`),
+        FfiConverterByteArray.lower(`state`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Register the Apple Secure Enclave (`apple-se`) plugin.
+     *
+     * The caller supplies a [`FfiSecureEnclaveCallback`] implementation
+     * backed by CryptoKit's `SecureEnclave.P256.Signing.PrivateKey` + a
+     * Keychain tag. **Staged release:** keys this plugin generates carry
+     * no per-key attestation chain - see
+     * [`crate::callbacks::SecureEnclaveCallback`]'s doc comment.
+     */
+    @Throws(FfiWscdException::class)override fun `registerAppleSecureEnclavePlugin`(`callback`: FfiSecureEnclaveCallback)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(FfiWscdException) { _status ->
+    UniffiLib.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_apple_secure_enclave_plugin(
+        it,
+        
+        FfiConverterTypeFfiSecureEnclaveCallback.lower(`callback`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Register the Apple Secure Enclave plugin restored from a previously
+     * [`export_apple_secure_enclave_state`]-exported blob (Keychain tags +
+     * public keys only, no private material - that never leaves the
+     * Secure Enclave). The host app must persist that blob itself and pass
+     * it back here on the next launch, or every enrolled `apple-se` key
+     * becomes unreachable (its `kid` still exists in credential/session
+     * metadata, but the manager has no record of the Keychain tag needed
+     * to sign with it again).
+     */
+    @Throws(FfiWscdException::class)override fun `registerAppleSecureEnclavePluginWithState`(`callback`: FfiSecureEnclaveCallback, `state`: kotlin.ByteArray)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(FfiWscdException) { _status ->
+    UniffiLib.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_apple_secure_enclave_plugin_with_state(
+        it,
+        
+        FfiConverterTypeFfiSecureEnclaveCallback.lower(`callback`),
         FfiConverterByteArray.lower(`state`),_status)
 }
     }
@@ -3636,6 +3826,44 @@ public object FfiConverterTypeFfiRotationOutcome: FfiConverterRustBuffer<FfiRota
     override fun write(value: FfiRotationOutcome, buf: ByteBuffer) {
             FfiConverterString.write(value.`contextId`, buf)
             FfiConverterTypeFfiLifecycleState.write(value.`state`, buf)
+    }
+}
+
+
+
+data class FfiSecureEnclavePublicKey (
+    var `x`: kotlin.ByteArray
+    , 
+    var `y`: kotlin.ByteArray
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiSecureEnclavePublicKey: FfiConverterRustBuffer<FfiSecureEnclavePublicKey> {
+    override fun read(buf: ByteBuffer): FfiSecureEnclavePublicKey {
+        return FfiSecureEnclavePublicKey(
+            FfiConverterByteArray.read(buf),
+            FfiConverterByteArray.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: FfiSecureEnclavePublicKey) = (
+            FfiConverterByteArray.allocationSize(value.`x`) +
+            FfiConverterByteArray.allocationSize(value.`y`)
+    )
+
+    override fun write(value: FfiSecureEnclavePublicKey, buf: ByteBuffer) {
+            FfiConverterByteArray.write(value.`x`, buf)
+            FfiConverterByteArray.write(value.`y`, buf)
     }
 }
 
@@ -5583,6 +5811,123 @@ internal object uniffiCallbackInterfaceFfiProgressCallback {
  * @suppress
  */
 public object FfiConverterTypeFfiProgressCallback: FfiConverterCallbackInterface<FfiProgressCallback>()
+
+
+
+
+
+/**
+ * Host-provided access to Apple's Secure Enclave for the `apple-se` plugin.
+ *
+ * The host implements this over CryptoKit's
+ * `SecureEnclave.P256.Signing.PrivateKey` + a Keychain tag - Rust has no
+ * portable way to drive the Secure Enclave directly, the same reason
+ * [`FfiCtap2Transport`] exists for FIDO2 authenticators. See
+ * [`crate::callbacks::SecureEnclaveCallback`]'s doc comment (the trait this
+ * bridges to) for the staged-release no-attestation contract and the raw
+ * `r || s` signature format expected back from `sign`.
+ */
+public interface FfiSecureEnclaveCallback {
+    
+    fun `generateKey`(`keyTag`: kotlin.String): FfiSecureEnclavePublicKey
+    
+    fun `sign`(`keyTag`: kotlin.String, `data`: kotlin.ByteArray): kotlin.ByteArray
+    
+    fun `deleteKey`(`keyTag`: kotlin.String)
+    
+    companion object
+}
+
+
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceFfiSecureEnclaveCallback {
+    internal object `generateKey`: UniffiCallbackInterfaceFfiSecureEnclaveCallbackMethod0 {
+        override fun callback(`uniffiHandle`: Long,`keyTag`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeFfiSecureEnclaveCallback.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`generateKey`(
+                    FfiConverterString.lift(`keyTag`),
+                )
+            }
+            val writeReturn = { value: FfiSecureEnclavePublicKey -> uniffiOutReturn.setValue(FfiConverterTypeFfiSecureEnclavePublicKey.lower(value)) }
+            uniffiTraitInterfaceCallWithError(
+                uniffiCallStatus,
+                makeCall,
+                writeReturn,
+                { e: FfiWscdException -> FfiConverterTypeFfiWscdError.lower(e) }
+            )
+        }
+    }
+    internal object `sign`: UniffiCallbackInterfaceFfiSecureEnclaveCallbackMethod1 {
+        override fun callback(`uniffiHandle`: Long,`keyTag`: RustBuffer.ByValue,`data`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeFfiSecureEnclaveCallback.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`sign`(
+                    FfiConverterString.lift(`keyTag`),
+                    FfiConverterByteArray.lift(`data`),
+                )
+            }
+            val writeReturn = { value: kotlin.ByteArray -> uniffiOutReturn.setValue(FfiConverterByteArray.lower(value)) }
+            uniffiTraitInterfaceCallWithError(
+                uniffiCallStatus,
+                makeCall,
+                writeReturn,
+                { e: FfiWscdException -> FfiConverterTypeFfiWscdError.lower(e) }
+            )
+        }
+    }
+    internal object `deleteKey`: UniffiCallbackInterfaceFfiSecureEnclaveCallbackMethod2 {
+        override fun callback(`uniffiHandle`: Long,`keyTag`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeFfiSecureEnclaveCallback.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`deleteKey`(
+                    FfiConverterString.lift(`keyTag`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCallWithError(
+                uniffiCallStatus,
+                makeCall,
+                writeReturn,
+                { e: FfiWscdException -> FfiConverterTypeFfiWscdError.lower(e) }
+            )
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypeFfiSecureEnclaveCallback.handleMap.remove(handle)
+        }
+    }
+
+    internal object uniffiClone: UniffiCallbackInterfaceClone {
+        override fun callback(handle: Long): Long {
+            return FfiConverterTypeFfiSecureEnclaveCallback.handleMap.clone(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfaceFfiSecureEnclaveCallback.UniffiByValue(
+        uniffiFree,
+        uniffiClone,
+        `generateKey`,
+        `sign`,
+        `deleteKey`,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_siros_wscd_manager_fn_init_callback_vtable_ffisecureenclavecallback(vtable)
+    }
+}
+
+/**
+ * The ffiConverter which transforms the Callbacks in to handles to pass to Rust.
+ *
+ * @suppress
+ */
+public object FfiConverterTypeFfiSecureEnclaveCallback: FfiConverterCallbackInterface<FfiSecureEnclaveCallback>()
 
 
 
