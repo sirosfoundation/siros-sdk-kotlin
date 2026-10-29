@@ -807,4 +807,223 @@ class WscdSelectionPolicyTest {
             store.getAll().size < 20,
         )
     }
+
+    // ── resolveCandidates (WscdManager.generateKeyForLevel's contract) ──────
+    //
+    // Nominal tiers from WscdPluginCapabilities: "softkey" -> iso_18045_basic,
+    // "fido2"/"r2ps" -> iso_18045_high (both at the SAME nominal tier, used
+    // below wherever a test needs two genuinely-tied eligible candidates).
+
+    @Test
+    fun resolveCandidates_returnsNull_whenRequiredTierIsNull() = runTest {
+        val tofu = InMemoryWscdTofuStore()
+        val policy = WscdSelectionPolicy(tofuStore = tofu, defaultMapping = null, requestChoice = null)
+
+        val result = policy.resolveCandidates(
+            issuer = issuer,
+            credentialType = credentialType,
+            requiredTier = null,
+            availablePluginIds = setOf("softkey", "fido2"),
+        )
+
+        assertNull(result)
+        assertTrue("no requirement must never write a TOFU entry", tofu.entries.isEmpty())
+    }
+
+    @Test
+    fun resolveCandidates_perPairOverride_isTheOnlyCandidate_evenWhenNominallyIneligible() = runTest {
+        // "softkey" is iso_18045_basic, which does NOT meet an iso_18045_high
+        // requirement - the override must still be the one and only
+        // candidate (no silent fallback to a different plugin), per the
+        // precedence this method deliberately differs from resolve() on.
+        val tofu = InMemoryWscdTofuStore()
+        val overrides = InMemoryWscdUserOverrideStore().apply { put(issuer, credentialType, "softkey") }
+        val policy = WscdSelectionPolicy(tofuStore = tofu, defaultMapping = null, requestChoice = null, userOverrideStore = overrides)
+
+        val result = policy.resolveCandidates(
+            issuer = issuer,
+            credentialType = credentialType,
+            requiredTier = "iso_18045_high",
+            availablePluginIds = setOf("softkey", "fido2", "r2ps"),
+        )
+
+        assertEquals(listOf("softkey"), result?.pluginIds)
+        assertEquals(false, result?.requiresWinnerConfirmation)
+        assertTrue("an override needs no TOFU write of its own", tofu.entries.isEmpty())
+    }
+
+    @Test
+    fun resolveCandidates_globalOverride_isTheOnlyCandidate() = runTest {
+        val tofu = InMemoryWscdTofuStore()
+        val overrides = InMemoryWscdUserOverrideStore().apply { globalOverride = "fido2" }
+        val policy = WscdSelectionPolicy(tofuStore = tofu, defaultMapping = null, requestChoice = null, userOverrideStore = overrides)
+
+        val result = policy.resolveCandidates(
+            issuer = issuer,
+            credentialType = credentialType,
+            requiredTier = "iso_18045_high",
+            availablePluginIds = setOf("softkey", "fido2"),
+        )
+
+        assertEquals(listOf("fido2"), result?.pluginIds)
+        assertEquals(false, result?.requiresWinnerConfirmation)
+    }
+
+    @Test
+    fun resolveCandidates_existingTofuPin_isTheOnlyCandidate_evenWhenNominallyIneligible() = runTest {
+        val tofu = InMemoryWscdTofuStore().apply { put(issuer, credentialType, "softkey") }
+        val policy = WscdSelectionPolicy(tofuStore = tofu, defaultMapping = null, requestChoice = null)
+
+        val result = policy.resolveCandidates(
+            issuer = issuer,
+            credentialType = credentialType,
+            requiredTier = "iso_18045_high",
+            availablePluginIds = setOf("softkey", "fido2", "r2ps"),
+        )
+
+        assertEquals(
+            "TOFU's whole point is sticking to the same hardware - no silent switch to a nominally-stronger one",
+            listOf("softkey"),
+            result?.pluginIds,
+        )
+        assertEquals(false, result?.requiresWinnerConfirmation)
+    }
+
+    @Test
+    fun resolveCandidates_noEligiblePlugin_throws() = runTest {
+        val tofu = InMemoryWscdTofuStore()
+        val policy = WscdSelectionPolicy(tofuStore = tofu, defaultMapping = null, requestChoice = null)
+
+        try {
+            policy.resolveCandidates(
+                issuer = issuer,
+                credentialType = credentialType,
+                requiredTier = "iso_18045_high",
+                availablePluginIds = setOf("softkey"),
+            )
+            fail("expected NoEligibleWscdPluginException")
+        } catch (e: NoEligibleWscdPluginException) {
+            // expected
+        }
+    }
+
+    @Test
+    fun resolveCandidates_exactlyOneEligible_returnsItAndRequiresConfirmation() = runTest {
+        val tofu = InMemoryWscdTofuStore()
+        val policy = WscdSelectionPolicy(tofuStore = tofu, defaultMapping = null, requestChoice = null)
+
+        val result = policy.resolveCandidates(
+            issuer = issuer,
+            credentialType = credentialType,
+            requiredTier = "iso_18045_high",
+            availablePluginIds = setOf("softkey", "fido2"),
+        )
+
+        assertEquals(listOf("fido2"), result?.pluginIds)
+        assertEquals(
+            "a single eligible candidate is still unconfirmed until a real key exists",
+            true,
+            result?.requiresWinnerConfirmation,
+        )
+        assertTrue("resolveCandidates must not persist anything itself - the caller confirms after generation", tofu.entries.isEmpty())
+    }
+
+    @Test
+    fun resolveCandidates_multipleEligible_currentDefaultLeadsTheOrderedList() = runTest {
+        val tofu = InMemoryWscdTofuStore()
+        val policy = WscdSelectionPolicy(tofuStore = tofu, defaultMapping = null, requestChoice = null)
+
+        val result = policy.resolveCandidates(
+            issuer = issuer,
+            credentialType = credentialType,
+            requiredTier = "iso_18045_high",
+            availablePluginIds = setOf("fido2", "r2ps"),
+            currentDefaultPluginId = "r2ps",
+        )
+
+        assertEquals(
+            "the current default leads, with the other eligible candidate as a fallback - not dropped",
+            listOf("r2ps", "fido2"),
+            result?.pluginIds,
+        )
+        assertEquals(true, result?.requiresWinnerConfirmation)
+    }
+
+    @Test
+    fun resolveCandidates_multipleEligible_defaultMappingLeadsTheOrderedListOverCurrentDefault() = runTest {
+        val tofu = InMemoryWscdTofuStore()
+        val policy = WscdSelectionPolicy(
+            tofuStore = tofu,
+            defaultMapping = mapOf("$issuer|$credentialType" to "fido2"),
+            requestChoice = null,
+        )
+
+        val result = policy.resolveCandidates(
+            issuer = issuer,
+            credentialType = credentialType,
+            requiredTier = "iso_18045_high",
+            availablePluginIds = setOf("fido2", "r2ps"),
+            currentDefaultPluginId = "r2ps",
+        )
+
+        assertEquals(listOf("fido2", "r2ps"), result?.pluginIds)
+        assertEquals(true, result?.requiresWinnerConfirmation)
+    }
+
+    @Test
+    fun resolveCandidates_genuineAmbiguity_asksTheUser_answerIsASingleConfirmedCandidate() = runTest {
+        val tofu = InMemoryWscdTofuStore()
+        val policy = WscdSelectionPolicy(
+            tofuStore = tofu,
+            defaultMapping = null,
+            requestChoice = { _, _, eligible -> WscdChoiceResult.Chosen(eligible.first(), RememberScope.THIS_ISSUER) },
+        )
+
+        val result = policy.resolveCandidates(
+            issuer = issuer,
+            credentialType = credentialType,
+            requiredTier = "iso_18045_high",
+            availablePluginIds = setOf("fido2", "r2ps"),
+        )
+
+        assertEquals(1, result?.pluginIds?.size)
+        assertEquals(
+            "the human already decided - not a guess needing post-hoc confirmation",
+            false,
+            result?.requiresWinnerConfirmation,
+        )
+        assertEquals(
+            "THIS_ISSUER must persist as TOFU immediately, same as resolve()",
+            result?.pluginIds?.first(),
+            tofu.get(issuer, credentialType),
+        )
+    }
+
+    @Test
+    fun resolveCandidates_ambiguityWithNoChoiceMade_throws() = runTest {
+        val tofu = InMemoryWscdTofuStore()
+        val policy = WscdSelectionPolicy(tofuStore = tofu, defaultMapping = null, requestChoice = null)
+
+        try {
+            policy.resolveCandidates(
+                issuer = issuer,
+                credentialType = credentialType,
+                requiredTier = "iso_18045_high",
+                availablePluginIds = setOf("fido2", "r2ps"),
+            )
+            fail("expected AmbiguousWscdPluginException")
+        } catch (e: AmbiguousWscdPluginException) {
+            // expected
+        }
+    }
+
+    @Test
+    fun confirmAutoPickWinner_persistsAsTofu() = runTest {
+        val tofu = InMemoryWscdTofuStore()
+        val policy = WscdSelectionPolicy(tofuStore = tofu, defaultMapping = null, requestChoice = null)
+
+        policy.confirmAutoPickWinner(issuer, credentialType, "fido2")
+
+        assertEquals("fido2", tofu.get(issuer, credentialType))
+    }
 }

@@ -1,7 +1,9 @@
 package org.siros.sdk.keystore
 
 import timber.log.Timber
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -16,6 +18,7 @@ import org.siros.sdk.credentials.SignerSecurityProperties
 import uniffi.siros_wscd_manager.FfiActivateLifecycleRequest
 import uniffi.siros_wscd_manager.FfiActivationOutcome
 import uniffi.siros_wscd_manager.FfiAlgorithm
+import uniffi.siros_wscd_manager.FfiAttestationFormat
 import uniffi.siros_wscd_manager.FfiAuthCallback
 import uniffi.siros_wscd_manager.FfiCertificationLevel
 import uniffi.siros_wscd_manager.FfiDestroyLifecycleRequest
@@ -102,6 +105,70 @@ class UniFFISigner(
         ffi.registerR2psPlugin(ffiConfig, R2psTransportBridge(transport))
     }
 
+    override fun registerAndroidKeystorePlugin(backend: AndroidKeyStoreBackend, authenticator: UserAuthenticator?) {
+        ffi.registerAndroidKeystorePlugin(AndroidKeystoreWscdCallbackBridge(backend, authenticator))
+    }
+
+    override fun registerAndroidKeystorePluginWithState(
+        state: ByteArray,
+        backend: AndroidKeyStoreBackend,
+        authenticator: UserAuthenticator?,
+    ) {
+        ffi.registerAndroidKeystorePluginWithState(AndroidKeystoreWscdCallbackBridge(backend, authenticator), state)
+    }
+
+    override fun exportAndroidKeystoreState(): ByteArray = ffi.exportAndroidKeystoreState()
+
+    /**
+     * Runs a native generate call that may have already persisted (and, for
+     * [generateKeyForLevel], already bound to its manager) a real key by
+     * the time it returns, so a cancellation racing the dispatcher handoff
+     * back to the caller - after the native call succeeded, before this
+     * suspend function delivers its result - must not silently lose that
+     * key: [kidOf] extracts the id from whatever [call] returned, and a
+     * cancellation caught here deletes it via [deleteKey] in a
+     * [NonCancellable] cleanup before rethrowing, mirroring
+     * [AndroidKeystoreSigner.generateManaged]'s identical rationale for the
+     * exact same race on this plugin's own generation paths.
+     */
+    private suspend fun <T> generateManagedNative(kidOf: (T) -> String, call: () -> T): T {
+        var created: T? = null
+        return try {
+            withContext(Dispatchers.IO) { call().also { created = it } }
+        } catch (e: CancellationException) {
+            created?.let { t ->
+                withContext(NonCancellable) { runCatching { ffi.deleteKey(kidOf(t)) } }
+            }
+            throw e
+        }
+    }
+
+    override suspend fun generateAndroidKeystoreKeyWithChallenge(attestationChallenge: ByteArray): String {
+        val result = generateManagedNative({ it.kid }) {
+            ffi.generateAndroidKeystoreKeyWithChallenge(attestationChallenge, FfiAlgorithm.ES256, noOpProgress())
+        }
+        publicKeyCache[result.kid] = result.publicKeyJwk.toByteArray(Charsets.UTF_8)
+        return result.kid
+    }
+
+    override suspend fun generateKeyForLevel(
+        requiredLevel: WscdCertificationLevel,
+        candidatePluginIds: List<String>,
+    ): GeneratedKeyWithPlugin {
+        val result = generateManagedNative({ it.kid }) {
+            withPinAuth { auth ->
+                ffi.generateKeyForLevel(requiredLevel.toFfi(), candidatePluginIds, FfiAlgorithm.ES256, auth, noOpProgress())
+            }
+        }
+        publicKeyCache[result.kid] = result.publicKeyJwk.toByteArray(Charsets.UTF_8)
+        // generate_key_for_level tries candidates in order and keeps
+        // whichever one's result was actually confirmed sufficient - that
+        // may not be the first (or only) candidate offered, so the winner
+        // is read back from the manager's own record rather than assumed.
+        val pluginId = ffi.listKeys().firstOrNull { it.kid == result.kid }?.pluginId
+            ?: error("generateKeyForLevel's own manager has no record of the key it just generated (${result.kid})")
+        return GeneratedKeyWithPlugin(keyId = result.kid, pluginId = pluginId)
+    }
 
     override fun registerFido2Plugin(transport: Ctap2TransportProvider) {
         ffi.registerFido2Plugin(Ctap2TransportBridge(transport))
@@ -349,8 +416,45 @@ class UniFFISigner(
         Unit
     }
 
+    /**
+     * siros-wscd-manager's `AttestationChain` carries an explicit `format`
+     * discriminant (`FfiAttestationFormat.X509_CHAIN`/`OPAQUE`) - unlike this
+     * SDK's own [AttestationChain], whose `certificates` field is overloaded
+     * to also mean "the one opaque blob" for [AttestationChain.FORMAT_FIDO2_PACKED]
+     * (see that class's doc comment: a pre-existing design predating the
+     * Rust-side discriminant, kept so `BackendApiClient.registerFido2Attestation`
+     * and `InstanceKeyEvidence` - both written against that shape - need no
+     * change). Map explicitly rather than forwarding `certificates`
+     * unconditionally: the fido2 plugin now reports `OPAQUE` (its CBOR
+     * attestation object lives in `opaqueAttestation`, not `certificates`),
+     * so a blind `AttestationChain(it.certificates, ...)` would silently
+     * produce an EMPTY certificates list for fido2 the moment that plugin's
+     * shape was corrected Rust-side - exactly the breakage flagged and
+     * fixed here instead of discovered later as a silent regression.
+     *
+     * `X509_CHAIN` is mapped to [AttestationChain.FORMAT_ANDROID_KEY]: of
+     * the plugins reachable through this signer today, only the Android
+     * Keystore plugin can ever return that format (fido2 always returns
+     * `OPAQUE`; r2ps's `attestation_chain()` always returns `null`, pending
+     * HSM-vendor attestation support). If a future plugin also returns a
+     * genuine X.509 chain, this mapping will need to distinguish by plugin
+     * id, not format alone - not needed yet.
+     */
     override suspend fun attestationChain(keyId: String): AttestationChain? = withContext(Dispatchers.IO) {
-        ffi.attestationChain(keyId)?.let { AttestationChain(it.certificates, it.clientDataHash) }
+        ffi.attestationChain(keyId)?.let { chain ->
+            when (chain.format) {
+                FfiAttestationFormat.X509_CHAIN -> AttestationChain(
+                    certificates = chain.certificates,
+                    clientDataHash = chain.clientDataHash,
+                    format = AttestationChain.FORMAT_ANDROID_KEY,
+                )
+                FfiAttestationFormat.OPAQUE -> AttestationChain(
+                    certificates = listOf(chain.opaqueAttestation),
+                    clientDataHash = chain.clientDataHash,
+                    format = AttestationChain.FORMAT_FIDO2_PACKED,
+                )
+            }
+        }
     }
 
     override suspend fun exportPublicKey(keyId: String): ByteArray = withContext(Dispatchers.IO) {
@@ -472,6 +576,13 @@ class UniFFISigner(
         FfiKeyStorageType.HARDWARE -> "hardware"
         FfiKeyStorageType.REMOTE_HSM -> "remote_hsm"
         FfiKeyStorageType.TRUSTED_EXECUTION -> "trusted_execution"
+    }
+
+    private fun WscdCertificationLevel.toFfi(): FfiCertificationLevel = when (this) {
+        WscdCertificationLevel.NONE -> FfiCertificationLevel.NONE
+        WscdCertificationLevel.BASELINE -> FfiCertificationLevel.BASELINE
+        WscdCertificationLevel.SUBSTANTIAL -> FfiCertificationLevel.SUBSTANTIAL
+        WscdCertificationLevel.HIGH -> FfiCertificationLevel.HIGH
     }
 
     private fun FfiCertificationLevel.toSdkCertification(): CertificationInfo = when (this) {

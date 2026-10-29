@@ -49,7 +49,120 @@ interface WscdManager : SignerLifecycleManager {
 
     /** Register the R2PS remote HSM plugin. */
     fun registerR2psPlugin(config: R2psConfig, transport: R2psTransportProvider)
+
+    /**
+     * Register the Android Keystore plugin: EC P-256 keys backed by this
+     * device's own TEE or StrongBox, generated with Android Key Attestation.
+     * [backend] defaults to the real [SystemAndroidKeyStore]; [authenticator]
+     * is asked for per-use authentication on a key that requires it (none do
+     * today - see [AndroidKeystoreWscdCallbackBridge]'s doc comment).
+     *
+     * One registered instance serves BOTH Wallet Instance Attestation's
+     * fixed hardware root (always reached via
+     * [generateAndroidKeystoreKeyWithChallenge], never [generateKeyForLevel])
+     * and Key Attestation's pluggable path (via [generateKeyForLevel], when
+     * `"android-keystore"` is one of its candidates) - mirrors how a single
+     * registered `fido2` plugin already serves both a specific credential's
+     * KA and (if ever used that way) other purposes. Register this at most
+     * once per process, like every other plugin.
+     */
+    fun registerAndroidKeystorePlugin(
+        backend: AndroidKeyStoreBackend = SystemAndroidKeyStore(),
+        authenticator: UserAuthenticator? = null,
+    )
+
+    /**
+     * Register the Android Keystore plugin restored from a previously
+     * [exportAndroidKeystoreState]-exported blob (kid-to-alias mapping,
+     * attestation chains, confirmed security levels - no private key
+     * material, that never leaves the Keystore) - use instead of
+     * [registerAndroidKeystorePlugin] when restoring a wallet whose keys
+     * were generated in an earlier process, so those keys stay addressable.
+     * Without this, a generated key's `kid` still exists in
+     * credential/session metadata after an app restart, but the plugin has
+     * no record of the alias needed to sign with it again - mirrors
+     * [registerFido2PluginWithState]'s doc comment exactly.
+     */
+    fun registerAndroidKeystorePluginWithState(
+        state: ByteArray,
+        backend: AndroidKeyStoreBackend = SystemAndroidKeyStore(),
+        authenticator: UserAuthenticator? = null,
+    )
+
+    /**
+     * Export the Android Keystore plugin's current key state, to persist
+     * and later restore via [registerAndroidKeystorePluginWithState].
+     * Throws if the android-keystore plugin isn't registered.
+     */
+    fun exportAndroidKeystoreState(): ByteArray
+
+    /**
+     * Generate a key with the Android Keystore plugin under a
+     * CALLER-SUPPLIED Android Key Attestation challenge, instead of the
+     * random one [generateKeyForLevel]/the plain `Signer.generateKey` path
+     * would use.
+     *
+     * **This is what Wallet Instance Attestation's instance-key
+     * provisioning must use** - per the wallet module's
+     * `InstanceKeyEvidence.challengeHash`, WIA's Android Key Attestation
+     * challenge is `SHA-256("siros-instance-key-v1" || C)` for a
+     * server-issued `C`; compute that and pass it as
+     * [attestationChallenge]. A random challenge cannot satisfy that fixed
+     * formula, making the resulting attestation unverifiable against the
+     * backend's own check.
+     *
+     * @return the new key's id (a JWK thumbprint, like every other
+     *   WSCD-generated key).
+     */
+    suspend fun generateAndroidKeystoreKeyWithChallenge(attestationChallenge: ByteArray): String
+
+    /**
+     * Generate a key that actually meets [requiredLevel], trying each of
+     * [candidatePluginIds] in order and confirming the real, objective
+     * outcome - never trusting a plugin's self-reported capability - before
+     * committing to it. See `WscdManager::generate_key_for_level`'s Rust
+     * doc comment (siros-wscd-manager) for the full generate-then-confirm-
+     * then-retry-the-next-candidate contract.
+     *
+     * [requiredLevel] is wscd-manager's own OBJECTIVE tier
+     * ([WscdCertificationLevel]: `none`/`baseline`/`substantial`/`high`,
+     * based on what a plugin can actually verify - hardware class,
+     * attestation presence, key non-exportability), deliberately NOT the
+     * ISO-18045 vocabulary ([WscdPluginCapabilities]'s
+     * `iso_18045_basic`/`moderate`/`high`): that mapping, and the ordered
+     * candidate list for a given ISO-18045 requirement
+     * ([WscdSelectionPolicy.resolveCandidates]), are owned entirely by this
+     * SDK, as deployment-configurable data - never hardcoded in
+     * wscd-manager, which has no business deciding what counts as
+     * "iso_18045_high" for any given deployment's own compliance posture.
+     *
+     * @return the new key's id AND which candidate actually won - the
+     *   caller needs the plugin id to call
+     *   [WscdSelectionPolicy.confirmAutoPickWinner] with the VERIFIED
+     *   winner (which may be any candidate in the list, not necessarily
+     *   the first), not just a bare kid with no way to tell which plugin
+     *   it ended up bound to.
+     */
+    suspend fun generateKeyForLevel(requiredLevel: WscdCertificationLevel, candidatePluginIds: List<String>): GeneratedKeyWithPlugin
 }
+
+/**
+ * The result of [WscdManager.generateKeyForLevel]: the new key's id, and
+ * which of the offered candidates actually won (generated the key AND had
+ * its result confirmed to meet the required level) - see that method's doc
+ * comment for why both are needed.
+ */
+data class GeneratedKeyWithPlugin(val keyId: String, val pluginId: String)
+
+/**
+ * wscd-manager's own objective certification-level vocabulary - mirrors
+ * `CertificationLevel`/`FfiCertificationLevel` (siros-wscd-manager)
+ * exactly. Deliberately NOT the ISO-18045 vocabulary
+ * ([WscdPluginCapabilities]'s `iso_18045_basic`/`moderate`/`high`) - see
+ * [WscdManager.generateKeyForLevel]'s doc comment for why the two must stay
+ * distinct.
+ */
+enum class WscdCertificationLevel { NONE, BASELINE, SUBSTANTIAL, HIGH }
 
 /**
  * R2PS server connection parameters.

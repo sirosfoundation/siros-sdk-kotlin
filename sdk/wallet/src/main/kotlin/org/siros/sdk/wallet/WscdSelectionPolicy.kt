@@ -606,4 +606,175 @@ class WscdSelectionPolicy(
             }
         }
     }
+
+    /**
+     * [resolve]'s answer: ordered candidate plugin ids to try (first is the
+     * preference), paired with whether a confirmed winner must be reported
+     * back via [confirmAutoPickWinner].
+     *
+     * @property pluginIds Every candidate to try, in order - never empty.
+     * @property requiresWinnerConfirmation True only for a fresh auto-pick
+     *   with no override/TOFU pin yet and no explicit user answer (this
+     *   call's "ordered preference list" branch, [resolveCandidates]'s step
+     *   5/6/7 below): the caller MUST call [confirmAutoPickWinner] with
+     *   whichever candidate's key generation actually succeeded (confirmed
+     *   by `WscdManager.generateKeyForLevel`'s own security-properties
+     *   check), so that result - not a guess - becomes the new TOFU pin.
+     *   False for an override, an existing TOFU pin, or an explicit user
+     *   answer from [requestChoice] - all three are already either
+     *   persisted (TOFU/global-override, per [WscdChoiceResult.Chosen.rememberScope])
+     *   or need no persistence at all (an override is already its own
+     *   stable preference); calling [confirmAutoPickWinner] in those cases
+     *   would be redundant, not incorrect, but callers should not need to.
+     */
+    data class WscdCandidateResolution(
+        val pluginIds: List<String>,
+        val requiresWinnerConfirmation: Boolean,
+    )
+
+    /**
+     * Like [resolve], but for [WscdManager.generateKeyForLevel]'s
+     * confirm-after-creation contract: returns an ORDERED LIST of candidate
+     * plugin ids to try, rather than collapsing to a single trusted winner
+     * up front - a plugin's nominal tier ([WscdPluginCapabilities]) is not
+     * proof it will actually reach it (StrongBox may be unavailable, say),
+     * so the real confirmation happens one layer down, after a real key
+     * exists, not here.
+     *
+     * Precedence - identical to [resolve] through step 4, since an override
+     * or an existing TOFU pin represents a DELIBERATE commitment to one
+     * specific plugin that must never be silently second-guessed by trying
+     * something else behind the user's back (TOFU's entire purpose is
+     * sticking to the same hardware):
+     * 1. `requiredTier == null` -> `null` (no-op), same as [resolve].
+     * 2/3. A per-(issuer, credentialType) or global user override that is
+     *    still registered -> a SINGLE-candidate list naming it, with
+     *    [WscdCandidateResolution.requiresWinnerConfirmation] `false`.
+     *    Deliberately **not** gated on [WscdPluginCapabilities] eligibility
+     *    any more (unlike [resolve]'s steps 2/3): if the override's device
+     *    can't actually reach `requiredTier`, `generateKeyForLevel` fails
+     *    with that one candidate and the caller sees a real, specific
+     *    failure - never a silent switch to different hardware the user
+     *    didn't choose.
+     * 4. A persisted TOFU pin that is still registered -> same as above:
+     *    single-candidate, unconditional, `requiresWinnerConfirmation`
+     *    `false`.
+     * 5. No pin yet at all: compute eligibility the same way [resolve] does
+     *    ([WscdPluginCapabilities]-based, over `availablePluginIds`) and
+     *    build a FULL ordered list rather than one blind pick:
+     *    - Zero eligible -> [NoEligibleWscdPluginException].
+     *    - Exactly one eligible -> that one candidate,
+     *      `requiresWinnerConfirmation` `true` (nothing to choose between,
+     *      but still unconfirmed until a real key exists).
+     *    - More than one eligible and [currentDefaultPluginId] is among
+     *      them -> it leads the list (same "avoid an unnecessary switch"
+     *      preference as [resolve]), followed by every other eligible
+     *      candidate as fallback order; `requiresWinnerConfirmation` `true`.
+     *    - More than one eligible and [defaultMapping] names one of them ->
+     *      same shape, that entry leads instead.
+     *    - More than one eligible, neither of the above resolves it -> ask
+     *      the user via [requestChoice], EXACTLY as [resolve] does. A
+     *      `Chosen` answer is a single-candidate list (`requiresWinnerConfirmation`
+     *      `false` - the human already decided, not a guess), persisted per
+     *      its `rememberScope` immediately, same as [resolve]. `Cancelled`,
+     *      no callback, or an answer outside the offered list all throw
+     *      [AmbiguousWscdPluginException], same as [resolve].
+     */
+    suspend fun resolveCandidates(
+        issuer: String,
+        credentialType: String,
+        requiredTier: String?,
+        availablePluginIds: Set<String>,
+        currentDefaultPluginId: String? = null,
+    ): WscdCandidateResolution? {
+        fun isEligible(pluginId: String): Boolean {
+            if (requiredTier == null) return true
+            val tier = WscdPluginCapabilities.tierOf(pluginId) ?: return false
+            return WscdPluginCapabilities.meets(tier, requiredTier)
+        }
+
+        fun singleCandidate(pluginId: String) = WscdCandidateResolution(listOf(pluginId), requiresWinnerConfirmation = false)
+
+        // 2/3. Overrides - unconditional (see this method's doc comment for
+        // why this differs from resolve()'s eligibility-gated version),
+        // evaluated before the requiredTier==null short-circuit for the
+        // same "an explicit override applies even to a credential with no
+        // declared requirement" reason resolve() documents.
+        (userOverrideStore.get(issuer, credentialType) ?: userOverrideStore.get(WILDCARD_ISSUER, credentialType))?.let { override ->
+            if (override in availablePluginIds) return singleCandidate(override)
+        }
+        userOverrideStore.getGlobal()?.let { override ->
+            if (override in availablePluginIds) return singleCandidate(override)
+        }
+
+        if (requiredTier == null) return null
+
+        // 4. TOFU - unconditional, same rationale.
+        tofuStore.get(issuer, credentialType)?.let { persisted ->
+            if (persisted in availablePluginIds) return singleCandidate(persisted)
+        }
+
+        // 5/6/7/8. No pin yet: build the full ordered eligible list.
+        val eligibleIds = availablePluginIds.filter { isEligible(it) }
+        if (eligibleIds.isEmpty()) {
+            throw NoEligibleWscdPluginException(issuer, credentialType, requiredTier)
+        }
+        if (eligibleIds.size == 1) {
+            return WscdCandidateResolution(eligibleIds, requiresWinnerConfirmation = true)
+        }
+
+        fun orderedFrom(preferred: String): WscdCandidateResolution =
+            WscdCandidateResolution(
+                listOf(preferred) + eligibleIds.filterNot { it == preferred },
+                requiresWinnerConfirmation = true,
+            )
+
+        val mappingKey = "$issuer|$credentialType"
+        val wildcardMappingKey = "$WILDCARD_ISSUER|$credentialType"
+        (defaultMapping?.get(mappingKey) ?: defaultMapping?.get(wildcardMappingKey))
+            ?.takeIf { it in eligibleIds }
+            ?.let { return orderedFrom(it) }
+
+        if (currentDefaultPluginId != null && currentDefaultPluginId in eligibleIds) {
+            return orderedFrom(currentDefaultPluginId)
+        }
+
+        return when (val choice = requestChoice?.invoke(issuer, credentialType, eligibleIds) ?: WscdChoiceResult.Cancelled) {
+            is WscdChoiceResult.Chosen -> {
+                if (choice.pluginId !in eligibleIds) {
+                    Timber.w(
+                        "RequestWscdChoice returned '${choice.pluginId}' which wasn't in the offered " +
+                            "eligible list $eligibleIds for issuer=$issuer credentialType=$credentialType; ignoring"
+                    )
+                    throw AmbiguousWscdPluginException(issuer, credentialType, eligibleIds)
+                }
+                when (choice.rememberScope) {
+                    RememberScope.ONCE -> { /* use for this call only, no persistence */ }
+                    RememberScope.THIS_ISSUER -> tofuStore.put(issuer, credentialType, choice.pluginId)
+                    RememberScope.ALL_ISSUERS -> userOverrideStore.setGlobal(choice.pluginId)
+                }
+                singleCandidate(choice.pluginId)
+            }
+            WscdChoiceResult.Cancelled -> throw AmbiguousWscdPluginException(issuer, credentialType, eligibleIds)
+        }
+    }
+
+    /**
+     * Records the REAL winner of a [resolveCandidates] call whose
+     * [WscdCandidateResolution.requiresWinnerConfirmation] was `true` - call
+     * this with whichever candidate `WscdManager.generateKeyForLevel`
+     * actually confirmed, once it returns, so that VERIFIED result (not any
+     * other candidate from the ordered list) becomes the new TOFU pin.
+     *
+     * Safe to call even when it wasn't required (an override/TOFU/explicit-choice
+     * single-candidate resolution): persisting the same pin again is a
+     * no-op in effect, since [resolve]/[resolveCandidates] both check
+     * overrides before TOFU, so an existing override is unaffected either
+     * way. Callers should still prefer checking
+     * [WscdCandidateResolution.requiresWinnerConfirmation] rather than
+     * calling this unconditionally, so a reader of the call site can see
+     * which case it's actually handling.
+     */
+    fun confirmAutoPickWinner(issuer: String, credentialType: String, pluginId: String) =
+        tofuStore.put(issuer, credentialType, pluginId)
 }

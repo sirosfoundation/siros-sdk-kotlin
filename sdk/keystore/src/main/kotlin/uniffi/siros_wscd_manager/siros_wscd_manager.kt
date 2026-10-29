@@ -650,6 +650,30 @@ internal open class UniffiForeignFutureResultVoid(
 internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
     fun callback(`callbackData`: Long,`result`: UniffiForeignFutureResultVoid.UniffiByValue,)
 }
+internal interface UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`alias`: RustBuffer.ByValue,`attestationChallenge`: RustBuffer.ByValue,`strongBox`: Byte,`userAuthenticationMethods`: RustBuffer.ByValue,`unlockedDeviceRequired`: Byte,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod1 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`alias`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod2 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`alias`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod3 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`alias`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod4 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`alias`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod5 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`alias`: RustBuffer.ByValue,`data`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod6 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+internal interface UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod7 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`alias`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
 internal interface UniffiCallbackInterfaceFfiAuthCallbackMethod0 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`pluginId`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,)
 }
@@ -667,6 +691,46 @@ internal interface UniffiCallbackInterfaceFfiHttpTransportMethod0 : com.sun.jna.
 }
 internal interface UniffiCallbackInterfaceFfiProgressCallbackMethod0 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`progress`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
+@Structure.FieldOrder("uniffiFree", "uniffiClone", "generate", "certificateChain", "publicKeyJwk", "securityLevel", "userAuthenticationMethods", "sign", "aliases", "delete")
+internal open class UniffiVTableCallbackInterfaceFfiAndroidKeystoreCallback(
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    @JvmField internal var `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+    @JvmField internal var `generate`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod0? = null,
+    @JvmField internal var `certificateChain`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod1? = null,
+    @JvmField internal var `publicKeyJwk`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod2? = null,
+    @JvmField internal var `securityLevel`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod3? = null,
+    @JvmField internal var `userAuthenticationMethods`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod4? = null,
+    @JvmField internal var `sign`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod5? = null,
+    @JvmField internal var `aliases`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod6? = null,
+    @JvmField internal var `delete`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod7? = null,
+) : Structure() {
+    class UniffiByValue(
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+        `uniffiClone`: UniffiCallbackInterfaceClone? = null,
+        `generate`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod0? = null,
+        `certificateChain`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod1? = null,
+        `publicKeyJwk`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod2? = null,
+        `securityLevel`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod3? = null,
+        `userAuthenticationMethods`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod4? = null,
+        `sign`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod5? = null,
+        `aliases`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod6? = null,
+        `delete`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod7? = null,
+    ): UniffiVTableCallbackInterfaceFfiAndroidKeystoreCallback(`uniffiFree`,`uniffiClone`,`generate`,`certificateChain`,`publicKeyJwk`,`securityLevel`,`userAuthenticationMethods`,`sign`,`aliases`,`delete`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceFfiAndroidKeystoreCallback) {
+        `uniffiFree` = other.`uniffiFree`
+        `uniffiClone` = other.`uniffiClone`
+        `generate` = other.`generate`
+        `certificateChain` = other.`certificateChain`
+        `publicKeyJwk` = other.`publicKeyJwk`
+        `securityLevel` = other.`securityLevel`
+        `userAuthenticationMethods` = other.`userAuthenticationMethods`
+        `sign` = other.`sign`
+        `aliases` = other.`aliases`
+        `delete` = other.`delete`
+    }
+
 }
 @Structure.FieldOrder("uniffiFree", "uniffiClone", "requestPin", "requestNewPin", "requestWebauthnAssertion")
 internal open class UniffiVTableCallbackInterfaceFfiAuthCallback(
@@ -793,13 +857,21 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_destroy_lifecycle(
     ): Int
+    external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_android_keystore_state(
+    ): Int
     external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_fido2_state(
     ): Int
     external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_public_key(
     ): Int
     external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_softkey_container(
     ): Int
+    external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_generate_android_keystore_key_with_challenge(
+    ): Int
     external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_generate_key(
+    ): Int
+    external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_generate_key_for_level(
+    ): Int
+    external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_generate_key_with_plugin(
     ): Int
     external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_import_softkey_container(
     ): Int
@@ -808,6 +880,10 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_list_keys(
     ): Int
     external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_migrate_key(
+    ): Int
+    external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_android_keystore_plugin(
+    ): Int
+    external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_android_keystore_plugin_with_state(
     ): Int
     external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_fido2_plugin(
     ): Int
@@ -828,6 +904,22 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_sign_with_factors(
     ): Int
     external fun uniffi_siros_wscd_manager_checksum_constructor_ffiwscdmanager_new(
+    ): Int
+    external fun uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_generate(
+    ): Int
+    external fun uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_certificate_chain(
+    ): Int
+    external fun uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_public_key_jwk(
+    ): Int
+    external fun uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_security_level(
+    ): Int
+    external fun uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_user_authentication_methods(
+    ): Int
+    external fun uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_sign(
+    ): Int
+    external fun uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_aliases(
+    ): Int
+    external fun uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_delete(
     ): Int
     external fun uniffi_siros_wscd_manager_checksum_method_ffiauthcallback_request_pin(
     ): Int
@@ -857,6 +949,7 @@ internal object UniffiLib {
 
     init {
         Native.register(UniffiLib::class.java, findLibraryName(componentName = "siros_wscd_manager"))
+        uniffiCallbackInterfaceFfiAndroidKeystoreCallback.register(this)
         uniffiCallbackInterfaceFfiAuthCallback.register(this)
         uniffiCallbackInterfaceFfiCtap2Transport.register(this)
         uniffiCallbackInterfaceFfiHttpTransport.register(this)
@@ -883,13 +976,21 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_destroy_lifecycle(`ptr`: Long,`request`: RustBuffer.ByValue,`auth`: Long,`progress`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_export_android_keystore_state(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_export_fido2_state(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_export_public_key(`ptr`: Long,`kid`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_export_softkey_container(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_generate_android_keystore_key_with_challenge(`ptr`: Long,`attestationChallenge`: RustBuffer.ByValue,`algorithm`: RustBuffer.ByValue,`progress`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_generate_key(`ptr`: Long,`algorithm`: RustBuffer.ByValue,`auth`: Long,`progress`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_generate_key_for_level(`ptr`: Long,`requiredLevel`: RustBuffer.ByValue,`candidatePluginIds`: RustBuffer.ByValue,`algorithm`: RustBuffer.ByValue,`auth`: Long,`progress`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_generate_key_with_plugin(`ptr`: Long,`pluginId`: RustBuffer.ByValue,`algorithm`: RustBuffer.ByValue,`auth`: Long,`progress`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_import_softkey_container(`ptr`: Long,`container`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -899,6 +1000,10 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_migrate_key(`ptr`: Long,`kid`: RustBuffer.ByValue,`targetPluginId`: RustBuffer.ByValue,`auth`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_android_keystore_plugin(`ptr`: Long,`callback`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_android_keystore_plugin_with_state(`ptr`: Long,`callback`: Long,`state`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_fido2_plugin(`ptr`: Long,`transport`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_fido2_plugin_with_state(`ptr`: Long,`transport`: Long,`state`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -917,6 +1022,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_sign_with_factors(`ptr`: Long,`kid`: RustBuffer.ByValue,`data`: RustBuffer.ByValue,`algorithm`: RustBuffer.ByValue,`options`: RustBuffer.ByValue,`auth`: Long,`progress`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_siros_wscd_manager_fn_init_callback_vtable_ffiandroidkeystorecallback(`vtable`: UniffiVTableCallbackInterfaceFfiAndroidKeystoreCallback,
+    ): Unit
     external fun uniffi_siros_wscd_manager_fn_init_callback_vtable_ffiauthcallback(`vtable`: UniffiVTableCallbackInterfaceFfiAuthCallback,
     ): Unit
     external fun uniffi_siros_wscd_manager_fn_init_callback_vtable_ffictap2transport(`vtable`: UniffiVTableCallbackInterfaceFfiCtap2Transport,
@@ -1077,6 +1184,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_destroy_lifecycle() and 0xFFFF) != 3691) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_android_keystore_state() and 0xFFFF) != 11408) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_fido2_state() and 0xFFFF) != 64045) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1086,7 +1196,16 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_export_softkey_container() and 0xFFFF) != 12042) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_generate_android_keystore_key_with_challenge() and 0xFFFF) != 16056) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_generate_key() and 0xFFFF) != 35191) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_generate_key_for_level() and 0xFFFF) != 54910) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_generate_key_with_plugin() and 0xFFFF) != 18816) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_import_softkey_container() and 0xFFFF) != 44885) {
@@ -1099,6 +1218,12 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_migrate_key() and 0xFFFF) != 11675) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_android_keystore_plugin() and 0xFFFF) != 51641) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_android_keystore_plugin_with_state() and 0xFFFF) != 2276) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiwscdmanager_register_fido2_plugin() and 0xFFFF) != 39324) {
@@ -1129,6 +1254,30 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_siros_wscd_manager_checksum_constructor_ffiwscdmanager_new() and 0xFFFF) != 9101) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_generate() and 0xFFFF) != 64646) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_certificate_chain() and 0xFFFF) != 25141) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_public_key_jwk() and 0xFFFF) != 3065) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_security_level() and 0xFFFF) != 32108) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_user_authentication_methods() and 0xFFFF) != 17440) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_sign() and 0xFFFF) != 31288) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_aliases() and 0xFFFF) != 18614) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiandroidkeystorecallback_delete() and 0xFFFF) != 53873) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_siros_wscd_manager_checksum_method_ffiauthcallback_request_pin() and 0xFFFF) != 7366) {
@@ -1622,6 +1771,12 @@ public interface FfiWscdManagerInterface {
     fun `destroyLifecycle`(`request`: FfiDestroyLifecycleRequest, `auth`: FfiAuthCallback, `progress`: FfiProgressCallback): FfiDestructionOutcome
     
     /**
+     * Export the Android Keystore plugin's key state for the host app to
+     * persist and later restore via [`register_android_keystore_plugin_with_state`].
+     */
+    fun `exportAndroidKeystoreState`(): kotlin.ByteArray
+    
+    /**
      * Export the FIDO2 plugin's key state (credential handles + public
      * keys) for the host app to persist and later restore via
      * [`register_fido2_plugin_with_state`].
@@ -1648,9 +1803,60 @@ public interface FfiWscdManagerInterface {
     fun `exportSoftkeyContainer`(): kotlin.ByteArray
     
     /**
+     * Generate a key with the Android Keystore plugin under a
+     * CALLER-SUPPLIED attestation challenge, instead of the random one
+     * `generate_key`/`generate_key_for_level` use.
+     *
+     * **This is what Wallet Instance Attestation's instance-key
+     * provisioning must use.** Per siros-sdk-kotlin #312's
+     * `InstanceKeyEvidence`, the Android Key Attestation challenge for a
+     * WIA instance key is `SHA-256("siros-instance-key-v1" || C)` (`C` the
+     * server-issued challenge, exactly as issued) - compute that hash on
+     * the host side and pass it here as `attestation_challenge`. Never use
+     * `generate_key_with_plugin("android-keystore", ...)` for WIA: it
+     * would attest under a random challenge the backend's fixed formula
+     * cannot reproduce, making the attestation unverifiable.
+     */
+    fun `generateAndroidKeystoreKeyWithChallenge`(`attestationChallenge`: kotlin.ByteArray, `algorithm`: FfiAlgorithm, `progress`: FfiProgressCallback): FfiGeneratedKey
+    
+    /**
      * Generate a new key pair.
      */
     fun `generateKey`(`algorithm`: FfiAlgorithm, `auth`: FfiAuthCallback, `progress`: FfiProgressCallback): FfiGeneratedKey
+    
+    /**
+     * Generate a key that actually meets `required_level`, trying each of
+     * `candidate_plugin_ids` in order and confirming the real outcome
+     * rather than trusting any plugin's self-reported capability - see
+     * `WscdManager::generate_key_for_level`'s doc comment for the full
+     * generate → confirm → delete-and-retry-next-candidate contract.
+     *
+     * `candidate_plugin_ids` is the ORDERED list the host SDK's own
+     * selection policy computed (e.g. `WscdSelectionPolicy.resolve()` on
+     * Kotlin/Swift) - this method does no ranking of its own, it only
+     * consumes the order it is given. This is Key Attestation's pluggable
+     * path; never use it for Wallet Instance Attestation's fixed hardware
+     * root (see [`generate_key_with_plugin`]'s doc comment).
+     */
+    fun `generateKeyForLevel`(`requiredLevel`: FfiCertificationLevel, `candidatePluginIds`: List<kotlin.String>, `algorithm`: FfiAlgorithm, `auth`: FfiAuthCallback, `progress`: FfiProgressCallback): FfiGeneratedKey
+    
+    /**
+     * Generate a key with a SPECIFIC registered plugin, bypassing the
+     * default-plugin resolution chain (`resolve_for_generate`) entirely.
+     *
+     * **This is the forced path Wallet Instance Attestation (WIA) must
+     * always use.** WIA's hardware root is a fixed, specific plugin (e.g.
+     * `"android-keystore"`) chosen by the device/platform, never something
+     * a selection policy picks among several candidates - call this with
+     * that plugin's id directly. Never call the plain `generate_key` (which
+     * goes through `resolve_for_generate`) or `generate_key_for_level`
+     * (which tries several candidates) for WIA's instance key: both exist
+     * for Key Attestation's pluggable path, where trying a different
+     * plugin on a later call is fine; WIA's hardware root must not move
+     * around depending on manager configuration or plugin registration
+     * order.
+     */
+    fun `generateKeyWithPlugin`(`pluginId`: kotlin.String, `algorithm`: FfiAlgorithm, `auth`: FfiAuthCallback, `progress`: FfiProgressCallback): FfiGeneratedKey
     
     /**
      * Import a softkey container (JSON bytes), replacing the current softkey state.
@@ -1674,6 +1880,30 @@ public interface FfiWscdManagerInterface {
      * credential binding is needed with the issuer.
      */
     fun `migrateKey`(`kid`: kotlin.String, `targetPluginId`: kotlin.String, `auth`: FfiAuthCallback): FfiMigrationResult
+    
+    /**
+     * Register the Android Keystore plugin under
+     * [`crate::plugins::android_keystore::PLUGIN_ID`] (`"android-keystore"`).
+     *
+     * One instance serves both WIA's forced path
+     * (`get_plugin_by_id("android-keystore")`/`generate_key_with_plugin`)
+     * and KA's pluggable path (`generate_key_for_level`/`resolve_for_generate`) -
+     * see [`crate::plugins::android_keystore::AndroidKeystorePlugin`]'s doc
+     * comment. Register it exactly once per process, like every other
+     * plugin.
+     */
+    fun `registerAndroidKeystorePlugin`(`callback`: FfiAndroidKeystoreCallback)
+    
+    /**
+     * Register the Android Keystore plugin restored from a previously
+     * [`export_android_keystore_state`]-exported blob (kid↔alias mapping,
+     * attestation chains, confirmed security levels - no private key
+     * material, that never leaves the Keystore). The host app must persist
+     * that blob itself and pass it back here on the next launch, or every
+     * key made by this plugin becomes unreachable (mirrors
+     * [`register_fido2_plugin_with_state`]'s doc comment exactly).
+     */
+    fun `registerAndroidKeystorePluginWithState`(`callback`: FfiAndroidKeystoreCallback, `state`: kotlin.ByteArray)
     
     /**
      * Register the FIDO2 previewSign (rawSign) plugin for hardware
@@ -1981,6 +2211,24 @@ open class FfiWscdManager: Disposable, AutoCloseable, FfiWscdManagerInterface
 
     
     /**
+     * Export the Android Keystore plugin's key state for the host app to
+     * persist and later restore via [`register_android_keystore_plugin_with_state`].
+     */
+    @Throws(FfiWscdException::class)override fun `exportAndroidKeystoreState`(): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FfiWscdException) { _status ->
+    UniffiLib.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_export_android_keystore_state(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Export the FIDO2 plugin's key state (credential handles + public
      * keys) for the host app to persist and later restore via
      * [`register_fido2_plugin_with_state`].
@@ -2044,6 +2292,38 @@ open class FfiWscdManager: Disposable, AutoCloseable, FfiWscdManagerInterface
 
     
     /**
+     * Generate a key with the Android Keystore plugin under a
+     * CALLER-SUPPLIED attestation challenge, instead of the random one
+     * `generate_key`/`generate_key_for_level` use.
+     *
+     * **This is what Wallet Instance Attestation's instance-key
+     * provisioning must use.** Per siros-sdk-kotlin #312's
+     * `InstanceKeyEvidence`, the Android Key Attestation challenge for a
+     * WIA instance key is `SHA-256("siros-instance-key-v1" || C)` (`C` the
+     * server-issued challenge, exactly as issued) - compute that hash on
+     * the host side and pass it here as `attestation_challenge`. Never use
+     * `generate_key_with_plugin("android-keystore", ...)` for WIA: it
+     * would attest under a random challenge the backend's fixed formula
+     * cannot reproduce, making the attestation unverifiable.
+     */
+    @Throws(FfiWscdException::class)override fun `generateAndroidKeystoreKeyWithChallenge`(`attestationChallenge`: kotlin.ByteArray, `algorithm`: FfiAlgorithm, `progress`: FfiProgressCallback): FfiGeneratedKey {
+            return FfiConverterTypeFfiGeneratedKey.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FfiWscdException) { _status ->
+    UniffiLib.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_generate_android_keystore_key_with_challenge(
+        it,
+        
+        FfiConverterByteArray.lower(`attestationChallenge`),
+        FfiConverterTypeFfiAlgorithm.lower(`algorithm`),
+        FfiConverterTypeFfiProgressCallback.lower(`progress`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
      * Generate a new key pair.
      */
     @Throws(FfiWscdException::class)override fun `generateKey`(`algorithm`: FfiAlgorithm, `auth`: FfiAuthCallback, `progress`: FfiProgressCallback): FfiGeneratedKey {
@@ -2053,6 +2333,73 @@ open class FfiWscdManager: Disposable, AutoCloseable, FfiWscdManagerInterface
     UniffiLib.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_generate_key(
         it,
         
+        FfiConverterTypeFfiAlgorithm.lower(`algorithm`),
+        FfiConverterTypeFfiAuthCallback.lower(`auth`),
+        FfiConverterTypeFfiProgressCallback.lower(`progress`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Generate a key that actually meets `required_level`, trying each of
+     * `candidate_plugin_ids` in order and confirming the real outcome
+     * rather than trusting any plugin's self-reported capability - see
+     * `WscdManager::generate_key_for_level`'s doc comment for the full
+     * generate → confirm → delete-and-retry-next-candidate contract.
+     *
+     * `candidate_plugin_ids` is the ORDERED list the host SDK's own
+     * selection policy computed (e.g. `WscdSelectionPolicy.resolve()` on
+     * Kotlin/Swift) - this method does no ranking of its own, it only
+     * consumes the order it is given. This is Key Attestation's pluggable
+     * path; never use it for Wallet Instance Attestation's fixed hardware
+     * root (see [`generate_key_with_plugin`]'s doc comment).
+     */
+    @Throws(FfiWscdException::class)override fun `generateKeyForLevel`(`requiredLevel`: FfiCertificationLevel, `candidatePluginIds`: List<kotlin.String>, `algorithm`: FfiAlgorithm, `auth`: FfiAuthCallback, `progress`: FfiProgressCallback): FfiGeneratedKey {
+            return FfiConverterTypeFfiGeneratedKey.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FfiWscdException) { _status ->
+    UniffiLib.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_generate_key_for_level(
+        it,
+        
+        FfiConverterTypeFfiCertificationLevel.lower(`requiredLevel`),
+        FfiConverterSequenceString.lower(`candidatePluginIds`),
+        FfiConverterTypeFfiAlgorithm.lower(`algorithm`),
+        FfiConverterTypeFfiAuthCallback.lower(`auth`),
+        FfiConverterTypeFfiProgressCallback.lower(`progress`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    /**
+     * Generate a key with a SPECIFIC registered plugin, bypassing the
+     * default-plugin resolution chain (`resolve_for_generate`) entirely.
+     *
+     * **This is the forced path Wallet Instance Attestation (WIA) must
+     * always use.** WIA's hardware root is a fixed, specific plugin (e.g.
+     * `"android-keystore"`) chosen by the device/platform, never something
+     * a selection policy picks among several candidates - call this with
+     * that plugin's id directly. Never call the plain `generate_key` (which
+     * goes through `resolve_for_generate`) or `generate_key_for_level`
+     * (which tries several candidates) for WIA's instance key: both exist
+     * for Key Attestation's pluggable path, where trying a different
+     * plugin on a later call is fine; WIA's hardware root must not move
+     * around depending on manager configuration or plugin registration
+     * order.
+     */
+    @Throws(FfiWscdException::class)override fun `generateKeyWithPlugin`(`pluginId`: kotlin.String, `algorithm`: FfiAlgorithm, `auth`: FfiAuthCallback, `progress`: FfiProgressCallback): FfiGeneratedKey {
+            return FfiConverterTypeFfiGeneratedKey.lift(
+    callWithHandle {
+    uniffiRustCallWithError(FfiWscdException) { _status ->
+    UniffiLib.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_generate_key_with_plugin(
+        it,
+        
+        FfiConverterString.lower(`pluginId`),
         FfiConverterTypeFfiAlgorithm.lower(`algorithm`),
         FfiConverterTypeFfiAuthCallback.lower(`auth`),
         FfiConverterTypeFfiProgressCallback.lower(`progress`),_status)
@@ -2136,6 +2483,55 @@ open class FfiWscdManager: Disposable, AutoCloseable, FfiWscdManagerInterface
     }
     )
     }
+    
+
+    
+    /**
+     * Register the Android Keystore plugin under
+     * [`crate::plugins::android_keystore::PLUGIN_ID`] (`"android-keystore"`).
+     *
+     * One instance serves both WIA's forced path
+     * (`get_plugin_by_id("android-keystore")`/`generate_key_with_plugin`)
+     * and KA's pluggable path (`generate_key_for_level`/`resolve_for_generate`) -
+     * see [`crate::plugins::android_keystore::AndroidKeystorePlugin`]'s doc
+     * comment. Register it exactly once per process, like every other
+     * plugin.
+     */
+    @Throws(FfiWscdException::class)override fun `registerAndroidKeystorePlugin`(`callback`: FfiAndroidKeystoreCallback)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(FfiWscdException) { _status ->
+    UniffiLib.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_android_keystore_plugin(
+        it,
+        
+        FfiConverterTypeFfiAndroidKeystoreCallback.lower(`callback`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Register the Android Keystore plugin restored from a previously
+     * [`export_android_keystore_state`]-exported blob (kid↔alias mapping,
+     * attestation chains, confirmed security levels - no private key
+     * material, that never leaves the Keystore). The host app must persist
+     * that blob itself and pass it back here on the next launch, or every
+     * key made by this plugin becomes unreachable (mirrors
+     * [`register_fido2_plugin_with_state`]'s doc comment exactly).
+     */
+    @Throws(FfiWscdException::class)override fun `registerAndroidKeystorePluginWithState`(`callback`: FfiAndroidKeystoreCallback, `state`: kotlin.ByteArray)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(FfiWscdException) { _status ->
+    UniffiLib.uniffi_siros_wscd_manager_fn_method_ffiwscdmanager_register_android_keystore_plugin_with_state(
+        it,
+        
+        FfiConverterTypeFfiAndroidKeystoreCallback.lower(`callback`),
+        FfiConverterByteArray.lower(`state`),_status)
+}
+    }
+    
     
 
     
@@ -2451,9 +2847,13 @@ public object FfiConverterTypeFfiActivationOutcome: FfiConverterRustBuffer<FfiAc
 
 
 data class FfiAttestationChain (
+    var `format`: FfiAttestationFormat
+    , 
     var `certificates`: List<kotlin.ByteArray>
     , 
     var `clientDataHash`: kotlin.ByteArray
+    , 
+    var `opaqueAttestation`: kotlin.ByteArray
     
 ){
     
@@ -2470,19 +2870,25 @@ data class FfiAttestationChain (
 public object FfiConverterTypeFfiAttestationChain: FfiConverterRustBuffer<FfiAttestationChain> {
     override fun read(buf: ByteBuffer): FfiAttestationChain {
         return FfiAttestationChain(
+            FfiConverterTypeFfiAttestationFormat.read(buf),
             FfiConverterSequenceByteArray.read(buf),
+            FfiConverterByteArray.read(buf),
             FfiConverterByteArray.read(buf),
         )
     }
 
     override fun allocationSize(value: FfiAttestationChain) = (
+            FfiConverterTypeFfiAttestationFormat.allocationSize(value.`format`) +
             FfiConverterSequenceByteArray.allocationSize(value.`certificates`) +
-            FfiConverterByteArray.allocationSize(value.`clientDataHash`)
+            FfiConverterByteArray.allocationSize(value.`clientDataHash`) +
+            FfiConverterByteArray.allocationSize(value.`opaqueAttestation`)
     )
 
     override fun write(value: FfiAttestationChain, buf: ByteBuffer) {
+            FfiConverterTypeFfiAttestationFormat.write(value.`format`, buf)
             FfiConverterSequenceByteArray.write(value.`certificates`, buf)
             FfiConverterByteArray.write(value.`clientDataHash`, buf)
+            FfiConverterByteArray.write(value.`opaqueAttestation`, buf)
     }
 }
 
@@ -3483,6 +3889,82 @@ public object FfiConverterTypeFfiAlgorithm: FfiConverterRustBuffer<FfiAlgorithm>
 
 
 
+/**
+ * Mirrors [`InternalAndroidKeystoreSecurityLevel`] — see its doc comment.
+ */
+
+enum class FfiAndroidKeystoreSecurityLevel {
+    
+    STRONG_BOX,
+    TRUSTED_EXECUTION,
+    SOFTWARE,
+    UNKNOWN;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiAndroidKeystoreSecurityLevel: FfiConverterRustBuffer<FfiAndroidKeystoreSecurityLevel> {
+    override fun read(buf: ByteBuffer) = try {
+        FfiAndroidKeystoreSecurityLevel.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FfiAndroidKeystoreSecurityLevel) = 4UL
+
+    override fun write(value: FfiAndroidKeystoreSecurityLevel, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+/**
+ * Mirrors [`InternalAttestationFormat`] — see its doc comment.
+ */
+
+enum class FfiAttestationFormat {
+    
+    X509_CHAIN,
+    OPAQUE;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFfiAttestationFormat: FfiConverterRustBuffer<FfiAttestationFormat> {
+    override fun read(buf: ByteBuffer) = try {
+        FfiAttestationFormat.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: FfiAttestationFormat) = 4UL
+
+    override fun write(value: FfiAttestationFormat, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
 
 enum class FfiAuthMethod {
     
@@ -4311,6 +4793,28 @@ sealed class FfiWscdException: kotlin.Exception() {
             get() = "reason=${ `reason` }, msg=${ `msg` }"
     }
     
+    /**
+     * See [`crate::error::WscdError::StrongBoxUnavailable`].
+     */
+    class StrongBoxUnavailable(
+        
+        val `msg`: kotlin.String
+        ) : FfiWscdException() {
+        override val message
+            get() = "msg=${ `msg` }"
+    }
+    
+    /**
+     * See [`crate::error::WscdError::UnconfirmedCleanup`].
+     */
+    class UnconfirmedCleanup(
+        
+        val `msg`: kotlin.String
+        ) : FfiWscdException() {
+        override val message
+            get() = "msg=${ `msg` }"
+    }
+    
 
     
 
@@ -4362,6 +4866,12 @@ public object FfiConverterTypeFfiWscdError : FfiConverterRustBuffer<FfiWscdExcep
                 )
             11 -> FfiWscdException.Pin(
                 FfiConverterTypeFfiPinFailure.read(buf),
+                FfiConverterString.read(buf),
+                )
+            12 -> FfiWscdException.StrongBoxUnavailable(
+                FfiConverterString.read(buf),
+                )
+            13 -> FfiWscdException.UnconfirmedCleanup(
                 FfiConverterString.read(buf),
                 )
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
@@ -4426,6 +4936,16 @@ public object FfiConverterTypeFfiWscdError : FfiConverterRustBuffer<FfiWscdExcep
                 + FfiConverterTypeFfiPinFailure.allocationSize(value.`reason`)
                 + FfiConverterString.allocationSize(value.`msg`)
             )
+            is FfiWscdException.StrongBoxUnavailable -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`msg`)
+            )
+            is FfiWscdException.UnconfirmedCleanup -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`msg`)
+            )
         }
     }
 
@@ -4487,10 +5007,250 @@ public object FfiConverterTypeFfiWscdError : FfiConverterRustBuffer<FfiWscdExcep
                 FfiConverterString.write(value.`msg`, buf)
                 Unit
             }
+            is FfiWscdException.StrongBoxUnavailable -> {
+                buf.putInt(12)
+                FfiConverterString.write(value.`msg`, buf)
+                Unit
+            }
+            is FfiWscdException.UnconfirmedCleanup -> {
+                buf.putInt(13)
+                FfiConverterString.write(value.`msg`, buf)
+                Unit
+            }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
     }
 
 }
+
+
+
+
+
+/**
+ * Host-provided Android Keystore access — see [`cb::AndroidKeystoreCallback`]'s
+ * doc comment (the internal trait this bridges to) for the full contract,
+ * including why `sign` collapses `newSignature`/authenticate/`finish` into
+ * one call.
+ *
+ * `public_key_jwk` and the `generate`/`certificate_chain` error cases are
+ * the only departures from a literal 1:1 method mirror of
+ * `AndroidKeyStoreBackend`:
+ * - A JWK crosses FFI as a JSON string (`String`), the same convention
+ * `FfiWscdManager::export_public_key` already uses — UniFFI has no
+ * generic "JSON value" record type.
+ * - `generate` returns `Err(FfiWscdError::StrongBoxUnavailable)` rather
+ * than a boolean/sentinel, specifically so `AndroidKeystoreCallbackBridge`
+ * can recover the one error variant it must distinguish (see that type) -
+ * every other error the host throws collapses to
+ * `FfiWscdError::Plugin`/`Callback` same as any other plugin's callback.
+ */
+public interface FfiAndroidKeystoreCallback {
+    
+    fun `generate`(`alias`: kotlin.String, `attestationChallenge`: kotlin.ByteArray?, `strongBox`: kotlin.Boolean, `userAuthenticationMethods`: List<kotlin.String>, `unlockedDeviceRequired`: kotlin.Boolean): FfiAndroidKeystoreSecurityLevel
+    
+    fun `certificateChain`(`alias`: kotlin.String): List<kotlin.ByteArray>
+    
+    /**
+     * `alias`'s public key as a JSON-encoded JWK.
+     */
+    fun `publicKeyJwk`(`alias`: kotlin.String): kotlin.String
+    
+    fun `securityLevel`(`alias`: kotlin.String): FfiAndroidKeystoreSecurityLevel
+    
+    fun `userAuthenticationMethods`(`alias`: kotlin.String): List<kotlin.String>
+    
+    fun `sign`(`alias`: kotlin.String, `data`: kotlin.ByteArray): kotlin.ByteArray
+    
+    fun `aliases`(): List<kotlin.String>
+    
+    fun `delete`(`alias`: kotlin.String)
+    
+    companion object
+}
+
+
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceFfiAndroidKeystoreCallback {
+    internal object `generate`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod0 {
+        override fun callback(`uniffiHandle`: Long,`alias`: RustBuffer.ByValue,`attestationChallenge`: RustBuffer.ByValue,`strongBox`: Byte,`userAuthenticationMethods`: RustBuffer.ByValue,`unlockedDeviceRequired`: Byte,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeFfiAndroidKeystoreCallback.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`generate`(
+                    FfiConverterString.lift(`alias`),
+                    FfiConverterOptionalByteArray.lift(`attestationChallenge`),
+                    FfiConverterBoolean.lift(`strongBox`),
+                    FfiConverterSequenceString.lift(`userAuthenticationMethods`),
+                    FfiConverterBoolean.lift(`unlockedDeviceRequired`),
+                )
+            }
+            val writeReturn = { value: FfiAndroidKeystoreSecurityLevel -> uniffiOutReturn.setValue(FfiConverterTypeFfiAndroidKeystoreSecurityLevel.lower(value)) }
+            uniffiTraitInterfaceCallWithError(
+                uniffiCallStatus,
+                makeCall,
+                writeReturn,
+                { e: FfiWscdException -> FfiConverterTypeFfiWscdError.lower(e) }
+            )
+        }
+    }
+    internal object `certificateChain`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod1 {
+        override fun callback(`uniffiHandle`: Long,`alias`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeFfiAndroidKeystoreCallback.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`certificateChain`(
+                    FfiConverterString.lift(`alias`),
+                )
+            }
+            val writeReturn = { value: List<kotlin.ByteArray> -> uniffiOutReturn.setValue(FfiConverterSequenceByteArray.lower(value)) }
+            uniffiTraitInterfaceCallWithError(
+                uniffiCallStatus,
+                makeCall,
+                writeReturn,
+                { e: FfiWscdException -> FfiConverterTypeFfiWscdError.lower(e) }
+            )
+        }
+    }
+    internal object `publicKeyJwk`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod2 {
+        override fun callback(`uniffiHandle`: Long,`alias`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeFfiAndroidKeystoreCallback.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`publicKeyJwk`(
+                    FfiConverterString.lift(`alias`),
+                )
+            }
+            val writeReturn = { value: kotlin.String -> uniffiOutReturn.setValue(FfiConverterString.lower(value)) }
+            uniffiTraitInterfaceCallWithError(
+                uniffiCallStatus,
+                makeCall,
+                writeReturn,
+                { e: FfiWscdException -> FfiConverterTypeFfiWscdError.lower(e) }
+            )
+        }
+    }
+    internal object `securityLevel`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod3 {
+        override fun callback(`uniffiHandle`: Long,`alias`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeFfiAndroidKeystoreCallback.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`securityLevel`(
+                    FfiConverterString.lift(`alias`),
+                )
+            }
+            val writeReturn = { value: FfiAndroidKeystoreSecurityLevel -> uniffiOutReturn.setValue(FfiConverterTypeFfiAndroidKeystoreSecurityLevel.lower(value)) }
+            uniffiTraitInterfaceCallWithError(
+                uniffiCallStatus,
+                makeCall,
+                writeReturn,
+                { e: FfiWscdException -> FfiConverterTypeFfiWscdError.lower(e) }
+            )
+        }
+    }
+    internal object `userAuthenticationMethods`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod4 {
+        override fun callback(`uniffiHandle`: Long,`alias`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeFfiAndroidKeystoreCallback.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`userAuthenticationMethods`(
+                    FfiConverterString.lift(`alias`),
+                )
+            }
+            val writeReturn = { value: List<kotlin.String> -> uniffiOutReturn.setValue(FfiConverterSequenceString.lower(value)) }
+            uniffiTraitInterfaceCallWithError(
+                uniffiCallStatus,
+                makeCall,
+                writeReturn,
+                { e: FfiWscdException -> FfiConverterTypeFfiWscdError.lower(e) }
+            )
+        }
+    }
+    internal object `sign`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod5 {
+        override fun callback(`uniffiHandle`: Long,`alias`: RustBuffer.ByValue,`data`: RustBuffer.ByValue,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeFfiAndroidKeystoreCallback.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`sign`(
+                    FfiConverterString.lift(`alias`),
+                    FfiConverterByteArray.lift(`data`),
+                )
+            }
+            val writeReturn = { value: kotlin.ByteArray -> uniffiOutReturn.setValue(FfiConverterByteArray.lower(value)) }
+            uniffiTraitInterfaceCallWithError(
+                uniffiCallStatus,
+                makeCall,
+                writeReturn,
+                { e: FfiWscdException -> FfiConverterTypeFfiWscdError.lower(e) }
+            )
+        }
+    }
+    internal object `aliases`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod6 {
+        override fun callback(`uniffiHandle`: Long,`uniffiOutReturn`: RustBuffer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeFfiAndroidKeystoreCallback.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`aliases`(
+                )
+            }
+            val writeReturn = { value: List<kotlin.String> -> uniffiOutReturn.setValue(FfiConverterSequenceString.lower(value)) }
+            uniffiTraitInterfaceCallWithError(
+                uniffiCallStatus,
+                makeCall,
+                writeReturn,
+                { e: FfiWscdException -> FfiConverterTypeFfiWscdError.lower(e) }
+            )
+        }
+    }
+    internal object `delete`: UniffiCallbackInterfaceFfiAndroidKeystoreCallbackMethod7 {
+        override fun callback(`uniffiHandle`: Long,`alias`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeFfiAndroidKeystoreCallback.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`delete`(
+                    FfiConverterString.lift(`alias`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCallWithError(
+                uniffiCallStatus,
+                makeCall,
+                writeReturn,
+                { e: FfiWscdException -> FfiConverterTypeFfiWscdError.lower(e) }
+            )
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypeFfiAndroidKeystoreCallback.handleMap.remove(handle)
+        }
+    }
+
+    internal object uniffiClone: UniffiCallbackInterfaceClone {
+        override fun callback(handle: Long): Long {
+            return FfiConverterTypeFfiAndroidKeystoreCallback.handleMap.clone(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfaceFfiAndroidKeystoreCallback.UniffiByValue(
+        uniffiFree,
+        uniffiClone,
+        `generate`,
+        `certificateChain`,
+        `publicKeyJwk`,
+        `securityLevel`,
+        `userAuthenticationMethods`,
+        `sign`,
+        `aliases`,
+        `delete`,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_siros_wscd_manager_fn_init_callback_vtable_ffiandroidkeystorecallback(vtable)
+    }
+}
+
+/**
+ * The ffiConverter which transforms the Callbacks in to handles to pass to Rust.
+ *
+ * @suppress
+ */
+public object FfiConverterTypeFfiAndroidKeystoreCallback: FfiConverterCallbackInterface<FfiAndroidKeystoreCallback>()
 
 
 
@@ -4884,6 +5644,38 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         } else {
             buf.put(1)
             FfiConverterString.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterOptionalByteArray: FfiConverterRustBuffer<kotlin.ByteArray?> {
+    override fun read(buf: ByteBuffer): kotlin.ByteArray? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterByteArray.read(buf)
+    }
+
+    override fun allocationSize(value: kotlin.ByteArray?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterByteArray.allocationSize(value)
+        }
+    }
+
+    override fun write(value: kotlin.ByteArray?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterByteArray.write(value, buf)
         }
     }
 }
