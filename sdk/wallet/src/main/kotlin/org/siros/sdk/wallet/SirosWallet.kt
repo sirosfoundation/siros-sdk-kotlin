@@ -2398,6 +2398,10 @@ class SirosWallet private constructor(
                     displayName = displayName,
                     credentials = emptyList(),
                 )
+                // Same reason as unlockKeystore's identical call: this path also lands directly in Ready, so without
+                // it the issuer catalog is never scheduled for a refresh here, and a stale persisted snapshot (or an
+                // empty one) can sit unrefreshed until something else happens to trigger a read.
+                issuerCatalog.refreshInBackground(issuerCatalogScopeKey())
                 Timber.i("Session resumed for user $userId (no private data)")
             }
         } catch (e: SirosException) {

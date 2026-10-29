@@ -88,6 +88,45 @@ class WalletViewModelTest {
         assertEquals(offers, viewModel.availableCredentials.value)
     }
 
+    /**
+     * Review of #298: rebuildWalletIfNeeded() (called by login()/register() when the current wallet is
+     * Disconnected/Error) replaces `wallet` with a brand new instance. Before this fix it never cancelled
+     * offersJob or closed the add-credential chooser - a collector opened by openAddCredential() against the OLD
+     * wallet's availableCredentials StateFlow kept running, silently bound to a destroyed wallet that can never
+     * emit again, so neither its background refresh nor a user Retry would ever reach the screen. The chooser
+     * must be closed on rebuild instead, so a later open rebinds to the NEW wallet's own flow.
+     */
+    @Test
+    @Ignore("Requires native WSCD library — run as instrumented test on device")
+    fun login_afterLogoutWithChooserOpen_closesTheStaleChooserInsteadOfLeavingItBoundToTheOldWallet() = runTest(dispatcher) {
+        val oldWallet = mockWallet(state = MutableStateFlow(WalletState.Disconnected()))
+        val offers = listOf(
+            CredentialOffer(
+                credentialConfigurationId = "pid",
+                credentialIssuerIdentifier = "https://issuer.example.com",
+                credentialName = "PID",
+                issuerName = "Issuer",
+            )
+        )
+        coEvery { oldWallet.getAvailableCredentials() } returns offers
+        val newWallet = mockWallet()
+        every { SirosWallet.create(any(), any()) } returnsMany listOf(oldWallet, newWallet)
+        val viewModel = WalletViewModel(mockk<Activity>(relaxed = true))
+
+        viewModel.openAddCredential()
+        advanceUntilIdle()
+        assertTrue(viewModel.showAddCredential.value)
+
+        // The wallet is Disconnected (set above): login() calls rebuildWalletIfNeeded(), which replaces it.
+        viewModel.login()
+        advanceUntilIdle()
+
+        assertFalse(
+            "the stale chooser (and its collector bound to the destroyed wallet) must be closed, not left running",
+            viewModel.showAddCredential.value,
+        )
+    }
+
     @Test
     @Ignore("Requires native WSCD library — run as instrumented test on device")
     fun wallet_uses_stable_default_backend_and_tenant() {

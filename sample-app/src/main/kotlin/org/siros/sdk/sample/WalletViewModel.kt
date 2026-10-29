@@ -2704,6 +2704,12 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
         val currentState = current.state.value
         if (currentState is WalletState.Disconnected || currentState is WalletState.Error) {
             current.destroy()
+            // Review of #298: the add-credential chooser's offersJob (see openAddCredential) collects the OLD
+            // wallet's availableCredentials StateFlow by reference - left running, it would silently go on
+            // watching a destroyed wallet that can never emit again, so neither its background refresh nor a
+            // user-triggered Retry would ever reach the screen. closeAddCredential() also resets the chooser's
+            // own visible state, which a stale snapshot from the previous account would otherwise leave showing.
+            closeAddCredential()
             wallet = SirosWallet.create(
                 activity,
                 buildWalletConfig(),

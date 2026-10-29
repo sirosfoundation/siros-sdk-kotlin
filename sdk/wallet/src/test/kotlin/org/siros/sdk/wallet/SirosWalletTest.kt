@@ -2343,6 +2343,44 @@ class SirosWalletTest {
     }
 
     /**
+     * Review of #298: [SirosWallet.unlockKeystore] schedules an issuer-catalog refresh once it reaches `Ready`, but
+     * [SirosWallet.resumeSession] can ALSO land directly in `Ready` itself - the "no stored private data" branch,
+     * which never calls `unlockKeystore` at all. Without its own refresh call, a stale (or still-empty) persisted
+     * catalog snapshot would sit unrefreshed until something else happened to read it.
+     */
+    @Test
+    fun resumeSession_withNoStoredPrivateData_stillSchedulesACatalogRefresh() = runTest(dispatcher) {
+        mockEngineConstructor()
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        every { sessionStore.userId } returns "user-1"
+        every { sessionStore.displayName } returns "Alice"
+        every { sessionStore.privateDataJwe } returns null
+        every { sessionStore.hkdfSalt } returns null
+        every { sessionStore.hkdfInfo } returns null
+        val accountRegistry = mockk<AccountRegistry>(relaxed = true)
+        every { accountRegistry.activeAccountId } returns "default:user-1"
+        val issuerCatalog = mockk<IssuerCatalog>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Disconnected())
+        val wallet = newWallet(
+            "_state" to stateFlow,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "accountRegistry" to accountRegistry,
+            "sessionStore" to sessionStore,
+            "authTokens" to mockk<AuthTokens>(relaxed = true),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+            "httpClient" to OkHttpClient(),
+            "issuerCatalog" to issuerCatalog,
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+
+        wallet.resumeSession()
+        advanceUntilIdle()
+
+        assertTrue(stateFlow.value is WalletState.Ready)
+        verify(exactly = 1) { issuerCatalog.refreshInBackground(any()) }
+    }
+
+    /**
      * `activeOffer` (used to build display metadata for a stored credential -
      * see [CredentialUtils.buildMetadata]/[CredentialUtils.buildMdocMetadata])
      * was previously only ever populated by [SirosWallet.startIssuanceByOffer].
