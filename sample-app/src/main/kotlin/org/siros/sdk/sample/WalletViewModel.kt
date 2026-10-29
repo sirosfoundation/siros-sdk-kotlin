@@ -2593,6 +2593,17 @@ class WalletViewModel(private val activity: Activity) : ViewModel() {
 
     fun handleQrResult(uri: String) {
         closeActivate()
+        // "Scan QR code" is now reachable from the Add Credential chooser
+        // (see AddCredentialScreen's onScanQr), not just from Home - so a
+        // flow actually starting here must leave Add Credential entirely,
+        // the same way startIDV() above clears _showAddCredential for the
+        // sibling "Scan passport" option. Without this, _showAddCredential
+        // stays true for the rest of the flow, and MainActivity's top-level
+        // `when` checks `showAddCredential` before it ever reaches the
+        // WalletState.FlowActive branch that would otherwise show
+        // FlowActiveView - the chooser screen is drawn forever over a flow
+        // that's silently progressing underneath it.
+        _showAddCredential.value = false
         lastFlowRetry = { handleQrResult(uri) }
 
         // Classification is pure/synchronous (see DeepLinkClassifier.kt), so it's

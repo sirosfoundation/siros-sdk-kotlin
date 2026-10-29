@@ -35,6 +35,11 @@
     <string name="add_credential_row_action_add">Lisää</string>
     <string name="add_credential_row_action_close">Sulje</string>
     <string name="nav_back">Takaisin</string>
+    <string name="add_credential_option_scan_qr_title">Skannaa QR-koodi</string>
+    <string name="add_credential_option_scan_qr_subtitle">Skannaa myöntäjän QR-koodi</string>
+    <string name="add_credential_option_all_title">Kaikki tunnetut todistukset</string>
+    <string name="add_credential_option_all_subtitle">Selaa kaikkia myöntäjiesi tarjoamia todistuksia</string>
+    <string name="add_credential_all_back">Takaisin todistuksen lisäysvaihtoehtoihin</string>
     <string name="credential_capability_online">Voidaan esittää verkossa</string>
     <string name="credential_capability_proximity">Voidaan esittää kasvokkain koskettamalla puhelinta</string>
     <string name="credential_capability_zkp">Voi todistaa henkilöllisyytesi paljastamatta kaikkia tietojasi</string>
