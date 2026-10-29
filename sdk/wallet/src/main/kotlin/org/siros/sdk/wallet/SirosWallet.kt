@@ -3403,6 +3403,13 @@ class SirosWallet private constructor(
             } else {
                 val keyId = generateInstanceKey()
                 if (sessionStore.activeAccountId != account) {
+                    // Same discipline as rotateInstanceKey's analogous check: the unused key and any pending evidence
+                    // it registered are discarded, not left behind - otherwise an account switch racing first-use
+                    // generation (challenge fetch, hardware key generation) can repeat on every interrupted attempt
+                    // and accumulate orphaned keys in finite hardware storage. runCatching because the keystore may
+                    // already be locked (a logout can race this too), in which case there is nothing more to clean up.
+                    if (pendingInstanceKeyEvidence?.keyId == keyId) pendingInstanceKeyEvidence = null
+                    runCatching { keystore.deleteKey(keyId) }
                     throw WalletException("Account changed while generating the wallet instance key")
                 }
                 sessionStore.instanceKeyId = keyId
@@ -3500,8 +3507,25 @@ class SirosWallet private constructor(
         }
     }
 
-    /** Instance-key evidence whose key was generated for [challenge] and has not been used for a WIA yet. */
-    private class PendingInstanceKeyEvidence(val keyId: String, val challenge: String, val createdAtMillis: Long)
+    /**
+     * Instance-key evidence whose key was generated for [challenge] and has not been used for a WIA yet.
+     *
+     * @param fetchedAtMillis When the challenge was FETCHED (before hardware key generation, which can take seconds
+     *   for StrongBox plus attestation) - the fallback staleness clock when [serverExpiresAtMillis] is unavailable.
+     *   Starting the clock only after key generation finishes would undercount a challenge's true age by however
+     *   long generation took, letting an already-expired challenge pass the local freshness check.
+     * @param serverExpiresAtMillis The backend's own `expires_at` for the challenge (epoch seconds, converted to
+     *   millis), when it sent one - authoritative over [fetchedAtMillis]'s local heuristic.
+     */
+    private class PendingInstanceKeyEvidence(
+        val keyId: String,
+        val challenge: String,
+        val fetchedAtMillis: Long,
+        val serverExpiresAtMillis: Long?,
+    ) {
+        /** True once the server's own expiry has passed, or (without one) the local fallback window has. */
+        fun isStale(now: Long): Boolean = now >= (serverExpiresAtMillis ?: (fetchedAtMillis + INSTANCE_KEY_CHALLENGE_FRESH_MS))
+    }
 
     @Volatile
     private var pendingInstanceKeyEvidence: PendingInstanceKeyEvidence? = null
@@ -3521,10 +3545,14 @@ class SirosWallet private constructor(
     private suspend fun generateInstanceKey(): String {
         if (keystore.supportsAttestedKeyGeneration && (evidenceBlockedAt == null || evidenceBlockedAt != deviceStateFingerprint())) {
             try {
-                val c = apiClient?.requestWIAChallenge()?.get("challenge")?.jsonPrimitive?.contentOrNull
+                val challengeResponse = apiClient?.requestWIAChallenge()
+                val c = challengeResponse?.get("challenge")?.jsonPrimitive?.contentOrNull
                 if (c != null) {
+                    // Captured here, before hardware key generation - see PendingInstanceKeyEvidence's doc comment.
+                    val fetchedAt = instanceKeyClock()
+                    val serverExpiresAt = challengeResponse["expires_at"]?.jsonPrimitive?.longOrNull?.let { it * 1000 }
                     val keyId = keystore.generateAttestedKey("ES256", InstanceKeyEvidence.challengeHash(c))
-                    pendingInstanceKeyEvidence = PendingInstanceKeyEvidence(keyId, c, instanceKeyClock())
+                    pendingInstanceKeyEvidence = PendingInstanceKeyEvidence(keyId, c, fetchedAt, serverExpiresAt)
                     keystore.markInstanceKey(keyId)
                     return keyId
                 }
@@ -3674,7 +3702,7 @@ class SirosWallet private constructor(
     private suspend fun obtainWia(client: BackendApiClient, keyId: String, pending: PendingInstanceKeyEvidence?, account: String?, generation: Int, budget: RotationBudget): String {
         var key = keyId
         var evidence = pending
-        if (evidence != null && instanceKeyClock() - evidence.createdAtMillis > INSTANCE_KEY_CHALLENGE_FRESH_MS) {
+        if (evidence != null && evidence.isStale(instanceKeyClock())) {
             // The challenge is single use and short lived: do not spend it, replace the key.
             if (!budget.spend()) throw WalletException("The instance key challenge went stale and no replacement is left in this attempt")
             Timber.w("The instance key challenge went stale before use; replacing the key")

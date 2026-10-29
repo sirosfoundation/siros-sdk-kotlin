@@ -225,6 +225,53 @@ class InstanceKeyEvidenceFlowTest {
         assertEquals("attested-2", r.stored())
     }
 
+    /**
+     * Review of #312: the local "is this challenge still fresh" heuristic used to start its clock only AFTER
+     * hardware key generation finished, undercounting a slow StrongBox/attestation generation as elapsed time.
+     * A challenge fetched long enough ago to go stale DURING generation must still be treated as stale at use,
+     * not reused just because no further time passed between generation finishing and the WIA request.
+     */
+    @Test
+    fun aSlowHardwareKeyGenerationCountsTowardTheChallengesAgeNotJustTheTimeAfterItFinishes() {
+        val r = rig()
+        var n = 0
+        coEvery { r.keystore.generateAttestedKey(any(), any()) } answers {
+            // Generation itself (StrongBox + attestation) takes long enough alone to exceed the freshness window,
+            // even though no further time passes before the WIA is requested right after this call returns.
+            r.clock[0] += 10 * 60 * 1000
+            "attested-${++n}"
+        }
+        coEvery { r.api.generateWIA(pop = any(), challenge = "C-2", clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } returns jwt()
+        assertNotNull(obtain(r.wallet))
+        coVerify(exactly = 0) { r.api.generateWIA(pop = any(), challenge = "C-1", clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) }
+        assertEquals("attested-2", r.stored())
+    }
+
+    /**
+     * Review of #312: the local freshness heuristic alone would call the first challenge fresh (no local time
+     * passes before it is used) - but the backend's own `expires_at` for it had already passed as of the fetch
+     * itself. The server's own expiry must be honored even when the local heuristic disagrees.
+     */
+    @Test
+    fun theServersExpiresAtIsHonoredEvenWhenTheLocalHeuristicWouldStillCallItFresh() {
+        val r = rig()
+        var n = 0
+        coEvery { r.api.requestWIAChallenge() } answers {
+            buildJsonObject {
+                put("challenge", JsonPrimitive(if (n == 0) "C-1" else "C-2"))
+                if (n == 0) put("expires_at", JsonPrimitive(r.clock[0] / 1000)) // already expired as of the fetch itself
+                n++
+            }
+        }
+        // If the stale server expiry is missed, C-1 is spent directly and the (unmocked-for-C-1) backend rejects it outright.
+        coEvery { r.api.generateWIA(pop = any(), challenge = "C-1", clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } throws
+            BackendApiException(400, "rejected", """{"error":"SOME_OTHER_ERROR"}""")
+        coEvery { r.api.generateWIA(pop = any(), challenge = "C-2", clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) } returns jwt()
+        assertNotNull(obtain(r.wallet))
+        coVerify(exactly = 0) { r.api.generateWIA(pop = any(), challenge = "C-1", clientId = any(), nativeAttestation = any(), credentialId = any(), keyAttestation = any()) }
+        assertEquals("attested-2", r.stored())
+    }
+
     @Test
     fun evidenceIsBuiltOnlyFromAnAndroidChainWithinTheBackendsBounds() {
         assertNotNull(InstanceKeyEvidence.androidKey(chain1))
@@ -282,6 +329,25 @@ class InstanceKeyEvidenceFlowTest {
         assertEquals("B's key is untouched", "B-key", r.stored())
         coVerify(exactly = 0) { r.keystore.deleteKey(any()) }
         coVerify(exactly = 1) { r.keystore.generateAttestedKey(any(), any()) } // only A's original key
+    }
+
+    /**
+     * Review of #312: an account switch racing FIRST-USE key generation (the challenge fetch, then hardware
+     * generation itself) must discard the orphaned key AND its now-unreferenceable pending evidence, the same
+     * discipline rotateInstanceKey already applies to a switch racing a REPLACEMENT. Without it, a switch at exactly
+     * this point used to just throw and leave both behind - repeated interrupted attempts could accumulate orphaned
+     * keys in finite hardware storage.
+     */
+    @Test
+    fun anAccountSwitchDuringFirstUseGenerationDiscardsTheOrphanedKeyAndItsPendingEvidence() {
+        val r = rig()
+        coEvery { r.keystore.generateAttestedKey(any(), any()) } answers {
+            // The account switches while THIS call (challenge already fetched, hardware generation in progress) is live.
+            r.setAccount("acct-B")
+            "attested-1"
+        }
+        assertNull("WIA acquisition is best-effort; the account-switch failure is swallowed, not thrown out", obtain(r.wallet))
+        coVerify(exactly = 1) { r.keystore.deleteKey("attested-1") }
     }
 
     @Test
