@@ -6,10 +6,10 @@
 # It is an alternative to zk-cred-longfellow (ISRG's Rust Longfellow) for the SDK's
 # `longfellow-nymauth` system; the SDK chooses per system (NymAuthBinding).
 #
-# nym-longfellow is taken by path from a readdit-demo checkout NEXT TO this repository
-# (../readdit-demo from the siros-sdk-kotlin root: AltmannPeter/readdit-demo, main or launchpad-perf from
-# commit 50c47ac on, which adds Circuits::from_pair and Layout::parse). To be replaced by a git or
-# vendored dependency before this leaves draft.
+# nym-longfellow is a git dependency on AltmannPeter/readdit-demo, pinned to commit 50c47ac98e37f6
+# (merged to its main: adds Circuits::from_pair and Layout::parse, no behaviour change otherwise).
+# That repo's cargo workspace root is native/longfellow/ (not the repo root); Cargo resolves the
+# nym-longfellow package from within the cloned tree regardless. Bump the rev when the build changes.
 [package]
 name = "nymauth-native"
 version = "0.1.0"
@@ -36,7 +36,7 @@ counting-alloc = []
 bindgen = ["uniffi/cli"]
 
 [dependencies]
-nym-longfellow = { path = "../../../readdit-demo/native/longfellow/nym-longfellow", optional = true }
+nym-longfellow = { git = "https://github.com/AltmannPeter/readdit-demo", rev = "50c47ac98e37f65003a71e75059fd49ce6f91916", optional = true }
 uniffi = "0.29"
 thiserror = "2"
 p256 = { version = "0.13", features = ["ecdsa"] }
