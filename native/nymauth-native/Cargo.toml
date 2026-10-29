@@ -10,11 +10,15 @@
 # crate on sirosfoundation/bbs-cd-plugins (vendored in readdit-demo, unchanged), with the device key's
 # ecdsa-pop signature made by the caller (a StrongBox key) through `Prover::prove_with`.
 #
-# nym-longfellow and nym-bbs are taken by path from a readdit-demo checkout NEXT TO this repository
-# (../readdit-demo from the siros-sdk-kotlin root: AltmannPeter/readdit-demo, main from commit 50c47ac on,
-# which adds Circuits::from_pair and Layout::parse, with commit 0250f90, branch feat/bbs-prove-with-signer,
-# which adds nym-bbs's Prover::prove_with). To be replaced by a git or vendored dependency before this
-# leaves draft.
+# nym-longfellow and nym-bbs/cd-ecdsa-pop/bbs-cd-plugin are git dependencies on AltmannPeter/readdit-demo.
+# nym-longfellow is pinned to commit 50c47ac98e37f6 (merged to its main: adds Circuits::from_pair and
+# Layout::parse, no behaviour change otherwise) - the same commit siros-sdk-kotlin#322 pins.
+#
+# nym-bbs/cd-ecdsa-pop/bbs-cd-plugin are pinned to commit 0250f907ec3264 on branch
+# feat/bbs-prove-with-signer (adds nym-bbs's Prover::prove_with), which is NOT YET MERGED to that
+# repo's main - the branch could be force-pushed or deleted without notice, which would break this
+# pin with no warning until the next build. Re-pin to the equivalent main commit once that branch
+# merges upstream; tracked at sirosfoundation/siros-sdk-kotlin#365.
 [package]
 name = "nymauth-native"
 version = "0.2.0"
@@ -42,11 +46,12 @@ counting-alloc = []
 bindgen = ["uniffi/cli"]
 
 [dependencies]
-nym-longfellow = { path = "../../../readdit-demo/native/longfellow/nym-longfellow", optional = true }
-nym-bbs = { path = "../../../readdit-demo/native/bbs/nym-bbs", optional = true }
+nym-longfellow = { git = "https://github.com/AltmannPeter/readdit-demo", rev = "50c47ac98e37f65003a71e75059fd49ce6f91916", optional = true }
+# Pinned to feat/bbs-prove-with-signer's tip, not yet merged upstream - see the file header and #365.
+nym-bbs = { git = "https://github.com/AltmannPeter/readdit-demo", rev = "0250f907ec3264cb876da9c909362e553ea77093", optional = true }
 # The plugin crates nym-bbs is built on (its vendored bbs-cd-plugins, the same paths and features), for the device signer.
-cd-ecdsa-pop = { path = "../../../readdit-demo/native/bbs/vendor/bbs-cd-plugins/crates/cd-ecdsa-pop", features = ["parallel"], optional = true }
-bbs-cd-plugin = { path = "../../../readdit-demo/native/bbs/vendor/bbs-cd-plugins/crates/bbs-cd-plugin", features = ["parallel"], optional = true }
+cd-ecdsa-pop = { git = "https://github.com/AltmannPeter/readdit-demo", rev = "0250f907ec3264cb876da9c909362e553ea77093", features = ["parallel"], optional = true }
+bbs-cd-plugin = { git = "https://github.com/AltmannPeter/readdit-demo", rev = "0250f907ec3264cb876da9c909362e553ea77093", features = ["parallel"], optional = true }
 serde_json = { version = "1", optional = true }
 uniffi = "0.29"
 thiserror = "2"

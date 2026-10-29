@@ -240,6 +240,7 @@ dependencies = [
 [[package]]
 name = "bbs-cd"
 version = "0.1.0"
+source = "git+https://github.com/AltmannPeter/readdit-demo?rev=0250f907ec3264cb876da9c909362e553ea77093#0250f907ec3264cb876da9c909362e553ea77093"
 dependencies = [
  "bls12_381",
  "getrandom 0.4.3",
@@ -252,6 +253,7 @@ dependencies = [
 [[package]]
 name = "bbs-cd-plugin"
 version = "0.1.0"
+source = "git+https://github.com/AltmannPeter/readdit-demo?rev=0250f907ec3264cb876da9c909362e553ea77093#0250f907ec3264cb876da9c909362e553ea77093"
 dependencies = [
  "bbs-cd",
  "bls12_381",
@@ -344,6 +346,7 @@ dependencies = [
 [[package]]
 name = "cd-date-range"
 version = "0.1.0"
+source = "git+https://github.com/AltmannPeter/readdit-demo?rev=0250f907ec3264cb876da9c909362e553ea77093#0250f907ec3264cb876da9c909362e553ea77093"
 dependencies = [
  "bbs-cd",
  "bbs-cd-plugin",
@@ -354,6 +357,7 @@ dependencies = [
 [[package]]
 name = "cd-ecdsa-pop"
 version = "0.1.0"
+source = "git+https://github.com/AltmannPeter/readdit-demo?rev=0250f907ec3264cb876da9c909362e553ea77093#0250f907ec3264cb876da9c909362e553ea77093"
 dependencies = [
  "ark-ff",
  "bbs-cd",
@@ -372,6 +376,7 @@ dependencies = [
 [[package]]
 name = "cd-pseudonym"
 version = "0.1.0"
+source = "git+https://github.com/AltmannPeter/readdit-demo?rev=0250f907ec3264cb876da9c909362e553ea77093#0250f907ec3264cb876da9c909362e553ea77093"
 dependencies = [
  "bbs-cd",
  "bbs-cd-plugin",
@@ -382,6 +387,7 @@ dependencies = [
 [[package]]
 name = "cd-tom256"
 version = "0.1.0"
+source = "git+https://github.com/AltmannPeter/readdit-demo?rev=0250f907ec3264cb876da9c909362e553ea77093#0250f907ec3264cb876da9c909362e553ea77093"
 dependencies = [
  "ark-ec",
  "ark-ff",
@@ -480,6 +486,7 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 [[package]]
 name = "compile-algebra"
 version = "0.1.0"
+source = "git+https://github.com/AltmannPeter/readdit-demo?rev=50c47ac98e37f65003a71e75059fd49ce6f91916#50c47ac98e37f65003a71e75059fd49ce6f91916"
 dependencies = [
  "core-algebra",
  "num-bigint",
@@ -495,10 +502,12 @@ checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
 [[package]]
 name = "core-algebra"
 version = "0.1.0"
+source = "git+https://github.com/AltmannPeter/readdit-demo?rev=50c47ac98e37f65003a71e75059fd49ce6f91916#50c47ac98e37f65003a71e75059fd49ce6f91916"
 
 [[package]]
 name = "core-proto"
 version = "0.1.0"
+source = "git+https://github.com/AltmannPeter/readdit-demo?rev=50c47ac98e37f65003a71e75059fd49ce6f91916#50c47ac98e37f65003a71e75059fd49ce6f91916"
 dependencies = [
  "compile-algebra",
  "core-algebra",
@@ -1012,6 +1021,7 @@ dependencies = [
 [[package]]
 name = "nym-bbs"
 version = "0.1.0"
+source = "git+https://github.com/AltmannPeter/readdit-demo?rev=0250f907ec3264cb876da9c909362e553ea77093#0250f907ec3264cb876da9c909362e553ea77093"
 dependencies = [
  "base64",
  "bbs-cd",
@@ -1032,6 +1042,7 @@ dependencies = [
 [[package]]
 name = "nym-longfellow"
 version = "0.1.0"
+source = "git+https://github.com/AltmannPeter/readdit-demo?rev=50c47ac98e37f65003a71e75059fd49ce6f91916#50c47ac98e37f65003a71e75059fd49ce6f91916"
 dependencies = [
  "base64",
  "ciborium",
@@ -1264,6 +1275,7 @@ dependencies = [
 [[package]]
 name = "runtime-algebra"
 version = "0.1.0"
+source = "git+https://github.com/AltmannPeter/readdit-demo?rev=50c47ac98e37f65003a71e75059fd49ce6f91916#50c47ac98e37f65003a71e75059fd49ce6f91916"
 dependencies = [
  "core-algebra",
 ]
@@ -1271,6 +1283,7 @@ dependencies = [
 [[package]]
 name = "runtime-ligero"
 version = "0.1.0"
+source = "git+https://github.com/AltmannPeter/readdit-demo?rev=50c47ac98e37f65003a71e75059fd49ce6f91916#50c47ac98e37f65003a71e75059fd49ce6f91916"
 dependencies = [
  "core-algebra",
  "runtime-algebra",
@@ -1284,6 +1297,7 @@ dependencies = [
 [[package]]
 name = "runtime-merkle"
 version = "0.1.0"
+source = "git+https://github.com/AltmannPeter/readdit-demo?rev=50c47ac98e37f65003a71e75059fd49ce6f91916#50c47ac98e37f65003a71e75059fd49ce6f91916"
 dependencies = [
  "runtime-proto",
  "runtime-random",
@@ -1293,6 +1307,7 @@ dependencies = [
 [[package]]
 name = "runtime-proto"
 version = "0.1.0"
+source = "git+https://github.com/AltmannPeter/readdit-demo?rev=50c47ac98e37f65003a71e75059fd49ce6f91916#50c47ac98e37f65003a71e75059fd49ce6f91916"
 dependencies = [
  "core-algebra",
  "core-proto",
@@ -1303,6 +1318,7 @@ dependencies = [
 [[package]]
 name = "runtime-random"
 version = "0.1.0"
+source = "git+https://github.com/AltmannPeter/readdit-demo?rev=50c47ac98e37f65003a71e75059fd49ce6f91916#50c47ac98e37f65003a71e75059fd49ce6f91916"
 dependencies = [
  "aes",
  "core-algebra",
@@ -1314,6 +1330,7 @@ dependencies = [
 [[package]]
 name = "runtime-sumcheck"
 version = "0.1.0"
+source = "git+https://github.com/AltmannPeter/readdit-demo?rev=50c47ac98e37f65003a71e75059fd49ce6f91916#50c47ac98e37f65003a71e75059fd49ce6f91916"
 dependencies = [
  "core-algebra",
  "core-proto",
@@ -1325,6 +1342,7 @@ dependencies = [
 [[package]]
 name = "runtime-zk"
 version = "0.1.0"
+source = "git+https://github.com/AltmannPeter/readdit-demo?rev=50c47ac98e37f65003a71e75059fd49ce6f91916#50c47ac98e37f65003a71e75059fd49ce6f91916"
 dependencies = [
  "core-algebra",
  "core-proto",
@@ -1343,9 +1361,9 @@ checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
 
 [[package]]
 name = "rustix"
-version = "1.1.5"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags",
  "errno",
@@ -1667,9 +1685,9 @@ checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 
 [[package]]
 name = "unicode-width"
-version = "0.2.2"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
+checksum = "ca718471876992059f251e33aafc334346ada08042b7661dd1fe313a9bced557"
 
 [[package]]
 name = "uniffi"
@@ -1795,6 +1813,7 @@ dependencies = [
 [[package]]
 name = "util"
 version = "0.1.0"
+source = "git+https://github.com/AltmannPeter/readdit-demo?rev=50c47ac98e37f65003a71e75059fd49ce6f91916#50c47ac98e37f65003a71e75059fd49ce6f91916"
 dependencies = [
  "rustc-hash",
 ]
