@@ -124,28 +124,6 @@ enum class WalletLifecycleRefusal(val errorCode: String) {
     }
 }
 
-/**
- * Result of deactivating the wallet (`POST
- * /user/session/instances/revoke-all`) or revoking its last instance.
- *
- * The backend records the revocation before it erases the data, so a call can
- * legitimately end with the instances revoked and the erasure unfinished
- * ([complete] false, after `409 ERASURE_INCOMPLETE` survived the client's
- * retry budget). The wallet is deactivated either way - an administrator
- * finishes the cascade by re-sending the same status through the admin API -
- * so a caller should forget its local account in both cases and use
- * [complete] only to decide what to tell the user.
- */
-data class DeactivationOutcome(
-    /** How many instances this call revoked. A repeated (retry) call answers 0. */
-    val revoked: Int,
-    /** True when the backend confirmed the erasure with a `200`. */
-    val complete: Boolean,
-)
-
-/** Backend error code for a `409` whose status change stands but whose erasure must be retried. */
-const val ERROR_ERASURE_INCOMPLETE: String = "ERASURE_INCOMPLETE"
-
 /** Backend error code for a `credential_id` that is not one of the caller's own passkeys. */
 const val ERROR_CREDENTIAL_NOT_OWNED: String = "CREDENTIAL_NOT_OWNED"
 
@@ -153,7 +131,7 @@ private val errorJson = Json { ignoreUnknownKeys = true }
 
 /**
  * The backend's stable `error` code from this exception's JSON body (e.g.
- * `ERASURE_INCOMPLETE`, `CREDENTIAL_NOT_OWNED`), or null when the body is
+ * `STEP_UP_FAILED`, `CREDENTIAL_NOT_OWNED`), or null when the body is
  * absent, not JSON, or carries no `error` field. Lets callers branch on the
  * protocol's error codes without each re-parsing the body.
  */

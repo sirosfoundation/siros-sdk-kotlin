@@ -129,6 +129,9 @@ class WscdKeystoreAdapter private constructor(
     override fun exportFido2State(): ByteArray =
         requireWscdManager().exportFido2State()
 
+    override suspend fun describeFido2Authenticator(): Fido2AuthenticatorInfo =
+        requireWscdManager().describeFido2Authenticator()
+
     /**
      * The persisted (privatedata-synced) copy of every hardware-backed WSCD
      * plugin's key metadata - see [JweKeystore.exportWscdCredentials]'s doc
@@ -625,6 +628,23 @@ class WscdKeystoreAdapter private constructor(
         return credentialsKeystore.exportEncryptedContainer()
     }
 
+    override suspend fun preparePrfKey(
+        credentialId: ByteArray,
+        prfOutput: ByteArray,
+        prfSalt: ByteArray,
+        hkdfSalt: ByteArray,
+        hkdfInfo: ByteArray,
+    ): PreparedPrfKey {
+        // Fold the signer's keys in first, as exportEncryptedContainer does, so
+        // the container this returns is as complete as the one it replaces.
+        for (kp in signer.exportPrivateKeypairs()) {
+            credentialsKeystore.importKeypairJwk(kp.keyId, kp.privateJwk)
+        }
+        return credentialsKeystore.preparePrfKey(credentialId, prfOutput, prfSalt, hkdfSalt, hkdfInfo)
+    }
+
+    override suspend fun commitPrfKey(prepared: PreparedPrfKey) = credentialsKeystore.commitPrfKey(prepared)
+
     override fun listKeys(): List<KeyInfo> {
         return runBlocking {
             signer.listKeys().map { KeyInfo(it.keyId, it.algorithm, 0L) }
@@ -688,6 +708,10 @@ class WscdKeystoreAdapter private constructor(
 
     override suspend fun clearCredentials() {
         credentialsKeystore.clearCredentials()
+    }
+
+    override suspend fun resetLocalKeys() {
+        signer.resetLocalKeys()
     }
 
     // ── Presentation-history storage (delegated to credentialsKeystore) ─

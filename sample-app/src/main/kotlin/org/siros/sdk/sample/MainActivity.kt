@@ -152,6 +152,9 @@ class MainActivity : ComponentActivity() {
                     viewModel = viewModel(factory = vmFactory)
                     LaunchedEffect(Unit) {
                         dispatchIncomingUri(intent?.data)
+                        // The launching intent is handled once: an activity re-created later (a configuration change, a return from the
+                        // browser) would otherwise deliver the same deep link again from getIntent().
+                        setIntent(android.content.Intent(intent).apply { data = null })
                         pendingWscaIntent?.let {
                             dispatchWscaTestAction(it)
                             pendingWscaIntent = null
@@ -244,6 +247,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
     val pendingPinEntry by viewModel.pendingPinEntry.collectAsState()
     val pendingTransportChoice by viewModel.pendingTransportChoice.collectAsState()
     val fido2AwaitingPresentation by viewModel.fido2AwaitingPresentation.collectAsState()
+    val fido2EnrolmentDiscovering by viewModel.fido2EnrolmentDiscovering.collectAsState()
     val fido2TransportMode by viewModel.fido2TransportMode.collectAsState()
     val pendingAutoEnrollOffer by viewModel.pendingAutoEnrollOffer.collectAsState()
     val presentationHistory by viewModel.presentationHistory.collectAsState()
@@ -333,6 +337,16 @@ fun WalletScreen(viewModel: WalletViewModel) {
     if (fido2AwaitingPresentation) {
         Fido2PresentKeyGuide(
             mode = fido2TransportMode,
+            onCancel = viewModel::cancelWscdLifecycleOp,
+        )
+    }
+
+    // Enrolment's first tap: the SDK is describing the key, before any PIN dialog (or, for a key without a PIN, before the
+    // ceremony itself) takes over - see WalletViewModel.fido2EnrolmentDiscovering's doc comment.
+    if (fido2EnrolmentDiscovering) {
+        Fido2PresentKeyGuide(
+            mode = fido2TransportMode,
+            discovering = true,
             onCancel = viewModel::cancelWscdLifecycleOp,
         )
     }
@@ -490,14 +504,9 @@ fun WalletScreen(viewModel: WalletViewModel) {
             showDevices -> DevicesScreen(
                 instances = viewModel.walletInstances.collectAsState().value,
                 loading = viewModel.devicesLoading.collectAsState().value,
-                busyInstanceId = viewModel.devicesBusyInstanceId.collectAsState().value,
-                deactivating = viewModel.deactivating.collectAsState().value,
-                deactivationOutcome = viewModel.deactivationOutcome.collectAsState().value,
                 errorMessage = viewModel.devicesError.collectAsState().value,
                 onBack = viewModel::closeDevices,
                 onRefresh = viewModel::refreshDevices,
-                onSetStatus = viewModel::setWalletInstanceStatus,
-                onDeactivateWallet = viewModel::deactivateWallet,
             )
 
             // Consolidated WSCD settings sub-screen (one tab per plugin -
@@ -601,6 +610,13 @@ fun WalletScreen(viewModel: WalletViewModel) {
                         onConfirmIssuance = viewModel::confirmIssuance,
                         onCancelIssuance = viewModel::cancelIssuance,
                         onStartIDV = viewModel::openIDVPreparation,
+                        // Same QR-scanning entry point Home's "Activate" ball
+                        // uses (see WalletViewModel.openActivate/ActivateMode's
+                        // doc comment) - promoted here to a peer top-level
+                        // option alongside Scan Passport, stacked over this
+                        // screen exactly like IDV above rather than
+                        // duplicating any scanning logic.
+                        onScanQr = viewModel::openActivate,
                         onRetry = viewModel::openAddCredential,
                         modifier = Modifier.padding(padding),
                     )
@@ -682,6 +698,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             zkCircuitUrls = viewModel.zkCircuitUrls.collectAsState().value,
                             presentationCount = presentationHistory.size,
                             onDisconnect = viewModel::disconnect,
+                            deletingAccount = viewModel.deletingAccount.collectAsState().value,
                             onDeleteAccount = viewModel::deleteAccount,
                             onShowHistory = viewModel::openHistory,
                             onShowWscdSettings = viewModel::openWscaDeveloper,
@@ -689,6 +706,8 @@ fun WalletScreen(viewModel: WalletViewModel) {
                             onForgetAccount = viewModel::forgetAccount,
                             passkeys = viewModel.listPasskeys(),
                             onRenamePasskey = viewModel::renamePasskey,
+                            addingPasskey = viewModel.addingPasskey.collectAsState().value,
+                            onAddPasskey = viewModel::addPasskey,
                             showCredentialDetails = showCredentialDetails,
                             onUpdateShowCredentialDetails = viewModel::updateShowCredentialDetails,
                             showDiagnosticMessages = viewModel.showDiagnosticMessages.collectAsState().value,
@@ -1384,13 +1403,16 @@ fun SettingsTab(
     zkCircuitUrls: List<String> = listOf(org.siros.sdk.credentials.ZkCircuitClient.DEFAULT_ZK_CIRCUIT_URL),
     presentationCount: Int,
     onDisconnect: () -> Unit,
-    onDeleteAccount: () -> Unit,
+    deletingAccount: Boolean = false,
+    onDeleteAccount: (confirmation: String) -> Unit,
     onShowHistory: () -> Unit,
     onShowWscdSettings: () -> Unit,
     onShowDevices: () -> Unit = {},
     onForgetAccount: ((String) -> Unit)? = null,
     passkeys: List<org.siros.sdk.wallet.CachedPasskey> = emptyList(),
     onRenamePasskey: ((String, String) -> Unit)? = null,
+    addingPasskey: Boolean = false,
+    onAddPasskey: ((String) -> Unit)? = null,
     onUpdateUseWmpProtocol: ((Boolean) -> Unit)? = null,
     showCredentialDetails: Boolean = false,
     onUpdateShowCredentialDetails: ((Boolean) -> Unit)? = null,
@@ -1847,6 +1869,43 @@ fun SettingsTab(
                         }
                     }
                 }
+                if (onAddPasskey != null) {
+                    var showAdd by remember { mutableStateOf(false) }
+                    var newNickname by remember { mutableStateOf("") }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { newNickname = ""; showAdd = true },
+                        enabled = !addingPasskey,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text(stringResource(R.string.add_passkey_button))
+                    }
+                    if (showAdd) {
+                        androidx.compose.material3.AlertDialog(
+                            onDismissRequest = { showAdd = false },
+                            title = { Text(stringResource(R.string.add_passkey_button)) },
+                            text = {
+                                OutlinedTextField(
+                                    value = newNickname,
+                                    onValueChange = { newNickname = it },
+                                    singleLine = true,
+                                    label = { Text(stringResource(R.string.add_passkey_nickname)) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(
+                                    enabled = newNickname.isNotBlank(),
+                                    onClick = { showAdd = false; onAddPasskey(newNickname.trim()) },
+                                ) { Text(stringResource(R.string.add_passkey_confirm)) }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { showAdd = false }) { Text(stringResource(R.string.add_passkey_cancel)) }
+                            },
+                        )
+                    }
+                }
             }
         }
 
@@ -1912,30 +1971,47 @@ fun SettingsTab(
         // Delete account
         Spacer(modifier = Modifier.height(8.dp))
         var showDeleteConfirm by remember { mutableStateOf(false) }
+        var typedConfirmation by remember { mutableStateOf("") }
         OutlinedButton(
-            onClick = { showDeleteConfirm = true },
+            onClick = { typedConfirmation = ""; showDeleteConfirm = true },
+            enabled = !deletingAccount,
             modifier = Modifier.fillMaxWidth().height(48.dp),
             shape = RoundedCornerShape(12.dp),
             colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
         ) {
-            Text("Delete Account")
+            Text(stringResource(R.string.delete_account_button))
         }
         if (showDeleteConfirm) {
             androidx.compose.material3.AlertDialog(
                 onDismissRequest = { showDeleteConfirm = false },
-                title = { Text("Delete Account?") },
-                text = { Text("This will remove all local data, credentials, and passkeys. This cannot be undone.") },
+                title = { Text(stringResource(R.string.delete_account_title)) },
+                text = {
+                    Column {
+                        Text(stringResource(R.string.delete_account_message))
+                        Spacer(modifier = Modifier.height(12.dp))
+                        androidx.compose.material3.OutlinedTextField(
+                            value = typedConfirmation,
+                            onValueChange = { typedConfirmation = it },
+                            singleLine = true,
+                            label = { Text("DELETE") },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                },
                 confirmButton = {
-                    TextButton(onClick = {
-                        showDeleteConfirm = false
-                        onDeleteAccount()
-                    }) {
-                        Text("Delete", color = MaterialTheme.colorScheme.error)
+                    TextButton(
+                        enabled = typedConfirmation == "DELETE",
+                        onClick = {
+                            showDeleteConfirm = false
+                            onDeleteAccount(typedConfirmation)
+                        },
+                    ) {
+                        Text(stringResource(R.string.delete_account_confirm), color = MaterialTheme.colorScheme.error)
                     }
                 },
                 dismissButton = {
                     TextButton(onClick = { showDeleteConfirm = false }) {
-                        Text("Cancel")
+                        Text(stringResource(R.string.delete_account_cancel))
                     }
                 },
             )

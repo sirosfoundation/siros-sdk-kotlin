@@ -53,8 +53,15 @@ object AuxiliaryDataV01 : AuxiliaryDataShape {
     private const val INVALID_ENCODING = "\u0000invalid"
     private const val UNSUPPORTED_ENCODING = "\u0000unsupported"
 
-    private const val MAX_ENTRIES = 8
-    private const val MAX_PATH = 8
+    /**
+     * The wallet's OWN bound on the number of entries in one advertisement direction, one delivery, or one `auxiliary_data_to_issuer`
+     * list, and on path depth: pure local hardening against a pathological input, not a mirror of the issuer's or the engine's policy -
+     * go-wallet-backend's own `maxAuxEntries`/`maxAuxPathLen` were REMOVED in its #480 rework, so an issuer legitimately advertising or
+     * delivering more than a handful of entries must not be refused here just because this wallet used to assume the engine capped it
+     * to the same number. 32 matches this codebase's other verifier-controlled list bound ([org.siros.sdk.wallet.transaction.TransactionDataValidator.MAX_ENTRIES]).
+     */
+    private const val MAX_ENTRIES = 32
+    private const val MAX_PATH = 32
     private const val OPENING_BYTES = 16
     private const val COMMITMENT_BYTES = 32
     private val json = Json { ignoreUnknownKeys = true }
@@ -141,6 +148,8 @@ object AuxiliaryDataV01 : AuxiliaryDataShape {
     override fun advertisement(config: CredentialConfiguration): AuxiliarySelection {
         // `auxiliary_data` belongs to a RESPONSE only: in public issuer metadata it is forbidden, whatever else the configuration says.
         if (config.credentialMetadata?.auxiliaryData != null) return AuxiliarySelection.Malformed
+        // A member of a superseded secret-bearing shape (any of the five names): a configuration that still publishes one is not offered.
+        if (config.credentialMetadata?.carriesLegacyMember == true) return AuxiliarySelection.Malformed
         val raw = config.auxiliaryDataSupported ?: return AuxiliarySelection.None
         val obj = raw as? JsonObject ?: return AuxiliarySelection.Malformed
         // Section 5: at least one direction. An empty object is a malformed advertisement, not "nothing advertised".
@@ -201,7 +210,7 @@ object AuxiliaryDataV01 : AuxiliaryDataShape {
         }
     }
 
-    override fun deliveriesToVerify(deliveries: List<SecretDelivery>, secretNamespace: String, advertised: AuxiliaryAdvertisement?): List<SecretDelivery>? {
+    override fun deliveriesToVerify(deliveries: List<SecretDelivery>, advertised: AuxiliaryAdvertisement?): List<SecretDelivery>? {
         // Everything delivered is verified, and the delivery must be exactly what was advertised: no extra secret, none missing.
         val want = advertised?.toWallet?.map { it.path }?.toSet() ?: return null
         val got = deliveries.map { it.path }.toSet()
