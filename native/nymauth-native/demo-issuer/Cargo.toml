@@ -3,6 +3,9 @@
 # app issues the adult's bbs_cd credential on the phone, bound to a StrongBox key, under a demo issuer
 # whose seed is bundled with the app (community-demo's BBS verifier learns a new issuer key on first use).
 # Never a dependency of the SDK.
+#
+# All readdit-demo crates below are pinned to commit 0250f907ec3264, the same feat/bbs-prove-with-signer
+# tip the main crate's Cargo.toml pins (see its header and sirosfoundation/siros-sdk-kotlin#365).
 [package]
 name = "nymauth-demo-issuer"
 version = "0.1.0"
@@ -27,12 +30,12 @@ uniffi = "0.29"
 thiserror = "2"
 p256 = { version = "0.13", features = ["ecdsa"] }
 serde_json = "1"
-nym-bbs = { path = "../../../../readdit-demo/native/bbs/nym-bbs" }
-bbs-cd = { path = "../../../../readdit-demo/native/bbs/vendor/bbs-cd-plugins/crates/bbs-cd" }
-bbs-cd-plugin = { path = "../../../../readdit-demo/native/bbs/vendor/bbs-cd-plugins/crates/bbs-cd-plugin", features = ["parallel"] }
-cd-ecdsa-pop = { path = "../../../../readdit-demo/native/bbs/vendor/bbs-cd-plugins/crates/cd-ecdsa-pop", features = ["parallel"] }
-cd-date-range = { path = "../../../../readdit-demo/native/bbs/vendor/bbs-cd-plugins/crates/cd-date-range" }
-cd-pseudonym = { path = "../../../../readdit-demo/native/bbs/vendor/bbs-cd-plugins/crates/cd-pseudonym" }
+nym-bbs = { git = "https://github.com/AltmannPeter/readdit-demo", rev = "0250f907ec3264cb876da9c909362e553ea77093" }
+bbs-cd = { git = "https://github.com/AltmannPeter/readdit-demo", rev = "0250f907ec3264cb876da9c909362e553ea77093" }
+bbs-cd-plugin = { git = "https://github.com/AltmannPeter/readdit-demo", rev = "0250f907ec3264cb876da9c909362e553ea77093", features = ["parallel"] }
+cd-ecdsa-pop = { git = "https://github.com/AltmannPeter/readdit-demo", rev = "0250f907ec3264cb876da9c909362e553ea77093", features = ["parallel"] }
+cd-date-range = { git = "https://github.com/AltmannPeter/readdit-demo", rev = "0250f907ec3264cb876da9c909362e553ea77093" }
+cd-pseudonym = { git = "https://github.com/AltmannPeter/readdit-demo", rev = "0250f907ec3264cb876da9c909362e553ea77093" }
 
 [dev-dependencies]
 # The end-to-end test proves with the SDK's library and verifies with community-demo's verifier.
