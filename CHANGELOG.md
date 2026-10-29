@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING: every superseded secret-bearing shape is gone; only Credential Auxiliary Data v0.1 (`auxiliary_data`, rulebook v0.5, vc#850) remains. Credentials issued with the legacy seed delivery must be re-issued.** Removed: the `org.siros.secret_seed` response member and its receipt, the `org.siros.psc` proof claim and the `holder_commitments` request field (`SignRequestParams`, WMP `SignSubFlowParams`; the wallet no longer answers a names-only holder-commitment request), the `PSC_CONFLICT` flow error and `PseudonymCommitmentConflictException` / `WalletEventListener.onPseudonymCommitmentConflict` (only `AUXILIARY_DATA_CONFLICT` is a typed conflict now; `PSC_CONFLICT` is an ordinary flow error), `WalletConfig.secretSeedNamespace`, `LegacyOrgSirosShape`, `SecretSeedDelivery`, the legacy `ssc` readers of `SecretSeedCommitment` and the `siros_psc_conflict` strings. A Credential Response whose `credential_metadata` carries any of `org.siros.secret_seed`, `org.siros.holder_commitments`, `org.siros.psc`, `holder_commitments` or `secret_members` is refused with the new `DeliveredMetadataRefusal.LEGACY_SECRET_MEMBER` (nothing stored, `credential_failure` sent as before); an issuer configuration that carries such a member in its metadata is not offered. The presence of any of those five member names is kept through decoding as a value-free marker (issuer metadata: `CredentialDisplayMetadata.carriesLegacyMember`; the engine's plain-completion relay: `ResponseCredentialMetadata.legacyMemberPresent`), so such a configuration is not offered and such a plain completion is refused with nothing stored; every response of a flow is checked when opened, not only the last one's metadata. A credential already stored with a legacy `org.siros.secret_seed` metadata entry is not read any more: it has no seed, a pseudonym proof for it is refused, and the entry is kept uninterpreted (never thrown on, never shown); re-issue the credential.
 
 ### Added
+- **`bbs_cd` presentations (nym_auth rulebook v0.4), with the device key signing through the SDK.** `BbsCdPresenter`
+  presents one planned `zkp_req` query of `source_format` `bbs_cd`: the rulebook's data-independent rules, the scheme
+  offered by the request (`system_id_values` must name `urn:mms:bbs-cd:nym_auth:v1`; fail closed), the binding's proof,
+  and the SDK's own response checks (`CircuitZkResponseValidator`) on the `vp_token` before it is returned. The binding is
+  pluggable (`BbsCdBinding`, as `NymAuthBinding` is for the circuit systems); the default, `NymAuthNativeBbsCdBinding`,
+  is nymauth-native 0.2.0's `BbsProver` (community-demo's nym-bbs on bbs-cd-plugins 0.1). The device key never reaches
+  native code: the one ecdsa-pop signature is asked of a `ZkWitnessSigner` (ES256; a StrongBox key from
+  `AndroidKeystoreSigner.zkWitnessSigner`), checked against the device key natively, and the signer's own exception (a
+  cancelled prompt) comes back unchanged. An unmet age range is refused before the device is asked. `nymauthNativeVersion`
+  is now 0.2.0 (vendored bindings regenerated). SirosWallet's credential store and engine flow do not present `bbs_cd`.
+- **Longfellow on Google's longfellow-zk runtime, the new default for `longfellow-nymauth`.** `GoogleLongfellowNymAuthBinding`
+  (implementation `google-longfellow-zk`) proves the nym_auth mdoc circuits with nymauth-native (`native/nymauth-native`:
+  community-demo's `nym-longfellow` on Google's longfellow-zk Rust runtime `61a8a73`, the code community-demo's verifier
+  runs). It loads only its approved circuit build, checks the inputs and the holder's data before it proves, and zeroes
+  its copies of the seed; its errors map onto the SDK's `NymAuthNativeException` kinds and refusals. Proofs are about
+  344 kB (zk-cred-longfellow: about 619 kB) and each implementation verifies the other's. `UniffiNymAuthNativeProver()`
+  and `WalletConfig.circuitZkNativeProver = null` now use it; ISRG's zk-cred-longfellow stays available with
+  `UniffiNymAuthNativeProver.withBindings(ZkCredLongfellowNymAuthBinding)`. `:sdk:credentials` takes
+  `org.siros:nymauth-native:0.1.0` (`-PnymauthNativeVersion`), a git dependency on AltmannPeter/readdit-demo built with
+  `native/nymauth-native/scripts/build-android.sh` (to ~/.m2); `checkNativeLibraries` checks it. Its UniFFI bindings are
+  vendored under `uniffi/nymauth_native`.
 - **`SirosWallet.addPasskey(nickname, authorizer)`** adds a passkey to the
   signed-in account (go-wallet-backend `register-begin`/`register-finish`).
   An existing passkey authorises it through `authorizer` (a `StepUpAuthenticator`,

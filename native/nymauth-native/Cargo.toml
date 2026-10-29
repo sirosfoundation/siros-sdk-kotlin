@@ -1,0 +1,74 @@
+# Native nymauth provers for the SIROS SDKs (Kotlin first), through UniFFI.
+#
+# Longfellow: the nym_auth mdoc circuits (the nym-auth-circuits archive's LFC2 pair) on Google's
+# longfellow-zk Rust runtime, through community-demo's own nym-longfellow crate: the code its
+# verifier runs, so a proof made here is checked by the same implementation that checks it there.
+# It is an alternative to zk-cred-longfellow (ISRG's Rust Longfellow) for the SDK's
+# `longfellow-nymauth` system; the SDK chooses per system (NymAuthBinding).
+#
+# BBS: the nym_auth attestation in its bbs_cd encoding (rulebook v0.4), through community-demo's nym-bbs
+# crate on sirosfoundation/bbs-cd-plugins (vendored in readdit-demo, unchanged), with the device key's
+# ecdsa-pop signature made by the caller (a StrongBox key) through `Prover::prove_with`.
+#
+# nym-longfellow and nym-bbs/cd-ecdsa-pop/bbs-cd-plugin are git dependencies on AltmannPeter/readdit-demo.
+# nym-longfellow is pinned to commit 50c47ac98e37f6 (merged to its main: adds Circuits::from_pair and
+# Layout::parse, no behaviour change otherwise) - the same commit siros-sdk-kotlin#322 pins. That
+# repo's cargo workspace root is native/longfellow/ (not the repo root); Cargo resolves the
+# nym-longfellow package from within the cloned tree regardless.
+#
+# nym-bbs/cd-ecdsa-pop/bbs-cd-plugin are pinned to commit 0250f907ec3264 on branch
+# feat/bbs-prove-with-signer (adds nym-bbs's Prover::prove_with), which is NOT YET MERGED to that
+# repo's main - the branch could be force-pushed or deleted without notice, which would break this
+# pin with no warning until the next build. Re-pin to the equivalent main commit once that branch
+# merges upstream; tracked at sirosfoundation/siros-sdk-kotlin#365.
+[package]
+name = "nymauth-native"
+version = "0.2.0"
+edition = "2024"
+description = "Native nymauth provers for the SIROS SDKs: Longfellow on Google's longfellow-zk Rust runtime, BBS (bbs_cd)"
+publish = false
+
+[lib]
+name = "nymauth_native"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+# UniFFI's binding generator (Kotlin, Swift), in library mode.
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+default = ["longfellow", "bbs", "counting-alloc"]
+longfellow = ["dep:nym-longfellow"]
+bbs = ["dep:nym-bbs", "dep:cd-ecdsa-pop", "dep:bbs-cd-plugin", "dep:serde_json"]
+# The counting global allocator (community-demo's node/src/alloc.rs), so a proof reports heap_mb and
+# witness_mb in community-demo's meaning. Off for a host that brings its own allocator.
+counting-alloc = []
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+nym-longfellow = { git = "https://github.com/AltmannPeter/readdit-demo", rev = "50c47ac98e37f65003a71e75059fd49ce6f91916", optional = true }
+# Pinned to feat/bbs-prove-with-signer's tip, not yet merged upstream - see the file header and #365.
+nym-bbs = { git = "https://github.com/AltmannPeter/readdit-demo", rev = "0250f907ec3264cb876da9c909362e553ea77093", optional = true }
+# The plugin crates nym-bbs is built on (its vendored bbs-cd-plugins, the same paths and features), for the device signer.
+cd-ecdsa-pop = { git = "https://github.com/AltmannPeter/readdit-demo", rev = "0250f907ec3264cb876da9c909362e553ea77093", features = ["parallel"], optional = true }
+bbs-cd-plugin = { git = "https://github.com/AltmannPeter/readdit-demo", rev = "0250f907ec3264cb876da9c909362e553ea77093", features = ["parallel"], optional = true }
+serde_json = { version = "1", optional = true }
+uniffi = "0.29"
+thiserror = "2"
+p256 = { version = "0.13", features = ["ecdsa"] }
+sha2 = "0.10"
+base64 = "0.22"
+hex = "0.4"
+zeroize = "1"
+
+[dev-dependencies]
+serde_json = "1"
+rand_core = { version = "0.6", features = ["getrandom"] }
+zstd = "0.13"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

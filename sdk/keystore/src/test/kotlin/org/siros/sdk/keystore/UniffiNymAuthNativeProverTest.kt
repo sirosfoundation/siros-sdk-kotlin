@@ -175,7 +175,7 @@ class UniffiNymAuthNativeProverTest {
         val p = UniffiNymAuthNativeProver()
         assertEquals(setOf(NymAuthCircuitZkAdapter.VEGA_SYSTEM, NymAuthCircuitZkAdapter.LONGFELLOW_SYSTEM), p.systems)
         assertEquals("zk-cred-vega", p.implementationFor(NymAuthCircuitZkAdapter.VEGA_SYSTEM))
-        assertEquals("zk-cred-longfellow", p.implementationFor(NymAuthCircuitZkAdapter.LONGFELLOW_SYSTEM))
+        assertEquals("google-longfellow-zk", p.implementationFor(NymAuthCircuitZkAdapter.LONGFELLOW_SYSTEM))
         assertNull(p.implementationFor("bbs-cd"))
     }
 

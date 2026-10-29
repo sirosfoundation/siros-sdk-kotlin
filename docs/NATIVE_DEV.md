@@ -4,6 +4,12 @@ The `circuit_zk` prover for the `nymauth-*` circuits runs in two native librarie
 `zk-cred-longfellow` (`longfellow-nymauth`). Their nymauth entry points are in open pull requests (both
 `feat/nymauth-prove`, PR #13). Until those are released, build the AARs from the PR heads and point Gradle at them.
 
+The default `longfellow-nymauth` implementation is a third library, `nymauth-native` (Google's longfellow-zk), built in
+this repository: `native/nymauth-native/scripts/build-android.sh` builds `org.siros:nymauth-native:0.1.0` into `~/.m2`
+and regenerates its Kotlin bindings (vendored under `sdk/credentials/src/main/kotlin/uniffi/nymauth_native`). See
+`native/nymauth-native/README.md`. zk-cred-longfellow stays a dependency: it is the alternative implementation
+(`UniffiNymAuthNativeProver.withBindings(ZkCredLongfellowNymAuthBinding)`) and carries the legacy ZK presentation path.
+
 ## Pins
 
 The SDK is built against exactly these commits (full SHAs; check a PR's head before building, it can move):
@@ -53,6 +59,8 @@ Packages (each library's own Maven repository), from the merged and tagged nativ
 
 - `org.siros:zk-cred-vega:0.0.7` (the PR branch's Cargo.toml still says 0.0.6, which is released and has no nymauth: bump it to 0.0.7 before tagging)
 - `org.siros:zk-cred-longfellow:0.1.2` (Cargo.toml says 0.1.1: bump to 0.1.2 before tagging)
+- `org.siros:nymauth-native:0.1.0` (from `native/nymauth-native`; it builds against readdit-demo's `nym-longfellow` by path, which
+  has to become a git or vendored dependency first)
 
 and the vendored bindings regenerated from those tagged builds, with `zkCredVegaVersion` / `zkCredLongfellowVersion` defaults
 in `sdk/credentials/build.gradle.kts` matching.
