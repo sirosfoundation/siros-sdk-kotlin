@@ -5,6 +5,8 @@ import java.security.KeyPairGenerator
 import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
 import java.util.Base64
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -25,12 +27,15 @@ class AndroidKeystoreSignerTest {
 
         var generatedOn: String? = null
         var signedOn: String? = null
+        /** Invoked synchronously right after the key is persisted, still inside generate() - simulates cancellation racing the dispatcher handoff back from the IO thread. */
+        var afterGenerate: (() -> Unit)? = null
 
         override fun generate(alias: String, attestationChallenge: ByteArray?, strongBox: Boolean) {
             generatedOn = Thread.currentThread().name
             if (strongBox && !strongBoxAvailable) throw AndroidKeyStoreBackend.StrongBoxUnavailable()
             generated += Generated(alias, attestationChallenge?.copyOf(), strongBox)
             keys[alias] = KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair().public as ECPublicKey
+            afterGenerate?.invoke()
         }
 
         override fun certificateChain(alias: String): List<ByteArray> = List(chainLength) { i -> byteArrayOf(alias.length.toByte(), i.toByte()) }
@@ -75,6 +80,41 @@ class AndroidKeystoreSignerTest {
         val s = signer(FakeBackend())
         val id = s.generateAttestedKey("ES256", ByteArray(32) { 1 })
         assertEquals(listOf("hardware"), s.securityProperties(id).keyStorage)
+    }
+
+    /**
+     * Review of #312: Android Keystore has already persisted the key by the time create() returns from the IO
+     * dispatcher, so a cancellation landing exactly at the handoff back to the caller must not leak it - the caller
+     * never receives the alias (CancellationException propagates instead), and from the wallet's point of view the
+     * key simply does not exist, so it can never be deleted through the ordinary deleteKey path.
+     */
+    @Test
+    fun aCancellationAtTheDispatcherHandoffDeletesTheAlreadyPersistedKeyInsteadOfLeakingIt() = runTest {
+        val b = FakeBackend()
+        val s = signer(b)
+        lateinit var job: Job
+        b.afterGenerate = { job.cancel() } // the key is already persisted; cancel right as create() is about to return
+        job = launch {
+            runCatching { s.generateKey("ES256") }
+        }
+        job.join()
+        assertTrue("the orphaned key was deleted, not left behind", b.deleted.isNotEmpty())
+        assertTrue("no key survives in the backend", b.aliases().isEmpty())
+    }
+
+    /** Same race, but for the attested-key path (a separate call site in AndroidKeystoreSigner). */
+    @Test
+    fun aCancellationAtTheDispatcherHandoffDeletesTheAlreadyPersistedAttestedKeyInsteadOfLeakingIt() = runTest {
+        val b = FakeBackend()
+        val s = signer(b)
+        lateinit var job: Job
+        b.afterGenerate = { job.cancel() }
+        job = launch {
+            runCatching { s.generateAttestedKey("ES256", ByteArray(32) { 1 }) }
+        }
+        job.join()
+        assertTrue(b.deleted.isNotEmpty())
+        assertTrue(b.aliases().isEmpty())
     }
 
     @Test

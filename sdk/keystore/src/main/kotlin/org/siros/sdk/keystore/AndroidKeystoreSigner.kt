@@ -2,7 +2,9 @@
 package org.siros.sdk.keystore
 
 import java.math.BigInteger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -56,12 +58,37 @@ class AndroidKeystoreSigner(
 ) : Signer {
     override val supportsAttestedKeyGeneration: Boolean get() = true
 
-    override suspend fun generateKey(algorithm: String): String = withContext(Dispatchers.IO) { create(algorithm, null) }
+    override suspend fun generateKey(algorithm: String): String = generateManaged { create(algorithm, null) }
 
     override suspend fun generateAttestedKey(algorithm: String, attestationChallenge: ByteArray): String {
         require(attestationChallenge.isNotEmpty()) { "an attestation challenge is required" }
         // Hardware key generation (StrongBox, attestation provisioning) can block for seconds: never on the caller's (main) dispatcher.
-        return withContext(Dispatchers.IO) { create(algorithm, attestationChallenge) }
+        return generateManaged { create(algorithm, attestationChallenge) }
+    }
+
+    /**
+     * Runs [block] (a blocking [create] call) on [Dispatchers.IO] and returns its alias even if THIS call is
+     * cancelled exactly at the dispatcher handoff back to the caller: Android Keystore has already persisted the key
+     * by the time [block] returns, a plain `withContext(Dispatchers.IO) { block() }` can still throw
+     * [CancellationException] instead of returning it if the parent job was cancelled in the meantime, and losing
+     * the alias that way would leak an untracked hardware key forever (StrongBox/TEE key storage is finite - enough
+     * cancelled attempts, e.g. the app backgrounded during a slow attestation, could exhaust it for every key on the
+     * device, not only instance keys). If genuinely cancelled, the orphaned key is deleted instead, in a
+     * [NonCancellable] cleanup so the deletion itself cannot be cut short by the same cancellation.
+     */
+    private suspend fun generateManaged(block: () -> String): String {
+        var createdAlias: String? = null
+        return try {
+            withContext(Dispatchers.IO) { block().also { createdAlias = it } }
+        } catch (e: CancellationException) {
+            createdAlias?.let { alias ->
+                withContext(NonCancellable) {
+                    runCatching { backend.delete(alias) }
+                    strongBoxAliases -= alias
+                }
+            }
+            throw e
+        }
     }
 
     private fun create(algorithm: String, challenge: ByteArray?): String {
