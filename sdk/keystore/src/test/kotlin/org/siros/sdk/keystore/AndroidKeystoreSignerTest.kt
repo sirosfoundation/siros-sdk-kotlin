@@ -1,13 +1,22 @@
 // Copyright 2026 SIROS Foundation. BSD 2-Clause License.
 package org.siros.sdk.keystore
 
+import java.math.BigInteger
 import java.security.KeyPairGenerator
+import java.security.Signature
 import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
 import java.util.Base64
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -15,40 +24,101 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import org.siros.sdk.credentials.KeystoreException
+import org.siros.sdk.credentials.TransactionDataError
+import org.siros.sdk.keystore.AndroidKeystoreSigner.AuthenticationMethod
+import org.siros.sdk.keystore.AndroidKeystoreSigner.HardwareRequirement
+import org.siros.sdk.keystore.AndroidKeystoreSigner.KeyPolicy
+import org.siros.sdk.keystore.AndroidKeystoreSigner.SecurityLevel
+import org.siros.sdk.keystore.AndroidKeystoreSigner.UserAuthentication
 
+/**
+ * Exercises [AndroidKeystoreSigner]'s own logic against a fully in-memory [FakeBackend] (no device needed): alias
+ * management, the best-effort StrongBox/TEE fallback, the explicit [AndroidKeystoreSigner.KeyPolicy] checks, SCA, and
+ * the cancellation-safety of every key-generation entry point. [FakeBackend.newSignature] hands back a REAL
+ * `java.security.Signature` initialized over an in-memory software EC key, so the per-use-authentication/SCA flow is
+ * exercised end to end here; what cannot be faithfully simulated off-device - that Android's own Keystore refuses to
+ * let a `Signature` sign unless a genuine biometric/device-credential prompt unlocked it, independent of whatever an
+ * authenticator claims - is covered on a real device by `AndroidKeystoreSignerTest` (androidTest).
+ */
 class AndroidKeystoreSignerTest {
     private class Generated(val alias: String, val challenge: ByteArray?, val strongBox: Boolean)
 
-    private class FakeBackend(var strongBoxAvailable: Boolean = true, var chainLength: Int = 3) : AndroidKeyStoreBackend {
+    private class FakeBackend(
+        var strongBoxAvailable: Boolean = true,
+        var chainLength: Int = 3,
+        /** The level reported for a TEE (strongBox=false) request; set to SOFTWARE to simulate an emulator with no secure hardware at all. */
+        var fallbackLevel: SecurityLevel = SecurityLevel.TRUSTED_ENVIRONMENT,
+    ) : AndroidKeyStoreBackend {
+        private class Entry(
+            val level: SecurityLevel,
+            val methods: Set<AuthenticationMethod>,
+            val keyPair: java.security.KeyPair,
+        )
+
         val generated = mutableListOf<Generated>()
         val deleted = mutableListOf<String>()
-        val keys = linkedMapOf<String, ECPublicKey>()
-        var derSignature: ByteArray = byteArrayOf()
+        private val entries = linkedMapOf<String, Entry>()
+        /** Foreign aliases visible in the same physical keystore but not tracked as [Entry]s (no methods, no chain). */
+        val foreignAliases = mutableSetOf<String>()
 
         var generatedOn: String? = null
         var signedOn: String? = null
+
         /** Invoked synchronously right after the key is persisted, still inside generate() - simulates cancellation racing the dispatcher handoff back from the IO thread. */
         var afterGenerate: (() -> Unit)? = null
 
-        override fun generate(alias: String, attestationChallenge: ByteArray?, strongBox: Boolean) {
+        override fun generate(
+            alias: String,
+            attestationChallenge: ByteArray?,
+            strongBox: Boolean,
+            userAuthenticationMethods: Set<AuthenticationMethod>,
+            unlockedDeviceRequired: Boolean,
+        ): SecurityLevel {
             generatedOn = Thread.currentThread().name
             if (strongBox && !strongBoxAvailable) throw AndroidKeyStoreBackend.StrongBoxUnavailable()
+            val level = if (strongBox) SecurityLevel.STRONGBOX else fallbackLevel
+            val keyPair = KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair()
+            entries[alias] = Entry(level, userAuthenticationMethods, keyPair)
             generated += Generated(alias, attestationChallenge?.copyOf(), strongBox)
-            keys[alias] = KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair().public as ECPublicKey
             afterGenerate?.invoke()
+            return level
         }
 
-        override fun certificateChain(alias: String): List<ByteArray> = List(chainLength) { i -> byteArrayOf(alias.length.toByte(), i.toByte()) }
-        override fun publicKey(alias: String): ECPublicKey = keys.getValue(alias)
-        override fun signDer(alias: String, data: ByteArray): ByteArray { signedOn = Thread.currentThread().name; return derSignature }
-        override fun aliases(): List<String> = keys.keys.toList()
-        override fun delete(alias: String) { deleted += alias; keys.remove(alias) }
+        override fun certificateChain(alias: String): List<ByteArray> =
+            if (alias in entries) List(chainLength) { i -> byteArrayOf(alias.length.toByte(), i.toByte()) } else emptyList()
+
+        override fun publicKey(alias: String): ECPublicKey = entries.getValue(alias).keyPair.public as ECPublicKey
+        override fun securityLevel(alias: String): SecurityLevel = entries[alias]?.level ?: SecurityLevel.UNKNOWN
+        override fun userAuthenticationMethods(alias: String): Set<AuthenticationMethod> = entries[alias]?.methods.orEmpty()
+
+        override fun newSignature(alias: String): Signature {
+            signedOn = Thread.currentThread().name
+            return Signature.getInstance("SHA256withECDSA").apply { initSign(entries.getValue(alias).keyPair.private) }
+        }
+
+        override fun aliases(): List<String> = entries.keys.toList() + foreignAliases
+        override fun delete(alias: String) {
+            deleted += alias
+            entries.remove(alias)
+        }
+
+        /** Seeds [alias] as a key already existing exactly as #312's original (now-merged) scheme made it: the whole
+         * alias string, with no separate aliasPrefix/keyId split - simulating a key made before this port. */
+        fun seedLegacyKey(alias: String, methods: Set<AuthenticationMethod> = emptySet()) {
+            val keyPair = KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair()
+            entries[alias] = Entry(SecurityLevel.STRONGBOX, methods, keyPair)
+        }
     }
 
-    private fun signer(b: FakeBackend): AndroidKeystoreSigner {
-        var n = 0
-        return AndroidKeystoreSigner(b, newAlias = { AndroidKeystoreSigner.ALIAS_PREFIX + (++n) })
-    }
+    private fun signer(b: FakeBackend, policy: KeyPolicy = KeyPolicy(), authenticator: UserAuthenticator? = null): AndroidKeystoreSigner =
+        // A real UUID, as production's default newAlias also produces: listKeys() tells this signer's own keys apart
+        // from another signer's (whose prefix might extend this one's) by that shape - see AndroidKeystoreSigner.KEY_ID.
+        AndroidKeystoreSigner(b, defaultPolicy = policy, authenticator = authenticator)
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // Best effort (generateKey / generateAttestedKey): never refused on the hardware level.
+    // ---------------------------------------------------------------------------------------------------------------
 
     @Test
     fun anAttestedKeyIsAskedForStrongBoxFirstWithTheChallenge() = runTest {
@@ -58,7 +128,7 @@ class AndroidKeystoreSignerTest {
         assertEquals(1, b.generated.size)
         assertTrue(b.generated.single().strongBox)
         assertArrayEquals(challenge, b.generated.single().challenge)
-        assertEquals(id, b.generated.single().alias)
+        assertTrue(id.isNotEmpty())
     }
 
     @Test
@@ -70,8 +140,7 @@ class AndroidKeystoreSignerTest {
         assertEquals(1, b.generated.size)
         assertFalse(b.generated.single().strongBox)
         assertArrayEquals(challenge, b.generated.single().challenge)
-        assertEquals("the first alias was dropped and the TEE key lives under a new one", listOf(AndroidKeystoreSigner.ALIAS_PREFIX + "1"), b.deleted)
-        assertEquals(AndroidKeystoreSigner.ALIAS_PREFIX + "2", id)
+        assertEquals("the first (half-made StrongBox) alias was dropped", 1, b.deleted.size)
         assertEquals(listOf("trusted_execution"), s.securityProperties(id).keyStorage)
     }
 
@@ -81,6 +150,66 @@ class AndroidKeystoreSignerTest {
         val id = s.generateAttestedKey("ES256", ByteArray(32) { 1 })
         assertEquals(listOf("hardware"), s.securityProperties(id).keyStorage)
     }
+
+    @Test
+    fun aPlainKeyHasNoChallenge() = runTest {
+        val b = FakeBackend()
+        signer(b).generateKey("ES256")
+        assertNull(b.generated.single().challenge)
+    }
+
+    @Test
+    fun aPlainKeyIsAlsoBestEffort_neverRefusedForWantOfStrongBox() = runTest {
+        // generateKey() must behave exactly like generateAttestedKey() on the hardware level: it is what the WIA
+        // flow falls back to (SirosWallet.generateInstanceKey), and instance-key provisioning must succeed on every
+        // Android device, including the majority with no StrongBox chip - never the strict createKey(policy) default.
+        val b = FakeBackend(strongBoxAvailable = false)
+        val s = signer(b)
+        val id = s.generateKey("ES256")
+        assertEquals(listOf("trusted_execution"), s.securityProperties(id).keyStorage)
+    }
+
+    @Test
+    fun onlyEs256IsAccepted() = runTest {
+        val s = signer(FakeBackend())
+        for (call in listOf<suspend () -> Unit>(
+            { s.generateKey("EdDSA") },
+            { s.generateAttestedKey("RS256", ByteArray(32)) },
+        )) {
+            try {
+                call()
+                fail("accepted")
+            } catch (e: KeystoreException) {
+                assertEquals("unsupported_algorithm", e.errorCode)
+            }
+        }
+    }
+
+    @Test
+    fun aNonEmptyChallengeIsRequired() = runTest {
+        try {
+            signer(FakeBackend()).generateAttestedKey("ES256", ByteArray(0))
+            fail("accepted")
+        } catch (_: IllegalArgumentException) {
+        }
+    }
+
+    @Test
+    fun theChainIsDerLeafFirstInAndroidKeyFormat_andAbsentForALoneCertificate() = runTest {
+        val b = FakeBackend()
+        val s = signer(b)
+        val id = s.generateAttestedKey("ES256", ByteArray(32))
+        val chain = s.attestationChain(id)!!
+        assertEquals(AttestationChain.FORMAT_ANDROID_KEY, chain.format)
+        assertEquals(listOf(0, 1, 2), chain.certificates.map { it[1].toInt() }) // order as the keystore returned it: leaf first
+        assertEquals(0, chain.clientDataHash.size)
+        b.chainLength = 1
+        assertNull(s.attestationChain(id))
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // Cancellation safety: every key-generation entry point.
+    // ---------------------------------------------------------------------------------------------------------------
 
     /**
      * Review of #312: Android Keystore has already persisted the key by the time create() returns from the IO
@@ -117,98 +246,310 @@ class AndroidKeystoreSignerTest {
         assertTrue(b.aliases().isEmpty())
     }
 
+    /** Same race again, for createKey(policy) - the new entry point this port adds. */
     @Test
-    fun theChainIsDerLeafFirstInAndroidKeyFormat_andAbsentForALoneCertificate() = runTest {
+    fun aCancellationAtTheDispatcherHandoffDeletesTheAlreadyPersistedPolicyKeyInsteadOfLeakingIt() = runTest {
         val b = FakeBackend()
         val s = signer(b)
-        val id = s.generateAttestedKey("ES256", ByteArray(32))
-        val chain = s.attestationChain(id)!!
-        assertEquals(AttestationChain.FORMAT_ANDROID_KEY, chain.format)
-        assertEquals(listOf(0, 1, 2), chain.certificates.map { it[1].toInt() }) // order as the keystore returned it: leaf first
-        assertEquals(0, chain.clientDataHash.size)
-        b.chainLength = 1
-        assertNull(s.attestationChain(id))
-    }
-
-    @Test
-    fun onlyEs256AndANonEmptyChallengeAreAccepted() = runTest {
-        val s = signer(FakeBackend())
-        for (call in listOf<suspend () -> Unit>(
-            { s.generateKey("EdDSA") },
-            { s.generateAttestedKey("RS256", ByteArray(32)) },
-            { s.generateAttestedKey("ES256", ByteArray(0)) },
-        )) {
-            try {
-                call()
-                fail("accepted")
-            } catch (_: IllegalArgumentException) {
-            }
+        lateinit var job: Job
+        b.afterGenerate = { job.cancel() }
+        job = launch {
+            runCatching { s.createKey(KeyPolicy(HardwareRequirement.HARDWARE)) }
         }
+        job.join()
+        assertTrue(b.deleted.isNotEmpty())
+        assertTrue(b.aliases().isEmpty())
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // createKey(policy): strict hardware requirement, confirmed and enforced.
+    // ---------------------------------------------------------------------------------------------------------------
+
+    @Test
+    fun strongBoxRequired_isMetOrRefused() = runTest {
+        val strict = signer(FakeBackend())
+        val created = strict.createKey()
+        assertEquals(SecurityLevel.STRONGBOX, created.securityLevel)
+        assertEquals(listOf("hardware"), strict.securityProperties(created.keyId).keyStorage)
     }
 
     @Test
-    fun aPlainKeyHasNoChallenge() = runTest {
-        val b = FakeBackend()
-        signer(b).generateKey("ES256")
-        assertNull(b.generated.single().challenge)
-    }
-
-    private fun der(r: ByteArray, s: ByteArray): ByteArray {
-        fun int(v: ByteArray) = byteArrayOf(0x02, v.size.toByte()) + v
-        val body = int(r) + int(s)
-        return byteArrayOf(0x30, body.size.toByte()) + body
+    fun strongBoxRequired_refusesAndLeavesNoKeyBehindWhenTheDeviceHasNone() = runTest {
+        val b = FakeBackend(strongBoxAvailable = false)
+        val strict = signer(b)
+        try {
+            strict.createKey()
+            fail("expected strongbox_unavailable")
+        } catch (e: KeystoreException) {
+            assertEquals("strongbox_unavailable", e.errorCode)
+        }
+        assertTrue("a refused key must not be left behind", strict.listKeys().isEmpty())
+        assertTrue(b.aliases().isEmpty())
     }
 
     @Test
-    fun aDerSignatureBecomesTheFixedWidthJwsForm() = runTest {
-        val b = FakeBackend()
+    fun hardwareRequired_fallsBackToTheTeeInsteadOfRefusing() = runTest {
+        val b = FakeBackend(strongBoxAvailable = false)
         val s = signer(b)
-        val id = s.generateKey("ES256")
-        // r has a leading zero (high bit set), s is short: both must come out 32 bytes wide.
-        val r = byteArrayOf(0) + ByteArray(32) { 0xF0.toByte() }
-        val sShort = byteArrayOf(1, 2, 3)
-        b.derSignature = der(r, sShort)
-        val raw = s.sign(id, byteArrayOf(1))
-        assertEquals(64, raw.size)
-        assertArrayEquals(ByteArray(32) { 0xF0.toByte() }, raw.copyOfRange(0, 32))
-        assertArrayEquals(ByteArray(29) + byteArrayOf(1, 2, 3), raw.copyOfRange(32, 64))
+        val created = s.createKey(KeyPolicy(HardwareRequirement.HARDWARE))
+        assertEquals(SecurityLevel.TRUSTED_ENVIRONMENT, created.securityLevel)
+        assertEquals(1, b.deleted.size) // the half-made StrongBox attempt
     }
 
     @Test
-    fun theExportedPublicKeyIsAP256Jwk() = runTest {
-        val b = FakeBackend()
+    fun hardwareRequired_refusesASoftwareOnlyDevice() = runTest {
+        val b = FakeBackend(strongBoxAvailable = false, fallbackLevel = SecurityLevel.SOFTWARE)
         val s = signer(b)
-        val id = s.generateKey("ES256")
-        val jwk = kotlinx.serialization.json.Json.parseToJsonElement(String(s.exportPublicKey(id))) as kotlinx.serialization.json.JsonObject
-        assertEquals("P-256", (jwk["crv"] as kotlinx.serialization.json.JsonPrimitive).content)
-        // kid carries the key id so WscdKeystoreAdapter/SirosWallet.extractProofKeyId can recover which holder key an
-        // embedded-JWK proof was made with (a multi-key mdoc batch would otherwise fall back to the wrong key).
-        assertEquals(id, (jwk["kid"] as kotlinx.serialization.json.JsonPrimitive).content)
-        val x = Base64.getUrlDecoder().decode((jwk["x"] as kotlinx.serialization.json.JsonPrimitive).content)
-        val y = Base64.getUrlDecoder().decode((jwk["y"] as kotlinx.serialization.json.JsonPrimitive).content)
-        assertEquals(32, x.size)
-        assertEquals(32, y.size)
-        val pub = b.publicKey(id)
-        assertEquals(java.math.BigInteger(1, x), pub.w.affineX)
-        assertEquals(java.math.BigInteger(1, y), pub.w.affineY)
-    }
-
-    @Test
-    fun listAndDeleteOnlyTouchTheSignersOwnKeys() = runTest {
-        val b = FakeBackend()
-        b.keys["foreign"] = KeyPairGenerator.getInstance("EC").apply { initialize(ECGenParameterSpec("secp256r1")) }.generateKeyPair().public as ECPublicKey
-        val s = signer(b)
-        val id = s.generateKey("ES256")
-        assertEquals(listOf(id), s.listKeys().map { it.keyId })
-        s.deleteKey(id)
+        try {
+            s.createKey(KeyPolicy(HardwareRequirement.HARDWARE))
+            fail("expected hardware_unavailable")
+        } catch (e: KeystoreException) {
+            assertEquals("hardware_unavailable", e.errorCode)
+        }
         assertTrue(s.listKeys().isEmpty())
     }
 
     @Test
-    fun theSignerAnnouncesTheCapability_andMigrationNeedsReEnrollment() = runTest {
+    fun anyRequirement_acceptsWhateverTheKeystoreGives() = runTest {
+        val b = FakeBackend(strongBoxAvailable = false, fallbackLevel = SecurityLevel.SOFTWARE)
+        val s = signer(b)
+        val created = s.createKey(KeyPolicy(HardwareRequirement.ANY))
+        assertEquals(SecurityLevel.SOFTWARE, created.securityLevel)
+    }
+
+    @Test
+    fun deviceCredentialAlone_needsAndroid11_pureFunctionCheck() {
+        // The live Build.VERSION.SDK_INT branch is covered by the instrumented AndroidKeystoreSignerTest; this is
+        // the same decision table AndroidKeystoreSignerPolicyTest exercises directly.
+        assertTrue(AndroidKeystoreSigner.effectiveMethods(UserAuthentication.EveryUse(setOf(AuthenticationMethod.DEVICE_CREDENTIAL)), 28).isEmpty())
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // Per-use user authentication and SCA.
+    // ---------------------------------------------------------------------------------------------------------------
+
+    @Test
+    fun keyWithoutUserAuthentication_isPossessionOnly() = runTest {
+        val s = signer(FakeBackend())
+        val id = s.generateKey("ES256")
+        assertTrue(s.securityProperties(id).userAuthentication.isEmpty())
+        assertFalse(s.scaAuthenticationCapability(id).isPossible)
+        try {
+            s.beginScaSign(id)
+            fail("SCA with a possession-only key")
+        } catch (e: Exception) {
+            assertTrue(e.toString(), e is TransactionDataError)
+        }
+    }
+
+    @Test
+    fun everyUseKey_refusesWithoutAnAuthenticator() = runTest {
+        val s = signer(FakeBackend())
+        val created = s.createKey(KeyPolicy(HardwareRequirement.ANY, UserAuthentication.EveryUse()))
+        val keyId = created.keyId
+        // Not asserting the exact method set: a plain JVM unit test has no real Build.VERSION.SDK_INT, so
+        // effectiveMethods() drops DEVICE_CREDENTIAL as it would pre-Android-11 - the live SDK-dependent behavior is
+        // covered by AndroidKeystoreSignerPolicyTest (the pure function) and the instrumented AndroidKeystoreSignerTest.
+        assertTrue(s.securityProperties(keyId).userAuthentication.isNotEmpty())
+        try {
+            s.sign(keyId, byteArrayOf(1))
+            fail("expected user_authentication_required")
+        } catch (e: KeystoreException) {
+            assertEquals("user_authentication_required", e.errorCode)
+        }
+        assertFalse("no authenticator: no SCA", s.scaAuthenticationCapability(keyId).isPossible)
+    }
+
+    @Test
+    fun everyUseKey_signsAfterTheAuthenticatorApproves_andReachesTwoScaCategories() = runTest {
+        val b = FakeBackend()
+        val authenticator = UserAuthenticator { request -> request.allowed.first() }
+        val s = signer(b, authenticator = authenticator)
+        val created = s.createKey(KeyPolicy(HardwareRequirement.ANY, UserAuthentication.EveryUse(setOf(AuthenticationMethod.BIOMETRIC))))
+        val keyId = created.keyId
+        assertTrue(s.scaAuthenticationCapability(keyId).isPossible)
+        val raw = s.sign(keyId, "hello".toByteArray())
+        assertEquals(64, raw.size)
+        val session = s.beginScaSign(keyId)
+        assertEquals(
+            setOf(AuthenticationCategory.POSSESSION, AuthenticationCategory.INHERENCE),
+            session.declaredFactors.map { it.category }.toSet(),
+        )
+        val signed = session.sign("transaction".toByteArray())
+        ScaSignSession.requireMatching(session.declaredFactors, signed.factors)
+        assertEquals(64, signed.signature.size)
+    }
+
+    @Test
+    fun everyUseKey_refusesWhenTheAuthenticatorApprovesAMethodTheKeyDoesNotAllow() = runTest {
+        val b = FakeBackend()
+        // The authenticator claims a method outside what the key's policy allows.
+        val authenticator = UserAuthenticator { AuthenticationMethod.DEVICE_CREDENTIAL }
+        val s = signer(b, authenticator = authenticator)
+        val created = s.createKey(KeyPolicy(HardwareRequirement.ANY, UserAuthentication.EveryUse(setOf(AuthenticationMethod.BIOMETRIC))))
+        try {
+            s.sign(created.keyId, byteArrayOf(1))
+            fail("expected user_authentication_failed")
+        } catch (e: KeystoreException) {
+            assertEquals("user_authentication_failed", e.errorCode)
+        }
+    }
+
+    @Test
+    fun scaSignSession_signsOnlyOnce() = runTest {
+        val b = FakeBackend()
+        val authenticator = UserAuthenticator { request -> request.allowed.first() }
+        val s = signer(b, authenticator = authenticator)
+        val created = s.createKey(KeyPolicy(HardwareRequirement.ANY, UserAuthentication.EveryUse(setOf(AuthenticationMethod.BIOMETRIC))))
+        val session = s.beginScaSign(created.keyId)
+        session.sign(byteArrayOf(1))
+        try {
+            session.sign(byteArrayOf(2))
+            fail("a session must sign once")
+        } catch (_: IllegalStateException) {
+        }
+    }
+
+    /**
+     * Copilot review of this port: a plain `var spent = false; check(!spent); spent = true` lets two genuinely
+     * concurrent callers both observe `false` before either sets it, so both would dispatch `finish()` against the
+     * same non-thread-safe `Signature` - a real `runTest` (single-threaded, cooperative) cannot reproduce this, so
+     * this uses `runBlocking` with real `Dispatchers.Default` parallelism, repeated to make a reintroduced race show
+     * up reliably rather than by chance.
+     */
+    @Test
+    fun scaSignSession_underGenuinelyConcurrentCallers_exactlyOneClaimsIt() = runBlocking {
+        repeat(200) {
+            val b = FakeBackend()
+            val authenticator = UserAuthenticator { request -> request.allowed.first() }
+            val s = signer(b, authenticator = authenticator)
+            val created = s.createKey(KeyPolicy(HardwareRequirement.ANY, UserAuthentication.EveryUse(setOf(AuthenticationMethod.BIOMETRIC))))
+            val session = s.beginScaSign(created.keyId)
+            val successes = java.util.concurrent.atomic.AtomicInteger(0)
+            coroutineScope {
+                (1..8).map { n ->
+                    async(Dispatchers.Default) {
+                        try {
+                            session.sign(byteArrayOf(n.toByte()))
+                            successes.incrementAndGet()
+                        } catch (_: IllegalStateException) {
+                        }
+                    }
+                }.forEach { it.await() }
+            }
+            assertEquals("exactly one of several concurrent callers may claim a single-use session", 1, successes.get())
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // Signing, export, listing, migration, dispatcher placement.
+    // ---------------------------------------------------------------------------------------------------------------
+
+    @Test
+    fun signReturnsARaw64ByteSignatureThatVerifiesWithTheExportedPublicKey() = runTest {
+        val b = FakeBackend()
+        val s = signer(b)
+        val id = s.generateKey("ES256")
+        val data = "DeviceAuthentication".toByteArray()
+        val raw = s.sign(id, data)
+        assertEquals(64, raw.size)
+        assertTrue(BigInteger(1, raw.copyOfRange(32, 64)) <= EcdsaSignatures.P256_ORDER.shiftRight(1))
+        val jwk = Json.parseToJsonElement(String(s.exportPublicKey(id))) as JsonObject
+        val x = Base64.getUrlDecoder().decode((jwk["x"] as JsonPrimitive).content)
+        val y = Base64.getUrlDecoder().decode((jwk["y"] as JsonPrimitive).content)
+        val params = java.security.AlgorithmParameters.getInstance("EC").apply { init(ECGenParameterSpec("secp256r1")) }
+            .getParameterSpec(java.security.spec.ECParameterSpec::class.java)
+        val publicKey = java.security.KeyFactory.getInstance("EC").generatePublic(
+            java.security.spec.ECPublicKeySpec(java.security.spec.ECPoint(BigInteger(1, x), BigInteger(1, y)), params),
+        )
+        val ok = Signature.getInstance("SHA256withECDSA").run {
+            initVerify(publicKey)
+            update(data)
+            verify(EcdsaSignatures.rawToDer(raw))
+        }
+        assertTrue(ok)
+    }
+
+    @Test
+    fun theExportedPublicKeyIsAP256JwkWithTheKeyIdAsKid() = runTest {
+        val b = FakeBackend()
+        val s = signer(b)
+        val id = s.generateKey("ES256")
+        val jwk = Json.parseToJsonElement(String(s.exportPublicKey(id))) as JsonObject
+        assertEquals("P-256", (jwk["crv"] as JsonPrimitive).content)
+        // kid carries the key id so WscdKeystoreAdapter/SirosWallet.extractProofKeyId can recover which holder key an
+        // embedded-JWK proof was made with (a multi-key mdoc batch would otherwise fall back to the wrong key).
+        assertEquals(id, (jwk["kid"] as JsonPrimitive).content)
+    }
+
+    @Test
+    fun listAndDeleteOnlyTouchTheSignersOwnKeys_evenAcrossOverlappingPrefixes() = runTest {
+        val b = FakeBackend()
+        val s = signer(b)
+        val a = s.generateKey("ES256")
+        val other = AndroidKeystoreSigner(b, aliasPrefix = "${AndroidKeystoreSigner.DEFAULT_ALIAS_PREFIX}other.")
+        val bKey = other.generateKey("ES256")
+        assertEquals(listOf(a), s.listKeys().map { it.keyId })
+        s.deleteKey(a)
+        assertTrue(s.listKeys().isEmpty())
+        assertEquals(listOf(bKey), other.listKeys().map { it.keyId })
+        other.deleteKey(bKey)
+    }
+
+    /**
+     * Copilot review of this port: #312's original (now-merged) scheme had no separate aliasPrefix/keyId split - a
+     * key's id WAS its whole alias, "siros-ak-<uuid>". Without resolving that legacy form, every key made before this
+     * port - including a live WIA instance key - would become unreachable after upgrading (resolving to a nonexistent
+     * `aliasPrefix + legacyId` alias), and `SirosWallet.ensureInstanceKeyId()` would silently replace it.
+     */
+    @Test
+    fun existingKeysFromBeforeThisPort_resolveByTheirBareLegacyAlias() = runTest {
+        val b = FakeBackend()
+        val legacyId = "siros-ak-${java.util.UUID.randomUUID()}"
+        b.seedLegacyKey(legacyId)
+        val s = signer(b) // the default aliasPrefix: the one real production instance ever used
+        assertEquals(64, s.sign(legacyId, byteArrayOf(1)).size)
+        val jwk = Json.parseToJsonElement(String(s.exportPublicKey(legacyId))) as JsonObject
+        assertEquals(legacyId, (jwk["kid"] as JsonPrimitive).content)
+        assertEquals(listOf("hardware"), s.securityProperties(legacyId).keyStorage)
+        s.deleteKey(legacyId)
+        assertTrue("the legacy alias itself must be deleted, not a nonexistent prefixed one", b.aliases().isEmpty())
+    }
+
+    @Test
+    fun listKeys_surfacesLegacyKeys_onlyUnderTheDefaultAliasPrefix() = runTest {
+        val b = FakeBackend()
+        val legacyId = "siros-ak-${java.util.UUID.randomUUID()}"
+        b.seedLegacyKey(legacyId)
+        val default = signer(b)
+        assertTrue(legacyId in default.listKeys().map { it.keyId })
+        val custom = AndroidKeystoreSigner(b, aliasPrefix = "${AndroidKeystoreSigner.DEFAULT_ALIAS_PREFIX}other.")
+        assertTrue("a custom-scoped signer's own listing must not pick up another instance's legacy key", custom.listKeys().isEmpty())
+    }
+
+    @Test
+    fun refusesUnknownKeys() = runTest {
+        val s = signer(FakeBackend())
+        try {
+            s.sign("no-such-key", byteArrayOf(1))
+            fail("expected key_not_found")
+        } catch (e: KeystoreException) {
+            assertEquals("key_not_found", e.errorCode)
+        }
+    }
+
+    @Test
+    fun keysAreDeviceBound() = runTest {
+        val s = signer(FakeBackend())
+        val id = s.generateKey("ES256")
+        assertTrue(s.exportPrivateKeypairs().isEmpty())
+        assertEquals(MigrationResult.ReEnrollmentRequired(id), s.migrateKey(id, "softkey"))
+    }
+
+    @Test
+    fun theSignerAnnouncesTheAttestationCapability() = runTest {
         val s = signer(FakeBackend())
         assertTrue(s.supportsAttestedKeyGeneration)
-        assertTrue(s.migrateKey("k", "other") is MigrationResult.ReEnrollmentRequired)
     }
 
     @Test
@@ -216,14 +557,17 @@ class AndroidKeystoreSignerTest {
         val b = FakeBackend()
         val s = signer(b)
         val caller = Thread.currentThread().name
-        val id = s.generateAttestedKey("ES256", ByteArray(32) { 1 })
+        val attestedId = s.generateAttestedKey("ES256", ByteArray(32) { 1 })
         val attestedOn = b.generatedOn!!
         s.generateKey("ES256")
         val plainOn = b.generatedOn!!
-        b.derSignature = der(ByteArray(32) { 1 }, ByteArray(32) { 2 })
-        s.sign(id, byteArrayOf(1))
+        val createdId = s.createKey(KeyPolicy(HardwareRequirement.ANY)).keyId
+        val policyOn = b.generatedOn!!
+        s.sign(attestedId, byteArrayOf(1))
         assertTrue("attested generation ran on $attestedOn, the caller is $caller", attestedOn.startsWith("DefaultDispatcher") && attestedOn != caller)
         assertTrue("plain generation ran on $plainOn", plainOn.startsWith("DefaultDispatcher"))
+        assertTrue("policy generation ran on $policyOn", policyOn.startsWith("DefaultDispatcher"))
         assertTrue("signing ran on ${b.signedOn}", b.signedOn!!.startsWith("DefaultDispatcher"))
+        assertTrue(createdId.isNotEmpty())
     }
 }
