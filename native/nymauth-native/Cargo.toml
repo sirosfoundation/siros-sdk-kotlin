@@ -12,7 +12,9 @@
 #
 # nym-longfellow and nym-bbs/cd-ecdsa-pop/bbs-cd-plugin are git dependencies on AltmannPeter/readdit-demo.
 # nym-longfellow is pinned to commit 50c47ac98e37f6 (merged to its main: adds Circuits::from_pair and
-# Layout::parse, no behaviour change otherwise) - the same commit siros-sdk-kotlin#322 pins.
+# Layout::parse, no behaviour change otherwise) - the same commit siros-sdk-kotlin#322 pins. That
+# repo's cargo workspace root is native/longfellow/ (not the repo root); Cargo resolves the
+# nym-longfellow package from within the cloned tree regardless.
 #
 # nym-bbs/cd-ecdsa-pop/bbs-cd-plugin are pinned to commit 0250f907ec3264 on branch
 # feat/bbs-prove-with-signer (adds nym-bbs's Prover::prove_with), which is NOT YET MERGED to that
