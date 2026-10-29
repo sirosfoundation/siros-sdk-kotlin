@@ -3549,13 +3549,43 @@ class SirosWallet private constructor(
     }
 
     /**
-     * Generates this installation's instance key. When the keystore can bind a key to an attestation challenge (the Android
-     * Keystore signer) the WIA challenge C is fetched FIRST and the key is generated for SHA-256("siros-instance-key-v1" || C), and
-     * remembered so the next WIA uses that very C with the key's chain; otherwise (or when the challenge cannot be fetched) a
-     * plain key, exactly as before, and no evidence.
+     * Whether [ensureAndroidKeystorePluginRegistered] has already registered the `android-keystore` WSCD plugin on
+     * [keystore]'s own [WscdManager] this process - registering twice on the same [keystore] is neither needed nor
+     * supported (see [WscdManager.registerAndroidKeystorePlugin]'s "at most once per process" contract). Guarded only
+     * by [instanceKeyMutex] (every caller below already holds it), not its own lock.
+     */
+    @Volatile
+    private var androidKeystorePluginRegistered = false
+
+    /**
+     * Registers the `android-keystore` WSCD plugin on [wscd] (a no-op after the first successful call) so
+     * [WscdManager.generateAndroidKeystoreKeyWithChallenge] - and, afterwards, plain [KeystoreManager.sign]/
+     * [KeystoreManager.attestationChain]/[KeystoreManager.listKeys]/[KeystoreManager.generateDPoPProof] on the very
+     * same [keystore] - can reach the key it makes. Registering on [keystore] itself (never a separate signer
+     * instance) is what makes the key immediately usable through every other call site in this class, which all
+     * read/write keys through [keystore] alone.
+     */
+    private fun ensureAndroidKeystorePluginRegistered(wscd: WscdManager) {
+        if (!androidKeystorePluginRegistered) {
+            wscd.registerAndroidKeystorePlugin()
+            androidKeystorePluginRegistered = true
+        }
+    }
+
+    /**
+     * Generates this installation's instance key. When the keystore can bind a key to an attestation challenge - a WSCD-backed
+     * [keystore] (via the `android-keystore` plugin, [WscdManager.generateAndroidKeystoreKeyWithChallenge] - the fixed, forced
+     * path real Android Key Attestation always uses, independent of whichever WSCD plugin the deployment has selected for
+     * ordinary credential keys) or, for a [keystore] that is itself a challenge-capable [Signer] outside the WSCD/UniFFI
+     * bridge ([org.siros.sdk.keystore.Signer.supportsAttestedKeyGeneration]) - the WIA challenge C is fetched FIRST and the key
+     * is generated for SHA-256("siros-instance-key-v1" || C), and remembered so the next WIA uses that very C with the key's
+     * chain; otherwise (or when the challenge cannot be fetched, or generation fails for any reason - no hardware support, an
+     * emulator with no Keystore attestation, ...) a plain key, exactly as before, and no evidence.
      */
     private suspend fun generateInstanceKey(): String {
-        if (keystore.supportsAttestedKeyGeneration && (evidenceBlockedAt == null || evidenceBlockedAt != deviceStateFingerprint())) {
+        val wscd = keystore as? WscdManager
+        val attestedCapable = wscd != null || keystore.supportsAttestedKeyGeneration
+        if (attestedCapable && (evidenceBlockedAt == null || evidenceBlockedAt != deviceStateFingerprint())) {
             try {
                 val challengeResponse = apiClient?.requestWIAChallenge()
                 val c = challengeResponse?.get("challenge")?.jsonPrimitive?.contentOrNull
@@ -3563,7 +3593,13 @@ class SirosWallet private constructor(
                     // Captured here, before hardware key generation - see PendingInstanceKeyEvidence's doc comment.
                     val fetchedAt = instanceKeyClock()
                     val serverExpiresAt = challengeResponse["expires_at"]?.jsonPrimitive?.longOrNull?.let { it * 1000 }
-                    val keyId = keystore.generateAttestedKey("ES256", InstanceKeyEvidence.challengeHash(c))
+                    val challengeHash = InstanceKeyEvidence.challengeHash(c)
+                    val keyId = if (wscd != null) {
+                        ensureAndroidKeystorePluginRegistered(wscd)
+                        wscd.generateAndroidKeystoreKeyWithChallenge(challengeHash)
+                    } else {
+                        keystore.generateAttestedKey("ES256", challengeHash)
+                    }
                     pendingInstanceKeyEvidence = PendingInstanceKeyEvidence(keyId, c, fetchedAt, serverExpiresAt)
                     keystore.markInstanceKey(keyId)
                     return keyId
