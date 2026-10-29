@@ -4,6 +4,8 @@ package org.siros.sdk.wallet
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import org.siros.sdk.keystore.Iso18045AssuranceScheme
+import org.siros.sdk.keystore.WscdAssuranceScheme
 import org.siros.sdk.keystore.WscdPluginCapabilities
 import timber.log.Timber
 
@@ -376,10 +378,13 @@ private object NoopWscdUserOverrideStore : WscdUserOverrideStore {
  *
  * **Phase 1 scope**: no changes to `siros-wscd-manager` (Rust/UniFFI) - no
  * live plugin enumeration, no live per-plugin capability query. Resolution
- * uses only [WscdPluginCapabilities]'s static table and picks among
- * `KeystoreManager` instances the host app has already constructed and
- * handed to the SDK via `availableKeystores` - never by asking the SDK to
- * build or mutate a plugin instance itself (only the host app can wire up
+ * uses only [assuranceScheme]'s static nominal-tier table
+ * ([Iso18045AssuranceScheme.DEFAULT] unless this policy was constructed with
+ * a different [WscdAssuranceScheme] - see that interface's doc comment) and
+ * picks among `KeystoreManager` instances the host app has already
+ * constructed and handed to the SDK via `availableKeystores` - never by
+ * asking the SDK to build or mutate a plugin instance itself (only the host
+ * app can wire up
  * the platform transports real plugins like fido2/r2ps need).
  *
  * Resolution order for [resolve]:
@@ -424,6 +429,20 @@ class WscdSelectionPolicy(
     private val defaultMapping: Map<String, String>? = null,
     private val requestChoice: RequestWscdChoice? = null,
     private val userOverrideStore: WscdUserOverrideStore = NoopWscdUserOverrideStore,
+    /**
+     * The assurance-label vocabulary [isEligible] (both [resolve] and
+     * [resolveCandidates]) compares a plugin's nominal tier against a
+     * credential type's declared `requiredTier` with -
+     * [Iso18045AssuranceScheme.DEFAULT] unless a deployment constructs this
+     * policy with its own [WscdAssuranceScheme] (its own
+     * [Iso18045AssuranceScheme] instance with different mapping tables, or a
+     * wholly different vocabulary altogether - see [WscdAssuranceScheme]'s
+     * doc comment). `requiredTier` itself is always a label IN this scheme's
+     * own vocabulary (it comes from the credential catalog/issuer, compared
+     * only via [WscdAssuranceScheme.meets] - never parsed or assumed to be
+     * ISO 18045 by this class).
+     */
+    private val assuranceScheme: WscdAssuranceScheme = Iso18045AssuranceScheme.DEFAULT,
 ) {
     companion object {
         /**
@@ -517,8 +536,8 @@ class WscdSelectionPolicy(
         // whether to actually use one.
         fun isEligible(pluginId: String): Boolean {
             if (requiredTier == null) return true
-            val tier = WscdPluginCapabilities.tierOf(pluginId) ?: return false
-            return WscdPluginCapabilities.meets(tier, requiredTier)
+            val tier = assuranceScheme.nominalLabelFor(pluginId) ?: return false
+            return assuranceScheme.meets(tier, requiredTier)
         }
 
         // 2. Per-(issuer, credentialType) user override - checked exactly
@@ -689,8 +708,8 @@ class WscdSelectionPolicy(
     ): WscdCandidateResolution? {
         fun isEligible(pluginId: String): Boolean {
             if (requiredTier == null) return true
-            val tier = WscdPluginCapabilities.tierOf(pluginId) ?: return false
-            return WscdPluginCapabilities.meets(tier, requiredTier)
+            val tier = assuranceScheme.nominalLabelFor(pluginId) ?: return false
+            return assuranceScheme.meets(tier, requiredTier)
         }
 
         fun singleCandidate(pluginId: String) = WscdCandidateResolution(listOf(pluginId), requiresWinnerConfirmation = false)

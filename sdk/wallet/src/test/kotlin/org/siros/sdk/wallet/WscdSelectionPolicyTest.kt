@@ -7,6 +7,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import org.siros.sdk.keystore.Iso18045AssuranceScheme
 
 /**
  * Covers every branch of [WscdSelectionPolicy.resolve]'s resolution order -
@@ -1025,5 +1026,82 @@ class WscdSelectionPolicyTest {
         policy.confirmAutoPickWinner(issuer, credentialType, "fido2")
 
         assertEquals("fido2", tofu.get(issuer, credentialType))
+    }
+
+    // ── assuranceScheme is genuinely deployment-configurable, not still ──────
+    // ── hardcoded to WscdPluginCapabilities' own default somewhere else. ─────
+
+    @Test
+    fun resolve_usesDefaultScheme_whenNoAssuranceSchemeGiven() = runTest {
+        // Unconfigured: "fido2" meets "iso_18045_high" under
+        // Iso18045AssuranceScheme.DEFAULT, same as before this change.
+        val tofu = InMemoryWscdTofuStore()
+        val policy = WscdSelectionPolicy(tofuStore = tofu, defaultMapping = null, requestChoice = null)
+
+        val result = policy.resolve(
+            issuer = issuer,
+            credentialType = credentialType,
+            requiredTier = "iso_18045_high",
+            availablePluginIds = setOf("fido2"),
+        )
+
+        assertEquals("fido2", result)
+    }
+
+    @Test
+    fun resolve_honorsCustomAssuranceScheme_fido2DemotedBelowRequiredTier() = runTest {
+        // A deployment whose audit treats "fido2" as only iso_18045_moderate
+        // (not Iso18045AssuranceScheme.DEFAULT's iso_18045_high) - proves the
+        // mapping is genuinely read from the injected scheme, not still a
+        // compiled-in constant anywhere in the resolution path.
+        val tofu = InMemoryWscdTofuStore()
+        val strictDeployment = Iso18045AssuranceScheme(
+            nominalPluginLabels = mapOf("fido2" to Iso18045AssuranceScheme.MODERATE, "softkey" to Iso18045AssuranceScheme.BASIC),
+        )
+        val policy = WscdSelectionPolicy(
+            tofuStore = tofu,
+            defaultMapping = null,
+            requestChoice = null,
+            assuranceScheme = strictDeployment,
+        )
+
+        try {
+            policy.resolve(
+                issuer = issuer,
+                credentialType = credentialType,
+                requiredTier = "iso_18045_high",
+                availablePluginIds = setOf("fido2"),
+            )
+            fail("expected NoEligibleWscdPluginException: this deployment's scheme caps fido2 at iso_18045_moderate")
+        } catch (e: NoEligibleWscdPluginException) {
+            // expected
+        }
+    }
+
+    @Test
+    fun resolve_honorsCustomAssuranceScheme_fido2StillEligibleForLowerRequirement() = runTest {
+        // Same custom scheme as above, but the credential only requires
+        // iso_18045_moderate - fido2 (capped at moderate by this deployment's
+        // own scheme) is still eligible, proving the override is a real
+        // re-ranking, not merely "always ineligible."
+        val tofu = InMemoryWscdTofuStore()
+        val strictDeployment = Iso18045AssuranceScheme(
+            nominalPluginLabels = mapOf("fido2" to Iso18045AssuranceScheme.MODERATE),
+        )
+        val policy = WscdSelectionPolicy(
+            tofuStore = tofu,
+            defaultMapping = null,
+            requestChoice = null,
+            assuranceScheme = strictDeployment,
+        )
+
+        val result = policy.resolve(
+            issuer = issuer,
+            credentialType = credentialType,
+            requiredTier = "iso_18045_moderate",
+            availablePluginIds = setOf("fido2"),
+        )
+
+        assertEquals("fido2", result)
     }
 }

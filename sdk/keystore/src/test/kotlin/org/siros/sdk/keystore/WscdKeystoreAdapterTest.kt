@@ -934,4 +934,61 @@ class WscdKeystoreAdapterTest {
         coVerify(exactly = 0) { signer.isWscdOnboarded() }
         assertFalse(adapter.isWscdOnboarded())
     }
+
+    // ── Key Attestation's key_storage/user_authentication now go through ─────
+    // ── the SAME configurable Iso18045AssuranceScheme as WscdPluginCapabilities ─
+
+    @Test
+    fun generateKeyAttestationMapsTrustedExecutionToModerate_notTheStrayEnhancedBasicString() = runTest {
+        // Regression test for the fix documented on
+        // Iso18045AssuranceScheme.DEFAULT_KEY_STORAGE_TYPE_LABELS: the
+        // previous, now-removed toIso18045AttackPotential switch mapped
+        // "trusted_execution" to the non-canonical "iso_18045_enhanced-basic"
+        // string, which is not part of the 3-tier iso_18045_basic/moderate/high
+        // vocabulary registered for this JWT's key_storage claim at all.
+        val signer = mockk<Signer>(relaxed = true).also {
+            coEvery { it.generateKey(any()) } returns "test-key-1"
+            coEvery { it.sign(any(), any()) } returns ByteArray(64) { i -> i.toByte() }
+            coEvery { it.exportPublicKey(any()) } returns realPublicKeyJwkJson().toByteArray()
+            coEvery { it.securityProperties(any()) } returns SignerSecurityProperties(
+                keyStorage = listOf("trusted_execution"),
+                userAuthentication = emptyList(),
+            )
+        }
+        val adapter = WscdKeystoreAdapter(signer)
+        adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+
+        val jwt = adapter.generateKeyAttestation(nonce = "n", count = 1)
+        val claims = com.nimbusds.jwt.SignedJWT.parse(jwt).jwtClaimsSet
+
+        assertEquals(listOf("iso_18045_moderate"), claims.getClaim("key_storage"))
+    }
+
+    @Test
+    fun generateKeyAttestationHonorsCustomAssuranceScheme() = runTest {
+        // Proves the Key Attestation JWT's key_storage claim is genuinely
+        // read through the injected Iso18045AssuranceScheme, not still a
+        // separate compiled-in table: a deployment configuring "hardware" to
+        // read as iso_18045_high (rather than DEFAULT's iso_18045_moderate)
+        // sees that custom value in the signed claim.
+        val signer = mockk<Signer>(relaxed = true).also {
+            coEvery { it.generateKey(any()) } returns "test-key-1"
+            coEvery { it.sign(any(), any()) } returns ByteArray(64) { i -> i.toByte() }
+            coEvery { it.exportPublicKey(any()) } returns realPublicKeyJwkJson().toByteArray()
+            coEvery { it.securityProperties(any()) } returns SignerSecurityProperties(
+                keyStorage = listOf("hardware"),
+                userAuthentication = emptyList(),
+            )
+        }
+        val lenientDeployment = Iso18045AssuranceScheme(
+            keyStorageTypeLabels = mapOf("hardware" to Iso18045AssuranceScheme.HIGH),
+        )
+        val adapter = WscdKeystoreAdapter(signer, assuranceScheme = lenientDeployment)
+        adapter.unlock(ByteArray(0), ByteArray(0), ByteArray(0), ByteArray(0))
+
+        val jwt = adapter.generateKeyAttestation(nonce = "n", count = 1)
+        val claims = com.nimbusds.jwt.SignedJWT.parse(jwt).jwtClaimsSet
+
+        assertEquals(listOf("iso_18045_high"), claims.getClaim("key_storage"))
+    }
 }
