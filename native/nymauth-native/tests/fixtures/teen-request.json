@@ -1,0 +1,90 @@
+{
+ "request": {
+  "aud": "https://self-issued.me/v2",
+  "iat": 1793020840,
+  "wallet_nonce": "spike-wallet-nonce-0001",
+  "response_type": "vp_token",
+  "response_mode": "direct_post.jwt",
+  "response_uri": "http://localhost:3000/api/vp/response/e45d11bdd615fc0977e93d10dc7f9779",
+  "client_id": "x509_san_dns:community.example",
+  "nonce": "e77c610219bbcf0f99bf9a7b39837500",
+  "state": "5c767d0f372fccda5b6700f7d9f1f068",
+  "dcql_query": {
+   "credentials": [
+    {
+     "id": "nym_attestation",
+     "format": "zkp_req",
+     "meta": {
+      "source_format": "mso_mdoc",
+      "doctype_value": "eu.europa.ec.eudi.nym_auth.1"
+     },
+     "_req": [
+      {
+       "fn_id": "pseudonym",
+       "return": "nym",
+       "params": {
+        "config": "known-offender-matching-ssc",
+        "ver": 1,
+        "prf": "sha-256"
+       }
+      },
+      {
+       "fn_id": "age_check",
+       "return": "age",
+       "params": {
+        "le": "2013-10-26",
+        "ge": "2008-10-27"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "client_metadata": {
+   "client_name": "Community",
+   "vp_formats_supported": {
+    "zkp_req": {
+     "proof_system_values": [
+      "longfellow-libzk-v1"
+     ],
+     "system_id_values": [
+      "urn:circuits:longfellow:nym_auth:v1"
+     ]
+    }
+   },
+   "jwks": {
+    "keys": [
+     {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "C7x70FlltQjtV-jdSQjfDrYGGyT0tGfuQLBm9as0fn8",
+      "y": "J0zp7UCzNwuKEisA1foX8ipJqVfeggT8r9jk-mrkp74",
+      "kid": "016639e1a57da81c",
+      "use": "enc",
+      "alg": "ECDH-ES"
+     }
+    ]
+   }
+  }
+ },
+ "handover": {
+  "client_id": "x509_san_dns:community.example",
+  "nonce": "e77c610219bbcf0f99bf9a7b39837500",
+  "response_uri": "http://localhost:3000/api/vp/response/e45d11bdd615fc0977e93d10dc7f9779",
+  "jwk_thumbprint": "dlCNOebSSxRN1JD4QaE_jiUNp50XtVB9U1qoXc3wrW8"
+ },
+ "credential": {
+  "issuer_signed": "ompuYW1lU3BhY2VzoXgcZXUuZXVyb3BhLmVjLmV1ZGkubnltX2F1dGguMYLYGFhbpGhkaWdlc3RJRABmcmFuZG9tUPT7_QLsA_RGk15BzuR9IFNxZWxlbWVudElkZW50aWZpZXJqYmlydGhfZGF0ZWxlbGVtZW50VmFsdWXZA-xqMjAxMS0wMy0xNNgYWGikaGRpZ2VzdElEAWZyYW5kb21QBxROTOmmhuR8vCWlnQFPe3FlbGVtZW50SWRlbnRpZmllcmNzc2NsZWxlbWVudFZhbHVlWCCFtsqCGkGoCM6rZWjMx-kxAFqNARdFtjo7FFI2sGiqJ2ppc3N1ZXJBdXRohEOhASahGCFZAeEwggHdMIIBgqADAgECAhEAzp3dKOVc8eXDKL465scyljAKBggqhkjOPQQDAjBCMR0wGwYDVQQDDBREZW1vIERvY3VtZW50IFNpZ25lcjEUMBIGA1UECgwLRGVtbyBJc3N1ZXIxCzAJBgNVBAYMAlNFMCAXDTI2MTAxMzAwMDAwMFoYDzk5OTkxMjMxMjM1OTU5WjBCMR0wGwYDVQQDDBREZW1vIERvY3VtZW50IFNpZ25lcjEUMBIGA1UECgwLRGVtbyBJc3N1ZXIxCzAJBgNVBAYMAlNFMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEtLP5Hl3snKZ5AnSBFernFC70EmMTkIU-5hWNLvSckOBWnzIE-MdEzR7wb75gNf1g1T8STp7BPMlc7A0iez9qGqNXMFUwDwYDVR0PAQH_BAUDAweAADASBgNVHSUECzAJBgcogYxdBQECMB0GA1UdDgQWBBQXTtkQPLvenT2QP9exHfmzm8950TAPBgNVHRMBAf8EBTADAQEAMAoGCCqGSM49BAMCA0kAMEYCIQDCHld-XRFjscbz87XlwibnoDwADfGpoIMFZzIQAB67aAIhALQx-BE0zlRKEspBFdExT9B504cTl2JzI9oJd4Qy9WSQWQGT2BhZAY6mZ3ZlcnNpb25jMS4wb2RpZ2VzdEFsZ29yaXRobWdTSEEtMjU2bHZhbHVlRGlnZXN0c6F4HGV1LmV1cm9wYS5lYy5ldWRpLm55bV9hdXRoLjGiAFggQ79mLr8PgI5UFXtjMIQwo9cpGkK0FeCHlEu6A3P6O64BWCDPFSKMlNygx8S5Od7F9tQs5L3N2fbwl6kfVTtBrmzB4W1kZXZpY2VLZXlJbmZvoWlkZXZpY2VLZXmkAQIgASFYIH5vi9ft6_BFfmjFHPdoQ0NlQM4WQUSsSXMc-jmRwrTsIlggJOE7qWdYrjSuECyJAq0coEs3iEMZ0VTCUmDqyeMsEclnZG9jVHlwZXgcZXUuZXVyb3BhLmVjLmV1ZGkubnltX2F1dGguMWx2YWxpZGl0eUluZm-jZnNpZ25lZMB0MjAyNi0xMC0xM1QwMDowMDowMFppdmFsaWRGcm9twHQyMDI2LTEwLTEzVDAwOjAwOjAwWmp2YWxpZFVudGlswHQ5OTk5LTEyLTMxVDIzOjU5OjU5WlhASWcWkf_oG-CJZOF46n_qLq_94Sksqap2BMPyPtCZf21C5it_BV30C0L-2r-0JT7FrsILTMKm1Bc3_d9HlGk6qA",
+  "doctype": "eu.europa.ec.eudi.nym_auth.1"
+ },
+ "device_key": {
+  "crv": "P-256",
+  "d": "-kIPShCJOixF-0VqWGTR-1WAcB_OQZQ401JiJyODC_c",
+  "kty": "EC",
+  "x": "fm-L1-3r8EV-aMUc92hDQ2VAzhZBRKxJcxz6OZHCtOw",
+  "y": "JOE7qWdYrjSuECyJAq0coEs3iEMZ0VTCUmDqyeMsEck"
+ },
+ "secret_seed": "9835b2fa5fff78a12a2331813612c95a",
+ "verifier_id": "x509_san_dns:community.example",
+ "comment": "community-demo's teen demo mdoc (app/wallet/demo-wallet.json, demo material) and a 13-17 + pseudonym request captured from community-demo 6a2f676; expected pseudonym for x509_san_dns:community.example: 61266c285395e6fa97f3fa2d93ee428de03d99e9e0e62a3fcc38664faaaa4c30"
+}
