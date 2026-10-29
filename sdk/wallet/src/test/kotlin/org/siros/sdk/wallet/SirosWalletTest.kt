@@ -264,10 +264,15 @@ class SirosWalletTest {
             "_state" to MutableStateFlow<WalletState>(WalletState.Disconnected()),
             "apiClient" to apiClient,
             "json" to Json { ignoreUnknownKeys = true },
+            "config" to WalletConfig(backendUrl = "https://backend.example.com"),
         )
 
         val offers = wallet.getAvailableCredentials()
 
+        coVerify(exactly = 1) { apiClient.getIssuerMetadata(7) }
+        // The second call is served from the SDK's cache: no further request to the backend.
+        assertEquals(offers, wallet.getAvailableCredentials())
+        coVerify(exactly = 1) { apiClient.getIssuers() }
         coVerify(exactly = 1) { apiClient.getIssuerMetadata(7) }
         assertEquals(1, offers.size)
         assertEquals("pid", offers.single().credentialConfigurationId)
@@ -2335,6 +2340,44 @@ class SirosWalletTest {
         } finally {
             server.shutdown()
         }
+    }
+
+    /**
+     * Review of #298: [SirosWallet.unlockKeystore] schedules an issuer-catalog refresh once it reaches `Ready`, but
+     * [SirosWallet.resumeSession] can ALSO land directly in `Ready` itself - the "no stored private data" branch,
+     * which never calls `unlockKeystore` at all. Without its own refresh call, a stale (or still-empty) persisted
+     * catalog snapshot would sit unrefreshed until something else happened to read it.
+     */
+    @Test
+    fun resumeSession_withNoStoredPrivateData_stillSchedulesACatalogRefresh() = runTest(dispatcher) {
+        mockEngineConstructor()
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        every { sessionStore.userId } returns "user-1"
+        every { sessionStore.displayName } returns "Alice"
+        every { sessionStore.privateDataJwe } returns null
+        every { sessionStore.hkdfSalt } returns null
+        every { sessionStore.hkdfInfo } returns null
+        val accountRegistry = mockk<AccountRegistry>(relaxed = true)
+        every { accountRegistry.activeAccountId } returns "default:user-1"
+        val issuerCatalog = mockk<IssuerCatalog>(relaxed = true)
+        val stateFlow = MutableStateFlow<WalletState>(WalletState.Disconnected())
+        val wallet = newWallet(
+            "_state" to stateFlow,
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "accountRegistry" to accountRegistry,
+            "sessionStore" to sessionStore,
+            "authTokens" to mockk<AuthTokens>(relaxed = true),
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+            "httpClient" to OkHttpClient(),
+            "issuerCatalog" to issuerCatalog,
+            "json" to Json { ignoreUnknownKeys = true },
+        )
+
+        wallet.resumeSession()
+        advanceUntilIdle()
+
+        assertTrue(stateFlow.value is WalletState.Ready)
+        verify(exactly = 1) { issuerCatalog.refreshInBackground(any()) }
     }
 
     /**
@@ -6029,6 +6072,74 @@ class SirosWalletTest {
             org.siros.sdk.credentials.AuxiliaryDataV01.id, selections[issuer to "pid"]?.shape?.id,
         )
         second.await()
+    }
+
+    /**
+     * [IssuerCatalog]'s `buildOffers` calls [SirosWallet.recordAuxiliarySelection] for EVERY offer on every catalog
+     * assembly (a cache read, a background refresh), including for the configuration an issuance is actively in
+     * flight for. Its completion handlers (`wmpDeliveredMetadataRefusal` and the legacy equivalent) look up the
+     * selection live, by (issuer, configuration): a catalog pass landing mid-flight must never swap out the selection
+     * the request was built with, or a response missing a required seed could be silently accepted. Found via review
+     * of #298's background refresh.
+     */
+    @Test
+    fun catalogDerivationNeverOverwritesTheActiveIssuancesAuxiliarySelection() = runTest(dispatcher) {
+        val issuer = "https://issuer.example"
+        fun metadataWith(advert: kotlinx.serialization.json.JsonElement?) = buildJsonObject {
+            put("credential_issuer", JsonPrimitive(issuer))
+            putJsonObject("credential_configurations_supported") {
+                putJsonObject("pid") {
+                    put("format", JsonPrimitive("dc+sd-jwt"))
+                    if (advert != null) put("auxiliary_data_supported", advert)
+                }
+            }
+        }
+        val valid = metadataWith(Json.parseToJsonElement("""{"to_wallet":[{"type":"hash_commitment","alg":"sha-256","path":["ssc"],"encoding":"base64url"}]}"""))
+        val withoutAdvertisement = metadataWith(null) // no auxiliary_data_supported at all -> AuxiliarySelection.None
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+        coEvery { apiClient.resolveIssuer(any(), any()) } returns buildJsonObject { putJsonObject("context") { put("trust_metadata", valid) } }
+        val engine = mockk<WalletEngineSession>(relaxed = true)
+        val selections = java.util.concurrent.ConcurrentHashMap<Pair<String, String>, org.siros.sdk.credentials.AuxiliarySelection.Selected>()
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "u", displayName = "A")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "engineSession" to engine,
+            "apiClient" to apiClient,
+            "secretSeedAdvertised" to selections,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+            "json" to Json { ignoreUnknownKeys = true },
+            "httpClient" to OkHttpClient(),
+        )
+        val offer = org.siros.sdk.credentials.CredentialOffer("pid", issuer, "PID", issuerName = "I")
+        wallet.startIssuanceByOffer(offer)
+        advanceUntilIdle()
+        assertEquals(
+            "the issuance's own resolution recorded the selection",
+            org.siros.sdk.credentials.AuxiliaryDataV01.id, selections[issuer to "pid"]?.shape?.id,
+        )
+        assertEquals(offer.credentialConfigurationId, "pid")
+        assertEquals("pid", (getField(wallet, "activeOffer") as org.siros.sdk.credentials.CredentialOffer).credentialConfigurationId)
+
+        // A concurrent catalog derivation (IssuerCatalog.buildOffers, e.g. a background refresh) for the SAME
+        // (issuer, "pid") the issuance above is still active for, with metadata that now advertises nothing.
+        val staleConfig = Json { ignoreUnknownKeys = true }
+            .decodeFromJsonElement(org.siros.sdk.credentials.IssuerMetadata.serializer(), withoutAdvertisement)
+            .credentialConfigurationsSupported.getValue("pid")
+        val record = SirosWallet::class.java.getDeclaredMethod(
+            "recordAuxiliarySelection", String::class.java, String::class.java, org.siros.sdk.credentials.CredentialConfiguration::class.java,
+        )
+        record.isAccessible = true
+        record.invoke(wallet, issuer, "pid", staleConfig)
+
+        assertEquals(
+            "a catalog pass for the actively-issuing pair must not overwrite the recorded selection",
+            org.siros.sdk.credentials.AuxiliaryDataV01.id, selections[issuer to "pid"]?.shape?.id,
+        )
+
+        // Once the issuance is no longer active (the attempt ended), the SAME catalog derivation is free to update it.
+        setField(wallet, "activeOffer", null)
+        record.invoke(wallet, issuer, "pid", staleConfig)
+        assertNull("no longer protected once the issuance ended", selections[issuer to "pid"])
     }
 
     @Test
@@ -14583,6 +14694,11 @@ class SirosWalletTest {
         }
         if ("readerTrustRootCertificates\$delegate" !in values) {
             setField(wallet, "readerTrustRootCertificates\$delegate", lazy { emptyList<java.security.cert.X509Certificate>() })
+        }
+        // allocateInstance skips the issuer catalog's initializer too; the wallet's own factory builds it over the fields set above.
+        if ("issuerCatalog" !in values) {
+            val catalogScope = (values["scope"] as? CoroutineScope) ?: CoroutineScope(Dispatchers.Unconfined + SupervisorJob())
+            setField(wallet, "issuerCatalog", wallet.newIssuerCatalog(catalogScope, InMemoryIssuerCatalogStore()))
         }
         return wallet
     }

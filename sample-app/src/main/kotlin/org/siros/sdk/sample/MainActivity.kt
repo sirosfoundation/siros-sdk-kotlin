@@ -237,6 +237,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
     val showAddCredential by viewModel.showAddCredential.collectAsState()
     val showIDVPreparation by viewModel.showIDVPreparation.collectAsState()
     val availableCredentials by viewModel.availableCredentials.collectAsState()
+    val isRefreshingOffers by viewModel.isRefreshingOffers.collectAsState()
     val isLoadingOffers by viewModel.isLoadingOffers.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -605,6 +606,7 @@ fun WalletScreen(viewModel: WalletViewModel) {
                     AddCredentialScreen(
                         offers = availableCredentials,
                         isLoading = isLoadingOffers,
+                        isRefreshing = isRefreshingOffers,
                         onOfferSelected = viewModel::selectCredentialOffer,
                         pendingOffer = pendingOffer,
                         onConfirmIssuance = viewModel::confirmIssuance,
@@ -617,7 +619,9 @@ fun WalletScreen(viewModel: WalletViewModel) {
                         // screen exactly like IDV above rather than
                         // duplicating any scanning logic.
                         onScanQr = viewModel::openActivate,
-                        onRetry = viewModel::openAddCredential,
+                        // NOT openAddCredential, which now only reads the cache (#298 review): the empty-state Retry
+                        // button must actually fetch, or it does nothing during the cache's TTL window.
+                        onRetry = viewModel::retryAvailableCredentials,
                         modifier = Modifier.padding(padding),
                     )
                 }

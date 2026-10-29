@@ -744,18 +744,50 @@ class BackendApiClient(
         }
     }
 
-    private fun execute(request: Request): JsonObject {
+    private suspend fun execute(request: Request): JsonObject {
         return executeRaw(request).jsonObject
     }
 
-    private fun executeRaw(request: Request): JsonElement {
-        val response = try {
-            httpClient.newCall(request).execute()
-        } catch (e: java.io.IOException) {
-            throw NetworkException("Network error: ${request.url}", e)
+    /** The parts of an [okhttp3.Response] [parseResponse] needs, read and the response closed before [executeRaw] resumes. */
+    private class RawResponse(val code: Int, val isSuccessful: Boolean, val body: String?, val privateDataEtag: String?)
+
+    /**
+     * Sends the request asynchronously so that cancelling the calling coroutine (a timeout, a logout) cancels the underlying
+     * [okhttp3.Call] too, instead of leaving the request running to completion.
+     *
+     * The response body is read and the response closed INSIDE [okhttp3.Callback.onResponse], before the continuation is
+     * resumed: a server that sends headers promptly but trickles (or never finishes) the body must stay cancellable, not
+     * just the wait for headers. `OkHttp`'s [okhttp3.Call.cancel] interrupts an in-flight body read (closes the
+     * underlying stream), so [cont.invokeOnCancellation]'s hook still covers it as long as the continuation has not
+     * resumed yet - resuming only once the body is fully read (or the read fails) keeps that window open for the whole
+     * request, not only until headers arrive.
+     */
+    private suspend fun executeRaw(request: Request): JsonElement {
+        val response = kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+            val call = httpClient.newCall(request)
+            cont.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : okhttp3.Callback {
+                override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+                    cont.resumeWith(Result.failure(NetworkException("Network error: ${request.url}", e)))
+                }
+
+                override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                    val raw = try {
+                        response.use { r -> RawResponse(r.code, r.isSuccessful, r.body?.string(), r.header(PRIVATE_DATA_ETAG_HEADER)) }
+                    } catch (e: java.io.IOException) {
+                        cont.resumeWith(Result.failure(NetworkException("Network error reading response body: ${request.url}", e)))
+                        return
+                    }
+                    cont.resumeWith(Result.success(raw))
+                }
+            })
         }
-        val responseBody = response.body?.string() ?: "{}"
-        response.header(PRIVATE_DATA_ETAG_HEADER)?.let { privateDataEtag = it }
+        return withContext(kotlinx.coroutines.Dispatchers.IO) { parseResponse(request, response) }
+    }
+
+    private fun parseResponse(request: Request, response: RawResponse): JsonElement {
+        val responseBody = response.body ?: "{}"
+        response.privateDataEtag?.let { privateDataEtag = it }
 
         if (!response.isSuccessful) {
             Timber.e("API request failed: ${request.method} ${request.url} -> ${response.code}")
