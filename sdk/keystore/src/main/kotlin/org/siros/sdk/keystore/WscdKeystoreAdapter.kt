@@ -103,6 +103,17 @@ class WscdKeystoreAdapter private constructor(
             "WSCD lifecycle/plugin registration not supported - this keystore's signer is not WSCD-backed"
         )
 
+    /**
+     * Key ids [markInstanceKey] has named as the wallet's own instance key, excluded from
+     * [generateProofWithJsonClaims]'s auto-selection so an ordinary credential issuance never picks up the instance
+     * key as its holder key: the instance key can be replaced (rotated) by the wallet's own retry logic at any time
+     * without knowing a credential has come to depend on it for signing, which would permanently break that
+     * credential's presentation. [sign]/[generateKeyProof] (an explicit `keyId`) are unaffected - only the "any
+     * available key" auto-selection path is narrowed. In-memory only: [markInstanceKey] must be called again after a
+     * process restart for a RESTORED instance key id, not only when one is freshly generated.
+     */
+    private val attestedKeyIds: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
     override suspend fun lifecycleStatus(pluginId: String, contextId: String): LifecycleStatus =
         requireWscdManager().lifecycleStatus(pluginId, contextId)
 
@@ -219,6 +230,28 @@ class WscdKeystoreAdapter private constructor(
         return signer.generateKey(algorithm)
     }
 
+    override val supportsAttestedKeyGeneration: Boolean get() = signer.supportsAttestedKeyGeneration
+
+    override suspend fun generateAttestedKey(algorithm: String, attestationChallenge: ByteArray): String {
+        checkUnlocked()
+        return signer.generateAttestedKey(algorithm, attestationChallenge)
+    }
+
+    override suspend fun deleteKey(keyId: String) {
+        checkUnlocked()
+        signer.deleteKey(keyId)
+        attestedKeyIds -= keyId
+        // For an exportable software signer (see the class doc comment), the key's private JWK may already be folded
+        // into credentialsKeystore by an earlier exportEncryptedContainer() - remove it there too, or it stays in
+        // S.keypairs forever and the next unlock() imports it straight back into the signer, resurrecting a key this
+        // call just reported deleted.
+        credentialsKeystore.removeKeypair(keyId)
+    }
+
+    override suspend fun markInstanceKey(keyId: String) {
+        attestedKeyIds += keyId
+    }
+
     override suspend fun sign(keyId: String, payload: ByteArray, algorithm: String): ByteArray {
         checkUnlocked()
         return signer.sign(keyId, payload)
@@ -257,7 +290,8 @@ class WscdKeystoreAdapter private constructor(
         checkUnlocked()
         // Converted (and refused) BEFORE any key is generated or used.
         val converted = ProofClaims.toJava(extraJsonClaims)
-        var keys = signer.listKeys()
+        // Instance keys are never eligible for auto-selection here - see attestedKeyIds' doc comment.
+        var keys = signer.listKeys().filterNot { it.keyId in attestedKeyIds }
         if (keys.isEmpty() || freshKey) {
             // Auto-generate a key for VCI proof-of-possession
             val newKeyId = signer.generateKey("ES256")
@@ -265,7 +299,7 @@ class WscdKeystoreAdapter private constructor(
                 // Use only the freshly generated key
                 signer.listKeys().filter { it.keyId == newKeyId }
             } else {
-                signer.listKeys()
+                signer.listKeys().filterNot { it.keyId in attestedKeyIds }
             }
         }
         val key = keys.firstOrNull()

@@ -2934,6 +2934,87 @@ class SirosWalletTest {
         }
     }
 
+    /**
+     * A renewal with BOTH an audience and a key id hint for a RETAINED, already-rotated-away instance key (the
+     * current instance key is a different one - see retireInstanceKey's retention rule) must not attest: a freshly
+     * obtained WIA/PoP would attest the current key while the DPoP proof is signed with the old, hinted one, which an
+     * issuer binding both to the same key would reject. Found via review of #312.
+     */
+    @Test
+    fun signClientAuth_aHintedKeyThatIsNotTheCurrentInstanceKey_isAnsweredWithoutAttestation() = runTest(dispatcher) {
+        val signFlow = MutableSharedFlow<SignRequestMessage>()
+        val engine = mockEngineConstructor(signRequests = signFlow)
+        every {
+            engine.sendSignResponse(any(), any(), any(), any(), any(), any(), any(), any(), any(), any())
+        } just runs
+        val sessionStore = mockk<SessionStore>(relaxed = true)
+        // The CURRENT instance key differs from the hint below: the hint names a retained, superseded key.
+        every { sessionStore.instanceKeyId } returns "instance-key-1"
+        val keystore = mockk<KeystoreManager>(relaxed = true)
+        every { keystore.listKeys() } returns listOf(KeyInfo("instance-key-1", "ES256", 0L))
+        coEvery {
+            keystore.generateDPoPProof(keyId = any(), htm = any(), htu = any(), nonce = any(), accessTokenHash = any())
+        } returns "dpop-jwt"
+        val apiClient = mockk<BackendApiClient>(relaxed = true)
+
+        val wallet = newWallet(
+            "_state" to MutableStateFlow<WalletState>(WalletState.Ready(userId = "user-1", displayName = "Alice")),
+            "scope" to CoroutineScope(dispatcher + SupervisorJob()),
+            "sessionStore" to sessionStore,
+            "keystore" to keystore,
+            "apiClient" to apiClient,
+            "config" to WalletConfig(backendUrl = "https://wallet.example.com", redirectUri = "siros-sample://callback"),
+            "json" to Json { ignoreUnknownKeys = true },
+            "httpClient" to OkHttpClient(),
+        )
+        invokeConnectEngine(wallet, "app-token")
+        advanceUntilIdle()
+
+        signFlow.emit(
+            SignRequestMessage(
+                flowId = "flow-renew",
+                messageId = "msg-renew",
+                action = "sign_client_auth",
+                params = SignRequestParams(
+                    audience = "https://as.example.com",
+                    issuer = "siros-sample://callback",
+                    htm = "POST",
+                    htu = "https://as.example.com/token",
+                    ath = "ath-value",
+                    keyId = "old-instance-key",
+                ),
+            )
+        )
+        repeat(10) {
+            runBlocking(Dispatchers.Default) { kotlinx.coroutines.delay(100) }
+            advanceUntilIdle()
+        }
+
+        coVerify(exactly = 1) {
+            keystore.generateDPoPProof(
+                keyId = "old-instance-key",
+                htm = "POST",
+                htu = "https://as.example.com/token",
+                nonce = null,
+                accessTokenHash = "ath-value",
+            )
+        }
+        // No attestation material was obtained at all - the mismatch is caught before any WIA round trip, not after.
+        coVerify(exactly = 0) { apiClient.requestWIAChallenge() }
+        coVerify(exactly = 0) { apiClient.generateWIA(any(), any(), any(), any()) }
+        coVerify(exactly = 0) { keystore.generateKeyProof(any(), any(), any(), any(), any()) }
+        verify(exactly = 1) {
+            engine.sendSignResponse(
+                flowId = "flow-renew",
+                messageId = "msg-renew",
+                clientAttestation = null,
+                clientAttestationPoP = null,
+                dpopKeyId = "old-instance-key",
+                dpopProof = "dpop-jwt",
+            )
+        }
+    }
+
     // ---- sign_client_auth: a proof that was asked for and could not be made is never answered with a bare key id ----
 
     private val ca = StringBuilder()
@@ -14551,7 +14632,7 @@ class SirosWalletTest {
         assertTrue(getField(wallet, "issuanceInFlight") as Boolean)
     }
 
-    private fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {
+    internal fun newWallet(vararg fields: Pair<String, Any?>): SirosWallet {
         val wallet = allocateInstance(SirosWallet::class.java) as SirosWallet
         val values = fields.toMap(mutableMapOf())
         val stateFlow = values["_state"] as? MutableStateFlow<WalletState>
@@ -14565,6 +14646,9 @@ class SirosWalletTest {
         if ("pendingAuthorizations" !in values) {
             values["pendingAuthorizations"] = mutableMapOf<String, Any>()
         }
+        // allocateInstance skips these initializers: the WIA acquisition lock and the set of DPoP-bound instance keys.
+        if ("wiaMutex" !in values) values["wiaMutex"] = kotlinx.coroutines.sync.Mutex()
+        if ("dpopBoundInstanceKeys" !in values) values["dpopBoundInstanceKeys"] = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         if ("pscIssuerByFlow" !in values) {
             values["pscIssuerByFlow"] = java.util.concurrent.ConcurrentHashMap<String, String>()
         }
@@ -14638,6 +14722,12 @@ class SirosWalletTest {
         }
         if ("trustDecisionCache" !in values) {
             values["trustDecisionCache"] = TrustDecisionCache(java.time.Duration.ZERO)
+        }
+        if ("credentialStore" !in values) {
+            // allocateInstance skips this initializer too: retireInstanceKey (instance-key rotation) now reads
+            // getCredentials() to check whether a replaced key is still a stored credential's holder key, which NPEs
+            // on a null credentialStore for any test that exercises rotation without itself caring about credentials.
+            values["credentialStore"] = FakeCredentialStore(mutableListOf())
         }
         if ("zkPreparationsByFlow" !in values) {
             values["zkPreparationsByFlow"] =

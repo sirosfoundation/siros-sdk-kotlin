@@ -714,6 +714,17 @@ class JweKeystore(
         keys[kid] = ECKey.Builder(ECKey.parse(jwk)).keyID(kid).build()
     }
 
+    /**
+     * Forget a keypair previously folded in by [importKeypairJwk] (or generated here), so it is gone from the next
+     * [exportEncryptedContainer] and the next [exportKeypairJwks] - see [WscdKeystoreAdapter.deleteKey]'s doc comment:
+     * without this, a key an exportable WSCD signer reports deleted stays in this keystore's own `S.keypairs` forever
+     * and `unlock()` imports it straight back into that signer, resurrecting a key its own plugin says is gone.
+     */
+    suspend fun removeKeypair(kid: String) = mutex.withLock {
+        keys.remove(kid)
+        Unit
+    }
+
     override suspend fun sign(keyId: String, payload: ByteArray, algorithm: String): ByteArray = mutex.withLock {
         requireUnlocked()
         val key = keys[keyId] ?: throw KeystoreException("Key not found: $keyId")
