@@ -41,7 +41,7 @@ interface NymAuthBinding {
 
 /**
  * The real [NymAuthNativeProver]: dispatches by catalog `system` to the [NymAuthBinding] the host chose for it (by
- * default [DEFAULT_BINDINGS]: zk-cred-vega for `vega-nymauth`, zk-cred-longfellow for `longfellow-nymauth`), keeps
+ * default [DEFAULT_BINDINGS]: zk-cred-vega for `vega-nymauth`, nymauth-native for `longfellow-nymauth`), keeps
  * ONE built circuit resident (keyed by system, circuit id and artifact hash, so a changed artifact is never proved
  * with a stale state), and drops it on [release] (memory pressure) or when its circuit is retired. A different
  * circuit evicts the resident one first: the process holds one native prover at a time. The binding's errors are
@@ -150,8 +150,12 @@ class UniffiNymAuthNativeProver(
     }
 
     companion object {
-        /** The SDK's own implementations: zk-cred-vega for `vega-nymauth`, zk-cred-longfellow for `longfellow-nymauth`. */
-        val DEFAULT_BINDINGS: List<NymAuthBinding> get() = listOf(ZkCredVegaNymAuthBinding, ZkCredLongfellowNymAuthBinding)
+        /**
+         * The SDK's own implementations: zk-cred-vega for `vega-nymauth`, nymauth-native (Google's longfellow-zk, as
+         * community-demo's verifier runs) for `longfellow-nymauth`. ISRG's zk-cred-longfellow stays available:
+         * `withBindings(ZkCredLongfellowNymAuthBinding)`.
+         */
+        val DEFAULT_BINDINGS: List<NymAuthBinding> get() = listOf(ZkCredVegaNymAuthBinding, GoogleLongfellowNymAuthBinding)
 
         /**
          * [DEFAULT_BINDINGS] with each of [replacements] taking over its system (a system no default serves is added): the

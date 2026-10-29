@@ -1,0 +1,7 @@
+nymauth-native
+
+This library links:
+- Google longfellow-zk, Rust runtime 61a8a73 (Apache License 2.0), vendored unchanged in
+  AltmannPeter/readdit-demo native/longfellow/vendor/longfellow-zk (its LICENSE there).
+- nym-longfellow (AltmannPeter/readdit-demo native/longfellow/nym-longfellow) and the nym_auth Longfellow
+  circuits and slot map of the SIROS nym-auth-circuits archive (circuits/longfellow-mdoc here).
