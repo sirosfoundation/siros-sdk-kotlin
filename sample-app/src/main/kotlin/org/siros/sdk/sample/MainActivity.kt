@@ -612,6 +612,15 @@ fun WalletScreen(viewModel: WalletViewModel) {
                         onConfirmIssuance = viewModel::confirmIssuance,
                         onCancelIssuance = viewModel::cancelIssuance,
                         onStartIDV = viewModel::openIDVPreparation,
+                        // Same QR-scanning entry point Home's "Activate" ball
+                        // uses (see WalletViewModel.openActivate/ActivateMode's
+                        // doc comment) - promoted here to a peer top-level
+                        // option alongside Scan Passport, stacked over this
+                        // screen exactly like IDV above rather than
+                        // duplicating any scanning logic.
+                        onScanQr = viewModel::openActivate,
+                        // NOT openAddCredential, which now only reads the cache (#298 review): the empty-state Retry
+                        // button must actually fetch, or it does nothing during the cache's TTL window.
                         onRetry = viewModel::retryAvailableCredentials,
                         modifier = Modifier.padding(padding),
                     )

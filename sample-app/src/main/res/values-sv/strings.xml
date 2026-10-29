@@ -35,6 +35,11 @@
     <string name="add_credential_row_action_add">Lägg till</string>
     <string name="add_credential_row_action_close">Stäng</string>
     <string name="nav_back">Tillbaka</string>
+    <string name="add_credential_option_scan_qr_title">Skanna QR-kod</string>
+    <string name="add_credential_option_scan_qr_subtitle">Skanna en utfärdares QR-kod</string>
+    <string name="add_credential_option_all_title">Alla kända intyg</string>
+    <string name="add_credential_option_all_subtitle">Bläddra bland alla intyg som dina utfärdare erbjuder</string>
+    <string name="add_credential_all_back">Tillbaka till alternativ för att lägga till intyg</string>
     <string name="credential_capability_online">Kan visas online</string>
     <string name="credential_capability_proximity">Kan visas personligen genom att trycka med telefonen</string>
     <string name="credential_capability_zkp">Kan bevisa din identitet utan att avslöja alla dina uppgifter</string>
