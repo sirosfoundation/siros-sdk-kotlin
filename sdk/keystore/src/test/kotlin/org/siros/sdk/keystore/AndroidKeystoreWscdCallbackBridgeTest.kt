@@ -9,7 +9,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
-import org.siros.sdk.credentials.KeystoreException
 import uniffi.siros_wscd_manager.FfiAndroidKeystoreSecurityLevel
 import uniffi.siros_wscd_manager.FfiWscdException
 
@@ -26,6 +25,8 @@ class AndroidKeystoreWscdCallbackBridgeTest {
 
     private class FakeBackend(
         var strongBoxAvailable: Boolean = true,
+        /** Simulates an ordinary (non-[KeystoreException], non-[FfiWscdException]) platform exception, e.g. a raw `android.security.KeyStoreException`. */
+        var certificateChainFailsWithPlatformException: Boolean = false,
     ) : AndroidKeyStoreBackend {
         private class Entry(
             val level: AndroidKeystoreSigner.SecurityLevel,
@@ -50,7 +51,10 @@ class AndroidKeystoreWscdCallbackBridgeTest {
             return level
         }
 
-        override fun certificateChain(alias: String): List<ByteArray> = emptyList()
+        override fun certificateChain(alias: String): List<ByteArray> {
+            if (certificateChainFailsWithPlatformException) throw IllegalStateException("simulated raw platform failure")
+            return emptyList()
+        }
 
         override fun publicKey(alias: String) = entries.getValue(alias).keyPair.public as java.security.interfaces.ECPublicKey
 
@@ -168,6 +172,60 @@ class AndroidKeystoreWscdCallbackBridgeTest {
         val jwk = kotlinx.serialization.json.Json.parseToJsonElement(bridge.publicKeyJwk("a")) as kotlinx.serialization.json.JsonObject
         assertEquals("EC", (jwk["kty"] as kotlinx.serialization.json.JsonPrimitive).content)
         assertEquals("P-256", (jwk["crv"] as kotlinx.serialization.json.JsonPrimitive).content)
+    }
+
+    @Test
+    fun publicKeyJwk_includesAKidMatchingTheJwkThumbprintTheRustPluginComputesFromTheSameJwk() {
+        val backend = FakeBackend()
+        val bridge = AndroidKeystoreWscdCallbackBridge(backend)
+        bridge.generate("a", null, strongBox = true, userAuthenticationMethods = emptyList(), unlockedDeviceRequired = false)
+
+        val jwkJson = bridge.publicKeyJwk("a")
+        val jwk = kotlinx.serialization.json.Json.parseToJsonElement(jwkJson) as kotlinx.serialization.json.JsonObject
+        val kid = (jwk["kid"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+        assertTrue("publicKeyJwk must include a kid, or SirosWallet.extractProofKeyId cannot recover the holder key", !kid.isNullOrEmpty())
+
+        // The Rust plugin (AndroidKeystorePlugin::finish_generate_key) independently derives the key's own kid via
+        // jwk_thumbprint, which reads only the canonical crv/kty/x/y members and ignores any kid already present - so
+        // the embedded kid must equal the RFC 7638 thumbprint of this exact JWK, computed the same way
+        // KeypairIdentity's own thumbprint matching already relies on (nimbus-jose-jwt's JWK.computeThumbprint()).
+        val independentThumbprint = com.nimbusds.jose.jwk.JWK.parse(jwkJson).computeThumbprint().toString()
+        assertEquals(independentThumbprint, kid)
+    }
+
+    @Test
+    fun generate_rejectsAnUnsupportedAuthenticationMethodInsteadOfSilentlyDroppingIt() {
+        val backend = FakeBackend()
+        val bridge = AndroidKeystoreWscdCallbackBridge(backend)
+
+        try {
+            bridge.generate(
+                "a",
+                null,
+                strongBox = true,
+                userAuthenticationMethods = listOf("some_future_method_this_bridge_does_not_know"),
+                unlockedDeviceRequired = false,
+            )
+            fail("an unrecognized authentication method must be rejected, not silently dropped to an empty (unauthenticated) set")
+        } catch (e: FfiWscdException.Plugin) {
+            // expected - and, crucially, no key was generated as an unauthenticated fallback:
+            assertEquals(emptyList<String>(), bridge.aliases())
+        }
+    }
+
+    @Test
+    fun certificateChain_translatesAnOrdinaryPlatformExceptionToATypedFfiException() {
+        val backend = FakeBackend(certificateChainFailsWithPlatformException = true)
+        val bridge = AndroidKeystoreWscdCallbackBridge(backend)
+        bridge.generate("a", null, strongBox = true, userAuthenticationMethods = emptyList(), unlockedDeviceRequired = false)
+
+        try {
+            bridge.certificateChain("a")
+            fail("expected a typed FfiWscdException, not the raw platform exception to escape across the UniFFI callback boundary")
+        } catch (e: FfiWscdException.Plugin) {
+            // expected - an ordinary IllegalStateException from the backend must not reach UniFFI as an unexpected
+            // callback error, bypassing the Rust side's typed cleanup/fallback handling.
+        }
     }
 
     @Test
