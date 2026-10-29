@@ -76,6 +76,19 @@ class WscdKeystoreAdapter private constructor(
      * signs for it - see [resolveSignerKey].
      */
     private val profile: InteropProfile = InteropProfile.DEFAULT,
+    /**
+     * The ISO-18045 mapping this adapter uses to encode the OID4VCI Key
+     * Attestation JWT's registered `key_storage`/`user_authentication`
+     * claims (see [toIso18045AttackPotential]) - [Iso18045AssuranceScheme.DEFAULT]
+     * unless a deployment constructs this adapter with its own
+     * [Iso18045AssuranceScheme] instance. Always this concrete class, never
+     * the generic [WscdAssuranceScheme] interface: those two claims are a
+     * registered external wire format that IS the ISO-18045 vocabulary by
+     * spec, not a deployment's free choice of label scheme (see
+     * [WscdAssuranceScheme]'s doc comment) - only which objective fact maps
+     * to which of the three real ISO-18045 tiers is configurable here.
+     */
+    private val assuranceScheme: Iso18045AssuranceScheme = Iso18045AssuranceScheme.DEFAULT,
 ) : KeystoreManager,
     WscdManager,
     // Extension state has to land in the same blob the credentials do, or
@@ -90,6 +103,15 @@ class WscdKeystoreAdapter private constructor(
 
     constructor(signer: Signer, profile: InteropProfile) :
         this(signer, JweKeystore(profile = profile), profile)
+
+    /**
+     * Construct with a deployment's own [Iso18045AssuranceScheme] (e.g. a
+     * different [Iso18045AssuranceScheme.DEFAULT_KEY_STORAGE_TYPE_LABELS]
+     * mapping for this adapter's Key Attestation JWT) instead of accepting
+     * the default - see [assuranceScheme]'s doc comment.
+     */
+    constructor(signer: Signer, assuranceScheme: Iso18045AssuranceScheme) :
+        this(signer, JweKeystore(), InteropProfile.DEFAULT, assuranceScheme)
 
     /**
      * Non-null only when [signer] is itself WSCD-backed (i.e. a
@@ -939,7 +961,18 @@ class WscdKeystoreAdapter private constructor(
      * Translate SIROS's internal WSCD key-storage/user-authentication
      * vocabulary (`software`/`hardware`/`trusted_execution`/`remote_hsm`,
      * see [SignerSecurityProperties]) into the OID4VCI Key Attestation JWT's
-     * registered `iso_18045_*` attack-potential-resistance values.
+     * registered `iso_18045_*` attack-potential-resistance values, via
+     * [assuranceScheme] - see [WscdAssuranceScheme.labelForKeyStorageType]'s
+     * doc comment for why this goes through the SAME configurable mapping
+     * [WscdPluginCapabilities] uses, instead of its own separate guess (what
+     * this method used to be, independently of
+     * [WscdPluginCapabilities]'s own table - a real, found bug: the two
+     * disagreed about what `"trusted_execution"` meant).
+     *
+     * `"none"`/[omitIfNone] stay local to this method rather than moving
+     * into [assuranceScheme]: whether to emit the claim AT ALL for "no
+     * security property reported" is a decision about this JWT's shape, not
+     * about what an objective fact is worth.
      *
      * Confirmed via a real conformance-test issuer that passing the raw
      * internal string through unmapped (e.g. `"software"`) produces a
@@ -948,21 +981,10 @@ class WscdKeystoreAdapter private constructor(
      * signature itself is cryptographically valid, so an unrecognized enum
      * value reaching a strict validator is the far more likely explanation
      * for a rejection than the signature math.
-     *
-     * Mappings are necessarily approximate (SIROS's vocabulary is coarser
-     * than the ISO 18045 scale) - conservative/lower tiers are preferred
-     * over overclaiming resistance we can't actually back up.
      */
     private fun toIso18045AttackPotential(raw: String, omitIfNone: Boolean = false): String? {
-        if (raw.startsWith("iso_18045_")) return raw // already spec-compliant, pass through
-        return when (raw.lowercase()) {
-            "none" -> if (omitIfNone) null else "iso_18045_basic"
-            "software" -> "iso_18045_basic"
-            "hardware" -> "iso_18045_moderate"
-            "trusted_execution" -> "iso_18045_enhanced-basic"
-            "remote_hsm" -> "iso_18045_high"
-            else -> "iso_18045_basic"
-        }
+        if (raw.equals("none", ignoreCase = true)) return if (omitIfNone) null else assuranceScheme.labelFor(WscdCertificationLevel.NONE)
+        return assuranceScheme.labelForKeyStorageType(raw)
     }
 
     private fun jwsAlgorithm(algorithm: String): JWSAlgorithm {

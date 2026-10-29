@@ -1635,8 +1635,8 @@ public abstract class org/siros/sdk/wallet/WscdSelectionException : java/lang/Ex
 public final class org/siros/sdk/wallet/WscdSelectionPolicy {
 	public static final field Companion Lorg/siros/sdk/wallet/WscdSelectionPolicy$Companion;
 	public static final field WILDCARD_ISSUER Ljava/lang/String;
-	public fun <init> (Lorg/siros/sdk/wallet/WscdTofuStore;Ljava/util/Map;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/wallet/WscdUserOverrideStore;)V
-	public synthetic fun <init> (Lorg/siros/sdk/wallet/WscdTofuStore;Ljava/util/Map;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/wallet/WscdUserOverrideStore;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lorg/siros/sdk/wallet/WscdTofuStore;Ljava/util/Map;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/wallet/WscdUserOverrideStore;Lorg/siros/sdk/keystore/WscdAssuranceScheme;)V
+	public synthetic fun <init> (Lorg/siros/sdk/wallet/WscdTofuStore;Ljava/util/Map;Lkotlin/jvm/functions/Function4;Lorg/siros/sdk/wallet/WscdUserOverrideStore;Lorg/siros/sdk/keystore/WscdAssuranceScheme;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun clearAll ()V
 	public final fun clearAllTofuMappings ()V
 	public final fun clearGlobalUserOverride ()V
