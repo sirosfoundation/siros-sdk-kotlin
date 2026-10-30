@@ -4231,10 +4231,9 @@ public object FfiConverterTypeFfiAuthMethod: FfiConverterRustBuffer<FfiAuthMetho
 
 enum class FfiCertificationLevel {
     
-    NONE,
-    BASELINE,
-    SUBSTANTIAL,
-    HIGH;
+    UNATTESTED,
+    ATTESTED_SHARED_ENVIRONMENT,
+    ATTESTED_DEDICATED_HARDWARE;
 
     
 
