@@ -996,7 +996,7 @@ class WscdKeystoreAdapter private constructor(
      * for a rejection than the signature math.
      */
     private fun toIso18045AttackPotential(raw: String, omitIfNone: Boolean = false): String? {
-        if (raw.equals("none", ignoreCase = true)) return if (omitIfNone) null else assuranceScheme.labelFor(WscdCertificationLevel.NONE)
+        if (raw.equals("none", ignoreCase = true)) return if (omitIfNone) null else assuranceScheme.labelFor(WscdCertificationLevel.UNATTESTED)
         return assuranceScheme.labelForKeyStorageType(raw)
     }
 

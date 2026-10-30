@@ -63,10 +63,19 @@ class WscdAssuranceSchemeTest {
     @Test
     fun default_certificationLevelLabels_rankWscdCertificationLevelsAscending() {
         val scheme = Iso18045AssuranceScheme.DEFAULT
-        assertEquals("iso_18045_basic", scheme.labelFor(WscdCertificationLevel.NONE))
-        assertEquals("iso_18045_basic", scheme.labelFor(WscdCertificationLevel.BASELINE))
-        assertEquals("iso_18045_moderate", scheme.labelFor(WscdCertificationLevel.SUBSTANTIAL))
-        assertEquals("iso_18045_high", scheme.labelFor(WscdCertificationLevel.HIGH))
+        assertEquals("iso_18045_basic", scheme.labelFor(WscdCertificationLevel.UNATTESTED))
+        assertEquals(
+            "iso_18045_enhanced-basic",
+            scheme.labelFor(WscdCertificationLevel.ATTESTED_SHARED_ENVIRONMENT),
+        )
+        // Deliberately MODERATE, not HIGH: a structurally confirmed dedicated
+        // secure element is real evidence, but wscd-manager's structural
+        // check alone is not a genuine third-party certification evaluation -
+        // see DEFAULT_CERTIFICATION_LEVEL_LABELS's doc comment.
+        assertEquals(
+            "iso_18045_moderate",
+            scheme.labelFor(WscdCertificationLevel.ATTESTED_DEDICATED_HARDWARE),
+        )
     }
 
     @Test
@@ -79,13 +88,54 @@ class WscdAssuranceSchemeTest {
         assertFalse(scheme.meets("iso_18045_high", "bogus"))
     }
 
+    /**
+     * Regression test for a real Copilot finding on this PR:
+     * [Iso18045AssuranceScheme.DEFAULT_CERTIFICATION_LEVEL_LABELS] maps
+     * [WscdCertificationLevel.ATTESTED_SHARED_ENVIRONMENT] to
+     * [Iso18045AssuranceScheme.ENHANCED_BASIC], but
+     * [Iso18045AssuranceScheme.DEFAULT_TIER_ORDER] used to omit that tier
+     * entirely - so [Iso18045AssuranceScheme.meets] treated a perfectly
+     * valid [Iso18045AssuranceScheme.labelFor] output as unrecognized and
+     * failed closed, REJECTING a real attested-TEE key against even a bare
+     * BASIC requirement, while an [WscdCertificationLevel.UNATTESTED] key
+     * (correctly ranked at index 0) WOULD have passed that same check -
+     * backwards from what any sane assurance ordering should do.
+     *
+     * Confirmed non-vacuous: with [Iso18045AssuranceScheme.DEFAULT_TIER_ORDER]
+     * reverted to `listOf(BASIC, MODERATE, HIGH)` (omitting
+     * [Iso18045AssuranceScheme.ENHANCED_BASIC]), the first assertion below
+     * fails - checked, then restored.
+     */
+    @Test
+    fun attestedSharedEnvironmentMeetsABasicRequirement_butNotModerate() {
+        val scheme = Iso18045AssuranceScheme.DEFAULT
+        val attestedSharedEnvironmentLabel = scheme.labelFor(WscdCertificationLevel.ATTESTED_SHARED_ENVIRONMENT)
+        assertEquals("iso_18045_enhanced-basic", attestedSharedEnvironmentLabel)
+
+        assertTrue(
+            "an attested-TEE key must meet a mere BASIC requirement",
+            scheme.meets(attestedSharedEnvironmentLabel, Iso18045AssuranceScheme.BASIC),
+        )
+        assertFalse(
+            "an attested-TEE key must NOT be credited as meeting MODERATE",
+            scheme.meets(attestedSharedEnvironmentLabel, Iso18045AssuranceScheme.MODERATE),
+        )
+        // The bug this guards against: an UNATTESTED key must never
+        // out-rank a genuinely attested one.
+        val unattestedLabel = scheme.labelFor(WscdCertificationLevel.UNATTESTED)
+        assertTrue(scheme.rankOf(attestedSharedEnvironmentLabel) > scheme.rankOf(unattestedLabel))
+    }
+
     // ── WscdPluginCapabilities facade delegates to the DEFAULT scheme ────────
 
     @Test
     fun wscdPluginCapabilitiesFacade_delegatesToDefaultScheme() {
         assertEquals("iso_18045_high", WscdPluginCapabilities.tierOf("fido2"))
         assertTrue(WscdPluginCapabilities.meets("iso_18045_high", "iso_18045_basic"))
-        assertEquals(1, WscdPluginCapabilities.rankOf("iso_18045_moderate"))
+        // Index 2, not 1: DEFAULT_TIER_ORDER is
+        // [BASIC, ENHANCED_BASIC, MODERATE, HIGH] - see that constant's own
+        // doc comment for why ENHANCED_BASIC's rank had to be added.
+        assertEquals(2, WscdPluginCapabilities.rankOf("iso_18045_moderate"))
     }
 
     // ── Genuinely deployment-configurable: NOT still hardcoded anywhere ──────
@@ -122,11 +172,13 @@ class WscdAssuranceSchemeTest {
     @Test
     fun customScheme_overridesCertificationLevelLabel() {
         val custom = Iso18045AssuranceScheme(
-            certificationLevelLabels = mapOf(WscdCertificationLevel.SUBSTANTIAL to Iso18045AssuranceScheme.HIGH),
+            certificationLevelLabels = mapOf(
+                WscdCertificationLevel.ATTESTED_DEDICATED_HARDWARE to Iso18045AssuranceScheme.HIGH,
+            ),
         )
-        assertEquals("iso_18045_high", custom.labelFor(WscdCertificationLevel.SUBSTANTIAL))
+        assertEquals("iso_18045_high", custom.labelFor(WscdCertificationLevel.ATTESTED_DEDICATED_HARDWARE))
         // Unmapped levels fail closed to the lowest tier rather than throwing.
-        assertEquals("iso_18045_basic", custom.labelFor(WscdCertificationLevel.HIGH))
+        assertEquals("iso_18045_basic", custom.labelFor(WscdCertificationLevel.UNATTESTED))
     }
 
     @Test
@@ -143,9 +195,14 @@ class WscdAssuranceSchemeTest {
     @Test
     fun misconfiguredCertificationLevelLabel_fallsBackToBasic() {
         val misconfigured = Iso18045AssuranceScheme(
-            certificationLevelLabels = mapOf(WscdCertificationLevel.HIGH to "not_a_real_tier"),
+            certificationLevelLabels = mapOf(
+                WscdCertificationLevel.ATTESTED_DEDICATED_HARDWARE to "not_a_real_tier",
+            ),
         )
-        assertEquals("iso_18045_basic", misconfigured.labelFor(WscdCertificationLevel.HIGH))
+        assertEquals(
+            "iso_18045_basic",
+            misconfigured.labelFor(WscdCertificationLevel.ATTESTED_DEDICATED_HARDWARE),
+        )
     }
 
     @Test
@@ -186,7 +243,7 @@ class WscdAssuranceSchemeTest {
     fun wscdAssuranceScheme_isNotIso18045Specific_aDifferentVocabularyImplementationWorksToo() {
         val nistStyle = FixedLabelScheme("aal2")
         assertEquals("aal2", nistStyle.nominalLabelFor("fido2"))
-        assertEquals("aal2", nistStyle.labelFor(WscdCertificationLevel.HIGH))
+        assertEquals("aal2", nistStyle.labelFor(WscdCertificationLevel.ATTESTED_DEDICATED_HARDWARE))
         assertTrue(nistStyle.meets("aal2", "aal2"))
         assertFalse(nistStyle.meets("aal2", "iso_18045_high"))
     }

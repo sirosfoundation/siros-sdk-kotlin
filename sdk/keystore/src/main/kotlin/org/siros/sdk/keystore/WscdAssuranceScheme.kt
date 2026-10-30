@@ -24,10 +24,12 @@ package org.siros.sdk.keystore
  *
  * **wscd-manager itself never sees a label, ISO 18045 or otherwise** - its
  * own `CertificationLevel`/`FfiCertificationLevel` enum (mirrored here as
- * [WscdCertificationLevel]) stays in its own objective, four-point
- * vocabulary (`none`/`baseline`/`substantial`/`high`, based on real
- * verifiable facts: hardware class, attestation presence, key
- * non-exportability) and knows nothing about any label scheme. This
+ * [WscdCertificationLevel]) stays in its own objective, purely STRUCTURAL
+ * three-point vocabulary (`unattested`/`attested_shared_environment`/
+ * `attested_dedicated_hardware` - whether an attestation artifact is present
+ * and structurally complete, and whether the hardware class it claims is a
+ * shared execution environment or a dedicated one; never who evaluated the
+ * hardware or by what process) and knows nothing about any label scheme. This
  * interface - and everything that calls through it
  * ([WscdSelectionPolicy], [WscdPluginCapabilities]) - lives entirely on the
  * SDK side, by design: different deployments auditing the SAME wallet
@@ -58,18 +60,19 @@ package org.siros.sdk.keystore
  * an arbitrary [WscdAssuranceScheme] a deployment might otherwise be using
  * for plugin selection), even though exactly which
  * [WscdCertificationLevel]/key-storage type maps to which of those four real
- * ISO 18045 tiers remains deployment-configurable DATA on that class. Note
- * this four-tier wire vocabulary is BROADER than the three-tier scale
- * ([Iso18045AssuranceScheme.DEFAULT_TIER_ORDER]: basic/moderate/high) plugin
- * SELECTION uses - a credential catalog here never REQUIRES enhanced-basic,
- * but a confirmed hardware fact may legitimately be REPORTED as it.
+ * ISO 18045 tiers remains deployment-configurable DATA on that class.
+ * [Iso18045AssuranceScheme.DEFAULT_TIER_ORDER] (plugin SELECTION's own
+ * ranking) includes enhanced-basic too, for a different reason: a credential
+ * catalog here never REQUIRES it, but [WscdCertificationLevel.ATTESTED_SHARED_ENVIRONMENT]
+ * DOES get reported as it by default, and [meets] must be able to rank that
+ * reported value correctly against whatever IS required.
  */
 interface WscdAssuranceScheme {
 
     /**
      * This scheme's label for wscd-manager's objective, scheme-agnostic
-     * [level] fact (`none`/`baseline`/`substantial`/`high` - see
-     * [WscdCertificationLevel]), as confirmed by
+     * [level] fact (`unattested`/`attested_shared_environment`/
+     * `attested_dedicated_hardware` - see [WscdCertificationLevel]), as confirmed by
      * [WscdManager.generateKeyForLevel] or reported in
      * [org.siros.sdk.credentials.SignerSecurityProperties.certification] for an
      * already-generated key.
@@ -190,44 +193,73 @@ class Iso18045AssuranceScheme(
 
         /**
          * Ascending assurance order for plugin-SELECTION eligibility
-         * ([meets]/[rankOf]) - the SDK's own three-tier scale, matching the
-         * wire's `attestation_los` field (see
-         * [org.siros.sdk.credentials.Vctm.requiredKeyStorage]) and
-         * [WscdPluginCapabilities]'s original, deliberate scope: this
-         * ecosystem's credential catalog/issuers never declare
-         * [ENHANCED_BASIC] as a REQUIREMENT, so it is intentionally absent
-         * from this list - NOT the same thing as [WIRE_LABELS] below, which
-         * is what a CONFIRMED hardware fact may be reported AS.
+         * ([meets]/[rankOf]). [ENHANCED_BASIC] - between [BASIC] and
+         * [MODERATE] - IS included here, even though no credential catalog
+         * in this ecosystem ever REQUIRES it (see [WscdPluginCapabilities]'s
+         * original, deliberate scope): [DEFAULT_CERTIFICATION_LEVEL_LABELS]
+         * maps [WscdCertificationLevel.ATTESTED_SHARED_ENVIRONMENT] to
+         * exactly this label, so [labelFor] can hand `meets()` an ACTUAL
+         * value of [ENHANCED_BASIC] - omitting it from this list would make
+         * [meets] treat that perfectly valid [labelFor] output as
+         * unrecognized and fail closed, rejecting an attested-TEE key
+         * against even a bare [BASIC] requirement while an [UNATTESTED] key
+         * (correctly ranked at index 0) would pass the same check. The
+         * "never a REQUIREMENT" fact about catalog data stays true on its
+         * own; this list existing to rank `actual` values correctly is a
+         * separate concern from what a catalog is ever observed to request.
          */
-        val DEFAULT_TIER_ORDER = listOf(BASIC, MODERATE, HIGH)
+        val DEFAULT_TIER_ORDER = listOf(BASIC, ENHANCED_BASIC, MODERATE, HIGH)
 
         /**
          * The full OID4VCI-registered ISO 18045 AVA_VAN wire vocabulary
          * (Appendix D.2, "Attack Potential Resistance") [labelFor]/
          * [labelForKeyStorageType] are allowed to emit - see [validated].
-         * FOUR tiers, not three: broader than [DEFAULT_TIER_ORDER] (the
-         * SDK's own narrower plugin-SELECTION scale) because the external
-         * wire format defines [ENHANCED_BASIC] as a real, registered tier
-         * between [BASIC] and [MODERATE] that a confirmed hardware fact can
-         * legitimately be reported as, even though no credential catalog in
-         * this ecosystem ever REQUIRES it. Deliberately NOT
-         * [DEFAULT_TIER_ORDER] (a deployment-configurable, potentially
-         * reordered/narrower list): this set is fixed by the OID4VCI spec
-         * itself, not by any constructor parameter.
+         * Happens to contain the same four strings as [DEFAULT_TIER_ORDER]
+         * today, but the two exist for different, independent reasons and
+         * must not be conflated: this is a fixed membership check mandated
+         * by the OID4VCI spec itself, used by [validated] alone, and NEVER a
+         * constructor parameter - unlike [DEFAULT_TIER_ORDER] (an ordered,
+         * deployment-configurable list a custom [Iso18045AssuranceScheme]
+         * instance may narrow, reorder, or replace entirely for its own
+         * plugin-SELECTION ranking).
          */
         private val WIRE_LABELS: Set<String> = setOf(BASIC, ENHANCED_BASIC, MODERATE, HIGH)
 
         /**
-         * wscd-manager's own objective tiers, as this DEFAULT scheme reads
-         * them for [labelFor]: `NONE`/`BASELINE` both read as [BASIC]
-         * (neither represents meaningful hardware backing); `SUBSTANTIAL` as
-         * [MODERATE]; `HIGH` as [HIGH].
+         * wscd-manager's own objective, structural tiers, as this DEFAULT
+         * scheme reads them for [labelFor]:
+         *
+         * - [WscdCertificationLevel.UNATTESTED] -> [BASIC]: no attestation
+         *   evidence at all, same floor as an unrecognized/absent fact.
+         * - [WscdCertificationLevel.ATTESTED_SHARED_ENVIRONMENT] ->
+         *   [ENHANCED_BASIC]: a real attestation artifact backs this key, but
+         *   the hardware class it claims shares silicon/attack surface with
+         *   the main application processor (e.g. a TEE) - exactly the same
+         *   reasoning [DEFAULT_KEY_STORAGE_TYPE_LABELS] already applies to
+         *   the raw `"trusted_execution"` key-storage string (see its own
+         *   doc comment): real isolation above pure software, but not a
+         *   dedicated element, so [ENHANCED_BASIC] is the precise fit, not a
+         *   compromise between [BASIC] and [MODERATE].
+         * - [WscdCertificationLevel.ATTESTED_DEDICATED_HARDWARE] ->
+         *   [MODERATE], deliberately NOT [HIGH]: a real attestation artifact
+         *   claims a physically separate, dedicated secure element, which is
+         *   real hardware-backing evidence worth crediting above
+         *   [ENHANCED_BASIC] - but wscd-manager's structural check alone
+         *   (attestation present + hardware-class claim, chain-to-root
+         *   verification explicitly NOT done by wscd-manager - see
+         *   `CertificationLevel`'s own Rust doc comment) is not the same
+         *   thing as a genuine third-party certification evaluation, so this
+         *   default does not reach for the wire format's strongest tier
+         *   without one. A deployment with real, out-of-band evaluation
+         *   evidence for its specific hardware (e.g. a confirmed StrongBox
+         *   chip model, or - mirroring [DEFAULT_NOMINAL_PLUGIN_LABELS]'s
+         *   `"r2ps"` entry - a specific known HSM) may override this default
+         *   to [HIGH] via the constructor parameter.
          */
         val DEFAULT_CERTIFICATION_LEVEL_LABELS: Map<WscdCertificationLevel, String> = mapOf(
-            WscdCertificationLevel.NONE to BASIC,
-            WscdCertificationLevel.BASELINE to BASIC,
-            WscdCertificationLevel.SUBSTANTIAL to MODERATE,
-            WscdCertificationLevel.HIGH to HIGH,
+            WscdCertificationLevel.UNATTESTED to BASIC,
+            WscdCertificationLevel.ATTESTED_SHARED_ENVIRONMENT to ENHANCED_BASIC,
+            WscdCertificationLevel.ATTESTED_DEDICATED_HARDWARE to MODERATE,
         )
 
         /**
